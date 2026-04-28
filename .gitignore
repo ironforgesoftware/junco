@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Operational artifacts (junco creates these at runtime)
+launchd.out
+launchd.err
+worktrees/
+worktrees-manual/
+
+# Junco vault state lives outside the repo (in iCloud / Obsidian).
+# Ignored in case the user ever symlinks the vault into the repo for browsing.
+Junco/
+
+# Test-loop / e2e harness runtime artifacts (scripts in scripts/test-loop/
+# write these alongside themselves; the *.md and *.sh / *.py harness files
+# stay tracked, but their per-run output does not).
+scripts/test-loop/run.log
+scripts/test-loop/results.jsonl
+scripts/test-loop/shepherd.stdout
+scripts/test-loop/shepherd.stderr
+scripts/test-loop/generate.log
+scripts/test-loop/DONE
+scripts/test-loop/HALT_REASON
+scripts/test-loop/CONTINUE
+scripts/test-loop/staging/
+scripts/test-loop/planner-logs/
+scripts/test-loop/e2e/
+scripts/test-loop/e2e2/
+scripts/test-loop/smoke-*
+scripts/test-loop/omp-batch-results-driver.log
+scripts/test-loop/omp-batch-results/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local coverage / build outputs
+htmlcov/
+.coverage
+.coverage.*
+dist/
+build/
+*.egg-info/
