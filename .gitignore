@@ -15,8 +15,13 @@ launchd.err
 worktrees/
 worktrees-manual/
 
-# Junco vault state lives outside the repo (in iCloud / Obsidian).
-# Ignored in case the user ever symlinks the vault into the repo for browsing.
+# Ticket state (inbox/processing/done/failed, worker.log). Canonical home is
+# ~/junco/tickets/; the Obsidian vault at Vault/Junco is a symlink into
+# this directory for read visibility. Per-run state, do not commit.
+tickets/
+
+# Historical: kept defensively for the case where the vault was occasionally
+# symlinked into the repo for browsing under the old ~/junco/Junco/ name.
 Junco/
 
 # Test-loop / e2e harness runtime artifacts (scripts in scripts/test-loop/
