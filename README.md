@@ -230,15 +230,13 @@ launchctl print gui/$(id -u)/com.junco.junco-worker                # inspect lau
 ### Manual runs
 
 ```bash
-.venv/bin/python worker.py --once --dry-run    # what would happen, don't execute
 .venv/bin/python worker.py --once              # process one task then exit
 ```
 
 A single-instance `flock` (`worker.lock`, next to `config.toml`) keeps a manual
 `--once` run from colliding with the live daemon: if the daemon holds the lock,
 the manual run logs `another worker instance holds …` and exits 0 without
-touching the queue. `--dry-run` is read-only (it neither claims tasks nor
-recovers orphans) and runs without the lock, so it's always safe alongside the daemon.
+touching the queue.
 
 ### Retrying a failed task
 
