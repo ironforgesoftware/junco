@@ -203,6 +203,7 @@ extension_paths = [
 enabled = true                             # turn-by-turn supervisor with nudge-on-guard-trip
 budget_per_kind = 1                        # how many nudges per guard kind before kill
 escalation_window_turns = 3                # same kind re-trips within K turns of nudge → kill
+event_timeout_seconds = 300                # inter-event idle cap; silent Pi → timeout (→ failed/). 0 disables
 
 [verify]
 enabled = true
@@ -232,6 +233,12 @@ launchctl print gui/$(id -u)/com.junco.junco-worker                # inspect lau
 .venv/bin/python worker.py --once --dry-run    # what would happen, don't execute
 .venv/bin/python worker.py --once              # process one task then exit
 ```
+
+A single-instance `flock` (`worker.lock`, next to `config.toml`) keeps a manual
+`--once` run from colliding with the live daemon: if the daemon holds the lock,
+the manual run logs `another worker instance holds …` and exits 0 without
+touching the queue. `--dry-run` is read-only (it neither claims tasks nor
+recovers orphans) and runs without the lock, so it's always safe alongside the daemon.
 
 ### Retrying a failed task
 

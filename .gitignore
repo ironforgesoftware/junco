@@ -12,6 +12,7 @@ env/
 # Operational artifacts (junco creates these at runtime)
 launchd.out
 launchd.err
+worker.lock
 worktrees/
 worktrees-manual/
 
