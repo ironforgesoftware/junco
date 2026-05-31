@@ -13,7 +13,10 @@ function statusFor(r: RunResult): string {
 function renderResult(original: string, status: string, r: RunResult): string {
   const reply = r.finalText || "_(no assistant text)_";
   const stats = `**Elapsed:** ${Math.round(r.durationMs / 1000)}s · **Tokens:** in=${r.usage.input} out=${r.usage.output}`;
-  const meta = `status: ${status}\nstop_reason: ${r.stopReason ?? "null"}\nduration_seconds: ${Math.round(r.durationMs / 1000)}`;
+  // Omit stop_reason when absent (Python parity: the key was only written when
+  // truthy) so a future parser of this block doesn't see the literal "null".
+  const stopLine = r.stopReason ? `\nstop_reason: ${r.stopReason}` : "";
+  const meta = `status: ${status}${stopLine}\nduration_seconds: ${Math.round(r.durationMs / 1000)}`;
   return `${original.trimEnd()}\n\n---\n<!-- junco-result\n${meta}\n-->\n\n## Result\n\n${stats}\n\n${reply}\n`;
 }
 
