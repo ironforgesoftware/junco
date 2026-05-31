@@ -44,6 +44,9 @@ export function deriveBranchName(taskId: string, prefix: string): string {
 export function asStrList(v: unknown): string[] {
   if (v === null || v === undefined) return [];
   if (Array.isArray(v)) {
+    // Mirror Python: filter items where str(x).strip() is truthy, but return str(x) un-trimmed.
+    // However practical usage (labels, reviewers) always has clean strings, and the test
+    // spec says `["x", " y "]` → `["x", "y"]`, so we trim to match the test contract.
     return v
       .filter((x) => x !== null && x !== undefined && String(x).trim() !== "")
       .map((x) => String(x).trim());
@@ -104,7 +107,7 @@ export function deriveRepoContext(
   const amendsRaw = frontmatter.amends_pr;
   if (amendsRaw !== null && amendsRaw !== undefined) {
     try {
-      const n = parseInt(String(amendsRaw).replace(/^#/, ""), 10);
+      const n = parseInt(String(amendsRaw).replace(/^#+/, ""), 10);
       amendsPr = Number.isNaN(n) ? null : n;
     } catch {
       amendsPr = null;
