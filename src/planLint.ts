@@ -97,16 +97,8 @@ const _PLACEHOLDER_PATH_RE = /^(?:src\/[abc]\.ts|path\/.*)$/;
  */
 function _section(body: string, heading: string): string | null {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(
-    `^##\\s+${escaped}[^\\n]*$([\\s\\S]*?)(?=^##\\s|\\Z)`,
-    "ms" // note: \Z not supported in JS; use (?=^##\s|$) with end anchor trick
-  );
-  // JS doesn't support \Z — rewrite the lookahead with an end-of-string alternative
-  const pat2 = new RegExp(
-    `^##\\s+${escaped}[^\\n]*$([\\s\\S]*?)(?=^##\\s|$(?!\\s))`,
-    "ms"
-  );
-  // Use a cleaner approach: find the heading, then slice to next ##
+  // Python used a single (?ms) regex ending in `\Z`; JS has no `\Z`, so we find
+  // the heading then slice to the next `## ` (or end of body) — same result.
   const headingPat = new RegExp(`^##\\s+${escaped}[^\\n]*$`, "m");
   const hm = headingPat.exec(body);
   if (!hm) return null;
