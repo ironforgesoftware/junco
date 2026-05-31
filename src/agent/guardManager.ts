@@ -55,7 +55,7 @@ export class GuardManager {
   private thinkingRepGuard: RepetitionGuard;
   private toolLoopGuard: ToolCallLoopGuard;
   private toolErrorLoopGuard: ToolErrorLoopGuard;
-  private readonly outputBudgetGuard: OutputBudgetGuard;
+  private readonly outputBudgetGuard: OutputBudgetGuard | null;
   private readonly supervisor: Supervisor;
 
   /** junco-side turn counter for the supervisor's escalation window. */
@@ -74,10 +74,16 @@ export class GuardManager {
     this.toolErrorLoopGuard = new ToolErrorLoopGuard();
     this.outputBudgetPerTurn =
       opts.outputBudgetPerTurn ?? DEFAULT_OUTPUT_BUDGET_PER_TURN;
-    this.outputBudgetGuard = new OutputBudgetGuard(
-      this.outputBudgetPerTurn || DEFAULT_OUTPUT_BUDGET_PER_TURN,
-      opts.outputBudgetPostCommit ?? DEFAULT_OUTPUT_BUDGET_POST_COMMIT,
-    );
+    // 0 disables the output-budget guard entirely — keep it null rather than a
+    // dead object, so the "disabled" state is structural (no budget can leak
+    // back in if a future caller drops the per-turn gate).
+    this.outputBudgetGuard =
+      this.outputBudgetPerTurn > 0
+        ? new OutputBudgetGuard(
+            this.outputBudgetPerTurn,
+            opts.outputBudgetPostCommit ?? DEFAULT_OUTPUT_BUDGET_POST_COMMIT,
+          )
+        : null;
     this.supervisor = new Supervisor(opts.supervisorConfig);
   }
 
@@ -175,7 +181,7 @@ export class GuardManager {
     if (name === "bash" && args && typeof args === "object") {
       const cmd = String((args as Record<string, unknown>).command ?? "");
       if (cmd.includes("git commit")) {
-        this.outputBudgetGuard.observeCommit();
+        this.outputBudgetGuard?.observeCommit();
       }
     }
 
@@ -234,7 +240,7 @@ export class GuardManager {
     let decision: GuardDecision | null = null;
 
     // Observe the turn's output tokens for the budget check BEFORE resetting.
-    if (this.outputBudgetPerTurn > 0) {
+    if (this.outputBudgetGuard) {
       const usage = event?.message?.usage;
       // Pi/oMLX usage shape: { output: N }. Fall back to totalTokens-input if
       // `output` is absent (mirrors RunAccumulator's defensive read).
@@ -278,7 +284,7 @@ export class GuardManager {
     // Advance the turn counter and reset the per-turn budget + cumulative
     // buffers (a new turn starts fresh).
     this.turnIndex += 1;
-    this.outputBudgetGuard.resetTurn();
+    this.outputBudgetGuard?.resetTurn();
     this.textBuf = "";
     this.thinkingBuf = "";
 
