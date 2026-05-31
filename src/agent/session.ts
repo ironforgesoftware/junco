@@ -120,6 +120,10 @@ export function makePiSessionFactory(cfg: Config, cwd: string): () => Promise<Ag
     modelRegistry.registerProvider(provider, {
       name: provider,
       baseUrl: apiBaseUrl(cfg.omlx.url),
+      // registerProvider RUNTIME-validates that apiKey (or oauth) is present when
+      // models are defined — even though the type marks it optional and we also
+      // set a runtime key above. The validated models.json carries it inline too.
+      apiKey: cfg.omlx.apiKey,
       api: "openai-completions",
       models: [
         {
