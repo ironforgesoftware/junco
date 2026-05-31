@@ -26,4 +26,22 @@ describe("parseTicket", () => {
   it("flags hasRepo when repo frontmatter present", () => {
     expect(parseTicket("/in/p1.md", PR).hasRepo).toBe(true);
   });
+
+  it("does not throw on malformed YAML frontmatter", () => {
+    const t = parseTicket("/in/bad.md", "---\n: invalid: yaml: [\n---\nbody");
+    expect(t.id).toBe("bad");
+    expect(t.body).toBe("body");
+    expect(t.priority).toBe("normal");
+    expect(t.hasRepo).toBe(false);
+  });
+
+  it("falls back to the default timeout for non-positive timeout_minutes", () => {
+    const t = parseTicket("/in/z.md", "---\nid: z\ntimeout_minutes: 0\n---\nx", 30);
+    expect(t.timeoutSeconds).toBe(1800);
+  });
+
+  it("accepts uppercase priority (lowercased, Python parity)", () => {
+    const t = parseTicket("/in/u.md", "---\nid: u\npriority: HIGH\n---\nx");
+    expect(t.priority).toBe("high");
+  });
 });
