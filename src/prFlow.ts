@@ -44,6 +44,7 @@ import {
 } from "./agent/session.js";
 import { GuardManager } from "./agent/guardManager.js";
 import { finalizePr, type TerminalDirs } from "./finalize.js";
+import { queuePaths } from "./config.js";
 import { log } from "./logging.js";
 
 // ---------------------------------------------------------------------------
@@ -491,9 +492,9 @@ function writePrBodyTempfile(body: string): string {
   return file;
 }
 
-/** Derive the terminal dirs from cfg (mirrors queuePaths) without importing the
- * full config module's queuePaths to keep prFlow self-contained for tests. */
+/** Terminal dirs for the PR flow — derived from the SAME queuePaths the Q&A flow
+ * uses, so both paths route done/failed to identical directories. */
 function defaultDirs(cfg: Config): TerminalDirs {
-  const root = join(cfg.vaultRoot, cfg.juncoSubdir);
-  return { done: join(root, "done"), failed: join(root, "failed") };
+  const p = queuePaths(cfg);
+  return { done: p.done, failed: p.failed };
 }
