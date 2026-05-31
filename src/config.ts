@@ -33,6 +33,7 @@ const TomlSchema = z.object({
   pi: z.object({
     model_id: z.string().default("omlx/Qwen3.6-27B-oQ8-mtp"),
     extra_args: z.array(z.string()).optional(),
+    commit_leftovers: z.boolean().default(false),
   }).default({}),
   oMLX: z.object({
     url: z.string().default("http://127.0.0.1:1234/v1"),
@@ -72,6 +73,11 @@ const TomlSchema = z.object({
     max_retries: z.number().default(1),
     thinking: z.string().default("minimal"),
   }).default({}),
+  plan_lint: z.object({
+    enabled: z.boolean().default(true),
+    block_on_error: z.boolean().default(true),
+    check_labels: z.boolean().default(true),
+  }).default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -106,6 +112,10 @@ export function loadConfig(path: string): Config {
     criticEnabled: d.critic.enabled,
     criticMaxRetries: d.critic.max_retries,
     criticThinking: d.critic.thinking,
+    planLintEnabled: d.plan_lint.enabled,
+    planLintBlockOnError: d.plan_lint.block_on_error,
+    planLintCheckLabels: d.plan_lint.check_labels,
+    commitLeftoversEnabled: d.pi.commit_leftovers,
   };
 }
 

@@ -93,7 +93,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     const summary = gm ? gm.supervisorSummary : "no nudges issued";
     acc.setError(`supervisor kill: ${killReason} (${summary})`);
   }
-  return acc.result(Date.now() - start, timedOut);
+  // A guard KILL is a SOFT abort (parity with Python aborted_by_repetition):
+  // the PR-flow continues past it to salvage any commits made before the abort.
+  return acc.result(Date.now() - start, timedOut, killReason !== null);
 }
 
 /**

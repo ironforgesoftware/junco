@@ -126,6 +126,10 @@ function makeConfig(work: string, ghBin: string): Config {
     criticEnabled: true,
     criticMaxRetries: 1,
     criticThinking: "minimal",
+    planLintEnabled: true,
+    planLintBlockOnError: true,
+    planLintCheckLabels: true,
+    commitLeftoversEnabled: false,
   };
 }
 

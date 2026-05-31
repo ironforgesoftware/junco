@@ -99,4 +99,24 @@ describe("loadConfig", () => {
     expect(cfg.criticMaxRetries).toBe(2);
     expect(cfg.criticThinking).toBe("high");
   });
+
+  it("applies plan-lint + commit_leftovers defaults when sections are absent", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.planLintEnabled).toBe(true);
+    expect(cfg.planLintBlockOnError).toBe(true);
+    expect(cfg.planLintCheckLabels).toBe(true);
+    expect(cfg.commitLeftoversEnabled).toBe(false);
+  });
+
+  it("reads the [plan_lint] knobs and [pi].commit_leftovers from config.toml", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n[pi]\ncommit_leftovers = true\n[plan_lint]\nenabled = false\nblock_on_error = false\ncheck_labels = false\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.planLintEnabled).toBe(false);
+    expect(cfg.planLintBlockOnError).toBe(false);
+    expect(cfg.planLintCheckLabels).toBe(false);
+    expect(cfg.commitLeftoversEnabled).toBe(true);
+  });
 });

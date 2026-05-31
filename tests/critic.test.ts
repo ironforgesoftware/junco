@@ -66,6 +66,10 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     criticEnabled: true,
     criticMaxRetries: 1,
     criticThinking: "minimal",
+    planLintEnabled: true,
+    planLintBlockOnError: true,
+    planLintCheckLabels: true,
+    commitLeftoversEnabled: false,
     ...overrides,
   };
 }

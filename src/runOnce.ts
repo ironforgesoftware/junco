@@ -6,6 +6,8 @@ import { parseTicket } from "./ticket.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
 import { GuardManager } from "./agent/guardManager.js";
 import { finalize } from "./finalize.js";
+import { deriveRepoContext } from "./repoContext.js";
+import { runPrFlow } from "./prFlow.js";
 import { log, withTicket } from "./logging.js";
 
 const PRIORITY_RANK: Record<string, number> = { high: 2, normal: 1, low: 0 };
@@ -19,6 +21,8 @@ const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 export interface RunDeps {
   // Injection seam: returns a session factory for (cfg, cwd). Defaults to the real Pi SDK.
   sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
+  // Critic session factory, threaded into the PR-flow (tests control its verdict).
+  criticSessionFactory?: () => Promise<AgentSessionLike>;
 }
 
 export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean> {
@@ -42,10 +46,6 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
   if (parsed.length === 0) return false;
 
   const next = parsed[0];
-  if (next.hasRepo) {
-    log.info("skipping PR-flow ticket (M1 = Q&A only)", { id: next.id });
-    return false;
-  }
 
   const claimed = claim(next.path, paths.processing);
   if (!claimed) {
@@ -55,6 +55,28 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
 
   return withTicket(next.id, async (): Promise<boolean> => {
     log.info("claimed", { src: next.path, dst: claimed });
+
+    // PR-flow ticket (frontmatter has `repo:`): derive the repo context and hand
+    // off to the PR orchestrator. A repo-less ctx (null) falls through to Q&A.
+    if (next.hasRepo) {
+      const ctx = deriveRepoContext(next.frontmatter, next.id, {
+        defaultBaseBranch: cfg.defaultBaseBranch,
+        branchPrefix: cfg.branchPrefix,
+        draftByDefault: cfg.draftByDefault,
+        defaultLabels: cfg.defaultLabels,
+      });
+      if (ctx) {
+        const dst = await runPrFlow(cfg, next, claimed, ctx, {
+          sessionFactoryFor: deps.sessionFactoryFor,
+          criticSessionFactory: deps.criticSessionFactory,
+        });
+        log.info("finalized (pr-flow)", { dst });
+        return true;
+      }
+      // ctx === null means no usable `repo:` — fall through to the Q&A path.
+      log.warn("hasRepo ticket produced no repo context; treating as Q&A", { id: next.id });
+    }
+
     const cwd = paths.processing; // Q&A has no worktree; cwd hosts only read-only tools
     const qaCfg: Config = { ...cfg, tools: cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t)) };
     // NOTE: if the factory throws (e.g. model unresolved), this rejects and the

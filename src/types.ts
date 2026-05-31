@@ -24,6 +24,13 @@ export interface Config {
   verifyEnabled: boolean;
   verifyCommandTimeout: number;
   verifyBlockOnFail: boolean;
+  // Plan-lint gate (parity with the Python [plan_lint] section).
+  planLintEnabled: boolean;
+  planLintBlockOnError: boolean;
+  planLintCheckLabels: boolean;
+  // Whether to sweep uncommitted leftovers into a final commit (parity with
+  // [pi].commit_leftovers). Pi-strict default is false (fail-loud).
+  commitLeftoversEnabled: boolean;
   // Post-session critic (parity with the Python [critic] section).
   criticEnabled: boolean;
   criticMaxRetries: number;
@@ -51,4 +58,9 @@ export interface RunResult {
   errorMessage: string | null;
   timedOut: boolean;
   durationMs: number;
+  // True when a guard KILL aborted the session (a SOFT abort — the agent may
+  // have made real commits before the guard fired). The PR-flow treats this
+  // differently from a hard exit (timeout / non-guard error). Python parity:
+  // `RunResult.aborted_by_repetition`.
+  abortedByGuard: boolean;
 }
