@@ -81,4 +81,22 @@ describe("loadConfig", () => {
     expect(cfg.supervisorOutputBudgetPerTurn).toBe(8000);
     expect(cfg.supervisorOutputBudgetPostCommit).toBe(16000);
   });
+
+  it("applies critic defaults when [critic] is absent", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.criticEnabled).toBe(true);
+    expect(cfg.criticMaxRetries).toBe(1);
+    expect(cfg.criticThinking).toBe("minimal");
+  });
+
+  it("reads the [critic] knobs from config.toml", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n[critic]\nenabled = false\nmax_retries = 2\nthinking = "high"\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.criticEnabled).toBe(false);
+    expect(cfg.criticMaxRetries).toBe(2);
+    expect(cfg.criticThinking).toBe("high");
+  });
 });

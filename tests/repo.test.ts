@@ -123,6 +123,9 @@ function makeConfig(work: string, ghBin: string): Config {
     verifyEnabled: true,
     verifyCommandTimeout: 60,
     verifyBlockOnFail: false,
+    criticEnabled: true,
+    criticMaxRetries: 1,
+    criticThinking: "minimal",
   };
 }
 

@@ -142,8 +142,23 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  *
  * The model is a reasoning model (`reasoning: true` + qwen thinking template),
  * matching the validated config; `thinkingLevel: "medium"` keeps thinking on.
+ *
+ * `overrides` lets a caller (e.g. the post-session critic) build a session with
+ * NO tools (`tools: []`) and a different thinking level. When omitted the
+ * existing defaults (`cfg.tools`, `"medium"`) are preserved unchanged.
  */
-export function makePiSessionFactory(cfg: Config, cwd: string): () => Promise<AgentSessionLike> {
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export interface SessionOverrides {
+  tools?: string[];
+  thinkingLevel?: ThinkingLevel | string;
+}
+
+export function makePiSessionFactory(
+  cfg: Config,
+  cwd: string,
+  overrides?: SessionOverrides,
+): () => Promise<AgentSessionLike> {
   return async () => {
     const { createAgentSession, AuthStorage, ModelRegistry, SessionManager } =
       await import("@earendil-works/pi-coding-agent");
@@ -197,11 +212,13 @@ export function makePiSessionFactory(cfg: Config, cwd: string): () => Promise<Ag
       cwd,
       model,
       // Reasoning model (qwen thinking template); "medium" matches typical
-      // worker operation. Tune in a later milestone if needed.
-      thinkingLevel: "medium",
+      // worker operation. The critic overrides this (e.g. cfg.criticThinking).
+      thinkingLevel: (overrides?.thinkingLevel ?? "medium") as ThinkingLevel,
       authStorage,
       modelRegistry,
-      tools: cfg.tools,
+      // The critic passes `[]` (no tools — diff-vs-spec review needs none);
+      // default is the configured worker allowlist.
+      tools: overrides?.tools ?? cfg.tools,
       sessionManager: SessionManager.inMemory(cwd),
     });
     return session;

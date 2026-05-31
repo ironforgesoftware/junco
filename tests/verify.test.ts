@@ -33,6 +33,9 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     verifyEnabled: true,
     verifyCommandTimeout: 10,
     verifyBlockOnFail: false,
+    criticEnabled: true,
+    criticMaxRetries: 1,
+    criticThinking: "minimal",
     ...overrides,
   };
 }

@@ -67,6 +67,11 @@ const TomlSchema = z.object({
     command_timeout: z.number().default(60),
     block_on_fail: z.boolean().default(false),
   }).default({}),
+  critic: z.object({
+    enabled: z.boolean().default(true),
+    max_retries: z.number().default(1),
+    thinking: z.string().default("minimal"),
+  }).default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -98,6 +103,9 @@ export function loadConfig(path: string): Config {
     verifyEnabled: d.verify.enabled,
     verifyCommandTimeout: d.verify.command_timeout,
     verifyBlockOnFail: d.verify.block_on_fail,
+    criticEnabled: d.critic.enabled,
+    criticMaxRetries: d.critic.max_retries,
+    criticThinking: d.critic.thinking,
   };
 }
 

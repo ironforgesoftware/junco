@@ -24,6 +24,10 @@ export interface Config {
   verifyEnabled: boolean;
   verifyCommandTimeout: number;
   verifyBlockOnFail: boolean;
+  // Post-session critic (parity with the Python [critic] section).
+  criticEnabled: boolean;
+  criticMaxRetries: number;
+  criticThinking: string;
 }
 export interface Paths { inbox: string; processing: string; done: string; failed: string; }
 

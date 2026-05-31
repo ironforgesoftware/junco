@@ -14,7 +14,8 @@ function cfg(root: string): Config {
            defaultBaseBranch: "main", branchPrefix: "junco/",
            worktreeRoot: "/tmp/worktrees", removeWorktreeOnSuccess: true,
            draftByDefault: true, defaultLabels: [],
-           verifyEnabled: true, verifyCommandTimeout: 60, verifyBlockOnFail: false };
+           verifyEnabled: true, verifyCommandTimeout: 60, verifyBlockOnFail: false,
+           criticEnabled: true, criticMaxRetries: 1, criticThinking: "minimal" };
 }
 
 function fakeFactory() {
