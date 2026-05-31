@@ -47,4 +47,15 @@ describe("loadConfig", () => {
     expect(cfg.vaultRoot).not.toContain("~");
     expect(cfg.vaultRoot).toBe(join(homedir(), "vault"));
   });
+
+  it("reads the tool allowlist from [pi].extra_args --tools", () => {
+    const p = writeToml(`vault_root = "/v"\n[pi]\nextra_args = ["--tools", "read,bash,grep"]\n`);
+    expect(loadConfig(p).tools).toEqual(["read", "bash", "grep"]);
+  });
+
+  it("falls back to default tools when extra_args has no --tools", () => {
+    const p = writeToml(`vault_root = "/v"\n[pi]\nextra_args = ["--model", "x"]\n`);
+    expect(loadConfig(p).tools).toContain("read");
+    expect(loadConfig(p).tools).toContain("write");
+  });
 });

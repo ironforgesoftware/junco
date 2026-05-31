@@ -56,6 +56,8 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
     log.info("claimed", { src: next.path, dst: claimed });
     const cwd = paths.processing; // Q&A has no worktree; cwd hosts only read-only tools
     const qaCfg: Config = { ...cfg, tools: cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t)) };
+    // NOTE: if the factory throws (e.g. model unresolved), this rejects and the
+    // claimed ticket is left in processing/ — orphan recovery lands in M4.
     const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
     const result = await runAgent({ body: next.body, cwd, timeoutMs: next.timeoutSeconds * 1000, createSession: factory });
     const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
