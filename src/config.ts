@@ -39,6 +39,17 @@ const TomlSchema = z.object({
     api_key: z.string().default("1234"),
   }).default({}),
   worker: z.object({ default_timeout_minutes: z.number().default(30) }).default({}),
+  // Loop-guard supervisor knobs. Python defaults: enabled false; here we
+  // default enabled TRUE for the in-process agent run (M2). The numeric
+  // defaults match the Python worker (budget_per_kind 1, escalation_window 3,
+  // output_budget_per_turn 12000, output_budget_post_commit 24000).
+  supervisor: z.object({
+    enabled: z.boolean().default(true),
+    budget_per_kind: z.number().default(1),
+    escalation_window_turns: z.number().default(3),
+    output_budget_per_turn: z.number().default(12000),
+    output_budget_post_commit: z.number().default(24000),
+  }).default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -54,6 +65,11 @@ export function loadConfig(path: string): Config {
     modelId: d.pi.model_id,
     tools: toolsFromExtraArgs(d.pi.extra_args),
     defaultTimeoutMinutes: d.worker.default_timeout_minutes,
+    supervisorEnabled: d.supervisor.enabled,
+    supervisorBudgetPerKind: d.supervisor.budget_per_kind,
+    supervisorEscalationWindow: d.supervisor.escalation_window_turns,
+    supervisorOutputBudgetPerTurn: d.supervisor.output_budget_per_turn,
+    supervisorOutputBudgetPostCommit: d.supervisor.output_budget_post_commit,
   };
 }
 

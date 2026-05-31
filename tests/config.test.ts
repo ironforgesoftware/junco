@@ -58,4 +58,27 @@ describe("loadConfig", () => {
     expect(loadConfig(p).tools).toContain("read");
     expect(loadConfig(p).tools).toContain("write");
   });
+
+  it("applies supervisor defaults when [supervisor] is absent", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.supervisorEnabled).toBe(true);
+    expect(cfg.supervisorBudgetPerKind).toBe(1);
+    expect(cfg.supervisorEscalationWindow).toBe(3);
+    expect(cfg.supervisorOutputBudgetPerTurn).toBe(12000);
+    expect(cfg.supervisorOutputBudgetPostCommit).toBe(24000);
+  });
+
+  it("reads the [supervisor] knobs from config.toml", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n[supervisor]\nenabled = false\nbudget_per_kind = 2\n` +
+      `escalation_window_turns = 5\noutput_budget_per_turn = 8000\noutput_budget_post_commit = 16000\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.supervisorEnabled).toBe(false);
+    expect(cfg.supervisorBudgetPerKind).toBe(2);
+    expect(cfg.supervisorEscalationWindow).toBe(5);
+    expect(cfg.supervisorOutputBudgetPerTurn).toBe(8000);
+    expect(cfg.supervisorOutputBudgetPostCommit).toBe(16000);
+  });
 });

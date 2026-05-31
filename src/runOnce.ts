@@ -4,6 +4,7 @@ import { queuePaths } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import { GuardManager } from "./agent/guardManager.js";
 import { finalize } from "./finalize.js";
 import { log, withTicket } from "./logging.js";
 
@@ -59,7 +60,19 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
     // NOTE: if the factory throws (e.g. model unresolved), this rejects and the
     // claimed ticket is left in processing/ — orphan recovery lands in M4.
     const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
-    const result = await runAgent({ body: next.body, cwd, timeoutMs: next.timeoutSeconds * 1000, createSession: factory });
+    // Construct the loop-guard supervisor when enabled (M2). It feeds off the
+    // agent event stream inside runAgent: nudge → mid-run steer, kill → abort.
+    const guardManager = cfg.supervisorEnabled
+      ? new GuardManager({
+          supervisorConfig: {
+            budgetPerKind: cfg.supervisorBudgetPerKind,
+            escalationWindowTurns: cfg.supervisorEscalationWindow,
+          },
+          outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
+          outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
+        })
+      : undefined;
+    const result = await runAgent({ body: next.body, cwd, timeoutMs: next.timeoutSeconds * 1000, createSession: factory, guardManager });
     const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
     log.info("finalized", { dst, status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed" });
     return true;
