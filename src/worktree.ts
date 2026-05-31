@@ -118,7 +118,7 @@ export async function prepareWorktree(
   taskId: string,
 ): Promise<string> {
   // Ensure worktreeRoot exists
-  mkdirSync(cfg.worktreeRoot, { parents: true, recursive: true } as Parameters<typeof mkdirSync>[1]);
+  mkdirSync(cfg.worktreeRoot, { recursive: true });
 
   const slug = worktreeSlug(taskId);
   const wtPath = join(cfg.worktreeRoot, slug);
@@ -151,6 +151,7 @@ export async function prepareWorktree(
     // harmless if branch doesn't exist yet; worktree add -B covers it).
     await git(cfg, ["branch", "-f", ctx.branchName, `origin/${ctx.branchName}`], {
       cwd: ctx.repo,
+      timeoutMs: 60_000,
       check: false,
     });
 
