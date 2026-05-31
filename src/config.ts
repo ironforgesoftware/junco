@@ -62,6 +62,11 @@ const TomlSchema = z.object({
     draft_by_default: z.boolean().default(true),
     default_labels: z.array(z.string()).default([]),
   }).default({}),
+  verify: z.object({
+    enabled: z.boolean().default(true),
+    command_timeout: z.number().default(60),
+    block_on_fail: z.boolean().default(false),
+  }).default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -90,6 +95,9 @@ export function loadConfig(path: string): Config {
     removeWorktreeOnSuccess: d.git.remove_worktree_on_success,
     draftByDefault: d.pr.draft_by_default,
     defaultLabels: d.pr.default_labels,
+    verifyEnabled: d.verify.enabled,
+    verifyCommandTimeout: d.verify.command_timeout,
+    verifyBlockOnFail: d.verify.block_on_fail,
   };
 }
 

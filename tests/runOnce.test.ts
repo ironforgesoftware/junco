@@ -13,7 +13,8 @@ function cfg(root: string): Config {
            gitBin: "git", ghBin: "gh",
            defaultBaseBranch: "main", branchPrefix: "junco/",
            worktreeRoot: "/tmp/worktrees", removeWorktreeOnSuccess: true,
-           draftByDefault: true, defaultLabels: [] };
+           draftByDefault: true, defaultLabels: [],
+           verifyEnabled: true, verifyCommandTimeout: 60, verifyBlockOnFail: false };
 }
 
 function fakeFactory() {

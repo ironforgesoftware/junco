@@ -99,6 +99,9 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
     removeWorktreeOnSuccess: true,
     draftByDefault: true,
     defaultLabels: [],
+    verifyEnabled: true,
+    verifyCommandTimeout: 60,
+    verifyBlockOnFail: false,
   };
 }
 

@@ -21,6 +21,9 @@ export interface Config {
   removeWorktreeOnSuccess: boolean;
   draftByDefault: boolean;
   defaultLabels: string[];
+  verifyEnabled: boolean;
+  verifyCommandTimeout: number;
+  verifyBlockOnFail: boolean;
 }
 export interface Paths { inbox: string; processing: string; done: string; failed: string; }
 
