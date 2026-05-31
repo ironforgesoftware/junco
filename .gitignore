@@ -58,3 +58,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Node / TypeScript (M1+ rewrite)
+node_modules/
+*.tsbuildinfo
