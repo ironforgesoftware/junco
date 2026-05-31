@@ -10,7 +10,10 @@ function cfg(root: string): Config {
            modelId: "m", tools: ["read"], defaultTimeoutMinutes: 1,
            supervisorEnabled: true, supervisorBudgetPerKind: 1, supervisorEscalationWindow: 3,
            supervisorOutputBudgetPerTurn: 12000, supervisorOutputBudgetPostCommit: 24000,
-           gitBin: "git", ghBin: "gh" };
+           gitBin: "git", ghBin: "gh",
+           defaultBaseBranch: "main", branchPrefix: "junco/",
+           worktreeRoot: "/tmp/worktrees", removeWorktreeOnSuccess: true,
+           draftByDefault: true, defaultLabels: [] };
 }
 
 function fakeFactory() {

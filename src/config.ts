@@ -53,6 +53,14 @@ const TomlSchema = z.object({
   git: z.object({
     git_bin: z.string().default("git"),
     gh_bin: z.string().default("gh"),
+    default_base_branch: z.string().default("main"),
+    branch_prefix: z.string().default("junco/"),
+    worktree_root: z.string().default("~/junco/worktrees"),
+    remove_worktree_on_success: z.boolean().default(true),
+  }).default({}),
+  pr: z.object({
+    draft_by_default: z.boolean().default(true),
+    default_labels: z.array(z.string()).default([]),
   }).default({}),
 });
 
@@ -76,6 +84,12 @@ export function loadConfig(path: string): Config {
     supervisorOutputBudgetPostCommit: d.supervisor.output_budget_post_commit,
     gitBin: d.git.git_bin,
     ghBin: d.git.gh_bin,
+    defaultBaseBranch: d.git.default_base_branch,
+    branchPrefix: d.git.branch_prefix,
+    worktreeRoot: expandHome(d.git.worktree_root),
+    removeWorktreeOnSuccess: d.git.remove_worktree_on_success,
+    draftByDefault: d.pr.draft_by_default,
+    defaultLabels: d.pr.default_labels,
   };
 }
 

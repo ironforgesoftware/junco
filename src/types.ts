@@ -14,6 +14,13 @@ export interface Config {
   supervisorOutputBudgetPostCommit: number;
   gitBin: string;
   ghBin: string;
+  // Repo-flow / PR config (parity with Python [git] and [pr] sections).
+  defaultBaseBranch: string;
+  branchPrefix: string;
+  worktreeRoot: string;
+  removeWorktreeOnSuccess: boolean;
+  draftByDefault: boolean;
+  defaultLabels: string[];
 }
 export interface Paths { inbox: string; processing: string; done: string; failed: string; }
 
