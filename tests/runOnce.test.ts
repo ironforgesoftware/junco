@@ -56,4 +56,36 @@ describe("runOnce", () => {
     // not claimed — still in inbox
     expect(readdirSync(join(j, "inbox"))).toHaveLength(1);
   });
+
+  it("skips an unreadable ticket but still processes a healthy one", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    // A directory named like a ticket makes readFileSync throw (EISDIR) → must be skipped.
+    mkdirSync(join(j, "inbox", "bad.md"));
+    writeFileSync(join(j, "inbox", "good.md"), "---\nid: good\n---\n# Q\nask\n", "utf8");
+
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() });
+    expect(handled).toBe(true);
+    const doneFiles = readdirSync(join(j, "done"));
+    expect(doneFiles).toHaveLength(1);
+    expect(doneFiles[0]).toContain("good.md");
+  });
+
+  it("gives the Q&A session a read-only tool subset", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(join(j, "inbox", "q1.md"), "---\nid: q1\n---\n# Q\nask\n", "utf8");
+
+    let receivedTools: string[] | undefined;
+    const c: Config = { ...cfg(root), tools: ["read", "write", "bash", "edit", "grep", "find", "ls"] };
+    await runOnce(c, {
+      sessionFactoryFor: (passedCfg) => {
+        receivedTools = passedCfg.tools;
+        return fakeFactory();
+      },
+    });
+    expect(receivedTools).toEqual(["read", "grep", "find", "ls"]);
+  });
 });
