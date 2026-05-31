@@ -32,4 +32,25 @@ describe("queue", () => {
     const { processing } = sandbox();
     expect(claim("/nope/missing.md", processing)).toBeNull();
   });
+
+  it("claim destination carries a UTC minute-resolution stamp prefix", () => {
+    const { inbox, processing } = sandbox();
+    const src = join(inbox, "t.md"); writeFileSync(src, "body");
+    const dst = claim(src, processing);
+    expect(dst).not.toBeNull();
+    expect(readdirSync(processing)[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{4}Z__t\.md$/);
+  });
+
+  it("discoverTasks returns [] for a non-existent inbox", () => {
+    expect(discoverTasks("/nope/does-not-exist")).toEqual([]);
+  });
+
+  it("discoverTasks returns paths sorted", () => {
+    const { inbox } = sandbox();
+    writeFileSync(join(inbox, "z.md"), "1"); writeFileSync(join(inbox, "a.md"), "2");
+    const found = discoverTasks(inbox);
+    expect(found).toHaveLength(2);
+    expect(found[0].endsWith("a.md")).toBe(true);
+    expect(found[1].endsWith("z.md")).toBe(true);
+  });
 });

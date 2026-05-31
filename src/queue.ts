@@ -7,8 +7,12 @@ export function discoverTasks(inbox: string): string[] {
       .filter((n) => n.endsWith(".md"))
       .map((n) => join(inbox, n))
       .sort();
-  } catch {
-    return [];
+  } catch (e) {
+    // A missing inbox is normal (not created yet) → empty. Surface anything
+    // else (EACCES, ENOTDIR, …) — silently returning [] would mask an operator
+    // misconfiguration as "no work", matching the Python which let such errors fly.
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw e;
   }
 }
 
@@ -23,8 +27,10 @@ export function claim(src: string, processingDir: string): string | null {
   try {
     renameSync(src, dst);
     return dst;
-  } catch (e: any) {
-    if (e?.code === "ENOENT") return null;
+  } catch (e) {
+    // Source vanished before we claimed it (lost a race / file deleted) → null.
+    // (processingDir was just mkdir'd above, so ENOENT here means the source.)
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
     throw e;
   }
 }
