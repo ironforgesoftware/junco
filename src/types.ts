@@ -12,6 +12,8 @@ export interface Config {
   supervisorEscalationWindow: number;
   supervisorOutputBudgetPerTurn: number;
   supervisorOutputBudgetPostCommit: number;
+  gitBin: string;
+  ghBin: string;
 }
 export interface Paths { inbox: string; processing: string; done: string; failed: string; }
 

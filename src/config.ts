@@ -50,6 +50,10 @@ const TomlSchema = z.object({
     output_budget_per_turn: z.number().default(12000),
     output_budget_post_commit: z.number().default(24000),
   }).default({}),
+  git: z.object({
+    git_bin: z.string().default("git"),
+    gh_bin: z.string().default("gh"),
+  }).default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -70,6 +74,8 @@ export function loadConfig(path: string): Config {
     supervisorEscalationWindow: d.supervisor.escalation_window_turns,
     supervisorOutputBudgetPerTurn: d.supervisor.output_budget_per_turn,
     supervisorOutputBudgetPostCommit: d.supervisor.output_budget_post_commit,
+    gitBin: d.git.git_bin,
+    ghBin: d.git.gh_bin,
   };
 }
 
