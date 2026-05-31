@@ -27,7 +27,10 @@ const TomlSchema = z.object({
 });
 
 export function loadConfig(path: string): Config {
-  const raw = parseToml(readFileSync(path, "utf8"));
+  const raw = parseToml(readFileSync(path, "utf8")) as Record<string, unknown>;
+  // Accept both [oMLX] and [omlx] section casings (parity with the Python
+  // load_config, which read data.get("oMLX", data.get("omlx", {}))).
+  if (raw.oMLX === undefined && raw.omlx !== undefined) raw.oMLX = raw.omlx;
   const d = TomlSchema.parse(raw);
   return {
     vaultRoot: expandHome(d.vault_root),

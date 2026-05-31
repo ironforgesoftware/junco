@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { writeFileSync, mkdtempSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { loadConfig, queuePaths } from "../src/config.js";
 
 function writeToml(body: string): string {
@@ -32,5 +32,19 @@ describe("loadConfig", () => {
     const paths = queuePaths({ vaultRoot: "/v", juncoSubdir: "Junco" } as any);
     expect(paths.inbox).toBe("/v/Junco/inbox");
     expect(paths.failed).toBe("/v/Junco/failed");
+  });
+
+  it("accepts a lowercase [omlx] section (Python parity)", () => {
+    const p = writeToml(`vault_root = "/tmp/vault"\n[omlx]\nurl = "http://host:9/v1"\napi_key = "low"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.omlx.url).toBe("http://host:9/v1");
+    expect(cfg.omlx.apiKey).toBe("low");
+  });
+
+  it("expands a leading ~ in vault_root to the home dir", () => {
+    const p = writeToml(`vault_root = "~/vault"\n[oMLX]\nurl = "u"\napi_key = "k"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.vaultRoot).not.toContain("~");
+    expect(cfg.vaultRoot).toBe(join(homedir(), "vault"));
   });
 });
