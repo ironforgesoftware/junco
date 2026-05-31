@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runAgent } from "../src/agent/session.js";
+import { runAgent, apiBaseUrl, splitModelId } from "../src/agent/session.js";
 
 // A fake AgentSession: records prompts, emits scripted events to all listeners
 // when prompted, and resolves prompt() afterward (mirroring the real SDK, whose
@@ -65,7 +65,31 @@ describe("runAgent", () => {
     expect(result.errorMessage).toBe("boom");
     expect(disposed).toBe(true);
   });
+});
 
+describe("apiBaseUrl", () => {
+  it("strips a trailing /models to get the API base", () => {
+    expect(apiBaseUrl("http://127.0.0.1:1234/v1/models")).toBe("http://127.0.0.1:1234/v1");
+    expect(apiBaseUrl("http://127.0.0.1:1234/v1/models/")).toBe("http://127.0.0.1:1234/v1");
+  });
+  it("leaves an API-base URL unchanged", () => {
+    expect(apiBaseUrl("http://127.0.0.1:1234/v1")).toBe("http://127.0.0.1:1234/v1");
+  });
+});
+
+describe("splitModelId", () => {
+  it("splits on the first slash into provider + id", () => {
+    expect(splitModelId("omlx/Qwen3.6-27B-oQ8-mtp")).toEqual({ provider: "omlx", modelId: "Qwen3.6-27B-oQ8-mtp" });
+  });
+  it("preserves slashes in the model id (multi-segment)", () => {
+    expect(splitModelId("openrouter/anthropic/claude")).toEqual({ provider: "openrouter", modelId: "anthropic/claude" });
+  });
+  it("defaults provider to omlx when there is no slash", () => {
+    expect(splitModelId("bare-model")).toEqual({ provider: "omlx", modelId: "bare-model" });
+  });
+});
+
+describe("runAgent (timeout)", () => {
   it("flips timedOut and aborts when the timeout fires before prompt() resolves", async () => {
     let aborted = false;
     let resolvePrompt: (() => void) | undefined;
