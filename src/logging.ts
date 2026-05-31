@@ -5,7 +5,9 @@ const store = new AsyncLocalStorage<{ ticket: string }>();
 
 function emit(level: Level, msg: string, fields: Record<string, unknown> = {}): void {
   const ticket = store.getStore()?.ticket ?? "-";
-  const entry = { ts: new Date().toISOString(), level, ticket, msg, ...fields };
+  // Spread caller fields FIRST so the canonical keys (ts/level/ticket/msg)
+  // always win — a stray field named e.g. "level" can't corrupt the log shape.
+  const entry = { ...fields, ts: new Date().toISOString(), level, ticket, msg };
   process.stdout.write(JSON.stringify(entry) + "\n");
 }
 

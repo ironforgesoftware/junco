@@ -22,4 +22,14 @@ describe("logging", () => {
     const lines = capture(() => withTicket("T7", () => log.warn("inside")));
     expect(lines[0].ticket).toBe("T7");
   });
+
+  it("canonical keys win over caller fields with the same name", () => {
+    const [entry] = capture(() =>
+      log.info("real", { level: "CRIT", ticket: "bogus", msg: "evil", ts: "x" }),
+    );
+    expect(entry.level).toBe("info");
+    expect(entry.ticket).toBe("-");
+    expect(entry.msg).toBe("real");
+    expect(entry.ts).not.toBe("x");
+  });
 });
