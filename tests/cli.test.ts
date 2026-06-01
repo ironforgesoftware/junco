@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, type MockedFunction, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
@@ -177,16 +177,19 @@ describe("run(['start']) — mainLoop throws", () => {
 // bare invocation → defaults to start
 // ---------------------------------------------------------------------------
 
-describe("run([]) — bare invocation defaults to start", () => {
-  it("returns 0", async () => {
-    const deps = makeDeps();
+describe("run([]) — first-run aware bare invocation", () => {
+  it("starts the daemon when a config already exists", async () => {
+    const deps = makeDeps({ existsFn: () => true });
     expect(await run([], deps)).toBe(0);
+    expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
   });
 
-  it("calls mainLoopFn (i.e. start path)", async () => {
-    const deps = makeDeps();
-    await run([], deps);
-    expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
+  it("runs the setup wizard (not start) when no config exists", async () => {
+    const wizard = vi.fn(async () => 0);
+    const deps = makeDeps({ existsFn: () => false, runInitWizardFn: wizard });
+    expect(await run([], deps)).toBe(0);
+    expect(wizard).toHaveBeenCalledTimes(1);
+    expect(deps.mainLoopFn).not.toHaveBeenCalled();
   });
 });
 
@@ -586,5 +589,57 @@ describe("run(['init', '--config', p])", () => {
     });
     const out = captured.join("");
     expect(out.length).toBeGreaterThan(0);
+  });
+});
+
+describe("run(['init']) — wizard routing", () => {
+  it("runs the wizard when no config exists (and passes yes:false)", async () => {
+    const wizard = vi.fn(async () => 0);
+    const code = await run(["init", "--config", "/nope/config.toml"], {
+      existsFn: () => false,
+      runInitWizardFn: wizard,
+      printFn: () => {},
+    });
+    expect(code).toBe(0);
+    expect(wizard).toHaveBeenCalledTimes(1);
+    expect(wizard.mock.calls[0][1]).toEqual({ yes: false });
+  });
+
+  it("passes --yes through to the wizard", async () => {
+    const wizard = vi.fn(async () => 0);
+    await run(["init", "--yes", "--config", "/nope/config.toml"], {
+      existsFn: () => false,
+      runInitWizardFn: wizard,
+      printFn: () => {},
+    });
+    expect(wizard.mock.calls[0][1]).toEqual({ yes: true });
+  });
+
+  it("does NOT overwrite an existing config (ensure-dirs only)", async () => {
+    const { configPath, vaultRoot } = freshDispatchVault(); // config present
+    const before = readFileSync(configPath, "utf8");
+    const wizard = vi.fn(async () => 0);
+    const code = await run(["init", "--config", configPath], {
+      runInitWizardFn: wizard,
+      printFn: () => {},
+    });
+    expect(code).toBe(0);
+    expect(wizard).not.toHaveBeenCalled();
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+    expect(existsSync(join(vaultRoot, "Junco", "inbox"))).toBe(true);
+  });
+
+  it("guards a non-TTY first run (no askFn / wizard / --yes) and writes nothing", async () => {
+    const origTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    try {
+      const code = await run(["init", "--config", "/nope/config.toml"], {
+        existsFn: () => false,
+        printFn: () => {},
+      });
+      expect(code).toBe(1);
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: origTTY, configurable: true });
+    }
   });
 });

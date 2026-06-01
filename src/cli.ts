@@ -3,9 +3,11 @@
  * Junco CLI — M4 restructure.
  *
  * Subcommands:
+ *   junco init [--config <path>] [--yes]     — setup wizard (writes config + queue)
  *   junco start [--config <path>] [--once]   — daemon (acquire lock, run mainLoop)
  *   junco run-once [--config <path>]         — dev/cron one-shot (no lock)
- *   junco                                    — bare → defaults to start
+ *   junco                                    — bare → wizard on first run (no
+ *                                              config yet), else start
  *   junco --help | -h                        — usage
  *
  * `run(argv, deps)` is a pure-ish function that returns an exit code without
@@ -17,7 +19,7 @@
 
 import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
@@ -29,6 +31,7 @@ import { log, setLogLevel } from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
+import { runInitWizard, type AskFn } from "./wizard.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -44,6 +47,12 @@ export interface CliDeps {
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
   readStdinFn?: () => Promise<string>;
+  /** Interactive prompt fn for the `init` setup wizard (tests inject scripted answers). */
+  askFn?: AskFn;
+  /** Existence check for first-run detection (tests control routing). Default: fs.existsSync. */
+  existsFn?: (path: string) => boolean;
+  /** The init wizard (tests inject a spy to assert routing without touching the fs). */
+  runInitWizardFn?: (configPath: string, opts: { yes?: boolean }) => Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,16 +63,20 @@ const USAGE = `\
 Usage: junco <subcommand> [options]
 
 Subcommands:
-  start        Start the daemon (default when no subcommand is given)
+  init         Interactive setup wizard — writes config.toml + creates the queue
+  start        Start the daemon
   run-once     Process one task and exit (dev/cron convenience; no lock)
   service      Render a service file to stdout (launchd plist or systemd unit)
   inbox-path   Print the inbox directory path and exit
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
-  init         Create queue directories for a new vault
+
+  (no subcommand) → runs the setup wizard on first run (no config yet),
+                    otherwise starts the daemon.
 
 Options:
   --config <path>       Path to config.toml  [default: config.toml]
+  --yes, -y             (init) Scaffold a default config without prompting
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
@@ -93,6 +106,7 @@ export async function run(
       once: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       platform: { type: "string" },
+      yes: { type: "boolean", short: "y", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -104,7 +118,11 @@ export async function run(
     return 0;
   }
 
-  const subcommand = positionals[0] ?? "start";
+  const existsFn = deps.existsFn ?? ((p: string) => existsSync(p));
+  // First-run aware: a bare invocation runs the setup wizard when there's no
+  // config yet, and starts the daemon once one exists.
+  const subcommand =
+    positionals[0] ?? (existsFn(resolve(values.config as string)) ? "start" : "init");
 
   // Resolve injected print function (defaults to process.stdout.write)
   const printFn = deps.printFn ?? ((s: string) => process.stdout.write(s));
@@ -268,28 +286,38 @@ export async function run(
   }
 
   // ------------------------------------------------------------
-  // init: scaffold queue directories for a new vault
+  // init: interactive setup wizard (writes config + creates the queue) when no
+  // config exists; ensures the queue dirs (no overwrite) when one already does.
   // ------------------------------------------------------------
   if (subcommand === "init") {
-    let cfg: Config;
-    try {
-      cfg = loadConfigFn(values.config as string);
-    } catch (e) {
-      process.stderr.write(
-        `junco init: could not load config — ${e instanceof Error ? e.message : String(e)}\n` +
-        `  Create a config.toml with at least vault_root = "<path>" and retry.\n`,
-      );
-      return 1;
+    const configPath = values.config as string;
+
+    if (!existsFn(resolve(configPath))) {
+      const wantYes = values.yes as boolean;
+      // Non-TTY guard: never hang on a prompt in pipes/CI. An injected askFn or
+      // runInitWizardFn counts as "interactive"; --yes scaffolds without prompting.
+      if (!wantYes && !deps.askFn && !deps.runInitWizardFn && !process.stdin.isTTY) {
+        process.stderr.write(
+          `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
+          `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.toml.\n`,
+        );
+        return 1;
+      }
+      const runWizard =
+        deps.runInitWizardFn ??
+        ((cp: string, o: { yes?: boolean }) =>
+          runInitWizard(cp, { ask: deps.askFn, yes: o.yes, printFn }));
+      return runWizard(configPath, { yes: wantYes });
     }
 
+    // Config already present — ensure the queue dirs, never overwrite the config.
+    const cfg = loadConfigFn(configPath);
     const paths = queuePaths(cfg);
-    const dirs = [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot];
-    for (const d of dirs) {
+    for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
       mkdirSync(d, { recursive: true });
     }
-
     printFn(
-      `Initialized Junco queue directories:\n` +
+      `Config already exists at ${resolve(configPath)}; ensured queue directories:\n` +
       `  inbox:      ${paths.inbox}\n` +
       `  processing: ${paths.processing}\n` +
       `  done:       ${paths.done}\n` +

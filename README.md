@@ -12,28 +12,18 @@ The embedded agent talks to any **OpenAI-compatible `/v1` inference endpoint** �
 
 Requires **Node ≥ 22.19** (plus `git` + an authenticated `gh` for PR-flow tickets).
 
-```bash
-npm install -g @ironforgesoftware/junco   # or ad-hoc: npx @ironforgesoftware/junco <command>
-# (after install, the command is just `junco`)
-```
-
-**1. Point it at your model** — create `~/junco/config.toml`:
-
-```toml
-vault_root = "~/junco-vault"          # where the work queue lives
-
-[model]
-id = "myprovider/my-model"            # any model on an OpenAI-compatible endpoint
-base_url = "http://127.0.0.1:1234/v1"
-api_key = "your-api-key"
-# (or, if you use Pi:  models_json = "~/.pi/agent/models.json")
-```
-
-**2. Set up and start:**
+**1. Run the setup wizard** — it asks a few questions, writes `config.toml`, and creates the queue:
 
 ```bash
-junco init  --config ~/junco/config.toml   # create the inbox/processing/done/failed dirs
-junco start --config ~/junco/config.toml   # run the daemon (Ctrl-C to stop)
+npx @ironforgesoftware/junco        # first run → setup wizard; afterwards → starts the daemon
+# prefer a global install?  npm install -g @ironforgesoftware/junco   (then the command is just `junco`)
+```
+(Or explicitly: `junco init` runs the same wizard; `junco init --yes` scaffolds defaults non-interactively.)
+
+**2. Start the worker:**
+
+```bash
+junco start          # polls the inbox; Ctrl-C to stop  (a bare `junco` also starts it once configured)
 ```
 
 **3. Give it work** — a ticket is a Markdown file. With a `repo:` field junco opens a draft PR; without one it answers in place:
@@ -77,34 +67,32 @@ npx @ironforgesoftware/junco <command>
 # (either way, the installed command is just `junco`)
 ```
 
-### 2. Create your config
-
-Create `~/junco/config.toml` with at least these keys:
-
-```toml
-vault_root = "~/my-junco-vault"   # where the queue lives
-
-[model]
-id = "myprovider/my-model"        # provider-prefixed model id
-base_url = "http://127.0.0.1:1234/v1"  # your OpenAI-compatible endpoint
-api_key = "your-api-key"
-# (or set: models_json = "~/.pi/agent/models.json" to load the model from there)
-```
-
-See [Configuration](#configuration) for every available key, or copy
-`examples/config.toml` as a starting point.
-
-### 3. Initialize the vault
+### 2. Set up (interactive wizard)
 
 ```bash
 junco init --config ~/junco/config.toml
 ```
 
-`init` reads `vault_root` from your config and creates the queue directories
-`<vault_root>/Junco/{inbox,processing,done,failed}` plus the worktree root.
-(It does not write `config.toml` — create that yourself in step 2.)
+The wizard asks for your vault directory and model (an OpenAI-compatible endpoint, or a Pi `models.json`), **writes `config.toml`**, and creates the queue directories `<vault_root>/Junco/{inbox,processing,done,failed}` plus the worktree root. Add `--yes` to scaffold defaults non-interactively. A bare `junco` (or `npx @ironforgesoftware/junco`) runs this same wizard on first run.
 
-### 4. Start the daemon
+<details><summary>Prefer to write the config by hand?</summary>
+
+Create `config.toml` with at least:
+
+```toml
+vault_root = "~/my-junco-vault"
+[model]
+id = "myprovider/my-model"             # provider-prefixed model id
+base_url = "http://127.0.0.1:1234/v1"  # your OpenAI-compatible endpoint
+api_key = "your-api-key"
+# (or set: models_json = "~/.pi/agent/models.json" to load the model from there)
+```
+
+Then run `junco init` — with a config already present it just creates the queue dirs (it never overwrites your config). See [Configuration](#configuration) for every key, or copy `examples/config.toml`.
+
+</details>
+
+### 3. Start the daemon
 
 ```bash
 junco start --config ~/junco/config.toml
@@ -112,7 +100,7 @@ junco start --config ~/junco/config.toml
 
 The daemon polls the inbox every 15 seconds. It acquires a lock (`worker.lock` next to `config.toml`) so only one instance runs at a time.
 
-### 5. Submit your first ticket
+### 4. Submit your first ticket
 
 **Q&A ticket** (no git, just an answer written back to the file):
 
@@ -217,7 +205,8 @@ All commands accept `--config <path>` to point at a non-default `config.toml`. W
 | `junco submit <file\|-> [--config <path>]` | Atomically place a ticket into the configured inbox. Use `-` to read from stdin. The inbox filename is derived from the ticket's `id` frontmatter field. |
 | `junco inbox-path [--config <path>]` | Print the resolved inbox directory path. |
 | `junco schema` | Print the ticket-frontmatter JSON Schema (the typed contract for all frontmatter fields). |
-| `junco init [--config <path>]` | Create queue directories (`inbox/`, `processing/`, `done/`, `failed/`) and the worktree root for a new vault. |
+| `junco init [--config <path>] [--yes]` | Interactive setup wizard: prompts for vault + model, **writes `config.toml`**, and creates the queue directories. With a config already present, just creates the dirs (never overwrites). `--yes` scaffolds defaults non-interactively. |
+| `junco` (no subcommand) | First run (no config yet) → the setup wizard; otherwise → `start`. |
 | `junco service [--platform launchd\|systemd] [--config <path>]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere. |
 | `junco --help` / `-h` | Print usage. |
 
