@@ -24,6 +24,7 @@ import { loadConfig } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
 import { log } from "./logging.js";
+import { renderService } from "./service.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -35,6 +36,8 @@ export interface CliDeps {
   installSignalHandlersFn?: (stopFlag: StopFlag) => () => void;
   mainLoopFn?: (cfg: Config, stopFlag: StopFlag, opts: { once?: boolean }) => Promise<void>;
   runOnceFn?: (cfg: Config) => Promise<boolean>;
+  /** Output function for the `service` subcommand. Default: process.stdout.write. */
+  printFn?: (s: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,11 +50,14 @@ Usage: junco <subcommand> [options]
 Subcommands:
   start      Start the daemon (default when no subcommand is given)
   run-once   Process one task and exit (dev/cron convenience; no lock)
+  service    Render a service file to stdout (launchd plist or systemd unit)
 
 Options:
-  --config <path>   Path to config.toml  [default: config.toml]
-  --once            (start) Process one task then exit
-  --help, -h        Show this help message
+  --config <path>       Path to config.toml  [default: config.toml]
+  --once                (start) Process one task then exit
+  --platform <name>     (service) Target platform: launchd | systemd
+                        [default: launchd on macOS, systemd elsewhere]
+  --help, -h            Show this help message
 `;
 
 // ---------------------------------------------------------------------------
@@ -76,6 +82,7 @@ export async function run(
       config: { type: "string", default: "config.toml" },
       once: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
+      platform: { type: "string" },
     },
     allowPositionals: true,
     strict: false,
@@ -88,6 +95,43 @@ export async function run(
   }
 
   const subcommand = positionals[0] ?? "start";
+
+  // Resolve injected print function (defaults to process.stdout.write)
+  const printFn = deps.printFn ?? ((s: string) => process.stdout.write(s));
+
+  // ------------------------------------------------------------
+  // service: render launchd plist or systemd unit to stdout
+  // ------------------------------------------------------------
+  if (subcommand === "service") {
+    const rawPlatform = values.platform as string | undefined;
+    const platform: "launchd" | "systemd" =
+      rawPlatform === "launchd" || rawPlatform === "systemd"
+        ? rawPlatform
+        : process.platform === "darwin"
+        ? "launchd"
+        : "systemd";
+
+    const configPath = resolve(values.config as string);
+    // Resolve cliEntry: use the script that was invoked (process.argv[1]),
+    // falling back to the binary field in package.json if unavailable.
+    const cliEntry = resolve(process.argv[1] ?? "dist/cli.js");
+
+    const rendered = renderService(platform, { cliEntry, configPath });
+    printFn(rendered + "\n");
+
+    // Print install hint to stderr
+    if (platform === "launchd") {
+      process.stderr.write(
+        "# Install: cp <file> ~/Library/LaunchAgents/ && launchctl bootstrap gui/$UID ~/Library/LaunchAgents/<label>.plist\n",
+      );
+    } else {
+      process.stderr.write(
+        "# Install: cp <file> ~/.config/systemd/user/junco.service && systemctl --user enable --now junco\n",
+      );
+    }
+
+    return 0;
+  }
 
   // ------------------------------------------------------------
   // run-once: single runOnce() attempt, no lock, no mainLoop

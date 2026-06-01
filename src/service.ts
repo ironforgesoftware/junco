@@ -1,0 +1,158 @@
+/**
+ * Service-file renderer for the Junco node daemon.
+ *
+ * Produces:
+ *  - macOS launchd LaunchAgent plist  (renderLaunchdPlist)
+ *  - Linux systemd user unit          (renderSystemdUnit)
+ *
+ * Both targets encode the same semantics:
+ *  - run `<nodeBin> <cliEntry> start --config <configPath>`
+ *  - respawn on crash (non-zero exit), but NOT on a clean exit 0
+ *    (important: the lock-held path exits 0, so the supervisor must not
+ *     endlessly loop when another instance is already running)
+ *  - minimum 30-second gap between respawn attempts (ThrottleInterval / RestartSec)
+ *
+ * Port / extension of the Python scripts/install.sh LaunchAgent stanza.
+ */
+
+import { dirname, resolve, join } from "node:path";
+
+// ---------------------------------------------------------------------------
+// Public interface
+// ---------------------------------------------------------------------------
+
+export interface ServiceOpts {
+  /** launchd Label / systemd unit base name.
+   *  Default: "com.junco.worker" (launchd) / unused in systemd header. */
+  label?: string;
+  /** Absolute node binary path. Default: process.execPath. */
+  nodeBin?: string;
+  /** Absolute path to the junco CLI entry (dist/cli.js). Required. */
+  cliEntry: string;
+  /** Absolute path to config.toml. Required. */
+  configPath: string;
+  /** Dir for stdout/stderr log files (launchd). Default: dirname(resolve(configPath)). */
+  logDir?: string;
+  /** HOME env value. Default: process.env.HOME ?? "". */
+  home?: string;
+  /** PATH env value. Default includes dirname(nodeBin) + common prefix dirs. */
+  pathEnv?: string;
+}
+
+// ---------------------------------------------------------------------------
+// XML escaping (defensive — paths rarely contain these but spec says escape)
+// ---------------------------------------------------------------------------
+
+function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// ---------------------------------------------------------------------------
+// Resolve defaults
+// ---------------------------------------------------------------------------
+
+function resolveOpts(opts: ServiceOpts): Required<ServiceOpts> {
+  const nodeBin = opts.nodeBin ?? process.execPath;
+  const logDir = opts.logDir ?? dirname(resolve(opts.configPath));
+  const home = opts.home ?? (process.env.HOME ?? "");
+  // Build a sensible PATH that includes the node binary's dir first
+  const nodeBinDir = dirname(nodeBin);
+  const pathEnv =
+    opts.pathEnv ??
+    `${nodeBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
+  const label = opts.label ?? "com.junco.worker";
+  return {
+    label,
+    nodeBin,
+    cliEntry: opts.cliEntry,
+    configPath: opts.configPath,
+    logDir,
+    home,
+    pathEnv,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// renderLaunchdPlist
+// ---------------------------------------------------------------------------
+
+export function renderLaunchdPlist(opts: ServiceOpts): string {
+  const o = resolveOpts(opts);
+  const x = xmlEscape;
+
+  const stdOut = join(o.logDir, "launchd.out");
+  const stdErr = join(o.logDir, "launchd.err");
+
+  return `\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${x(o.label)}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${x(o.nodeBin)}</string>
+        <string>${x(o.cliEntry)}</string>
+        <string>start</string>
+        <string>--config</string>
+        <string>${x(o.configPath)}</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>30</integer>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>${x(stdOut)}</string>
+    <key>StandardErrorPath</key><string>${x(stdErr)}</string>
+    <key>EnvironmentVariables</key><dict>
+        <key>HOME</key><string>${x(o.home)}</string>
+        <key>PATH</key><string>${x(o.pathEnv)}</string>
+    </dict>
+</dict>
+</plist>
+`;
+}
+
+// ---------------------------------------------------------------------------
+// renderSystemdUnit
+// ---------------------------------------------------------------------------
+
+export function renderSystemdUnit(opts: ServiceOpts): string {
+  const o = resolveOpts(opts);
+
+  // systemd unit lines must not be XML-escaped; values with spaces in ExecStart
+  // should be quoted, but our paths are absolute and shouldn't contain spaces.
+  // We intentionally do not XML-escape here — this is INI-style, not XML.
+  return `\
+[Unit]
+Description=Junco task-queue worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${o.nodeBin} ${o.cliEntry} start --config ${o.configPath}
+Restart=on-failure
+RestartSec=30
+Environment=HOME=${o.home}
+Environment=PATH=${o.pathEnv}
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+// ---------------------------------------------------------------------------
+// renderService — dispatch
+// ---------------------------------------------------------------------------
+
+export function renderService(
+  platform: "launchd" | "systemd",
+  opts: ServiceOpts,
+): string {
+  if (platform === "launchd") return renderLaunchdPlist(opts);
+  return renderSystemdUnit(opts);
+}

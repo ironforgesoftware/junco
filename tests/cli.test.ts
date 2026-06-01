@@ -270,6 +270,74 @@ describe("run(['-h'])", () => {
 });
 
 // ---------------------------------------------------------------------------
+// service subcommand
+// ---------------------------------------------------------------------------
+
+describe("run(['service','--platform','systemd'])", () => {
+  it("returns 0", async () => {
+    const captured: string[] = [];
+    const deps = makeDeps({ printFn: (s) => captured.push(s) });
+    const code = await run(
+      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
+      deps,
+    );
+    expect(code).toBe(0);
+  });
+
+  it("captured output contains [Unit]", async () => {
+    const captured: string[] = [];
+    const deps = makeDeps({ printFn: (s) => captured.push(s) });
+    await run(
+      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
+      deps,
+    );
+    expect(captured.join("")).toContain("[Unit]");
+  });
+
+  it("captured output contains ExecStart=", async () => {
+    const captured: string[] = [];
+    const deps = makeDeps({ printFn: (s) => captured.push(s) });
+    await run(
+      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
+      deps,
+    );
+    expect(captured.join("")).toContain("ExecStart=");
+  });
+
+  it("does NOT call mainLoopFn", async () => {
+    const captured: string[] = [];
+    const deps = makeDeps({ printFn: (s) => captured.push(s) });
+    await run(
+      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
+      deps,
+    );
+    expect(deps.mainLoopFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("run(['service','--platform','launchd'])", () => {
+  it("returns 0", async () => {
+    const captured: string[] = [];
+    const deps = makeDeps({ printFn: (s) => captured.push(s) });
+    const code = await run(
+      ["service", "--platform", "launchd", "--config", "/tmp/config.toml"],
+      deps,
+    );
+    expect(code).toBe(0);
+  });
+
+  it("captured output contains <plist", async () => {
+    const captured: string[] = [];
+    const deps = makeDeps({ printFn: (s) => captured.push(s) });
+    await run(
+      ["service", "--platform", "launchd", "--config", "/tmp/config.toml"],
+      deps,
+    );
+    expect(captured.join("")).toContain("<plist");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // lock path derivation
 // ---------------------------------------------------------------------------
 
