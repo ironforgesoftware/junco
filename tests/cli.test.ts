@@ -6,7 +6,10 @@
  * injected via CliDeps — no real fs / daemon / signals / timers.
  */
 
-import { describe, it, expect, vi, type MockedFunction } from "vitest";
+import { describe, it, expect, vi, type MockedFunction, afterEach } from "vitest";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
 import type { StopFlag } from "../src/daemon.js";
@@ -360,5 +363,222 @@ describe("lock path derivation", () => {
     await run(["start"], deps);
     const [lockArg] = (acquireLockFn as MockedFunction<any>).mock.calls[0];
     expect(lockArg).toMatch(/worker\.lock$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dispatch CLI subcommands — M6-T2
+// ---------------------------------------------------------------------------
+
+/**
+ * Full Config object satisfying all required fields for tests that touch the
+ * real FS (inbox-path, submit, init).  vaultRoot is overridden per test.
+ */
+const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
+  juncoSubdir: "Junco",
+  omlx: { url: "http://127.0.0.1:1234/v1", apiKey: "test" },
+  modelId: "test-model",
+  tools: ["read"],
+  defaultTimeoutMinutes: 30,
+  pollIntervalSeconds: 15,
+  startupPollSeconds: 30,
+  startupWait: true,
+  supervisorEnabled: false,
+  supervisorBudgetPerKind: 1,
+  supervisorEscalationWindow: 3,
+  supervisorOutputBudgetPerTurn: 12000,
+  supervisorOutputBudgetPostCommit: 24000,
+  gitBin: "git",
+  ghBin: "gh",
+  defaultBaseBranch: "main",
+  branchPrefix: "junco/",
+  worktreeRoot: "/tmp/worktrees",
+  removeWorktreeOnSuccess: true,
+  draftByDefault: true,
+  defaultLabels: [],
+  verifyEnabled: false,
+  verifyCommandTimeout: 60,
+  verifyBlockOnFail: false,
+  planLintEnabled: false,
+  planLintBlockOnError: false,
+  planLintCheckLabels: false,
+  commitLeftoversEnabled: false,
+  criticEnabled: false,
+  criticMaxRetries: 1,
+  criticThinking: "minimal",
+  healthEnabled: false,
+  healthHost: "127.0.0.1",
+  healthPort: 8787,
+  logLevel: "info",
+};
+
+let dispatchTmpDirs: string[] = [];
+
+function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: string } {
+  const vaultRoot = mkdtempSync(join(tmpdir(), "junco-cli-dispatch-"));
+  dispatchTmpDirs.push(vaultRoot);
+  const cfg: Config = { ...DISPATCH_CONFIG_BASE, vaultRoot };
+  // write a real config.toml so loadConfig can load it
+  const configPath = join(vaultRoot, "config.toml");
+  writeFileSync(
+    configPath,
+    `vault_root = "${vaultRoot}"\njunco_subdir = "Junco"\n`,
+    "utf8",
+  );
+  return { cfg, vaultRoot, configPath };
+}
+
+afterEach(() => {
+  for (const d of dispatchTmpDirs) {
+    try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+  dispatchTmpDirs = [];
+});
+
+// --- inbox-path ---
+
+describe("run(['inbox-path', '--config', p])", () => {
+  it("returns 0", async () => {
+    const { configPath } = freshDispatchVault();
+    const captured: string[] = [];
+    const code = await run(["inbox-path", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+  });
+
+  it("prints output ending with /inbox\\n", async () => {
+    const { configPath } = freshDispatchVault();
+    const captured: string[] = [];
+    await run(["inbox-path", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+    });
+    const out = captured.join("");
+    expect(out.trimEnd()).toMatch(/\/inbox$/);
+    expect(out).toMatch(/\n$/);
+  });
+});
+
+// --- schema ---
+
+describe("run(['schema'])", () => {
+  it("returns 0", async () => {
+    const captured: string[] = [];
+    const code = await run(["schema"], {
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+  });
+
+  it("printed output parses as JSON", async () => {
+    const captured: string[] = [];
+    await run(["schema"], { printFn: (s) => captured.push(s) });
+    const out = captured.join("");
+    expect(() => JSON.parse(out)).not.toThrow();
+  });
+
+  it("parsed JSON has a title field", async () => {
+    const captured: string[] = [];
+    await run(["schema"], { printFn: (s) => captured.push(s) });
+    const parsed = JSON.parse(captured.join(""));
+    expect(parsed.title).toBeTruthy();
+  });
+
+  it("does NOT call loadConfigFn (schema is static)", async () => {
+    const loadConfigFn = vi.fn(() => ({} as Config));
+    await run(["schema"], { loadConfigFn });
+    expect(loadConfigFn).not.toHaveBeenCalled();
+  });
+});
+
+// --- submit (stdin) ---
+
+describe("run(['submit', '-', '--config', p]) — stdin", () => {
+  const TICKET_CONTENT = `---\nid: cli-stdin-test\npriority: normal\n---\n\n# Test ticket\n`;
+
+  it("returns 0", async () => {
+    const { configPath } = freshDispatchVault();
+    const captured: string[] = [];
+    const code = await run(
+      ["submit", "-", "--config", configPath],
+      {
+        printFn: (s) => captured.push(s),
+        readStdinFn: async () => TICKET_CONTENT,
+      },
+    );
+    expect(code).toBe(0);
+  });
+
+  it("prints 'submitted: ...'", async () => {
+    const { configPath } = freshDispatchVault();
+    const captured: string[] = [];
+    await run(
+      ["submit", "-", "--config", configPath],
+      {
+        printFn: (s) => captured.push(s),
+        readStdinFn: async () => TICKET_CONTENT,
+      },
+    );
+    expect(captured.join("")).toMatch(/submitted:/);
+  });
+
+  it("the ticket lands in the inbox", async () => {
+    const { configPath, vaultRoot } = freshDispatchVault();
+    const captured: string[] = [];
+    await run(
+      ["submit", "-", "--config", configPath],
+      {
+        printFn: (s) => captured.push(s),
+        readStdinFn: async () => TICKET_CONTENT,
+      },
+    );
+    const expected = join(vaultRoot, "Junco", "inbox", "cli-stdin-test.md");
+    expect(existsSync(expected)).toBe(true);
+  });
+});
+
+// --- submit (no file arg) ---
+
+describe("run(['submit']) — missing file argument", () => {
+  it("returns 2", async () => {
+    const { configPath } = freshDispatchVault();
+    const captured: string[] = [];
+    const code = await run(["submit", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(2);
+  });
+});
+
+// --- init ---
+
+describe("run(['init', '--config', p])", () => {
+  it("returns 0", async () => {
+    const { configPath } = freshDispatchVault();
+    const captured: string[] = [];
+    const code = await run(["init", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+  });
+
+  it("creates the four queue dirs under the vault", async () => {
+    const { configPath, vaultRoot } = freshDispatchVault();
+    await run(["init", "--config", configPath], {
+      printFn: () => {},
+    });
+    for (const dir of ["inbox", "processing", "done", "failed"]) {
+      expect(existsSync(join(vaultRoot, "Junco", dir))).toBe(true);
+    }
+  });
+
+  it("prints a summary mentioning dirs", async () => {
+    const { configPath } = freshDispatchVault();
+    const captured: string[] = [];
+    await run(["init", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+    });
+    const out = captured.join("");
+    expect(out.length).toBeGreaterThan(0);
   });
 });

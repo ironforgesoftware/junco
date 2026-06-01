@@ -17,14 +17,18 @@
 
 import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
+import { readFileSync, mkdirSync } from "node:fs";
+import { basename } from "node:path";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock } from "./lock.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, queuePaths } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
 import { log, setLogLevel } from "./logging.js";
 import { renderService } from "./service.js";
+import { inboxPath, submitTicket } from "./dispatch.js";
+import { describeTicketSchema } from "./ticketSchema.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -36,8 +40,10 @@ export interface CliDeps {
   installSignalHandlersFn?: (stopFlag: StopFlag) => () => void;
   mainLoopFn?: (cfg: Config, stopFlag: StopFlag, opts: { once?: boolean }) => Promise<void>;
   runOnceFn?: (cfg: Config) => Promise<boolean>;
-  /** Output function for the `service` subcommand. Default: process.stdout.write. */
+  /** Output function for the `service`, `inbox-path`, `schema`, `submit`, `init` subcommands. Default: process.stdout.write. */
   printFn?: (s: string) => void;
+  /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
+  readStdinFn?: () => Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,9 +54,13 @@ const USAGE = `\
 Usage: junco <subcommand> [options]
 
 Subcommands:
-  start      Start the daemon (default when no subcommand is given)
-  run-once   Process one task and exit (dev/cron convenience; no lock)
-  service    Render a service file to stdout (launchd plist or systemd unit)
+  start        Start the daemon (default when no subcommand is given)
+  run-once     Process one task and exit (dev/cron convenience; no lock)
+  service      Render a service file to stdout (launchd plist or systemd unit)
+  inbox-path   Print the inbox directory path and exit
+  submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
+  schema       Print the ticket frontmatter JSON Schema and exit
+  init         Create queue directories for a new vault
 
 Options:
   --config <path>       Path to config.toml  [default: config.toml]
@@ -188,6 +198,105 @@ export async function run(
       uninstall();
       lock.release();
     }
+  }
+
+  // ------------------------------------------------------------
+  // inbox-path: print the inbox directory and exit
+  // ------------------------------------------------------------
+  if (subcommand === "inbox-path") {
+    const cfg = loadConfigFn(values.config as string);
+    printFn(inboxPath(cfg) + "\n");
+    return 0;
+  }
+
+  // ------------------------------------------------------------
+  // schema: print the ticket frontmatter JSON Schema (no config needed)
+  // ------------------------------------------------------------
+  if (subcommand === "schema") {
+    printFn(describeTicketSchema() + "\n");
+    return 0;
+  }
+
+  // ------------------------------------------------------------
+  // submit <file|-|--config ...>: place a ticket into the inbox
+  // ------------------------------------------------------------
+  if (subcommand === "submit") {
+    const fileArg = positionals[1];
+    if (!fileArg) {
+      process.stderr.write(`Usage: junco submit <file|-> [--config <path>]\n`);
+      return 2;
+    }
+
+    let content: string;
+    try {
+      if (fileArg === "-") {
+        const readStdinFn = deps.readStdinFn ?? (() =>
+          new Promise<string>((resolve, reject) => {
+            let buf = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { buf += chunk; });
+            process.stdin.on("end", () => resolve(buf));
+            process.stdin.on("error", reject);
+          })
+        );
+        content = await readStdinFn();
+      } else {
+        content = readFileSync(fileArg, "utf8");
+      }
+    } catch (e) {
+      process.stderr.write(
+        `junco submit: cannot read '${fileArg}': ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      return 1;
+    }
+
+    const cfg = loadConfigFn(values.config as string);
+    const idHint = fileArg !== "-" ? basename(fileArg).replace(/\.md$/, "") : undefined;
+
+    let dst: string;
+    try {
+      dst = submitTicket(cfg, content, { idHint });
+    } catch (e) {
+      process.stderr.write(
+        `junco submit: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      return 1;
+    }
+
+    printFn(`submitted: ${dst}\n`);
+    return 0;
+  }
+
+  // ------------------------------------------------------------
+  // init: scaffold queue directories for a new vault
+  // ------------------------------------------------------------
+  if (subcommand === "init") {
+    let cfg: Config;
+    try {
+      cfg = loadConfigFn(values.config as string);
+    } catch (e) {
+      process.stderr.write(
+        `junco init: could not load config — ${e instanceof Error ? e.message : String(e)}\n` +
+        `  Create a config.toml with at least vault_root = "<path>" and retry.\n`,
+      );
+      return 1;
+    }
+
+    const paths = queuePaths(cfg);
+    const dirs = [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot];
+    for (const d of dirs) {
+      mkdirSync(d, { recursive: true });
+    }
+
+    printFn(
+      `Initialized Junco queue directories:\n` +
+      `  inbox:      ${paths.inbox}\n` +
+      `  processing: ${paths.processing}\n` +
+      `  done:       ${paths.done}\n` +
+      `  failed:     ${paths.failed}\n` +
+      `  worktrees:  ${cfg.worktreeRoot}\n`,
+    );
+    return 0;
   }
 
   // ------------------------------------------------------------
