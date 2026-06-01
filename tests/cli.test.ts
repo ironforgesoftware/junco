@@ -376,8 +376,14 @@ describe("lock path derivation", () => {
  */
 const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   juncoSubdir: "Junco",
-  omlx: { url: "http://127.0.0.1:1234/v1", apiKey: "test" },
-  modelId: "test-model",
+  model: {
+      id: "test-model", modelsJson: null, api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
+      contextWindow: 131072, maxTokens: 49152,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      thinkingLevel: "medium",
+      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+    },
   tools: ["read"],
   defaultTimeoutMinutes: 30,
   pollIntervalSeconds: 15,

@@ -6,8 +6,14 @@ import { runOnce } from "../src/runOnce.js";
 import type { Config } from "../src/types.js";
 
 function cfg(root: string): Config {
-  return { vaultRoot: root, juncoSubdir: "Junco", omlx: { url: "u", apiKey: "k" },
-           modelId: "m", tools: ["read"], defaultTimeoutMinutes: 1,
+  return { vaultRoot: root, juncoSubdir: "Junco", model: {
+      id: "m", modelsJson: null, api: "openai-completions",
+      baseUrl: "u", apiKey: "k", reasoning: true, input: ["text", "image"],
+      contextWindow: 131072, maxTokens: 49152,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      thinkingLevel: "medium",
+      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+    }, tools: ["read"], defaultTimeoutMinutes: 1,
            pollIntervalSeconds: 15, startupPollSeconds: 30, startupWait: true,
            supervisorEnabled: true, supervisorBudgetPerKind: 1, supervisorEscalationWindow: 3,
            supervisorOutputBudgetPerTurn: 12000, supervisorOutputBudgetPostCommit: 24000,

@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
 
@@ -237,5 +240,52 @@ describe("runAgent (timeout)", () => {
     });
     expect(aborted).toBe(true);
     expect(result.timedOut).toBe(true);
+  });
+});
+
+// The models.json (file) path of makePiSessionFactory relies on the SDK's
+// ModelRegistry.create(authStorage, path) resolving a provider+model from a
+// Pi-style models.json. This exercises that contract WITHOUT a live model
+// (building the registry from a file does no network I/O).
+describe("models.json file path — SDK resolution", () => {
+  it("ModelRegistry.create resolves a provider+model from a Pi models.json", async () => {
+    const { ModelRegistry, AuthStorage } = await import("@earendil-works/pi-coding-agent");
+    const dir = mkdtempSync(join(tmpdir(), "junco-mj-"));
+    try {
+      const p = join(dir, "models.json");
+      writeFileSync(
+        p,
+        JSON.stringify({
+          providers: {
+            omlx: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              api: "openai-completions",
+              apiKey: "1234",
+              compat: { maxTokensField: "max_tokens", supportsUsageInStreaming: true },
+              models: [
+                {
+                  id: "my-model",
+                  name: "My Model",
+                  reasoning: true,
+                  input: ["text"],
+                  contextWindow: 200000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  compat: { thinkingFormat: "qwen-chat-template" },
+                },
+              ],
+            },
+          },
+        }),
+      );
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), p);
+      const model = registry.find("omlx", "my-model");
+      expect(model).toBeTruthy();
+      expect(model!.contextWindow).toBe(200000);
+      expect(model!.maxTokens).toBe(8192);
+      expect(model!.reasoning).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

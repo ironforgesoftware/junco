@@ -18,8 +18,14 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
-    omlx: { url: "http://127.0.0.1:1234/v1/models", apiKey: "test-key" },
-    modelId: "omlx/test-model",
+    model: {
+      id: "omlx/test-model", modelsJson: null, api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1/models", apiKey: "test-key", reasoning: true, input: ["text", "image"],
+      contextWindow: 131072, maxTokens: 49152,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      thinkingLevel: "medium",
+      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+    },
     tools: [],
     defaultTimeoutMinutes: 30,
     pollIntervalSeconds: 15,

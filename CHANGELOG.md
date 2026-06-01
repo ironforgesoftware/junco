@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Configurable model + inference provider via a new `[model]` config section. Previously the API style, context window, max tokens, thinking format, and the rest of the model's capabilities were hardcoded for a local oMLX/Qwen setup; now they are configurable, so junco can drive any model on any Pi-supported provider (OpenAI-compatible, Anthropic, Google, Bedrock, …). Two modes: point `[model].models_json` at a Pi-style `models.json` to load the provider+model from that file, or describe it inline with `[model]` fields. The legacy `[pi].model_id` and `[oMLX]` keys still work as fallbacks for `id` / `base_url` / `api_key`.
+
 ## [0.1.0] - 2026-05-31
 
 ### Added

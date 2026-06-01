@@ -8,7 +8,7 @@
 
 import type { Config } from "./types.js";
 import { log } from "./logging.js";
-import { apiBaseUrl } from "./agent/session.js";
+import { resolveProbeBaseUrl } from "./agent/modelSetup.js";
 
 /**
  * Minimal stop-flag interface consumed by waitForOmlx.  The real StopFlag
@@ -33,9 +33,9 @@ export interface OmlxReachableDeps {
  * with a 2xx status (resp.ok), false for any other outcome (non-ok, network
  * error, timeout).
  *
- * Probe URL: normalise cfg.omlx.url to the /v1 base via apiBaseUrl (strips a
- * trailing /models if present) then re-append /models — matching the Python
- * worker's intent of hitting the configured endpoint with Bearer auth.
+ * Probe URL: resolveProbeBaseUrl gives the /v1 API base (from a configured
+ * models.json's provider entry, or the inline base_url), then re-append
+ * /models — hitting the configured endpoint with Bearer auth.
  */
 export async function omlxReachable(
   cfg: Config,
@@ -44,7 +44,7 @@ export async function omlxReachable(
   const fetchFn = deps?.fetchFn ?? fetch;
   const timeoutMs = deps?.timeoutMs ?? 5000;
 
-  const base = apiBaseUrl(cfg.omlx.url).replace(/\/+$/, "");
+  const base = resolveProbeBaseUrl(cfg).replace(/\/+$/, "");
   const probeUrl = `${base}/models`;
 
   const controller = new AbortController();
@@ -53,7 +53,7 @@ export async function omlxReachable(
   try {
     const resp = await fetchFn(probeUrl, {
       method: "GET",
-      headers: { Authorization: `Bearer ${cfg.omlx.apiKey}` },
+      headers: { Authorization: `Bearer ${cfg.model.apiKey}` },
       signal: controller.signal,
     });
     return resp.ok;
@@ -123,7 +123,7 @@ export async function waitForOmlx(
     tries++;
     if (tries === 1 || tries % 10 === 0) {
       log.warn(
-        `oMLX unreachable at ${cfg.omlx.url}; retry ${tries} (every ${cfg.startupPollSeconds}s)`,
+        `inference endpoint unreachable at ${cfg.model.baseUrl}; retry ${tries} (every ${cfg.startupPollSeconds}s)`,
       );
     }
 

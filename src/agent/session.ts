@@ -1,6 +1,12 @@
+import { existsSync } from "node:fs";
 import type { Config, RunResult } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
 import { GuardManager } from "./guardManager.js";
+import { log } from "../logging.js";
+import { buildInlineProviderConfig, splitModelId, apiBaseUrl } from "./modelSetup.js";
+
+// Re-exported for back-compat: these helpers moved to ./modelSetup.js.
+export { splitModelId, apiBaseUrl } from "./modelSetup.js";
 
 /**
  * Minimal structural type of what we use from a Pi `AgentSession`. Keeping the
@@ -121,33 +127,28 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  *     only required when you cannot touch the registry directly; here we own the
  *     registry, so the extension machinery is unnecessary.
  *
- * The provider/model values (compat block, reasoning, contextWindow, maxTokens,
- * thinkingFormat) are copied from the VALIDATED `~/.pi/agent/models.json` the
- * Python worker used against this same oMLX server — so the embedded run matches
- * the proven baseline rather than guessed defaults. The `ProviderConfigInput`
- * shape matches `docs/custom-provider.md` + the on-disk schema in `docs/models.md`.
- * (A later milestone can source these from config instead of hardcoding.)
+ * The provider/model values (api, compat block, reasoning, contextWindow,
+ * maxTokens, thinkingFormat) come from the resolved `cfg.model` config — built
+ * either from a Pi models.json (`cfg.model.modelsJson`, path A) or from the
+ * inline `[model].*` TOML fields via `buildInlineProviderConfig` (path B). The
+ * `ProviderConfigInput` shape matches `docs/custom-provider.md` + the on-disk
+ * schema in `docs/models.md`.
  *
- * baseUrl: `cfg.omlx.url` is the list-models endpoint (`.../v1/models`, used by
- * the health check); the provider API base is its parent (`.../v1`), derived via
+ * baseUrl: `cfg.model.baseUrl` may point at the list-models endpoint
+ * (`.../v1/models`); the provider API base is its parent (`.../v1`), derived via
  * `apiBaseUrl()`.
  *
- * Auth: the oMLX API key is injected via `authStorage.setRuntimeApiKey(provider,
- * key)` (auth-storage.d.ts:63), which is the HIGHEST-priority source in
- * `getApiKey` (auth-storage.d.ts:124-134) — so no `apiKey` field is needed in
- * the provider config, and nothing is persisted to disk.
+ * Auth: the API key is injected via `authStorage.setRuntimeApiKey(provider,
+ * cfg.model.apiKey)` (auth-storage.d.ts:63), the HIGHEST-priority source in
+ * `getApiKey` (auth-storage.d.ts:124-134); nothing is persisted to disk.
  *
- * Model id: `cfg.modelId` is provider-prefixed (e.g. "omlx/Qwen3.6-...-mtp"),
- * mirroring what the Python worker passed to the `--model` CLI flag. We split on
- * the first "/" into provider + bare model id, since the programmatic
- * `registerProvider`/`find` APIs take them separately.
- *
- * The model is a reasoning model (`reasoning: true` + qwen thinking template),
- * matching the validated config; `thinkingLevel: "medium"` keeps thinking on.
+ * Model id: `cfg.model.id` is provider-prefixed (e.g. "omlx/Qwen3.6-...-mtp").
+ * We split on the first "/" into provider + bare model id, since the
+ * programmatic `registerProvider`/`find` APIs take them separately.
  *
  * `overrides` lets a caller (e.g. the post-session critic) build a session with
  * NO tools (`tools: []`) and a different thinking level. When omitted the
- * existing defaults (`cfg.tools`, `"medium"`) are preserved unchanged.
+ * defaults (`cfg.tools`, `cfg.model.thinkingLevel`) are preserved unchanged.
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -165,57 +166,43 @@ export function makePiSessionFactory(
     const { createAgentSession, AuthStorage, ModelRegistry, SessionManager } =
       await import("@earendil-works/pi-coding-agent");
 
-    const { provider, modelId } = splitModelId(cfg.modelId);
+    const { provider, modelId } = splitModelId(cfg.model.id);
 
     const authStorage = AuthStorage.create();
-    authStorage.setRuntimeApiKey(provider, cfg.omlx.apiKey);
+    authStorage.setRuntimeApiKey(provider, cfg.model.apiKey);
 
-    const modelRegistry = ModelRegistry.inMemory(authStorage);
-    modelRegistry.registerProvider(provider, {
-      name: provider,
-      baseUrl: apiBaseUrl(cfg.omlx.url),
-      // registerProvider RUNTIME-validates that apiKey (or oauth) is present when
-      // models are defined — even though the type marks it optional and we also
-      // set a runtime key above. The validated models.json carries it inline too.
-      apiKey: cfg.omlx.apiKey,
-      api: "openai-completions",
-      models: [
-        {
-          id: modelId,
-          name: modelId,
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 131072,
-          maxTokens: 49152,
-          // compat is per-MODEL in the programmatic ProviderConfigInput API
-          // (the on-disk models.json splits it provider/model; we merge here).
-          // Copied from the validated ~/.pi/agent/models.json. maxTokensField is
-          // load-bearing: oMLX rejects the auto-detected `max_completion_tokens`.
-          compat: {
-            supportsDeveloperRole: false,
-            supportsReasoningEffort: false,
-            maxTokensField: "max_tokens",
-            supportsUsageInStreaming: true,
-            thinkingFormat: "qwen-chat-template",
-          },
-        },
-      ],
-    });
-
-    const model = modelRegistry.find(provider, modelId);
+    // Path A (file): load the provider+model from a Pi models.json when it's
+    // configured and present — single source of truth, zero drift. Path B
+    // (inline): build the provider+model from the cfg.model.* fields. If the
+    // file path can't resolve the model, fall through to inline.
+    let modelRegistry: any;
+    let model: any;
+    if (cfg.model.modelsJson && existsSync(cfg.model.modelsJson)) {
+      modelRegistry = ModelRegistry.create(authStorage, cfg.model.modelsJson);
+      model = modelRegistry.find(provider, modelId);
+      if (!model) {
+        log.warn("model not in models.json; using inline [model] config", {
+          modelsJson: cfg.model.modelsJson, provider, modelId,
+        });
+      }
+    }
+    if (!model) {
+      const { providerConfig } = buildInlineProviderConfig(cfg);
+      modelRegistry = ModelRegistry.inMemory(authStorage);
+      modelRegistry.registerProvider(provider, providerConfig as any);
+      model = modelRegistry.find(provider, modelId);
+    }
     if (!model) {
       throw new Error(
-        `Pi model "${provider}/${modelId}" not found in registry after registering provider "${provider}" (baseUrl: ${apiBaseUrl(cfg.omlx.url)}).`,
+        `Pi model "${provider}/${modelId}" not found in registry (baseUrl: ${apiBaseUrl(cfg.model.baseUrl)}).`,
       );
     }
 
     const { session } = await createAgentSession({
       cwd,
       model,
-      // Reasoning model (qwen thinking template); "medium" matches typical
-      // worker operation. The critic overrides this (e.g. cfg.criticThinking).
-      thinkingLevel: (overrides?.thinkingLevel ?? "medium") as ThinkingLevel,
+      // Worker default from config; the critic overrides this (cfg.criticThinking).
+      thinkingLevel: (overrides?.thinkingLevel ?? cfg.model.thinkingLevel) as ThinkingLevel,
       authStorage,
       modelRegistry,
       // The critic passes `[]` (no tools — diff-vs-spec review needs none);
@@ -227,25 +214,3 @@ export function makePiSessionFactory(
   };
 }
 
-/**
- * Split a provider-prefixed model id ("omlx/Qwen3.6-...") into its provider and
- * bare model id. Splits on the FIRST "/" only, so model ids that themselves
- * contain slashes (e.g. "openrouter/anthropic/claude") are preserved. If there
- * is no "/", the whole string is treated as the model id under the default
- * "omlx" provider.
- */
-export function splitModelId(full: string): { provider: string; modelId: string } {
-  const slash = full.indexOf("/");
-  if (slash === -1) return { provider: "omlx", modelId: full };
-  return { provider: full.slice(0, slash), modelId: full.slice(slash + 1) };
-}
-
-/**
- * Derive the OpenAI-compatible API base from the configured oMLX URL. The repo
- * config's `[oMLX].url` points at the list-models endpoint (`.../v1/models`),
- * but the provider baseUrl must be the API root (`.../v1`). Strip a trailing
- * `/models` (with optional trailing slash); otherwise return as-is.
- */
-export function apiBaseUrl(url: string): string {
-  return url.replace(/\/models\/?$/, "");
-}

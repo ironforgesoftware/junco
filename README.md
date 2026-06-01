@@ -42,12 +42,11 @@ Create `~/junco/config.toml` with at least these keys:
 ```toml
 vault_root = "~/my-junco-vault"   # where the queue lives
 
-[pi]
-model_id = "myprovider/my-model"  # model id your endpoint exposes
-
-[oMLX]
-url = "http://127.0.0.1:1234/v1"  # your OpenAI-compatible endpoint
+[model]
+id = "myprovider/my-model"        # provider-prefixed model id
+base_url = "http://127.0.0.1:1234/v1"  # your OpenAI-compatible endpoint
 api_key = "your-api-key"
+# (or set: models_json = "~/.pi/agent/models.json" to load the model from there)
 ```
 
 See [Configuration](#configuration) for every available key, or copy
@@ -193,16 +192,32 @@ junco_subdir = "Junco"            # Subfolder name inside vault_root. Default: "
 
 # ── Agent ────────────────────────────────────────────────────────────────────
 [pi]
-model_id = "<provider>/<model>"   # REQUIRED. Model ID the embedded agent sends to the endpoint.
 extra_args = [                    # Optional extra CLI args passed to the agent.
-  "--tools", "bash,read,write,edit,grep,find,todo_write"
+  "--tools", "bash,read,write,edit,grep,find"
 ]
 commit_leftovers = false          # false (default) = agent must commit its own work; fail-loud if not.
 
-# ── Inference endpoint ───────────────────────────────────────────────────────
-[oMLX]                            # Section name is historical; applies to any OpenAI-compatible /v1 endpoint.
-url = "http://127.0.0.1:1234/v1"  # Base URL of the OpenAI-compatible endpoint.
-api_key = "1234"                  # API key for the endpoint.
+# ── Model + inference provider ───────────────────────────────────────────────
+# Two ways to configure the model. EITHER point at a Pi-style models.json:
+[model]
+id = "<provider>/<model>"         # REQUIRED. Provider-prefixed (provider = text before the first "/").
+models_json = "~/.pi/agent/models.json"   # Optional. If set + present, the provider+model (api, compat,
+                                  # context_window, thinking_format, …) are loaded from this file.
+# … OR describe it inline (used when models_json is unset/missing). The fields
+# below default to the values shown — override only what your model needs:
+api = "openai-completions"        # openai-completions | anthropic-messages | google-generative-ai | bedrock-converse-stream | …
+base_url = "http://127.0.0.1:1234/v1"  # Any OpenAI-compatible /v1 base URL.
+api_key = "1234"
+reasoning = true                  # Model supports extended thinking.
+input = ["text", "image"]         # Modalities the model accepts.
+context_window = 131072
+max_tokens = 49152
+thinking_level = "medium"         # off | minimal | low | medium | high | xhigh
+[model.compat]                     # Provider quirks (snake_case here; camelCased internally).
+max_tokens_field = "max_tokens"   # Some servers reject the auto-detected "max_completion_tokens".
+thinking_format = "qwen-chat-template"
+# Back-compat: a legacy [pi].model_id + [oMLX] url/api_key still populate
+# [model].id / base_url / api_key when [model] omits them.
 
 # ── Worker ───────────────────────────────────────────────────────────────────
 [worker]
@@ -263,8 +278,9 @@ log_level = "info"                # debug | info | warn | error
 
 | Knob | Effect |
 |---|---|
-| `[oMLX].url` | Switch inference backends — point at any OpenAI-compatible `/v1` endpoint. |
-| `[pi].model_id` | Tell the agent which model to request from the endpoint. |
+| `[model].id` | Which model the agent requests (provider-prefixed, e.g. `omlx/my-model`). |
+| `[model].models_json` | Point at a Pi `models.json` to load the provider+model (api, compat, context window…) from that file. |
+| `[model].base_url` / `api` | Switch inference backends — any OpenAI-compatible `/v1` endpoint, or another Pi `api` style (Anthropic, Google, Bedrock…). |
 | `[verify].block_on_fail` | Set `true` to make verification failures block the PR open (strict mode). |
 | `[supervisor].budget_per_kind` | Raise to allow more nudges before killing a looping agent. |
 | `[worker].startup_wait` | Set `false` to start the daemon even when the endpoint is not yet up. |
