@@ -6,6 +6,9 @@ export interface Config {
   modelId: string;
   tools: string[];
   defaultTimeoutMinutes: number;
+  pollIntervalSeconds: number;
+  startupPollSeconds: number;
+  startupWait: boolean;
   // Loop-guard supervisor knobs (parity with the Python [supervisor] section).
   supervisorEnabled: boolean;
   supervisorBudgetPerKind: number;

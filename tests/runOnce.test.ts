@@ -8,6 +8,7 @@ import type { Config } from "../src/types.js";
 function cfg(root: string): Config {
   return { vaultRoot: root, juncoSubdir: "Junco", omlx: { url: "u", apiKey: "k" },
            modelId: "m", tools: ["read"], defaultTimeoutMinutes: 1,
+           pollIntervalSeconds: 15, startupPollSeconds: 30, startupWait: true,
            supervisorEnabled: true, supervisorBudgetPerKind: 1, supervisorEscalationWindow: 3,
            supervisorOutputBudgetPerTurn: 12000, supervisorOutputBudgetPostCommit: 24000,
            gitBin: "git", ghBin: "gh",

@@ -1,0 +1,157 @@
+/**
+ * Tests for src/health.ts — omlxReachable + waitForOmlx.
+ * Written FIRST (TDD). No real network, no real delays.
+ *
+ * Port of worker.py omlx_reachable / wait_for_omlx.
+ */
+
+import { describe, it, expect, vi } from "vitest";
+import type { Config } from "../src/types.js";
+import type { StopFlagLike } from "../src/health.js";
+import { omlxReachable, waitForOmlx } from "../src/health.js";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeConfig(overrides: Partial<Config> = {}): Config {
+  return {
+    vaultRoot: "/tmp/vault",
+    juncoSubdir: "Junco",
+    omlx: { url: "http://127.0.0.1:1234/v1/models", apiKey: "test-key" },
+    modelId: "omlx/test-model",
+    tools: [],
+    defaultTimeoutMinutes: 30,
+    pollIntervalSeconds: 15,
+    startupPollSeconds: 30,
+    startupWait: true,
+    supervisorEnabled: false,
+    supervisorBudgetPerKind: 1,
+    supervisorEscalationWindow: 3,
+    supervisorOutputBudgetPerTurn: 12000,
+    supervisorOutputBudgetPostCommit: 24000,
+    gitBin: "git",
+    ghBin: "gh",
+    defaultBaseBranch: "main",
+    branchPrefix: "junco/",
+    worktreeRoot: "/tmp/worktrees",
+    removeWorktreeOnSuccess: true,
+    draftByDefault: true,
+    defaultLabels: [],
+    verifyEnabled: true,
+    verifyCommandTimeout: 60,
+    verifyBlockOnFail: false,
+    criticEnabled: true,
+    criticMaxRetries: 1,
+    criticThinking: "minimal",
+    planLintEnabled: true,
+    planLintBlockOnError: true,
+    planLintCheckLabels: true,
+    commitLeftoversEnabled: false,
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// omlxReachable
+// ---------------------------------------------------------------------------
+
+describe("omlxReachable", () => {
+  it("returns true when fetch returns ok:true", async () => {
+    let capturedUrl: string | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+
+    const fetchFn = async (url: string, init?: RequestInit): Promise<Response> => {
+      capturedUrl = url;
+      capturedHeaders = init?.headers as Record<string, string>;
+      return { ok: true } as Response;
+    };
+
+    const cfg = makeConfig();
+    const result = await omlxReachable(cfg, { fetchFn, timeoutMs: 1000 });
+
+    expect(result).toBe(true);
+    // probe URL should end with /models
+    expect(capturedUrl).toMatch(/\/models$/);
+    // should have Bearer auth header
+    expect(capturedHeaders?.["Authorization"]).toBe("Bearer test-key");
+  });
+
+  it("returns false when fetch returns ok:false", async () => {
+    const fetchFn = async (): Promise<Response> => ({ ok: false } as Response);
+    const cfg = makeConfig();
+    const result = await omlxReachable(cfg, { fetchFn, timeoutMs: 1000 });
+    expect(result).toBe(false);
+  });
+
+  it("returns false when fetch throws (network error)", async () => {
+    const fetchFn = async (): Promise<Response> => {
+      throw new Error("Network error");
+    };
+    const cfg = makeConfig();
+    const result = await omlxReachable(cfg, { fetchFn, timeoutMs: 1000 });
+    expect(result).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// waitForOmlx
+// ---------------------------------------------------------------------------
+
+describe("waitForOmlx", () => {
+  it("returns immediately when startupWait is false", async () => {
+    const cfg = makeConfig({ startupWait: false });
+    const stopFlag: StopFlagLike = { requested: false };
+
+    let fetchCalled = false;
+    const fetchFn = async (): Promise<Response> => {
+      fetchCalled = true;
+      throw new Error("should not be called");
+    };
+
+    await waitForOmlx(cfg, stopFlag, { fetchFn });
+    expect(fetchCalled).toBe(false);
+  });
+
+  it("resolves once reachable after retries; sleep called twice; fetch called 3 times", async () => {
+    const cfg = makeConfig({ startupWait: true, startupPollSeconds: 1 });
+    const stopFlag: StopFlagLike = { requested: false };
+
+    let fetchCallCount = 0;
+    const fetchFn = async (): Promise<Response> => {
+      fetchCallCount++;
+      if (fetchCallCount <= 2) return { ok: false } as Response;
+      return { ok: true } as Response;
+    };
+
+    let sleepCallCount = 0;
+    const sleep = async (_seconds: number, _sf: StopFlagLike): Promise<void> => {
+      sleepCallCount++;
+    };
+
+    await waitForOmlx(cfg, stopFlag, { fetchFn, sleep });
+
+    expect(fetchCallCount).toBe(3);
+    expect(sleepCallCount).toBe(2);
+  });
+
+  it("exits loop when stop flag is set", async () => {
+    const cfg = makeConfig({ startupWait: true, startupPollSeconds: 1 });
+    const stop = { requested: false };
+
+    const fetchFn = async (): Promise<Response> => ({ ok: false } as Response);
+
+    let sleepCallCount = 0;
+    const sleep = async (_seconds: number, _sf: StopFlagLike): Promise<void> => {
+      sleepCallCount++;
+      // Set stop after the first sleep so the loop exits
+      stop.requested = true;
+    };
+
+    await waitForOmlx(cfg, stop, { fetchFn, sleep });
+
+    // Should have fetched once, slept once, then checked stop.requested and exited
+    expect(sleepCallCount).toBe(1);
+    // Should NOT loop forever
+  });
+});

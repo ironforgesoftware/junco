@@ -39,7 +39,12 @@ const TomlSchema = z.object({
     url: z.string().default("http://127.0.0.1:1234/v1"),
     api_key: z.string().default("1234"),
   }).default({}),
-  worker: z.object({ default_timeout_minutes: z.number().default(30) }).default({}),
+  worker: z.object({
+    default_timeout_minutes: z.number().default(30),
+    poll_interval_seconds: z.number().default(15),
+    startup_poll_seconds: z.number().default(30),
+    startup_wait: z.boolean().default(true),
+  }).default({}),
   // Loop-guard supervisor knobs. Python defaults: enabled false; here we
   // default enabled TRUE for the in-process agent run (M2). The numeric
   // defaults match the Python worker (budget_per_kind 1, escalation_window 3,
@@ -93,6 +98,9 @@ export function loadConfig(path: string): Config {
     modelId: d.pi.model_id,
     tools: toolsFromExtraArgs(d.pi.extra_args),
     defaultTimeoutMinutes: d.worker.default_timeout_minutes,
+    pollIntervalSeconds: d.worker.poll_interval_seconds,
+    startupPollSeconds: d.worker.startup_poll_seconds,
+    startupWait: d.worker.startup_wait,
     supervisorEnabled: d.supervisor.enabled,
     supervisorBudgetPerKind: d.supervisor.budget_per_kind,
     supervisorEscalationWindow: d.supervisor.escalation_window_turns,
