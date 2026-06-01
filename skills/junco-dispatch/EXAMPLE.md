@@ -8,7 +8,7 @@ shape-reference, not a copy-paste source.
 
 ## Example 1 — Trivial (1 file, 1 commit, 30 min)
 
-**User brief:** "Dispatch to junco: add a CHANGELOG.md to junco-pr-smoke noting the v0.1.0 release."
+**User brief:** "Dispatch to junco: add a CHANGELOG.md to example-app noting the v0.1.0 release."
 
 **Rendered ticket:**
 
@@ -18,7 +18,7 @@ id: add-changelog-2026-04-23
 created: 2026-04-23T11:30:00
 priority: normal
 timeout_minutes: 30
-repo: ~/Development/junco-pr-smoke
+repo: ~/code/example-app
 base_branch: main
 pr_title: "Add CHANGELOG.md for v0.1.0"
 draft: true
@@ -36,7 +36,7 @@ v0.1.0 section.
 
 ## Pre-flight context (verified at plan time)
 
-- Repo: junco-pr-smoke — disposable smoke-test target. No build system, no tests.
+- Repo: example-app — a small example target repo. No build system, no tests.
 - Existing root files: `README.md`, `HELLO.md`, `HELLO-4.md`. No prior `CHANGELOG.md`.
 - Convention: Keep a Changelog 1.1.0 + Semantic Versioning 2.0.0.
 
@@ -94,7 +94,7 @@ All paths are relative to the worktree root (your cwd).
 
   ### Added
 
-  - Initial state: disposable smoke-test target for the junco task-queue worker.
+  - Initial state: Example target repo for junco.
   ```
 
 - [ ] Commit: `git add CHANGELOG.md && git commit -m "docs: add CHANGELOG.md with v0.1.0 entry"`
@@ -140,7 +140,7 @@ worktree root.
 
 ## Example 2 — Moderate (2 files, 2 commits, 60 min)
 
-**User brief:** "Dispatch to junco: add HELLO-4.md greeting and add a Provenance section to README in junco-pr-smoke."
+**User brief:** "Dispatch to junco: add HELLO-4.md greeting and add a Provenance section to README in example-app."
 (This is a known-good moderate-complexity shape. Use it as
 an anchor for moderate-complexity work.)
 
@@ -152,7 +152,7 @@ id: hello4-and-readme-2026-04-23
 created: 2026-04-23T12:00:00
 priority: normal
 timeout_minutes: 60
-repo: ~/Development/junco-pr-smoke
+repo: ~/code/example-app
 base_branch: main
 pr_title: "Add HELLO-4.md and Provenance section to README"
 draft: true
@@ -169,7 +169,7 @@ the repo's origin is self-documenting.
 
 ## Pre-flight context (verified at plan time)
 
-- Repo: junco-pr-smoke — disposable smoke-test target. No build system, no tests.
+- Repo: example-app — a small example target repo. No build system, no tests.
 - Existing root files: `README.md`, `HELLO.md`. No prior `HELLO-4.md`, no prior `## Provenance 4` section.
 - Repo writes plain markdown; no link checking or linting on commit.
 
@@ -231,7 +231,7 @@ All paths are relative to the worktree root (your cwd).
 
   ## Provenance 4
 
-  Disposable smoke-test target for junco. Exercise run #4.
+  Example target repo for junco. Exercise run #4.
   ```
 
 - [ ] Commit: `git add README.md && git commit -m "Note smoke-test provenance in README"`
@@ -291,7 +291,7 @@ id: amend-42-trailing-newline-2026-04-23
 created: 2026-04-23T14:20:00
 priority: normal
 timeout_minutes: 30
-repo: ~/Development/junco-pr-smoke
+repo: ~/code/example-app
 amends_pr: 42
 ---
 
