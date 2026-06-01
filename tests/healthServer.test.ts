@@ -101,6 +101,14 @@ describe("healthServer", () => {
       const body = await resp.json() as { status: string };
       expect(body.status).toBe("alive");
     });
+
+    it("routes correctly when a query string is present (/live?cb=1)", async () => {
+      handle = await startHealthServer({ port: 0, metrics: makeFakeMetrics() });
+      const resp = await fetch(`${handle.url}/live?cb=123`);
+      expect(resp.status).toBe(200);
+      const body = await resp.json() as { status: string };
+      expect(body.status).toBe("alive");
+    });
   });
 
   // -------------------------------------------------------------------------

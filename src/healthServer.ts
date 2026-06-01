@@ -85,7 +85,9 @@ export function startHealthServer(
           return;
         }
 
-        const path = req.url ?? "/";
+        // Strip any query string so /health?cb=123 (cache-busters, probe args)
+        // still routes correctly.
+        const path = (req.url ?? "/").split("?")[0];
 
         if (path === "/live") {
           const snap = opts.metrics.snapshot();

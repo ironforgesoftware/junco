@@ -505,4 +505,24 @@ describe("mainLoop — observability", () => {
       warnSpy.mockRestore();
     }
   });
+
+  it("closes the health server even when the poll loop throws (finally)", async () => {
+    const cfg = makeConfig({ healthEnabled: true });
+    const stop = new StopFlag();
+    const handle = makeFakeHealthHandle();
+    const startHealthServerFn = vi.fn(async () => handle);
+    const boom = new Error("runOnce blew up mid-loop");
+    const { deps } = makeDeps({
+      startHealthServerFn,
+      runOnceFn: vi.fn(async () => {
+        throw boom;
+      }),
+    });
+
+    // The throw propagates (the daemon process would exit 1), but the health
+    // server must still be closed by the finally — no leaked port.
+    await expect(mainLoop(cfg, stop, {}, deps)).rejects.toBe(boom);
+    expect(startHealthServerFn).toHaveBeenCalledTimes(1);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
 });
