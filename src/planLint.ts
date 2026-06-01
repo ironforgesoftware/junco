@@ -411,10 +411,12 @@ export class LabelCache {
   }
 }
 
-function _fetchRepoLabels(nwo: string): Set<string> {
+function _fetchRepoLabels(nwo: string, ghBin = "gh"): Set<string> {
   /**
    * Call `gh label list --repo <nwo>`. Returns a set of label names.
    *
+   * `ghBin` defaults to PATH-resolved "gh" (NOT an absolute path), so the check
+   * works on Linux / Intel-mac / custom installs; the worker threads `cfg.ghBin`.
    * Returns empty set on any failure (timeout, gh not found, non-zero exit).
    * The checkLabelsExist function treats empty as "could not validate" and
    * emits a warning, not an error — better to let the ticket through than
@@ -422,7 +424,7 @@ function _fetchRepoLabels(nwo: string): Set<string> {
    */
   try {
     const stdout = execFileSync(
-      "/opt/homebrew/bin/gh",
+      ghBin,
       ["label", "list", "--repo", nwo, "--limit", "200", "--json", "name", "-q", ".[].name"],
       { encoding: "utf8", timeout: 30_000 }
     );
@@ -443,6 +445,7 @@ function checkLabelsExist(
   opts: {
     labelCache?: LabelCache;
     fetchLabels?: (nwo: string) => Set<string>;
+    ghBin?: string;
   } = {}
 ): LintViolation[] {
   const rawLabels = frontmatter["labels"];
@@ -459,7 +462,8 @@ function checkLabelsExist(
   }
 
   const cache = opts.labelCache ?? null;
-  const fetchFn = opts.fetchLabels ?? _fetchRepoLabels;
+  const ghBin = opts.ghBin ?? "gh";
+  const fetchFn = opts.fetchLabels ?? ((nwo: string) => _fetchRepoLabels(nwo, ghBin));
 
   let repoLabels: Set<string>;
   const cached = cache ? cache.get(repoNwo) : null;
@@ -513,6 +517,8 @@ export interface LintTicketOpts {
   checkLabels?: boolean;
   labelCache?: LabelCache;
   fetchLabels?: (nwo: string) => Set<string>;
+  /** gh binary for the label-existence check; defaults to PATH-resolved "gh". */
+  ghBin?: string;
 }
 
 export function lintTicket(
@@ -526,7 +532,7 @@ export function lintTicket(
    * Pass `checkLabels: false` to skip the network call to GitHub.
    * Pass `repoPath` (string) to enable filesystem-aware Files-table validation.
    */
-  const { repoNwo, repoPath, checkLabels = true, labelCache, fetchLabels } = opts;
+  const { repoNwo, repoPath, checkLabels = true, labelCache, fetchLabels, ghBin } = opts;
 
   const violations: LintViolation[] = [];
   violations.push(...checkNoCdInVerification(body));
@@ -538,7 +544,7 @@ export function lintTicket(
   violations.push(...checkNoCdInSteps(body));
   if (checkLabels) {
     violations.push(
-      ...checkLabelsExist(frontmatter, repoNwo, { labelCache, fetchLabels })
+      ...checkLabelsExist(frontmatter, repoNwo, { labelCache, fetchLabels, ghBin })
     );
   }
   return new LintResult(violations);

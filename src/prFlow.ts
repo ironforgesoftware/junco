@@ -198,7 +198,7 @@ export function buildPrBody(
   const metadataLines = [
     `- Elapsed: ${fmtDuration(Math.round(result.durationMs / 1000))}`,
     `- Tool calls: ${result.toolCalls.length}`,
-    `- Tokens: in=${result.usage.input} · out=${result.usage.output} · total=${result.usage.total}`,
+    `- Tokens: in=${result.usage.input.toLocaleString("en-US")} · out=${result.usage.output.toLocaleString("en-US")} · total=${result.usage.total.toLocaleString("en-US")}`,
     `- Stop reason: \`${result.stopReason}\``,
   ];
   if (result.abortedByGuard) metadataLines.push("- **Aborted by repetition guard:** yes");
@@ -258,6 +258,7 @@ export async function runPrFlow(
       repoPath: ctx.repo,
       checkLabels: cfg.planLintCheckLabels,
       labelCache: LABEL_CACHE,
+      ghBin: cfg.ghBin,
     });
     for (const w of lint.warnings) {
       log.warn(`plan-lint warning [${w.rule}] for ${task.id}: ${w.message}`);
@@ -365,6 +366,12 @@ export async function runPrFlow(
 
     // Phase 9: post-session review (skip on a guard-aborted session).
     const skipPostSessionReview = result.abortedByGuard;
+    if (skipPostSessionReview) {
+      // Record the skip as metadata (parity with worker.py PrOutcome.critic =
+      // CriticResult(status="skipped", ...)). The buildPrBody banner only fires
+      // on pass/missing, so this never surfaces in the PR body — metadata only.
+      prOutcome.critic = { status: "skipped", findings: "aborted-by-repetition session", rawOutput: "" };
+    }
     if (!skipPostSessionReview) {
       prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
       if (prOutcome.verification.skippedReason) {

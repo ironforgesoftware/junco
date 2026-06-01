@@ -639,6 +639,23 @@ describe("labels_exist", () => {
     lintTicket(VALID_BODY, fm, { repoNwo, fetchLabels, checkLabels: true, labelCache: cache });
     expect(callCount).toBe(2);
   });
+
+  // Regression: the real _fetchRepoLabels path must honor the configured gh
+  // binary (not a hardcoded /opt/homebrew/bin/gh). No fetchLabels injection here
+  // — this exercises execFileSync against a fake gh script passed via ghBin.
+  it("ghBin is honored by the real label fetch (no fetchLabels injection)", () => {
+    const binDir = mkdtempSync(join(tmpdir(), "junco-lint-ghbin-"));
+    const fakeGh = join(binDir, "gh");
+    // Emit one label per line — _fetchRepoLabels reads `-q .[].name` output.
+    writeFileSync(fakeGh, "#!/bin/sh\nprintf 'bug\\nenhancement\\ndocs\\n'\n", { mode: 0o755 });
+    try {
+      const result = lintTicket(VALID_BODY, fm, { repoNwo, checkLabels: true, ghBin: fakeGh });
+      // All ticket labels (bug, enhancement) are present → no labels_exist violation.
+      expect(result.violations.filter((v) => v.rule === "labels_exist")).toHaveLength(0);
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
