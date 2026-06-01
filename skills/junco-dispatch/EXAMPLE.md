@@ -141,8 +141,8 @@ worktree root.
 ## Example 2 — Moderate (2 files, 2 commits, 60 min)
 
 **User brief:** "Dispatch to junco: add HELLO-4.md greeting and add a Provenance section to README in junco-pr-smoke."
-(This is the actual smoke-4 task, re-shaped in the canonical form. Use it as
-a known-good anchor for moderate-complexity work.)
+(This is a known-good moderate-complexity shape. Use it as
+an anchor for moderate-complexity work.)
 
 **Rendered ticket:**
 
@@ -356,6 +356,6 @@ surfaces results in the PR body. Don't run them yourself.
 ## Calibration notes for the skill
 
 - Example 1 and 2 are what "good" looks like for their respective sizes. Use them as anchors when a user brief could swing either way in scope.
-- Example 2 is a known-good shape matching a real smoke test (smoke-4) that completed in 4m 37s with 8× fewer tokens than the same work in a loose prompt. **Shape matters.**
+- Example 2 is a known-good shape: in testing, a well-structured plan like this ran several times faster and used far fewer tokens than the same work given as a loose prompt. **Shape matters.**
 - When generating, don't invent richer examples than the brief warrants. A "create a file" ticket should NOT grow a "Reference — existing utilities" section with three bullets just to fill the slot.
 - Aim for the minimum plan that still contains every mandatory section (even if some are `_None_`). Consistency of shape > fullness of content.
