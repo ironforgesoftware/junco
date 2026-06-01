@@ -1,6 +1,6 @@
 {
   "name": "@ironforgesoftware/junco",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A harness-agnostic task-queue worker that turns Markdown tickets into git pull requests by driving a coding agent.",
   "type": "module",
   "license": "MIT",
@@ -46,14 +46,14 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.78.0",
-    "smol-toml": "^1.3.0",
-    "yaml": "^2.5.0",
-    "zod": "^3.23.0"
+    "@earendil-works/pi-coding-agent": "0.78.0",
+    "smol-toml": "1.6.1",
+    "yaml": "2.9.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.6.0",
-    "vitest": "^2.0.0"
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
   }
 }

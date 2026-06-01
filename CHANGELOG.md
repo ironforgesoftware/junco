@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-01
+
+### Changed
+
+- Pinned all dependencies to exact versions (removed `^` ranges) for fully reproducible installs.
+- CI: bumped `actions/checkout` → v6 and `actions/setup-node` → v6, and the publish runner to Node 24 — clears the Node-20 runner deprecation warning.
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
