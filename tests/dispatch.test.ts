@@ -14,8 +14,14 @@ import { inboxPath, submitTicket } from "../src/dispatch.js";
 // ---------------------------------------------------------------------------
 
 const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
-  omlx: { url: "http://127.0.0.1:1234/v1", apiKey: "test" },
-  modelId: "test-model",
+  model: {
+      id: "test-model", modelsJson: null, api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
+      contextWindow: 131072, maxTokens: 49152,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      thinkingLevel: "medium",
+      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+    },
   tools: ["read", "bash"],
   defaultTimeoutMinutes: 30,
   pollIntervalSeconds: 15,

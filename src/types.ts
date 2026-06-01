@@ -1,9 +1,38 @@
-export interface OmlxConfig { url: string; apiKey: string; }
+/** OpenAI-completions-style compat flags (open record — any future Pi compat
+ * key passes through). The named fields are the ones junco has tuned defaults
+ * for; `[k: string]` keeps the schema forward-compatible. */
+export interface ModelCompat {
+  supportsDeveloperRole?: boolean;
+  supportsReasoningEffort?: boolean;
+  maxTokensField?: string;
+  supportsUsageInStreaming?: boolean;
+  thinkingFormat?: string;
+  [k: string]: unknown;
+}
+export interface ModelCost { input: number; output: number; cacheRead: number; cacheWrite: number; }
+/** The model + inference provider junco drives Pi against. Resolved by
+ * `loadConfig` from the `[model]` section (with fallbacks to the legacy
+ * `[pi].model_id` / `[oMLX]` keys). When `modelsJson` points at an existing
+ * Pi-style models.json the provider+model are loaded from THAT file and the
+ * inline capability fields are ignored. */
+export interface ModelConfig {
+  id: string;                 // provider-prefixed, e.g. "omlx/Qwen3.6-27B-oQ8-mtp"
+  modelsJson: string | null;  // path to a Pi models.json, or null for inline
+  api: string;                // Pi Api style, e.g. "openai-completions"
+  baseUrl: string;            // OpenAI-compatible endpoint
+  apiKey: string;
+  reasoning: boolean;
+  input: string[];            // e.g. ["text", "image"]
+  contextWindow: number;
+  maxTokens: number;
+  cost: ModelCost;
+  thinkingLevel: string;      // worker default thinking level
+  compat: ModelCompat;
+}
 export interface Config {
   vaultRoot: string;
   juncoSubdir: string;
-  omlx: OmlxConfig;
-  modelId: string;
+  model: ModelConfig;
   tools: string[];
   defaultTimeoutMinutes: number;
   pollIntervalSeconds: number;

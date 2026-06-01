@@ -17,8 +17,9 @@ describe("loadConfig", () => {
     const cfg = loadConfig(p);
     expect(cfg.vaultRoot).toBe("/tmp/vault");
     expect(cfg.juncoSubdir).toBe("Junco");
-    expect(cfg.modelId).toBe("omlx/m");
-    expect(cfg.omlx.url).toBe("http://127.0.0.1:1234/v1");
+    // [pi].model_id and [oMLX] fall back into the resolved model config.
+    expect(cfg.model.id).toBe("omlx/m");
+    expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
     expect(cfg.defaultTimeoutMinutes).toBe(30);
     expect(cfg.tools).toContain("read");
   });
@@ -37,8 +38,52 @@ describe("loadConfig", () => {
   it("accepts a lowercase [omlx] section (Python parity)", () => {
     const p = writeToml(`vault_root = "/tmp/vault"\n[omlx]\nurl = "http://host:9/v1"\napi_key = "low"\n`);
     const cfg = loadConfig(p);
-    expect(cfg.omlx.url).toBe("http://host:9/v1");
-    expect(cfg.omlx.apiKey).toBe("low");
+    expect(cfg.model.baseUrl).toBe("http://host:9/v1");
+    expect(cfg.model.apiKey).toBe("low");
+  });
+
+  it("[model] defaults reproduce the previously-hardcoded values", () => {
+    const p = writeToml(`vault_root = "/tmp/vault"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.model.id).toBe("omlx/Qwen3.6-27B-oQ8-mtp");
+    expect(cfg.model.modelsJson).toBeNull();
+    expect(cfg.model.api).toBe("openai-completions");
+    expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
+    expect(cfg.model.reasoning).toBe(true);
+    expect(cfg.model.input).toEqual(["text", "image"]);
+    expect(cfg.model.contextWindow).toBe(131072);
+    expect(cfg.model.maxTokens).toBe(49152);
+    expect(cfg.model.thinkingLevel).toBe("medium");
+    expect(cfg.model.compat.maxTokensField).toBe("max_tokens");
+    expect(cfg.model.compat.thinkingFormat).toBe("qwen-chat-template");
+  });
+
+  it("[model] fields override the defaults and the legacy fallbacks; compat keys camelize", () => {
+    const p = writeToml(
+      `vault_root = "/tmp/vault"\n` +
+        `[pi]\nmodel_id = "legacy/should-be-overridden"\n` +
+        `[oMLX]\nurl = "http://legacy:1/v1"\n` +
+        `[model]\n` +
+        `id = "anthropic/claude"\napi = "anthropic-messages"\n` +
+        `base_url = "https://api.example.com/v1"\napi_key = "sk-x"\n` +
+        `context_window = 200000\nmax_tokens = 8192\nreasoning = false\nthinking_level = "high"\n` +
+        `models_json = "~/models.json"\n` +
+        `[model.compat]\nthinking_format = "anthropic"\nmax_tokens_field = "max_completion_tokens"\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.model.id).toBe("anthropic/claude");
+    expect(cfg.model.api).toBe("anthropic-messages");
+    expect(cfg.model.baseUrl).toBe("https://api.example.com/v1");
+    expect(cfg.model.apiKey).toBe("sk-x");
+    expect(cfg.model.contextWindow).toBe(200000);
+    expect(cfg.model.maxTokens).toBe(8192);
+    expect(cfg.model.reasoning).toBe(false);
+    expect(cfg.model.thinkingLevel).toBe("high");
+    expect(cfg.model.modelsJson).toBe(join(homedir(), "models.json"));
+    // snake_case TOML keys camelized; defaults still present for unset keys.
+    expect(cfg.model.compat.thinkingFormat).toBe("anthropic");
+    expect(cfg.model.compat.maxTokensField).toBe("max_completion_tokens");
+    expect(cfg.model.compat.supportsUsageInStreaming).toBe(true);
   });
 
   it("expands a leading ~ in vault_root to the home dir", () => {

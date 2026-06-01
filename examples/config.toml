@@ -4,13 +4,35 @@ vault_root = "~/junco-vault"          # REQUIRED. Queue lives at <vault_root>/<j
 junco_subdir = "Junco"                # default "Junco"
 
 [pi]                                   # the embedded coding agent
-model_id = "myprovider/my-model"      # the model id your endpoint exposes
-extra_args = ["--tools", "bash,read,write,edit,grep,find,todo_write"]  # the --tools CSV sets the agent's tool allowlist
+extra_args = ["--tools", "bash,read,write,edit,grep,find"]  # the --tools CSV sets the agent's tool allowlist
 commit_leftovers = false              # false = the agent must commit its own work (fail-loud otherwise)
 
-[oMLX]                                 # the OpenAI-compatible inference endpoint
-url = "http://127.0.0.1:1234/v1"      # any OpenAI-compatible /v1 base URL
+# The model + inference provider junco drives. TWO ways to configure it:
+#
+# (1) Point at a Pi-style models.json — the provider+model (api, compat,
+#     context_window, thinking_format, …) are loaded from that file:
+# [model]
+# id = "omlx/my-model"
+# models_json = "~/.pi/agent/models.json"
+#
+# (2) Or describe it inline. Only `id` + the endpoint are usually needed; the
+#     other fields default to the values shown (tuned for a local oMLX server).
+[model]
+id = "myprovider/my-model"            # provider-prefixed model id (provider = text before the first "/")
+api = "openai-completions"            # Pi API style: openai-completions | anthropic-messages | google-generative-ai | bedrock-converse-stream | …
+base_url = "http://127.0.0.1:1234/v1" # any OpenAI-compatible /v1 base URL
 api_key = "your-api-key"
+reasoning = true                      # model supports extended thinking
+input = ["text", "image"]             # modalities the model accepts
+context_window = 131072
+max_tokens = 49152
+thinking_level = "medium"             # off | minimal | low | medium | high | xhigh
+[model.compat]                         # provider quirks (snake_case here, camelCased internally)
+max_tokens_field = "max_tokens"       # some servers reject the auto-detected "max_completion_tokens"
+thinking_format = "qwen-chat-template"
+
+# Legacy fallback: an older [pi].model_id + [oMLX] url/api_key still work and
+# populate [model].id / base_url / api_key when [model] omits them.
 
 [worker]
 default_timeout_minutes = 30          # per-ticket cap when the ticket omits timeout_minutes

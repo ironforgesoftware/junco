@@ -27,6 +27,24 @@ function toolsFromExtraArgs(extraArgs: string[] | undefined): string[] {
   return DEFAULT_TOOLS;
 }
 
+// junco's previously-hardcoded compat block (src/agent/session.ts), now the
+// default. The SDK uses camelCase; TOML uses snake_case (camelized on load).
+const DEFAULT_COMPAT: Record<string, unknown> = {
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  maxTokensField: "max_tokens",
+  supportsUsageInStreaming: true,
+  thinkingFormat: "qwen-chat-template",
+};
+
+function camelizeKeys(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase())] = v;
+  }
+  return out;
+}
+
 const TomlSchema = z.object({
   vault_root: z.string({ required_error: "config: vault_root is required" }),
   junco_subdir: z.string().default("Junco"),
@@ -38,6 +56,32 @@ const TomlSchema = z.object({
   oMLX: z.object({
     url: z.string().default("http://127.0.0.1:1234/v1"),
     api_key: z.string().default("1234"),
+  }).default({}),
+  // The model + inference provider. Every field is optional: omitted fields
+  // fall back to the legacy [pi].model_id / [oMLX] keys (id/base_url/api_key) or
+  // to the tuned defaults below (which reproduce junco's previously-hardcoded
+  // values). Set `models_json` to load the provider+model from a Pi models.json
+  // instead of the inline fields.
+  model: z.object({
+    id: z.string().optional(),
+    models_json: z.string().optional(),
+    api: z.string().optional(),
+    base_url: z.string().optional(),
+    api_key: z.string().optional(),
+    reasoning: z.boolean().optional(),
+    input: z.array(z.string()).optional(),
+    context_window: z.number().optional(),
+    max_tokens: z.number().optional(),
+    cost: z.object({
+      input: z.number(),
+      output: z.number(),
+      cache_read: z.number(),
+      cache_write: z.number(),
+    }).partial().optional(),
+    thinking_level: z.string().optional(),
+    // Open record so any present/future Pi compat key passes through. Keys are
+    // snake_case in TOML and camelCased before reaching the SDK.
+    compat: z.record(z.unknown()).optional(),
   }).default({}),
   worker: z.object({
     default_timeout_minutes: z.number().default(30),
@@ -100,8 +144,27 @@ export function loadConfig(path: string): Config {
   return {
     vaultRoot: expandHome(d.vault_root),
     juncoSubdir: d.junco_subdir,
-    omlx: { url: d.oMLX.url, apiKey: d.oMLX.api_key },
-    modelId: d.pi.model_id,
+    model: {
+      // id/base_url/api_key fall back to the legacy [pi].model_id / [oMLX] keys.
+      id: d.model.id ?? d.pi.model_id,
+      modelsJson: d.model.models_json ? expandHome(d.model.models_json) : null,
+      api: d.model.api ?? "openai-completions",
+      // Stored raw; apiBaseUrl() normalizes (strips trailing /models) at use.
+      baseUrl: d.model.base_url ?? d.oMLX.url,
+      apiKey: d.model.api_key ?? d.oMLX.api_key,
+      reasoning: d.model.reasoning ?? true,
+      input: d.model.input ?? ["text", "image"],
+      contextWindow: d.model.context_window ?? 131072,
+      maxTokens: d.model.max_tokens ?? 49152,
+      cost: {
+        input: d.model.cost?.input ?? 0,
+        output: d.model.cost?.output ?? 0,
+        cacheRead: d.model.cost?.cache_read ?? 0,
+        cacheWrite: d.model.cost?.cache_write ?? 0,
+      },
+      thinkingLevel: d.model.thinking_level ?? "medium",
+      compat: { ...DEFAULT_COMPAT, ...camelizeKeys(d.model.compat ?? {}) },
+    },
     tools: toolsFromExtraArgs(d.pi.extra_args),
     defaultTimeoutMinutes: d.worker.default_timeout_minutes,
     pollIntervalSeconds: d.worker.poll_interval_seconds,

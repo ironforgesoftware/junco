@@ -169,7 +169,7 @@ export async function mainLoop(
   log.info("worker online", {
     pid: process.pid,
     vault: join(cfg.vaultRoot, cfg.juncoSubdir),
-    model: cfg.modelId,
+    model: cfg.model.id,
     once: Boolean(opts.once),
   });
 
