@@ -194,25 +194,29 @@ export async function mainLoop(
     }
   }
 
-  let idleAnnounced = false;
-  while (!stopFlag.requested) {
-    metrics.recordPoll();
-    const handled = await runOnceFn(cfg);
-    if (handled) {
-      idleAnnounced = false;
-      if (opts.once) break;
-      continue;
+  try {
+    let idleAnnounced = false;
+    while (!stopFlag.requested) {
+      metrics.recordPoll();
+      const handled = await runOnceFn(cfg);
+      if (handled) {
+        idleAnnounced = false;
+        if (opts.once) break;
+        continue;
+      }
+      if (!idleAnnounced) {
+        log.info("idle");
+        idleAnnounced = true;
+      }
+      await sleep(cfg.pollIntervalSeconds, stopFlag);
     }
-    if (!idleAnnounced) {
-      log.info("idle");
-      idleAnnounced = true;
-    }
-    await sleep(cfg.pollIntervalSeconds, stopFlag);
+  } finally {
+    // Always tear the health server down, even if the loop throws. It stays up
+    // for the whole in-flight task during a graceful shutdown (close runs after
+    // the loop exits), but a mid-loop throw must not leak the bound port to an
+    // embedded/test caller — we don't rely on process exit to free it.
+    if (health) await health.close();
   }
-
-  // Tear the health server down AFTER the loop exits so it stays up for the
-  // whole in-flight task during a graceful shutdown.
-  if (health) await health.close();
 
   log.info("worker exiting cleanly");
 }
