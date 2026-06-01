@@ -41,7 +41,7 @@ export class RunAccumulator {
 
   setError(msg: string): void { this.errorMessage = msg; }
 
-  result(durationMs: number, timedOut = false): RunResult {
+  result(durationMs: number, timedOut = false, abortedByGuard = false): RunResult {
     return {
       finalText: this.text.trim(),
       toolCalls: this.toolCalls,
@@ -50,6 +50,7 @@ export class RunAccumulator {
       errorMessage: this.errorMessage,
       timedOut,
       durationMs,
+      abortedByGuard,
     };
   }
 }

@@ -33,12 +33,18 @@ const TomlSchema = z.object({
   pi: z.object({
     model_id: z.string().default("omlx/Qwen3.6-27B-oQ8-mtp"),
     extra_args: z.array(z.string()).optional(),
+    commit_leftovers: z.boolean().default(false),
   }).default({}),
   oMLX: z.object({
     url: z.string().default("http://127.0.0.1:1234/v1"),
     api_key: z.string().default("1234"),
   }).default({}),
-  worker: z.object({ default_timeout_minutes: z.number().default(30) }).default({}),
+  worker: z.object({
+    default_timeout_minutes: z.number().default(30),
+    poll_interval_seconds: z.number().default(15),
+    startup_poll_seconds: z.number().default(30),
+    startup_wait: z.boolean().default(true),
+  }).default({}),
   // Loop-guard supervisor knobs. Python defaults: enabled false; here we
   // default enabled TRUE for the in-process agent run (M2). The numeric
   // defaults match the Python worker (budget_per_kind 1, escalation_window 3,
@@ -49,6 +55,39 @@ const TomlSchema = z.object({
     escalation_window_turns: z.number().default(3),
     output_budget_per_turn: z.number().default(12000),
     output_budget_post_commit: z.number().default(24000),
+  }).default({}),
+  git: z.object({
+    git_bin: z.string().default("git"),
+    gh_bin: z.string().default("gh"),
+    default_base_branch: z.string().default("main"),
+    branch_prefix: z.string().default("junco/"),
+    worktree_root: z.string().default("~/junco/worktrees"),
+    remove_worktree_on_success: z.boolean().default(true),
+  }).default({}),
+  pr: z.object({
+    draft_by_default: z.boolean().default(true),
+    default_labels: z.array(z.string()).default([]),
+  }).default({}),
+  verify: z.object({
+    enabled: z.boolean().default(true),
+    command_timeout: z.number().default(60),
+    block_on_fail: z.boolean().default(false),
+  }).default({}),
+  critic: z.object({
+    enabled: z.boolean().default(true),
+    max_retries: z.number().default(1),
+    thinking: z.string().default("minimal"),
+  }).default({}),
+  plan_lint: z.object({
+    enabled: z.boolean().default(true),
+    block_on_error: z.boolean().default(true),
+    check_labels: z.boolean().default(true),
+  }).default({}),
+  observability: z.object({
+    health_enabled: z.boolean().default(true),
+    health_host: z.string().default("127.0.0.1"),
+    health_port: z.number().default(8787),
+    log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }).default({}),
 });
 
@@ -65,11 +104,36 @@ export function loadConfig(path: string): Config {
     modelId: d.pi.model_id,
     tools: toolsFromExtraArgs(d.pi.extra_args),
     defaultTimeoutMinutes: d.worker.default_timeout_minutes,
+    pollIntervalSeconds: d.worker.poll_interval_seconds,
+    startupPollSeconds: d.worker.startup_poll_seconds,
+    startupWait: d.worker.startup_wait,
     supervisorEnabled: d.supervisor.enabled,
     supervisorBudgetPerKind: d.supervisor.budget_per_kind,
     supervisorEscalationWindow: d.supervisor.escalation_window_turns,
     supervisorOutputBudgetPerTurn: d.supervisor.output_budget_per_turn,
     supervisorOutputBudgetPostCommit: d.supervisor.output_budget_post_commit,
+    gitBin: d.git.git_bin,
+    ghBin: d.git.gh_bin,
+    defaultBaseBranch: d.git.default_base_branch,
+    branchPrefix: d.git.branch_prefix,
+    worktreeRoot: expandHome(d.git.worktree_root),
+    removeWorktreeOnSuccess: d.git.remove_worktree_on_success,
+    draftByDefault: d.pr.draft_by_default,
+    defaultLabels: d.pr.default_labels,
+    verifyEnabled: d.verify.enabled,
+    verifyCommandTimeout: d.verify.command_timeout,
+    verifyBlockOnFail: d.verify.block_on_fail,
+    criticEnabled: d.critic.enabled,
+    criticMaxRetries: d.critic.max_retries,
+    criticThinking: d.critic.thinking,
+    planLintEnabled: d.plan_lint.enabled,
+    planLintBlockOnError: d.plan_lint.block_on_error,
+    planLintCheckLabels: d.plan_lint.check_labels,
+    commitLeftoversEnabled: d.pi.commit_leftovers,
+    healthEnabled: d.observability.health_enabled,
+    healthHost: d.observability.health_host,
+    healthPort: d.observability.health_port,
+    logLevel: d.observability.log_level,
   };
 }
 

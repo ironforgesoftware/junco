@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { log, withTicket } from "../src/logging.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { log, withTicket, setLogLevel } from "../src/logging.js";
 
 function capture(fn: () => void): any[] {
   const lines: any[] = [];
@@ -31,5 +31,52 @@ describe("logging", () => {
     expect(entry.ticket).toBe("-");
     expect(entry.msg).toBe("real");
     expect(entry.ts).not.toBe("x");
+  });
+});
+
+describe("setLogLevel", () => {
+  // Restore the default threshold so the level change can't leak into other
+  // tests (the level is process-wide module state).
+  afterEach(() => setLogLevel("info"));
+
+  it("default 'info' suppresses debug but emits info/warn/error", () => {
+    const lines = capture(() => {
+      log.debug("d");
+      log.info("i");
+      log.warn("w");
+      log.error("e");
+    });
+    expect(lines.map((l) => l.level)).toEqual(["info", "warn", "error"]);
+  });
+
+  it("'warn' suppresses debug + info, emits warn + error", () => {
+    setLogLevel("warn");
+    const lines = capture(() => {
+      log.debug("d");
+      log.info("i");
+      log.warn("w");
+      log.error("e");
+    });
+    expect(lines.map((l) => l.level)).toEqual(["warn", "error"]);
+  });
+
+  it("'error' emits only error", () => {
+    setLogLevel("error");
+    const lines = capture(() => {
+      log.warn("w");
+      log.error("e");
+    });
+    expect(lines.map((l) => l.level)).toEqual(["error"]);
+  });
+
+  it("'debug' emits every level", () => {
+    setLogLevel("debug");
+    const lines = capture(() => {
+      log.debug("d");
+      log.info("i");
+      log.warn("w");
+      log.error("e");
+    });
+    expect(lines.map((l) => l.level)).toEqual(["debug", "info", "warn", "error"]);
   });
 });

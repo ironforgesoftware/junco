@@ -1,20 +1,20 @@
 ---
 name: junco-dispatch
-description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and drops it in ~/junco/tickets/inbox/ for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for omp -p).'
+description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses).'
 ---
 
 # Junco dispatch
 
-Package a unit of work into a plan-shaped markdown file with junco frontmatter and write it to `/Users/you/junco/tickets/inbox/`. The local junco worker (launchd agent `com.junco.junco-worker`) claims the ticket, runs it through `omp` against a local Qwen3.6-27B on oMLX, and opens a draft PR on completion. The tickets directory is symlinked into the Obsidian vault (`Vault/Junco/`) for read-only visibility on Mac and iOS Obsidian.
+Package a unit of work into a plan-shaped markdown file with junco frontmatter and submit it to the configured inbox via `junco submit`. The junco worker claims the ticket, runs it through its configured coding agent, and opens a draft PR on completion.
 
-**Why this skill exists:** plan quality is the single biggest lever on the local agent's performance. In smoke testing, the same work took **4m 37s with a well-structured plan vs. 23+ min and a failed loop with a loose prompt** (8× fewer tokens). This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
+**Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
 ## When to trigger
 
 Fire this skill when the user explicitly asks to dispatch work:
 
 - **Fresh tickets:** "dispatch this to junco", "send to junco", "junco this", "/junco", "junco: <brief>", "queue this for junco"
-- **Batch tickets (no preview, for `omp -p`):** "junco-batch: <brief>" — used for automated load tests; skips the preview gate (see "Batch mode" under Dispatch procedure)
+- **Batch tickets (no preview, headless mode):** "junco-batch: <brief>" — used for automated load tests; skips the preview gate (see "Batch mode" under Dispatch procedure)
 - **Amend tickets (follow-ups on existing PRs):** "amend junco PR #N: <what to fix>", "junco: fix PR #N by ...", "follow up on PR #N via junco", "dispatch an amendment to #N"
 
 **Do NOT fire** when the user is:
@@ -56,7 +56,7 @@ Ask the minimum needed — autodetect where possible, ask inline when not.
 
 1. **Read the template.** Use Read tool on `~/.claude/skills/junco-dispatch/TEMPLATE.md` to load the canonical shape. Do not paraphrase from memory.
 2. **Choose an example as anchor.** Read `EXAMPLE.md`; pick the one (trivial or moderate) closest in scope.
-3. **Discover repo specifics for Pre-flight context + Reference.** Read the repo's `package.json` / `pyproject.toml` / `Cargo.toml` to capture build tool + version + key dependency versions. Read 1–2 files central to the change to extract reusable signatures (barrel exports, function signatures, type shapes). Paste these inline in the ticket — every Read avoided at execute time saves ~30 seconds. **Verify-before-drafting:** before populating Reference and Files sections, READ the actual target file(s). Do NOT assume field names, line numbers, imports, or interface shapes from memory — they have been wrong in the past (2026-04-27 omp-batch comparison: a Claude batch-render listed a `description` field on Product that didn't exist, and called the `image` field "an HTTPS URL" when it was actually a CSS gradient). The plan-lint `files_paths_exist` rule will warn if your Files-table paths don't match the repo state.
+3. **Discover repo specifics for Pre-flight context + Reference.** Read the repo's `package.json` / `pyproject.toml` / `Cargo.toml` to capture build tool + version + key dependency versions. Read 1–2 files central to the change to extract reusable signatures (barrel exports, function signatures, type shapes). Paste these inline in the ticket — every Read avoided at execute time saves ~30 seconds. **Verify-before-drafting:** before populating Reference and Files sections, READ the actual target file(s). Do NOT assume field names, line numbers, imports, or interface shapes from memory — they have been wrong in the past (a plan-render listed a `description` field on a model that didn't exist, and called an `image` field "an HTTPS URL" when it was actually a CSS gradient). The plan-lint `files_paths_exist` rule will warn if your Files-table paths don't match the repo state.
 4. **Populate every section.** Follow the template literally. If a section is inapplicable (e.g. no reusable utilities, no observable behavior), write `_None._` — do not drop the section. Shape consistency matters more than section density.
 5. **Be specific.** Absolute paths when they help; relative-to-worktree-root (default) when the task is self-contained. Include line numbers for surgical edits.
 6. **Include the full "Notes for the agent (strict)" block verbatim.** This is the anti-loop payload — copy from `TEMPLATE.md` exactly. Do not reword.
@@ -76,7 +76,7 @@ Ask the minimum needed — autodetect where possible, ask inline when not.
 
 ## Authoring discipline (what makes the plan NOT loop)
 
-Empirical lessons from smoke-2/3/4. Bake these into every plan body:
+Empirical lessons from repeated testing. Bake these into every plan body:
 
 - **Absolute paths or "relative to worktree root".** Never say "the config file".
 - **Line numbers for surgical edits** (e.g. `src/a.ts:42–58`). Removes grep pressure.
@@ -86,13 +86,13 @@ Empirical lessons from smoke-2/3/4. Bake these into every plan body:
 - **Reference signatures, not just paths.** Paste `validate(token: str) -> Result[User, Error]` rather than `path/to/validate.py`. Saves Read calls AND prevents wrong-shape inventions.
 - **Behavior (EARS) and Verification are paired.** Behavior says `WHEN X THE SYSTEM SHALL Y`; Verification gives the bash command that exercises it. They map 1:1.
 - **Verification commands must be exact and check exit 0.** Not "make sure it builds". **Never include `cd <repo>` in the bash block** — junco runs it with `cwd=<worktree>`; a leading `cd` moves out of the worktree and the verification fails for the wrong reason.
-- **Verification runs on macOS BSD utilities, not GNU.** The worker shells out to bash on macOS, which uses BSD coreutils. Common gotchas:
+- **Write portable verification commands.** The worker runs verification in the daemon's shell on whatever OS it runs on — prefer portable commands. Common gotchas when portability matters:
   - `wc -l < file` outputs `       1` (whitespace-padded) on BSD vs `1` on GNU. Use `awk 'END {print NR}' file` for portable line count, OR `[ "$(wc -l < file | tr -d ' ')" = "1" ]`.
   - `sed -i` requires a backup-extension arg on BSD: `sed -i ''` (note the empty string). Alternative: redirect to a temp file and `mv`.
   - `date -v +1d` (BSD) vs `date -d 'tomorrow'` (GNU) — prefer ISO timestamps in spec content rather than computing dates in verification.
   - `head -c N` works on both. `tail -c N` differs in offset semantics — verify the exact byte you want with `xxd` or `od` for portability.
   - When in doubt, prefer Python or `awk` one-liners over shell coreutils — they have consistent semantics across platforms.
-- **The "Notes for the agent (strict)" section is mandatory.** Copy verbatim. Dropping this is the difference between 4 minutes and 20+ minutes of wall clock.
+- **The "Notes for the agent (strict)" section is mandatory.** Copy verbatim. Dropping this is the difference between a few minutes and 20+ minutes of wall clock.
 
 ## Plan-lint (automatic pre-dispatch check)
 
@@ -122,32 +122,34 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 **Two modes** based on trigger phrase:
 
 - **Interactive (default):** triggered by `junco:`, `dispatch to junco`, `send to junco`, `/junco`. Includes the preview gate — used for normal day-to-day dispatch.
-- **Batch (no preview):** triggered by `junco-batch:`. SKIPS the AskUserQuestion preview gate entirely and writes directly to inbox/. Used for automated load tests run via `omp -p` (non-interactive). The AskUserQuestion tool is unavailable in `omp -p` mode and will throw `ToolAbortError` if invoked, so batch mode MUST omit it. Do NOT use `junco-batch:` for normal interactive dispatches — there is no review checkpoint.
+- **Batch (no preview):** triggered by `junco-batch:`. SKIPS the AskUserQuestion preview gate entirely and submits directly. Used for automated load tests run from a non-interactive / headless harness (no interactive prompt tool available). The AskUserQuestion tool is unavailable in a headless harness and will throw `ToolAbortError` if invoked, so batch mode MUST omit it. Do NOT use `junco-batch:` for normal interactive dispatches — there is no review checkpoint.
 
 ### Interactive mode (default)
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body).
 2. **Preview + approve.** Use `AskUserQuestion` with the rendered ticket as a preview. Ask: "Dispatch this to junco?" with options `Yes, dispatch` / `Edit first` / `Cancel`.
-3. **On approve — write to inbox.** Use the Write tool to create:
+3. **On approve — submit via CLI.** Write the rendered ticket to a temp file, then run:
 
    ```
-   /Users/you/junco/tickets/inbox/<id>.md
+   junco submit <tempfile>
    ```
+
+   (`junco submit` resolves the configured inbox and places the file atomically, deriving the filename from the `id` frontmatter field.) If `junco` is not installed globally, use `npx junco submit <tempfile>`. Report the destination path it prints.
 
 4. **Announce.** Tell the user:
-   - Ticket file path
-   - Expected wall clock (use `timeout_minutes` as an upper bound; cite smoke-4's 4m 37s as a realistic floor for moderate work)
-   - How to watch: `tail -F ~/junco/launchd.out` or `tail -F ~/junco/tickets/worker.log`
-5. **Offer monitoring.** Ask: "Want me to monitor the ticket and notify when it lands in done/ or failed/?" If yes, spawn a Monitor tool call that polls `done/<id>` and `failed/<id>`.
+   - Ticket id and destination path (from `junco submit` output)
+   - Expected wall clock (use `timeout_minutes` as an upper bound)
+   - How to watch: watch the daemon's log output (its stdout, captured by your process/service manager), or poll the `done/` and `failed/` directories under the queue root (`junco inbox-path` shows where the queue lives)
+5. **Offer monitoring.** Ask: "Want me to monitor the ticket and notify when it lands in done/ or failed/?" If yes, spawn a Monitor tool call that polls `done/<id>` and `failed/<id>` under the queue root.
 
-### Batch mode (no preview, for `omp -p`)
+### Batch mode (no preview, headless harness)
 
 Triggered when the user prompt starts with `junco-batch:`. Identical to interactive mode EXCEPT step 2 and step 5 are skipped:
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body). Same template, same rules.
-2. **(SKIPPED)** No `AskUserQuestion` preview gate. The ask tool is unavailable in `omp -p` mode and would throw `ToolAbortError`.
-3. **Write directly to inbox.** Use the Write tool to create the same path as interactive mode (`/Users/you/junco/tickets/inbox/<id>.md`).
-4. **Print one-line confirmation to stdout.** Format: `BATCH_DISPATCHED <id> -> <inbox-path>`. This line is what the calling shell script greps for to confirm success.
+2. **(SKIPPED)** No `AskUserQuestion` preview gate. The ask tool is unavailable in a headless harness and would throw `ToolAbortError`.
+3. **Submit via CLI.** Write the rendered ticket to a temp file, then run `junco submit <tempfile>` (or `npx junco submit <tempfile>`). The worker resolves the configured inbox and places the file atomically.
+4. **Print one-line confirmation to stdout.** Format: `BATCH_DISPATCHED <id> -> <destination-path>`. This line is what the calling shell script greps for to confirm success. (The destination path comes from `junco submit` output.)
 5. **(SKIPPED)** No monitor offer.
 
 Note: batch mode produces tickets with the SAME structural quality as interactive mode (same TEMPLATE.md, same plan-lint rules apply post-claim). The only difference is the absence of the human-in-the-loop preview gate. Use only for automated test loops.
@@ -219,6 +221,6 @@ This skill's template and anti-loop rules were synthesized from:
 - Anthropic, "Effective context engineering for AI agents" (section structure + Goldilocks specificity)
 - Addy Osmani, "How to write a good spec for AI agents" (six-area template; three-tier boundaries)
 - Addy Osmani, "The Code Agent Orchestra" (kill-loop patterns; file ownership; Ralph Loop)
-- Empirical smoke-test data: `~/junco/tests/test_pr_flow.py` and the MEMORY entry `project_junco_pr_flow.md`
+- Empirical data from repeated end-to-end test runs comparing structured plans vs. loose prompts
 
 The "Notes for the agent (strict)" block is the single most-earned asset — multiple 20-minute looping runs led to its exact wording.

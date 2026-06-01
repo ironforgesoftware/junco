@@ -81,4 +81,68 @@ describe("loadConfig", () => {
     expect(cfg.supervisorOutputBudgetPerTurn).toBe(8000);
     expect(cfg.supervisorOutputBudgetPostCommit).toBe(16000);
   });
+
+  it("applies critic defaults when [critic] is absent", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.criticEnabled).toBe(true);
+    expect(cfg.criticMaxRetries).toBe(1);
+    expect(cfg.criticThinking).toBe("minimal");
+  });
+
+  it("reads the [critic] knobs from config.toml", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n[critic]\nenabled = false\nmax_retries = 2\nthinking = "high"\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.criticEnabled).toBe(false);
+    expect(cfg.criticMaxRetries).toBe(2);
+    expect(cfg.criticThinking).toBe("high");
+  });
+
+  it("applies plan-lint + commit_leftovers defaults when sections are absent", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.planLintEnabled).toBe(true);
+    expect(cfg.planLintBlockOnError).toBe(true);
+    expect(cfg.planLintCheckLabels).toBe(true);
+    expect(cfg.commitLeftoversEnabled).toBe(false);
+  });
+
+  it("reads the [plan_lint] knobs and [pi].commit_leftovers from config.toml", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n[pi]\ncommit_leftovers = true\n[plan_lint]\nenabled = false\nblock_on_error = false\ncheck_labels = false\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.planLintEnabled).toBe(false);
+    expect(cfg.planLintBlockOnError).toBe(false);
+    expect(cfg.planLintCheckLabels).toBe(false);
+    expect(cfg.commitLeftoversEnabled).toBe(true);
+  });
+
+  it("applies [observability] defaults when the section is absent", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.healthEnabled).toBe(true);
+    expect(cfg.healthHost).toBe("127.0.0.1");
+    expect(cfg.healthPort).toBe(8787);
+    expect(cfg.logLevel).toBe("info");
+  });
+
+  it("reads the [observability] knobs from config.toml", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n[observability]\nhealth_enabled = false\nhealth_host = "0.0.0.0"\n` +
+      `health_port = 9999\nlog_level = "warn"\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.healthEnabled).toBe(false);
+    expect(cfg.healthHost).toBe("0.0.0.0");
+    expect(cfg.healthPort).toBe(9999);
+    expect(cfg.logLevel).toBe("warn");
+  });
+
+  it("rejects an out-of-range [observability].log_level", () => {
+    const p = writeToml(`vault_root = "/v"\n[observability]\nlog_level = "verbose"\n`);
+    expect(() => loadConfig(p)).toThrow();
+  });
 });

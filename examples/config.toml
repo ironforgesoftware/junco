@@ -1,0 +1,59 @@
+# Junco configuration. Copy to ~/junco/config.toml and edit.
+
+vault_root = "~/junco-vault"          # REQUIRED. Queue lives at <vault_root>/<junco_subdir>/{inbox,processing,done,failed}
+junco_subdir = "Junco"                # default "Junco"
+
+[pi]                                   # the embedded coding agent
+model_id = "myprovider/my-model"      # the model id your endpoint exposes
+extra_args = ["--tools", "bash,read,write,edit,grep,find,todo_write"]  # the --tools CSV sets the agent's tool allowlist
+commit_leftovers = false              # false = the agent must commit its own work (fail-loud otherwise)
+
+[oMLX]                                 # the OpenAI-compatible inference endpoint
+url = "http://127.0.0.1:1234/v1"      # any OpenAI-compatible /v1 base URL
+api_key = "your-api-key"
+
+[worker]
+default_timeout_minutes = 30          # per-ticket cap when the ticket omits timeout_minutes
+poll_interval_seconds = 15            # idle poll cadence
+startup_poll_seconds = 30             # retry cadence while waiting for the endpoint at boot
+startup_wait = true                   # block startup until the endpoint is reachable
+
+[supervisor]                           # loop guards
+enabled = true
+budget_per_kind = 1
+escalation_window_turns = 3
+output_budget_per_turn = 12000
+output_budget_post_commit = 24000
+
+[git]
+git_bin = "git"
+gh_bin = "gh"
+default_base_branch = "main"
+branch_prefix = "junco/"              # PR branches are <branch_prefix><id>
+worktree_root = "~/junco/worktrees"
+remove_worktree_on_success = true
+
+[pr]
+draft_by_default = true
+default_labels = []
+
+[verify]
+enabled = true
+command_timeout = 60                  # per ## Verification bash block, seconds
+block_on_fail = false                 # true = a failing verification blocks the PR
+
+[critic]
+enabled = true
+max_retries = 1                       # one corrective re-dispatch if the critic flags gaps
+thinking = "minimal"
+
+[plan_lint]
+enabled = true
+block_on_error = true                 # lint failures route the ticket to failed/ before it runs
+check_labels = true                   # validate frontmatter labels exist on the repo (via gh)
+
+[observability]
+health_enabled = true
+health_host = "127.0.0.1"             # loopback by default — metrics not network-exposed unless changed
+health_port = 8787
+log_level = "info"                    # debug | info | warn | error

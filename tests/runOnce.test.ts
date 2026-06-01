@@ -8,8 +8,18 @@ import type { Config } from "../src/types.js";
 function cfg(root: string): Config {
   return { vaultRoot: root, juncoSubdir: "Junco", omlx: { url: "u", apiKey: "k" },
            modelId: "m", tools: ["read"], defaultTimeoutMinutes: 1,
+           pollIntervalSeconds: 15, startupPollSeconds: 30, startupWait: true,
            supervisorEnabled: true, supervisorBudgetPerKind: 1, supervisorEscalationWindow: 3,
-           supervisorOutputBudgetPerTurn: 12000, supervisorOutputBudgetPostCommit: 24000 };
+           supervisorOutputBudgetPerTurn: 12000, supervisorOutputBudgetPostCommit: 24000,
+           gitBin: "git", ghBin: "gh",
+           defaultBaseBranch: "main", branchPrefix: "junco/",
+           worktreeRoot: "/tmp/worktrees", removeWorktreeOnSuccess: true,
+           draftByDefault: true, defaultLabels: [],
+           verifyEnabled: true, verifyCommandTimeout: 60, verifyBlockOnFail: false,
+           criticEnabled: true, criticMaxRetries: 1, criticThinking: "minimal",
+           planLintEnabled: true, planLintBlockOnError: true, planLintCheckLabels: true,
+           commitLeftoversEnabled: false,
+           healthEnabled: false, healthHost: "127.0.0.1", healthPort: 8787, logLevel: "info" };
 }
 
 function fakeFactory() {
@@ -48,15 +58,19 @@ describe("runOnce", () => {
     expect(await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() })).toBe(false);
   });
 
-  it("skips a PR-flow ticket (hasRepo) in M1", async () => {
+  it("claims a PR-flow ticket and routes a bad repo to failed/", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
     ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
-    writeFileSync(join(j, "inbox", "pr.md"), "---\nid: pr\nrepo: /tmp/x\n---\n# PR\n", "utf8");
+    // repo path does not exist → validateRepoContext throws → finalize to failed/.
+    writeFileSync(join(j, "inbox", "pr.md"), "---\nid: pr\nrepo: /tmp/does-not-exist-junco\n---\n# PR\n", "utf8");
     const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() });
-    expect(handled).toBe(false);
-    // not claimed — still in inbox
-    expect(readdirSync(join(j, "inbox"))).toHaveLength(1);
+    expect(handled).toBe(true);
+    // claimed + finalized to failed/ (not left in inbox)
+    expect(readdirSync(join(j, "inbox"))).toHaveLength(0);
+    const failedFiles = readdirSync(join(j, "failed"));
+    expect(failedFiles).toHaveLength(1);
+    expect(readFileSync(join(j, "failed", failedFiles[0]), "utf8")).toContain("status: failed");
   });
 
   it("skips an unreadable ticket but still processes a healthy one", async () => {

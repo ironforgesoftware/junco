@@ -13,7 +13,7 @@ function sandbox() {
   writeFileSync(ticket, "---\nid: q1\n---\n# Q\nask\n", "utf8");
   return { ticket, done, failed };
 }
-const ok: RunResult = { finalText: "the answer", toolCalls: [], usage: { input: 1, output: 1, cacheRead: 0, total: 2 }, stopReason: "stop", errorMessage: null, timedOut: false, durationMs: 1000 };
+const ok: RunResult = { finalText: "the answer", toolCalls: [], usage: { input: 1, output: 1, cacheRead: 0, total: 2 }, stopReason: "stop", errorMessage: null, timedOut: false, durationMs: 1000, abortedByGuard: false };
 
 describe("finalize", () => {
   it("writes reply + status to done/ and leaves no temp file", () => {
