@@ -16,33 +16,9 @@ worker.lock
 worktrees/
 worktrees-manual/
 
-# Ticket state (inbox/processing/done/failed, worker.log). Canonical home is
-# ~/junco/tickets/; the Obsidian vault at Vault/Junco is a symlink into
-# this directory for read visibility. Per-run state, do not commit.
+# Ticket state (inbox/processing/done/failed, worker.log). Per-run state under
+# the configured vault; do not commit.
 tickets/
-
-# Historical: kept defensively for the case where the vault was occasionally
-# symlinked into the repo for browsing under the old ~/junco/Junco/ name.
-Junco/
-
-# Test-loop / e2e harness runtime artifacts (scripts in scripts/test-loop/
-# write these alongside themselves; the *.md and *.sh / *.py harness files
-# stay tracked, but their per-run output does not).
-scripts/test-loop/run.log
-scripts/test-loop/results.jsonl
-scripts/test-loop/shepherd.stdout
-scripts/test-loop/shepherd.stderr
-scripts/test-loop/generate.log
-scripts/test-loop/DONE
-scripts/test-loop/HALT_REASON
-scripts/test-loop/CONTINUE
-scripts/test-loop/staging/
-scripts/test-loop/planner-logs/
-scripts/test-loop/e2e/
-scripts/test-loop/e2e2/
-scripts/test-loop/smoke-*
-scripts/test-loop/omp-batch-results-driver.log
-scripts/test-loop/omp-batch-results/
 
 # OS / editor cruft
 .DS_Store
@@ -62,3 +38,6 @@ build/
 # Node / TypeScript (M1+ rewrite)
 node_modules/
 *.tsbuildinfo
+
+# Personal runtime config (machine-specific). The shipped template is examples/config.toml.
+/config.toml
