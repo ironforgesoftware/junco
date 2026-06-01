@@ -134,7 +134,18 @@ export async function run(
   }
 
   // ------------------------------------------------------------
-  // run-once: single runOnce() attempt, no lock, no mainLoop
+  // run-once: single runOnce() attempt — intentionally NO singleton lock.
+  //
+  // Python's main() locks even for --once because its startup recover_orphans
+  // sweep would otherwise steal the live daemon's in-flight task into failed/
+  // (worker.py:569-572). That risk is STRUCTURALLY ABSENT here: run-once calls
+  // runOnce() directly and never runs recoverOrphans (only mainLoop does). The
+  // claim is an atomic rename, so a manual run-once and a live daemon can never
+  // win the same ticket. Keeping it lock-free makes it a clean cron/dev poke.
+  //
+  // ⚠️ If you ever add an orphan sweep (or any processing/ mutation) to this
+  // path, you MUST acquire the lock first — otherwise you reintroduce exactly
+  // the daemon-collision bug the lock exists to prevent.
   // ------------------------------------------------------------
   if (subcommand === "run-once") {
     const cfg = loadConfigFn(values.config as string);
