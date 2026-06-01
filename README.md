@@ -1,320 +1,499 @@
 # junco
 
-A headless task-queue worker that turns Markdown tickets into git pull requests
-by driving a local LLM coding agent (Pi) under a runtime supervisor.
+**Turn Markdown tickets into pull requests — automatically.**
 
-You drop a `.md` file with a frontmatter into an Obsidian-vault inbox; junco
-claims it, spawns a Pi session in a fresh git worktree, watches the agent
-turn-by-turn, nudges it when it loops, runs the spec's verification block,
-critiques the diff, and opens a draft PR. Or fails loudly if the agent
-deviated. One ticket at a time, sequential, polling-based.
+Junco is a task-queue worker that turns Markdown "tickets" into git pull requests. Drop a ticket (a plan with YAML frontmatter) into an inbox directory; the daemon claims it, runs it in an isolated git worktree by driving a coding agent, applies loop guards and verification, runs a diff-vs-spec critic, then opens a draft PR. A ticket without a `repo:` field is a **Q&A ticket** — the agent answers in-place, no git involved. Any tool or human can author and submit tickets; Junco is harness-agnostic on the dispatch side.
 
-```
-            ┌─────────────────────────────────────────────────────────────┐
-            │  Obsidian vault                                              │
-            │   ├─ Junco/inbox/   ← drop .md tickets here                  │
-            │   ├─ Junco/processing/                                       │
-            │   ├─ Junco/done/                                             │
-            │   └─ Junco/failed/                                           │
-            └────────────────────────┬────────────────────────────────────┘
-                                     │ (poll every 15s)
-                                     ▼
-            ┌────────────────────────────────────────────────────────────┐
-            │  ~/junco/worker.py  (single-task daemon under launchd)     │
-            │   1. claim ticket → fresh git worktree                     │
-            │   2. spawn Pi --mode rpc                                   │
-            │   3. supervise turn-by-turn (nudge / kill on guard trip)   │
-            │   4. run ## Verification block                             │
-            │   5. critic pass (diff vs spec)                            │
-            │   6. push + open draft PR  (or fail loudly)                │
-            └────────────────────────┬────────────────────────────────────┘
-                                     │
-                                     ▼
-                                  GitHub PR
-```
+The embedded agent talks to any **OpenAI-compatible `/v1` inference endpoint** — point it at a local server, a hosted API, or any compatible provider.
 
-## Status
+---
 
-| Layer | What it does | Where |
-|---|---|---|
-| Queue | Atomic claim from inbox/ → processing/ → done/ \| failed/. iCloud-aware. | `worker.py:claim` + `discover_tasks` |
-| Agent | Spawns Pi (or omp) with project-aware preamble + ticket body. | `worker.py:_run_task_supervised` / `_run_task_oneshot` |
-| Supervisor | Drives Pi via RPC. On guard trip, sends a recovery nudge before killing. | `supervisor.py`, `nudges.py`, `rpc_client.py` |
-| Guards | Text-rep / thinking-rep (`RepetitionGuard`); tool-call literal-rep with adaptive thresholds (`ToolCallLoopGuard`); same-tool consecutive errors (`ToolErrorLoopGuard`). | `worker.py` |
-| Post-session | Spec verification (configurable blocking gate); critic pass with one corrective re-dispatch. | `worker.py:run_spec_verification`, `run_critic_pass` |
-| PR flow | Worktree per ticket, `git push --set-upstream`, `gh pr create --draft`. | `worker.py:_run_pr_flow` |
+## Table of Contents
 
-152 tests. Run with `.venv/bin/python -m pytest tests/ -q`.
+1. [Quickstart](#quickstart)
+2. [How it works](#how-it-works)
+3. [CLI reference](#cli-reference)
+4. [Configuration](#configuration)
+5. [Tickets](#tickets)
+6. [Health & observability](#health--observability)
+7. [Running as a service](#running-as-a-service)
+8. [Troubleshooting](#troubleshooting)
+9. [Contributing](#contributing)
+10. [License](#license)
 
-## Prerequisites
+---
 
-- macOS with iCloud-synced Obsidian vault (defaults to `~/Library/Mobile Documents/obsidian/Documents/Vault`).
-- Python 3.11+ (3.14 tested).
-- [oMLX](https://github.com/jundot/omlx) running on `127.0.0.1:1234` with `Qwen3.6-27B-MLX-8bit` (or a model of your choice). The 27B is the validated default for headless Pi.
-- [Pi](https://github.com/badlogic/pi-mono) — `npm install -g @mariozechner/pi-coding-agent` — installed at `/opt/homebrew/bin/pi`. (Junco can also run against `omp` from the oh-my-pi fork; configure via `client = "pi"` or `client = "omp"` in `config.toml`.)
-- `gh` (GitHub CLI) authenticated against the target repo.
-- For the Pi worker path: the `write-enriched` and `todo-write` extensions installed at `~/.pi/agent/extensions/` (pointed at by `[pi].extension_paths` in `config.toml`).
+## Quickstart
 
-## Install
+**Prerequisites:** Node ≥ 22.19. For PR-flow tickets: `git` + the GitHub CLI `gh` (run `gh auth login` once). Q&A tickets need neither.
 
-From `~/junco/`:
+### 1. Install
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install pyyaml pytest
-.venv/bin/python -m pytest tests/ -q       # expect 87 passing
-bash scripts/install.sh                    # creates vault folders, installs LaunchAgent
+npm install -g junco
+# or run without installing:
+npx junco <command>
 ```
 
-`install.sh` creates `<vault>/Junco/{inbox,processing,done,failed}`, installs the ticket templates, renders `~/Library/LaunchAgents/com.junco.junco-worker.plist`, and loads the daemon with `launchctl bootstrap`.
-
-## Uninstall
+### 2. Initialize a vault
 
 ```bash
-bash scripts/uninstall.sh
+junco init --config ~/junco/config.toml
 ```
 
-Removes the LaunchAgent. Leaves `~/junco/` (the code) and the vault's `Junco/` folder (the history) untouched so debug state survives.
+This creates `config.toml` (if absent) and the queue directories:
+`<vault_root>/Junco/{inbox,processing,done,failed}` plus the worktree root.
 
-## Submitting tasks
+### 3. Edit `config.toml`
 
-Two ticket flavors, distinguished by frontmatter:
+Open the generated `config.toml` and set at minimum:
 
-- **Q&A ticket** (no `repo:`): junco runs Pi against the prompt body and writes the reply back into the file. No git involvement.
-- **PR-flow ticket** (`repo: <path>`): junco creates a worktree, runs Pi inside it, and opens a draft PR.
+```toml
+vault_root = "~/my-junco-vault"   # where the queue lives
 
-### Q&A ticket
+[pi]
+model_id = "myprovider/my-model"  # model id your endpoint exposes
 
-Drop into `<vault>/Junco/inbox/`:
-
-```markdown
----
-priority: normal             # low | normal | high
-timeout_minutes: 30          # per-task wall-clock cap
----
-
-# Title
-
-Question or request body. Wikilinks like [[Other Note]] pass through verbatim
-so the agent can resolve them if relevant.
+[oMLX]
+url = "http://127.0.0.1:1234/v1"  # your OpenAI-compatible endpoint
+api_key = "your-api-key"
 ```
 
-### PR-flow ticket
+See [Configuration](#configuration) for every available key.
 
-```markdown
+### 4. Start the daemon
+
+```bash
+junco start --config ~/junco/config.toml
+```
+
+The daemon polls the inbox every 15 seconds. It acquires a lock (`worker.lock` next to `config.toml`) so only one instance runs at a time.
+
+### 5. Submit your first ticket
+
+**Q&A ticket** (no git, just an answer written back to the file):
+
+```bash
+cat > /tmp/my-question.md << 'EOF'
 ---
-id: my-ticket-id-2026-04-25
+id: my-first-qa-2026-05-31
+priority: normal
+timeout_minutes: 10
+---
+
+# What is the Big O complexity of merge sort?
+
+Explain with a short example.
+EOF
+
+junco submit /tmp/my-question.md --config ~/junco/config.toml
+```
+
+**PR-flow ticket** (creates a worktree, runs the agent, opens a draft PR):
+
+```bash
+cat > /tmp/my-pr-ticket.md << 'EOF'
+---
+id: add-hello-util-2026-05-31
 priority: normal
 timeout_minutes: 30
-repo: ~/Development/your-project   # REQUIRED — triggers PR flow
+repo: /absolute/path/to/your-repo
 base_branch: main
-pr_title: Concise PR title
+pr_title: Add hello utility function
 draft: true
-labels: []
-# amends_pr: 42                    # optional — amend mode (no new PR; commits added to existing)
 ---
 
-# What the PR should do
-
-## Why
-Short rationale.
-
-## Scope
-### In scope
-- ...
-### Out of scope
-- ...
+# Add a hello() utility
 
 ## Steps
-### Step 1 — ...
-- [ ] ...
-- [ ] Commit: `git add ... && git commit -m "..."`
+- [ ] Create `src/hello.ts` exporting a `hello(name: string): string` function.
+- [ ] Commit: `git add src/hello.ts && git commit -m "feat: add hello utility"`
 
 ## Verification
 
 ```bash
-# Junco runs this AFTER your session in the worktree.
-# If [verify].block_on_fail = true, any failure here blocks the PR open.
-test -f path/to/expected
 npx tsc --noEmit
 ```
 
 ## Done when
-- [ ] N commits on `<branch_name>`.
+- [ ] 1 commit on the branch with the new file.
+EOF
+
+junco submit /tmp/my-pr-ticket.md --config ~/junco/config.toml
 ```
 
-The full template (with strict-notes for the agent) lives in `templates/task-code.md` and `~/.claude/skills/junco-dispatch/TEMPLATE.md`.
+Watch the daemon pick it up and open a draft PR automatically.
 
-## PR-flow lifecycle
+---
 
-1. Ticket lands in `inbox/` → claimed atomically into `processing/` (worker scans every 15s).
-2. **Pre-flight validation** with retry-with-backoff for transient github.com flakiness: `gh repo view`, `git ls-remote --heads origin <base>`, branch-collision check.
-3. **Worktree provisioning**: `git worktree add -b junco/<id> <wt> origin/<base>` from `~/junco/worktrees/<id>`.
-4. **Agent run** (one of):
-   - **Supervised path** (`client = "pi"` AND `[supervisor].enabled = true`): spawn `pi --mode rpc`, send the initial prompt as a `prompt` command, supervise turn-by-turn. On guard trip: `Supervisor.decide()` → nudge or kill. After `agent_end` and no pending nudge, close cleanly.
-   - **One-shot path** (legacy): `pi -p --mode json @<prompt-file>` runs to completion or hard-kills on guard trip.
-5. **Post-session checks** (only on cleanly-completed sessions):
-   - `run_spec_verification` runs the ticket's `## Verification` block in the worktree. Surfaces results in PR body banner. If `[verify].block_on_fail = true`, a failure routes the ticket to `failed/` and skips push/PR.
-   - `run_critic_pass` spawns a short Pi session that compares `git diff base..HEAD` to the ticket spec and outputs `JUNCO_VERIFY: PASS` or `JUNCO_VERIFY: MISSING <items>`. On `MISSING` with retries remaining, junco re-dispatches one corrective worker turn.
-6. **Push + PR**: `git push --set-upstream` (with retry on network flakiness) → `gh pr create --draft` (with retry).
-7. **Finalize**: ticket moves to `done/` with frontmatter additions (`pr_url`, `branch`, `commit_count`, `tokens_*`, `agent_command`, etc.) and a structured `## Result` body block. Worktree removed on success; preserved for inspection on any failure.
+## How it works
 
-## Result frontmatter (PR-flow tickets)
-
-```yaml
-status: completed                                    # | completed_no_changes | failed | timeout | aborted_partial | aborted_no_changes
-started: 2026-04-25T17:11:48
-finished: 2026-04-25T17:19:30
-duration_seconds: 462
-exit_code: 0
-tokens_in: 52001
-tokens_out: 1466
-cache_read: 0
-total_tokens: 53467
-stop_reason: stop
-agent_command: /opt/homebrew/bin/pi --mode rpc --model omlx/Qwen3.6-27B-MLX-8bit ...
-pr_url: https://github.com/owner/repo/pull/42
-branch: junco/my-ticket-id-2026-04-25
-base_branch: main
-commit_count: 3
-pushed: true
 ```
+  You (or any harness)
+         │
+         │  junco submit <ticket.md>
+         ▼
+  <vault_root>/Junco/inbox/          ← drop tickets here
+         │
+         │  daemon polls every 15s
+         ▼
+  ┌──────────────────────────────────────────────────────┐
+  │  junco daemon                                        │
+  │                                                      │
+  │  1. plan-lint           validate frontmatter         │
+  │  2. claim               inbox/ → processing/         │
+  │  3. git worktree        isolated branch per ticket   │
+  │  4. agent run           drives coding agent          │
+  │     └─ loop guards      supervisor watches each turn │
+  │  5. verification        runs ## Verification block   │
+  │  6. critic              diff-vs-spec check           │
+  │  7. push + PR           gh pr create --draft         │
+  │  8. finalize            processing/ → done/|failed/  │
+  └──────────────────────────────────────────────────────┘
+         │
+         ▼
+  GitHub draft PR  (or answer written in-place for Q&A)
+```
+
+**Plan-lint** runs before the agent starts. Bad tickets (invalid frontmatter, forbidden patterns, nonexistent labels) route directly to `failed/` without consuming any agent tokens.
+
+**Loop guards** (supervisor) watch the agent turn-by-turn. On a guard trip, the supervisor sends a recovery nudge; if the agent trips the same guard again within the escalation window, it kills the session.
+
+**Critic** compares the final diff to the ticket spec. If it flags missing items and retries remain, Junco dispatches one corrective agent turn before pushing.
+
+---
+
+## CLI reference
+
+All commands accept `--config <path>` to point at a non-default `config.toml`. When omitted, `config.toml` in the current directory is used.
+
+| Command | Description |
+|---|---|
+| `junco start [--config <path>] [--once]` | Run the daemon. Polls forever; `--once` processes one task then exits. Acquires a single-instance lock (`worker.lock` next to `config.toml`); exits 0 if another instance holds the lock. |
+| `junco run-once [--config <path>]` | One-shot: process a single available task and exit. No lock — convenient for dev or cron. |
+| `junco submit <file\|-> [--config <path>]` | Atomically place a ticket into the configured inbox. Use `-` to read from stdin. The inbox filename is derived from the ticket's `id` frontmatter field. |
+| `junco inbox-path [--config <path>]` | Print the resolved inbox directory path. |
+| `junco schema` | Print the ticket-frontmatter JSON Schema (the typed contract for all frontmatter fields). |
+| `junco init [--config <path>]` | Create queue directories (`inbox/`, `processing/`, `done/`, `failed/`) and the worktree root for a new vault. |
+| `junco service [--platform launchd\|systemd] [--config <path>]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere. |
+| `junco --help` / `-h` | Print usage. |
+
+---
 
 ## Configuration
 
-`~/junco/config.toml`. Selected sections — see the file for the full set:
+Junco is configured via a TOML file (default: `config.toml` in the current directory). Below is a fully-annotated reference with defaults.
 
 ```toml
-client = "pi"                              # "pi" or "omp"
+# ── Vault ────────────────────────────────────────────────────────────────────
+vault_root = "~/junco-vault"      # REQUIRED. Queue lives at <vault_root>/<junco_subdir>/
+junco_subdir = "Junco"            # Subfolder name inside vault_root. Default: "Junco"
 
+# ── Agent ────────────────────────────────────────────────────────────────────
 [pi]
-bin = "/opt/homebrew/bin/pi"
-model_id = "omlx/Qwen3.6-27B-MLX-8bit"
-mode = "json"                              # ignored when supervisor.enabled=true (rpc is forced)
-extra_args = ["--tools", "bash,read,write,edit,grep,find,todo_write",
-              "--no-skills", "--no-context-files", "--no-prompt-templates"]
-commit_leftovers = false                   # fail-loud: incomplete work doesn't get a leftovers commit
-extension_paths = [
-  "~/.pi/agent/extensions/todo-write.ts",
-  "~/.pi/agent/extensions/write-enriched.ts",
+model_id = "<provider>/<model>"   # REQUIRED. Model ID the embedded agent sends to the endpoint.
+extra_args = [                    # Optional extra CLI args passed to the agent.
+  "--tools", "bash,read,write,edit,grep,find,todo_write"
 ]
+commit_leftovers = false          # false (default) = agent must commit its own work; fail-loud if not.
 
+# ── Inference endpoint ───────────────────────────────────────────────────────
+[oMLX]                            # Section name is historical; applies to any OpenAI-compatible /v1 endpoint.
+url = "http://127.0.0.1:1234/v1"  # Base URL of the OpenAI-compatible endpoint.
+api_key = "1234"                  # API key for the endpoint.
+
+# ── Worker ───────────────────────────────────────────────────────────────────
+[worker]
+default_timeout_minutes = 30      # Per-ticket wall-clock cap (used when the ticket omits timeout_minutes).
+poll_interval_seconds = 15        # How often to poll the inbox when idle.
+startup_poll_seconds = 30         # Retry cadence while waiting for the endpoint at boot.
+startup_wait = true               # Block startup until the inference endpoint is reachable.
+
+# ── Supervisor (loop guards) ─────────────────────────────────────────────────
 [supervisor]
-enabled = true                             # turn-by-turn supervisor with nudge-on-guard-trip
-budget_per_kind = 1                        # how many nudges per guard kind before kill
-escalation_window_turns = 3                # same kind re-trips within K turns of nudge → kill
-event_timeout_seconds = 300                # inter-event idle cap; silent Pi → timeout (→ failed/). 0 disables
+enabled = true
+budget_per_kind = 1               # Nudges per guard kind before the session is killed.
+escalation_window_turns = 3       # Same guard re-trips within K turns of a nudge → kill.
+output_budget_per_turn = 12000    # Token output cap per agent turn.
+output_budget_post_commit = 24000 # Token output cap in post-commit turns.
 
+# ── Git ──────────────────────────────────────────────────────────────────────
+[git]
+git_bin = "git"
+gh_bin = "gh"
+default_base_branch = "main"
+branch_prefix = "junco/"          # PR branches are named <branch_prefix><ticket-id>.
+worktree_root = "~/junco/worktrees"
+remove_worktree_on_success = true # Clean up worktrees after a successful PR. Default: true.
+
+# ── Pull requests ─────────────────────────────────────────────────────────────
+[pr]
+draft_by_default = true           # Open PRs as drafts. Default: true.
+default_labels = []               # Labels added to every PR (in addition to per-ticket labels).
+
+# ── Verification ─────────────────────────────────────────────────────────────
 [verify]
 enabled = true
-command_timeout = 60                       # per-command timeout for verification block
-block_on_fail = true                       # verification failure → ticket fails (no PR opens)
+command_timeout = 60              # Seconds per bash command in the ## Verification block.
+block_on_fail = false             # true = a failing verification blocks the PR; ticket goes to failed/.
 
+# ── Critic ───────────────────────────────────────────────────────────────────
 [critic]
 enabled = true
-max_retries = 1                            # MISSING + retries remaining → 1 corrective re-dispatch
-thinking = "minimal"                       # critic Pi session's thinking level
+max_retries = 1                   # One corrective re-dispatch when the critic flags missing items.
+thinking = "minimal"
+
+# ── Plan lint ────────────────────────────────────────────────────────────────
+[plan_lint]
+enabled = true
+block_on_error = true             # Lint failures route the ticket to failed/ before the agent runs.
+check_labels = true               # Validate that frontmatter labels exist on the target repo (via gh).
+
+# ── Observability ─────────────────────────────────────────────────────────────
+[observability]
+health_enabled = true
+health_host = "127.0.0.1"         # Loopback by default — not network-exposed unless you change this.
+health_port = 8787
+log_level = "info"                # debug | info | warn | error
 ```
 
-After editing: `launchctl kickstart -k gui/$(id -u)/com.junco.junco-worker`.
+### Key knobs to know
 
-## Operation
-
-```bash
-tail -F ~/junco/launchd.out                                            # daemon log
-tail -F "<vault>/Junco/worker.log"                                     # rotating worker log
-launchctl kickstart -k gui/$(id -u)/com.junco.junco-worker         # force-restart
-launchctl print gui/$(id -u)/com.junco.junco-worker                # inspect launchd state
-```
-
-### Manual runs
-
-```bash
-.venv/bin/python worker.py --once              # process one task then exit
-```
-
-A single-instance `flock` (`worker.lock`, next to `config.toml`) keeps a manual
-`--once` run from colliding with the live daemon: if the daemon holds the lock,
-the manual run logs `another worker instance holds …` and exits 0 without
-touching the queue.
-
-### Retrying a failed task
-
-```bash
-mv "<vault>/Junco/failed/<file>" "<vault>/Junco/inbox/<file>"
-```
-
-Existing writer-owned frontmatter fields (`status`, `started`, `pr_url`, etc.) and any prior `## Result` block are stripped before the new run; user-authored frontmatter (`id`, `repo`, `base_branch`, etc.) is preserved.
-
-## Repository layout
-
-```
-~/junco/
-├── README.md
-├── pyproject.toml             PEP 621 project metadata
-├── config.toml                worker config
-├── worker.py                  main daemon (launchd points here)
-├── supervisor.py              decision engine
-├── rpc_client.py              Pi --mode rpc protocol shim
-├── nudges.py                  recovery message templates
-├── plan_lint.py               pre-claim ticket validation
-│
-├── tests/                     pytest suite (152 tests)
-├── scripts/
-│   ├── install.sh             LaunchAgent install
-│   ├── uninstall.sh           LaunchAgent remove
-│   └── test-loop/             stress-run harness (shepherd, render, analyze, generate, omp_batch_probe)
-├── templates/                 Obsidian Templater inputs (task.md, task-code.md)
-└── docs/
-    ├── postmortems/           run-by-run findings (2026-04-27 stress, 2026-04-28 e2e)
-    ├── briefs/                25 reusable test-fixture briefs (T01..T25)
-    └── omp-planner-samples/   captured omp planner outputs from 2026-04-27 probe
-```
-
-### File map (source modules)
-
-| File | Role |
+| Knob | Effect |
 |---|---|
-| `worker.py` | Main daemon. Config loading, task discovery, claim, dispatcher (`run_task` → supervised or one-shot), PR flow, finalize. |
-| `rpc_client.py` | Pi `--mode rpc` protocol shim. Bidirectional JSONL over stdin/stdout. |
-| `supervisor.py` | Decision engine: `decide(GuardEvent) → Action(continue\|nudge\|kill)`. Per-kind nudge budget + escalation window. |
-| `nudges.py` | Recovery message templates per guard kind. ⚠️ JUNCO NOTICE-branded. |
-| `plan_lint.py` | Pre-claim ticket validation (no `cd` in verification, files-table path existence, forbidden phrases, label existence, etc.). |
-| `templates/task.md`, `templates/task-code.md` | Obsidian Templater inputs for Q&A and PR-flow tickets. |
-| `scripts/install.sh`, `scripts/uninstall.sh` | LaunchAgent install/remove. |
-| `scripts/test-loop/` | Stress-run harness — `shepherd.py` (sequential dispatcher with halt-on-failure), `render_tickets.py` (Claude-side ticket renderer), `omp_batch_probe.sh` (omp -p batch probe), `generate.sh`, `analyze.py`. |
-| `docs/postmortems/` | Per-run architectural findings + ranked fixes shipped per round. |
-| `docs/briefs/` | 25 reusable task briefs (T01 trivial → T25 architectural). |
-| `docs/omp-planner-samples/` | 3 captured high-quality omp-planner ticket outputs from the 2026-04-27 probe. |
-| `tests/` | 152 tests across protocol (rpc_client), policy (supervisor), integration (supervised_run), guards (repetition, output-budget, transient-retry), PR flow, plan-lint. |
+| `[oMLX].url` | Switch inference backends — point at any OpenAI-compatible `/v1` endpoint. |
+| `[pi].model_id` | Tell the agent which model to request from the endpoint. |
+| `[verify].block_on_fail` | Set `true` to make verification failures block the PR open (strict mode). |
+| `[supervisor].budget_per_kind` | Raise to allow more nudges before killing a looping agent. |
+| `[worker].startup_wait` | Set `false` to start the daemon even when the endpoint is not yet up. |
+| `[git].remove_worktree_on_success` | Set `false` to retain worktrees after success (debugging). |
 
-## Architectural phases (in order shipped)
+---
 
-A chronological record so future-you knows when each layer landed and why:
+## Tickets
 
-1. **Phase 1** (PR flow) — worktree-per-ticket, push, draft PR via `gh`.
-2. **Phase 2** (loop guards) — `RepetitionGuard` for text/thinking, `ToolCallLoopGuard` for tool literal-rep.
-3. **Phase 3** (Pi migration) — `client = "pi"` worker default; vanilla Pi as the headless agent. Omp retained for interactive driving.
-4. **Phase 4** (write-enriched + adaptive thresholds + tool-error loop guard + spec verification + critic pass + retry-with-backoff for github.com network ops + lean prose review).
-5. **Phase 5** (supervised multi-turn) — Pi `--mode rpc` integration; `Supervisor.decide()` ; nudge-on-guard-trip; one-shot path preserved as legacy fallback.
-6. **Phase 6** (verification gate, "Option A") — `[verify].block_on_fail` makes verification block PR open instead of just informational.
-7. **Phase 7** (plan-lint pre-claim gate) — Deterministic ticket validation before claim. Catches `cd <repo>` in verification block, missing strict-notes block, forbidden phrases, nonexistent labels, files-table path mismatches. See `plan_lint.py`.
-8. **Phase 8** (round 2: stress-run hardening) — `OutputBudgetGuard` (per-turn output token cap, kills runaway thinking before length-cutoff). Tightened `bash`/`grep`/`find`/`glob` thresholds to 3 from the stress-run findings.
-9. **Phase 9** (round 3: e2e flow + retry) — Pi transient-error retry on `stop_reason=error` + 0 output tokens. SKILL.md guidance: BSD-coreutils awareness for verification commands; "verify before drafting" rule.
+A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco schema` to print the full typed JSON Schema for every frontmatter field.
 
-For the run-by-run details and what motivated each fix, see `docs/postmortems/`.
+### Ticket flavors
+
+| Flavor | Trigger | What happens |
+|---|---|---|
+| **Q&A ticket** | No `repo:` field | Agent answers in-place; result written back to the ticket file. No git. |
+| **PR-flow ticket** | `repo: <absolute/path>` | Agent runs in an isolated git worktree; a draft PR is opened on success. |
+
+### Key frontmatter fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Unique ticket identifier. Used as the inbox filename and branch suffix. |
+| `repo` | path | Absolute path to the target git repository. Presence triggers PR flow. |
+| `priority` | `low\|normal\|high` | Processing order within the queue. |
+| `timeout_minutes` | number | Per-ticket wall-clock cap. Overrides `[worker].default_timeout_minutes`. |
+| `base_branch` | string | Branch to fork from. Overrides `[git].default_base_branch`. |
+| `branch_name` | string | Override the auto-generated branch name. |
+| `pr_title` | string | Pull request title. |
+| `draft` | bool | Open PR as draft. Overrides `[pr].draft_by_default`. |
+| `labels` | string[] | Labels to apply to the PR. |
+| `reviewers` | string[] | GitHub handles to request as reviewers. |
+| `amends_pr` | number | PR number — add commits to an existing PR instead of opening a new one. |
+
+### Minimal Q&A ticket
+
+```markdown
+---
+id: my-qa-2026-05-31
+priority: normal
+timeout_minutes: 10
+---
+
+# My question
+
+What is the time complexity of binary search and why?
+```
+
+### Minimal PR-flow ticket
+
+```markdown
+---
+id: add-util-2026-05-31
+priority: normal
+timeout_minutes: 30
+repo: /absolute/path/to/your-repo
+base_branch: main
+pr_title: Add utility function
+draft: true
+---
+
+# Add a utility function
+
+## Steps
+- [ ] Implement the function.
+- [ ] Commit: `git add ... && git commit -m "feat: add utility"`
+
+## Verification
+
+```bash
+npx tsc --noEmit
+```
+
+## Done when
+- [ ] 1 commit on the branch.
+```
+
+### Submitting tickets
+
+```bash
+# From a file:
+junco submit ./my-ticket.md --config ~/junco/config.toml
+
+# From stdin:
+cat my-ticket.md | junco submit - --config ~/junco/config.toml
+
+# Print the inbox path:
+junco inbox-path --config ~/junco/config.toml
+```
+
+The bundled `junco-dispatch` skill (for Claude Code) scaffolds well-structured tickets from any Claude session and submits them automatically.
+
+### Templates
+
+Ticket templates live in the `templates/` directory:
+- `templates/task.md` — Q&A ticket template
+- `templates/task-code.md` — PR-flow ticket template (with strict-notes for the agent)
+
+### PR-flow lifecycle
+
+1. Ticket lands in `inbox/` — plan-lint validates frontmatter first (bad tickets → `failed/`, no agent run).
+2. Daemon claims it atomically into `processing/`.
+3. Git worktree provisioned from `origin/<base_branch>` at `<worktree_root>/<id>`.
+4. Agent runs with loop guards active (supervisor watches each turn; nudges on guard trips, kills on escalation).
+5. After the agent session: the `## Verification` block runs in the worktree.
+6. Critic compares the diff to the spec; if items are missing and retries remain, one corrective agent turn is dispatched.
+7. Branch pushed; `gh pr create --draft` opens the PR.
+8. Ticket moves to `done/` (success) or `failed/` (any failure). Worktree removed on success if `remove_worktree_on_success = true`.
+
+---
+
+## Health & observability
+
+When `[observability].health_enabled = true`, Junco serves HTTP on `health_host:health_port` (default `127.0.0.1:8787`).
+
+| Endpoint | Success | Use |
+|---|---|---|
+| `GET /live` | `200 {status:"alive", pid, uptimeSeconds}` | Liveness — is the process up? |
+| `GET /ready` | `200 {status:"ready"}` or `503` | Readiness — can the endpoint be reached? |
+| `GET /health` | `200 {status:"ok", ready, metrics:{...}}` | Full metrics: uptime, poll count, current ticket, tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
+
+```bash
+# Quick checks:
+curl http://127.0.0.1:8787/live
+curl http://127.0.0.1:8787/ready
+curl http://127.0.0.1:8787/health | jq .
+```
+
+**Logs** are structured JSON on stdout. Set `[observability].log_level` to `debug` for verbose output, `info` for normal operation.
+
+> The health server binds to loopback (`127.0.0.1`) by default. To expose it on a network interface, change `health_host`. Do so with care — there is no authentication.
+
+---
+
+## Running as a service
+
+`junco service` renders a platform-native service file to stdout. Pipe it to the right location and load it.
+
+### macOS (launchd)
+
+```bash
+junco service --platform launchd --config ~/junco/config.toml \
+  > ~/Library/LaunchAgents/com.junco.worker.plist
+
+launchctl load ~/Library/LaunchAgents/com.junco.worker.plist
+launchctl start com.junco.worker
+```
+
+### Linux (systemd)
+
+```bash
+junco service --platform systemd --config ~/junco/config.toml \
+  > ~/.config/systemd/user/junco.service
+
+systemctl --user daemon-reload
+systemctl --user enable --now junco
+```
+
+### Lock semantics and supervisor restart loops
+
+`junco start` acquires `worker.lock` (next to `config.toml`). If a second instance starts while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
+
+`junco run-once` does **not** acquire the lock — it is safe for cron and dev use alongside a running daemon.
+
+---
 
 ## Troubleshooting
 
-- **`gh repo view` flaky on a fresh ticket**: junco retries on network-pattern stderr (`i/o timeout`, `dial tcp`, `could not resolve host`, ...). If ALL retries fail, ticket lands in `failed/` with the original error.
-- **Tool-loop guard trips on a ticket that should succeed**: check `[supervisor].budget_per_kind` (default 1 — first trip becomes a nudge); also adaptive thresholds in `worker.py:DEFAULT_TOOL_LOOP_THRESHOLDS`.
-- **"every task times out at N seconds"**: deep-context dense-27B prefill can exceed Pi's default stream timeout. Set `~/.omp/agent/.env` (omp) or check Pi's equivalent for `OMP_STREAM_FIRST_EVENT_TIMEOUT_MS=900000`.
-- **Task stuck "unstable"**: iCloud sync hasn't settled. Bump `worker.stability_window_seconds` to 10–15.
-- **`.icloud` placeholder never materializes**: open the file in Finder once OR run `brctl download <path>` manually. Junco auto-triggers `brctl download` when `[worker].icloud_brctl_download = true`.
-- **Verification block fails but the diff looks correct**: with `[verify].block_on_fail = true` the ticket goes to `failed/`. Worktree is preserved at `~/junco/worktrees/<id>` — `cd` in and run the failing commands manually.
+### Inference endpoint unreachable at boot
+
+By default (`[worker].startup_wait = true`) Junco blocks startup and retries every `startup_poll_seconds` (default 30) until the endpoint responds. Check that your inference server is running and that `[oMLX].url` points to the correct address.
+
+Set `startup_wait = false` to let Junco start immediately and fail individual tickets if the endpoint is down.
+
+### `gh` not authenticated
+
+PR-flow tickets require the GitHub CLI to be authenticated. Run:
+
+```bash
+gh auth login
+gh auth status   # verify
+```
+
+Q&A tickets do not use `gh` and are unaffected.
+
+### A ticket is stuck in `processing/`
+
+If the daemon crashed mid-run (power loss, OOM), a ticket can be stranded in `processing/`. On the next startup Junco detects orphaned claims and recovers them automatically. If you need to force it, move the file back to `inbox/`:
+
+```bash
+mv <vault_root>/Junco/processing/<ticket.md> <vault_root>/Junco/inbox/
+```
+
+Existing result frontmatter written by the worker is stripped; your original frontmatter is preserved.
+
+### Plan-lint rejections
+
+If a ticket lands in `failed/` immediately (before any agent run), plan-lint rejected it. Open the ticket file — the `## Result` block describes the specific lint error. Common causes:
+
+- `repo:` path does not exist or is not a git repository
+- Label names in `labels:` do not exist on the target GitHub repo (`[plan_lint].check_labels = true`)
+- `## Verification` block contains `cd <repo>` (forbidden — verification runs inside the worktree already)
+- Missing required frontmatter fields
+
+Fix the frontmatter and resubmit:
+
+```bash
+junco submit ./fixed-ticket.md --config ~/junco/config.toml
+```
+
+### Verification failure blocks the PR
+
+If `[verify].block_on_fail = true` and the `## Verification` block fails, the ticket moves to `failed/` and the worktree is preserved at `<worktree_root>/<id>`. Inspect it directly:
+
+```bash
+cd <worktree_root>/<ticket-id>
+# run the failing verification commands manually
+```
+
+Fix and resubmit the ticket, or set `block_on_fail = false` if you want Junco to open the PR regardless.
+
+---
 
 ## Contributing
 
-1. Fork, branch, write tests first.
-2. `.venv/bin/python -m pytest tests/ -q` — must stay green.
-3. Open a PR. Junco itself can be used to write junco — drop a PR-flow ticket against this repo.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Bug reports, feature requests, and PRs are welcome.
+
+Junco can submit tickets against itself — drop a PR-flow ticket with `repo:` pointing at this repository.
+
+---
+
+## License
+
+MIT
