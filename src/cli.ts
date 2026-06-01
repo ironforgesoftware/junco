@@ -19,8 +19,9 @@
 
 import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
-import { readFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock } from "./lock.js";
@@ -335,10 +336,27 @@ export async function run(
 }
 
 // ---------------------------------------------------------------------------
-// Top-level entry point (thin wrapper — keeps process.exit out of run())
+// Top-level entry point (thin wrapper — keeps process.exit out of run()).
+//
+// Only self-invoke when this module is the actual entry point — NOT when it is
+// imported (e.g. by the test suite), which would otherwise run the CLI + call
+// process.exit on import. realpathSync resolves the bin symlink npm creates so
+// the check holds for global installs and npx.
 // ---------------------------------------------------------------------------
 
-run(process.argv.slice(2)).then((code) => process.exit(code)).catch((e) => {
-  log.error("fatal", { error: e instanceof Error ? (e.stack ?? e.message) : String(e) });
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  run(process.argv.slice(2)).then((code) => process.exit(code)).catch((e) => {
+    log.error("fatal", { error: e instanceof Error ? (e.stack ?? e.message) : String(e) });
+    process.exit(1);
+  });
+}
