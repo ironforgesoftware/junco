@@ -90,8 +90,6 @@ The frontmatter schema in `ticketSchema.ts` is the **stable public contract** �
 
 ---
 
-## The Python files at the repo root
+## Provenance
 
-`worker.py`, `plan_lint.py`, and the other `.py` files at the repo root are the **historical Python implementation** — the reference that the TypeScript rewrite (`src/`) is replacing in place. They are kept for archaeological reference only.
-
-**Do not extend them.** All new work goes in `src/`. If you are unsure whether something belongs in the Python layer, it does not — write it in TypeScript.
+The implementation in `src/` was ported from an earlier Python prototype, which has since been removed. Some modules carry `// Port of worker.py …` comments that reference that original as provenance for parity-sensitive logic (loop-guard thresholds, the critic prompt, the PR-flow phase order). Those references are historical — the Python files are no longer in the tree. All work goes in `src/` (TypeScript).
