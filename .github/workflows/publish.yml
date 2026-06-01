@@ -1,0 +1,39 @@
+name: Publish to npm
+
+# Publishes the package whenever a GitHub Release is published.
+#
+# Release flow:
+#   1. Bump "version" in package.json (+ update CHANGELOG.md).
+#   2. Commit, then tag it: git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+#   3. Create a GitHub Release for that tag (gh release create vX.Y.Z ...).
+# This workflow then builds, tests (via the prepublishOnly hook), and publishes
+# with npm provenance — no local 2FA dance required.
+#
+# Requires a repo secret NPM_TOKEN: an npm granular/automation token scoped to
+# the @ironforgesoftware org with publish (read+write) and 2FA-bypass enabled.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance (signed via GitHub OIDC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      # `npm publish` runs the prepublishOnly hook (npm run build && npm test)
+      # before publishing. --access public covers the scoped package (also set
+      # in package.json publishConfig); --provenance attaches a verified
+      # build-to-source attestation, shown on the npm package page.
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
