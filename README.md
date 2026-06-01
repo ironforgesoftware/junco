@@ -8,8 +8,48 @@ The embedded agent talks to any **OpenAI-compatible `/v1` inference endpoint** �
 
 ---
 
+## Get started in 60 seconds
+
+Requires **Node ≥ 22.19** (plus `git` + an authenticated `gh` for PR-flow tickets).
+
+```bash
+npm install -g junco          # or run ad-hoc with: npx junco <command>
+```
+
+**1. Point it at your model** — create `~/junco/config.toml`:
+
+```toml
+vault_root = "~/junco-vault"          # where the work queue lives
+
+[model]
+id = "myprovider/my-model"            # any model on an OpenAI-compatible endpoint
+base_url = "http://127.0.0.1:1234/v1"
+api_key = "your-api-key"
+# (or, if you use Pi:  models_json = "~/.pi/agent/models.json")
+```
+
+**2. Set up and start:**
+
+```bash
+junco init  --config ~/junco/config.toml   # create the inbox/processing/done/failed dirs
+junco start --config ~/junco/config.toml   # run the daemon (Ctrl-C to stop)
+```
+
+**3. Give it work** — a ticket is a Markdown file. With a `repo:` field junco opens a draft PR; without one it answers in place:
+
+```bash
+junco submit my-task.md
+```
+
+**4. Watch it:** `curl localhost:8787/health`, or check `<vault_root>/Junco/done/` and `failed/`.
+
+New to the ticket format? Run `junco schema`, copy a template from `examples/`, or let the bundled **`junco-dispatch`** skill scaffold a well-formed ticket. The sections below explain each step in depth.
+
+---
+
 ## Table of Contents
 
+0. [Get started in 60 seconds](#get-started-in-60-seconds)
 1. [Quickstart](#quickstart)
 2. [How it works](#how-it-works)
 3. [CLI reference](#cli-reference)
