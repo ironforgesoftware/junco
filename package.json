@@ -1,5 +1,5 @@
 {
-  "name": "junco",
+  "name": "@ironforgesoftware/junco",
   "version": "0.1.0",
   "description": "A harness-agnostic task-queue worker that turns Markdown tickets into git pull requests by driving a coding agent.",
   "type": "module",
@@ -12,6 +12,9 @@
   },
   "bugs": {
     "url": "https://github.com/ironforgesoftware/junco/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "task-queue",

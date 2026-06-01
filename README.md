@@ -13,7 +13,8 @@ The embedded agent talks to any **OpenAI-compatible `/v1` inference endpoint** �
 Requires **Node ≥ 22.19** (plus `git` + an authenticated `gh` for PR-flow tickets).
 
 ```bash
-npm install -g junco          # or run ad-hoc with: npx junco <command>
+npm install -g @ironforgesoftware/junco   # or ad-hoc: npx @ironforgesoftware/junco <command>
+# (after install, the command is just `junco`)
 ```
 
 **1. Point it at your model** — create `~/junco/config.toml`:
@@ -70,9 +71,10 @@ New to the ticket format? Run `junco schema`, copy a template from `examples/`, 
 ### 1. Install
 
 ```bash
-npm install -g junco
+npm install -g @ironforgesoftware/junco
 # or run without installing:
-npx junco <command>
+npx @ironforgesoftware/junco <command>
+# (either way, the installed command is just `junco`)
 ```
 
 ### 2. Create your config
