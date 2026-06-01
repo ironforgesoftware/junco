@@ -1,5 +1,6 @@
 import type { Config, RunResult } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
+import { GuardManager } from "./guardManager.js";
 
 /**
  * Minimal structural type of what we use from a Pi `AgentSession`. Keeping the
@@ -24,6 +25,12 @@ export interface RunAgentOptions {
   cwd: string;
   timeoutMs: number;
   createSession: () => Promise<AgentSessionLike>;
+  /**
+   * Optional loop-guard + supervisor. When present, runAgent feeds every event
+   * to it; a "nudge" decision injects a corrective steering prompt mid-run, a
+   * "kill" decision aborts the run. Absent → M1 behavior is unchanged.
+   */
+  guardManager?: GuardManager;
 }
 
 /**
@@ -34,9 +41,11 @@ export interface RunAgentOptions {
  */
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const acc = new RunAccumulator();
+  const gm = opts.guardManager;
   const session = await opts.createSession();
   const start = Date.now();
   let timedOut = false;
+  let killReason: string | null = null;
   let unsubscribe: (() => void) | undefined;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -47,7 +56,29 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   try {
     // Subscribe immediately before prompt() (so no startup events are missed),
     // but inside the try so the session is still disposed if subscribe throws.
-    unsubscribe = session.subscribe((e) => acc.observe(e));
+    unsubscribe = session.subscribe((e) => {
+      acc.observe(e);
+      if (!gm) return;
+      // A kill is terminal — once decided, stop feeding the guard (further
+      // events from the aborting run shouldn't produce more decisions).
+      if (killReason !== null) return;
+      const decision = gm.observe(e);
+      if (!decision) return;
+      if (decision.action === "nudge") {
+        // Inject a corrective steering prompt mid-run. "steer" redirects the
+        // CURRENT run (delivered after the current assistant turn finishes its
+        // tool calls, before the next LLM call) — verified against the SDK
+        // (docs/rpc.md:62, PromptOptions.streamingBehavior). Fire-and-forget:
+        // the outer `await session.prompt(body)` resolves only after the
+        // steered continuation also finishes, so one await still suffices.
+        void session.prompt(decision.message, { streamingBehavior: "steer" }).catch(() => {});
+      } else {
+        // Kill: record the reason and abort the run. abort() resolves the
+        // in-flight prompt() so runAgent returns. Guard the rejection.
+        killReason = decision.reason;
+        void session.abort().catch(() => {});
+      }
+    });
     await session.prompt(opts.body);
   } catch (e) {
     acc.setError(e instanceof Error ? e.message : String(e));
@@ -55,6 +86,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     clearTimeout(timer);
     unsubscribe?.();
     session.dispose();
+  }
+  // Surface a guard kill into errorMessage (so finalize() routes the ticket to
+  // failed/) with the supervisor summary, mirroring the Python banner.
+  if (killReason !== null) {
+    const summary = gm ? gm.supervisorSummary : "no nudges issued";
+    acc.setError(`supervisor kill: ${killReason} (${summary})`);
   }
   return acc.result(Date.now() - start, timedOut);
 }

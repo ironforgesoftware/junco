@@ -6,6 +6,12 @@ export interface Config {
   modelId: string;
   tools: string[];
   defaultTimeoutMinutes: number;
+  // Loop-guard supervisor knobs (parity with the Python [supervisor] section).
+  supervisorEnabled: boolean;
+  supervisorBudgetPerKind: number;
+  supervisorEscalationWindow: number;
+  supervisorOutputBudgetPerTurn: number;
+  supervisorOutputBudgetPostCommit: number;
 }
 export interface Paths { inbox: string; processing: string; done: string; failed: string; }
 

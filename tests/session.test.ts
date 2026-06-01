@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { runAgent, apiBaseUrl, splitModelId } from "../src/agent/session.js";
+import { GuardManager } from "../src/agent/guardManager.js";
 
 // A fake AgentSession: records prompts, emits scripted events to all listeners
 // when prompted, and resolves prompt() afterward (mirroring the real SDK, whose
@@ -64,6 +65,125 @@ describe("runAgent", () => {
     });
     expect(result.errorMessage).toBe("boom");
     expect(disposed).toBe(true);
+  });
+});
+
+// A fake session for guard-driven tests: emits `events` to listeners when the
+// INITIAL prompt arrives. Records every prompt (text + options). Once aborted,
+// stops emitting and resolves the in-flight initial prompt (mirroring the real
+// SDK, whose abort() halts the run and resolves prompt()).
+function guardFakeSession(events: any[]) {
+  const listeners: ((e: any) => void)[] = [];
+  let aborted = false;
+  let resolveInitial: (() => void) | undefined;
+  const self = {
+    prompts: [] as { text: string; options?: any }[],
+    aborted: false,
+    subscribe(l: (e: any) => void) {
+      listeners.push(l);
+      return () => {};
+    },
+    prompt(text: string, options?: any): Promise<void> {
+      self.prompts.push({ text, options });
+      // Only the INITIAL prompt drives the event stream; steered nudge prompts
+      // are fire-and-forget injections that don't re-emit the script.
+      if (self.prompts.length > 1) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        resolveInitial = resolve;
+        // Emit synchronously after returning to the caller is unnecessary here;
+        // emit on next microtask so `subscribe` is fully wired.
+        queueMicrotask(() => {
+          for (const e of events) {
+            if (aborted) break;
+            listeners.forEach((l) => l(e));
+          }
+          // Initial run finishes naturally if not aborted mid-stream.
+          if (!aborted) resolve();
+        });
+      });
+    },
+    dispose() {},
+    abort(): Promise<void> {
+      aborted = true;
+      self.aborted = true;
+      resolveInitial?.();
+      return Promise.resolve();
+    },
+  };
+  return self;
+}
+
+describe("runAgent (guard manager)", () => {
+  it("injects a nudge (steer) when a guard trips", async () => {
+    // 3 identical bash calls → tool_call_loop nudge on the 3rd.
+    const args = { command: "ls -la" };
+    const events = [
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = guardFakeSession(events);
+    const result = await runAgent({
+      body: "do work",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      guardManager: new GuardManager(),
+    });
+    // The nudge prompt was injected with streamingBehavior: "steer".
+    expect(session.prompts[0].text).toBe("do work");
+    const nudge = session.prompts.find((p) => p.options?.streamingBehavior === "steer");
+    expect(nudge).toBeDefined();
+    expect(nudge!.text).toContain("JUNCO NOTICE");
+    expect(nudge!.text).toContain("bash");
+    // A single nudge is not a kill — no errorMessage.
+    expect(result.errorMessage).toBeNull();
+    expect(session.aborted).toBe(false);
+  });
+
+  it("aborts the run and records the kill reason on escalation", async () => {
+    // Output budget over 12000 in a turn → kill (output_budget always kills).
+    const events = [
+      { type: "turn_end", message: { usage: { output: 99999, input: 0, totalTokens: 99999 } } },
+      // Trailing events should NOT be observed after the abort/kill.
+      { type: "tool_execution_start", toolName: "bash", args: { command: "x" } },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = guardFakeSession(events);
+    const result = await runAgent({
+      body: "do work",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      guardManager: new GuardManager({ outputBudgetPerTurn: 12000 }),
+    });
+    expect(session.aborted).toBe(true);
+    expect(result.errorMessage).toContain("supervisor kill");
+    expect(result.errorMessage).toContain("output_budget");
+    // Not flagged as a timeout (it was a guard kill, not the wall-clock timer).
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("preserves M1 behavior when no guardManager is passed", async () => {
+    // Identical to the basic runAgent test, just asserting no injection happens.
+    const args = { command: "ls" };
+    const events = [
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = guardFakeSession(events);
+    const result = await runAgent({
+      body: "do work",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+    });
+    expect(session.prompts).toHaveLength(1); // only the initial prompt, no nudge
+    expect(session.aborted).toBe(false);
+    expect(result.errorMessage).toBeNull();
   });
 });
 
