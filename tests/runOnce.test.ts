@@ -18,7 +18,8 @@ function cfg(root: string): Config {
            verifyEnabled: true, verifyCommandTimeout: 60, verifyBlockOnFail: false,
            criticEnabled: true, criticMaxRetries: 1, criticThinking: "minimal",
            planLintEnabled: true, planLintBlockOnError: true, planLintCheckLabels: true,
-           commitLeftoversEnabled: false };
+           commitLeftoversEnabled: false,
+           healthEnabled: false, healthHost: "127.0.0.1", healthPort: 8787, logLevel: "info" };
 }
 
 function fakeFactory() {

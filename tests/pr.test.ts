@@ -112,6 +112,10 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
     planLintBlockOnError: true,
     planLintCheckLabels: true,
     commitLeftoversEnabled: false,
+    healthEnabled: false,
+    healthHost: "127.0.0.1",
+    healthPort: 8787,
+    logLevel: "info",
   };
 }
 

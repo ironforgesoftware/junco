@@ -119,4 +119,30 @@ describe("loadConfig", () => {
     expect(cfg.planLintCheckLabels).toBe(false);
     expect(cfg.commitLeftoversEnabled).toBe(true);
   });
+
+  it("applies [observability] defaults when the section is absent", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.healthEnabled).toBe(true);
+    expect(cfg.healthHost).toBe("127.0.0.1");
+    expect(cfg.healthPort).toBe(8787);
+    expect(cfg.logLevel).toBe("info");
+  });
+
+  it("reads the [observability] knobs from config.toml", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n[observability]\nhealth_enabled = false\nhealth_host = "0.0.0.0"\n` +
+      `health_port = 9999\nlog_level = "warn"\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.healthEnabled).toBe(false);
+    expect(cfg.healthHost).toBe("0.0.0.0");
+    expect(cfg.healthPort).toBe(9999);
+    expect(cfg.logLevel).toBe("warn");
+  });
+
+  it("rejects an out-of-range [observability].log_level", () => {
+    const p = writeToml(`vault_root = "/v"\n[observability]\nlog_level = "verbose"\n`);
+    expect(() => loadConfig(p)).toThrow();
+  });
 });

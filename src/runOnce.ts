@@ -9,6 +9,7 @@ import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
 import { log, withTicket } from "./logging.js";
+import { metrics } from "./metrics.js";
 
 const PRIORITY_RANK: Record<string, number> = { high: 2, normal: 1, low: 0 };
 
@@ -54,49 +55,57 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
   }
 
   return withTicket(next.id, async (): Promise<boolean> => {
-    log.info("claimed", { src: next.path, dst: claimed });
+    // Expose the in-flight ticket on the metrics singleton (read by /health);
+    // the finally clears it for BOTH the PR-flow and Q&A paths so the daemon
+    // reports idle once the task ends, however it ends.
+    metrics.setCurrentTicket(next.id);
+    try {
+      log.info("claimed", { src: next.path, dst: claimed });
 
-    // PR-flow ticket (frontmatter has `repo:`): derive the repo context and hand
-    // off to the PR orchestrator. A repo-less ctx (null) falls through to Q&A.
-    if (next.hasRepo) {
-      const ctx = deriveRepoContext(next.frontmatter, next.id, {
-        defaultBaseBranch: cfg.defaultBaseBranch,
-        branchPrefix: cfg.branchPrefix,
-        draftByDefault: cfg.draftByDefault,
-        defaultLabels: cfg.defaultLabels,
-      });
-      if (ctx) {
-        const dst = await runPrFlow(cfg, next, claimed, ctx, {
-          sessionFactoryFor: deps.sessionFactoryFor,
-          criticSessionFactory: deps.criticSessionFactory,
+      // PR-flow ticket (frontmatter has `repo:`): derive the repo context and hand
+      // off to the PR orchestrator. A repo-less ctx (null) falls through to Q&A.
+      if (next.hasRepo) {
+        const ctx = deriveRepoContext(next.frontmatter, next.id, {
+          defaultBaseBranch: cfg.defaultBaseBranch,
+          branchPrefix: cfg.branchPrefix,
+          draftByDefault: cfg.draftByDefault,
+          defaultLabels: cfg.defaultLabels,
         });
-        log.info("finalized (pr-flow)", { dst });
-        return true;
+        if (ctx) {
+          const dst = await runPrFlow(cfg, next, claimed, ctx, {
+            sessionFactoryFor: deps.sessionFactoryFor,
+            criticSessionFactory: deps.criticSessionFactory,
+          });
+          log.info("finalized (pr-flow)", { dst });
+          return true;
+        }
+        // ctx === null means no usable `repo:` — fall through to the Q&A path.
+        log.warn("hasRepo ticket produced no repo context; treating as Q&A", { id: next.id });
       }
-      // ctx === null means no usable `repo:` — fall through to the Q&A path.
-      log.warn("hasRepo ticket produced no repo context; treating as Q&A", { id: next.id });
-    }
 
-    const cwd = paths.processing; // Q&A has no worktree; cwd hosts only read-only tools
-    const qaCfg: Config = { ...cfg, tools: cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t)) };
-    // NOTE: if the factory throws (e.g. model unresolved), this rejects and the
-    // claimed ticket is left in processing/ — orphan recovery lands in M4.
-    const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
-    // Construct the loop-guard supervisor when enabled (M2). It feeds off the
-    // agent event stream inside runAgent: nudge → mid-run steer, kill → abort.
-    const guardManager = cfg.supervisorEnabled
-      ? new GuardManager({
-          supervisorConfig: {
-            budgetPerKind: cfg.supervisorBudgetPerKind,
-            escalationWindowTurns: cfg.supervisorEscalationWindow,
-          },
-          outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
-          outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
-        })
-      : undefined;
-    const result = await runAgent({ body: next.body, cwd, timeoutMs: next.timeoutSeconds * 1000, createSession: factory, guardManager });
-    const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
-    log.info("finalized", { dst, status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed" });
-    return true;
+      const cwd = paths.processing; // Q&A has no worktree; cwd hosts only read-only tools
+      const qaCfg: Config = { ...cfg, tools: cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t)) };
+      // NOTE: if the factory throws (e.g. model unresolved), this rejects and the
+      // claimed ticket is left in processing/ — orphan recovery lands in M4.
+      const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
+      // Construct the loop-guard supervisor when enabled (M2). It feeds off the
+      // agent event stream inside runAgent: nudge → mid-run steer, kill → abort.
+      const guardManager = cfg.supervisorEnabled
+        ? new GuardManager({
+            supervisorConfig: {
+              budgetPerKind: cfg.supervisorBudgetPerKind,
+              escalationWindowTurns: cfg.supervisorEscalationWindow,
+            },
+            outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
+            outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
+          })
+        : undefined;
+      const result = await runAgent({ body: next.body, cwd, timeoutMs: next.timeoutSeconds * 1000, createSession: factory, guardManager });
+      const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
+      log.info("finalized", { dst, status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed" });
+      return true;
+    } finally {
+      metrics.setCurrentTicket(null);
+    }
   });
 }

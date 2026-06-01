@@ -23,7 +23,7 @@ import { acquireSingletonLock } from "./lock.js";
 import { loadConfig } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
-import { log } from "./logging.js";
+import { log, setLogLevel } from "./logging.js";
 import { renderService } from "./service.js";
 
 // ---------------------------------------------------------------------------
@@ -149,6 +149,7 @@ export async function run(
   // ------------------------------------------------------------
   if (subcommand === "run-once") {
     const cfg = loadConfigFn(values.config as string);
+    setLogLevel(cfg.logLevel);
     const handled = await runOnceFn(cfg);
     log.info("run-once complete", { handled });
     return 0;
@@ -160,6 +161,7 @@ export async function run(
   if (subcommand === "start") {
     const configPath = values.config as string;
     const cfg = loadConfigFn(configPath);
+    setLogLevel(cfg.logLevel);
 
     // Derive lock path: mirror Python args.config.resolve().parent / "worker.lock"
     const lockPath = join(dirname(resolve(configPath)), "worker.lock");

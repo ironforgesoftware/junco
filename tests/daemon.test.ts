@@ -7,9 +7,11 @@
  * _install_signal_handlers.
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import type { Config } from "../src/types.js";
 import type { StopFlagLike } from "../src/health.js";
+import type { HealthServerHandle } from "../src/healthServer.js";
+import { metrics } from "../src/metrics.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -17,6 +19,15 @@ import {
   mainLoop,
   type MainLoopDeps,
 } from "../src/daemon.js";
+
+/** A fake health-server handle whose close() is a spy — never binds a port. */
+function makeFakeHealthHandle(): HealthServerHandle {
+  return {
+    port: 12345,
+    url: "http://127.0.0.1:12345",
+    close: vi.fn(async () => {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -56,6 +67,10 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     planLintBlockOnError: true,
     planLintCheckLabels: true,
     commitLeftoversEnabled: false,
+    healthEnabled: false,
+    healthHost: "127.0.0.1",
+    healthPort: 0,
+    logLevel: "info",
     ...overrides,
   };
 }
@@ -76,6 +91,9 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     waitForOmlxFn: vi.fn(async () => {}),
     sleep: vi.fn(async () => {}),
     mkdirs: vi.fn(() => {}),
+    // Default fake — never binds a real port. Tests that exercise the health
+    // lifecycle pass their own spy + a healthEnabled:true config.
+    startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
     ...overrides,
   };
   return { deps };
@@ -383,5 +401,108 @@ describe("mainLoop", () => {
     await mainLoop(cfg, stop, {}, deps);
 
     expect(deps.runOnceFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — observability wiring (metrics + health lifecycle)
+// ---------------------------------------------------------------------------
+
+describe("mainLoop — observability", () => {
+  // The metrics singleton is process-wide; reset so pollCount assertions start
+  // from a clean slate and don't leak into other suites.
+  beforeEach(() => metrics.reset());
+  afterEach(() => metrics.reset());
+
+  it("records at least one poll while looping", async () => {
+    const cfg = makeConfig();
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(metrics.snapshot().pollCount).toBeGreaterThan(0);
+    expect(metrics.snapshot().startedAt).not.toBeNull();
+  });
+
+  it("starts the health server once at boot and closes it after the loop ends (healthEnabled:true)", async () => {
+    const cfg = makeConfig({ healthEnabled: true });
+    const stop = new StopFlag();
+    const handle = makeFakeHealthHandle();
+    const startHealthServerFn = vi.fn(async () => handle);
+    const { deps } = makeDeps({
+      startHealthServerFn,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(startHealthServerFn).toHaveBeenCalledTimes(1);
+    // It receives the configured host/port + the metrics singleton + a probe.
+    const arg = startHealthServerFn.mock.calls[0][0];
+    expect(arg.host).toBe(cfg.healthHost);
+    expect(arg.port).toBe(cfg.healthPort);
+    expect(arg.metrics).toBe(metrics);
+    expect(typeof arg.readinessProbe).toBe("function");
+    // Closed exactly once, AFTER the loop exits.
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start the health server when healthEnabled:false", async () => {
+    const cfg = makeConfig({ healthEnabled: false });
+    const stop = new StopFlag();
+    const startHealthServerFn = vi.fn(async () => makeFakeHealthHandle());
+    const { deps } = makeDeps({
+      startHealthServerFn,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(startHealthServerFn).not.toHaveBeenCalled();
+  });
+
+  it("a health-server start failure does NOT crash the daemon (logs warn, continues, no close)", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig({ healthEnabled: true });
+      const stop = new StopFlag();
+      const startHealthServerFn = vi.fn(async () => {
+        throw new Error("EADDRINUSE");
+      });
+      const runOnceFn = vi.fn(async () => false);
+      const { deps } = makeDeps({
+        startHealthServerFn,
+        runOnceFn,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      // Must resolve (not reject) — the daemon survives a health-start failure.
+      await expect(mainLoop(cfg, stop, {}, deps)).resolves.toBeUndefined();
+
+      // Loop still ran.
+      expect(runOnceFn).toHaveBeenCalled();
+      // A warning was logged for the failed start.
+      const warned = warnSpy.mock.calls.some((c) =>
+        String(c[0]).includes("health endpoint failed to start"),
+      );
+      expect(warned).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

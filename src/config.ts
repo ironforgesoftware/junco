@@ -83,6 +83,12 @@ const TomlSchema = z.object({
     block_on_error: z.boolean().default(true),
     check_labels: z.boolean().default(true),
   }).default({}),
+  observability: z.object({
+    health_enabled: z.boolean().default(true),
+    health_host: z.string().default("127.0.0.1"),
+    health_port: z.number().default(8787),
+    log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  }).default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -124,6 +130,10 @@ export function loadConfig(path: string): Config {
     planLintBlockOnError: d.plan_lint.block_on_error,
     planLintCheckLabels: d.plan_lint.check_labels,
     commitLeftoversEnabled: d.pi.commit_leftovers,
+    healthEnabled: d.observability.health_enabled,
+    healthHost: d.observability.health_host,
+    healthPort: d.observability.health_port,
+    logLevel: d.observability.log_level,
   };
 }
 

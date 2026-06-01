@@ -131,6 +131,10 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
     planLintBlockOnError: true,
     planLintCheckLabels: false,
     commitLeftoversEnabled: false,
+    healthEnabled: false,
+    healthHost: "127.0.0.1",
+    healthPort: 8787,
+    logLevel: "info",
     ...overrides,
   };
 }

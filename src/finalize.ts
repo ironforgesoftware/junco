@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { RunResult } from "./types.js";
 import type { PrOutcome } from "./prFlow.js";
+import { metrics } from "./metrics.js";
 
 export interface TerminalDirs { done: string; failed: string; }
 
@@ -35,6 +36,10 @@ export function finalize(ticketPath: string, result: RunResult, dirs: TerminalDi
   mkdirSync(dstDir, { recursive: true });
   const dst = join(dstDir, basename(ticketPath));
   renameSync(ticketPath, dst); // atomic move, same filesystem
+
+  // Single metrics instrumentation point for the Q&A path — after the terminal
+  // status is computed and the ticket has been moved into done/ or failed/.
+  metrics.recordTask(status, result.usage, result.durationMs);
   return dst;
 }
 
@@ -161,5 +166,9 @@ export function finalizePr(
   mkdirSync(dstDir, { recursive: true });
   const dst = join(dstDir, basename(ticketPath));
   renameSync(ticketPath, dst);
+
+  // Single metrics instrumentation point for the PR path — after the terminal
+  // status is computed and the ticket has been moved into done/ or failed/.
+  metrics.recordTask(status, result.usage, result.durationMs);
   return dst;
 }

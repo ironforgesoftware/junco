@@ -38,6 +38,12 @@ export interface Config {
   criticEnabled: boolean;
   criticMaxRetries: number;
   criticThinking: string;
+  // Observability (parity with the Python [observability] section): the health
+  // HTTP server's bind address + the daemon-wide log threshold.
+  healthEnabled: boolean;
+  healthHost: string;
+  healthPort: number;
+  logLevel: "debug" | "info" | "warn" | "error";
 }
 export interface Paths { inbox: string; processing: string; done: string; failed: string; }
 

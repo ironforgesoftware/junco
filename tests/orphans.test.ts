@@ -51,6 +51,10 @@ function makeConfig(): { cfg: Config; root: string } {
     planLintBlockOnError: true,
     planLintCheckLabels: true,
     commitLeftoversEnabled: false,
+    healthEnabled: false,
+    healthHost: "127.0.0.1",
+    healthPort: 8787,
+    logLevel: "info",
   };
   return { cfg, root };
 }

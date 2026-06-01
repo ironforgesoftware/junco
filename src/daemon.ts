@@ -20,8 +20,14 @@ import { queuePaths } from "./config.js";
 import { runOnce } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
-import { waitForOmlx, type StopFlagLike } from "./health.js";
+import { waitForOmlx, omlxReachable, type StopFlagLike } from "./health.js";
 import { log } from "./logging.js";
+import { metrics } from "./metrics.js";
+import {
+  startHealthServer,
+  type HealthServerHandle,
+  type HealthServerOpts,
+} from "./healthServer.js";
 
 // ---------------------------------------------------------------------------
 // StopFlag
@@ -116,6 +122,9 @@ export interface MainLoopDeps {
   waitForOmlxFn?: (cfg: Config, stopFlag: StopFlagLike) => Promise<void>;
   sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
   mkdirs?: (cfg: Config) => void;
+  // Injectable so tests never bind a real port. Defaults to the real
+  // startHealthServer. The daemon shares the process-wide `metrics` singleton.
+  startHealthServerFn?: (opts: HealthServerOpts) => Promise<HealthServerHandle>;
 }
 
 function defaultMkdirs(cfg: Config): void {
@@ -147,8 +156,12 @@ export async function mainLoop(
     deps.waitForOmlxFn ?? ((c: Config, s: StopFlagLike) => waitForOmlx(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
+  const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
   mkdirs(cfg);
+  // Stamp the start time once the queue dirs exist; the health server reports
+  // uptime off this. Idempotent — first call wins.
+  metrics.markStarted();
   recoverOrphansFn(cfg);
   pruneFn(cfg.worktreeRoot);
   await waitForOmlxFn(cfg, stopFlag);
@@ -160,8 +173,30 @@ export async function mainLoop(
     once: Boolean(opts.once),
   });
 
+  // Health endpoint (optional). A start failure must NOT crash the daemon — we
+  // log a warning and continue headless. The server closes after the loop ends.
+  let health: HealthServerHandle | null = null;
+  if (cfg.healthEnabled) {
+    try {
+      health = await startHealthServerFn({
+        host: cfg.healthHost,
+        port: cfg.healthPort,
+        metrics,
+        readinessProbe: () => omlxReachable(cfg),
+      });
+      log.info("health endpoint listening", { url: health.url });
+    } catch (e) {
+      log.warn("health endpoint failed to start; continuing without it", {
+        error: e instanceof Error ? e.message : String(e),
+        port: cfg.healthPort,
+      });
+      health = null;
+    }
+  }
+
   let idleAnnounced = false;
   while (!stopFlag.requested) {
+    metrics.recordPoll();
     const handled = await runOnceFn(cfg);
     if (handled) {
       idleAnnounced = false;
@@ -174,6 +209,10 @@ export async function mainLoop(
     }
     await sleep(cfg.pollIntervalSeconds, stopFlag);
   }
+
+  // Tear the health server down AFTER the loop exits so it stays up for the
+  // whole in-flight task during a graceful shutdown.
+  if (health) await health.close();
 
   log.info("worker exiting cleanly");
 }
