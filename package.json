@@ -31,7 +31,9 @@
     "dist",
     "templates",
     "skills",
+    "examples",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
