@@ -35,18 +35,9 @@ npm install -g junco
 npx junco <command>
 ```
 
-### 2. Initialize a vault
+### 2. Create your config
 
-```bash
-junco init --config ~/junco/config.toml
-```
-
-This creates `config.toml` (if absent) and the queue directories:
-`<vault_root>/Junco/{inbox,processing,done,failed}` plus the worktree root.
-
-### 3. Edit `config.toml`
-
-Open the generated `config.toml` and set at minimum:
+Create `~/junco/config.toml` with at least these keys:
 
 ```toml
 vault_root = "~/my-junco-vault"   # where the queue lives
@@ -59,7 +50,18 @@ url = "http://127.0.0.1:1234/v1"  # your OpenAI-compatible endpoint
 api_key = "your-api-key"
 ```
 
-See [Configuration](#configuration) for every available key.
+See [Configuration](#configuration) for every available key, or copy
+`examples/config.toml` as a starting point.
+
+### 3. Initialize the vault
+
+```bash
+junco init --config ~/junco/config.toml
+```
+
+`init` reads `vault_root` from your config and creates the queue directories
+`<vault_root>/Junco/{inbox,processing,done,failed}` plus the worktree root.
+(It does not write `config.toml` — create that yourself in step 2.)
 
 ### 4. Start the daemon
 
