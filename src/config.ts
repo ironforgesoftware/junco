@@ -7,7 +7,7 @@ import type { Config, Paths } from "./types.js";
 
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (p === "~" || p.startsWith("~/")) return join(homedir(), p.slice(1));
   return p;
 }
