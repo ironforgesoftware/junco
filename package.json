@@ -28,8 +28,12 @@
     "agent",
     "ci"
   ],
-  "engines": { "node": ">=22.19.0" },
-  "bin": { "junco": "dist/cli.js" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "junco": "dist/cli.js"
+  },
   "files": [
     "dist",
     "templates",
@@ -46,6 +50,7 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
+    "@clack/prompts": "1.5.0",
     "@earendil-works/pi-coding-agent": "0.78.0",
     "smol-toml": "1.6.1",
     "yaml": "2.9.0",
