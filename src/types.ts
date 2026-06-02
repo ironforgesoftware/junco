@@ -16,7 +16,7 @@ export interface ModelCost { input: number; output: number; cacheRead: number; c
  * Pi-style models.json the provider+model are loaded from THAT file and the
  * inline capability fields are ignored. */
 export interface ModelConfig {
-  id: string;                 // provider-prefixed, e.g. "omlx/Qwen3.6-27B-oQ8-mtp"
+  id: string;                 // provider-prefixed, e.g. "openai/gpt-4o-mini"
   modelsJson: string | null;  // path to a Pi models.json, or null for inline
   api: string;                // Pi Api style, e.g. "openai-completions"
   baseUrl: string;            // OpenAI-compatible endpoint

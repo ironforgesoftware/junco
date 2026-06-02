@@ -45,7 +45,7 @@ describe("loadConfig", () => {
   it("[model] defaults reproduce the previously-hardcoded values", () => {
     const p = writeToml(`vault_root = "/tmp/vault"\n`);
     const cfg = loadConfig(p);
-    expect(cfg.model.id).toBe("omlx/Qwen3.6-27B-oQ8-mtp");
+    expect(cfg.model.id).toBe("local/my-model");
     expect(cfg.model.modelsJson).toBeNull();
     expect(cfg.model.api).toBe("openai-completions");
     expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");

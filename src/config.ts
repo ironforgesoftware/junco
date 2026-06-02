@@ -49,7 +49,7 @@ const TomlSchema = z.object({
   vault_root: z.string({ required_error: "config: vault_root is required" }),
   junco_subdir: z.string().default("Junco"),
   pi: z.object({
-    model_id: z.string().default("omlx/Qwen3.6-27B-oQ8-mtp"),
+    model_id: z.string().default("local/my-model"),
     extra_args: z.array(z.string()).optional(),
     commit_leftovers: z.boolean().default(false),
   }).default({}),

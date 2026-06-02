@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { Config } from "../types.js";
 
 /**
- * Split a provider-prefixed model id ("omlx/Qwen3.6-...") into its provider and
+ * Split a provider-prefixed model id ("openai/gpt-4o-mini") into its provider and
  * bare model id. Splits on the FIRST "/" only, so model ids that themselves
  * contain slashes (e.g. "openrouter/anthropic/claude") are preserved. If there
  * is no "/", the whole string is treated as the model id under the default

@@ -142,7 +142,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * cfg.model.apiKey)` (auth-storage.d.ts:63), the HIGHEST-priority source in
  * `getApiKey` (auth-storage.d.ts:124-134); nothing is persisted to disk.
  *
- * Model id: `cfg.model.id` is provider-prefixed (e.g. "omlx/Qwen3.6-...-mtp").
+ * Model id: `cfg.model.id` is provider-prefixed (e.g. "openai/gpt-4o-mini").
  * We split on the first "/" into provider + bare model id, since the
  * programmatic `registerProvider`/`find` APIs take them separately.
  *
