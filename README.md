@@ -12,7 +12,7 @@ The embedded agent talks to any **OpenAI-compatible `/v1` inference endpoint** �
 
 Requires **Node ≥ 22.19** (plus `git` + an authenticated `gh` for PR-flow tickets).
 
-**1. Run the setup wizard** — it asks a few questions, writes `config.toml`, and creates the queue:
+**1. Run the setup wizard** — it asks a few questions, **detects the models on your endpoint**, writes `config.toml`, and creates the queue:
 
 ```bash
 npx @ironforgesoftware/junco        # first run → setup wizard; afterwards → starts the daemon
@@ -32,7 +32,7 @@ junco start          # polls the inbox; Ctrl-C to stop  (a bare `junco` also sta
 junco submit my-task.md
 ```
 
-**4. Watch it:** `curl localhost:8787/health`, or check `<vault_root>/Junco/done/` and `failed/`.
+**4. Watch it:** `curl localhost:8787/health`, or check `~/Junco/done/` and `failed/`.
 
 New to the ticket format? Run `junco schema`, copy a template from `examples/`, or let the bundled **`junco-dispatch`** skill scaffold a well-formed ticket. The sections below explain each step in depth.
 
@@ -73,7 +73,7 @@ npx @ironforgesoftware/junco <command>
 junco init --config ~/junco/config.toml
 ```
 
-The wizard asks for your vault directory and model (an OpenAI-compatible endpoint, or a Pi `models.json`), **writes `config.toml`**, and creates the queue directories `<vault_root>/Junco/{inbox,processing,done,failed}` plus the worktree root. Add `--yes` to scaffold defaults non-interactively. A bare `junco` (or `npx @ironforgesoftware/junco`) runs this same wizard on first run.
+The wizard asks where to keep your tickets and which model to use — **letting you pick from the models your endpoint advertises** (an OpenAI-compatible endpoint, or a Pi `models.json`) — **writes `config.toml`**, and creates the queue directories at `<vault_root>/{inbox,processing,done,failed}` (default `~/Junco/…`) plus the worktree root. Add `--yes` to scaffold defaults non-interactively. A bare `junco` (or `npx @ironforgesoftware/junco`) runs this same wizard on first run.
 
 <details><summary>Prefer to write the config by hand?</summary>
 

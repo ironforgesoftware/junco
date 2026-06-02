@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-01
+
+### Added
+
+- Colorized `junco init` wizard (via `@clack/prompts`): boxed prompts and an arrow-key model picker that **discovers models from your endpoint** (`GET /v1/models`) or lists the entries in a Pi `models.json`, with a spinner while it fetches. Falls back to manual entry when the endpoint is unreachable.
+- Graceful cancel: Ctrl-C / Ctrl-D during setup exits cleanly (exit 130, no stack trace).
+
+### Changed
+
+- The wizard now writes `junco_subdir = ""`, so the queue lives directly under the chosen directory (default `~/Junco/{inbox,…}`) — no redundant `Junco/` subfolder. Existing configs are unaffected (the schema default stays `Junco`).
+- Removed personal-stack strings from the shipped surface — wizard prompts, the legacy `[pi].model_id` fallback default, and doc-comment examples now use neutral placeholders. The wizard infers the provider label from the endpoint host.
+
 ## [0.2.1] - 2026-06-01
 
 ### Changed
