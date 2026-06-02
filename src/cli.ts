@@ -32,7 +32,7 @@ import { log, setLogLevel } from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
-import { runInitWizard, type AskFn } from "./wizard.js";
+import { runInitWizard } from "./wizard.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -48,8 +48,6 @@ export interface CliDeps {
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
   readStdinFn?: () => Promise<string>;
-  /** Interactive prompt fn for the `init` setup wizard (tests inject scripted answers). */
-  askFn?: AskFn;
   /** Existence check for first-run detection (tests control routing). Default: fs.existsSync. */
   existsFn?: (path: string) => boolean;
   /** The init wizard (tests inject a spy to assert routing without touching the fs). */
@@ -295,9 +293,9 @@ export async function run(
 
     if (!existsFn(resolve(configPath))) {
       const wantYes = values.yes as boolean;
-      // Non-TTY guard: never hang on a prompt in pipes/CI. An injected askFn or
+      // Non-TTY guard: never hang on a prompt in pipes/CI. An injected
       // runInitWizardFn counts as "interactive"; --yes scaffolds without prompting.
-      if (!wantYes && !deps.askFn && !deps.runInitWizardFn && !process.stdin.isTTY) {
+      if (!wantYes && !deps.runInitWizardFn && !process.stdin.isTTY) {
         process.stderr.write(
           `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
           `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.toml.\n`,
@@ -306,8 +304,7 @@ export async function run(
       }
       const runWizard =
         deps.runInitWizardFn ??
-        ((cp: string, o: { yes?: boolean }) =>
-          runInitWizard(cp, { ask: deps.askFn, yes: o.yes, printFn }));
+        ((cp: string, o: { yes?: boolean }) => runInitWizard(cp, { yes: o.yes, printFn }));
       return runWizard(configPath, { yes: wantYes });
     }
 

@@ -7,17 +7,28 @@ import {
   collectAnswers,
   defaultAnswers,
   runInitWizard,
-  type AskFn,
   type WizardAnswers,
 } from "../src/wizard.js";
 import { loadConfig, queuePaths } from "../src/config.js";
+import { type Prompter, WizardCancelled } from "../src/wizard/prompter.js";
 
-// A scripted ask: pops queued answers in order (empty string => caller's default).
-function scriptedAsk(answers: string[]): AskFn {
-  let i = 0;
-  return async (_q, opts) => {
-    const raw = i < answers.length ? answers[i++] : "";
-    return raw || (opts?.default ?? "");
+// A scripted Prompter: pops queued text()/select() answers in order; empty queue
+// falls back to the prompt's default / first option. The spinner runs inline.
+function scriptedPrompter(a: { text?: string[]; select?: string[] } = {}): Prompter {
+  const text = [...(a.text ?? [])];
+  const select = [...(a.select ?? [])];
+  return {
+    intro() {},
+    note() {},
+    async text(o) {
+      return text.length ? text.shift()! : (o.default ?? "");
+    },
+    async select(o) {
+      return select.length ? select.shift()! : o.options[0].value;
+    },
+    async spinner(_s, task) {
+      return task();
+    },
   };
 }
 
@@ -32,9 +43,9 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
     return loadConfig(p);
   }
 
-  it("inline mode", () => {
+  it("inline mode — queue directly under vault_root (no /Junco)", () => {
     const a: WizardAnswers = {
-      vaultRoot: "~/jv", mode: "inline", modelId: "prov/m",
+      vaultRoot: "/tmp/jv", mode: "inline", modelId: "prov/m",
       baseUrl: "http://h:1/v1", apiKey: "k",
     };
     const cfg = parse(renderConfigToml(a));
@@ -42,7 +53,8 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
     expect(cfg.model.baseUrl).toBe("http://h:1/v1");
     expect(cfg.model.apiKey).toBe("k");
     expect(cfg.model.modelsJson).toBeNull();
-    expect(cfg.vaultRoot).not.toContain("~"); // expandHome applied on load
+    expect(cfg.juncoSubdir).toBe("");
+    expect(queuePaths(cfg).inbox).toBe("/tmp/jv/inbox"); // no "Junco" segment
   });
 
   it("models_json mode", () => {
@@ -65,29 +77,48 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
   });
 });
 
-describe("collectAnswers", () => {
-  it("inline branch with explicit answers", async () => {
-    const ask = scriptedAsk(["~/v", "inline", "prov/model", "http://e/v1", "secret"]);
-    expect(await collectAnswers(ask)).toEqual({
-      vaultRoot: "~/v", mode: "inline", modelId: "prov/model",
-      baseUrl: "http://e/v1", apiKey: "secret",
-    });
-  });
-
-  it("models-json branch (mode detected by leading 'm')", async () => {
-    const ask = scriptedAsk(["~/v", "models-json", "omlx/x", "~/m.json"]);
-    expect(await collectAnswers(ask)).toEqual({
-      vaultRoot: "~/v", mode: "models_json", modelId: "omlx/x", modelsJson: "~/m.json",
-    });
-  });
-
-  it("empty input falls back to defaults (inline)", async () => {
-    const ask = scriptedAsk([]); // everything empty → defaults
-    const a = await collectAnswers(ask);
-    expect(a).toEqual({
-      vaultRoot: "~/junco-vault", mode: "inline", modelId: "omlx/my-model",
+describe("defaultAnswers", () => {
+  it("→ ~/Junco + neutral model (no personal-stack strings)", () => {
+    expect(defaultAnswers()).toEqual({
+      vaultRoot: "~/Junco", mode: "inline", modelId: "local/my-model",
       baseUrl: "http://127.0.0.1:1234/v1", apiKey: "1234",
     });
+  });
+});
+
+describe("collectAnswers", () => {
+  it("inline: picks a discovered model, prefixed by the inferred provider", async () => {
+    const p = scriptedPrompter({
+      text: ["~/v", "http://127.0.0.1:1234/v1", "secret"], select: ["inline", "m-fast"],
+    });
+    const a = await collectAnswers(p, { fetchModelsFn: async () => ["m-fast", "m-slow"] });
+    expect(a).toEqual({
+      vaultRoot: "~/v", mode: "inline", modelId: "local/m-fast",
+      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "secret",
+    });
+  });
+
+  it("inline: manual entry keeps a slash-containing id unprefixed", async () => {
+    const p = scriptedPrompter({
+      text: ["~/v", "https://openrouter.ai/api/v1", "k", "anthropic/claude"],
+      select: ["inline", " manual"],
+    });
+    const a = await collectAnswers(p, { fetchModelsFn: async () => ["x"] });
+    expect(a.modelId).toBe("anthropic/claude");
+  });
+
+  it("inline: empty discovery falls straight to a manual prompt, prefixed", async () => {
+    const p = scriptedPrompter({
+      text: ["~/v", "https://api.openai.com/v1", "k", "gpt-z"], select: ["inline"],
+    });
+    const a = await collectAnswers(p, { fetchModelsFn: async () => [] });
+    expect(a.modelId).toBe("openai/gpt-z");
+  });
+
+  it("models_json: lists file entries", async () => {
+    const p = scriptedPrompter({ text: ["~/v", "~/m.json"], select: ["models_json", "omlx/alpha"] });
+    const a = await collectAnswers(p, { parseModelsJsonFn: () => ["omlx/alpha", "omlx/beta"] });
+    expect(a).toEqual({ vaultRoot: "~/v", mode: "models_json", modelId: "omlx/alpha", modelsJson: "~/m.json" });
   });
 });
 
@@ -95,21 +126,24 @@ describe("runInitWizard", () => {
   let dir: string | null = null;
   afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
 
-  it("writes config + requests the queue dirs (scripted ask)", async () => {
+  it("writes config + requests the queue dirs", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-run-"));
     const cfgPath = join(dir, "config.toml");
     const printed: string[] = [];
     const made: string[] = [];
-    // Record mkdir calls instead of creating real dirs (worktreeRoot defaults
-    // outside the temp dir); the config write still uses the real writeFileSync.
     const code = await runInitWizard(cfgPath, {
-      ask: scriptedAsk([`${dir}/vault`, "inline", "prov/m", "http://h:1/v1", "k"]),
+      prompter: scriptedPrompter({
+        text: [`${dir}/vault`, "http://127.0.0.1:1234/v1", "k"], select: ["inline", "m-a"],
+      }),
+      fetchModelsFn: async () => ["m-a"],
       mkdirFn: (p) => made.push(p),
       printFn: (s) => printed.push(s),
     });
     expect(code).toBe(0);
     expect(existsSync(cfgPath)).toBe(true);
-    const paths = queuePaths(loadConfig(cfgPath));
+    const cfg = loadConfig(cfgPath);
+    expect(cfg.juncoSubdir).toBe("");
+    const paths = queuePaths(cfg);
     for (const d of [paths.inbox, paths.processing, paths.done, paths.failed]) {
       expect(made).toContain(d);
     }
@@ -119,15 +153,25 @@ describe("runInitWizard", () => {
   it("--yes scaffolds a valid config with no prompts", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-yes-"));
     const cfgPath = join(dir, "config.toml");
-    const askThatThrows: AskFn = async () => { throw new Error("should not prompt with --yes"); };
-    // mkdirFn is a no-op so the default-vault config doesn't create real dirs
-    // (~/junco-vault, ~/junco/worktrees) on the test machine.
-    const code = await runInitWizard(cfgPath, {
-      yes: true, ask: askThatThrows, mkdirFn: () => {}, printFn: () => {},
-    });
+    const code = await runInitWizard(cfgPath, { yes: true, mkdirFn: () => {}, printFn: () => {} });
     expect(code).toBe(0);
     const cfg = loadConfig(cfgPath); // parses → valid
-    expect(cfg.model.id).toBe("omlx/my-model");
+    expect(cfg.model.id).toBe("local/my-model");
     expect(readFileSync(cfgPath, "utf8")).toMatch(/\[model\]/);
+  });
+
+  it("returns 130 on cancel and writes nothing", async () => {
+    dir = mkdtempSync(join(tmpdir(), "junco-wiz-cancel-"));
+    const cfgPath = join(dir, "config.toml");
+    const written: string[] = [];
+    const cancelling: Prompter = {
+      ...scriptedPrompter(),
+      async text() { throw new WizardCancelled(); },
+    };
+    const code = await runInitWizard(cfgPath, {
+      prompter: cancelling, writeFileFn: (p) => written.push(p), mkdirFn: () => {}, printFn: () => {},
+    });
+    expect(code).toBe(130);
+    expect(written).toEqual([]);
   });
 });
