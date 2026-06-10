@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-10
+
+### Added
+
+- **Self-healing retries.** Transient failures (endpoint errors, truncated streams) with no commits requeue the ticket with backoff (`[worker].max_transient_retries`, default 2; worker-managed `retry_count`/`not_before` frontmatter). Crashed tickets found in `processing/` at startup requeue under the same budget instead of failing.
+- **Endpoint-aware claiming.** The daemon probes readiness before every claim — an endpoint outage queues work instead of burning the inbox into `failed/`.
+- **Timeout salvage.** Sessions that hit the ticket timeout after committing get their commits pushed and a draft PR opened (new terminal status `timeout_partial`, routed to `done/`) with a partial-run banner.
+- **Force-stop.** Second SIGTERM/SIGINT aborts the in-flight session and salvages commits; third hard-exits. Rendered service units now set `ExitTimeOut`/`TimeoutStopSec` sized to the ticket timeout so supervisors don't SIGKILL a draining worker.
+- **Day-2 CLI:** `junco status`, `junco list [box]`, `junco retry <name…|--all>`, `junco doctor`, `junco logs [-f] [-n N] [--json]`.
+- **Concurrency.** `[worker].max_concurrent` (default 1) runs tickets in parallel with per-repo serialization and graceful drain; `/health` reports `currentTickets`.
+- **Observability.** Structured logs tee to `<state_dir>/worker.log` (10 MB rotation) with a human-readable TTY format; per-ticket transcripts under `<state_dir>/transcripts/`; live progress (turns, last tool, output tokens) in `/health` (`currentProgress`).
+- **Per-ticket `tools:` override** — Q&A tickets stay read-only by default and can opt into more (e.g. `tools: [read, grep, bash]`).
+- **`[git].allowed_repo_roots`** confines PR-flow tickets to approved repo roots; the README now documents the inbox trust model.
+- `not_before` frontmatter — schedule a ticket for later (also the worker's retry-backoff mechanism).
+- Plain (non-Obsidian) ticket templates under `templates/plain/`; CI test workflow on push/PR; prettier + eslint (`no-floating-promises`).
+
+### Changed
+
+- User-level config discovery: `--config` → `./config.toml` → `~/.config/junco/config.toml` (the wizard writes the user-level path by default, so `junco` works from any directory).
+- Stack-agnostic naming: daemon logs say "inference endpoint"; bare model ids default to the `local` provider (previously `omlx`).
+- The diff-vs-spec critic is told when its diff was truncated, preventing false MISSING verdicts on very large diffs.
+- The Pi event stream is typed at the session boundary (`AgentEvent`).
+
+### Fixed
+
+- README troubleshooting referenced the legacy `[oMLX].url` key instead of `[model].base_url`.
+- Stale-worktree cleanup failures now surface as a clear `GitOpError` instead of a raw fs error.
+
 ## [0.2.2] - 2026-06-01
 
 ### Added

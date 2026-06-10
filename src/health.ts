@@ -37,7 +37,10 @@ export interface EndpointReachableDeps {
  * models.json's provider entry, or the inline base_url), then re-append
  * /models — hitting the configured endpoint with Bearer auth.
  */
-export async function endpointReachable(cfg: Config, deps?: EndpointReachableDeps): Promise<boolean> {
+export async function endpointReachable(
+  cfg: Config,
+  deps?: EndpointReachableDeps,
+): Promise<boolean> {
   const fetchFn = deps?.fetchFn ?? fetch;
   const timeoutMs = deps?.timeoutMs ?? 5000;
 
