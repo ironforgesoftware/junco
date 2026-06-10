@@ -35,6 +35,7 @@ import { describeTicketSchema } from "./ticketSchema.js";
 import { runInitWizard } from "./wizard.js";
 import { runStatusCommand } from "./statusCmd.js";
 import { runListCommand } from "./listCmd.js";
+import { runRetryCommand } from "./retryCmd.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -71,6 +72,7 @@ Subcommands:
   inbox-path   Print the inbox directory path and exit
   status       Show daemon / endpoint / queue health at a glance
   list [box]   List tickets per queue box (inbox|processing|done|failed)
+  retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -138,6 +140,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       help: { type: "boolean", short: "h", default: false },
       platform: { type: "string" },
       yes: { type: "boolean", short: "y", default: false },
+      all: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -295,6 +298,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "list") {
     const cfg = loadConfigFn(configPath);
     return runListCommand(cfg, positionals[1], { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // retry: clean failed tickets and resubmit them to the inbox
+  // ------------------------------------------------------------
+  if (subcommand === "retry") {
+    const cfg = loadConfigFn(configPath);
+    return runRetryCommand(cfg, positionals.slice(1), { all: values.all as boolean }, { printFn });
   }
 
   // ------------------------------------------------------------
