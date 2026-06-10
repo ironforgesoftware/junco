@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { acquireSingletonLock } from "../src/lock.js";
+import { acquireSingletonLock, readLockHolder } from "../src/lock.js";
 
 let tmpDirs: string[] = [];
 
@@ -131,5 +131,20 @@ describe("acquireSingletonLock", () => {
     expect(lock).not.toBeNull();
     expect(existsSync(lockPath)).toBe(true);
     lock!.release();
+  });
+});
+
+describe("readLockHolder", () => {
+  it("live pid → pid; missing file, garbage, or dead pid → null", () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-lockread-"));
+    const p = join(dir, "worker.lock");
+    expect(readLockHolder(p)).toBeNull(); // missing
+    writeFileSync(p, String(process.pid), "utf8");
+    expect(readLockHolder(p)).toBe(process.pid); // alive (us)
+    writeFileSync(p, "not-a-pid", "utf8");
+    expect(readLockHolder(p)).toBeNull(); // garbage
+    writeFileSync(p, "999999", "utf8");
+    expect(readLockHolder(p)).toBeNull(); // (almost certainly) dead
+    rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -33,6 +33,7 @@ import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
 import { runInitWizard } from "./wizard.js";
+import { runStatusCommand } from "./statusCmd.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -67,6 +68,7 @@ Subcommands:
   run-once     Process one task and exit (dev/cron convenience; no lock)
   service      Render a service file to stdout (launchd plist or systemd unit)
   inbox-path   Print the inbox directory path and exit
+  status       Show daemon / endpoint / queue health at a glance
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -272,6 +274,17 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const cfg = loadConfigFn(configPath);
     printFn(inboxPath(cfg) + "\n");
     return 0;
+  }
+
+  // ------------------------------------------------------------
+  // status: daemon /health + queue counts at a glance
+  // ------------------------------------------------------------
+  if (subcommand === "status") {
+    const cfg = loadConfigFn(configPath);
+    return runStatusCommand(cfg, {
+      printFn,
+      lockPath: join(dirname(resolve(configPath)), "worker.lock"),
+    });
   }
 
   // ------------------------------------------------------------

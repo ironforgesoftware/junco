@@ -147,3 +147,22 @@ function buildLock(lockPath: string, ownPid: number): SingletonLock {
     },
   };
 }
+
+/**
+ * Who holds the lock? The pid in the pidfile when that process is alive, else
+ * null. Read-only — never mutates the lock (used by `junco status`/`doctor`).
+ *
+ * NOTE (also true of the stale-steal path above): pidfile check-then-act is
+ * inherently TOCTOU. Accepted: junco is a per-user daemon; the worst outcome
+ * of a lost race is a redundant "lock held" exit 0 on the next acquire.
+ */
+export function readLockHolder(lockPath: string): number | null {
+  try {
+    const pid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    process.kill(pid, 0); // throws if dead / not signalable
+    return pid;
+  } catch {
+    return null;
+  }
+}
