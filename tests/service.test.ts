@@ -214,3 +214,26 @@ describe("renderService", () => {
     expect(out).toContain("[Unit]");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stop timeouts — the supervisor must outwait a draining in-flight ticket
+// ---------------------------------------------------------------------------
+
+describe("stop timeouts", () => {
+  it("launchd plist sets ExitTimeOut from stopTimeoutSeconds", () => {
+    const out = renderLaunchdPlist({ ...BASE_OPTS, stopTimeoutSeconds: 2460 });
+    expect(out).toContain("<key>ExitTimeOut</key><integer>2460</integer>");
+  });
+
+  it("systemd unit sets TimeoutStopSec from stopTimeoutSeconds", () => {
+    const out = renderSystemdUnit({ ...BASE_OPTS, stopTimeoutSeconds: 2460 });
+    expect(out).toContain("TimeoutStopSec=2460");
+  });
+
+  it("defaults stopTimeoutSeconds to 2400 (40 min — default 30-min ticket + drain margin)", () => {
+    expect(renderLaunchdPlist(BASE_OPTS)).toContain(
+      "<key>ExitTimeOut</key><integer>2400</integer>",
+    );
+    expect(renderSystemdUnit(BASE_OPTS)).toContain("TimeoutStopSec=2400");
+  });
+});

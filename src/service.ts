@@ -37,6 +37,11 @@ export interface ServiceOpts {
   home?: string;
   /** PATH env value. Default includes dirname(nodeBin) + common prefix dirs. */
   pathEnv?: string;
+  /** Grace period (seconds) the supervisor allows between its stop signal and
+   * SIGKILL. Must exceed the longest ticket timeout so a graceful shutdown can
+   * drain the in-flight task instead of being killed mid-run (which would
+   * orphan the ticket). Default 2400 (40 min — default 30-min ticket + margin). */
+  stopTimeoutSeconds?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +68,7 @@ function resolveOpts(opts: ServiceOpts): Required<ServiceOpts> {
   const nodeBinDir = dirname(nodeBin);
   const pathEnv = opts.pathEnv ?? `${nodeBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
   const label = opts.label ?? "com.junco.worker";
+  const stopTimeoutSeconds = opts.stopTimeoutSeconds ?? 2400;
   return {
     label,
     nodeBin,
@@ -71,6 +77,7 @@ function resolveOpts(opts: ServiceOpts): Required<ServiceOpts> {
     logDir,
     home,
     pathEnv,
+    stopTimeoutSeconds,
   };
 }
 
@@ -102,6 +109,7 @@ export function renderLaunchdPlist(opts: ServiceOpts): string {
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
     <key>ThrottleInterval</key><integer>30</integer>
+    <key>ExitTimeOut</key><integer>${o.stopTimeoutSeconds}</integer>
     <key>ProcessType</key><string>Background</string>
     <key>StandardOutPath</key><string>${x(stdOut)}</string>
     <key>StandardErrorPath</key><string>${x(stdErr)}</string>
@@ -135,6 +143,7 @@ Type=simple
 ExecStart=${o.nodeBin} ${o.cliEntry} start --config ${o.configPath}
 Restart=on-failure
 RestartSec=30
+TimeoutStopSec=${o.stopTimeoutSeconds}
 Environment=HOME=${o.home}
 Environment=PATH=${o.pathEnv}
 

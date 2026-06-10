@@ -140,7 +140,20 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // falling back to the binary field in package.json if unavailable.
     const cliEntry = resolve(process.argv[1] ?? "dist/cli.js");
 
-    const rendered = renderService(platform, { cliEntry, configPath });
+    // Best-effort config read: size the stop timeout to the ticket timeout
+    // (+10 min drain margin) and put launchd logs under the state dir. No
+    // config yet → renderService falls back to its own defaults.
+    let stopTimeoutSeconds: number | undefined;
+    let logDir: string | undefined;
+    try {
+      const cfg = loadConfigFn(configPath);
+      stopTimeoutSeconds = (cfg.defaultTimeoutMinutes + 10) * 60;
+      logDir = cfg.stateDir;
+    } catch {
+      /* fall back to renderer defaults */
+    }
+
+    const rendered = renderService(platform, { cliEntry, configPath, stopTimeoutSeconds, logDir });
     printFn(rendered + "\n");
 
     // Print install hint to stderr
