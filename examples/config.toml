@@ -79,3 +79,17 @@ health_enabled = true
 health_host = "127.0.0.1"             # loopback by default — metrics not network-exposed unless changed
 health_port = 8787
 log_level = "info"                    # debug | info | warn | error
+
+# ── Added in v0.3.0 (all optional; defaults shown) ───────────────────────────
+# [worker]
+# max_transient_retries = 2     # requeue transient failures this many times
+# retry_backoff_seconds = 60    # not_before backoff per retry (linear × attempt)
+# max_concurrent = 1            # parallel tickets (same-repo always serialized)
+
+# [git]
+# allowed_repo_roots = []       # confine PR-flow tickets to these roots ([] = anywhere)
+
+# [observability]
+# state_dir = "~/.local/state/junco"  # worker.log + transcripts/ live here
+# log_to_file = true
+# transcripts = true            # per-ticket event JSONL under <state_dir>/transcripts/

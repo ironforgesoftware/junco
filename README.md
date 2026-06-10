@@ -48,9 +48,10 @@ New to the ticket format? Run `junco schema`, copy a template from `examples/`, 
 5. [Tickets](#tickets)
 6. [Health & observability](#health--observability)
 7. [Running as a service](#running-as-a-service)
-8. [Troubleshooting](#troubleshooting)
-9. [Contributing](#contributing)
-10. [License](#license)
+8. [Security model](#security-model)
+9. [Troubleshooting](#troubleshooting)
+10. [Contributing](#contributing)
+11. [License](#license)
 
 ---
 
@@ -192,11 +193,19 @@ Watch the daemon pick it up and open a draft PR automatically.
 
 **Critic** compares the final diff to the ticket spec. If it flags missing items and retries remain, Junco dispatches one corrective agent turn before pushing.
 
+### Reliability
+
+- **Transient failures retry themselves.** When a run fails for infrastructure reasons (endpoint error, truncated stream) with no commits made, the ticket goes back to the inbox with `retry_count` bumped and a `not_before` backoff stamp — up to `[worker].max_transient_retries` (default 2). Real failures (plan-lint, verification, guard kills) still fail immediately.
+- **The worker doesn't burn tickets while your endpoint is down.** Readiness is probed before every claim; work stays queued until the endpoint answers.
+- **Crashes requeue, not fail.** Tickets found in `processing/` at startup rejoin the inbox under the same retry budget; only an exhausted budget routes to `failed/`.
+- **Timeouts salvage work.** A session that hits its timeout after committing gets its commits pushed and a draft PR opened (status `timeout_partial`, routed to `done/`) with a partial-run banner, instead of losing the work in a dead worktree.
+- **Ctrl-C twice force-stops.** First signal: finish the in-flight ticket, then exit. Second: abort the agent session and salvage its commits. Third: hard exit. Rendered service files set matching stop timeouts so launchd/systemd don't SIGKILL a draining worker.
+
 ---
 
 ## CLI reference
 
-All commands accept `--config <path>` to point at a non-default `config.toml`. When omitted, `config.toml` in the current directory is used.
+All commands accept `--config <path>` to point at a non-default `config.toml`. When omitted, junco uses `./config.toml` if present, else the user-level default `~/.config/junco/config.toml` (respects `XDG_CONFIG_HOME`) — so junco works from any directory after first-run setup.
 
 | Command | Description |
 |---|---|
@@ -208,13 +217,18 @@ All commands accept `--config <path>` to point at a non-default `config.toml`. W
 | `junco init [--config <path>] [--yes]` | Interactive setup wizard: prompts for vault + model, **writes `config.toml`**, and creates the queue directories. With a config already present, just creates the dirs (never overwrites). `--yes` scaffolds defaults non-interactively. |
 | `junco` (no subcommand) | First run (no config yet) → the setup wizard; otherwise → `start`. |
 | `junco service [--platform launchd\|systemd] [--config <path>]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere. |
+| `junco status` | One-glance view: daemon (pid/uptime), endpoint readiness, in-flight tickets, processed counts, queue sizes. |
+| `junco list [box]` | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses. |
+| `junco retry <name…\|--all>` | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped. |
+| `junco doctor` | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/state dirs writable. |
+| `junco logs [-f] [-n N] [--json]` | Tail (or follow) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`. |
 | `junco --help` / `-h` | Print usage. |
 
 ---
 
 ## Configuration
 
-Junco is configured via a TOML file (default: `config.toml` in the current directory). Below is a fully-annotated reference with defaults.
+Junco is configured via a TOML file — `./config.toml` if present, else `~/.config/junco/config.toml` (the wizard writes the latter unless you pass `--config`). Below is a fully-annotated reference with defaults.
 
 ```toml
 # ── Vault ────────────────────────────────────────────────────────────────────
@@ -256,6 +270,9 @@ default_timeout_minutes = 30      # Per-ticket wall-clock cap (used when the tic
 poll_interval_seconds = 15        # How often to poll the inbox when idle.
 startup_poll_seconds = 30         # Retry cadence while waiting for the endpoint at boot.
 startup_wait = true               # Block startup until the inference endpoint is reachable.
+max_transient_retries = 2         # Requeue transient failures (endpoint errors, no commits) this many times.
+retry_backoff_seconds = 60        # not_before backoff per retry (linear: attempt × backoff).
+max_concurrent = 1                # Parallel ticket slots. Same-repo tickets always serialize.
 
 # ── Supervisor (loop guards) ─────────────────────────────────────────────────
 [supervisor]
@@ -273,6 +290,7 @@ default_base_branch = "main"
 branch_prefix = "junco/"          # PR branches are named <branch_prefix><ticket-id>.
 worktree_root = "~/junco/worktrees"
 remove_worktree_on_success = true # Clean up worktrees after a successful PR. Default: true.
+allowed_repo_roots = []           # Confine PR-flow tickets to these roots ([] = any path). See Security model.
 
 # ── Pull requests ─────────────────────────────────────────────────────────────
 [pr]
@@ -303,6 +321,9 @@ health_enabled = true
 health_host = "127.0.0.1"         # Loopback by default — not network-exposed unless you change this.
 health_port = 8787
 log_level = "info"                # debug | info | warn | error
+state_dir = "~/.local/state/junco" # worker.log + transcripts/ live here.
+log_to_file = true                # Tee structured logs to <state_dir>/worker.log (10 MB rotation).
+transcripts = true                # Per-ticket event JSONL under <state_dir>/transcripts/.
 ```
 
 ### Key knobs to know
@@ -345,6 +366,9 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 | `labels` | string[] | Labels to apply to the PR. |
 | `reviewers` | string[] | GitHub handles to request as reviewers. |
 | `amends_pr` | number | PR number — add commits to an existing PR instead of opening a new one. |
+| `tools` | string[] | Per-ticket tool allowlist override. Q&A tickets default to a read-only subset (`read, grep, find, ls`); list tools explicitly (e.g. `[read, grep, bash]`) to opt in to more. |
+| `not_before` | ISO datetime | Don't claim this ticket before this UTC instant. Set by the worker for retry backoff; dispatchers may also set it to schedule work. |
+| `retry_count` | integer | Worker-managed transparent-retry counter. Don't set by hand. |
 
 ### Minimal Q&A ticket
 
@@ -407,8 +431,11 @@ The bundled `junco-dispatch` skill (for Claude Code) scaffolds well-structured t
 ### Templates
 
 Ticket templates live in the `templates/` directory:
-- `templates/task.md` — Q&A ticket template
-- `templates/task-code.md` — PR-flow ticket template (with strict-notes for the agent)
+- `templates/plain/task.md` — Q&A ticket template (plain Markdown)
+- `templates/plain/task-code.md` — PR-flow ticket template (plain Markdown)
+- `templates/task.md`, `templates/task-code.md` — the same templates with [Obsidian Templater](https://github.com/SilentVoid13/Templater) date/title placeholders, for Obsidian-vault dispatch setups
+
+> `junco retry` note: a retried ticket is cut at the first appended `<!-- junco-result` separator, so a ticket BODY containing that literal line would lose its tail on retry.
 
 ### PR-flow lifecycle
 
@@ -431,7 +458,7 @@ When `[observability].health_enabled = true`, Junco serves HTTP on `health_host:
 |---|---|---|
 | `GET /live` | `200 {status:"alive", pid, uptimeSeconds}` | Liveness — is the process up? |
 | `GET /ready` | `200 {status:"ready"}` or `503` | Readiness — can the endpoint be reached? |
-| `GET /health` | `200 {status:"ok", ready, metrics:{...}}` | Full metrics: uptime, poll count, current ticket, tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
+| `GET /health` | `200 {status:"ok", ready, metrics:{...}}` | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
 
 ```bash
 # Quick checks:
@@ -440,7 +467,11 @@ curl http://127.0.0.1:8787/ready
 curl http://127.0.0.1:8787/health | jq .
 ```
 
-**Logs** are structured JSON on stdout. Set `[observability].log_level` to `debug` for verbose output, `info` for normal operation.
+**Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<state_dir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `[observability].log_level` to `debug` for verbose output, `info` for normal operation.
+
+**Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<state_dir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `[observability].transcripts = false`.
+
+**Concurrency:** `[worker].max_concurrent` (default 1) runs that many tickets in parallel. Tickets targeting the same `repo:` always serialize, and a graceful stop drains in-flight work.
 
 > The health server binds to loopback (`127.0.0.1`) by default. To expose it on a network interface, change `health_host`. Do so with care — there is no authentication.
 
@@ -478,11 +509,22 @@ systemctl --user enable --now junco
 
 ---
 
+## Security model
+
+The inbox is a **code-execution boundary**. Junco runs a coding agent with bash/file tools against whatever ticket lands in `inbox/`, and `## Verification` blocks run as your user — anyone who can write to the inbox can act as you. Keep the inbox on a local disk you own, don't point it at a synced/shared folder others can write to, and set `[git].allowed_repo_roots` to confine PR-flow tickets to approved checkout locations:
+
+```toml
+[git]
+allowed_repo_roots = ["~/code"]   # [] (default) = any path on disk
+```
+
+---
+
 ## Troubleshooting
 
 ### Inference endpoint unreachable at boot
 
-By default (`[worker].startup_wait = true`) Junco blocks startup and retries every `startup_poll_seconds` (default 30) until the endpoint responds. Check that your inference server is running and that `[oMLX].url` points to the correct address.
+By default (`[worker].startup_wait = true`) Junco blocks startup and retries every `startup_poll_seconds` (default 30) until the endpoint responds. Check that your inference server is running and that `[model].base_url` points to the correct address.
 
 Set `startup_wait = false` to let Junco start immediately and fail individual tickets if the endpoint is down.
 

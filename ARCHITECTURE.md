@@ -10,10 +10,12 @@ Junco is a TypeScript (Node ≥ 22.19) task-queue worker that turns Markdown tic
 ticket (.md)        queue directories       Junco worker
 ──────────────      ───────────────────     ────────────────────────────────────────
                     inbox/                  ← junco submit drops files here
-                       ↓  claim (rename)
-                    processing/             ← worker owns the ticket while running
-                       ↓  finalize
+                       ↓  claim (rename)       (not_before-gated; endpoint-readiness
+                    processing/                 probed before every claim)
+                       ↓  finalize          ← worker owns the ticket while running
                     done/ | failed/         ← terminal state + result block appended
+                       ↖  requeue           ← transient failures + crash recovery go
+                          (processing/ → inbox/)  back with retry_count++ / not_before
 ```
 
 A ticket is a Markdown file with a YAML frontmatter block validated against the `junco schema`. If the frontmatter includes a `repo:` field, Junco runs the full **PR flow** (agent writes code, opens a pull request). Without `repo:`, it runs the lighter **Q&A path** (agent operates read-only, answer is appended to the ticket).
@@ -41,17 +43,21 @@ A ticket is a Markdown file with a YAML frontmatter block validated against the 
     The loop-guard supervisor (agent/supervisor.ts) is attached to the event stream.
 
  5. Hard-exit check
-    Timeout or non-guard error → preserve worktree + fail.
-    A guard kill is a SOFT abort; execution continues to salvage any commits.
+    Non-guard error → transient (no commits) → requeue to inbox with backoff
+    (retry_count++ / not_before, up to [worker].max_transient_retries);
+    otherwise preserve worktree + fail.
+    A guard kill is a SOFT abort, and so is a TIMEOUT: both continue through
+    post-processing so commits made before the cutoff are salvaged.
 
  6. Count / commit
     Count new commits since the base; optionally commit unstaged leftovers (pr.ts).
 
  7. No-commits gate
-    Truncation or error with no commits → fail.
-    Clean no-change → terminal status completed_no_changes.
+    Timeout with no commits → preserve worktree + fail.
+    stop_reason error/length with no commits → requeue (budget permitting),
+    else fail. Clean no-change → terminal status completed_no_changes.
 
- 8. Post-session review  (skipped on a guard abort)
+ 8. Post-session review  (skipped on a guard abort or timeout)
     a. Run ## Verification bash blocks in the worktree (verify.ts).
     b. Run the critic (critic.ts): in-process diff-vs-spec review → PASS | MISSING.
     c. On MISSING + retries remaining + not amend mode →
@@ -87,17 +93,22 @@ No worktree, no git operations, no PR.
 
 ```
 ensure queue dirs
-  → recoverOrphans  (orphans.ts: tickets stranded in processing/ from a crash → failed/)
+  → recoverOrphans  (orphans.ts: crashed tickets requeue to inbox under the
+                     transient-retry budget; exhausted budget → failed/)
   → prune stale worktrees
-  → waitForOmlx     (health.ts: blocks until the inference endpoint answers)
+  → waitForEndpoint (health.ts: blocks until the inference endpoint answers)
   → start health server (healthServer.ts)
-  → poll loop:
+  → poll loop (max_concurrent = 1, the default — serial):
         every poll_interval_seconds → runOnce (claim + execute one ticket)
         StopFlag checked between polls for graceful shutdown
+    OR scheduler (max_concurrent > 1 — runScheduler):
+        tops up to max_concurrent in-flight tickets; same-repo tickets
+        always serialize; wakes on task-settle or poll tick; graceful stop
+        drains in-flight work
   → on shutdown: close health server
 ```
 
-The CLI `start` subcommand acquires the **single-instance lock** (`lock.ts`, pidfile + PID-liveness stale detection) before entering `mainLoop`. If the lock is already held by a live process, `start` exits 0 immediately. Signal handlers (`SIGTERM`/`SIGINT`) are installed by `installSignalHandlers`; both the lock and the handlers are released in a `finally` block.
+The CLI `start` subcommand acquires the **single-instance lock** (`lock.ts`, pidfile + PID-liveness stale detection) before entering `mainLoop`. If the lock is already held by a live process, `start` exits 0 immediately. Signal handlers (`SIGTERM`/`SIGINT`) are installed by `installSignalHandlers` with **stop escalation**: the first signal requests a graceful stop (drain the in-flight ticket), the second force-stops (`StopFlag.forceSignal` aborts the agent session softly — committed work is salvaged like a guard kill), the third hard-exits (130). Both the lock and the handlers are released in a `finally` block. Rendered service units set `ExitTimeOut`/`TimeoutStopSec` sized to the ticket timeout so the supervisor outwaits a draining worker.
 
 ---
 
@@ -145,11 +156,11 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 
 | File | Responsibility |
 |---|---|
-| `cli.ts` | Entrypoint; subcommands `start`, `run-once`, `submit`, `inbox-path`, `schema`, `init`, `service`. Exposes testable `run(argv, deps)`. |
-| `daemon.ts` | `mainLoop`, `StopFlag`, `installSignalHandlers`, `sleepInterruptible`. |
+| `cli.ts` | Entrypoint; subcommands `start`, `run-once`, `submit`, `inbox-path`, `status`, `list`, `retry`, `doctor`, `logs`, `schema`, `init`, `service`. Exposes testable `run(argv, deps)`. |
+| `daemon.ts` | `mainLoop`, `runScheduler` (max_concurrent > 1), `StopFlag` (+ forceSignal), `installSignalHandlers`, `sleepInterruptible`. |
 | `lock.ts` | Single-instance lock — pidfile + PID-liveness stale detection. |
-| `orphans.ts` | `recoverOrphans`: sweep crashed tickets from `processing/` → `failed/`. |
-| `health.ts` | `omlxReachable` + `waitForOmlx`. |
+| `orphans.ts` | `recoverOrphans`: requeue crashed tickets (budget permitting), else → `failed/`. |
+| `health.ts` | `endpointReachable` + `waitForEndpoint` (inference-endpoint probes). |
 | `healthServer.ts` | HTTP health server (`/live`, `/ready`, `/health`). |
 | `metrics.ts` | `RunMetrics` accumulator + process singleton. |
 | `logging.ts` | Structured JSON logger with `AsyncLocalStorage` per-ticket context. |
@@ -159,7 +170,7 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 | `ticket.ts` | Parse a ticket (YAML frontmatter + body). |
 | `ticketSchema.ts` | The frontmatter JSON-Schema contract (`junco schema`). |
 | `dispatch.ts` | `inboxPath`, `submitTicket` (atomic placement into inbox). |
-| `runOnce.ts` | Single-task orchestration: claim → PR flow or Q&A path → finalize. |
+| `runOnce.ts` | `claimNextTask` (discover/filter/priority/claim) + `executeClaimed` (PR flow or Q&A → finalize) + serial `runOnce`. |
 | `planLint.ts` | Deterministic ticket validation before the agent runs. |
 | `prFlow.ts` | `runPrFlow`: the 14-phase PR orchestration. |
 | `finalize.ts` | Compute terminal status, append result block, move ticket atomically. |
@@ -176,7 +187,13 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 | `agent/supervisor.ts` | Decides nudge vs kill when a guard fires. |
 | `agent/nudges.ts` | Nudge message templates. |
 | `agent/guardManager.ts` | Subscribes guards to the event stream; routes nudges and kills. |
-| `service.ts` | Render a launchd plist / systemd unit (`junco service`). |
+| `service.ts` | Render a launchd plist / systemd unit (`junco service`), stop timeouts included. |
+| `requeue.ts` | Transient-failure classification + atomic requeue-to-inbox with backoff. |
+| `statusCmd.ts` | `junco status` — daemon /health + queue counts at a glance. |
+| `listCmd.ts` | `junco list` — newest-first ticket listing with terminal statuses. |
+| `retryCmd.ts` | `junco retry` — clean failed tickets and resubmit to the inbox. |
+| `doctor.ts` | `junco doctor` — preflight config/toolchain/endpoint/model/dirs. |
+| `logsCmd.ts` | `junco logs` — tail/follow the state-dir worker.log. |
 
 ---
 
@@ -185,10 +202,15 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 ```
 inbox/               — submitted by junco submit (or any atomic file write)
   ↓  claim()         — atomic rename, adds UTC-timestamp prefix
+                       (not_before-gated; skipped while its repo is busy)
 processing/          — owned by the worker; do not touch while worker is live
   ↓  finalize()      — appends result block, atomic rename
-done/                — terminal: completed, completed_no_changes, …
-failed/              — terminal: plan-lint failure, agent error, verification block, …
+  ↘  requeueTicket() — transient failure / crash: back to inbox/ with
+                       retry_count++ and a not_before backoff stamp
+done/                — terminal: completed, completed_no_changes,
+                       aborted_partial, timeout_partial
+failed/              — terminal: plan-lint failure, agent error, verification
+                       block, timeout with no commits, retry budget exhausted, …
 ```
 
 The **stable public contract** is the ticket frontmatter schema (`junco schema` / `ticketSchema.ts`). Changing it is a breaking change for any tool that generates tickets.
