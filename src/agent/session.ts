@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Config, RunResult } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
 import { GuardManager } from "./guardManager.js";
@@ -7,6 +8,13 @@ import { buildInlineProviderConfig, splitModelId, apiBaseUrl } from "./modelSetu
 
 // Re-exported for back-compat: these helpers moved to ./modelSetup.js.
 export { splitModelId, apiBaseUrl } from "./modelSetup.js";
+
+/**
+ * The SDK's session event union, re-exported under junco's name so consumers
+ * (runResult, guards, tests) need no direct SDK import. Type-only — the SDK
+ * module itself is still lazy-loaded at runtime inside makePiSessionFactory.
+ */
+export type AgentEvent = AgentSessionEvent;
 
 /**
  * Minimal structural type of what we use from a Pi `AgentSession`. Keeping the
@@ -20,7 +28,7 @@ export { splitModelId, apiBaseUrl } from "./modelSetup.js";
  *   - abort(): Promise<void>   (line 402)
  */
 export interface AgentSessionLike {
-  subscribe(listener: (event: any) => void): () => void;
+  subscribe(listener: (event: AgentEvent) => void): () => void;
   prompt(text: string, options?: unknown): Promise<void>;
   dispose(): void;
   abort(): Promise<void>;

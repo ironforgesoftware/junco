@@ -1,4 +1,5 @@
 import type { RunResult, ToolCall, Usage } from "../types.js";
+import type { AgentEvent } from "./session.js";
 
 export class RunAccumulator {
   private text = "";
@@ -7,19 +8,23 @@ export class RunAccumulator {
   private stopReason: string | null = null;
   private errorMessage: string | null = null;
 
-  observe(event: any): void {
-    switch (event?.type) {
+  observe(event: AgentEvent): void {
+    // The PUBLIC boundary is typed (AgentEvent — callers and fakes are checked
+    // at the subscribe layer); internally we parse defensively against partial
+    // shapes (test fakes, older servers), so access goes through one local cast.
+    const e = event as any;
+    switch (e?.type) {
       case "message_update":
-        if (event.assistantMessageEvent?.type === "text_delta")
-          this.text += event.assistantMessageEvent.delta ?? "";
+        if (e.assistantMessageEvent?.type === "text_delta")
+          this.text += e.assistantMessageEvent.delta ?? "";
         break;
       case "tool_execution_start":
         // `args` lives on the START event; tool_execution_end carries `result`,
         // not `args` (verified against the SDK's ToolExecution*Event type defs).
-        this.toolCalls.push({ name: event.toolName, args: event.args });
+        this.toolCalls.push({ name: e.toolName, args: e.args });
         break;
       case "turn_end": {
-        const u = event.message?.usage;
+        const u = e.message?.usage;
         if (u) {
           // The SDK Usage field is `totalTokens` (the Python worker/fake used the
           // same name); fall back to `total`, then to input+output, for safety.
@@ -31,11 +36,11 @@ export class RunAccumulator {
             total: this.usage.total + turnTotal,
           };
         }
-        if (event.message?.stopReason) this.stopReason = event.message.stopReason;
+        if (e.message?.stopReason) this.stopReason = e.message.stopReason;
         break;
       }
       case "auto_retry_end":
-        if (event.finalError) this.errorMessage = String(event.finalError);
+        if (e.finalError) this.errorMessage = String(e.finalError);
         break;
     }
   }
