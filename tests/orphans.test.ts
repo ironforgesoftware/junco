@@ -32,6 +32,9 @@ function makeConfig(): { cfg: Config; root: string } {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: true,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -43,6 +46,7 @@ function makeConfig(): { cfg: Config; root: string } {
     branchPrefix: "junco/",
     worktreeRoot: "/tmp/worktrees",
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -59,6 +63,9 @@ function makeConfig(): { cfg: Config; root: string } {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: join(root, "state"),
+    logToFile: false,
+    transcriptsEnabled: false,
   };
   return { cfg, root };
 }
@@ -85,12 +92,12 @@ describe("recoverOrphans", () => {
     expect(result).toEqual([]);
   });
 
-  it("single orphan: moved from processing/ to failed/, content updated", () => {
+  it("single orphan with budget remaining: requeued to inbox/ with retry_count+1, no banner", () => {
     const { cfg, root } = makeConfig();
     const processing = join(root, "Junco", "processing");
-    const failed = join(root, "Junco", "failed");
+    const inbox = join(root, "Junco", "inbox");
     mkdirSync(processing, { recursive: true });
-    mkdirSync(failed, { recursive: true });
+    mkdirSync(inbox, { recursive: true });
 
     const name = "2026-01-01T0000Z__task-a.md";
     const orphanPath = join(processing, name);
@@ -99,25 +106,47 @@ describe("recoverOrphans", () => {
     const result = recoverOrphans(cfg);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toBe(join(failed, name));
+    expect(result[0]).toBe(join(inbox, "task-a.md")); // claim stamp stripped
 
-    // Gone from processing/
+    // Gone from processing/, back in inbox/
     expect(existsSync(orphanPath)).toBe(false);
-
-    // Present in failed/
-    expect(existsSync(join(failed, name))).toBe(true);
-
-    const text = readFileSync(join(failed, name), "utf8");
-    expect(text).toContain("## Orphan recovery");
-    expect(text).toContain("status: failed");
+    const text = readFileSync(join(inbox, "task-a.md"), "utf8");
+    expect(text).toContain("retry_count: 1");
+    expect(text).toContain("not_before:");
+    expect(text).not.toContain("## Orphan recovery");
+    expect(text).not.toContain("junco-result");
   });
 
-  it("multiple orphans: all three moved to failed/, returns 3 dst paths", () => {
+  it("orphan with exhausted budget: moved to failed/ with the banner", () => {
     const { cfg, root } = makeConfig();
     const processing = join(root, "Junco", "processing");
     const failed = join(root, "Junco", "failed");
     mkdirSync(processing, { recursive: true });
     mkdirSync(failed, { recursive: true });
+
+    const name = "2026-01-01T0000Z__task-spent.md";
+    writeFileSync(
+      join(processing, name),
+      "---\nid: task-spent\nretry_count: 2\n---\n# Spent\nbody\n",
+      "utf8",
+    );
+
+    const result = recoverOrphans(cfg);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(join(failed, name));
+    const text = readFileSync(join(failed, name), "utf8");
+    expect(text).toContain("## Orphan recovery");
+    expect(text).toContain("status: failed");
+    expect(text).toContain("Retry budget exhausted");
+  });
+
+  it("multiple fresh orphans: all three requeued to inbox/, returns 3 dst paths", () => {
+    const { cfg, root } = makeConfig();
+    const processing = join(root, "Junco", "processing");
+    const inbox = join(root, "Junco", "inbox");
+    mkdirSync(processing, { recursive: true });
+    mkdirSync(inbox, { recursive: true });
 
     const names = [
       "2026-01-01T0000Z__task-a.md",
@@ -133,7 +162,7 @@ describe("recoverOrphans", () => {
 
     for (const n of names) {
       expect(existsSync(join(processing, n))).toBe(false);
-      expect(existsSync(join(failed, n))).toBe(true);
+      expect(existsSync(join(inbox, n.replace(/^.*__/, "")))).toBe(true);
     }
   });
 
@@ -150,7 +179,7 @@ describe("recoverOrphans", () => {
     expect(existsSync(txtPath)).toBe(true);
   });
 
-  it("banner contains injected timestamp string", () => {
+  it("banner contains injected timestamp string (exhausted-budget path)", () => {
     const { cfg, root } = makeConfig();
     const processing = join(root, "Junco", "processing");
     const failed = join(root, "Junco", "failed");
@@ -158,7 +187,11 @@ describe("recoverOrphans", () => {
     mkdirSync(failed, { recursive: true });
 
     const name = "2026-01-01T0000Z__task-ts.md";
-    writeFileSync(join(processing, name), "# TS task\nbody\n", "utf8");
+    writeFileSync(
+      join(processing, name),
+      "---\nid: task-ts\nretry_count: 2\n---\n# TS task\nbody\n",
+      "utf8",
+    );
 
     const fixedNow = "2026-05-31T12:00:00.000Z";
     const result = recoverOrphans(cfg, { now: () => fixedNow });
@@ -171,14 +204,12 @@ describe("recoverOrphans", () => {
   it("idempotent-ish: second run on empty processing/ returns []", () => {
     const { cfg, root } = makeConfig();
     const processing = join(root, "Junco", "processing");
-    const failed = join(root, "Junco", "failed");
     mkdirSync(processing, { recursive: true });
-    mkdirSync(failed, { recursive: true });
 
     const name = "2026-01-01T0000Z__task-idem.md";
     writeFileSync(join(processing, name), "# Idem\nbody\n", "utf8");
 
-    // First run — moves the orphan
+    // First run — requeues the orphan
     const first = recoverOrphans(cfg);
     expect(first).toHaveLength(1);
 

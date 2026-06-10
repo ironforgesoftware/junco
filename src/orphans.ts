@@ -2,6 +2,8 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync } from 
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
+import { parseTicket } from "./ticket.js";
+import { requeueTicket } from "./requeue.js";
 import { log } from "./logging.js";
 
 export interface OrphanDeps {
@@ -13,13 +15,13 @@ export interface OrphanDeps {
  * crashed mid-run (the singleton lock guarantees no live concurrent instance,
  * so every processing-dir file is genuinely orphaned — no age check needed).
  *
- * Each orphan is annotated with a <!-- junco-result ... --> metadata block
- * (status: failed, reason: orphan-recovery) plus a human "## Orphan recovery"
- * banner, then atomically moved to failed/.
+ * A crash is infrastructure, not a verdict on the ticket — each orphan is
+ * REQUEUED to inbox/ under the same transient-retry budget (retry_count++,
+ * not_before backoff). Only when the budget is exhausted does it get the
+ * <!-- junco-result --> metadata block + "## Orphan recovery" banner and an
+ * atomic move to failed/ (the original Python recover_orphans behaviour).
  *
- * Returns the list of destination paths (moved-to-failed/ paths).
- *
- * Faithful port of worker.py recover_orphans (lines 530-559).
+ * Returns the list of destination paths (inbox/ requeues + failed/ moves).
  */
 export function recoverOrphans(cfg: Config, deps: OrphanDeps = {}): string[] {
   const { processing, failed } = queuePaths(cfg);
@@ -46,6 +48,18 @@ export function recoverOrphans(cfg: Config, deps: OrphanDeps = {}): string[] {
       continue;
     }
 
+    // Requeue first (budget permitting) — the crash wasn't the ticket's fault.
+    try {
+      const parsed = parseTicket(orphanPath, existing);
+      const rq = requeueTicket(cfg, orphanPath, parsed, "orphan-recovery (worker crashed mid-run)");
+      if (rq.requeued) {
+        moved.push(rq.dst!);
+        continue;
+      }
+    } catch (e) {
+      log.error("orphan requeue failed; falling back to failed/", { name, err: String(e) });
+    }
+
     const ts = deps.now?.() ?? new Date().toISOString();
 
     // Metadata block — same delimiters as src/finalize.ts renderResult.
@@ -61,7 +75,7 @@ export function recoverOrphans(cfg: Config, deps: OrphanDeps = {}): string[] {
       `## Orphan recovery\n\n` +
       `This task was found in \`processing/\` at worker startup (${ts}), ` +
       `meaning a previous worker process crashed or was killed mid-run. ` +
-      `Moving to failed/ without re-running. Move back to inbox/ to retry.`;
+      `Retry budget exhausted; moving to failed/. Move back to inbox/ to retry by hand.`;
 
     const updated = `${existing.trimEnd()}\n\n---\n${metaBlock}\n\n${banner}\n`;
 
