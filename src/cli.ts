@@ -34,6 +34,7 @@ import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
 import { runInitWizard } from "./wizard.js";
 import { runStatusCommand } from "./statusCmd.js";
+import { runListCommand } from "./listCmd.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -69,6 +70,7 @@ Subcommands:
   service      Render a service file to stdout (launchd plist or systemd unit)
   inbox-path   Print the inbox directory path and exit
   status       Show daemon / endpoint / queue health at a glance
+  list [box]   List tickets per queue box (inbox|processing|done|failed)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -285,6 +287,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       printFn,
       lockPath: join(dirname(resolve(configPath)), "worker.lock"),
     });
+  }
+
+  // ------------------------------------------------------------
+  // list: newest-first ticket listing per queue box
+  // ------------------------------------------------------------
+  if (subcommand === "list") {
+    const cfg = loadConfigFn(configPath);
+    return runListCommand(cfg, positionals[1], { printFn });
   }
 
   // ------------------------------------------------------------
