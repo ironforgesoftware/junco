@@ -37,6 +37,7 @@ import { runStatusCommand } from "./statusCmd.js";
 import { runListCommand } from "./listCmd.js";
 import { runRetryCommand } from "./retryCmd.js";
 import { runDoctor } from "./doctor.js";
+import { runLogsCommand } from "./logsCmd.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -75,6 +76,7 @@ Subcommands:
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
+  logs [-f] [-n N] [--json]  Show (or follow) the worker log
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -143,6 +145,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       platform: { type: "string" },
       yes: { type: "boolean", short: "y", default: false },
       all: { type: "boolean", default: false },
+      follow: { type: "boolean", short: "f", default: false },
+      lines: { type: "string", short: "n" },
+      json: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -316,6 +321,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "doctor") {
     return runDoctor(configPath, { loadConfigFn, printFn });
+  }
+
+  // ------------------------------------------------------------
+  // logs: tail/follow the state-dir worker.log
+  // ------------------------------------------------------------
+  if (subcommand === "logs") {
+    const cfg = loadConfigFn(configPath);
+    const n = values.lines !== undefined ? parseInt(values.lines as string, 10) : undefined;
+    return runLogsCommand(cfg, {
+      follow: values.follow as boolean,
+      lines: Number.isInteger(n) && (n as number) > 0 ? n : undefined,
+      json: (values.json as boolean) || undefined,
+    });
   }
 
   // ------------------------------------------------------------

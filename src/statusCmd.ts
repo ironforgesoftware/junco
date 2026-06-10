@@ -4,7 +4,6 @@
  */
 
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
 import { readLockHolder } from "./lock.js";
