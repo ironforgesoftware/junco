@@ -29,6 +29,9 @@ export interface RunDeps {
    * daemon wires this to endpointReachable so an endpoint outage queues work
    * instead of burning tickets into failed/. */
   readyFn?: () => Promise<boolean>;
+  /** Operator force-stop signal — aborts the in-flight agent session softly
+   * (commits are salvaged). The daemon wires this to StopFlag.forceSignal. */
+  abortSignal?: AbortSignal;
 }
 
 export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean> {
@@ -102,6 +105,7 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
           const dst = await runPrFlow(cfg, next, claimed, ctx, {
             sessionFactoryFor: deps.sessionFactoryFor,
             criticSessionFactory: deps.criticSessionFactory,
+            abortSignal: deps.abortSignal,
           });
           log.info("finalized (pr-flow)", { dst });
           return true;
@@ -133,6 +137,7 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
         timeoutMs: next.timeoutSeconds * 1000,
         createSession: factory,
         guardManager,
+        abortSignal: deps.abortSignal,
       });
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
       // backoff instead of finalizing to failed/ (budget permitting).

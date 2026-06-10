@@ -223,6 +223,11 @@ export interface PrFlowDeps {
   criticSessionFactory?: () => Promise<AgentSessionLike>;
   /** Terminal dirs override (tests). Defaults to queuePaths(cfg). */
   dirs?: TerminalDirs;
+  /** Operator force-stop signal — soft-aborts the worker + corrective sessions
+   * (guard-kill semantics: committed work is salvaged). The critic session is
+   * NOT threaded: it is tool-less and bounded, and a force-stopped worker
+   * session never reaches it anyway (guard-abort skips post-session review). */
+  abortSignal?: AbortSignal;
 }
 
 export async function runPrFlow(
@@ -313,6 +318,7 @@ export async function runPrFlow(
     timeoutMs: task.timeoutSeconds * 1000,
     createSession: factory,
     guardManager,
+    abortSignal: deps.abortSignal,
   });
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
@@ -454,6 +460,7 @@ export async function runPrFlow(
           cwd: wtPath,
           timeoutMs: task.timeoutSeconds * 1000,
           createSession: correctiveFactory,
+          abortSignal: deps.abortSignal,
           guardManager: cfg.supervisorEnabled
             ? new GuardManager({
                 supervisorConfig: {

@@ -37,19 +37,37 @@ import {
  * Cooperative shutdown flag.  Signal handlers (and tests) call requestStop();
  * the main loop polls `requested`.  Port of worker.py StopFlag — logs once on
  * the first stop request, then stays latched true.
+ *
+ * Force-stop escalation: a SECOND signal calls requestForceStop(), which aborts
+ * `forceSignal` — runAgent listens on it and soft-aborts the in-flight session
+ * (guard-kill semantics: commits made so far are salvaged into a PR).
  */
 export class StopFlag implements StopFlagLike {
   private _requested = false;
+  private readonly _force = new AbortController();
 
   get requested(): boolean {
     return this._requested;
   }
 
+  /** Aborts when a force-stop is requested; runAgent listens on this. */
+  get forceSignal(): AbortSignal {
+    return this._force.signal;
+  }
+
   requestStop(): void {
     if (!this._requested) {
-      log.info("stop requested; will exit after current task");
+      log.info("stop requested; will exit after current task (signal again to abort it)");
     }
     this._requested = true;
+  }
+
+  requestForceStop(): void {
+    this._requested = true;
+    if (!this._force.signal.aborted) {
+      log.warn("force stop: aborting in-flight agent session (committed work will be salvaged)");
+      this._force.abort();
+    }
   }
 }
 
@@ -94,14 +112,20 @@ export async function sleepInterruptible(
 // ---------------------------------------------------------------------------
 
 /**
- * Register SIGTERM/SIGINT handlers that request a graceful stop.  Returns an
- * uninstall function that removes exactly those listeners (named references so
- * removeListener matches), letting tests — and a clean shutdown — detach them.
- * Port of worker.py _install_signal_handlers.
+ * Register SIGTERM/SIGINT handlers with stop escalation: the first signal
+ * requests a graceful stop (drain the in-flight task), the second force-stops
+ * (abort the agent session, salvage commits), the third hard-exits (130).
+ * Returns an uninstall function that removes exactly those listeners (named
+ * references so removeListener matches), letting tests — and a clean
+ * shutdown — detach them.
  */
 export function installSignalHandlers(stopFlag: StopFlag): () => void {
+  let count = 0;
   const handler = (): void => {
-    stopFlag.requestStop();
+    count++;
+    if (count === 1) stopFlag.requestStop();
+    else if (count === 2) stopFlag.requestForceStop();
+    else process.exit(130); // third signal: the operator really means it
   };
   process.on("SIGTERM", handler);
   process.on("SIGINT", handler);
@@ -152,7 +176,9 @@ export async function mainLoop(
   // The daemon's default runOnce probes endpoint readiness before claiming,
   // so an endpoint outage queues work instead of burning tickets into failed/.
   const runOnceFn =
-    deps.runOnceFn ?? ((c: Config) => runOnce(c, { readyFn: () => endpointReachable(c) }));
+    deps.runOnceFn ??
+    ((c: Config) =>
+      runOnce(c, { readyFn: () => endpointReachable(c), abortSignal: stopFlag.forceSignal }));
   const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
   const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
   const waitForEndpointFn =

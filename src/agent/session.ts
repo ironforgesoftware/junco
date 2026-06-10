@@ -45,6 +45,11 @@ export interface RunAgentOptions {
    * "kill" decision aborts the run. Absent → M1 behavior is unchanged.
    */
   guardManager?: GuardManager;
+  /**
+   * External abort (operator force-stop). Treated like a guard kill: the run
+   * is aborted softly and any commits already made are salvaged.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -67,6 +72,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     // rejection so a failed abort can't surface as an unhandled rejection.
     void session.abort().catch(() => {});
   }, opts.timeoutMs);
+  // Operator force-stop: soft-abort exactly like a guard kill so the PR-flow
+  // salvages any commits already made.
+  const onExternalAbort = (): void => {
+    if (killReason === null) killReason = "force-stop requested by operator";
+    void session.abort().catch(() => {});
+  };
+  if (opts.abortSignal) {
+    if (opts.abortSignal.aborted) onExternalAbort();
+    else opts.abortSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
   try {
     // Subscribe immediately before prompt() (so no startup events are missed),
     // but inside the try so the session is still disposed if subscribe throws.
@@ -98,6 +113,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     acc.setError(e instanceof Error ? e.message : String(e));
   } finally {
     clearTimeout(timer);
+    opts.abortSignal?.removeEventListener("abort", onExternalAbort);
     unsubscribe?.();
     session.dispose();
   }

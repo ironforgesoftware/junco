@@ -255,6 +255,70 @@ describe("runAgent (timeout)", () => {
   });
 });
 
+describe("runAgent (external force-stop)", () => {
+  it("an abort signal kills the run with guard-kill (salvage) semantics", async () => {
+    const ac = new AbortController();
+    let resolvePrompt: (() => void) | undefined;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        // Hang until abort(); fire the operator's force-stop mid-run.
+        queueMicrotask(() => ac.abort());
+        return new Promise<void>((resolve) => {
+          resolvePrompt = resolve;
+        });
+      },
+      dispose() {},
+      abort: async () => {
+        resolvePrompt?.();
+      },
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      abortSignal: ac.signal,
+    });
+    expect(result.timedOut).toBe(false);
+    expect(result.abortedByGuard).toBe(true); // soft abort → PR-flow salvages
+    expect(result.errorMessage).toMatch(/force-stop requested by operator/);
+  });
+
+  it("an already-aborted signal kills the run immediately", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    let resolvePrompt: (() => void) | undefined;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        return new Promise<void>((resolve) => {
+          resolvePrompt = resolve;
+        });
+      },
+      dispose() {},
+      abort: async () => {
+        // abort is requested before prompt() is even called; resolve as soon
+        // as the hang is installed.
+        queueMicrotask(() => resolvePrompt?.());
+      },
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      abortSignal: ac.signal,
+    });
+    expect(result.abortedByGuard).toBe(true);
+    expect(result.errorMessage).toMatch(/force-stop/);
+  });
+});
+
 // The models.json (file) path of makePiSessionFactory relies on the SDK's
 // ModelRegistry.create(authStorage, path) resolving a provider+model from a
 // Pi-style models.json. This exercises that contract WITHOUT a live model

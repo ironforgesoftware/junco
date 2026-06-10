@@ -242,6 +242,28 @@ describe("installSignalHandlers", () => {
     expect(process.listenerCount("SIGTERM")).toBe(before);
   });
 
+  it("StopFlag: requestForceStop aborts the forceSignal and latches requested", () => {
+    const f = new StopFlag();
+    expect(f.forceSignal.aborted).toBe(false);
+    f.requestForceStop();
+    expect(f.forceSignal.aborted).toBe(true);
+    expect(f.requested).toBe(true);
+  });
+
+  it("signal handlers escalate: 1st → graceful stop, 2nd → force stop", () => {
+    const stop = new StopFlag();
+    const uninstall = installSignalHandlers(stop);
+    try {
+      process.emit("SIGTERM");
+      expect(stop.requested).toBe(true);
+      expect(stop.forceSignal.aborted).toBe(false);
+      process.emit("SIGTERM");
+      expect(stop.forceSignal.aborted).toBe(true);
+    } finally {
+      uninstall();
+    }
+  });
+
   it("uninstall removes both SIGINT and SIGTERM listeners back to baseline", () => {
     const beforeInt = process.listenerCount("SIGINT");
     const beforeTerm = process.listenerCount("SIGTERM");
