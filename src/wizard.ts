@@ -11,7 +11,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, queuePaths, expandHome } from "./config.js";
+import { loadConfig, queuePaths, expandHome, resolveConfigPath } from "./config.js";
 import { type Prompter, WizardCancelled, clackPrompter } from "./wizard/prompter.js";
 import { fetchModels, parseModelsJson, inferProvider } from "./wizard/models.js";
 
@@ -194,13 +194,16 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
     }
 
     const queueRoot = dirname(paths.inbox);
+    // No --config noise when the config landed on the default resolution path —
+    // a bare `junco start` will find it from any directory.
+    const flag = resolved === resolveConfigPath(undefined) ? "" : ` --config ${resolved}`;
     printFn(
       `\n✓ Wrote config:  ${resolved}\n` +
         `✓ Created queue: ${queueRoot}/{inbox,processing,done,failed}\n\n` +
         `Next steps:\n` +
         `  • Tweak the model/endpoint in ${resolved} if needed.\n` +
-        `  • Start the worker:  junco start --config ${resolved}\n` +
-        `  • Submit a ticket:   junco submit <ticket>.md --config ${resolved}\n`,
+        `  • Start the worker:  junco start${flag}\n` +
+        `  • Submit a ticket:   junco submit <ticket>.md${flag}\n`,
     );
     return 0;
   } catch (e) {

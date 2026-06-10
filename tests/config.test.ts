@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, queuePaths } from "../src/config.js";
+import { loadConfig, queuePaths, resolveConfigPath, defaultUserConfigPath } from "../src/config.js";
 
 function writeToml(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "junco-cfg-"));
@@ -231,5 +231,37 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig(writeToml(`vault_root = "/v"\n[worker]\nmax_transient_retries = -1\n`)),
     ).toThrow();
+  });
+});
+
+describe("resolveConfigPath", () => {
+  it("explicit path wins, resolved against cwd", () => {
+    expect(resolveConfigPath("rel/c.toml", { cwd: () => "/base" })).toBe("/base/rel/c.toml");
+    expect(resolveConfigPath("/abs/c.toml", { cwd: () => "/base" })).toBe("/abs/c.toml");
+  });
+
+  it("falls back to ./config.toml when it exists", () => {
+    const p = resolveConfigPath(undefined, {
+      cwd: () => "/base",
+      existsFn: (x) => x === "/base/config.toml",
+    });
+    expect(p).toBe("/base/config.toml");
+  });
+
+  it("otherwise resolves the XDG user path", () => {
+    const p = resolveConfigPath(undefined, {
+      cwd: () => "/base",
+      existsFn: () => false,
+      env: { XDG_CONFIG_HOME: "/xdg" },
+    });
+    expect(p).toBe("/xdg/junco/config.toml");
+  });
+
+  it("defaultUserConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {
+    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.toml");
+    expect(defaultUserConfigPath({})).toBe(join(homedir(), ".config/junco/config.toml"));
+    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "  " })).toBe(
+      join(homedir(), ".config/junco/config.toml"),
+    );
   });
 });

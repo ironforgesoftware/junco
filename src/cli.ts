@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock } from "./lock.js";
-import { loadConfig, queuePaths } from "./config.js";
+import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
 import { log, setLogLevel } from "./logging.js";
@@ -74,7 +74,8 @@ Subcommands:
                     otherwise starts the daemon.
 
 Options:
-  --config <path>       Path to config.toml  [default: config.toml]
+  --config <path>       Path to config.toml
+                        [default: ./config.toml if present, else ~/.config/junco/config.toml]
   --yes, -y             (init) Scaffold a default config without prompting
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
@@ -98,7 +99,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     options: {
-      config: { type: "string", default: "config.toml" },
+      config: { type: "string" },
       once: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       platform: { type: "string" },
@@ -115,10 +116,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   const existsFn = deps.existsFn ?? ((p: string) => existsSync(p));
+  // Resolve the config path ONCE: explicit --config → ./config.toml when
+  // present → the user-level default (~/.config/junco/config.toml).
+  const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
   // First-run aware: a bare invocation runs the setup wizard when there's no
   // config yet, and starts the daemon once one exists.
-  const subcommand =
-    positionals[0] ?? (existsFn(resolve(values.config as string)) ? "start" : "init");
+  const subcommand = positionals[0] ?? (existsFn(configPath) ? "start" : "init");
 
   // Resolve injected print function (defaults to process.stdout.write)
   const printFn = deps.printFn ?? ((s: string) => process.stdout.write(s));
@@ -135,7 +138,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
           ? "launchd"
           : "systemd";
 
-    const configPath = resolve(values.config as string);
     // Resolve cliEntry: use the script that was invoked (process.argv[1]),
     // falling back to the binary field in package.json if unavailable.
     const cliEntry = resolve(process.argv[1] ?? "dist/cli.js");
@@ -185,7 +187,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // the daemon-collision bug the lock exists to prevent.
   // ------------------------------------------------------------
   if (subcommand === "run-once") {
-    const cfg = loadConfigFn(values.config as string);
+    const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
     const handled = await runOnceFn(cfg);
     log.info("run-once complete", { handled });
@@ -196,7 +198,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // start (or bare / default)
   // ------------------------------------------------------------
   if (subcommand === "start") {
-    const configPath = values.config as string;
     const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
 
@@ -231,7 +232,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // inbox-path: print the inbox directory and exit
   // ------------------------------------------------------------
   if (subcommand === "inbox-path") {
-    const cfg = loadConfigFn(values.config as string);
+    const cfg = loadConfigFn(configPath);
     printFn(inboxPath(cfg) + "\n");
     return 0;
   }
@@ -280,7 +281,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return 1;
     }
 
-    const cfg = loadConfigFn(values.config as string);
+    const cfg = loadConfigFn(configPath);
     const idHint = fileArg !== "-" ? basename(fileArg).replace(/\.md$/, "") : undefined;
 
     let dst: string;
@@ -300,8 +301,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // config exists; ensures the queue dirs (no overwrite) when one already does.
   // ------------------------------------------------------------
   if (subcommand === "init") {
-    const configPath = values.config as string;
-
     if (!existsFn(resolve(configPath))) {
       const wantYes = values.yes as boolean;
       // Non-TTY guard: never hang on a prompt in pipes/CI. An injected

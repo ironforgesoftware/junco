@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type { Config, Paths } from "./types.js";
@@ -10,6 +10,40 @@ const DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 export function expandHome(p: string): string {
   if (p === "~" || p.startsWith("~/")) return join(homedir(), p.slice(1));
   return p;
+}
+
+/** The user-level default config location (XDG_CONFIG_HOME or ~/.config). */
+export function defaultUserConfigPath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const base =
+    env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== ""
+      ? env.XDG_CONFIG_HOME
+      : join(homedir(), ".config");
+  return join(base, "junco", "config.toml");
+}
+
+export interface ResolveConfigDeps {
+  existsFn?: (p: string) => boolean;
+  env?: Record<string, string | undefined>;
+  cwd?: () => string;
+}
+
+/**
+ * Where the config lives. Order: explicit --config → ./config.toml when present
+ * (repo-local setups keep working) → the user-level default. The returned path
+ * may not exist yet — first-run detection checks that separately.
+ */
+export function resolveConfigPath(
+  explicit: string | undefined,
+  deps: ResolveConfigDeps = {},
+): string {
+  const existsFn = deps.existsFn ?? existsSync;
+  const cwd = deps.cwd ?? ((): string => process.cwd());
+  if (explicit) return resolve(cwd(), explicit);
+  const local = resolve(cwd(), "config.toml");
+  if (existsFn(local)) return local;
+  return defaultUserConfigPath(deps.env ?? process.env);
 }
 
 // The tool allowlist is configured (parity with the Python worker) as a
