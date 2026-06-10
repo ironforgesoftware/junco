@@ -484,6 +484,25 @@ exit 1
     expect(readFileSync(dst, "utf8")).toContain("status: failed");
   });
 
+  it("a tools: frontmatter narrows the PR-flow session's allowlist", async () => {
+    const cfg = makeConfig(h, { tools: ["read", "write", "bash", "edit"] });
+    const { task, path } = makeTicket(
+      h,
+      "narrow.md",
+      `---\nid: narrow\nrepo: ${h.work}\ntools: [read, edit]\n---\n# Narrow\n\nDo a thing.\n`,
+    );
+    const seen: string[][] = [];
+    const dst = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: (passedCfg, cwd) => {
+        seen.push(passedCfg.tools);
+        return commitFactory({ commit: true })(passedCfg, cwd);
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+    expect(dst.startsWith(h.done)).toBe(true);
+    expect(seen[0]).toEqual(["read", "edit"]);
+  });
+
   // -------------------------------------------------------------------------
   // Timeout salvage
   // -------------------------------------------------------------------------

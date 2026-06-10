@@ -311,7 +311,10 @@ export async function runPrFlow(
         outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
       })
     : undefined;
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(cfg, wtPath);
+  // A ticket-level `tools:` overrides the configured allowlist for THIS
+  // ticket's sessions (worker + corrective). Everything else keeps cfg.
+  const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
+  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath);
   const result = await runAgent({
     body: prompt,
     cwd: wtPath,
@@ -454,7 +457,7 @@ export async function runPrFlow(
         log.info(
           `critic: MISSING ${critic.findings.slice(0, 120)} — re-dispatching one corrective worker turn`,
         );
-        const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(cfg, wtPath);
+        const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath);
         const corrective = await runAgent({
           body: buildCorrectivePrompt(task, critic.findings),
           cwd: wtPath,

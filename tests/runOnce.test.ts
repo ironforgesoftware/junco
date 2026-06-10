@@ -274,3 +274,34 @@ describe("runOnce", () => {
     expect(readdirSync(join(j, "failed"))).toHaveLength(1);
   });
 });
+
+describe("per-ticket tools override", () => {
+  it("Q&A default stays read-only; a tools: frontmatter overrides it verbatim", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    const seen: string[][] = [];
+    const capturing = (passedCfg: Config) => {
+      seen.push(passedCfg.tools);
+      return fakeFactory()();
+    };
+    const c: Config = {
+      ...cfg(root),
+      tools: ["read", "write", "bash", "edit", "grep", "find", "ls"],
+    };
+
+    writeFileSync(join(j, "inbox", "plain.md"), "---\nid: plain\n---\nq\n", "utf8");
+    await runOnce(c, { sessionFactoryFor: (pc) => () => capturing(pc) });
+    expect(seen[0]).toEqual(["read", "grep", "find", "ls"]);
+
+    writeFileSync(
+      join(j, "inbox", "bashy.md"),
+      "---\nid: bashy\ntools: [read, bash]\n---\nq\n",
+      "utf8",
+    );
+    await runOnce(c, { sessionFactoryFor: (pc) => () => capturing(pc) });
+    expect(seen[1]).toEqual(["read", "bash"]);
+  });
+});
