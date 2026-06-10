@@ -86,6 +86,17 @@ export interface Paths {
   failed: string;
 }
 
+/**
+ * Terminal statuses that route a ticket to done/ (everything else → failed/).
+ * Shared by finalize.ts (routing) and metrics.ts (success/failure bucketing) —
+ * keep this the ONLY definition.
+ */
+export const TERMINAL_DONE_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "completed_no_changes",
+  "aborted_partial",
+]);
+
 export interface Ticket {
   path: string;
   id: string;

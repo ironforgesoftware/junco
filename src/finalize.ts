@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
-import type { RunResult } from "./types.js";
+import { TERMINAL_DONE_STATUSES, type RunResult } from "./types.js";
 import type { PrOutcome } from "./prFlow.js";
 import { metrics } from "./metrics.js";
 
@@ -74,10 +74,6 @@ export function computePrStatus(
   if (prOutcome && prOutcome.statusOverride) return prOutcome.statusOverride;
   return "completed";
 }
-
-// done/ routing set (parity with worker.py line 2433). aborted_no_changes,
-// timeout, and failed all route to failed/.
-const DONE_STATUSES = new Set(["completed", "completed_no_changes", "aborted_partial"]);
 
 function renderPrResult(
   original: string,
@@ -178,7 +174,7 @@ export function finalizePr(
   writeFileSync(tmp, body, "utf8");
   renameSync(tmp, ticketPath);
 
-  const dstDir = DONE_STATUSES.has(status) ? opts.dirs.done : opts.dirs.failed;
+  const dstDir = TERMINAL_DONE_STATUSES.has(status) ? opts.dirs.done : opts.dirs.failed;
   mkdirSync(dstDir, { recursive: true });
   const dst = join(dstDir, basename(ticketPath));
   renameSync(ticketPath, dst);

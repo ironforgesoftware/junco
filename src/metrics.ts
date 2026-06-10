@@ -2,8 +2,10 @@
 // Run-metrics registry
 // ---------------------------------------------------------------------------
 // Shared in-memory state updated by the daemon loop and read by the health
-// HTTP server (M5-T2). Dependency-free and synchronous.
+// HTTP server (M5-T2). Synchronous; depends only on types.ts.
 // ---------------------------------------------------------------------------
+
+import { TERMINAL_DONE_STATUSES } from "./types.js";
 
 export interface MetricsSnapshot {
   startedAt: string | null; // ISO; null until markStarted()
@@ -22,10 +24,6 @@ export interface MetricsSnapshot {
   lastTaskAt: string | null; // ISO of the most recent recordTask()
   lastTaskStatus: string | null;
 }
-
-// Parity with finalize.ts DONE_STATUSES (these route to done/ on success).
-// Everything else (failed, timeout, aborted_no_changes, …) is a failure.
-const DONE_STATUSES = new Set<string>(["completed", "completed_no_changes", "aborted_partial"]);
 
 export class RunMetrics {
   private _now: () => Date;
@@ -80,7 +78,7 @@ export class RunMetrics {
     this._tasksByStatus[status] = (this._tasksByStatus[status] ?? 0) + 1;
 
     // Classify success / failure against the done-routed set
-    if (DONE_STATUSES.has(status)) {
+    if (TERMINAL_DONE_STATUSES.has(status)) {
       this._tasksSucceeded++;
     } else {
       this._tasksFailed++;
