@@ -131,7 +131,14 @@ export async function prepareWorktree(
     if (existsSync(wtPath)) {
       // Last resort: rename out of the way
       const backup = `${wtPath}.old-${Math.floor(Date.now() / 1000)}`;
-      renameSync(wtPath, backup);
+      try {
+        renameSync(wtPath, backup);
+      } catch (e) {
+        throw new GitOpError(
+          `stale worktree cleanup failed: could not move ${wtPath} aside: ` +
+            (e instanceof Error ? e.message : String(e)),
+        );
+      }
       log.warn(`unprunable worktree moved aside: ${wtPath} -> ${backup}`);
     }
   }

@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   rmSync,
   symlinkSync,
+  chmodSync,
   writeFileSync,
   readlinkSync,
   lstatSync,
@@ -29,6 +30,7 @@ import {
   cleanupWorktree,
   pruneStaleWorktrees,
 } from "../src/worktree.js";
+import { GitOpError } from "../src/git.js";
 import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 
@@ -436,4 +438,31 @@ describe("pruneStaleWorktrees", () => {
     expect(existsSync(normalDir)).toBe(true);
     expect(existsSync(plainDir)).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// prepareWorktree — stale-dir cleanup failure surfaces as GitOpError
+// ---------------------------------------------------------------------------
+
+describe("prepareWorktree (stale-dir cleanup failure)", () => {
+  it("rejects with GitOpError when the unprunable dir cannot be moved aside", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    const ctx = makeContext(work);
+
+    // A stale plain dir occupies the worktree path (git worktree remove will
+    // fail — it is not a registered worktree). A read-only PARENT then makes
+    // the move-aside rename fail too (rename needs write perm on the parent).
+    const wtPath = join(wtsRoot, "stale-guard-ticket");
+    mkdirSync(wtPath, { recursive: true });
+    chmodSync(wtsRoot, 0o555);
+    try {
+      await expect(prepareWorktree(cfg, ctx, "stale-guard-ticket")).rejects.toThrow(GitOpError);
+      await expect(prepareWorktree(cfg, ctx, "stale-guard-ticket")).rejects.toThrow(
+        /stale worktree cleanup failed/,
+      );
+    } finally {
+      chmodSync(wtsRoot, 0o755);
+    }
+  }, 30000);
 });
