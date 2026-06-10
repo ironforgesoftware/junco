@@ -13,7 +13,8 @@ export interface MetricsSnapshot {
   pid: number; // process.pid
   pollCount: number;
   lastPollAt: string | null; // ISO of the most recent recordPoll()
-  currentTicket: string | null; // the ticket being processed, or null when idle
+  currentTicket: string | null; // first in-flight ticket, or null when idle (back-compat)
+  currentTickets: string[]; // every in-flight ticket (max_concurrent may be > 1)
   tasksProcessed: number;
   tasksSucceeded: number;
   tasksFailed: number;
@@ -36,7 +37,7 @@ export class RunMetrics {
   private _startedAt: Date | null = null;
   private _pollCount = 0;
   private _lastPollAt: Date | null = null;
-  private _currentTicket: string | null = null;
+  private _current: string[] = [];
   private _tasksProcessed = 0;
   private _tasksSucceeded = 0;
   private _tasksFailed = 0;
@@ -68,9 +69,21 @@ export class RunMetrics {
     this._lastPollAt = this._now();
   }
 
-  /** Set or clear the currently-processing ticket id. */
+  /** A task entered execution. */
+  taskStarted(id: string): void {
+    if (!this._current.includes(id)) this._current.push(id);
+  }
+
+  /** A task left execution (however it ended). Clears its progress too. */
+  taskEnded(id: string): void {
+    this._current = this._current.filter((x) => x !== id);
+    this.clearTaskProgress(id);
+  }
+
+  /** Legacy single-ticket setter (pre-concurrency API; kept for embedders).
+   * Equivalent to taskStarted(id) / clearing everything on null. */
   setCurrentTicket(id: string | null): void {
-    this._currentTicket = id;
+    this._current = id === null ? [] : [id];
   }
 
   /** Record a live progress snapshot for an in-flight ticket. */
@@ -126,7 +139,8 @@ export class RunMetrics {
       pid: process.pid,
       pollCount: this._pollCount,
       lastPollAt: this._lastPollAt ? this._lastPollAt.toISOString() : null,
-      currentTicket: this._currentTicket,
+      currentTicket: this._current[0] ?? null,
+      currentTickets: [...this._current],
       tasksProcessed: this._tasksProcessed,
       tasksSucceeded: this._tasksSucceeded,
       tasksFailed: this._tasksFailed,
@@ -145,7 +159,7 @@ export class RunMetrics {
     this._startedAt = null;
     this._pollCount = 0;
     this._lastPollAt = null;
-    this._currentTicket = null;
+    this._current = [];
     this._tasksProcessed = 0;
     this._tasksSucceeded = 0;
     this._tasksFailed = 0;

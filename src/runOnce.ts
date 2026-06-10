@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import type { Config } from "./types.js";
-import { queuePaths } from "./config.js";
+import { join, resolve } from "node:path";
+import type { Config, Ticket } from "./types.js";
+import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
@@ -35,10 +35,32 @@ export interface RunDeps {
   abortSignal?: AbortSignal;
 }
 
-export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean> {
+/** One claimed unit of work, ready to execute. */
+export interface ClaimedWork {
+  ticket: Ticket;
+  claimedPath: string;
+  /** Resolved repo path for per-repo serialization; null for Q&A tickets. */
+  repoKey: string | null;
+}
+
+export interface ClaimOpts {
+  /** Repo keys currently executing — tickets targeting them stay queued. */
+  skipRepoKeys?: Set<string>;
+  /** Probe before claiming: false → claim nothing this poll. */
+  readyFn?: () => Promise<boolean>;
+}
+
+/**
+ * Discover, filter (not_before, busy repos), priority-sort, and atomically
+ * claim the next eligible ticket. Returns null when nothing is claimable.
+ */
+export async function claimNextTask(
+  cfg: Config,
+  opts: ClaimOpts = {},
+): Promise<ClaimedWork | null> {
   const paths = queuePaths(cfg);
   const candidates = discoverTasks(paths.inbox);
-  if (candidates.length === 0) return false;
+  if (candidates.length === 0) return null;
 
   // Parse defensively per-ticket: a single unreadable/vanished file (the inbox
   // can change between discover and read) must not throw the whole batch — that
@@ -56,7 +78,7 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
       }
     })
     .sort((a, b) => PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority]);
-  if (parsed.length === 0) return false;
+  if (parsed.length === 0) return null;
 
   // not_before gate (retry backoff / scheduled tickets). An unparseable stamp
   // counts as eligible — a malformed date must not strand a ticket forever.
@@ -66,30 +88,47 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
     const ts = Date.parse(t.notBefore);
     return Number.isNaN(ts) || ts <= now;
   });
-  if (eligible.length === 0) return false;
+  if (eligible.length === 0) return null;
 
   // Readiness gate: when there IS eligible work, don't claim it unless the
   // inference endpoint can actually serve it.
-  if (deps.readyFn && !(await deps.readyFn())) {
+  if (opts.readyFn && !(await opts.readyFn())) {
     log.warn("inference endpoint not ready; leaving inbox untouched this poll", {
       eligible: eligible.length,
     });
-    return false;
+    return null;
   }
 
-  const next = eligible[0];
-
-  const claimed = claim(next.path, paths.processing);
-  if (!claimed) {
-    log.info("source vanished before claim", { id: next.id });
-    return false;
+  for (const t of eligible) {
+    const repoKey =
+      t.hasRepo && typeof t.frontmatter.repo === "string"
+        ? resolve(expandHome(t.frontmatter.repo))
+        : null;
+    if (repoKey && opts.skipRepoKeys?.has(repoKey)) continue; // repo busy — leave queued
+    const claimed = claim(t.path, paths.processing);
+    if (!claimed) {
+      log.info("source vanished before claim", { id: t.id });
+      continue; // lost a race — try the next candidate
+    }
+    return { ticket: t, claimedPath: claimed, repoKey };
   }
+  return null;
+}
 
-  return withTicket(next.id, async (): Promise<boolean> => {
+/** Execute one claimed ticket to its terminal state (or a requeue). */
+export async function executeClaimed(
+  cfg: Config,
+  work: ClaimedWork,
+  deps: RunDeps = {},
+): Promise<void> {
+  const next = work.ticket;
+  const claimed = work.claimedPath;
+  const paths = queuePaths(cfg);
+  await withTicket(next.id, async (): Promise<void> => {
     // Expose the in-flight ticket on the metrics singleton (read by /health);
     // the finally clears it for BOTH the PR-flow and Q&A paths so the daemon
     // reports idle once the task ends, however it ends.
-    metrics.setCurrentTicket(next.id);
+    metrics.taskStarted(next.id);
     try {
       log.info("claimed", { src: next.path, dst: claimed });
 
@@ -110,7 +149,7 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
           });
           log.info("finalized (pr-flow)", { dst });
-          return true;
+          return;
         }
         // ctx === null means no usable `repo:` — fall through to the Q&A path.
         log.warn("hasRepo ticket produced no repo context; treating as Q&A", { id: next.id });
@@ -157,17 +196,27 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
           next,
           result.errorMessage ?? `stop_reason=${result.stopReason}`,
         );
-        if (rq.requeued) return true;
+        if (rq.requeued) return;
       }
       const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
       log.info("finalized", {
         dst,
         status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed",
       });
-      return true;
     } finally {
-      metrics.setCurrentTicket(null);
-      metrics.clearTaskProgress(next.id);
+      metrics.taskEnded(next.id); // also clears this ticket's progress
     }
   });
+}
+
+/**
+ * Claim and execute ONE ticket (the serial path: the daemon at
+ * max_concurrent=1, `junco run-once`, cron pokes). Returns whether a ticket
+ * was handled.
+ */
+export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean> {
+  const work = await claimNextTask(cfg, { readyFn: deps.readyFn });
+  if (!work) return false;
+  await executeClaimed(cfg, work, deps);
+  return true;
 }

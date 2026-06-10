@@ -20,6 +20,7 @@ function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot
     pollCount: 7,
     lastPollAt: "2026-05-31T00:00:30.000Z",
     currentTicket: null,
+    currentTickets: [],
     tasksProcessed: 5,
     tasksSucceeded: 4,
     tasksFailed: 1,
@@ -29,6 +30,7 @@ function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot
     totalDurationMs: 30000,
     lastTaskAt: "2026-05-31T00:00:28.000Z",
     lastTaskStatus: "completed",
+    currentProgress: {},
     ...overrides,
   };
 }

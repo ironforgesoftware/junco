@@ -17,7 +17,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
-import { runOnce } from "./runOnce.js";
+import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
 import { waitForEndpoint, endpointReachable, type StopFlagLike } from "./health.js";
@@ -140,7 +140,14 @@ export function installSignalHandlers(stopFlag: StopFlag): () => void {
 // ---------------------------------------------------------------------------
 
 export interface MainLoopDeps {
+  /** Serial-mode seam (max_concurrent = 1): claim + execute one ticket. */
   runOnceFn?: (cfg: Config) => Promise<boolean>;
+  /** Concurrent-mode seams (max_concurrent > 1). */
+  claimFn?: (
+    cfg: Config,
+    opts: { skipRepoKeys: Set<string>; readyFn?: () => Promise<boolean> },
+  ) => Promise<ClaimedWork | null>;
+  executeFn?: (cfg: Config, work: ClaimedWork) => Promise<void>;
   recoverOrphansFn?: (cfg: Config) => void;
   pruneFn?: (worktreeRoot: string) => void;
   waitForEndpointFn?: (cfg: Config, stopFlag: StopFlagLike) => Promise<void>;
@@ -158,11 +165,97 @@ function defaultMkdirs(cfg: Config): void {
   }
 }
 
+export interface SchedulerDeps {
+  claimFn?: (
+    cfg: Config,
+    opts: { skipRepoKeys: Set<string>; readyFn?: () => Promise<boolean> },
+  ) => Promise<ClaimedWork | null>;
+  executeFn?: (cfg: Config, work: ClaimedWork) => Promise<void>;
+  sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
+  readyFn?: () => Promise<boolean>;
+}
+
+/**
+ * Concurrent claim/execute scheduler (max_concurrent > 1): tops up to
+ * cfg.maxConcurrent in-flight tickets, never runs two tickets against the same
+ * repo at once (skipRepoKeys), wakes on the earlier of a task settling or the
+ * poll tick, and drains in-flight work on a graceful stop. Force-stop aborts
+ * the sessions via the StopFlag's forceSignal (threaded by executeFn).
+ */
+export async function runScheduler(
+  cfg: Config,
+  stopFlag: StopFlag,
+  opts: { once?: boolean } = {},
+  deps: SchedulerDeps = {},
+): Promise<void> {
+  const claimFn =
+    deps.claimFn ??
+    ((c: Config, o: { skipRepoKeys: Set<string>; readyFn?: () => Promise<boolean> }) =>
+      claimNextTask(c, o));
+  const executeFn =
+    deps.executeFn ??
+    ((c: Config, w: ClaimedWork) => executeClaimed(c, w, { abortSignal: stopFlag.forceSignal }));
+  const sleep = deps.sleep ?? sleepInterruptible;
+
+  const inflight = new Set<Promise<void>>();
+  const busyRepos = new Set<string>();
+  let idleAnnounced = false;
+  let breakAfterDrain = false;
+
+  while (!stopFlag.requested && !breakAfterDrain) {
+    metrics.recordPoll();
+    let claimedThisPoll = 0;
+    while (inflight.size < cfg.maxConcurrent && !stopFlag.requested) {
+      const work = await claimFn(cfg, { skipRepoKeys: busyRepos, readyFn: deps.readyFn });
+      if (!work) break;
+      claimedThisPoll++;
+      idleAnnounced = false;
+      if (work.repoKey) busyRepos.add(work.repoKey);
+      const p: Promise<void> = executeFn(cfg, work)
+        .catch((e) =>
+          log.error("task execution crashed", {
+            id: work.ticket.id,
+            error: e instanceof Error ? (e.stack ?? e.message) : String(e),
+          }),
+        )
+        .finally(() => {
+          inflight.delete(p);
+          if (work.repoKey) busyRepos.delete(work.repoKey);
+        });
+      inflight.add(p);
+      if (opts.once) break;
+    }
+
+    if (opts.once && (claimedThisPoll > 0 || inflight.size > 0)) {
+      breakAfterDrain = true;
+    } else if (inflight.size === 0) {
+      if (!idleAnnounced) {
+        log.info("idle");
+        idleAnnounced = true;
+      }
+      await sleep(cfg.pollIntervalSeconds, stopFlag);
+    } else {
+      // Wake on the next settle OR the next poll tick, whichever first — a
+      // freed slot tops up immediately; a busy-but-not-full pool still polls.
+      await Promise.race([sleep(cfg.pollIntervalSeconds, stopFlag), ...inflight]);
+    }
+  }
+
+  if (inflight.size > 0) {
+    log.info("draining in-flight tasks", { count: inflight.size });
+    await Promise.allSettled([...inflight]);
+  }
+}
+
 /**
  * Poll-forever daemon loop with graceful shutdown.  Port of worker.py
  * main_loop: ensure queue dirs → recover orphans → prune stale worktrees →
  * wait for endpoint → poll loop (handled → reset idle + break-if-once + continue;
  * else log idle once + interruptible sleep) → "worker exiting cleanly".
+ *
+ * At [worker].max_concurrent > 1 the poll loop is replaced by runScheduler
+ * (parallel tickets, per-repo serialization, graceful drain); the serial loop
+ * below is kept byte-for-byte for the default of 1 — zero behavioral change.
  *
  * Every side-effecting collaborator is injectable so the loop is unit-testable
  * without real fs / network / timers.
@@ -224,20 +317,29 @@ export async function mainLoop(
   }
 
   try {
-    let idleAnnounced = false;
-    while (!stopFlag.requested) {
-      metrics.recordPoll();
-      const handled = await runOnceFn(cfg);
-      if (handled) {
-        idleAnnounced = false;
-        if (opts.once) break;
-        continue;
+    if (cfg.maxConcurrent > 1) {
+      await runScheduler(cfg, stopFlag, opts, {
+        claimFn: deps.claimFn,
+        executeFn: deps.executeFn,
+        sleep: deps.sleep,
+        readyFn: () => endpointReachable(cfg),
+      });
+    } else {
+      let idleAnnounced = false;
+      while (!stopFlag.requested) {
+        metrics.recordPoll();
+        const handled = await runOnceFn(cfg);
+        if (handled) {
+          idleAnnounced = false;
+          if (opts.once) break;
+          continue;
+        }
+        if (!idleAnnounced) {
+          log.info("idle");
+          idleAnnounced = true;
+        }
+        await sleep(cfg.pollIntervalSeconds, stopFlag);
       }
-      if (!idleAnnounced) {
-        log.info("idle");
-        idleAnnounced = true;
-      }
-      await sleep(cfg.pollIntervalSeconds, stopFlag);
     }
   } finally {
     // Always tear the health server down, even if the loop throws. It stays up

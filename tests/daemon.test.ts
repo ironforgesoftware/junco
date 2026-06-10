@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import type { Config } from "../src/types.js";
+import type { ClaimedWork } from "../src/runOnce.js";
 import type { HealthServerHandle } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
 import {
@@ -16,6 +17,7 @@ import {
   sleepInterruptible,
   installSignalHandlers,
   mainLoop,
+  runScheduler,
   type MainLoopDeps,
 } from "../src/daemon.js";
 
@@ -549,5 +551,109 @@ describe("mainLoop — observability", () => {
     await expect(mainLoop(cfg, stop, {}, deps)).rejects.toBe(boom);
     expect(startHealthServerFn).toHaveBeenCalledTimes(1);
     expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runScheduler (max_concurrent > 1)
+// ---------------------------------------------------------------------------
+
+describe("runScheduler", () => {
+  const fakeWork = (id: string, repoKey: string | null): ClaimedWork => ({
+    ticket: { id } as ClaimedWork["ticket"],
+    claimedPath: `/p/${id}`,
+    repoKey,
+  });
+
+  // A sleep that yields a real macrotask tick — an instant-resolve fake would
+  // starve setTimeout-based fake tasks and spin the scheduler on microtasks.
+  const tickSleep = async (): Promise<void> => {
+    await new Promise((r) => setTimeout(r, 1));
+  };
+
+  it("runs up to max_concurrent tasks at once and per-repo serializes", async () => {
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const queue = [fakeWork("a", "/repo/X"), fakeWork("b", "/repo/X"), fakeWork("c", "/repo/Y")];
+    let peak = 0;
+    let running = 0;
+    const started: string[] = [];
+    const stop = new StopFlag();
+    const claimFn = async (_c: Config, o: { skipRepoKeys: Set<string> }) => {
+      const i = queue.findIndex((w) => !w.repoKey || !o.skipRepoKeys.has(w.repoKey));
+      if (i === -1) {
+        if (queue.length === 0 && running === 0) stop.requestStop();
+        return null;
+      }
+      return queue.splice(i, 1)[0];
+    };
+    const executeFn = async (_c: Config, w: ClaimedWork) => {
+      running++;
+      peak = Math.max(peak, running);
+      started.push(w.ticket.id);
+      await new Promise((r) => setTimeout(r, 20));
+      running--;
+    };
+    await runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep });
+    expect(started.sort()).toEqual(["a", "b", "c"]);
+    expect(peak).toBe(2); // c ran beside a; b waited for repo X to free up
+    // b must have started strictly after a finished (same repo).
+    expect(started.indexOf("b")).toBeGreaterThan(started.indexOf("a"));
+  });
+
+  it("graceful stop drains in-flight work before returning", async () => {
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    let finished = 0;
+    let given = false;
+    const claimFn = async () => {
+      if (given) return null;
+      given = true;
+      return fakeWork("slow", null);
+    };
+    const executeFn = async () => {
+      stop.requestStop(); // stop arrives mid-task
+      await new Promise((r) => setTimeout(r, 30));
+      finished++;
+    };
+    await runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep });
+    expect(finished).toBe(1); // drained, not abandoned
+  });
+
+  it("once mode claims one task, drains it, and returns", async () => {
+    const cfg = makeConfig({ maxConcurrent: 3, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    const claims: string[] = [];
+    let done = 0;
+    let n = 0;
+    const claimFn = async () => {
+      n++;
+      claims.push(`t${n}`);
+      return fakeWork(`t${n}`, null);
+    };
+    const executeFn = async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      done++;
+    };
+    await runScheduler(cfg, stop, { once: true }, { claimFn, executeFn, sleep: tickSleep });
+    expect(claims).toEqual(["t1"]);
+    expect(done).toBe(1);
+  });
+
+  it("a crashing executeFn is logged and does not kill the scheduler", async () => {
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    const queue = [fakeWork("boom", null), fakeWork("ok", null)];
+    let okRan = false;
+    const claimFn = async () => {
+      const w = queue.shift() ?? null;
+      if (!w && okRan) stop.requestStop();
+      return w;
+    };
+    const executeFn = async (_c: Config, w: ClaimedWork) => {
+      if (w.ticket.id === "boom") throw new Error("kaboom");
+      okRan = true;
+    };
+    await runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep });
+    expect(okRan).toBe(true);
   });
 });

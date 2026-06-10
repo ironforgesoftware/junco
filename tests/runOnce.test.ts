@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runOnce } from "../src/runOnce.js";
+import { runOnce, claimNextTask } from "../src/runOnce.js";
 import type { Config } from "../src/types.js";
 
 function cfg(root: string): Config {
@@ -303,5 +303,41 @@ describe("per-ticket tools override", () => {
     );
     await runOnce(c, { sessionFactoryFor: (pc) => () => capturing(pc) });
     expect(seen[1]).toEqual(["read", "bash"]);
+  });
+});
+
+describe("claimNextTask (per-repo serialization)", () => {
+  it("skips tickets whose repoKey is busy and claims the next eligible", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    const repoA = join(root, "repoA");
+    const repoB = join(root, "repoB");
+    writeFileSync(join(j, "inbox", "r1.md"), `---\nid: r1\nrepo: ${repoA}\n---\nx\n`, "utf8");
+    writeFileSync(join(j, "inbox", "r2.md"), `---\nid: r2\nrepo: ${repoB}\n---\nx\n`, "utf8");
+    const w = await claimNextTask(cfg(root), { skipRepoKeys: new Set([repoA]) });
+    expect(w?.ticket.id).toBe("r2");
+    expect(w?.repoKey).toBe(repoB);
+  });
+
+  it("returns null when everything is gated on busy repos", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    const repoA = join(root, "repoA");
+    writeFileSync(join(j, "inbox", "r1.md"), `---\nid: r1\nrepo: ${repoA}\n---\nx\n`, "utf8");
+    const w = await claimNextTask(cfg(root), { skipRepoKeys: new Set([repoA]) });
+    expect(w).toBeNull();
+    expect(readdirSync(join(j, "inbox"))).toEqual(["r1.md"]); // left queued
+  });
+
+  it("Q&A tickets have a null repoKey (never repo-gated)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(join(j, "inbox", "q.md"), "---\nid: q\n---\nx\n", "utf8");
+    const w = await claimNextTask(cfg(root), { skipRepoKeys: new Set(["/anything"]) });
+    expect(w?.ticket.id).toBe("q");
+    expect(w?.repoKey).toBeNull();
   });
 });

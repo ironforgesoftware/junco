@@ -285,3 +285,27 @@ describe("task progress", () => {
     expect(m.snapshot().currentProgress).toEqual({});
   });
 });
+
+describe("multi-ticket tracking (max_concurrent > 1)", () => {
+  it("tracks several in-flight tickets; currentTicket stays first-or-null for back-compat", () => {
+    const m = new RunMetrics();
+    m.taskStarted("a");
+    m.taskStarted("b");
+    expect(m.snapshot().currentTickets).toEqual(["a", "b"]);
+    expect(m.snapshot().currentTicket).toBe("a");
+    m.taskEnded("a");
+    expect(m.snapshot().currentTickets).toEqual(["b"]);
+    expect(m.snapshot().currentTicket).toBe("b");
+    m.taskEnded("b");
+    expect(m.snapshot().currentTicket).toBeNull();
+    expect(m.snapshot().currentTickets).toEqual([]);
+  });
+
+  it("taskEnded clears that ticket's progress", () => {
+    const m = new RunMetrics();
+    m.taskStarted("a");
+    m.setTaskProgress("a", { turns: 1, lastTool: "bash", outputTokens: 10 });
+    m.taskEnded("a");
+    expect(m.snapshot().currentProgress).toEqual({});
+  });
+});
