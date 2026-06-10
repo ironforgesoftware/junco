@@ -19,7 +19,7 @@
 
 import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
-import { readFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync, realpathSync, createWriteStream } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
@@ -28,7 +28,7 @@ import { acquireSingletonLock } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
-import { log, setLogLevel } from "./logging.js";
+import { log, setLogLevel, setLogFormat, setLogSink, rotateLogIfLarge } from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
@@ -82,6 +82,36 @@ Options:
                         [default: launchd on macOS, systemd elsewhere]
   --help, -h            Show this help message
 `;
+
+// ---------------------------------------------------------------------------
+// Daemon-mode log plumbing
+// ---------------------------------------------------------------------------
+
+/**
+ * Human format on a TTY (JUNCO_LOG_JSON=1 forces JSON), plus a JSON tee to the
+ * state-dir worker.log (10MB single-generation rotation). Returns a cleanup
+ * that detaches the sink and closes the stream.
+ */
+function setupLogOutputs(cfg: Config): () => void {
+  if (process.stdout.isTTY && process.env.JUNCO_LOG_JSON !== "1") setLogFormat("human");
+  if (!cfg.logToFile) return () => {};
+  try {
+    const logPath = join(cfg.stateDir, "worker.log");
+    mkdirSync(cfg.stateDir, { recursive: true });
+    rotateLogIfLarge(logPath);
+    const stream = createWriteStream(logPath, { flags: "a" });
+    setLogSink((l) => stream.write(l + "\n"));
+    return () => {
+      setLogSink(null);
+      stream.end();
+    };
+  } catch (e) {
+    log.warn("file logging disabled (state dir not writable)", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return () => {};
+  }
+}
 
 // ---------------------------------------------------------------------------
 // run — pure-ish; returns exit code, never calls process.exit
@@ -189,9 +219,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "run-once") {
     const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
-    const handled = await runOnceFn(cfg);
-    log.info("run-once complete", { handled });
-    return 0;
+    const teardownLogs = setupLogOutputs(cfg);
+    try {
+      const handled = await runOnceFn(cfg);
+      log.info("run-once complete", { handled });
+      return 0;
+    } finally {
+      teardownLogs();
+    }
   }
 
   // ------------------------------------------------------------
@@ -200,6 +235,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "start") {
     const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
+    const teardownLogs = setupLogOutputs(cfg);
 
     // Derive lock path: mirror Python args.config.resolve().parent / "worker.lock"
     const lockPath = join(dirname(resolve(configPath)), "worker.lock");
@@ -225,6 +261,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     } finally {
       uninstall();
       lock.release();
+      teardownLogs();
     }
   }
 
