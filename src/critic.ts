@@ -73,18 +73,28 @@ Now output your single-line verdict.
  * Fill the verbatim template. Replaces all `{spec}`/`{diff}`/`{base}`
  * placeholders (mirrors Python `str.format`). Uses `split/join` rather than
  * regex replacement so `$`-sequences in the diff/spec are inserted literally.
+ *
+ * When the diff carries the truncation marker, guidance is appended so the
+ * critic does not flag items as MISSING merely because they fall beyond the
+ * cutoff (false MISSING verdicts trigger a pointless corrective re-dispatch).
  */
 export function buildCriticPrompt(spec: string, diff: string, base: string): string {
+  const truncationGuidance = diff.includes("DIFF TRUNCATED")
+    ? "\nNOTE: the diff above is TRUNCATED. Judge only the hunks you can see; " +
+      "do not report MISSING for items you cannot see solely because the diff " +
+      "is cut off. When truncation leaves you unsure about an item, lean PASS.\n"
+    : "";
   return CRITIC_PROMPT_TEMPLATE.split("{spec}")
     .join(spec)
     .split("{base}")
     .join(base)
     .split("{diff}")
-    .join(diff);
+    .join(diff + truncationGuidance);
 }
 
-const DIFF_TRUNCATION_NOTE =
-  "\n\n[... diff truncated at 100k chars; see git diff in worktree for full ...]";
+export const DIFF_TRUNCATION_NOTE =
+  "\n\n[... DIFF TRUNCATED: only the first 100,000 characters are shown; " +
+  "see git diff in the worktree for the rest ...]";
 
 /**
  * Capture `git diff base..HEAD --unified=3` for the critic to review. Truncated

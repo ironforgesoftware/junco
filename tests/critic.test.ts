@@ -17,6 +17,7 @@ import {
   gitDiff,
   buildCriticPrompt,
   CRITIC_PROMPT_TEMPLATE,
+  DIFF_TRUNCATION_NOTE,
   runCriticPass,
   buildCorrectivePrompt,
 } from "../src/critic.js";
@@ -257,13 +258,8 @@ describe("gitDiff", () => {
     run(["git", "-C", work, "commit", "-m", "big"]);
 
     const diff = await gitDiff(makeCfg(), work, "origin/main");
-    expect(diff.length).toBe(
-      100_000 +
-        "\n\n[... diff truncated at 100k chars; see git diff in worktree for full ...]".length,
-    );
-    expect(diff).toContain(
-      "[... diff truncated at 100k chars; see git diff in worktree for full ...]",
-    );
+    expect(diff.length).toBe(100_000 + DIFF_TRUNCATION_NOTE.length);
+    expect(diff).toContain("DIFF TRUNCATED: only the first 100,000 characters are shown");
   });
 });
 
@@ -340,5 +336,23 @@ describe("buildCorrectivePrompt", () => {
     expect(out).toContain("ORIGINAL SPEC BODY");
     expect(out).toContain("## Original ticket spec");
     expect(out).toContain("Do NOT amend, rebase, or force-change prior");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildCriticPrompt — truncation guidance
+// ---------------------------------------------------------------------------
+
+describe("buildCriticPrompt truncation guidance", () => {
+  it("carries no truncation note for a complete diff", () => {
+    const out = buildCriticPrompt("the spec", "diff --git a/x b/x\n+1\n", "main");
+    expect(out).not.toMatch(/TRUNCATED/);
+  });
+
+  it("instructs the critic to lean PASS when the diff is truncated", () => {
+    const out = buildCriticPrompt("the spec", "x".repeat(40) + DIFF_TRUNCATION_NOTE, "main");
+    expect(out).toMatch(/TRUNCATED/);
+    expect(out).toMatch(/do not report MISSING for items you cannot see/i);
+    expect(out).toMatch(/lean PASS/);
   });
 });
