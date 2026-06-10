@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
@@ -143,6 +144,9 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
         guardManager,
         abortSignal: deps.abortSignal,
         onProgress: (p) => metrics.setTaskProgress(next.id, p),
+        transcriptPath: cfg.transcriptsEnabled
+          ? join(cfg.stateDir, "transcripts", `${next.id}.jsonl`)
+          : undefined,
       });
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
       // backoff instead of finalizing to failed/ (budget permitting).

@@ -313,6 +313,10 @@ export async function runPrFlow(
         outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
       })
     : undefined;
+  // Per-ticket event transcript (worker + corrective append to one file).
+  const transcriptPath = cfg.transcriptsEnabled
+    ? join(cfg.stateDir, "transcripts", `${task.id}.jsonl`)
+    : undefined;
   // A ticket-level `tools:` overrides the configured allowlist for THIS
   // ticket's sessions (worker + corrective). Everything else keeps cfg.
   const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
@@ -325,6 +329,7 @@ export async function runPrFlow(
     guardManager,
     abortSignal: deps.abortSignal,
     onProgress: deps.onProgress,
+    transcriptPath,
   });
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
@@ -468,6 +473,7 @@ export async function runPrFlow(
           createSession: correctiveFactory,
           abortSignal: deps.abortSignal,
           onProgress: deps.onProgress,
+          transcriptPath, // corrective turn appends to the same chronological record
           guardManager: cfg.supervisorEnabled
             ? new GuardManager({
                 supervisorConfig: {

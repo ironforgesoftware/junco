@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId } from "../src/agent/session.js";
@@ -396,5 +396,47 @@ describe("runAgent (onProgress)", () => {
     expect(snaps).toHaveLength(2);
     expect(snaps[0]).toEqual({ turns: 0, lastTool: "read", outputTokens: 0 });
     expect(snaps[1]).toEqual({ turns: 1, lastTool: "read", outputTokens: 4 });
+  });
+});
+
+describe("runAgent (transcript sidecar)", () => {
+  it("streams non-delta events to the transcript path as JSONL", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tx-"));
+    const txPath = join(dir, "transcripts", "t-1.jsonl");
+    const events = [
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x" } }, // skipped
+      { type: "tool_execution_start", toolName: "read", args: { path: "/a" } },
+      {
+        type: "turn_end",
+        message: { stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 } },
+      },
+    ];
+    const session = fakeSession(events);
+    await runAgent({
+      body: "x",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      transcriptPath: txPath,
+    });
+    // The write stream flushes asynchronously after end(); give it a beat.
+    await new Promise((r) => setTimeout(r, 50));
+    const lines = readFileSync(txPath, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]).type).toBe("tool_execution_start");
+    expect(JSON.parse(lines[1]).type).toBe("turn_end");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("an unwritable transcript path only warns — the run still completes", async () => {
+    const session = fakeSession([{ type: "agent_end", messages: [], willRetry: false }]);
+    const result = await runAgent({
+      body: "x",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      transcriptPath: "/dev/null/impossible/t.jsonl",
+    });
+    expect(result.errorMessage).toBeNull();
   });
 });

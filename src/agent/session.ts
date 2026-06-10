@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, createWriteStream, type WriteStream } from "node:fs";
+import { dirname } from "node:path";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Config, RunResult } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
@@ -55,6 +56,11 @@ export interface RunAgentOptions {
    * wired to the metrics singleton so /health can show live progress.
    */
   onProgress?: (p: { turns: number; lastTool: string | null; outputTokens: number }) => void;
+  /**
+   * Append every non-delta event as a JSON line — the debugging record for
+   * failed runs. Parent dir is created; write failures only warn.
+   */
+  transcriptPath?: string;
 }
 
 /**
@@ -87,11 +93,25 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     if (opts.abortSignal.aborted) onExternalAbort();
     else opts.abortSignal.addEventListener("abort", onExternalAbort, { once: true });
   }
+  let transcript: WriteStream | null = null;
+  if (opts.transcriptPath) {
+    try {
+      mkdirSync(dirname(opts.transcriptPath), { recursive: true });
+      transcript = createWriteStream(opts.transcriptPath, { flags: "a" });
+    } catch (e) {
+      log.warn("transcript disabled (path not writable)", {
+        path: opts.transcriptPath,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
   try {
     // Subscribe immediately before prompt() (so no startup events are missed),
     // but inside the try so the session is still disposed if subscribe throws.
     unsubscribe = session.subscribe((e) => {
       acc.observe(e);
+      // Skip per-token deltas — the transcript records turns/tools/results.
+      if (transcript && e?.type !== "message_update") transcript.write(JSON.stringify(e) + "\n");
       if (opts.onProgress && (e?.type === "turn_end" || e?.type === "tool_execution_start")) {
         opts.onProgress(acc.progress());
       }
@@ -123,6 +143,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     clearTimeout(timer);
     opts.abortSignal?.removeEventListener("abort", onExternalAbort);
     unsubscribe?.();
+    transcript?.end();
     session.dispose();
   }
   // Surface a guard kill into errorMessage (so finalize() routes the ticket to
