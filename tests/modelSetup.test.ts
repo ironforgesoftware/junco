@@ -30,13 +30,13 @@ function mkCfg(model: Partial<ModelConfig> = {}): Config {
 }
 
 describe("splitModelId / apiBaseUrl", () => {
-  it("splits on the first slash; defaults provider to omlx", () => {
+  it("splits on the first slash; defaults provider to local", () => {
     expect(splitModelId("omlx/Qwen3.6")).toEqual({ provider: "omlx", modelId: "Qwen3.6" });
     expect(splitModelId("openrouter/anthropic/claude")).toEqual({
       provider: "openrouter",
       modelId: "anthropic/claude",
     });
-    expect(splitModelId("bare")).toEqual({ provider: "omlx", modelId: "bare" });
+    expect(splitModelId("bare")).toEqual({ provider: "local", modelId: "bare" });
   });
   it("strips a trailing /models from the base url", () => {
     expect(apiBaseUrl("http://h:1/v1/models")).toBe("http://h:1/v1");

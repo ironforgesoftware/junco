@@ -107,7 +107,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 /**
  * Real SDK session factory (validated by the e2e in Task 9; not unit-tested
  * here). Returns a thunk that builds a headless `AgentSession` pointed at the
- * local oMLX OpenAI-compatible server.
+ * configured OpenAI-compatible endpoint.
  *
  * PROVIDER/MODEL RESOLUTION — chosen path: in-memory `ModelRegistry` +
  * `registerProvider` (a typed variant of plan path "A"; NOT the disk

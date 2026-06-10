@@ -1,8 +1,8 @@
 /**
- * oMLX startup health-check — port of worker.py omlx_reachable +
+ * Inference-endpoint startup health-check — port of worker.py omlx_reachable +
  * wait_for_omlx (lines 616-647).
  *
- * On daemon startup junco blocks until the local oMLX inference server is
+ * On daemon startup junco blocks until the configured inference endpoint is
  * reachable, so the first ticket doesn't fail on a cold server.
  */
 
@@ -11,7 +11,7 @@ import { log } from "./logging.js";
 import { resolveProbeBaseUrl } from "./agent/modelSetup.js";
 
 /**
- * Minimal stop-flag interface consumed by waitForOmlx.  The real StopFlag
+ * Minimal stop-flag interface consumed by waitForEndpoint.  The real StopFlag
  * lands in M4-T4; a local copy is fine — any object with `requested: boolean`
  * satisfies it.
  */
@@ -20,16 +20,16 @@ export interface StopFlagLike {
 }
 
 // ---------------------------------------------------------------------------
-// omlxReachable
+// endpointReachable
 // ---------------------------------------------------------------------------
 
-export interface OmlxReachableDeps {
+export interface EndpointReachableDeps {
   fetchFn?: typeof fetch;
   timeoutMs?: number;
 }
 
 /**
- * Probe the oMLX /models endpoint.  Returns true when the server responds
+ * Probe the endpoint's /models route.  Returns true when the server responds
  * with a 2xx status (resp.ok), false for any other outcome (non-ok, network
  * error, timeout).
  *
@@ -37,7 +37,7 @@ export interface OmlxReachableDeps {
  * models.json's provider entry, or the inline base_url), then re-append
  * /models — hitting the configured endpoint with Bearer auth.
  */
-export async function omlxReachable(cfg: Config, deps?: OmlxReachableDeps): Promise<boolean> {
+export async function endpointReachable(cfg: Config, deps?: EndpointReachableDeps): Promise<boolean> {
   const fetchFn = deps?.fetchFn ?? fetch;
   const timeoutMs = deps?.timeoutMs ?? 5000;
 
@@ -62,7 +62,7 @@ export async function omlxReachable(cfg: Config, deps?: OmlxReachableDeps): Prom
 }
 
 // ---------------------------------------------------------------------------
-// waitForOmlx
+// waitForEndpoint
 // ---------------------------------------------------------------------------
 
 /**
@@ -78,25 +78,25 @@ async function defaultSleep(seconds: number, stopFlag: StopFlagLike): Promise<vo
   }
 }
 
-export interface WaitForOmlxDeps {
+export interface WaitForEndpointDeps {
   fetchFn?: typeof fetch;
   sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
 }
 
 /**
- * Block until the oMLX server is reachable or the stop-flag is set.
+ * Block until the inference endpoint is reachable or the stop-flag is set.
  * Port of worker.py wait_for_omlx (lines 629-647).
  *
  * - If cfg.startupWait is false → return immediately (no probe).
  * - Loop while !stopFlag.requested:
- *   - probe via omlxReachable; on success log and return.
+ *   - probe via endpointReachable; on success log and return.
  *   - on failure: log a warning on tries===1 or tries%10===0 (exactly the
  *     Python cadence), then sleep cfg.startupPollSeconds.
  */
-export async function waitForOmlx(
+export async function waitForEndpoint(
   cfg: Config,
   stopFlag: StopFlagLike,
-  deps?: WaitForOmlxDeps,
+  deps?: WaitForEndpointDeps,
 ): Promise<void> {
   if (!cfg.startupWait) return;
 
@@ -105,11 +105,11 @@ export async function waitForOmlx(
 
   let tries = 0;
   while (!stopFlag.requested) {
-    if (await omlxReachable(cfg, { fetchFn })) {
+    if (await endpointReachable(cfg, { fetchFn })) {
       if (tries > 0) {
-        log.info(`oMLX reachable after ${tries} retries`);
+        log.info(`inference endpoint reachable after ${tries} retries`);
       } else {
-        log.info("oMLX reachable");
+        log.info("inference endpoint reachable");
       }
       return;
     }

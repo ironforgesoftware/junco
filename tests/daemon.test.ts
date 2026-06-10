@@ -99,7 +99,7 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     runOnceFn: vi.fn(async () => false),
     recoverOrphansFn: vi.fn(() => {}),
     pruneFn: vi.fn(() => {}),
-    waitForOmlxFn: vi.fn(async () => {}),
+    waitForEndpointFn: vi.fn(async () => {}),
     sleep: vi.fn(async () => {}),
     mkdirs: vi.fn(() => {}),
     // Default fake — never binds a real port. Tests that exercise the health
@@ -275,7 +275,7 @@ describe("mainLoop", () => {
       pruneFn: vi.fn(() => {
         order.push("prune");
       }),
-      waitForOmlxFn: vi.fn(async () => {
+      waitForEndpointFn: vi.fn(async () => {
         order.push("wait");
       }),
       runOnceFn: vi.fn(async () => {
@@ -295,8 +295,8 @@ describe("mainLoop", () => {
     expect(deps.recoverOrphansFn).toHaveBeenCalledTimes(1);
     expect(deps.pruneFn).toHaveBeenCalledTimes(1);
     expect(deps.pruneFn).toHaveBeenCalledWith(cfg.worktreeRoot);
-    expect(deps.waitForOmlxFn).toHaveBeenCalledTimes(1);
-    expect(deps.waitForOmlxFn).toHaveBeenCalledWith(cfg, stop);
+    expect(deps.waitForEndpointFn).toHaveBeenCalledTimes(1);
+    expect(deps.waitForEndpointFn).toHaveBeenCalledWith(cfg, stop);
   });
 
   it("once=true breaks after a single handled task; sleep never called", async () => {
@@ -395,7 +395,7 @@ describe("mainLoop", () => {
     const cfg = makeConfig();
     const stop = new StopFlag();
     const { deps } = makeDeps({
-      waitForOmlxFn: vi.fn(async () => {
+      waitForEndpointFn: vi.fn(async () => {
         stop.requestStop();
       }),
       runOnceFn: vi.fn(async () => false),

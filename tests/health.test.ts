@@ -1,14 +1,14 @@
 /**
- * Tests for src/health.ts — omlxReachable + waitForOmlx.
+ * Tests for src/health.ts — endpointReachable + waitForEndpoint.
  * Written FIRST (TDD). No real network, no real delays.
  *
- * Port of worker.py omlx_reachable / wait_for_omlx.
+ * Port of worker.py omlx_reachable / wait_for_omlx (now endpoint-named).
  */
 
 import { describe, it, expect } from "vitest";
 import type { Config } from "../src/types.js";
 import type { StopFlagLike } from "../src/health.js";
-import { omlxReachable, waitForOmlx } from "../src/health.js";
+import { endpointReachable, waitForEndpoint } from "../src/health.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,10 +69,10 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 }
 
 // ---------------------------------------------------------------------------
-// omlxReachable
+// endpointReachable
 // ---------------------------------------------------------------------------
 
-describe("omlxReachable", () => {
+describe("endpointReachable", () => {
   it("returns true when fetch returns ok:true", async () => {
     let capturedUrl: string | undefined;
     let capturedHeaders: Record<string, string> | undefined;
@@ -84,7 +84,7 @@ describe("omlxReachable", () => {
     };
 
     const cfg = makeConfig();
-    const result = await omlxReachable(cfg, { fetchFn, timeoutMs: 1000 });
+    const result = await endpointReachable(cfg, { fetchFn, timeoutMs: 1000 });
 
     expect(result).toBe(true);
     // probe URL should end with /models
@@ -96,7 +96,7 @@ describe("omlxReachable", () => {
   it("returns false when fetch returns ok:false", async () => {
     const fetchFn = async (): Promise<Response> => ({ ok: false }) as Response;
     const cfg = makeConfig();
-    const result = await omlxReachable(cfg, { fetchFn, timeoutMs: 1000 });
+    const result = await endpointReachable(cfg, { fetchFn, timeoutMs: 1000 });
     expect(result).toBe(false);
   });
 
@@ -105,16 +105,16 @@ describe("omlxReachable", () => {
       throw new Error("Network error");
     };
     const cfg = makeConfig();
-    const result = await omlxReachable(cfg, { fetchFn, timeoutMs: 1000 });
+    const result = await endpointReachable(cfg, { fetchFn, timeoutMs: 1000 });
     expect(result).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// waitForOmlx
+// waitForEndpoint
 // ---------------------------------------------------------------------------
 
-describe("waitForOmlx", () => {
+describe("waitForEndpoint", () => {
   it("returns immediately when startupWait is false", async () => {
     const cfg = makeConfig({ startupWait: false });
     const stopFlag: StopFlagLike = { requested: false };
@@ -125,7 +125,7 @@ describe("waitForOmlx", () => {
       throw new Error("should not be called");
     };
 
-    await waitForOmlx(cfg, stopFlag, { fetchFn });
+    await waitForEndpoint(cfg, stopFlag, { fetchFn });
     expect(fetchCalled).toBe(false);
   });
 
@@ -145,7 +145,7 @@ describe("waitForOmlx", () => {
       sleepCallCount++;
     };
 
-    await waitForOmlx(cfg, stopFlag, { fetchFn, sleep });
+    await waitForEndpoint(cfg, stopFlag, { fetchFn, sleep });
 
     expect(fetchCallCount).toBe(3);
     expect(sleepCallCount).toBe(2);
@@ -164,7 +164,7 @@ describe("waitForOmlx", () => {
       stop.requested = true;
     };
 
-    await waitForOmlx(cfg, stop, { fetchFn, sleep });
+    await waitForEndpoint(cfg, stop, { fetchFn, sleep });
 
     // Should have fetched once, slept once, then checked stop.requested and exited
     expect(sleepCallCount).toBe(1);

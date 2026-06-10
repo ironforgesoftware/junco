@@ -24,7 +24,7 @@ export interface HealthServerOpts {
   /** Source of metrics. Typically the process-wide `metrics` singleton. */
   metrics: { snapshot(): MetricsSnapshot };
   /**
-   * Async dependency probe. Should return true when dependencies (e.g. oMLX)
+   * Async dependency probe. Should return true when dependencies (e.g. the inference endpoint)
    * are reachable. Defaults to `async () => true`.
    *
    * A rejection is treated as "not ready" — it does NOT cause a 500.

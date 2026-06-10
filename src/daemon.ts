@@ -20,7 +20,7 @@ import { queuePaths } from "./config.js";
 import { runOnce } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
-import { waitForOmlx, omlxReachable, type StopFlagLike } from "./health.js";
+import { waitForEndpoint, endpointReachable, type StopFlagLike } from "./health.js";
 import { log } from "./logging.js";
 import { metrics } from "./metrics.js";
 import {
@@ -119,7 +119,7 @@ export interface MainLoopDeps {
   runOnceFn?: (cfg: Config) => Promise<boolean>;
   recoverOrphansFn?: (cfg: Config) => void;
   pruneFn?: (worktreeRoot: string) => void;
-  waitForOmlxFn?: (cfg: Config, stopFlag: StopFlagLike) => Promise<void>;
+  waitForEndpointFn?: (cfg: Config, stopFlag: StopFlagLike) => Promise<void>;
   sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
   mkdirs?: (cfg: Config) => void;
   // Injectable so tests never bind a real port. Defaults to the real
@@ -137,7 +137,7 @@ function defaultMkdirs(cfg: Config): void {
 /**
  * Poll-forever daemon loop with graceful shutdown.  Port of worker.py
  * main_loop: ensure queue dirs → recover orphans → prune stale worktrees →
- * wait for oMLX → poll loop (handled → reset idle + break-if-once + continue;
+ * wait for endpoint → poll loop (handled → reset idle + break-if-once + continue;
  * else log idle once + interruptible sleep) → "worker exiting cleanly".
  *
  * Every side-effecting collaborator is injectable so the loop is unit-testable
@@ -152,7 +152,7 @@ export async function mainLoop(
   const runOnceFn = deps.runOnceFn ?? ((c: Config) => runOnce(c));
   const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
   const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
-  const waitForOmlxFn = deps.waitForOmlxFn ?? ((c: Config, s: StopFlagLike) => waitForOmlx(c, s));
+  const waitForEndpointFn = deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
@@ -163,7 +163,7 @@ export async function mainLoop(
   metrics.markStarted();
   recoverOrphansFn(cfg);
   pruneFn(cfg.worktreeRoot);
-  await waitForOmlxFn(cfg, stopFlag);
+  await waitForEndpointFn(cfg, stopFlag);
 
   log.info("worker online", {
     pid: process.pid,
@@ -181,7 +181,7 @@ export async function mainLoop(
         host: cfg.healthHost,
         port: cfg.healthPort,
         metrics,
-        readinessProbe: () => omlxReachable(cfg),
+        readinessProbe: () => endpointReachable(cfg),
       });
       log.info("health endpoint listening", { url: health.url });
     } catch (e) {

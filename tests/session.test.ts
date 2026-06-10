@@ -219,8 +219,8 @@ describe("splitModelId", () => {
       modelId: "anthropic/claude",
     });
   });
-  it("defaults provider to omlx when there is no slash", () => {
-    expect(splitModelId("bare-model")).toEqual({ provider: "omlx", modelId: "bare-model" });
+  it("defaults provider to local when there is no slash", () => {
+    expect(splitModelId("bare-model")).toEqual({ provider: "local", modelId: "bare-model" });
   });
 });
 

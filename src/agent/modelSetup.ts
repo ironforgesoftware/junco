@@ -13,11 +13,11 @@ import type { Config } from "../types.js";
  * bare model id. Splits on the FIRST "/" only, so model ids that themselves
  * contain slashes (e.g. "openrouter/anthropic/claude") are preserved. If there
  * is no "/", the whole string is treated as the model id under the default
- * "omlx" provider.
+ * "local" provider.
  */
 export function splitModelId(full: string): { provider: string; modelId: string } {
   const slash = full.indexOf("/");
-  if (slash === -1) return { provider: "omlx", modelId: full };
+  if (slash === -1) return { provider: "local", modelId: full };
   return { provider: full.slice(0, slash), modelId: full.slice(slash + 1) };
 }
 
