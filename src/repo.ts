@@ -6,7 +6,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { git, gh, GitOpError } from "./git.js";
 import { isAmend } from "./repoContext.js";
 import { log } from "./logging.js";
@@ -118,6 +118,22 @@ export async function resolveAmendTarget(
  * head / base refs.
  */
 export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promise<string> {
+  // Containment rail: when [git].allowed_repo_roots is non-empty, a ticket may
+  // only target repos under one of those roots. The inbox is a code-execution
+  // boundary — this caps where a hostile or fat-fingered ticket can point it.
+  if (cfg.allowedRepoRoots.length > 0) {
+    const real = resolve(ctx.repo);
+    const ok = cfg.allowedRepoRoots.some((root) => {
+      const r = resolve(root);
+      return real === r || real.startsWith(r + sep);
+    });
+    if (!ok) {
+      throw new GitOpError(
+        `repo ${ctx.repo} is outside [git].allowed_repo_roots — refusing to run this ticket`,
+      );
+    }
+  }
+
   // Check repo path exists
   if (!existsSync(ctx.repo)) {
     throw new GitOpError(`repo path does not exist: ${ctx.repo}`);

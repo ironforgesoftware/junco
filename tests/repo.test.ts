@@ -115,6 +115,9 @@ function makeConfig(work: string, ghBin: string): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -126,6 +129,7 @@ function makeConfig(work: string, ghBin: string): Config {
     branchPrefix: "junco/",
     worktreeRoot: join(work, "wts"),
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -142,6 +146,9 @@ function makeConfig(work: string, ghBin: string): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: "/tmp/junco-repo-test-state",
+    logToFile: false,
+    transcriptsEnabled: false,
   };
 }
 
@@ -403,4 +410,45 @@ describe("resolveAmendTarget", () => {
       delete process.env.FAKE_GH_PR_JSON;
     }
   }, 15000);
+});
+
+// ---------------------------------------------------------------------------
+// allowed_repo_roots containment
+// ---------------------------------------------------------------------------
+
+describe("allowed_repo_roots", () => {
+  it("rejects a repo outside every allowed root, before touching git/gh", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = { ...makeConfig(work, ghScript), allowedRepoRoots: ["/srv/allowed-only"] };
+    const ctx = makeContext("/home/evil/repo");
+    await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/allowed_repo_roots/);
+  });
+
+  it("accepts a repo under an allowed root (continues to the existing checks)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = { ...makeConfig(work, ghScript), allowedRepoRoots: [tmpRoot] };
+    const ctx = makeContext(work);
+    await expect(validateRepoContext(cfg, ctx)).resolves.toBe("owner/repo");
+  }, 15000);
+
+  it("an empty allowlist allows everything (default)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = { ...makeConfig(work, ghScript), allowedRepoRoots: [] };
+    const ctx = makeContext(work);
+    await expect(validateRepoContext(cfg, ctx)).resolves.toBe("owner/repo");
+  }, 15000);
+
+  it("an exact-root match is allowed (no separator-suffix false negative)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = { ...makeConfig(work, ghScript), allowedRepoRoots: [work] };
+    const ctx = makeContext(work);
+    await expect(validateRepoContext(cfg, ctx)).resolves.toBe("owner/repo");
+  }, 15000);
+
+  it("a prefix that is not a path boundary is rejected (/srv/allowed vs /srv/allowed-evil)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = { ...makeConfig(work, ghScript), allowedRepoRoots: ["/srv/allowed"] };
+    const ctx = makeContext("/srv/allowed-evil");
+    await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/allowed_repo_roots/);
+  });
 });
