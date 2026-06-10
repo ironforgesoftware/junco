@@ -50,6 +50,11 @@ export interface RunAgentOptions {
    * is aborted softly and any commits already made are salvaged.
    */
   abortSignal?: AbortSignal;
+  /**
+   * Called on turn ends and tool starts with a cheap progress snapshot —
+   * wired to the metrics singleton so /health can show live progress.
+   */
+  onProgress?: (p: { turns: number; lastTool: string | null; outputTokens: number }) => void;
 }
 
 /**
@@ -87,6 +92,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     // but inside the try so the session is still disposed if subscribe throws.
     unsubscribe = session.subscribe((e) => {
       acc.observe(e);
+      if (opts.onProgress && (e?.type === "turn_end" || e?.type === "tool_execution_start")) {
+        opts.onProgress(acc.progress());
+      }
       if (!gm) return;
       // A kill is terminal — once decided, stop feeding the guard (further
       // events from the aborting run shouldn't produce more decisions).

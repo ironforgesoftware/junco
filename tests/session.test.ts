@@ -365,3 +365,36 @@ describe("models.json file path — SDK resolution", () => {
     }
   });
 });
+
+describe("runAgent (onProgress)", () => {
+  it("fires on turn ends and tool starts with cumulative progress", async () => {
+    const snaps: Array<{ turns: number; lastTool: string | null; outputTokens: number }> = [];
+    const session = {
+      subscribe(l: (e: any) => void) {
+        queueMicrotask(() => {
+          l({ type: "tool_execution_start", toolName: "read", args: {} });
+          l({
+            type: "turn_end",
+            message: { stopReason: "stop", usage: { input: 1, output: 4, totalTokens: 5 } },
+          });
+        });
+        return () => {};
+      },
+      async prompt() {
+        await new Promise((r) => setTimeout(r, 5));
+      },
+      dispose() {},
+      abort: async () => {},
+    };
+    await runAgent({
+      body: "x",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      onProgress: (p) => snaps.push(p),
+    });
+    expect(snaps).toHaveLength(2);
+    expect(snaps[0]).toEqual({ turns: 0, lastTool: "read", outputTokens: 0 });
+    expect(snaps[1]).toEqual({ turns: 1, lastTool: "read", outputTokens: 4 });
+  });
+});

@@ -7,6 +7,8 @@ export class RunAccumulator {
   private usage: Usage = { input: 0, output: 0, cacheRead: 0, total: 0 };
   private stopReason: string | null = null;
   private errorMessage: string | null = null;
+  private turns = 0;
+  private lastTool: string | null = null;
 
   observe(event: AgentEvent): void {
     // The PUBLIC boundary is typed (AgentEvent — callers and fakes are checked
@@ -22,6 +24,7 @@ export class RunAccumulator {
         // `args` lives on the START event; tool_execution_end carries `result`,
         // not `args` (verified against the SDK's ToolExecution*Event type defs).
         this.toolCalls.push({ name: e.toolName, args: e.args });
+        this.lastTool = typeof e.toolName === "string" ? e.toolName : this.lastTool;
         break;
       case "turn_end": {
         const u = e.message?.usage;
@@ -37,12 +40,18 @@ export class RunAccumulator {
           };
         }
         if (e.message?.stopReason) this.stopReason = e.message.stopReason;
+        this.turns++;
         break;
       }
       case "auto_retry_end":
         if (e.finalError) this.errorMessage = String(e.finalError);
         break;
     }
+  }
+
+  /** Cheap live-progress view for the metrics surface. */
+  progress(): { turns: number; lastTool: string | null; outputTokens: number } {
+    return { turns: this.turns, lastTool: this.lastTool, outputTokens: this.usage.output };
   }
 
   setError(msg: string): void {

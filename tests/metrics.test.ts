@@ -265,3 +265,23 @@ describe("RunMetrics", () => {
     });
   });
 });
+
+describe("task progress", () => {
+  it("is exposed in the snapshot and cleared with the task", () => {
+    const m = new RunMetrics();
+    m.setTaskProgress("t-1", { turns: 3, lastTool: "bash", outputTokens: 120 });
+    const snap = m.snapshot();
+    expect(snap.currentProgress["t-1"].turns).toBe(3);
+    expect(snap.currentProgress["t-1"].lastTool).toBe("bash");
+    expect(typeof snap.currentProgress["t-1"].updatedAt).toBe("string");
+    m.clearTaskProgress("t-1");
+    expect(m.snapshot().currentProgress["t-1"]).toBeUndefined();
+  });
+
+  it("reset() clears progress too", () => {
+    const m = new RunMetrics();
+    m.setTaskProgress("t-1", { turns: 1, lastTool: null, outputTokens: 0 });
+    m.reset();
+    expect(m.snapshot().currentProgress).toEqual({});
+  });
+});

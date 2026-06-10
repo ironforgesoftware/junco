@@ -106,6 +106,7 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
             sessionFactoryFor: deps.sessionFactoryFor,
             criticSessionFactory: deps.criticSessionFactory,
             abortSignal: deps.abortSignal,
+            onProgress: (p) => metrics.setTaskProgress(next.id, p),
           });
           log.info("finalized (pr-flow)", { dst });
           return true;
@@ -141,6 +142,7 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
         createSession: factory,
         guardManager,
         abortSignal: deps.abortSignal,
+        onProgress: (p) => metrics.setTaskProgress(next.id, p),
       });
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
       // backoff instead of finalizing to failed/ (budget permitting).
@@ -161,6 +163,7 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
       return true;
     } finally {
       metrics.setCurrentTicket(null);
+      metrics.clearTaskProgress(next.id);
     }
   });
 }

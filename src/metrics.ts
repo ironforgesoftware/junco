@@ -23,6 +23,11 @@ export interface MetricsSnapshot {
   totalDurationMs: number;
   lastTaskAt: string | null; // ISO of the most recent recordTask()
   lastTaskStatus: string | null;
+  /** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
+  currentProgress: Record<
+    string,
+    { turns: number; lastTool: string | null; outputTokens: number; updatedAt: string }
+  >;
 }
 
 export class RunMetrics {
@@ -41,6 +46,10 @@ export class RunMetrics {
   private _totalDurationMs = 0;
   private _lastTaskAt: Date | null = null;
   private _lastTaskStatus: string | null = null;
+  private _progress: Record<
+    string,
+    { turns: number; lastTool: string | null; outputTokens: number; updatedAt: string }
+  > = {};
 
   constructor(now: () => Date = () => new Date()) {
     this._now = now;
@@ -62,6 +71,19 @@ export class RunMetrics {
   /** Set or clear the currently-processing ticket id. */
   setCurrentTicket(id: string | null): void {
     this._currentTicket = id;
+  }
+
+  /** Record a live progress snapshot for an in-flight ticket. */
+  setTaskProgress(
+    id: string,
+    p: { turns: number; lastTool: string | null; outputTokens: number },
+  ): void {
+    this._progress[id] = { ...p, updatedAt: this._now().toISOString() };
+  }
+
+  /** Drop a ticket's progress (always called when the ticket ends). */
+  clearTaskProgress(id: string): void {
+    delete this._progress[id];
   }
 
   /**
@@ -114,6 +136,7 @@ export class RunMetrics {
       totalDurationMs: this._totalDurationMs,
       lastTaskAt: this._lastTaskAt ? this._lastTaskAt.toISOString() : null,
       lastTaskStatus: this._lastTaskStatus,
+      currentProgress: { ...this._progress },
     };
   }
 
@@ -132,6 +155,7 @@ export class RunMetrics {
     this._totalDurationMs = 0;
     this._lastTaskAt = null;
     this._lastTaskStatus = null;
+    this._progress = {};
   }
 }
 

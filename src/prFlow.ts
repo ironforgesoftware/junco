@@ -228,6 +228,8 @@ export interface PrFlowDeps {
    * NOT threaded: it is tool-less and bounded, and a force-stopped worker
    * session never reaches it anyway (guard-abort skips post-session review). */
   abortSignal?: AbortSignal;
+  /** Live progress hook (turns, last tool, output tokens) for /health. */
+  onProgress?: (p: { turns: number; lastTool: string | null; outputTokens: number }) => void;
 }
 
 export async function runPrFlow(
@@ -322,6 +324,7 @@ export async function runPrFlow(
     createSession: factory,
     guardManager,
     abortSignal: deps.abortSignal,
+    onProgress: deps.onProgress,
   });
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
@@ -464,6 +467,7 @@ export async function runPrFlow(
           timeoutMs: task.timeoutSeconds * 1000,
           createSession: correctiveFactory,
           abortSignal: deps.abortSignal,
+          onProgress: deps.onProgress,
           guardManager: cfg.supervisorEnabled
             ? new GuardManager({
                 supervisorConfig: {

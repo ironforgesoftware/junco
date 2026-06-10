@@ -92,3 +92,16 @@ describe("RunAccumulator", () => {
     expect(acc.result(0).usage.total).toBe(10);
   });
 });
+
+describe("progress tracking", () => {
+  it("tracks turns and lastTool as progress", () => {
+    const acc = new RunAccumulator();
+    acc.observe({ type: "tool_execution_start", toolName: "bash", args: {} } as any);
+    acc.observe({
+      type: "turn_end",
+      message: { usage: { input: 1, output: 2, totalTokens: 3 } },
+    } as any);
+    acc.observe({ type: "tool_execution_start", toolName: "edit", args: {} } as any);
+    expect(acc.progress()).toEqual({ turns: 1, lastTool: "edit", outputTokens: 2 });
+  });
+});
