@@ -3,8 +3,15 @@ import { log, withTicket, setLogLevel } from "../src/logging.js";
 
 function capture(fn: () => void): any[] {
   const lines: any[] = [];
-  const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => { lines.push(JSON.parse(String(s))); return true; });
-  try { fn(); } finally { spy.mockRestore(); }
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => {
+    lines.push(JSON.parse(String(s)));
+    return true;
+  });
+  try {
+    fn();
+  } finally {
+    spy.mockRestore();
+  }
   return lines;
 }
 

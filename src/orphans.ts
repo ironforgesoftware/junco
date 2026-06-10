@@ -63,8 +63,7 @@ export function recoverOrphans(cfg: Config, deps: OrphanDeps = {}): string[] {
       `meaning a previous worker process crashed or was killed mid-run. ` +
       `Moving to failed/ without re-running. Move back to inbox/ to retry.`;
 
-    const updated =
-      `${existing.trimEnd()}\n\n---\n${metaBlock}\n\n${banner}\n`;
+    const updated = `${existing.trimEnd()}\n\n---\n${metaBlock}\n\n${banner}\n`;
 
     // Atomic write: temp sibling → rename (PR #1 pattern used across the codebase).
     const tmp = orphanPath + ".tmp";

@@ -58,12 +58,10 @@ function xmlEscape(s: string): string {
 function resolveOpts(opts: ServiceOpts): Required<ServiceOpts> {
   const nodeBin = opts.nodeBin ?? process.execPath;
   const logDir = opts.logDir ?? dirname(resolve(opts.configPath));
-  const home = opts.home ?? (process.env.HOME ?? "");
+  const home = opts.home ?? process.env.HOME ?? "";
   // Build a sensible PATH that includes the node binary's dir first
   const nodeBinDir = dirname(nodeBin);
-  const pathEnv =
-    opts.pathEnv ??
-    `${nodeBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
+  const pathEnv = opts.pathEnv ?? `${nodeBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
   const label = opts.label ?? "com.junco.worker";
   return {
     label,
@@ -149,10 +147,7 @@ WantedBy=default.target
 // renderService — dispatch
 // ---------------------------------------------------------------------------
 
-export function renderService(
-  platform: "launchd" | "systemd",
-  opts: ServiceOpts,
-): string {
+export function renderService(platform: "launchd" | "systemd", opts: ServiceOpts): string {
   if (platform === "launchd") return renderLaunchdPlist(opts);
   return renderSystemdUnit(opts);
 }

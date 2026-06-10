@@ -9,24 +9,29 @@ export interface ModelCompat {
   thinkingFormat?: string;
   [k: string]: unknown;
 }
-export interface ModelCost { input: number; output: number; cacheRead: number; cacheWrite: number; }
+export interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
 /** The model + inference provider junco drives Pi against. Resolved by
  * `loadConfig` from the `[model]` section (with fallbacks to the legacy
  * `[pi].model_id` / `[oMLX]` keys). When `modelsJson` points at an existing
  * Pi-style models.json the provider+model are loaded from THAT file and the
  * inline capability fields are ignored. */
 export interface ModelConfig {
-  id: string;                 // provider-prefixed, e.g. "openai/gpt-4o-mini"
-  modelsJson: string | null;  // path to a Pi models.json, or null for inline
-  api: string;                // Pi Api style, e.g. "openai-completions"
-  baseUrl: string;            // OpenAI-compatible endpoint
+  id: string; // provider-prefixed, e.g. "openai/gpt-4o-mini"
+  modelsJson: string | null; // path to a Pi models.json, or null for inline
+  api: string; // Pi Api style, e.g. "openai-completions"
+  baseUrl: string; // OpenAI-compatible endpoint
   apiKey: string;
   reasoning: boolean;
-  input: string[];            // e.g. ["text", "image"]
+  input: string[]; // e.g. ["text", "image"]
   contextWindow: number;
   maxTokens: number;
   cost: ModelCost;
-  thinkingLevel: string;      // worker default thinking level
+  thinkingLevel: string; // worker default thinking level
   compat: ModelCompat;
 }
 export interface Config {
@@ -74,7 +79,12 @@ export interface Config {
   healthPort: number;
   logLevel: "debug" | "info" | "warn" | "error";
 }
-export interface Paths { inbox: string; processing: string; done: string; failed: string; }
+export interface Paths {
+  inbox: string;
+  processing: string;
+  done: string;
+  failed: string;
+}
 
 export interface Ticket {
   path: string;
@@ -86,8 +96,16 @@ export interface Ticket {
   hasRepo: boolean;
 }
 
-export interface ToolCall { name: string; args: unknown; }
-export interface Usage { input: number; output: number; cacheRead: number; total: number; }
+export interface ToolCall {
+  name: string;
+  args: unknown;
+}
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  total: number;
+}
 export interface RunResult {
   finalText: string;
   toolCalls: ToolCall[];

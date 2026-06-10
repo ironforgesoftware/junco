@@ -3,7 +3,7 @@
  * Written FIRST (TDD). Uses real ephemeral server + global fetch.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { startHealthServer } from "../src/healthServer.js";
 import type { HealthServerHandle } from "../src/healthServer.js";
 import type { MetricsSnapshot } from "../src/metrics.js";
@@ -83,7 +83,7 @@ describe("healthServer", () => {
       expect(resp.status).toBe(200);
       expect(resp.headers.get("content-type")).toMatch(/application\/json/);
 
-      const body = await resp.json() as { status: string; pid: number; uptimeSeconds: number };
+      const body = (await resp.json()) as { status: string; pid: number; uptimeSeconds: number };
       expect(body.status).toBe("alive");
       expect(body.pid).toBe(99999);
       expect(body.uptimeSeconds).toBe(123);
@@ -98,7 +98,7 @@ describe("healthServer", () => {
 
       const resp = await fetch(`${handle.url}/live`);
       expect(resp.status).toBe(200);
-      const body = await resp.json() as { status: string };
+      const body = (await resp.json()) as { status: string };
       expect(body.status).toBe("alive");
     });
 
@@ -106,7 +106,7 @@ describe("healthServer", () => {
       handle = await startHealthServer({ port: 0, metrics: makeFakeMetrics() });
       const resp = await fetch(`${handle.url}/live?cb=123`);
       expect(resp.status).toBe(200);
-      const body = await resp.json() as { status: string };
+      const body = (await resp.json()) as { status: string };
       expect(body.status).toBe("alive");
     });
   });
@@ -125,7 +125,7 @@ describe("healthServer", () => {
 
       const resp = await fetch(`${handle.url}/ready`);
       expect(resp.status).toBe(200);
-      const body = await resp.json() as { status: string };
+      const body = (await resp.json()) as { status: string };
       expect(body.status).toBe("ready");
     });
 
@@ -138,7 +138,7 @@ describe("healthServer", () => {
 
       const resp = await fetch(`${handle.url}/ready`);
       expect(resp.status).toBe(503);
-      const body = await resp.json() as { status: string; reason: string };
+      const body = (await resp.json()) as { status: string; reason: string };
       expect(body.status).toBe("not_ready");
       expect(body.reason).toBeTruthy();
     });
@@ -147,12 +147,14 @@ describe("healthServer", () => {
       handle = await startHealthServer({
         port: 0,
         metrics: makeFakeMetrics(),
-        readinessProbe: async () => { throw new Error("probe exploded"); },
+        readinessProbe: async () => {
+          throw new Error("probe exploded");
+        },
       });
 
       const resp = await fetch(`${handle.url}/ready`);
       expect(resp.status).toBe(503);
-      const body = await resp.json() as { status: string };
+      const body = (await resp.json()) as { status: string };
       expect(body.status).toBe("not_ready");
     });
 
@@ -165,7 +167,7 @@ describe("healthServer", () => {
 
       const resp = await fetch(`${handle.url}/ready`);
       expect(resp.status).toBe(200);
-      const body = await resp.json() as { status: string };
+      const body = (await resp.json()) as { status: string };
       expect(body.status).toBe("ready");
     });
   });
@@ -194,7 +196,7 @@ describe("healthServer", () => {
       expect(resp.status).toBe(200);
       expect(resp.headers.get("content-type")).toMatch(/application\/json/);
 
-      const body = await resp.json() as {
+      const body = (await resp.json()) as {
         status: string;
         ready: boolean;
         metrics: MetricsSnapshot;
@@ -217,7 +219,7 @@ describe("healthServer", () => {
 
       const resp = await fetch(`${handle.url}/health`);
       expect(resp.status).toBe(200);
-      const body = await resp.json() as { status: string; ready: boolean };
+      const body = (await resp.json()) as { status: string; ready: boolean };
       expect(body.status).toBe("ok");
       expect(body.ready).toBe(false);
     });
@@ -235,7 +237,7 @@ describe("healthServer", () => {
 
     const resp = await fetch(`${handle.url}/nope`);
     expect(resp.status).toBe(404);
-    const body = await resp.json() as { error: string };
+    const body = (await resp.json()) as { error: string };
     expect(body.error).toBeTruthy();
   });
 
@@ -247,7 +249,7 @@ describe("healthServer", () => {
 
     const resp = await fetch(`${handle.url}/health`, { method: "POST" });
     expect(resp.status).toBe(405);
-    const body = await resp.json() as { error: string };
+    const body = (await resp.json()) as { error: string };
     expect(body.error).toBeTruthy();
   });
 

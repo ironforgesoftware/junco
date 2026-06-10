@@ -23,7 +23,10 @@ function thinkingDelta(delta: string) {
   return { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta } };
 }
 function turnEnd(output: number) {
-  return { type: "turn_end", message: { usage: { output, input: 0, cacheRead: 0, totalTokens: output } } };
+  return {
+    type: "turn_end",
+    message: { usage: { output, input: 0, cacheRead: 0, totalTokens: output } },
+  };
 }
 
 describe("GuardManager — tool_call_loop", () => {
@@ -135,8 +138,9 @@ describe("GuardManager — turn boundary", () => {
 // A paragraph that reliably trips RepetitionGuard (proven in guards.test.ts):
 // probe ≥200 chars, ≥10 unique chars, recurring ≥4× in the 2000-char window.
 const REP_BLOCK =
-  "This is an important paragraph with varied content and punctuation; worth flagging when it repeats. ".repeat(2) +
-  "\n\n";
+  "This is an important paragraph with varied content and punctuation; worth flagging when it repeats. ".repeat(
+    2,
+  ) + "\n\n";
 
 describe("GuardManager — text repetition", () => {
   it("nudges when cumulative text repeats the same paragraph, then re-instantiates", () => {
@@ -178,7 +182,8 @@ describe("GuardManager — thinking repetition", () => {
   it("nudges on repeated thinking with kind=thinking_rep", () => {
     const gm = new GuardManager();
     let decision = null as ReturnType<GuardManager["observe"]>;
-    for (let i = 0; i < 8 && decision === null; i++) decision = gm.observe(thinkingDelta(REP_BLOCK));
+    for (let i = 0; i < 8 && decision === null; i++)
+      decision = gm.observe(thinkingDelta(REP_BLOCK));
     expect(decision).not.toBeNull();
     expect(decision!.action).toBe("nudge");
     expect(decision!.kind).toBe("thinking_rep");

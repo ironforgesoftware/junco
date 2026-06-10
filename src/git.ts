@@ -49,10 +49,7 @@ export interface RunOpts {
  *
  * Mirrors Python `_run_cmd(capture_output=True, text=True, check=…, timeout=…)`.
  */
-export async function runCmd(
-  argv: string[],
-  opts: RunOpts = {},
-): Promise<CmdResult> {
+export async function runCmd(argv: string[], opts: RunOpts = {}): Promise<CmdResult> {
   const { cwd, timeoutMs = 120_000, check = true } = opts;
   const [bin, ...args] = argv;
 
@@ -77,10 +74,14 @@ export async function runCmd(
     // stdio is ["ignore", "pipe", "pipe"] so stdout/stderr are always Readable.
     // The type is Readable|null because spawn() types can't encode our opts statically.
     proc.stdout!.setEncoding("utf8");
-    proc.stdout!.on("data", (chunk: string) => { stdout += chunk; });
+    proc.stdout!.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
 
     proc.stderr!.setEncoding("utf8");
-    proc.stderr!.on("data", (chunk: string) => { stderr += chunk; });
+    proc.stderr!.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
 
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -98,23 +99,13 @@ export async function runCmd(
       const exitCode = code ?? 1;
 
       if (timedOut) {
-        reject(
-          new GitOpError(
-            `${bin} timed out after ${timeoutMs}ms`,
-            stderr,
-            exitCode,
-          ),
-        );
+        reject(new GitOpError(`${bin} timed out after ${timeoutMs}ms`, stderr, exitCode));
         return;
       }
 
       if (check && exitCode !== 0) {
         reject(
-          new GitOpError(
-            `${bin} ${args[0] ?? ""} failed (exit ${exitCode})`,
-            stderr,
-            exitCode,
-          ),
+          new GitOpError(`${bin} ${args[0] ?? ""} failed (exit ${exitCode})`, stderr, exitCode),
         );
         return;
       }

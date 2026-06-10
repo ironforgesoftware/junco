@@ -13,7 +13,9 @@ function writeToml(body: string): string {
 
 describe("loadConfig", () => {
   it("parses a minimal config with defaults", () => {
-    const p = writeToml(`vault_root = "/tmp/vault"\n[pi]\nmodel_id = "omlx/m"\n[oMLX]\nurl = "http://127.0.0.1:1234/v1"\napi_key = "k"\n`);
+    const p = writeToml(
+      `vault_root = "/tmp/vault"\n[pi]\nmodel_id = "omlx/m"\n[oMLX]\nurl = "http://127.0.0.1:1234/v1"\napi_key = "k"\n`,
+    );
     const cfg = loadConfig(p);
     expect(cfg.vaultRoot).toBe("/tmp/vault");
     expect(cfg.juncoSubdir).toBe("Junco");
@@ -36,7 +38,9 @@ describe("loadConfig", () => {
   });
 
   it("accepts a lowercase [omlx] section (Python parity)", () => {
-    const p = writeToml(`vault_root = "/tmp/vault"\n[omlx]\nurl = "http://host:9/v1"\napi_key = "low"\n`);
+    const p = writeToml(
+      `vault_root = "/tmp/vault"\n[omlx]\nurl = "http://host:9/v1"\napi_key = "low"\n`,
+    );
     const cfg = loadConfig(p);
     expect(cfg.model.baseUrl).toBe("http://host:9/v1");
     expect(cfg.model.apiKey).toBe("low");
@@ -117,7 +121,7 @@ describe("loadConfig", () => {
   it("reads the [supervisor] knobs from config.toml", () => {
     const p = writeToml(
       `vault_root = "/v"\n[supervisor]\nenabled = false\nbudget_per_kind = 2\n` +
-      `escalation_window_turns = 5\noutput_budget_per_turn = 8000\noutput_budget_post_commit = 16000\n`,
+        `escalation_window_turns = 5\noutput_budget_per_turn = 8000\noutput_budget_post_commit = 16000\n`,
     );
     const cfg = loadConfig(p);
     expect(cfg.supervisorEnabled).toBe(false);
@@ -177,7 +181,7 @@ describe("loadConfig", () => {
   it("reads the [observability] knobs from config.toml", () => {
     const p = writeToml(
       `vault_root = "/v"\n[observability]\nhealth_enabled = false\nhealth_host = "0.0.0.0"\n` +
-      `health_port = 9999\nlog_level = "warn"\n`,
+        `health_port = 9999\nlog_level = "warn"\n`,
     );
     const cfg = loadConfig(p);
     expect(cfg.healthEnabled).toBe(false);

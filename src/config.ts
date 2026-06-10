@@ -20,7 +20,10 @@ function toolsFromExtraArgs(extraArgs: string[] | undefined): string[] {
   if (extraArgs) {
     const i = extraArgs.indexOf("--tools");
     if (i >= 0 && i + 1 < extraArgs.length) {
-      const tools = extraArgs[i + 1].split(",").map((t) => t.trim()).filter(Boolean);
+      const tools = extraArgs[i + 1]
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       if (tools.length > 0) return tools;
     }
   }
@@ -48,91 +51,116 @@ function camelizeKeys(obj: Record<string, unknown>): Record<string, unknown> {
 const TomlSchema = z.object({
   vault_root: z.string({ required_error: "config: vault_root is required" }),
   junco_subdir: z.string().default("Junco"),
-  pi: z.object({
-    model_id: z.string().default("local/my-model"),
-    extra_args: z.array(z.string()).optional(),
-    commit_leftovers: z.boolean().default(false),
-  }).default({}),
-  oMLX: z.object({
-    url: z.string().default("http://127.0.0.1:1234/v1"),
-    api_key: z.string().default("1234"),
-  }).default({}),
+  pi: z
+    .object({
+      model_id: z.string().default("local/my-model"),
+      extra_args: z.array(z.string()).optional(),
+      commit_leftovers: z.boolean().default(false),
+    })
+    .default({}),
+  oMLX: z
+    .object({
+      url: z.string().default("http://127.0.0.1:1234/v1"),
+      api_key: z.string().default("1234"),
+    })
+    .default({}),
   // The model + inference provider. Every field is optional: omitted fields
   // fall back to the legacy [pi].model_id / [oMLX] keys (id/base_url/api_key) or
   // to the tuned defaults below (which reproduce junco's previously-hardcoded
   // values). Set `models_json` to load the provider+model from a Pi models.json
   // instead of the inline fields.
-  model: z.object({
-    id: z.string().optional(),
-    models_json: z.string().optional(),
-    api: z.string().optional(),
-    base_url: z.string().optional(),
-    api_key: z.string().optional(),
-    reasoning: z.boolean().optional(),
-    input: z.array(z.string()).optional(),
-    context_window: z.number().optional(),
-    max_tokens: z.number().optional(),
-    cost: z.object({
-      input: z.number(),
-      output: z.number(),
-      cache_read: z.number(),
-      cache_write: z.number(),
-    }).partial().optional(),
-    thinking_level: z.string().optional(),
-    // Open record so any present/future Pi compat key passes through. Keys are
-    // snake_case in TOML and camelCased before reaching the SDK.
-    compat: z.record(z.unknown()).optional(),
-  }).default({}),
-  worker: z.object({
-    default_timeout_minutes: z.number().default(30),
-    poll_interval_seconds: z.number().default(15),
-    startup_poll_seconds: z.number().default(30),
-    startup_wait: z.boolean().default(true),
-  }).default({}),
+  model: z
+    .object({
+      id: z.string().optional(),
+      models_json: z.string().optional(),
+      api: z.string().optional(),
+      base_url: z.string().optional(),
+      api_key: z.string().optional(),
+      reasoning: z.boolean().optional(),
+      input: z.array(z.string()).optional(),
+      context_window: z.number().optional(),
+      max_tokens: z.number().optional(),
+      cost: z
+        .object({
+          input: z.number(),
+          output: z.number(),
+          cache_read: z.number(),
+          cache_write: z.number(),
+        })
+        .partial()
+        .optional(),
+      thinking_level: z.string().optional(),
+      // Open record so any present/future Pi compat key passes through. Keys are
+      // snake_case in TOML and camelCased before reaching the SDK.
+      compat: z.record(z.unknown()).optional(),
+    })
+    .default({}),
+  worker: z
+    .object({
+      default_timeout_minutes: z.number().default(30),
+      poll_interval_seconds: z.number().default(15),
+      startup_poll_seconds: z.number().default(30),
+      startup_wait: z.boolean().default(true),
+    })
+    .default({}),
   // Loop-guard supervisor knobs. Python defaults: enabled false; here we
   // default enabled TRUE for the in-process agent run (M2). The numeric
   // defaults match the Python worker (budget_per_kind 1, escalation_window 3,
   // output_budget_per_turn 12000, output_budget_post_commit 24000).
-  supervisor: z.object({
-    enabled: z.boolean().default(true),
-    budget_per_kind: z.number().default(1),
-    escalation_window_turns: z.number().default(3),
-    output_budget_per_turn: z.number().default(12000),
-    output_budget_post_commit: z.number().default(24000),
-  }).default({}),
-  git: z.object({
-    git_bin: z.string().default("git"),
-    gh_bin: z.string().default("gh"),
-    default_base_branch: z.string().default("main"),
-    branch_prefix: z.string().default("junco/"),
-    worktree_root: z.string().default("~/junco/worktrees"),
-    remove_worktree_on_success: z.boolean().default(true),
-  }).default({}),
-  pr: z.object({
-    draft_by_default: z.boolean().default(true),
-    default_labels: z.array(z.string()).default([]),
-  }).default({}),
-  verify: z.object({
-    enabled: z.boolean().default(true),
-    command_timeout: z.number().default(60),
-    block_on_fail: z.boolean().default(false),
-  }).default({}),
-  critic: z.object({
-    enabled: z.boolean().default(true),
-    max_retries: z.number().default(1),
-    thinking: z.string().default("minimal"),
-  }).default({}),
-  plan_lint: z.object({
-    enabled: z.boolean().default(true),
-    block_on_error: z.boolean().default(true),
-    check_labels: z.boolean().default(true),
-  }).default({}),
-  observability: z.object({
-    health_enabled: z.boolean().default(true),
-    health_host: z.string().default("127.0.0.1"),
-    health_port: z.number().default(8787),
-    log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  }).default({}),
+  supervisor: z
+    .object({
+      enabled: z.boolean().default(true),
+      budget_per_kind: z.number().default(1),
+      escalation_window_turns: z.number().default(3),
+      output_budget_per_turn: z.number().default(12000),
+      output_budget_post_commit: z.number().default(24000),
+    })
+    .default({}),
+  git: z
+    .object({
+      git_bin: z.string().default("git"),
+      gh_bin: z.string().default("gh"),
+      default_base_branch: z.string().default("main"),
+      branch_prefix: z.string().default("junco/"),
+      worktree_root: z.string().default("~/junco/worktrees"),
+      remove_worktree_on_success: z.boolean().default(true),
+    })
+    .default({}),
+  pr: z
+    .object({
+      draft_by_default: z.boolean().default(true),
+      default_labels: z.array(z.string()).default([]),
+    })
+    .default({}),
+  verify: z
+    .object({
+      enabled: z.boolean().default(true),
+      command_timeout: z.number().default(60),
+      block_on_fail: z.boolean().default(false),
+    })
+    .default({}),
+  critic: z
+    .object({
+      enabled: z.boolean().default(true),
+      max_retries: z.number().default(1),
+      thinking: z.string().default("minimal"),
+    })
+    .default({}),
+  plan_lint: z
+    .object({
+      enabled: z.boolean().default(true),
+      block_on_error: z.boolean().default(true),
+      check_labels: z.boolean().default(true),
+    })
+    .default({}),
+  observability: z
+    .object({
+      health_enabled: z.boolean().default(true),
+      health_host: z.string().default("127.0.0.1"),
+      health_port: z.number().default(8787),
+      log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
+    })
+    .default({}),
 });
 
 export function loadConfig(path: string): Config {

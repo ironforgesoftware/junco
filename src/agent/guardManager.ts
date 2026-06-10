@@ -72,8 +72,7 @@ export class GuardManager {
     this.thinkingRepGuard = new RepetitionGuard();
     this.toolLoopGuard = new ToolCallLoopGuard();
     this.toolErrorLoopGuard = new ToolErrorLoopGuard();
-    this.outputBudgetPerTurn =
-      opts.outputBudgetPerTurn ?? DEFAULT_OUTPUT_BUDGET_PER_TURN;
+    this.outputBudgetPerTurn = opts.outputBudgetPerTurn ?? DEFAULT_OUTPUT_BUDGET_PER_TURN;
     // 0 disables the output-budget guard entirely — keep it null rather than a
     // dead object, so the "disabled" state is structural (no budget can leak
     // back in if a future caller drops the per-turn gate).

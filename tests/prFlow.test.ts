@@ -102,9 +102,15 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
     vaultRoot: h.root,
     juncoSubdir: "Junco",
     model: {
-      id: "test/model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+      id: "test/model",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "test",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
@@ -218,7 +224,10 @@ function criticFactory(verdictLine: string): () => Promise<AgentSessionLike> {
         });
         listener?.({
           type: "turn_end",
-          message: { stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 } },
+          message: {
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+          },
         });
         listener?.({ type: "agent_end", messages: [], willRetry: false });
       },
@@ -262,7 +271,15 @@ describe("runPrFlow", () => {
     expect(text).toContain("pushed: true");
     expect(text).toContain("branch: junco/happy");
     // The branch landed on the remote.
-    const remoteBranches = run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/happy"]);
+    const remoteBranches = run([
+      "git",
+      "-C",
+      h.work,
+      "ls-remote",
+      "--heads",
+      "origin",
+      "junco/happy",
+    ]);
     expect(remoteBranches).toContain("junco/happy");
   });
 
@@ -285,7 +302,15 @@ describe("runPrFlow", () => {
     expect(text).toContain("status: completed_no_changes");
     expect(text).toContain("pushed: false");
     // No branch pushed.
-    const remoteBranches = run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/noop"]);
+    const remoteBranches = run([
+      "git",
+      "-C",
+      h.work,
+      "ls-remote",
+      "--heads",
+      "origin",
+      "junco/noop",
+    ]);
     expect(remoteBranches.trim()).toBe("");
   });
 
@@ -338,7 +363,11 @@ Make a change.
 exit 1
 \`\`\`
 `;
-    const { task, path } = makeTicket(h, "verify.md", `---\nid: verify\nrepo: ${h.work}\n---\n${body}`);
+    const { task, path } = makeTicket(
+      h,
+      "verify.md",
+      `---\nid: verify\nrepo: ${h.work}\n---\n${body}`,
+    );
     const ctx = ctxFor(cfg, task);
 
     const dst = await runPrFlow(cfg, task, path, ctx, {
@@ -351,7 +380,15 @@ exit 1
     expect(text).toContain("status: failed");
     expect(text).toContain("verification gate blocked push");
     // No branch pushed.
-    const remoteBranches = run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/verify"]);
+    const remoteBranches = run([
+      "git",
+      "-C",
+      h.work,
+      "ls-remote",
+      "--heads",
+      "origin",
+      "junco/verify",
+    ]);
     expect(remoteBranches.trim()).toBe("");
   });
 

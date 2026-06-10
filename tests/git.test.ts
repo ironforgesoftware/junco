@@ -3,15 +3,8 @@
  * Written FIRST (TDD) — these fail until git.ts is implemented.
  */
 
-import { describe, it, expect, vi } from "vitest";
-import {
-  GitOpError,
-  runCmd,
-  isNetworkError,
-  runWithRetry,
-  git,
-  gh,
-} from "../src/git.js";
+import { describe, it, expect } from "vitest";
+import { GitOpError, runCmd, isNetworkError, runWithRetry, git, gh } from "../src/git.js";
 
 // ---------------------------------------------------------------------------
 // GitOpError
@@ -67,26 +60,19 @@ describe("runCmd", () => {
   });
 
   it("resolves (no throw) on non-zero exit when check=false", async () => {
-    const result = await runCmd(
-      ["node", "-e", "process.stderr.write('boom'); process.exit(3)"],
-      { check: false },
-    );
+    const result = await runCmd(["node", "-e", "process.stderr.write('boom'); process.exit(3)"], {
+      check: false,
+    });
     expect(result.code).toBe(3);
     expect(result.stderr).toBe("boom");
   });
 
   it("throws GitOpError on timeout and includes 'timed out' in message", async () => {
     await expect(
-      runCmd(
-        ["node", "-e", "setTimeout(() => {}, 60000)"],
-        { timeoutMs: 100 },
-      ),
+      runCmd(["node", "-e", "setTimeout(() => {}, 60000)"], { timeoutMs: 100 }),
     ).rejects.toMatchObject({ name: "GitOpError" });
     await expect(
-      runCmd(
-        ["node", "-e", "setTimeout(() => {}, 60000)"],
-        { timeoutMs: 100 },
-      ),
+      runCmd(["node", "-e", "setTimeout(() => {}, 60000)"], { timeoutMs: 100 }),
     ).rejects.toThrow(/timed out/i);
   });
 });
@@ -244,10 +230,7 @@ describe("runWithRetry", () => {
 
 describe("git", () => {
   it("uses cfg.gitBin as argv[0] and resolves stdout", async () => {
-    const result = await git(
-      { gitBin: "node" },
-      ["-e", "process.stdout.write('x')"],
-    );
+    const result = await git({ gitBin: "node" }, ["-e", "process.stdout.write('x')"]);
     expect(result.stdout).toBe("x");
     expect(result.code).toBe(0);
   });
@@ -255,31 +238,24 @@ describe("git", () => {
   it("retries network errors when retryNetwork=true", async () => {
     // We can't easily make a real git call fail with network errors in tests,
     // so we verify the retryNetwork path doesn't blow up on success.
-    const result = await git(
-      { gitBin: "node" },
-      ["-e", "process.stdout.write('retry-ok')"],
-      { retryNetwork: true },
-    );
+    const result = await git({ gitBin: "node" }, ["-e", "process.stdout.write('retry-ok')"], {
+      retryNetwork: true,
+    });
     expect(result.stdout).toBe("retry-ok");
   });
 });
 
 describe("gh", () => {
   it("uses cfg.ghBin as argv[0] and resolves stdout", async () => {
-    const result = await gh(
-      { ghBin: "node" },
-      ["-e", "process.stdout.write('y')"],
-    );
+    const result = await gh({ ghBin: "node" }, ["-e", "process.stdout.write('y')"]);
     expect(result.stdout).toBe("y");
     expect(result.code).toBe(0);
   });
 
   it("retryNetwork path works on success", async () => {
-    const result = await gh(
-      { ghBin: "node" },
-      ["-e", "process.stdout.write('gh-retry-ok')"],
-      { retryNetwork: true },
-    );
+    const result = await gh({ ghBin: "node" }, ["-e", "process.stdout.write('gh-retry-ok')"], {
+      retryNetwork: true,
+    });
     expect(result.stdout).toBe("gh-retry-ok");
   });
 });

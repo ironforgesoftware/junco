@@ -102,11 +102,10 @@ export class Supervisor {
       if (record.kind === evt.kind) {
         return {
           kind: "kill",
-          reason: (
+          reason:
             `nudge ignored — ${evt.kind} re-tripped within ` +
             `${escalationWindowTurns} turns of prior nudge ` +
-            `(at turn ${record.turnIndex}, now turn ${evt.turnIndex})`
-          ),
+            `(at turn ${record.turnIndex}, now turn ${evt.turnIndex})`,
         };
       }
     }

@@ -6,10 +6,7 @@ import { describe, it, expect } from "vitest";
 import { Supervisor } from "../src/agent/supervisor.js";
 import type { GuardEvent, SupervisorConfig } from "../src/agent/supervisor.js";
 
-function makeEvt(
-  kind: GuardEvent["kind"],
-  turnIndex: number = 0,
-): GuardEvent {
+function makeEvt(kind: GuardEvent["kind"], turnIndex: number = 0): GuardEvent {
   return {
     kind,
     detail: "test trip",
@@ -101,7 +98,7 @@ describe("Supervisor.decide()", () => {
     // nudge at turn 0, then trip at turn 4: cutoff = 4-3 = 1; record at 0 is NOT > 1, so it's pruned
     // The second trip hits budget logic (not escalation) → kill with budget exhausted
     const sup = new Supervisor();
-    sup.decide(makeEvt("tool_call_loop", 0));  // nudge at turn 0
+    sup.decide(makeEvt("tool_call_loop", 0)); // nudge at turn 0
     const action = sup.decide(makeEvt("tool_call_loop", 4)); // turn 4: cutoff=1, record@0 pruned
     expect(action.kind).toBe("kill");
     expect(action.reason).toContain("nudge budget exhausted for tool_call_loop");

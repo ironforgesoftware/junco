@@ -29,7 +29,13 @@ describe("runAgent", () => {
   it("runs the prompt and maps events to a RunResult", async () => {
     const events = [
       { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } },
-      { type: "turn_end", message: { stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 } } },
+      {
+        type: "turn_end",
+        message: {
+          stopReason: "stop",
+          usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+        },
+      },
       { type: "agent_end", messages: [], willRetry: false },
     ];
     const session = fakeSession(events);
@@ -202,10 +208,16 @@ describe("apiBaseUrl", () => {
 
 describe("splitModelId", () => {
   it("splits on the first slash into provider + id", () => {
-    expect(splitModelId("omlx/Qwen3.6-27B-oQ8-mtp")).toEqual({ provider: "omlx", modelId: "Qwen3.6-27B-oQ8-mtp" });
+    expect(splitModelId("omlx/Qwen3.6-27B-oQ8-mtp")).toEqual({
+      provider: "omlx",
+      modelId: "Qwen3.6-27B-oQ8-mtp",
+    });
   });
   it("preserves slashes in the model id (multi-segment)", () => {
-    expect(splitModelId("openrouter/anthropic/claude")).toEqual({ provider: "openrouter", modelId: "anthropic/claude" });
+    expect(splitModelId("openrouter/anthropic/claude")).toEqual({
+      provider: "openrouter",
+      modelId: "anthropic/claude",
+    });
   });
   it("defaults provider to omlx when there is no slash", () => {
     expect(splitModelId("bare-model")).toEqual({ provider: "omlx", modelId: "bare-model" });

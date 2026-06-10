@@ -152,8 +152,7 @@ export async function mainLoop(
   const runOnceFn = deps.runOnceFn ?? ((c: Config) => runOnce(c));
   const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
   const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
-  const waitForOmlxFn =
-    deps.waitForOmlxFn ?? ((c: Config, s: StopFlagLike) => waitForOmlx(c, s));
+  const waitForOmlxFn = deps.waitForOmlxFn ?? ((c: Config, s: StopFlagLike) => waitForOmlx(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;

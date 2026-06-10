@@ -182,7 +182,9 @@ export function makePiSessionFactory(
       model = modelRegistry.find(provider, modelId);
       if (!model) {
         log.warn("model not in models.json; using inline [model] config", {
-          modelsJson: cfg.model.modelsJson, provider, modelId,
+          modelsJson: cfg.model.modelsJson,
+          provider,
+          modelId,
         });
       }
     }
@@ -213,4 +215,3 @@ export function makePiSessionFactory(
     return session;
   };
 }
-

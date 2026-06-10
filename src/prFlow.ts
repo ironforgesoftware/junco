@@ -19,11 +19,7 @@ import type { RepoContext } from "./repoContext.js";
 import { isAmend } from "./repoContext.js";
 import { GitOpError, git } from "./git.js";
 import { validateRepoContext, resolveAmendTarget, type AmendTarget } from "./repo.js";
-import {
-  prepareWorktree,
-  cleanupWorktree,
-  currentHeadSha,
-} from "./worktree.js";
+import { prepareWorktree, cleanupWorktree, currentHeadSha } from "./worktree.js";
 import {
   countNewCommits,
   listNewCommits,
@@ -33,15 +29,11 @@ import {
   derivePrTitle,
   type Commit,
 } from "./pr.js";
-import { lintTicket, LabelCache, formatViolations } from "./planLint.js";
+import { lintTicket, LabelCache } from "./planLint.js";
 import { runSpecVerification, type VerificationResult } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
-import {
-  runAgent,
-  makePiSessionFactory,
-  type AgentSessionLike,
-} from "./agent/session.js";
+import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
 import { GuardManager } from "./agent/guardManager.js";
 import { finalizePr, type TerminalDirs } from "./finalize.js";
 import { queuePaths } from "./config.js";
@@ -172,14 +164,18 @@ export function buildPrBody(
     const failedLines: string[] = [];
     for (const { preview, exitCode, output } of verification.failedOutputs.slice(0, 5)) {
       const snip = output.trim().slice(0, 300);
-      failedLines.push(`  - \`${preview}\` → exit ${exitCode}\n    \`\`\`\n    ${snip}\n    \`\`\``);
+      failedLines.push(
+        `  - \`${preview}\` → exit ${exitCode}\n    \`\`\`\n    ${snip}\n    \`\`\``,
+      );
     }
     parts.push(
       `> ⚠️ **Spec verification: ${verification.blocksPassed}/${verification.blocksRun} checks passed.** Failures:\n` +
         failedLines.join("\n"),
     );
   } else if (verification && verification.blocksRun > 0) {
-    parts.push(`> ✅ **Spec verification:** ${verification.blocksPassed}/${verification.blocksRun} checks passed.`);
+    parts.push(
+      `> ✅ **Spec verification:** ${verification.blocksPassed}/${verification.blocksRun} checks passed.`,
+    );
   }
 
   const body = task.body.trim();
@@ -190,8 +186,7 @@ export function buildPrBody(
 
   if (prOutcome.commits.length > 0) {
     parts.push(
-      "## Commits\n\n" +
-        prOutcome.commits.map((c) => `- \`${c.sha}\` ${c.subject}`).join("\n"),
+      "## Commits\n\n" + prOutcome.commits.map((c) => `- \`${c.sha}\` ${c.subject}`).join("\n"),
     );
   }
 
@@ -303,7 +298,7 @@ export async function runPrFlow(
       })
     : undefined;
   const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(cfg, wtPath);
-  let result = await runAgent({
+  const result = await runAgent({
     body: prompt,
     cwd: wtPath,
     timeoutMs: task.timeoutSeconds * 1000,
@@ -359,7 +354,9 @@ export async function runPrFlow(
         return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError });
       }
       prOutcome.statusOverride = "completed_no_changes";
-      log.info(`no-changes outcome for ${claimedPath}; skipping ${isAmend(ctx) ? "PR-update" : "PR"}`);
+      log.info(
+        `no-changes outcome for ${claimedPath}; skipping ${isAmend(ctx) ? "PR-update" : "PR"}`,
+      );
       if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
       return finalizePr(claimedPath, result, prOutcome, { dirs });
     }
@@ -370,7 +367,11 @@ export async function runPrFlow(
       // Record the skip as metadata (parity with worker.py PrOutcome.critic =
       // CriticResult(status="skipped", ...)). The buildPrBody banner only fires
       // on pass/missing, so this never surfaces in the PR body — metadata only.
-      prOutcome.critic = { status: "skipped", findings: "aborted-by-repetition session", rawOutput: "" };
+      prOutcome.critic = {
+        status: "skipped",
+        findings: "aborted-by-repetition session",
+        rawOutput: "",
+      };
     }
     if (!skipPostSessionReview) {
       prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
@@ -386,10 +387,14 @@ export async function runPrFlow(
         criticSessionFactory: deps.criticSessionFactory,
       });
       prOutcome.critic = critic;
-      log.info(`critic: ${critic.status}${critic.findings ? ` (${critic.findings.slice(0, 120)})` : ""}`);
+      log.info(
+        `critic: ${critic.status}${critic.findings ? ` (${critic.findings.slice(0, 120)})` : ""}`,
+      );
 
       if (critic.status === "missing" && cfg.criticMaxRetries > 0 && !isAmend(ctx)) {
-        log.info(`critic: MISSING ${critic.findings.slice(0, 120)} — re-dispatching one corrective worker turn`);
+        log.info(
+          `critic: MISSING ${critic.findings.slice(0, 120)} — re-dispatching one corrective worker turn`,
+        );
         const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(cfg, wtPath);
         const corrective = await runAgent({
           body: buildCorrectivePrompt(task, critic.findings),

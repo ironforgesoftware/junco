@@ -5,11 +5,7 @@ import { describe, it, expect } from "vitest";
 import { buildNudgeForGuardEvent } from "../src/agent/nudges.js";
 import type { GuardEvent } from "../src/agent/supervisor.js";
 
-function makeEvt(
-  kind: GuardEvent["kind"],
-  lastName: string | null,
-  lastCount: number,
-): GuardEvent {
+function makeEvt(kind: GuardEvent["kind"], lastName: string | null, lastCount: number): GuardEvent {
   return {
     kind,
     detail: "test",

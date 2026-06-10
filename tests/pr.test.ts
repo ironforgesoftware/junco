@@ -7,14 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import {
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -83,9 +76,15 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {
-      id: "test/model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+      id: "test/model",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "test",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
@@ -125,10 +124,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
   };
 }
 
-function makeContext(
-  work: string,
-  overrides: Partial<RepoContext> = {},
-): RepoContext {
+function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoContext {
   return {
     repo: work,
     baseBranch: "main",
@@ -284,7 +280,7 @@ describe("commitLeftovers", () => {
 
 describe("pushBranch", () => {
   it("pushes a branch to the bare remote", async () => {
-    const { work, remote } = setupGitHarness(tmpRoot);
+    const { work } = setupGitHarness(tmpRoot);
     const cfg = makeConfig(work, tmpRoot);
 
     // Create a new branch with a commit
@@ -475,9 +471,9 @@ describe("openPullRequest", () => {
     process.env.FAKE_GH_OUTPUT = "not a url at all";
     process.env.FAKE_GH_EXIT_CODE = "0";
     try {
-      await expect(
-        openPullRequest(cfg, ctx, "owner/repo", "No URL PR", bodyFile),
-      ).rejects.toThrow(GitOpError);
+      await expect(openPullRequest(cfg, ctx, "owner/repo", "No URL PR", bodyFile)).rejects.toThrow(
+        GitOpError,
+      );
     } finally {
       delete process.env.FAKE_GH_OUTPUT;
       delete process.env.FAKE_GH_EXIT_CODE;
@@ -499,9 +495,9 @@ describe("openPullRequest", () => {
     delete process.env.FAKE_GH_OUTPUT;
     process.env.FAKE_GH_EXIT_CODE = "0";
     try {
-      await expect(
-        openPullRequest(cfg, ctx, "owner/repo", "Empty PR", bodyFile),
-      ).rejects.toThrow(GitOpError);
+      await expect(openPullRequest(cfg, ctx, "owner/repo", "Empty PR", bodyFile)).rejects.toThrow(
+        GitOpError,
+      );
     } finally {
       delete process.env.FAKE_GH_EXIT_CODE;
     }

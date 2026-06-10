@@ -13,7 +13,8 @@ import {
   mkdtempSync,
   rmSync,
   symlinkSync,
-  readdirSync,
+  writeFileSync,
+  readlinkSync,
   lstatSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -70,7 +71,7 @@ function setupGitHarness(tmpRoot: string): {
 
   // Seed a commit
   const readmePath = join(work, "README.md");
-  require("node:fs").writeFileSync(readmePath, "seed\n");
+  writeFileSync(readmePath, "seed\n");
   run(["git", "-C", work, "add", "README.md"]);
   run(["git", "-C", work, "commit", "-m", "seed"]);
 
@@ -86,9 +87,15 @@ function makeConfig(work: string, wtsRoot: string): Config {
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {
-      id: "test/model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+      id: "test/model",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "test",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
@@ -128,10 +135,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
   };
 }
 
-function makeContext(
-  work: string,
-  overrides: Partial<RepoContext> = {},
-): RepoContext {
+function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoContext {
   return {
     repo: work,
     baseBranch: "main",
@@ -271,7 +275,7 @@ describe("linkNodeModules", () => {
     linkNodeModules(repoPath, wtPath);
 
     // Symlink still points to otherDir, not repoPath/node_modules
-    const resolved = require("node:fs").readlinkSync(join(wtPath, "node_modules"));
+    const resolved = readlinkSync(join(wtPath, "node_modules"));
     expect(resolved).toBe(otherDir);
   });
 });
@@ -333,11 +337,8 @@ describe("prepareWorktree — fresh mode", () => {
     const wtPath2 = await prepareWorktree(cfg, ctx2, "stale-task");
     expect(existsSync(wtPath2)).toBe(true);
 
-    // The old worktree should be renamed aside or removed
-    const entries = readdirSync(wtsRoot);
-    const hasBackup = entries.some((e) => e.startsWith("stale-task.old-"));
-    // Either it was cleanly removed (no backup) or renamed to .old-<ts>
-    // Either way, the new worktree exists
+    // The old worktree was either cleanly removed or renamed aside to
+    // .old-<ts>; either way, the new worktree exists.
     expect(existsSync(wtPath2)).toBe(true);
   }, 30000);
 
@@ -379,9 +380,7 @@ describe("cleanupWorktree", () => {
     const cfg = makeConfig(work, wtsRoot);
     const ctx = makeContext(work);
 
-    await expect(
-      cleanupWorktree(cfg, ctx, join(wtsRoot, "does-not-exist")),
-    ).resolves.not.toThrow();
+    await expect(cleanupWorktree(cfg, ctx, join(wtsRoot, "does-not-exist"))).resolves.not.toThrow();
   }, 30000);
 });
 
@@ -419,9 +418,7 @@ describe("pruneStaleWorktrees", () => {
 
   it("is a no-op if worktreeRoot does not exist", () => {
     // Should not throw
-    expect(() =>
-      pruneStaleWorktrees(join(tmpRoot, "nonexistent"), 3 * 86400),
-    ).not.toThrow();
+    expect(() => pruneStaleWorktrees(join(tmpRoot, "nonexistent"), 3 * 86400)).not.toThrow();
   });
 
   it("ignores non-.old-<digits> entries", () => {

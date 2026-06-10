@@ -6,40 +6,82 @@ import { runOnce } from "../src/runOnce.js";
 import type { Config } from "../src/types.js";
 
 function cfg(root: string): Config {
-  return { vaultRoot: root, juncoSubdir: "Junco", model: {
-      id: "m", modelsJson: null, api: "openai-completions",
-      baseUrl: "u", apiKey: "k", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+  return {
+    vaultRoot: root,
+    juncoSubdir: "Junco",
+    model: {
+      id: "m",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "u",
+      apiKey: "k",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
-    }, tools: ["read"], defaultTimeoutMinutes: 1,
-           pollIntervalSeconds: 15, startupPollSeconds: 30, startupWait: true,
-           supervisorEnabled: true, supervisorBudgetPerKind: 1, supervisorEscalationWindow: 3,
-           supervisorOutputBudgetPerTurn: 12000, supervisorOutputBudgetPostCommit: 24000,
-           gitBin: "git", ghBin: "gh",
-           defaultBaseBranch: "main", branchPrefix: "junco/",
-           worktreeRoot: "/tmp/worktrees", removeWorktreeOnSuccess: true,
-           draftByDefault: true, defaultLabels: [],
-           verifyEnabled: true, verifyCommandTimeout: 60, verifyBlockOnFail: false,
-           criticEnabled: true, criticMaxRetries: 1, criticThinking: "minimal",
-           planLintEnabled: true, planLintBlockOnError: true, planLintCheckLabels: true,
-           commitLeftoversEnabled: false,
-           healthEnabled: false, healthHost: "127.0.0.1", healthPort: 8787, logLevel: "info" };
+    },
+    tools: ["read"],
+    defaultTimeoutMinutes: 1,
+    pollIntervalSeconds: 15,
+    startupPollSeconds: 30,
+    startupWait: true,
+    supervisorEnabled: true,
+    supervisorBudgetPerKind: 1,
+    supervisorEscalationWindow: 3,
+    supervisorOutputBudgetPerTurn: 12000,
+    supervisorOutputBudgetPostCommit: 24000,
+    gitBin: "git",
+    ghBin: "gh",
+    defaultBaseBranch: "main",
+    branchPrefix: "junco/",
+    worktreeRoot: "/tmp/worktrees",
+    removeWorktreeOnSuccess: true,
+    draftByDefault: true,
+    defaultLabels: [],
+    verifyEnabled: true,
+    verifyCommandTimeout: 60,
+    verifyBlockOnFail: false,
+    criticEnabled: true,
+    criticMaxRetries: 1,
+    criticThinking: "minimal",
+    planLintEnabled: true,
+    planLintBlockOnError: true,
+    planLintCheckLabels: true,
+    commitLeftoversEnabled: false,
+    healthEnabled: false,
+    healthHost: "127.0.0.1",
+    healthPort: 8787,
+    logLevel: "info",
+  };
 }
 
 function fakeFactory() {
   return async () => ({
     subscribe(l: (e: any) => void) {
       queueMicrotask(() => {
-        l({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "reply!" } });
-        l({ type: "turn_end", message: { stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 } } });
+        l({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "reply!" },
+        });
+        l({
+          type: "turn_end",
+          message: {
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+          },
+        });
         l({ type: "agent_end", messages: [], willRetry: false });
       });
       return () => {};
     },
-    async prompt() { await new Promise((r) => setTimeout(r, 5)); },
-    dispose() {}, abort: async () => {},
+    async prompt() {
+      await new Promise((r) => setTimeout(r, 5));
+    },
+    dispose() {},
+    abort: async () => {},
   });
 }
 
@@ -47,7 +89,9 @@ describe("runOnce", () => {
   it("processes a Q&A ticket to done/ with the reply", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
-    ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
     writeFileSync(join(j, "inbox", "q1.md"), "---\nid: q1\n---\n# Q\nask\n", "utf8");
 
     const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() });
@@ -60,16 +104,24 @@ describe("runOnce", () => {
 
   it("returns false when the inbox is empty", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
-    ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(root, "Junco", d), { recursive: true }));
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(root, "Junco", d), { recursive: true }),
+    );
     expect(await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() })).toBe(false);
   });
 
   it("claims a PR-flow ticket and routes a bad repo to failed/", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
-    ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
     // repo path does not exist → validateRepoContext throws → finalize to failed/.
-    writeFileSync(join(j, "inbox", "pr.md"), "---\nid: pr\nrepo: /tmp/does-not-exist-junco\n---\n# PR\n", "utf8");
+    writeFileSync(
+      join(j, "inbox", "pr.md"),
+      "---\nid: pr\nrepo: /tmp/does-not-exist-junco\n---\n# PR\n",
+      "utf8",
+    );
     const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() });
     expect(handled).toBe(true);
     // claimed + finalized to failed/ (not left in inbox)
@@ -82,7 +134,9 @@ describe("runOnce", () => {
   it("skips an unreadable ticket but still processes a healthy one", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
-    ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
     // A directory named like a ticket makes readFileSync throw (EISDIR) → must be skipped.
     mkdirSync(join(j, "inbox", "bad.md"));
     writeFileSync(join(j, "inbox", "good.md"), "---\nid: good\n---\n# Q\nask\n", "utf8");
@@ -97,11 +151,16 @@ describe("runOnce", () => {
   it("gives the Q&A session a read-only tool subset", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
-    ["inbox", "processing", "done", "failed"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
     writeFileSync(join(j, "inbox", "q1.md"), "---\nid: q1\n---\n# Q\nask\n", "utf8");
 
     let receivedTools: string[] | undefined;
-    const c: Config = { ...cfg(root), tools: ["read", "write", "bash", "edit", "grep", "find", "ls"] };
+    const c: Config = {
+      ...cfg(root),
+      tools: ["read", "write", "bash", "edit", "grep", "find", "ls"],
+    };
     await runOnce(c, {
       sessionFactoryFor: (passedCfg) => {
         receivedTools = passedCfg.tools;

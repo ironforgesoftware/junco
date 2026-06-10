@@ -37,11 +37,10 @@ export async function countNewCommits(
   wtPath: string,
   sinceRef: string,
 ): Promise<number> {
-  const result = await git(
-    cfg,
-    ["rev-list", "--count", `${sinceRef}..HEAD`],
-    { cwd: wtPath, check: false },
-  );
+  const result = await git(cfg, ["rev-list", "--count", `${sinceRef}..HEAD`], {
+    cwd: wtPath,
+    check: false,
+  });
   if (result.code !== 0) return 0;
   return parseInt(result.stdout.trim() || "0", 10);
 }
@@ -63,11 +62,10 @@ export async function listNewCommits(
   wtPath: string,
   sinceRef: string,
 ): Promise<Commit[]> {
-  const result = await git(
-    cfg,
-    ["log", "--format=%h%x09%s", `${sinceRef}..HEAD`],
-    { cwd: wtPath, check: false },
-  );
+  const result = await git(cfg, ["log", "--format=%h%x09%s", `${sinceRef}..HEAD`], {
+    cwd: wtPath,
+    check: false,
+  });
   const commits: Commit[] = [];
   for (const line of result.stdout.split("\n")) {
     if (line.includes("\t")) {
@@ -96,11 +94,9 @@ export async function commitLeftovers(
   message: string,
 ): Promise<void> {
   await git(cfg, ["add", "-A"], { cwd: wtPath });
-  await git(
-    cfg,
-    ["-c", "commit.gpgsign=false", "commit", "-m", message, "--allow-empty-message"],
-    { cwd: wtPath },
-  );
+  await git(cfg, ["-c", "commit.gpgsign=false", "commit", "-m", message, "--allow-empty-message"], {
+    cwd: wtPath,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -117,11 +113,11 @@ export async function pushBranch(
   wtPath: string,
   branch: string,
 ): Promise<void> {
-  await git(
-    cfg,
-    ["push", "--set-upstream", "origin", branch],
-    { cwd: wtPath, timeoutMs: 180_000, retryNetwork: true },
-  );
+  await git(cfg, ["push", "--set-upstream", "origin", branch], {
+    cwd: wtPath,
+    timeoutMs: 180_000,
+    retryNetwork: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -149,12 +145,18 @@ export async function openPullRequest(
   bodyFile: string,
 ): Promise<string> {
   const argv: string[] = [
-    "pr", "create",
-    "--repo", nwo,
-    "--base", ctx.baseBranch,
-    "--head", ctx.branchName,
-    "--title", title,
-    "--body-file", bodyFile,
+    "pr",
+    "create",
+    "--repo",
+    nwo,
+    "--base",
+    ctx.baseBranch,
+    "--head",
+    ctx.branchName,
+    "--title",
+    title,
+    "--body-file",
+    bodyFile,
   ];
 
   if (ctx.draft) {
@@ -169,11 +171,11 @@ export async function openPullRequest(
     argv.push("--reviewer", rv);
   }
 
-  const result = await gh(
-    cfg,
-    argv,
-    { cwd: cfg.worktreeRoot, timeoutMs: 120_000, retryNetwork: true },
-  );
+  const result = await gh(cfg, argv, {
+    cwd: cfg.worktreeRoot,
+    timeoutMs: 120_000,
+    retryNetwork: true,
+  });
 
   // Mirror Python: url = cp.stdout.strip().splitlines()[-1] if cp.stdout.strip() else ""
   const stripped = result.stdout.trim();

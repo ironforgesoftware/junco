@@ -15,13 +15,19 @@ import { inboxPath, submitTicket } from "../src/dispatch.js";
 
 const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
   model: {
-      id: "test-model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
-    },
+    id: "test-model",
+    modelsJson: null,
+    api: "openai-completions",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    apiKey: "test",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 131072,
+    maxTokens: 49152,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    thinkingLevel: "medium",
+    compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  },
   tools: ["read", "bash"],
   defaultTimeoutMinutes: 30,
   pollIntervalSeconds: 15,
@@ -101,7 +107,11 @@ function freshVault(): { cfg: Config; vaultRoot: string } {
 
 afterEach(() => {
   for (const v of tmpVaults) {
-    try { rmSync(v, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(v, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
   tmpVaults = [];
 });
@@ -134,7 +144,7 @@ describe("submitTicket", () => {
   });
 
   it("writes a .md file containing the original content", () => {
-    const { cfg, vaultRoot } = freshVault();
+    const { cfg } = freshVault();
     const dst = submitTicket(cfg, TICKET_WITH_ID, {});
     const content = readFileSync(dst, "utf8");
     expect(content).toBe(TICKET_WITH_ID);
@@ -174,7 +184,7 @@ describe("submitTicket", () => {
   });
 
   it("the written file has a .md extension (daemon's glob would find it)", () => {
-    const { cfg, vaultRoot } = freshVault();
+    const { cfg } = freshVault();
     const dst = submitTicket(cfg, TICKET_WITH_ID, {});
     expect(dst).toMatch(/\.md$/);
     expect(existsSync(dst)).toBe(true);

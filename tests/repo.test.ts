@@ -7,14 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import {
-  existsSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-  chmodSync,
-  mkdirSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -54,7 +47,7 @@ function setupGitHarness(tmpRoot: string): {
   run(["git", "-C", work, "config", "user.name", "CI"]);
   run(["git", "-C", work, "config", "commit.gpgsign", "false"]);
 
-  require("node:fs").writeFileSync(join(work, "README.md"), "seed\n");
+  writeFileSync(join(work, "README.md"), "seed\n");
   run(["git", "-C", work, "add", "README.md"]);
   run(["git", "-C", work, "commit", "-m", "seed"]);
   run(["git", "-C", work, "remote", "add", "origin", remote]);
@@ -104,9 +97,15 @@ function makeConfig(work: string, ghBin: string): Config {
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {
-      id: "test/model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+      id: "test/model",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "test",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
@@ -146,10 +145,7 @@ function makeConfig(work: string, ghBin: string): Config {
   };
 }
 
-function makeContext(
-  work: string,
-  overrides: Partial<RepoContext> = {},
-): RepoContext {
+function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoContext {
   return {
     repo: work,
     baseBranch: "main",
@@ -221,9 +217,7 @@ describe("validateRepoContext — fresh mode", () => {
     const cfg = makeConfig(work, ghScript);
     const ctx = makeContext(work, { branchName: "main", baseBranch: "main" });
 
-    await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(
-      /must differ from base_branch/i,
-    );
+    await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/must differ from base_branch/i);
   }, 15000);
 
   it("throws if base branch does not exist on origin", async () => {
@@ -247,9 +241,7 @@ describe("validateRepoContext — fresh mode", () => {
     run(["git", "-C", work, "push", "-u", "origin", "junco/collision"]);
     run(["git", "-C", work, "checkout", "main"]);
 
-    await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(
-      /already exists on origin/i,
-    );
+    await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/already exists on origin/i);
   }, 15000);
 });
 
@@ -259,8 +251,7 @@ describe("validateRepoContext — fresh mode", () => {
 
 describe("validateRepoContext — amend mode", () => {
   it("mutates ctx.branchName and ctx.baseBranch from PR metadata", async () => {
-    const { work, remote } = setupGitHarness(tmpRoot);
-    const cfg = makeConfig(work, ghScript);
+    const { work } = setupGitHarness(tmpRoot);
 
     // Create and push the feature branch (simulates open PR head on origin)
     run(["git", "-C", work, "checkout", "-b", "feature/amend-branch"]);
@@ -361,9 +352,7 @@ describe("resolveAmendTarget", () => {
 
     try {
       const ctx = makeContext(work, { amendsPr: 5 });
-      await expect(
-        resolveAmendTarget(cfg, ctx, "owner/repo"),
-      ).rejects.toThrow(/CLOSED.*not OPEN/i);
+      await expect(resolveAmendTarget(cfg, ctx, "owner/repo")).rejects.toThrow(/CLOSED.*not OPEN/i);
     } finally {
       delete process.env.FAKE_GH_PR_JSON;
     }
@@ -385,9 +374,7 @@ describe("resolveAmendTarget", () => {
 
     try {
       const ctx = makeContext(work, { amendsPr: 99 });
-      await expect(
-        resolveAmendTarget(cfg, ctx, "owner/repo"),
-      ).rejects.toThrow(/cross-repo|fork/i);
+      await expect(resolveAmendTarget(cfg, ctx, "owner/repo")).rejects.toThrow(/cross-repo|fork/i);
     } finally {
       delete process.env.FAKE_GH_PR_JSON;
     }
@@ -409,9 +396,9 @@ describe("resolveAmendTarget", () => {
 
     try {
       const ctx = makeContext(work, { amendsPr: 1 });
-      await expect(
-        resolveAmendTarget(cfg, ctx, "owner/repo"),
-      ).rejects.toThrow(/metadata incomplete/i);
+      await expect(resolveAmendTarget(cfg, ctx, "owner/repo")).rejects.toThrow(
+        /metadata incomplete/i,
+      );
     } finally {
       delete process.env.FAKE_GH_PR_JSON;
     }

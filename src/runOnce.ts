@@ -39,7 +39,10 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
       try {
         return [parseTicket(p, readFileSync(p, "utf8"), cfg.defaultTimeoutMinutes)];
       } catch (e) {
-        log.warn("skipping unreadable ticket", { path: p, error: e instanceof Error ? e.message : String(e) });
+        log.warn("skipping unreadable ticket", {
+          path: p,
+          error: e instanceof Error ? e.message : String(e),
+        });
         return [];
       }
     })
@@ -100,9 +103,18 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
             outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
           })
         : undefined;
-      const result = await runAgent({ body: next.body, cwd, timeoutMs: next.timeoutSeconds * 1000, createSession: factory, guardManager });
+      const result = await runAgent({
+        body: next.body,
+        cwd,
+        timeoutMs: next.timeoutSeconds * 1000,
+        createSession: factory,
+        guardManager,
+      });
       const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
-      log.info("finalized", { dst, status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed" });
+      log.info("finalized", {
+        dst,
+        status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed",
+      });
       return true;
     } finally {
       metrics.setCurrentTicket(null);

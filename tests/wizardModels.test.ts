@@ -19,7 +19,8 @@ describe("inferProvider", () => {
 
 describe("fetchModels", () => {
   it("parses data[].id and sends Bearer auth to <base>/models", async () => {
-    let seenUrl = "", seenAuth = "";
+    let seenUrl = "",
+      seenAuth = "";
     const fetchFn = (async (url: string, init: RequestInit) => {
       seenUrl = String(url);
       seenAuth = String((init.headers as Record<string, string>).Authorization);
@@ -37,7 +38,9 @@ describe("fetchModels", () => {
   });
 
   it("returns [] when fetch throws", async () => {
-    const fetchFn = (async () => { throw new Error("down"); }) as unknown as typeof fetch;
+    const fetchFn = (async () => {
+      throw new Error("down");
+    }) as unknown as typeof fetch;
     expect(await fetchModels("http://h/v1", "k", { fetchFn })).toEqual([]);
   });
 
@@ -54,10 +57,15 @@ describe("parseModelsJson", () => {
   it("lists provider/model for every entry", () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-mj-"));
     const p = join(dir, "models.json");
-    writeFileSync(p, JSON.stringify({ providers: {
-      omlx: { models: [{ id: "alpha" }, { id: "beta" }] },
-      openai: { models: [{ id: "gpt-x" }] },
-    } }));
+    writeFileSync(
+      p,
+      JSON.stringify({
+        providers: {
+          omlx: { models: [{ id: "alpha" }, { id: "beta" }] },
+          openai: { models: [{ id: "gpt-x" }] },
+        },
+      }),
+    );
     expect(parseModelsJson(p).sort()).toEqual(["omlx/alpha", "omlx/beta", "openai/gpt-x"].sort());
     rmSync(dir, { recursive: true, force: true });
   });

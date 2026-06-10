@@ -34,7 +34,10 @@ function scriptedPrompter(a: { text?: string[]; select?: string[] } = {}): Promp
 
 describe("renderConfigToml — round-trips through loadConfig", () => {
   let dir: string | null = null;
-  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
 
   function parse(toml: string) {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-"));
@@ -45,8 +48,11 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
 
   it("inline mode — queue directly under vault_root (no /Junco)", () => {
     const a: WizardAnswers = {
-      vaultRoot: "/tmp/jv", mode: "inline", modelId: "prov/m",
-      baseUrl: "http://h:1/v1", apiKey: "k",
+      vaultRoot: "/tmp/jv",
+      mode: "inline",
+      modelId: "prov/m",
+      baseUrl: "http://h:1/v1",
+      apiKey: "k",
     };
     const cfg = parse(renderConfigToml(a));
     expect(cfg.model.id).toBe("prov/m");
@@ -59,7 +65,9 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
 
   it("models_json mode", () => {
     const a: WizardAnswers = {
-      vaultRoot: "~/jv", mode: "models_json", modelId: "omlx/x",
+      vaultRoot: "~/jv",
+      mode: "models_json",
+      modelId: "omlx/x",
       modelsJson: "~/.pi/agent/models.json",
     };
     const cfg = parse(renderConfigToml(a));
@@ -69,8 +77,11 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
 
   it("escapes quotes/backslashes in values", () => {
     const a: WizardAnswers = {
-      vaultRoot: '/path/with "quote"', mode: "inline", modelId: "p/m",
-      baseUrl: "http://h/v1", apiKey: "a\\b",
+      vaultRoot: '/path/with "quote"',
+      mode: "inline",
+      modelId: "p/m",
+      baseUrl: "http://h/v1",
+      apiKey: "a\\b",
     };
     const cfg = parse(renderConfigToml(a)); // must not throw on parse
     expect(cfg.model.apiKey).toBe("a\\b");
@@ -80,8 +91,11 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
 describe("defaultAnswers", () => {
   it("→ ~/Junco + neutral model (no personal-stack strings)", () => {
     expect(defaultAnswers()).toEqual({
-      vaultRoot: "~/Junco", mode: "inline", modelId: "local/my-model",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "1234",
+      vaultRoot: "~/Junco",
+      mode: "inline",
+      modelId: "local/my-model",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "1234",
     });
   });
 });
@@ -89,12 +103,16 @@ describe("defaultAnswers", () => {
 describe("collectAnswers", () => {
   it("inline: picks a discovered model, prefixed by the inferred provider", async () => {
     const p = scriptedPrompter({
-      text: ["~/v", "http://127.0.0.1:1234/v1", "secret"], select: ["inline", "m-fast"],
+      text: ["~/v", "http://127.0.0.1:1234/v1", "secret"],
+      select: ["inline", "m-fast"],
     });
     const a = await collectAnswers(p, { fetchModelsFn: async () => ["m-fast", "m-slow"] });
     expect(a).toEqual({
-      vaultRoot: "~/v", mode: "inline", modelId: "local/m-fast",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "secret",
+      vaultRoot: "~/v",
+      mode: "inline",
+      modelId: "local/m-fast",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "secret",
     });
   });
 
@@ -109,22 +127,34 @@ describe("collectAnswers", () => {
 
   it("inline: empty discovery falls straight to a manual prompt, prefixed", async () => {
     const p = scriptedPrompter({
-      text: ["~/v", "https://api.openai.com/v1", "k", "gpt-z"], select: ["inline"],
+      text: ["~/v", "https://api.openai.com/v1", "k", "gpt-z"],
+      select: ["inline"],
     });
     const a = await collectAnswers(p, { fetchModelsFn: async () => [] });
     expect(a.modelId).toBe("openai/gpt-z");
   });
 
   it("models_json: lists file entries", async () => {
-    const p = scriptedPrompter({ text: ["~/v", "~/m.json"], select: ["models_json", "omlx/alpha"] });
+    const p = scriptedPrompter({
+      text: ["~/v", "~/m.json"],
+      select: ["models_json", "omlx/alpha"],
+    });
     const a = await collectAnswers(p, { parseModelsJsonFn: () => ["omlx/alpha", "omlx/beta"] });
-    expect(a).toEqual({ vaultRoot: "~/v", mode: "models_json", modelId: "omlx/alpha", modelsJson: "~/m.json" });
+    expect(a).toEqual({
+      vaultRoot: "~/v",
+      mode: "models_json",
+      modelId: "omlx/alpha",
+      modelsJson: "~/m.json",
+    });
   });
 });
 
 describe("runInitWizard", () => {
   let dir: string | null = null;
-  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
 
   it("writes config + requests the queue dirs", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-run-"));
@@ -133,7 +163,8 @@ describe("runInitWizard", () => {
     const made: string[] = [];
     const code = await runInitWizard(cfgPath, {
       prompter: scriptedPrompter({
-        text: [`${dir}/vault`, "http://127.0.0.1:1234/v1", "k"], select: ["inline", "m-a"],
+        text: [`${dir}/vault`, "http://127.0.0.1:1234/v1", "k"],
+        select: ["inline", "m-a"],
       }),
       fetchModelsFn: async () => ["m-a"],
       mkdirFn: (p) => made.push(p),
@@ -166,10 +197,15 @@ describe("runInitWizard", () => {
     const written: string[] = [];
     const cancelling: Prompter = {
       ...scriptedPrompter(),
-      async text() { throw new WizardCancelled(); },
+      async text() {
+        throw new WizardCancelled();
+      },
     };
     const code = await runInitWizard(cfgPath, {
-      prompter: cancelling, writeFileFn: (p) => written.push(p), mkdirFn: () => {}, printFn: () => {},
+      prompter: cancelling,
+      writeFileFn: (p) => written.push(p),
+      mkdirFn: () => {},
+      printFn: () => {},
     });
     expect(code).toBe(130);
     expect(written).toEqual([]);

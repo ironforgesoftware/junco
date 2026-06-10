@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { finalize } from "../src/finalize.js";
@@ -7,13 +14,24 @@ import type { RunResult } from "../src/types.js";
 
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), "junco-fin-"));
-  const processing = join(root, "processing"); const done = join(root, "done"); const failed = join(root, "failed");
+  const processing = join(root, "processing");
+  const done = join(root, "done");
+  const failed = join(root, "failed");
   [processing, done, failed].forEach((d) => mkdirSync(d));
   const ticket = join(processing, "2026__q1.md");
   writeFileSync(ticket, "---\nid: q1\n---\n# Q\nask\n", "utf8");
   return { ticket, done, failed };
 }
-const ok: RunResult = { finalText: "the answer", toolCalls: [], usage: { input: 1, output: 1, cacheRead: 0, total: 2 }, stopReason: "stop", errorMessage: null, timedOut: false, durationMs: 1000, abortedByGuard: false };
+const ok: RunResult = {
+  finalText: "the answer",
+  toolCalls: [],
+  usage: { input: 1, output: 1, cacheRead: 0, total: 2 },
+  stopReason: "stop",
+  errorMessage: null,
+  timedOut: false,
+  durationMs: 1000,
+  abortedByGuard: false,
+};
 
 describe("finalize", () => {
   it("writes reply + status to done/ and leaves no temp file", () => {

@@ -5,7 +5,7 @@
  * Port of worker.py omlx_reachable / wait_for_omlx.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import type { Config } from "../src/types.js";
 import type { StopFlagLike } from "../src/health.js";
 import { omlxReachable, waitForOmlx } from "../src/health.js";
@@ -19,9 +19,15 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {
-      id: "omlx/test-model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1/models", apiKey: "test-key", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+      id: "omlx/test-model",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1/models",
+      apiKey: "test-key",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
@@ -88,7 +94,7 @@ describe("omlxReachable", () => {
   });
 
   it("returns false when fetch returns ok:false", async () => {
-    const fetchFn = async (): Promise<Response> => ({ ok: false } as Response);
+    const fetchFn = async (): Promise<Response> => ({ ok: false }) as Response;
     const cfg = makeConfig();
     const result = await omlxReachable(cfg, { fetchFn, timeoutMs: 1000 });
     expect(result).toBe(false);
@@ -149,7 +155,7 @@ describe("waitForOmlx", () => {
     const cfg = makeConfig({ startupWait: true, startupPollSeconds: 1 });
     const stop = { requested: false };
 
-    const fetchFn = async (): Promise<Response> => ({ ok: false } as Response);
+    const fetchFn = async (): Promise<Response> => ({ ok: false }) as Response;
 
     let sleepCallCount = 0;
     const sleep = async (_seconds: number, _sf: StopFlagLike): Promise<void> => {

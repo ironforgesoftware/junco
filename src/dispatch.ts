@@ -6,7 +6,7 @@
  */
 
 import { mkdirSync, writeFileSync, renameSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
 import { parseTicket } from "./ticket.js";
@@ -41,10 +41,7 @@ export function submitTicket(
   }
 
   // Slugify: keep alphanumeric, dots, underscores, hyphens; collapse rest to "-".
-  const slug =
-    ticketId
-      .replace(/[^A-Za-z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "ticket";
+  const slug = ticketId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
 
   mkdirSync(inbox, { recursive: true });
 

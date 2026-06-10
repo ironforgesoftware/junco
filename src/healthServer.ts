@@ -45,11 +45,7 @@ export interface HealthServerHandle {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function writeJson(
-  res: ServerResponse,
-  statusCode: number,
-  obj: unknown,
-): void {
+function writeJson(res: ServerResponse, statusCode: number, obj: unknown): void {
   const body = JSON.stringify(obj);
   res.writeHead(statusCode, {
     "Content-Type": "application/json",
@@ -70,69 +66,65 @@ async function safeProbe(probe: () => Promise<boolean>): Promise<boolean> {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function startHealthServer(
-  opts: HealthServerOpts,
-): Promise<HealthServerHandle> {
+export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerHandle> {
   const host = opts.host ?? "127.0.0.1";
   const probe = opts.readinessProbe ?? (async () => true);
 
-  const server: Server = createServer(
-    async (req: IncomingMessage, res: ServerResponse) => {
-      try {
-        // Method gate — only GET is supported
-        if (req.method !== "GET") {
-          writeJson(res, 405, { error: "method not allowed" });
-          return;
-        }
-
-        // Strip any query string so /health?cb=123 (cache-busters, probe args)
-        // still routes correctly.
-        const path = (req.url ?? "/").split("?")[0];
-
-        if (path === "/live") {
-          const snap = opts.metrics.snapshot();
-          writeJson(res, 200, {
-            status: "alive",
-            pid: snap.pid,
-            uptimeSeconds: snap.uptimeSeconds,
-          });
-          return;
-        }
-
-        if (path === "/ready") {
-          const ready = await safeProbe(probe);
-          if (ready) {
-            writeJson(res, 200, { status: "ready" });
-          } else {
-            writeJson(res, 503, {
-              status: "not_ready",
-              reason: "dependency unreachable",
-            });
-          }
-          return;
-        }
-
-        if (path === "/health") {
-          const [snap, ready] = await Promise.all([
-            Promise.resolve(opts.metrics.snapshot()),
-            safeProbe(probe),
-          ]);
-          writeJson(res, 200, { status: "ok", ready, metrics: snap });
-          return;
-        }
-
-        // Unknown path
-        writeJson(res, 404, { error: "not found" });
-      } catch {
-        // Unexpected handler throw — respond 500 and swallow
-        try {
-          writeJson(res, 500, { error: "internal" });
-        } catch {
-          // res might already be sent; ignore
-        }
+  const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      // Method gate — only GET is supported
+      if (req.method !== "GET") {
+        writeJson(res, 405, { error: "method not allowed" });
+        return;
       }
-    },
-  );
+
+      // Strip any query string so /health?cb=123 (cache-busters, probe args)
+      // still routes correctly.
+      const path = (req.url ?? "/").split("?")[0];
+
+      if (path === "/live") {
+        const snap = opts.metrics.snapshot();
+        writeJson(res, 200, {
+          status: "alive",
+          pid: snap.pid,
+          uptimeSeconds: snap.uptimeSeconds,
+        });
+        return;
+      }
+
+      if (path === "/ready") {
+        const ready = await safeProbe(probe);
+        if (ready) {
+          writeJson(res, 200, { status: "ready" });
+        } else {
+          writeJson(res, 503, {
+            status: "not_ready",
+            reason: "dependency unreachable",
+          });
+        }
+        return;
+      }
+
+      if (path === "/health") {
+        const [snap, ready] = await Promise.all([
+          Promise.resolve(opts.metrics.snapshot()),
+          safeProbe(probe),
+        ]);
+        writeJson(res, 200, { status: "ok", ready, metrics: snap });
+        return;
+      }
+
+      // Unknown path
+      writeJson(res, 404, { error: "not found" });
+    } catch {
+      // Unexpected handler throw — respond 500 and swallow
+      try {
+        writeJson(res, 500, { error: "internal" });
+      } catch {
+        // res might already be sent; ignore
+      }
+    }
+  });
 
   return new Promise<HealthServerHandle>((resolve, reject) => {
     // Reject the promise if listen fails (e.g. EADDRINUSE) before success

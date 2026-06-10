@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 export interface RepoContext {
-  repo: string;            // absolute path
+  repo: string; // absolute path
   baseBranch: string;
   branchName: string;
   draft: boolean;
@@ -52,7 +52,10 @@ export function asStrList(v: unknown): string[] {
       .map((x) => String(x).trim());
   }
   if (typeof v === "string") {
-    return v.split(",").map((p) => p.trim()).filter(Boolean);
+    return v
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
   }
   return [String(v)];
 }
@@ -79,22 +82,17 @@ export function deriveRepoContext(
   const repo = resolve(expandHome(String(rawRepo)));
 
   const baseBranch =
-    typeof frontmatter.base_branch === "string"
-      ? frontmatter.base_branch
-      : opts.defaultBaseBranch;
+    typeof frontmatter.base_branch === "string" ? frontmatter.base_branch : opts.defaultBaseBranch;
 
-  const branchName =
-    frontmatter.branch_name
-      ? String(frontmatter.branch_name)
-      : deriveBranchName(taskId, opts.branchPrefix);
+  const branchName = frontmatter.branch_name
+    ? String(frontmatter.branch_name)
+    : deriveBranchName(taskId, opts.branchPrefix);
 
   const draftRaw = frontmatter.draft;
-  const draft =
-    typeof draftRaw === "boolean" ? draftRaw : opts.draftByDefault;
+  const draft = typeof draftRaw === "boolean" ? draftRaw : opts.draftByDefault;
 
   const prTitleRaw = frontmatter.pr_title;
-  const prTitle =
-    typeof prTitleRaw === "string" && prTitleRaw ? prTitleRaw : null;
+  const prTitle = typeof prTitleRaw === "string" && prTitleRaw ? prTitleRaw : null;
 
   // Mirror Python: `_as_str_list(frontmatter.get("labels")) or list(default_labels)`
   // i.e. use frontmatter labels only if the result is non-empty; else fall back.

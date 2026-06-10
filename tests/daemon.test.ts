@@ -9,7 +9,6 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import type { Config } from "../src/types.js";
-import type { StopFlagLike } from "../src/health.js";
 import type { HealthServerHandle } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
 import {
@@ -38,9 +37,15 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {
-      id: "omlx/test-model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test-key", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+      id: "omlx/test-model",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "test-key",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
@@ -129,9 +134,7 @@ describe("StopFlag", () => {
       stop.requestStop();
       stop.requestStop();
       expect(stop.requested).toBe(true);
-      const stopLogs = spy.mock.calls.filter((c) =>
-        String(c[0]).includes("stop requested"),
-      );
+      const stopLogs = spy.mock.calls.filter((c) => String(c[0]).includes("stop requested"));
       expect(stopLogs).toHaveLength(1);
     } finally {
       spy.mockRestore();
@@ -287,13 +290,7 @@ describe("mainLoop", () => {
 
     await mainLoop(cfg, stop, {}, deps);
 
-    expect(order.slice(0, 5)).toEqual([
-      "mkdirs",
-      "recover",
-      "prune",
-      "wait",
-      "runOnce",
-    ]);
+    expect(order.slice(0, 5)).toEqual(["mkdirs", "recover", "prune", "wait", "runOnce"]);
     expect(deps.mkdirs).toHaveBeenCalledTimes(1);
     expect(deps.recoverOrphansFn).toHaveBeenCalledTimes(1);
     expect(deps.pruneFn).toHaveBeenCalledTimes(1);

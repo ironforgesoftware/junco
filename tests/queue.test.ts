@@ -6,22 +6,26 @@ import { discoverTasks, claim } from "../src/queue.js";
 
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), "junco-q-"));
-  const inbox = join(root, "inbox"); const processing = join(root, "processing");
-  mkdirSync(inbox); mkdirSync(processing);
+  const inbox = join(root, "inbox");
+  const processing = join(root, "processing");
+  mkdirSync(inbox);
+  mkdirSync(processing);
   return { inbox, processing };
 }
 
 describe("queue", () => {
   it("discovers .md files in inbox", () => {
     const { inbox } = sandbox();
-    writeFileSync(join(inbox, "a.md"), "x"); writeFileSync(join(inbox, "b.txt"), "y");
+    writeFileSync(join(inbox, "a.md"), "x");
+    writeFileSync(join(inbox, "b.txt"), "y");
     expect(discoverTasks(inbox).map((p) => p.endsWith("a.md"))).toContain(true);
     expect(discoverTasks(inbox)).toHaveLength(1);
   });
 
   it("claim atomically moves inbox→processing with ts prefix", () => {
     const { inbox, processing } = sandbox();
-    const src = join(inbox, "t.md"); writeFileSync(src, "body");
+    const src = join(inbox, "t.md");
+    writeFileSync(src, "body");
     const dst = claim(src, processing);
     expect(dst).not.toBeNull();
     expect(existsSync(src)).toBe(false);
@@ -35,7 +39,8 @@ describe("queue", () => {
 
   it("claim destination carries a UTC minute-resolution stamp prefix", () => {
     const { inbox, processing } = sandbox();
-    const src = join(inbox, "t.md"); writeFileSync(src, "body");
+    const src = join(inbox, "t.md");
+    writeFileSync(src, "body");
     const dst = claim(src, processing);
     expect(dst).not.toBeNull();
     expect(readdirSync(processing)[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{4}Z__t\.md$/);
@@ -47,7 +52,8 @@ describe("queue", () => {
 
   it("discoverTasks returns paths sorted", () => {
     const { inbox } = sandbox();
-    writeFileSync(join(inbox, "z.md"), "1"); writeFileSync(join(inbox, "a.md"), "2");
+    writeFileSync(join(inbox, "z.md"), "1");
+    writeFileSync(join(inbox, "a.md"), "2");
     const found = discoverTasks(inbox);
     expect(found).toHaveLength(2);
     expect(found[0].endsWith("a.md")).toBe(true);

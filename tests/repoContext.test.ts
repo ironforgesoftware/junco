@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  deriveRepoContext,
-  deriveBranchName,
-  asStrList,
-  isAmend,
-} from "../src/repoContext.js";
+import { deriveRepoContext, deriveBranchName, asStrList, isAmend } from "../src/repoContext.js";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -91,30 +86,22 @@ describe("deriveRepoContext — full PR ticket with defaults", () => {
 // ---------------------------------------------------------------------------
 describe("deriveRepoContext — overrides honored", () => {
   it("branch_name override", () => {
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", branch_name: "feat/my-branch" }, "T04", OPTS,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", branch_name: "feat/my-branch" }, "T04", OPTS);
     expect(ctx!.branchName).toBe("feat/my-branch");
   });
 
   it("base_branch override", () => {
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", base_branch: "develop" }, "T04", OPTS,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", base_branch: "develop" }, "T04", OPTS);
     expect(ctx!.baseBranch).toBe("develop");
   });
 
   it("pr_title override", () => {
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", pr_title: "My PR Title" }, "T04", OPTS,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", pr_title: "My PR Title" }, "T04", OPTS);
     expect(ctx!.prTitle).toBe("My PR Title");
   });
 
   it("draft: false override", () => {
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", draft: false }, "T04", OPTS,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", draft: false }, "T04", OPTS);
     expect(ctx!.draft).toBe(false);
   });
 
@@ -126,32 +113,24 @@ describe("deriveRepoContext — overrides honored", () => {
 
   it("labels from frontmatter (comma string) used instead of defaults", () => {
     const opts = { ...OPTS, defaultLabels: ["default-label"] };
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", labels: "a, b ,c" }, "T04", opts,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", labels: "a, b ,c" }, "T04", opts);
     expect(ctx!.labels).toEqual(["a", "b", "c"]);
   });
 
   it("labels from frontmatter (array) used instead of defaults", () => {
     const opts = { ...OPTS, defaultLabels: ["default-label"] };
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", labels: ["x", "y"] }, "T04", opts,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", labels: ["x", "y"] }, "T04", opts);
     expect(ctx!.labels).toEqual(["x", "y"]);
   });
 
   it("falls back to defaultLabels when labels frontmatter yields empty list", () => {
     const opts = { ...OPTS, defaultLabels: ["fallback"] };
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", labels: "" }, "T04", opts,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", labels: "" }, "T04", opts);
     expect(ctx!.labels).toEqual(["fallback"]);
   });
 
   it("reviewers parsed from comma string", () => {
-    const ctx = deriveRepoContext(
-      { repo: "/tmp/x", reviewers: "alice, bob" }, "T04", OPTS,
-    );
+    const ctx = deriveRepoContext({ repo: "/tmp/x", reviewers: "alice, bob" }, "T04", OPTS);
     expect(ctx!.reviewers).toEqual(["alice", "bob"]);
   });
 });

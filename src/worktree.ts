@@ -47,10 +47,7 @@ export function worktreeSlug(taskId: string): string {
 /**
  * Port of worker.py `current_head_sha` (lines 2021-2022).
  */
-export async function currentHeadSha(
-  cfg: Pick<Config, "gitBin">,
-  wtPath: string,
-): Promise<string> {
+export async function currentHeadSha(cfg: Pick<Config, "gitBin">, wtPath: string): Promise<string> {
   const result = await git(cfg, ["rev-parse", "HEAD"], { cwd: wtPath });
   return result.stdout.trim();
 }
@@ -189,16 +186,12 @@ export async function prepareWorktree(
   });
 
   try {
-    await git(
-      cfg,
-      ["worktree", "add", "-b", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
-      { cwd: ctx.repo, timeoutMs: 120_000 },
-    );
+    await git(cfg, ["worktree", "add", "-b", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`], {
+      cwd: ctx.repo,
+      timeoutMs: 120_000,
+    });
   } catch (e) {
-    if (
-      e instanceof GitOpError &&
-      e.stderr.toLowerCase().includes("already exists")
-    ) {
+    if (e instanceof GitOpError && e.stderr.toLowerCase().includes("already exists")) {
       // Branch may already exist locally (no remote) — add without -b.
       await git(cfg, ["worktree", "add", wtPath, ctx.branchName], {
         cwd: ctx.repo,
@@ -250,10 +243,7 @@ export async function cleanupWorktree(
  *
  * No-op if worktreeRoot does not exist.
  */
-export function pruneStaleWorktrees(
-  worktreeRoot: string,
-  maxAgeSeconds = 3 * 86400,
-): void {
+export function pruneStaleWorktrees(worktreeRoot: string, maxAgeSeconds = 3 * 86400): void {
   if (!existsSync(worktreeRoot)) return;
 
   const nowSeconds = Math.floor(Date.now() / 1000);

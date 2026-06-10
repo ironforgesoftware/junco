@@ -44,9 +44,15 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {
-      id: "test/model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
+      id: "test/model",
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "test",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevel: "medium",
       compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
@@ -113,8 +119,17 @@ function fakeCriticSession(finalDelta: string) {
     },
     async prompt(_text: string) {
       const events = [
-        { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: finalDelta } },
-        { type: "turn_end", message: { stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 } } },
+        {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: finalDelta },
+        },
+        {
+          type: "turn_end",
+          message: {
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+          },
+        },
         { type: "agent_end", messages: [], willRetry: false },
       ];
       for (const e of events) listeners.forEach((l) => l(e));
@@ -155,7 +170,10 @@ afterEach(() => {
 
 describe("scanCriticMarker", () => {
   it("PASS marker → pass with empty findings", () => {
-    expect(scanCriticMarker("blah blah\nJUNCO_VERIFY: PASS")).toEqual({ status: "pass", findings: "" });
+    expect(scanCriticMarker("blah blah\nJUNCO_VERIFY: PASS")).toEqual({
+      status: "pass",
+      findings: "",
+    });
   });
 
   it("MISSING marker → missing with trimmed findings", () => {
@@ -232,14 +250,20 @@ describe("gitDiff", () => {
     const { work } = setupGitHarness(tmpRoot);
     // ~150k of distinct lines → diff well over the 100k cap.
     const lines: string[] = [];
-    for (let i = 0; i < 8000; i++) lines.push(`line number ${i} with some padding content here xyz`);
+    for (let i = 0; i < 8000; i++)
+      lines.push(`line number ${i} with some padding content here xyz`);
     writeFileSync(join(work, "big.txt"), lines.join("\n") + "\n");
     run(["git", "-C", work, "add", "big.txt"]);
     run(["git", "-C", work, "commit", "-m", "big"]);
 
     const diff = await gitDiff(makeCfg(), work, "origin/main");
-    expect(diff.length).toBe(100_000 + "\n\n[... diff truncated at 100k chars; see git diff in worktree for full ...]".length);
-    expect(diff).toContain("[... diff truncated at 100k chars; see git diff in worktree for full ...]");
+    expect(diff.length).toBe(
+      100_000 +
+        "\n\n[... diff truncated at 100k chars; see git diff in worktree for full ...]".length,
+    );
+    expect(diff).toContain(
+      "[... diff truncated at 100k chars; see git diff in worktree for full ...]",
+    );
   });
 });
 
@@ -269,7 +293,8 @@ describe("runCriticPass", () => {
     run(["git", "-C", work, "commit", "-m", "feat"]);
 
     const result = await runCriticPass(makeCfg(), makeTicket("do the thing"), work, "origin/main", {
-      criticSessionFactory: async () => fakeCriticSession("JUNCO_VERIFY: MISSING error handling, tests") as any,
+      criticSessionFactory: async () =>
+        fakeCriticSession("JUNCO_VERIFY: MISSING error handling, tests") as any,
     });
     expect(result.status).toBe("missing");
     expect(result.findings).toBe("error handling, tests");
@@ -277,8 +302,17 @@ describe("runCriticPass", () => {
 
   it("criticEnabled=false → skipped (matches Python wording)", async () => {
     const { work } = setupGitHarness(tmpRoot);
-    const result = await runCriticPass(makeCfg({ criticEnabled: false }), makeTicket("x"), work, "origin/main");
-    expect(result).toEqual({ status: "skipped", findings: "cfg.critic_enabled=false", rawOutput: "" });
+    const result = await runCriticPass(
+      makeCfg({ criticEnabled: false }),
+      makeTicket("x"),
+      work,
+      "origin/main",
+    );
+    expect(result).toEqual({
+      status: "skipped",
+      findings: "cfg.critic_enabled=false",
+      rawOutput: "",
+    });
   });
 
   it("empty diff → skipped (matches Python wording)", async () => {

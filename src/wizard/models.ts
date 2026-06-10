@@ -26,7 +26,10 @@ export function inferProvider(baseUrl: string): string {
   if (known[host]) return known[host];
   if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host.endsWith(".local"))
     return "local";
-  const labels = host.replace(/^api\./, "").split(".").filter(Boolean);
+  const labels = host
+    .replace(/^api\./, "")
+    .split(".")
+    .filter(Boolean);
   if (labels.length >= 2) return labels[labels.length - 2];
   if (labels.length === 1) return labels[0];
   return "custom";
@@ -76,7 +79,8 @@ export function parseModelsJson(path: string): string[] {
     };
     const out: string[] = [];
     for (const [provider, p] of Object.entries(data.providers ?? {}))
-      for (const m of p.models ?? []) if (typeof m?.id === "string") out.push(`${provider}/${m.id}`);
+      for (const m of p.models ?? [])
+        if (typeof m?.id === "string") out.push(`${provider}/${m.id}`);
     return out;
   } catch {
     return [];

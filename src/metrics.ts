@@ -6,12 +6,12 @@
 // ---------------------------------------------------------------------------
 
 export interface MetricsSnapshot {
-  startedAt: string | null;       // ISO; null until markStarted()
-  uptimeSeconds: number;          // 0 if not started
-  pid: number;                    // process.pid
+  startedAt: string | null; // ISO; null until markStarted()
+  uptimeSeconds: number; // 0 if not started
+  pid: number; // process.pid
   pollCount: number;
-  lastPollAt: string | null;      // ISO of the most recent recordPoll()
-  currentTicket: string | null;   // the ticket being processed, or null when idle
+  lastPollAt: string | null; // ISO of the most recent recordPoll()
+  currentTicket: string | null; // the ticket being processed, or null when idle
   tasksProcessed: number;
   tasksSucceeded: number;
   tasksFailed: number;
@@ -19,17 +19,13 @@ export interface MetricsSnapshot {
   totalTokensIn: number;
   totalTokensOut: number;
   totalDurationMs: number;
-  lastTaskAt: string | null;      // ISO of the most recent recordTask()
+  lastTaskAt: string | null; // ISO of the most recent recordTask()
   lastTaskStatus: string | null;
 }
 
 // Parity with finalize.ts DONE_STATUSES (these route to done/ on success).
 // Everything else (failed, timeout, aborted_no_changes, …) is a failure.
-const DONE_STATUSES = new Set<string>([
-  "completed",
-  "completed_no_changes",
-  "aborted_partial",
-]);
+const DONE_STATUSES = new Set<string>(["completed", "completed_no_changes", "aborted_partial"]);
 
 export class RunMetrics {
   private _now: () => Date;
@@ -77,11 +73,7 @@ export class RunMetrics {
    * @param usage   Token usage — only input and output are summed here
    * @param durationMs  Wall-clock duration for the task
    */
-  recordTask(
-    status: string,
-    usage: { input: number; output: number },
-    durationMs: number,
-  ): void {
+  recordTask(status: string, usage: { input: number; output: number }, durationMs: number): void {
     this._tasksProcessed++;
 
     // Bucket by status
@@ -106,9 +98,7 @@ export class RunMetrics {
   snapshot(): MetricsSnapshot {
     const now = this._now();
     const uptimeSeconds =
-      this._startedAt !== null
-        ? Math.floor((now.getTime() - this._startedAt.getTime()) / 1000)
-        : 0;
+      this._startedAt !== null ? Math.floor((now.getTime() - this._startedAt.getTime()) / 1000) : 0;
 
     return {
       startedAt: this._startedAt ? this._startedAt.toISOString() : null,

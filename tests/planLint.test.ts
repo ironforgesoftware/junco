@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -27,16 +27,13 @@ function validBody({
     ? "## Verification\n```bash\ncd /tmp\nnpm test\n```\n"
     : "## Verification\n```bash\nnpm test\n```\n";
 
-  const forbidden = forbiddenPhrase
-    ? forbiddenInNotes
-      ? ""
-      : `${forbiddenPhrase}\n`
-    : "";
+  const forbidden = forbiddenPhrase ? (forbiddenInNotes ? "" : `${forbiddenPhrase}\n`) : "";
 
   const cdLine = stepCd ? "cd /Users/you/repo\n" : "";
 
   const step1 = `### Step 1 — Do the thing\n${forbidden}${cdLine}Edit src/index.ts here.\n\`\`\`bash\ngit commit -m "step 1"\n\`\`\`\n`;
-  const step2 = extraSteps || `### Step 2 — Wrap up\nRun more.\n\`\`\`bash\ngit commit -m "step 2"\n\`\`\`\n`;
+  const step2 =
+    extraSteps || `### Step 2 — Wrap up\nRun more.\n\`\`\`bash\ngit commit -m "step 2"\n\`\`\`\n`;
 
   const files =
     filesSection ||
@@ -118,7 +115,7 @@ describe("formatViolations", () => {
     ];
     const out = formatViolations(violations);
     expect(out).toBe(
-      "[error] no_cd_in_verification: bad cd\n[warning] notes_block_present: missing"
+      "[error] no_cd_in_verification: bad cd\n[warning] notes_block_present: missing",
     );
   });
 
@@ -605,11 +602,15 @@ describe("labels_exist", () => {
     const fetchLabels = (_nwo: string): Set<string> => {
       throw new Error("should not be called");
     };
-    const result = lintTicket(VALID_BODY, {}, {
-      repoNwo,
-      fetchLabels,
-      checkLabels: true,
-    });
+    const result = lintTicket(
+      VALID_BODY,
+      {},
+      {
+        repoNwo,
+        fetchLabels,
+        checkLabels: true,
+      },
+    );
     const v = result.violations.filter((v) => v.rule === "labels_exist");
     expect(v).toHaveLength(0);
   });

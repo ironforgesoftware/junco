@@ -127,16 +127,13 @@ function _stepBlocks(body: string): Array<[string, string]> {
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i];
     const start = match.index;
-    const nextStep =
-      i + 1 < matches.length ? matches[i + 1].index : body.length;
+    const nextStep = i + 1 < matches.length ? matches[i + 1].index : body.length;
 
     // Also stop at next ## heading
     const afterMatchEnd = match.index + match[0].length;
     const bodyAfter = body.slice(afterMatchEnd);
     const h2Match = /^##\s/m.exec(bodyAfter);
-    const h2Offset = h2Match
-      ? afterMatchEnd + h2Match.index
-      : body.length;
+    const h2Offset = h2Match ? afterMatchEnd + h2Match.index : body.length;
 
     const end = Math.min(nextStep, h2Offset);
     blocks.push([match[0].trim(), body.slice(start, end)]);
@@ -426,7 +423,7 @@ function _fetchRepoLabels(nwo: string, ghBin = "gh"): Set<string> {
     const stdout = execFileSync(
       ghBin,
       ["label", "list", "--repo", nwo, "--limit", "200", "--json", "name", "-q", ".[].name"],
-      { encoding: "utf8", timeout: 30_000 }
+      { encoding: "utf8", timeout: 30_000 },
     );
     const names = new Set<string>();
     for (const line of stdout.split("\n")) {
@@ -446,7 +443,7 @@ function checkLabelsExist(
     labelCache?: LabelCache;
     fetchLabels?: (nwo: string) => Set<string>;
     ghBin?: string;
-  } = {}
+  } = {},
 ): LintViolation[] {
   const rawLabels = frontmatter["labels"];
   if (!Array.isArray(rawLabels) || rawLabels.length === 0) return [];
@@ -488,9 +485,7 @@ function checkLabelsExist(
     ];
   }
 
-  const missing = rawLabels
-    .map((lbl) => String(lbl))
-    .filter((lbl) => !repoLabels.has(lbl));
+  const missing = rawLabels.map((lbl) => String(lbl)).filter((lbl) => !repoLabels.has(lbl));
 
   if (missing.length > 0) {
     return [
@@ -524,7 +519,7 @@ export interface LintTicketOpts {
 export function lintTicket(
   body: string,
   frontmatter: Record<string, unknown>,
-  opts: LintTicketOpts = {}
+  opts: LintTicketOpts = {},
 ): LintResult {
   /**
    * Run all lint checks against a ticket body + frontmatter.
@@ -543,9 +538,7 @@ export function lintTicket(
   violations.push(...checkNoForbiddenPhrases(body));
   violations.push(...checkNoCdInSteps(body));
   if (checkLabels) {
-    violations.push(
-      ...checkLabelsExist(frontmatter, repoNwo, { labelCache, fetchLabels, ghBin })
-    );
+    violations.push(...checkLabelsExist(frontmatter, repoNwo, { labelCache, fetchLabels, ghBin }));
   }
   return new LintResult(violations);
 }

@@ -32,7 +32,10 @@ function mkCfg(model: Partial<ModelConfig> = {}): Config {
 describe("splitModelId / apiBaseUrl", () => {
   it("splits on the first slash; defaults provider to omlx", () => {
     expect(splitModelId("omlx/Qwen3.6")).toEqual({ provider: "omlx", modelId: "Qwen3.6" });
-    expect(splitModelId("openrouter/anthropic/claude")).toEqual({ provider: "openrouter", modelId: "anthropic/claude" });
+    expect(splitModelId("openrouter/anthropic/claude")).toEqual({
+      provider: "openrouter",
+      modelId: "anthropic/claude",
+    });
     expect(splitModelId("bare")).toEqual({ provider: "omlx", modelId: "bare" });
   });
   it("strips a trailing /models from the base url", () => {
@@ -81,7 +84,9 @@ describe("buildInlineProviderConfig", () => {
   });
 
   it("normalizes a /models base url to the API root", () => {
-    const { providerConfig } = buildInlineProviderConfig(mkCfg({ baseUrl: "http://127.0.0.1:1234/v1/models" }));
+    const { providerConfig } = buildInlineProviderConfig(
+      mkCfg({ baseUrl: "http://127.0.0.1:1234/v1/models" }),
+    );
     expect(providerConfig.baseUrl).toBe("http://127.0.0.1:1234/v1");
   });
 });
@@ -102,7 +107,9 @@ describe("resolveProbeBaseUrl", () => {
     const p = join(dir, "models.json");
     writeFileSync(
       p,
-      JSON.stringify({ providers: { omlx: { baseUrl: "http://from-file:7/v1/models", api: "openai-completions" } } }),
+      JSON.stringify({
+        providers: { omlx: { baseUrl: "http://from-file:7/v1/models", api: "openai-completions" } },
+      }),
     );
     const cfg = mkCfg({ id: "omlx/x", modelsJson: p, baseUrl: "http://ignored/v1" });
     expect(resolveProbeBaseUrl(cfg)).toBe("http://from-file:7/v1");

@@ -12,7 +12,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
-import type { StopFlag } from "../src/daemon.js";
 import { run } from "../src/cli.js";
 
 // ---------------------------------------------------------------------------
@@ -293,30 +292,21 @@ describe("run(['service','--platform','systemd'])", () => {
   it("captured output contains [Unit]", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(
-      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
-      deps,
-    );
+    await run(["service", "--platform", "systemd", "--config", "/tmp/config.toml"], deps);
     expect(captured.join("")).toContain("[Unit]");
   });
 
   it("captured output contains ExecStart=", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(
-      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
-      deps,
-    );
+    await run(["service", "--platform", "systemd", "--config", "/tmp/config.toml"], deps);
     expect(captured.join("")).toContain("ExecStart=");
   });
 
   it("does NOT call mainLoopFn", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(
-      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
-      deps,
-    );
+    await run(["service", "--platform", "systemd", "--config", "/tmp/config.toml"], deps);
     expect(deps.mainLoopFn).not.toHaveBeenCalled();
   });
 });
@@ -335,10 +325,7 @@ describe("run(['service','--platform','launchd'])", () => {
   it("captured output contains <plist", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(
-      ["service", "--platform", "launchd", "--config", "/tmp/config.toml"],
-      deps,
-    );
+    await run(["service", "--platform", "launchd", "--config", "/tmp/config.toml"], deps);
     expect(captured.join("")).toContain("<plist");
   });
 });
@@ -380,13 +367,19 @@ describe("lock path derivation", () => {
 const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   juncoSubdir: "Junco",
   model: {
-      id: "test-model", modelsJson: null, api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1", apiKey: "test", reasoning: true, input: ["text", "image"],
-      contextWindow: 131072, maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
-    },
+    id: "test-model",
+    modelsJson: null,
+    api: "openai-completions",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    apiKey: "test",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 131072,
+    maxTokens: 49152,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    thinkingLevel: "medium",
+    compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  },
   tools: ["read"],
   defaultTimeoutMinutes: 30,
   pollIntervalSeconds: 15,
@@ -429,17 +422,17 @@ function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: str
   const cfg: Config = { ...DISPATCH_CONFIG_BASE, vaultRoot };
   // write a real config.toml so loadConfig can load it
   const configPath = join(vaultRoot, "config.toml");
-  writeFileSync(
-    configPath,
-    `vault_root = "${vaultRoot}"\njunco_subdir = "Junco"\n`,
-    "utf8",
-  );
+  writeFileSync(configPath, `vault_root = "${vaultRoot}"\njunco_subdir = "Junco"\n`, "utf8");
   return { cfg, vaultRoot, configPath };
 }
 
 afterEach(() => {
   for (const d of dispatchTmpDirs) {
-    try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
   dispatchTmpDirs = [];
 });
@@ -494,7 +487,7 @@ describe("run(['schema'])", () => {
   });
 
   it("does NOT call loadConfigFn (schema is static)", async () => {
-    const loadConfigFn = vi.fn(() => ({} as Config));
+    const loadConfigFn = vi.fn(() => ({}) as Config);
     await run(["schema"], { loadConfigFn });
     expect(loadConfigFn).not.toHaveBeenCalled();
   });
@@ -508,39 +501,30 @@ describe("run(['submit', '-', '--config', p]) — stdin", () => {
   it("returns 0", async () => {
     const { configPath } = freshDispatchVault();
     const captured: string[] = [];
-    const code = await run(
-      ["submit", "-", "--config", configPath],
-      {
-        printFn: (s) => captured.push(s),
-        readStdinFn: async () => TICKET_CONTENT,
-      },
-    );
+    const code = await run(["submit", "-", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+      readStdinFn: async () => TICKET_CONTENT,
+    });
     expect(code).toBe(0);
   });
 
   it("prints 'submitted: ...'", async () => {
     const { configPath } = freshDispatchVault();
     const captured: string[] = [];
-    await run(
-      ["submit", "-", "--config", configPath],
-      {
-        printFn: (s) => captured.push(s),
-        readStdinFn: async () => TICKET_CONTENT,
-      },
-    );
+    await run(["submit", "-", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+      readStdinFn: async () => TICKET_CONTENT,
+    });
     expect(captured.join("")).toMatch(/submitted:/);
   });
 
   it("the ticket lands in the inbox", async () => {
     const { configPath, vaultRoot } = freshDispatchVault();
     const captured: string[] = [];
-    await run(
-      ["submit", "-", "--config", configPath],
-      {
-        printFn: (s) => captured.push(s),
-        readStdinFn: async () => TICKET_CONTENT,
-      },
-    );
+    await run(["submit", "-", "--config", configPath], {
+      printFn: (s) => captured.push(s),
+      readStdinFn: async () => TICKET_CONTENT,
+    });
     const expected = join(vaultRoot, "Junco", "inbox", "cli-stdin-test.md");
     expect(existsSync(expected)).toBe(true);
   });

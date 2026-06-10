@@ -61,9 +61,7 @@ export async function resolveAmendTarget(
     stdout = result.stdout;
   } catch (e) {
     if (e instanceof GitOpError) {
-      throw new GitOpError(
-        `gh pr view #${ctx.amendsPr} failed: ${e.stderr.trim() || e.message}`,
-      );
+      throw new GitOpError(`gh pr view #${ctx.amendsPr} failed: ${e.stderr.trim() || e.message}`);
     }
     throw e;
   }
@@ -72,9 +70,7 @@ export async function resolveAmendTarget(
   try {
     data = JSON.parse(stdout || "{}") as Record<string, unknown>;
   } catch {
-    throw new GitOpError(
-      `gh pr view returned non-JSON: ${stdout.slice(0, 200)}`,
-    );
+    throw new GitOpError(`gh pr view returned non-JSON: ${stdout.slice(0, 200)}`);
   }
 
   const state = String(data["state"] ?? "");
@@ -95,9 +91,7 @@ export async function resolveAmendTarget(
   const url = String(data["url"] ?? "");
 
   if (!head || !base || !url) {
-    throw new GitOpError(
-      `PR #${ctx.amendsPr} metadata incomplete: ${JSON.stringify(data)}`,
-    );
+    throw new GitOpError(`PR #${ctx.amendsPr} metadata incomplete: ${JSON.stringify(data)}`);
   }
 
   return {
@@ -123,10 +117,7 @@ export async function resolveAmendTarget(
  * lookup and ctx.branchName / ctx.baseBranch are MUTATED to match the PR's
  * head / base refs.
  */
-export async function validateRepoContext(
-  cfg: Config,
-  ctx: RepoContext,
-): Promise<string> {
+export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promise<string> {
   // Check repo path exists
   if (!existsSync(ctx.repo)) {
     throw new GitOpError(`repo path does not exist: ${ctx.repo}`);
@@ -157,9 +148,7 @@ export async function validateRepoContext(
     nwo = nwoResult.stdout.trim();
   } catch (e) {
     if (e instanceof GitOpError) {
-      throw new GitOpError(
-        `gh repo view failed in ${ctx.repo}: ${e.stderr.trim() || e.message}`,
-      );
+      throw new GitOpError(`gh repo view failed in ${ctx.repo}: ${e.stderr.trim() || e.message}`);
     }
     throw e;
   }
@@ -188,11 +177,11 @@ export async function validateRepoContext(
     ctx.baseBranch = target.baseRef;
 
     // Verify the head branch actually exists on origin
-    const bls = await git(
-      cfg,
-      ["ls-remote", "--heads", "origin", ctx.branchName],
-      { cwd: ctx.repo, check: false, retryNetwork: true },
-    );
+    const bls = await git(cfg, ["ls-remote", "--heads", "origin", ctx.branchName], {
+      cwd: ctx.repo,
+      check: false,
+      retryNetwork: true,
+    });
     if (bls.code !== 0 || !bls.stdout.trim()) {
       throw new GitOpError(
         `PR #${ctx.amendsPr} head branch ${JSON.stringify(ctx.branchName)} not on origin`,
@@ -203,11 +192,11 @@ export async function validateRepoContext(
 
   // Fresh-ticket mode: enforce remaining safety rails.
   // Ensure base branch exists on origin.
-  const ls = await git(
-    cfg,
-    ["ls-remote", "--heads", "origin", ctx.baseBranch],
-    { cwd: ctx.repo, check: false, retryNetwork: true },
-  );
+  const ls = await git(cfg, ["ls-remote", "--heads", "origin", ctx.baseBranch], {
+    cwd: ctx.repo,
+    check: false,
+    retryNetwork: true,
+  });
   if (ls.code !== 0 || !ls.stdout.trim()) {
     throw new GitOpError(
       `base branch ${JSON.stringify(ctx.baseBranch)} not found on origin (or ls-remote failed)`,
@@ -215,11 +204,11 @@ export async function validateRepoContext(
   }
 
   // Refuse to stomp an existing branch on origin.
-  const bls = await git(
-    cfg,
-    ["ls-remote", "--heads", "origin", ctx.branchName],
-    { cwd: ctx.repo, check: false, retryNetwork: true },
-  );
+  const bls = await git(cfg, ["ls-remote", "--heads", "origin", ctx.branchName], {
+    cwd: ctx.repo,
+    check: false,
+    retryNetwork: true,
+  });
   if (bls.code === 0 && bls.stdout.trim()) {
     throw new GitOpError(
       `branch ${JSON.stringify(ctx.branchName)} already exists on origin; pick a different branch_name or delete the remote branch first`,

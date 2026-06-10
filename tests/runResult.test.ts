@@ -7,11 +7,35 @@ import { RunAccumulator } from "../src/agent/runResult.js";
 describe("RunAccumulator", () => {
   it("collects final text, tool calls, usage and stopReason from events", () => {
     const acc = new RunAccumulator();
-    acc.observe({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } } as any);
-    acc.observe({ type: "tool_execution_start", toolCallId: "c1", toolName: "read", args: { path: "/x" } } as any);
-    acc.observe({ type: "tool_execution_end", toolCallId: "c1", toolName: "read", result: "ok", isError: false } as any);
-    acc.observe({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "world" } } as any);
-    acc.observe({ type: "turn_end", turnIndex: 0, message: { stopReason: "stop", usage: { input: 10, output: 3, cacheRead: 1, cacheWrite: 0, totalTokens: 14 } } } as any);
+    acc.observe({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Hello " },
+    } as any);
+    acc.observe({
+      type: "tool_execution_start",
+      toolCallId: "c1",
+      toolName: "read",
+      args: { path: "/x" },
+    } as any);
+    acc.observe({
+      type: "tool_execution_end",
+      toolCallId: "c1",
+      toolName: "read",
+      result: "ok",
+      isError: false,
+    } as any);
+    acc.observe({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "world" },
+    } as any);
+    acc.observe({
+      type: "turn_end",
+      turnIndex: 0,
+      message: {
+        stopReason: "stop",
+        usage: { input: 10, output: 3, cacheRead: 1, cacheWrite: 0, totalTokens: 14 },
+      },
+    } as any);
     acc.observe({ type: "agent_end", messages: [], willRetry: false } as any);
     const r = acc.result(123);
     expect(r.finalText).toBe("Hello world");
@@ -24,15 +48,26 @@ describe("RunAccumulator", () => {
 
   it("sums usage (totalTokens) across multiple turns", () => {
     const acc = new RunAccumulator();
-    acc.observe({ type: "turn_end", message: { usage: { input: 5, output: 2, cacheRead: 0, totalTokens: 7 } } } as any);
-    acc.observe({ type: "turn_end", message: { usage: { input: 3, output: 1, cacheRead: 0, totalTokens: 4 } } } as any);
+    acc.observe({
+      type: "turn_end",
+      message: { usage: { input: 5, output: 2, cacheRead: 0, totalTokens: 7 } },
+    } as any);
+    acc.observe({
+      type: "turn_end",
+      message: { usage: { input: 3, output: 1, cacheRead: 0, totalTokens: 4 } },
+    } as any);
     expect(acc.result(0).usage).toEqual({ input: 8, output: 3, cacheRead: 0, total: 11 });
   });
 
   it("records multiple tool calls in order and ignores tool_execution_end for args", () => {
     const acc = new RunAccumulator();
     acc.observe({ type: "tool_execution_start", toolName: "read", args: { p: 1 } } as any);
-    acc.observe({ type: "tool_execution_end", toolName: "read", result: "x", isError: false } as any);
+    acc.observe({
+      type: "tool_execution_end",
+      toolName: "read",
+      result: "x",
+      isError: false,
+    } as any);
     acc.observe({ type: "tool_execution_start", toolName: "bash", args: { cmd: "ls" } } as any);
     expect(acc.result(0).toolCalls).toEqual([
       { name: "read", args: { p: 1 } },
@@ -50,7 +85,10 @@ describe("RunAccumulator", () => {
 
   it("falls back to input+output when a turn omits totalTokens", () => {
     const acc = new RunAccumulator();
-    acc.observe({ type: "turn_end", message: { usage: { input: 6, output: 4, cacheRead: 0 } } } as any);
+    acc.observe({
+      type: "turn_end",
+      message: { usage: { input: 6, output: 4, cacheRead: 0 } },
+    } as any);
     expect(acc.result(0).usage.total).toBe(10);
   });
 });

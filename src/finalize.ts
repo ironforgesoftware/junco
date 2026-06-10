@@ -4,7 +4,10 @@ import type { RunResult } from "./types.js";
 import type { PrOutcome } from "./prFlow.js";
 import { metrics } from "./metrics.js";
 
-export interface TerminalDirs { done: string; failed: string; }
+export interface TerminalDirs {
+  done: string;
+  failed: string;
+}
 
 function statusFor(r: RunResult): string {
   if (r.timedOut) return "timeout";
@@ -105,7 +108,10 @@ function renderPrResult(
   const lines: string[] = [stats];
   const prLines: string[] = [];
   if (prOutcome.prUrl) {
-    const label = prOutcome.amendedPrNumber !== null ? `**PR (amended #${prOutcome.amendedPrNumber}):**` : "**PR:**";
+    const label =
+      prOutcome.amendedPrNumber !== null
+        ? `**PR (amended #${prOutcome.amendedPrNumber}):**`
+        : "**PR:**";
     prLines.push(`${label} ${prOutcome.prUrl}`);
   }
   if (prOutcome.branch) {
@@ -128,9 +134,13 @@ function renderPrResult(
   if ((status === "failed" || status === "timeout") && err) {
     lines.push(`> **${status === "timeout" ? "Timed out" : "Failed"}.** ${err}`);
   } else if (status === "aborted_partial") {
-    lines.push(`> **⚠️ Partial run — aborted by the loop guard.** ${err || "Killed mid-session."} Review the diff carefully.`);
+    lines.push(
+      `> **⚠️ Partial run — aborted by the loop guard.** ${err || "Killed mid-session."} Review the diff carefully.`,
+    );
   } else if (status === "aborted_no_changes") {
-    lines.push(`> **Aborted by the loop guard with no committed work.** ${err || "Killed before any commits."}`);
+    lines.push(
+      `> **Aborted by the loop guard with no committed work.** ${err || "Killed before any commits."}`,
+    );
   }
 
   lines.push(reply);
@@ -156,7 +166,13 @@ export function finalizePr(
 ): string {
   const phaseError = opts.phaseError ?? null;
   const status = computePrStatus(result, prOutcome, phaseError);
-  const body = renderPrResult(readFileSync(ticketPath, "utf8"), status, result, prOutcome, phaseError);
+  const body = renderPrResult(
+    readFileSync(ticketPath, "utf8"),
+    status,
+    result,
+    prOutcome,
+    phaseError,
+  );
 
   const tmp = ticketPath + ".tmp";
   writeFileSync(tmp, body, "utf8");

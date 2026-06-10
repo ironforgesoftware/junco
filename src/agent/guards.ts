@@ -177,14 +177,9 @@ export class ToolCallLoopGuard {
   lastCount: number = 0;
   lastThreshold: number = 0;
 
-  constructor(
-    thresholdMap: Record<string, number> | null = null,
-    defaultThreshold: number = 4,
-  ) {
+  constructor(thresholdMap: Record<string, number> | null = null, defaultThreshold: number = 4) {
     this.thresholdMap =
-      thresholdMap !== null
-        ? { ...thresholdMap }
-        : { ...DEFAULT_TOOL_LOOP_THRESHOLDS };
+      thresholdMap !== null ? { ...thresholdMap } : { ...DEFAULT_TOOL_LOOP_THRESHOLDS };
     this.defaultThreshold = defaultThreshold;
   }
 

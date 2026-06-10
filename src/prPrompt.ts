@@ -5,7 +5,6 @@
  */
 
 import type { RepoContext } from "./repoContext.js";
-import { isAmend } from "./repoContext.js";
 import type { AmendTarget } from "./repo.js";
 
 export interface PrPromptTask {

@@ -5,11 +5,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import {
-  renderLaunchdPlist,
-  renderSystemdUnit,
-  renderService,
-} from "../src/service.js";
+import { renderLaunchdPlist, renderSystemdUnit, renderService } from "../src/service.js";
 
 // ---------------------------------------------------------------------------
 // Shared opts for deterministic tests
@@ -149,9 +145,7 @@ describe("renderLaunchdPlist", () => {
 describe("renderSystemdUnit", () => {
   it("contains ExecStart with nodeBin cliEntry start --config configPath", () => {
     const out = renderSystemdUnit(BASE_OPTS);
-    expect(out).toContain(
-      "ExecStart=/usr/bin/node /x/dist/cli.js start --config /x/config.toml"
-    );
+    expect(out).toContain("ExecStart=/usr/bin/node /x/dist/cli.js start --config /x/config.toml");
   });
 
   it("contains Restart=on-failure", () => {

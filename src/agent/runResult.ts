@@ -10,7 +10,8 @@ export class RunAccumulator {
   observe(event: any): void {
     switch (event?.type) {
       case "message_update":
-        if (event.assistantMessageEvent?.type === "text_delta") this.text += event.assistantMessageEvent.delta ?? "";
+        if (event.assistantMessageEvent?.type === "text_delta")
+          this.text += event.assistantMessageEvent.delta ?? "";
         break;
       case "tool_execution_start":
         // `args` lives on the START event; tool_execution_end carries `result`,
@@ -22,7 +23,7 @@ export class RunAccumulator {
         if (u) {
           // The SDK Usage field is `totalTokens` (the Python worker/fake used the
           // same name); fall back to `total`, then to input+output, for safety.
-          const turnTotal = u.totalTokens ?? u.total ?? ((u.input ?? 0) + (u.output ?? 0));
+          const turnTotal = u.totalTokens ?? u.total ?? (u.input ?? 0) + (u.output ?? 0);
           this.usage = {
             input: this.usage.input + (u.input ?? 0),
             output: this.usage.output + (u.output ?? 0),
@@ -39,7 +40,9 @@ export class RunAccumulator {
     }
   }
 
-  setError(msg: string): void { this.errorMessage = msg; }
+  setError(msg: string): void {
+    this.errorMessage = msg;
+  }
 
   result(durationMs: number, timedOut = false, abortedByGuard = false): RunResult {
     return {

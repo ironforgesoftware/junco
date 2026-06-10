@@ -14,8 +14,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
   properties: {
     id: {
       type: "string",
-      description:
-        "Unique ticket identifier. Defaults to the filename (without .md) when omitted.",
+      description: "Unique ticket identifier. Defaults to the filename (without .md) when omitted.",
     },
     repo: {
       type: "string",

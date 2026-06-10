@@ -86,10 +86,7 @@ Options:
 // run — pure-ish; returns exit code, never calls process.exit
 // ---------------------------------------------------------------------------
 
-export async function run(
-  argv: string[],
-  deps: CliDeps = {},
-): Promise<number> {
+export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Resolve injected collaborators (defaults wire to the real implementations)
   const loadConfigFn = deps.loadConfigFn ?? loadConfig;
   const acquireLockFn = deps.acquireLockFn ?? acquireSingletonLock;
@@ -135,8 +132,8 @@ export async function run(
       rawPlatform === "launchd" || rawPlatform === "systemd"
         ? rawPlatform
         : process.platform === "darwin"
-        ? "launchd"
-        : "systemd";
+          ? "launchd"
+          : "systemd";
 
     const configPath = resolve(values.config as string);
     // Resolve cliEntry: use the script that was invoked (process.argv[1]),
@@ -247,15 +244,18 @@ export async function run(
     let content: string;
     try {
       if (fileArg === "-") {
-        const readStdinFn = deps.readStdinFn ?? (() =>
-          new Promise<string>((resolve, reject) => {
-            let buf = "";
-            process.stdin.setEncoding("utf8");
-            process.stdin.on("data", (chunk) => { buf += chunk; });
-            process.stdin.on("end", () => resolve(buf));
-            process.stdin.on("error", reject);
-          })
-        );
+        const readStdinFn =
+          deps.readStdinFn ??
+          (() =>
+            new Promise<string>((resolve, reject) => {
+              let buf = "";
+              process.stdin.setEncoding("utf8");
+              process.stdin.on("data", (chunk) => {
+                buf += chunk;
+              });
+              process.stdin.on("end", () => resolve(buf));
+              process.stdin.on("error", reject);
+            }));
         content = await readStdinFn();
       } else {
         content = readFileSync(fileArg, "utf8");
@@ -274,9 +274,7 @@ export async function run(
     try {
       dst = submitTicket(cfg, content, { idHint });
     } catch (e) {
-      process.stderr.write(
-        `junco submit: ${e instanceof Error ? e.message : String(e)}\n`,
-      );
+      process.stderr.write(`junco submit: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
 
@@ -298,7 +296,7 @@ export async function run(
       if (!wantYes && !deps.runInitWizardFn && !process.stdin.isTTY) {
         process.stderr.write(
           `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
-          `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.toml.\n`,
+            `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.toml.\n`,
         );
         return 1;
       }
@@ -316,11 +314,11 @@ export async function run(
     }
     printFn(
       `Config already exists at ${resolve(configPath)}; ensured queue directories:\n` +
-      `  inbox:      ${paths.inbox}\n` +
-      `  processing: ${paths.processing}\n` +
-      `  done:       ${paths.done}\n` +
-      `  failed:     ${paths.failed}\n` +
-      `  worktrees:  ${cfg.worktreeRoot}\n`,
+        `  inbox:      ${paths.inbox}\n` +
+        `  processing: ${paths.processing}\n` +
+        `  done:       ${paths.done}\n` +
+        `  failed:     ${paths.failed}\n` +
+        `  worktrees:  ${cfg.worktreeRoot}\n`,
     );
     return 0;
   }
@@ -352,8 +350,10 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
-  run(process.argv.slice(2)).then((code) => process.exit(code)).catch((e) => {
-    log.error("fatal", { error: e instanceof Error ? (e.stack ?? e.message) : String(e) });
-    process.exit(1);
-  });
+  run(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((e) => {
+      log.error("fatal", { error: e instanceof Error ? (e.stack ?? e.message) : String(e) });
+      process.exit(1);
+    });
 }

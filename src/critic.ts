@@ -75,10 +75,12 @@ Now output your single-line verdict.
  * regex replacement so `$`-sequences in the diff/spec are inserted literally.
  */
 export function buildCriticPrompt(spec: string, diff: string, base: string): string {
-  return CRITIC_PROMPT_TEMPLATE
-    .split("{spec}").join(spec)
-    .split("{base}").join(base)
-    .split("{diff}").join(diff);
+  return CRITIC_PROMPT_TEMPLATE.split("{spec}")
+    .join(spec)
+    .split("{base}")
+    .join(base)
+    .split("{diff}")
+    .join(diff);
 }
 
 const DIFF_TRUNCATION_NOTE =
@@ -112,7 +114,10 @@ export async function gitDiff(cfg: Config, wtPath: string, baseRef: string): Pro
  * Python `_scan_critic_marker`: no text → error; no marker → error; otherwise
  * the LAST marker wins. PASS → pass/""; MISSING → missing/<trimmed rest>.
  */
-export function scanCriticMarker(text: string): { status: "pass" | "missing" | "error"; findings: string } {
+export function scanCriticMarker(text: string): {
+  status: "pass" | "missing" | "error";
+  findings: string;
+} {
   if (!text) return { status: "error", findings: "no output from critic" };
   // matchAll collects every occurrence (mirrors Python finditer). The regex is
   // a module-level `g`-flagged literal; matchAll resets lastIndex each call so
@@ -188,6 +193,7 @@ export function buildCorrectivePrompt(task: Ticket, missingItems: string): strin
     "that's already committed. Do NOT amend, rebase, or force-change prior " +
     "commits. After the fix, output a one-line summary and stop.\n\n" +
     "---\n\n" +
-    "## Original ticket spec\n\n"
-  ) + task.body;
+    "## Original ticket spec\n\n" +
+    task.body
+  );
 }

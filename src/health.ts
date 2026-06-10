@@ -37,10 +37,7 @@ export interface OmlxReachableDeps {
  * models.json's provider entry, or the inline base_url), then re-append
  * /models — hitting the configured endpoint with Bearer auth.
  */
-export async function omlxReachable(
-  cfg: Config,
-  deps?: OmlxReachableDeps,
-): Promise<boolean> {
+export async function omlxReachable(cfg: Config, deps?: OmlxReachableDeps): Promise<boolean> {
   const fetchFn = deps?.fetchFn ?? fetch;
   const timeoutMs = deps?.timeoutMs ?? 5000;
 
@@ -73,10 +70,7 @@ export async function omlxReachable(
  * stopFlag.requested.  The canonical version (sleepInterruptible) arrives in
  * M4-T4; tests inject their own sleep, so this is only used in production.
  */
-async function defaultSleep(
-  seconds: number,
-  stopFlag: StopFlagLike,
-): Promise<void> {
+async function defaultSleep(seconds: number, stopFlag: StopFlagLike): Promise<void> {
   const end = Date.now() + seconds * 1000;
   while (!stopFlag.requested && Date.now() < end) {
     const remaining = end - Date.now();

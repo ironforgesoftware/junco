@@ -3,10 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import {
-  TICKET_FRONTMATTER_JSON_SCHEMA,
-  describeTicketSchema,
-} from "../src/ticketSchema.js";
+import { TICKET_FRONTMATTER_JSON_SCHEMA, describeTicketSchema } from "../src/ticketSchema.js";
 
 describe("TICKET_FRONTMATTER_JSON_SCHEMA structure", () => {
   it("has type: object", () => {
@@ -20,13 +17,19 @@ describe("TICKET_FRONTMATTER_JSON_SCHEMA structure", () => {
   });
 
   it("properties.priority.enum includes 'high'", () => {
-    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<string, Record<string, unknown>>;
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
     const priorityEnum = props.priority.enum as string[];
     expect(priorityEnum).toContain("high");
   });
 
   it("properties.priority.enum includes all three values", () => {
-    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<string, Record<string, unknown>>;
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
     const priorityEnum = props.priority.enum as string[];
     expect(priorityEnum).toContain("low");
     expect(priorityEnum).toContain("normal");
@@ -62,8 +65,17 @@ describe("describeTicketSchema()", () => {
   it("documents all expected frontmatter fields", () => {
     const s = describeTicketSchema();
     const expected = [
-      "id", "repo", "priority", "timeout_minutes", "base_branch",
-      "branch_name", "pr_title", "draft", "labels", "reviewers", "amends_pr",
+      "id",
+      "repo",
+      "priority",
+      "timeout_minutes",
+      "base_branch",
+      "branch_name",
+      "pr_title",
+      "draft",
+      "labels",
+      "reviewers",
+      "amends_pr",
     ];
     for (const field of expected) {
       expect(s).toContain(`"${field}"`);

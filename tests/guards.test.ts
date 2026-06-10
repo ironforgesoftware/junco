@@ -3,7 +3,7 @@
  * Written FIRST (TDD) — these are expected to fail until guards.ts is implemented.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   DEFAULT_TOOL_LOOP_THRESHOLDS,
   RepetitionGuard,
@@ -51,7 +51,6 @@ describe("RepetitionGuard", () => {
   });
 
   it("returns false when probeLen < 80 (text just over minChars but window/3 too small)", () => {
-    const g = new RepetitionGuard(2000, 200, 4, 1000);
     // tail = 1050 chars → probeLen = floor(1050/3) = 350 but also min(200, 350) = 200 ≥ 80 → would proceed.
     // Make a string exactly at 1000 chars where the window would produce probeLen < 80:
     // With windowChars=2000 and a 1000-char string, tail=1000 → probeLen = min(200, floor(1000/3)=333) = 200 ≥ 80
@@ -99,7 +98,10 @@ describe("RepetitionGuard", () => {
 
   it("trips when a paragraph repeats 4+ times in window (threshold=4)", () => {
     const g = new RepetitionGuard();
-    const probe = "This is an important paragraph with varied content and punctuation; worth flagging when it repeats. ".repeat(2);
+    const probe =
+      "This is an important paragraph with varied content and punctuation; worth flagging when it repeats. ".repeat(
+        2,
+      );
     const block = probe + "\n\n";
     const cumulative = block.repeat(5);
     expect(g.update(cumulative)).toBe(true);
@@ -117,7 +119,8 @@ describe("RepetitionGuard", () => {
     // Pad with enough unique prefix so probe appears 3× total in tail.
     const unit = "abcdefghij".repeat(8); // 80 chars, 10 unique chars (passes trivial check)
     // Build: [padding][unit][unit][unit] → tail ends in unit, and unit appears 3× in tail
-    const padding = "ZZZZ_unique_prefix_text_padding_chars_here_abcXYZetcfoobar_!@#$%^&*()_=+;:?,./XXXXXX"; // ~80 chars
+    const padding =
+      "ZZZZ_unique_prefix_text_padding_chars_here_abcXYZetcfoobar_!@#$%^&*()_=+;:?,./XXXXXX"; // ~80 chars
     const text = padding.repeat(8) + unit.repeat(3); // padding*8 + unit*3 ≈ 640+240 = 880 chars
     // tail = last 800 chars → will include the 3 unit repetitions
     // probe = last 80 chars = unit
@@ -131,7 +134,8 @@ describe("RepetitionGuard", () => {
   it("trips on 4th occurrence in tail (count >= threshold)", () => {
     const g = new RepetitionGuard(800, 80, 4, 200);
     const unit = "abcdefghij".repeat(8); // 80 chars
-    const padding = "ZZZZ_unique_prefix_text_padding_chars_here_abcXYZetcfoobar_!@#$%^&*()_=+;:?,./XXXXXX";
+    const padding =
+      "ZZZZ_unique_prefix_text_padding_chars_here_abcXYZetcfoobar_!@#$%^&*()_=+;:?,./XXXXXX";
     // 4× unit in tail → trips
     const text = padding.repeat(8) + unit.repeat(4);
     expect(g.update(text)).toBe(true);
@@ -141,7 +145,10 @@ describe("RepetitionGuard", () => {
 
   it("only looks at recent window, not ancient text", () => {
     const g = new RepetitionGuard(1500);
-    const repeated = "REPEATED PARAGRAPH WITH ENOUGH VARIANCE TO PASS THE FLOOR CHECK AND BE DETECTABLE AS A LOOP. ".repeat(2);
+    const repeated =
+      "REPEATED PARAGRAPH WITH ENOUGH VARIANCE TO PASS THE FLOOR CHECK AND BE DETECTABLE AS A LOOP. ".repeat(
+        2,
+      );
     // Old repetitions, then long diverse recent prose.
     const text = repeated.repeat(5) + ("a" + "bcdefghij".repeat(200));
     g.update(text);
@@ -150,7 +157,10 @@ describe("RepetitionGuard", () => {
 
   it("lastProbe and lastCount are set after evaluation", () => {
     const g = new RepetitionGuard();
-    const probe = "This is an important paragraph with varied content and punctuation; worth flagging when it repeats. ".repeat(2);
+    const probe =
+      "This is an important paragraph with varied content and punctuation; worth flagging when it repeats. ".repeat(
+        2,
+      );
     const cumulative = (probe + "\n\n").repeat(5);
     g.update(cumulative);
     expect(g.lastProbe).not.toBeNull();
@@ -170,7 +180,8 @@ describe("RepetitionGuard", () => {
     const g = new RepetitionGuard(800, 80, 2, 200);
     // Craft: probe repeated exactly 2× non-overlapping → trips at threshold 2
     const unit = "abcdefghij".repeat(8); // 80 chars, 10 unique
-    const padding = "ZZZZ_unique_prefix_text_padding_chars_here_abcXYZetcfoobar_!@#$%^&*()_=+;:?,./XXXXXX";
+    const padding =
+      "ZZZZ_unique_prefix_text_padding_chars_here_abcXYZetcfoobar_!@#$%^&*()_=+;:?,./XXXXXX";
     const text = padding.repeat(8) + unit.repeat(2);
     expect(g.update(text)).toBe(true); // 2 occurrences >= threshold 2
   });
@@ -185,7 +196,7 @@ describe("ToolCallLoopGuard", () => {
     const g = new ToolCallLoopGuard();
     expect(g.observe("bash", { cmd: "ls" })).toBe(false); // run 1
     expect(g.observe("bash", { cmd: "ls" })).toBe(false); // run 2
-    expect(g.observe("bash", { cmd: "ls" })).toBe(true);  // run 3 → trips
+    expect(g.observe("bash", { cmd: "ls" })).toBe(true); // run 3 → trips
     expect(g.tripped).toBe(true);
     expect(g.lastName).toBe("bash");
     expect(g.lastCount).toBe(3);
@@ -270,7 +281,7 @@ describe("ToolCallLoopGuard", () => {
     expect(g.observe("bash", { cmd: "pwd" })).toBe(false); // run resets to 1
     // Another 2 identical → still only run=3 total but since reset now run=3 from new sig
     expect(g.observe("bash", { cmd: "pwd" })).toBe(false); // run=2
-    expect(g.observe("bash", { cmd: "pwd" })).toBe(true);  // run=3 → trips
+    expect(g.observe("bash", { cmd: "pwd" })).toBe(true); // run=3 → trips
   });
 
   it("stable hash: object key order does not affect matching (same args different order trips)", () => {
@@ -278,7 +289,7 @@ describe("ToolCallLoopGuard", () => {
     // {a:1,b:2} and {b:2,a:1} should hash identically (stable JSON sort_keys)
     expect(g.observe("bash", { b: 2, a: 1 })).toBe(false); // run 1
     expect(g.observe("bash", { a: 1, b: 2 })).toBe(false); // run 2 — same hash
-    expect(g.observe("bash", { a: 1, b: 2 })).toBe(true);  // run 3 → trips
+    expect(g.observe("bash", { a: 1, b: 2 })).toBe(true); // run 3 → trips
     expect(g.tripped).toBe(true);
   });
 
@@ -317,9 +328,9 @@ describe("ToolCallLoopGuard", () => {
 describe("ToolErrorLoopGuard", () => {
   it("trips on 3rd consecutive same-tool error (threshold=3)", () => {
     const g = new ToolErrorLoopGuard();
-    expect(g.observe("bash", true)).toBe(false);  // error 1
-    expect(g.observe("bash", true)).toBe(false);  // error 2
-    expect(g.observe("bash", true)).toBe(true);   // error 3 → trips
+    expect(g.observe("bash", true)).toBe(false); // error 1
+    expect(g.observe("bash", true)).toBe(false); // error 2
+    expect(g.observe("bash", true)).toBe(true); // error 3 → trips
     expect(g.tripped).toBe(true);
     expect(g.lastName).toBe("bash");
     expect(g.lastCount).toBe(3);
@@ -338,9 +349,9 @@ describe("ToolErrorLoopGuard", () => {
     expect(g.observe("bash", true)).toBe(false);
     expect(g.observe("bash", false)).toBe(false); // success → resets
     // Now errors start fresh
-    expect(g.observe("bash", true)).toBe(false);  // run=1
-    expect(g.observe("bash", true)).toBe(false);  // run=2
-    expect(g.observe("bash", true)).toBe(true);   // run=3 → trips
+    expect(g.observe("bash", true)).toBe(false); // run=1
+    expect(g.observe("bash", true)).toBe(false); // run=2
+    expect(g.observe("bash", true)).toBe(true); // run=3 → trips
   });
 
   it("different tool resets the run", () => {
@@ -350,7 +361,7 @@ describe("ToolErrorLoopGuard", () => {
     expect(g.observe("grep", true)).toBe(false); // different tool → run=1
     expect(g.tripped).toBe(false);
     expect(g.observe("grep", true)).toBe(false); // run=2
-    expect(g.observe("grep", true)).toBe(true);  // run=3 → trips
+    expect(g.observe("grep", true)).toBe(true); // run=3 → trips
     expect(g.lastName).toBe("grep");
   });
 
@@ -433,7 +444,7 @@ describe("OutputBudgetGuard", () => {
     const g = new OutputBudgetGuard(12000, 24000);
     expect(g.observeOutputTokens(5000)).toBe(false);
     expect(g.observeOutputTokens(6000)).toBe(false); // 11000
-    expect(g.observeOutputTokens(2000)).toBe(true);  // 13000 > 12000 → trips
+    expect(g.observeOutputTokens(2000)).toBe(true); // 13000 > 12000 → trips
     expect(g.tripped).toBe(true);
     expect(g.lastCount).toBe(13000);
     expect(g.lastThreshold).toBe(12000);
@@ -457,7 +468,7 @@ describe("OutputBudgetGuard", () => {
     const g = new OutputBudgetGuard(12000, 24000);
     g.observeCommit();
     expect(g.observeOutputTokens(20000)).toBe(false); // 20000 ≤ 24000
-    expect(g.observeOutputTokens(5000)).toBe(true);   // 25000 > 24000 → trips
+    expect(g.observeOutputTokens(5000)).toBe(true); // 25000 > 24000 → trips
     expect(g.lastThreshold).toBe(24000);
   });
 
@@ -466,7 +477,7 @@ describe("OutputBudgetGuard", () => {
     expect(g.observeOutputTokens(8000)).toBe(false); // under pre-commit 10000
     g.observeCommit(); // budget bumps to 20000
     expect(g.observeOutputTokens(10000)).toBe(false); // 18000 < 20000
-    expect(g.observeOutputTokens(5000)).toBe(true);   // 23000 > 20000 → trips
+    expect(g.observeOutputTokens(5000)).toBe(true); // 23000 > 20000 → trips
     expect(g.lastThreshold).toBe(20000);
   });
 
