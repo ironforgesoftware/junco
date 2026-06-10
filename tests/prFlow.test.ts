@@ -23,6 +23,7 @@ import { execFileSync } from "node:child_process";
 
 import { runPrFlow } from "../src/prFlow.js";
 import { deriveRepoContext } from "../src/repoContext.js";
+import { claim } from "../src/queue.js";
 import { parseTicket } from "../src/ticket.js";
 import type { Config, Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
@@ -120,6 +121,9 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -131,6 +135,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
     branchPrefix: "junco/",
     worktreeRoot: h.wtsRoot,
     removeWorktreeOnSuccess: false, // preserve so we can assert on commits
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -147,6 +152,9 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: join(h.root, "state"),
+    logToFile: false,
+    transcriptsEnabled: false,
     ...overrides,
   };
 }
@@ -415,5 +423,90 @@ exit 1
     expect(text).toContain("pushed: true");
     // Two commits: the initial + the corrective re-dispatch.
     expect(text).toContain("commit_count: 2");
+  });
+
+  // -------------------------------------------------------------------------
+  // Transient-failure requeue
+  // -------------------------------------------------------------------------
+
+  /** Session whose prompt() throws — a hard non-guard error with no commits. */
+  function erroringFactory(): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    return (_cfg, _cwd) => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        throw new Error("fetch failed: ECONNREFUSED");
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+  }
+
+  it("transient agent error with zero commits requeues the ticket and removes the worktree", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "flaky.md",
+      `---\nid: flaky\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const dst = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: erroringFactory(),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst).toContain(join("Junco", "inbox")); // requeued, not failed
+    const text = readFileSync(dst, "utf8");
+    expect(text).toMatch(/retry_count: 1/);
+    expect(text).toMatch(/not_before:/);
+    expect(text).not.toMatch(/junco-result/);
+    expect(readdirSync(h.failed)).toHaveLength(0);
+    expect(readdirSync(h.wtsRoot)).toHaveLength(0); // worktree cleaned for the retry
+  });
+
+  it("transient error with retry budget exhausted routes to failed/ as before", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "spent.md",
+      `---\nid: spent\nrepo: ${h.work}\nretry_count: 2\n---\n# Spent\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const dst = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: erroringFactory(),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.failed)).toBe(true);
+    expect(readFileSync(dst, "utf8")).toContain("status: failed");
+  });
+
+  it("a requeued ticket can be re-claimed and run to done/ (no branch collision)", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "retry-roundtrip.md",
+      `---\nid: retry-roundtrip\nrepo: ${h.work}\n---\n# Roundtrip\n\nDo a thing.\n`,
+    );
+
+    const dst1 = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: erroringFactory(),
+      dirs: { done: h.done, failed: h.failed },
+    });
+    expect(dst1).toContain(join("Junco", "inbox"));
+
+    // Second attempt: re-claim (simulating the queue) and run a committing fake.
+    const claimed2 = claim(dst1, h.processing)!;
+    const task2 = parseTicket(claimed2, readFileSync(claimed2, "utf8"), 30);
+    expect(task2.retryCount).toBe(1);
+    const dst2 = await runPrFlow(cfg, task2, claimed2, ctxFor(cfg, task2), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+    expect(dst2.startsWith(h.done)).toBe(true);
+    expect(readFileSync(dst2, "utf8")).toContain("status: completed");
   });
 });

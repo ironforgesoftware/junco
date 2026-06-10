@@ -10,7 +10,7 @@
  * repeat real work).
  */
 
-import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { Config, RunResult, Ticket } from "./types.js";
 import { queuePaths } from "./config.js";
@@ -74,6 +74,7 @@ export function requeueTicket(
   renameSync(tmp, claimedPath);
 
   const inbox = queuePaths(cfg).inbox;
+  mkdirSync(inbox, { recursive: true }); // defensive — survives a deleted inbox
   let name = basename(claimedPath).replace(CLAIM_PREFIX_RE, "");
   if (existsSync(join(inbox, name))) name = name.replace(/\.md$/, `-r${attempt}.md`);
   const dst = join(inbox, name);

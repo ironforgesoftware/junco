@@ -8,6 +8,7 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
+import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { log, withTicket } from "./logging.js";
 import { metrics } from "./metrics.js";
 
@@ -24,6 +25,10 @@ export interface RunDeps {
   sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
   // Critic session factory, threaded into the PR-flow (tests control its verdict).
   criticSessionFactory?: () => Promise<AgentSessionLike>;
+  /** Probe before claiming: false → leave the inbox untouched this poll. The
+   * daemon wires this to endpointReachable so an endpoint outage queues work
+   * instead of burning tickets into failed/. */
+  readyFn?: () => Promise<boolean>;
 }
 
 export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean> {
@@ -49,7 +54,26 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
     .sort((a, b) => PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority]);
   if (parsed.length === 0) return false;
 
-  const next = parsed[0];
+  // not_before gate (retry backoff / scheduled tickets). An unparseable stamp
+  // counts as eligible — a malformed date must not strand a ticket forever.
+  const now = Date.now();
+  const eligible = parsed.filter((t) => {
+    if (!t.notBefore) return true;
+    const ts = Date.parse(t.notBefore);
+    return Number.isNaN(ts) || ts <= now;
+  });
+  if (eligible.length === 0) return false;
+
+  // Readiness gate: when there IS eligible work, don't claim it unless the
+  // inference endpoint can actually serve it.
+  if (deps.readyFn && !(await deps.readyFn())) {
+    log.warn("inference endpoint not ready; leaving inbox untouched this poll", {
+      eligible: eligible.length,
+    });
+    return false;
+  }
+
+  const next = eligible[0];
 
   const claimed = claim(next.path, paths.processing);
   if (!claimed) {
@@ -110,6 +134,17 @@ export async function runOnce(cfg: Config, deps: RunDeps = {}): Promise<boolean>
         createSession: factory,
         guardManager,
       });
+      // Transient failure (endpoint hiccup, truncated stream) → requeue with
+      // backoff instead of finalizing to failed/ (budget permitting).
+      if (isTransientFailure(result, 0)) {
+        const rq = requeueTicket(
+          cfg,
+          claimed,
+          next,
+          result.errorMessage ?? `stop_reason=${result.stopReason}`,
+        );
+        if (rq.requeued) return true;
+      }
       const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
       log.info("finalized", {
         dst,

@@ -28,6 +28,9 @@ function cfg(root: string): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: true,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -39,6 +42,7 @@ function cfg(root: string): Config {
     branchPrefix: "junco/",
     worktreeRoot: "/tmp/worktrees",
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -55,6 +59,9 @@ function cfg(root: string): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: join(root, "state"),
+    logToFile: false,
+    transcriptsEnabled: false,
   };
 }
 
@@ -168,5 +175,102 @@ describe("runOnce", () => {
       },
     });
     expect(receivedTools).toEqual(["read", "grep", "find", "ls"]);
+  });
+
+  it("skips tickets whose not_before is in the future", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(
+      join(j, "inbox", "future.md"),
+      '---\nid: future\nnot_before: "2099-01-01T00:00:00Z"\n---\nq\n',
+      "utf8",
+    );
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() });
+    expect(handled).toBe(false);
+    expect(readdirSync(join(j, "inbox"))).toEqual(["future.md"]); // not claimed
+  });
+
+  it("treats an unparseable not_before as eligible", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(
+      join(j, "inbox", "odd.md"),
+      '---\nid: odd\nnot_before: "not-a-date"\n---\nq\n',
+      "utf8",
+    );
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory() });
+    expect(handled).toBe(true);
+  });
+
+  it("readiness gate: does not claim when readyFn says the endpoint is down", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: () => fakeFactory(),
+      readyFn: async () => false,
+    });
+    expect(handled).toBe(false);
+    expect(readdirSync(join(j, "inbox"))).toEqual(["t.md"]); // still queued, not burned
+  });
+
+  it("Q&A transient error requeues to inbox instead of failing (budget permitting)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const erroringFactory = () => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        throw new Error("fetch failed: ECONNREFUSED");
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: erroringFactory });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 1/);
+    expect(content).toMatch(/not_before:/);
+  });
+
+  it("Q&A transient error with exhausted budget finalizes to failed/ as before", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\nretry_count: 2\n---\nq\n", "utf8");
+    const erroringFactory = () => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        throw new Error("fetch failed: ECONNREFUSED");
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: erroringFactory });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "inbox"))).toHaveLength(0);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(1);
   });
 });

@@ -149,10 +149,14 @@ export async function mainLoop(
   opts: { once?: boolean } = {},
   deps: MainLoopDeps = {},
 ): Promise<void> {
-  const runOnceFn = deps.runOnceFn ?? ((c: Config) => runOnce(c));
+  // The daemon's default runOnce probes endpoint readiness before claiming,
+  // so an endpoint outage queues work instead of burning tickets into failed/.
+  const runOnceFn =
+    deps.runOnceFn ?? ((c: Config) => runOnce(c, { readyFn: () => endpointReachable(c) }));
   const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
   const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
-  const waitForEndpointFn = deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
+  const waitForEndpointFn =
+    deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;

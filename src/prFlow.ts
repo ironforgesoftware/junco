@@ -30,6 +30,7 @@ import {
   type Commit,
 } from "./pr.js";
 import { lintTicket, LabelCache } from "./planLint.js";
+import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { runSpecVerification, type VerificationResult } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
@@ -306,18 +307,46 @@ export async function runPrFlow(
     guardManager,
   });
 
+  // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
+  // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
+  const sinceRef = isAmend(ctx) ? preRunHead : `origin/${ctx.baseBranch}`;
+
   // --- Phase 5: Hard-exit check (timeout or non-guard error). ---
   // A guard abort is a SOFT abort — continue through post-processing.
-  const hardExit = result.timedOut || (result.errorMessage !== null && !result.abortedByGuard);
-  if (hardExit) {
+  // TEMPORARY (replaced by the timeout-salvage task): timeout still hard-exits.
+  if (result.timedOut) {
+    prOutcome.worktreePreserved = true;
+    return finalizePr(claimedPath, result, prOutcome, { dirs });
+  }
+  const hardError = result.errorMessage !== null && !result.abortedByGuard;
+  if (hardError) {
+    // A TRANSIENT error with zero commits is requeued (budget permitting)
+    // rather than failed — the inference side hiccuped, not the ticket.
+    let commitsSoFar = 0;
+    try {
+      commitsSoFar = await countNewCommits(cfg, wtPath, sinceRef);
+    } catch {
+      /* unreadable worktree → treat as 0; requeue is still the safe path */
+    }
+    if (isTransientFailure(result, commitsSoFar)) {
+      const rq = requeueTicket(
+        cfg,
+        claimedPath,
+        task,
+        result.errorMessage ?? "agent session error",
+      );
+      if (rq.requeued) {
+        await cleanupWorktree(cfg, ctx, wtPath);
+        return rq.dst!;
+      }
+    }
     prOutcome.worktreePreserved = true;
     return finalizePr(claimedPath, result, prOutcome, { dirs });
   }
 
   // --- Phases 6-13: commits, push, PR. Any GitOpError → preserve + failed. ---
   try {
-    // Phase 6: since-ref (amend: pre-run HEAD; fresh: origin/<base>).
-    const sinceRef = isAmend(ctx) ? preRunHead : `origin/${ctx.baseBranch}`;
+    // Phase 6: count commits since the ref.
     let newCommits = await countNewCommits(cfg, wtPath, sinceRef);
     const dirty = await worktreeIsDirty(cfg, wtPath);
     if (newCommits === 0 && dirty) {
@@ -335,6 +364,16 @@ export async function runPrFlow(
 
     // Phase 8: no-commits gate.
     if (newCommits === 0) {
+      // stop_reason error/length with nothing committed is the transient
+      // class — requeue with backoff before falling through to terminal fail.
+      if (result.stopReason === "error" || result.stopReason === "length") {
+        const rq = requeueTicket(cfg, claimedPath, task, `stop_reason=${result.stopReason}`);
+        if (rq.requeued) {
+          await cleanupWorktree(cfg, ctx, wtPath);
+          return rq.dst!;
+        }
+        // budget exhausted → fall through to the existing terminal handling
+      }
       if (result.stopReason === "error") {
         const phaseError =
           "agent errored mid-session (stop_reason='error', " +
