@@ -43,5 +43,15 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
     body,
     frontmatter,
     hasRepo: frontmatter.repo !== undefined && frontmatter.repo !== null,
+    notBefore: typeof frontmatter.not_before === "string" ? frontmatter.not_before : null,
+    retryCount:
+      typeof frontmatter.retry_count === "number" &&
+      Number.isInteger(frontmatter.retry_count) &&
+      frontmatter.retry_count >= 0
+        ? frontmatter.retry_count
+        : 0,
+    tools: Array.isArray(frontmatter.tools)
+      ? frontmatter.tools.filter((t): t is string => typeof t === "string" && t.trim() !== "")
+      : null,
   };
 }

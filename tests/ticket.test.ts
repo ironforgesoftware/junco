@@ -44,4 +44,30 @@ describe("parseTicket", () => {
     const t = parseTicket("/in/u.md", "---\nid: u\npriority: HIGH\n---\nx");
     expect(t.priority).toBe("high");
   });
+
+  it("parses not_before, retry_count and tools", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\nnot_before: "2099-01-01T00:00:00Z"\nretry_count: 2\ntools: [read, bash]\n---\nbody`,
+    );
+    expect(t.notBefore).toBe("2099-01-01T00:00:00Z");
+    expect(t.retryCount).toBe(2);
+    expect(t.tools).toEqual(["read", "bash"]);
+  });
+
+  it("defaults: notBefore null, retryCount 0, tools null", () => {
+    const t = parseTicket("/q/a.md", "---\nid: x\n---\nbody");
+    expect(t.notBefore).toBeNull();
+    expect(t.retryCount).toBe(0);
+    expect(t.tools).toBeNull();
+  });
+
+  it("guards malformed retry/tools values (negative count, non-string tools)", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      "---\nid: x\nretry_count: -3\ntools: [read, 7, '']\n---\nbody",
+    );
+    expect(t.retryCount).toBe(0);
+    expect(t.tools).toEqual(["read"]);
+  });
 });

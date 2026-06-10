@@ -194,4 +194,42 @@ describe("loadConfig", () => {
     const p = writeToml(`vault_root = "/v"\n[observability]\nlog_level = "verbose"\n`);
     expect(() => loadConfig(p)).toThrow();
   });
+
+  it("resilience + observability + concurrency defaults", () => {
+    const p = writeToml(`vault_root = "/v"\n`);
+    const cfg = loadConfig(p);
+    expect(cfg.maxTransientRetries).toBe(2);
+    expect(cfg.retryBackoffSeconds).toBe(60);
+    expect(cfg.maxConcurrent).toBe(1);
+    expect(cfg.stateDir).toBe(join(homedir(), ".local/state/junco"));
+    expect(cfg.logToFile).toBe(true);
+    expect(cfg.transcriptsEnabled).toBe(true);
+    expect(cfg.allowedRepoRoots).toEqual([]);
+  });
+
+  it("resilience keys are configurable", () => {
+    const p = writeToml(
+      `vault_root = "/v"\n` +
+        `[worker]\nmax_transient_retries = 0\nretry_backoff_seconds = 5\nmax_concurrent = 3\n` +
+        `[observability]\nstate_dir = "~/x"\nlog_to_file = false\ntranscripts = false\n` +
+        `[git]\nallowed_repo_roots = ["~/code"]\n`,
+    );
+    const cfg = loadConfig(p);
+    expect(cfg.maxTransientRetries).toBe(0);
+    expect(cfg.retryBackoffSeconds).toBe(5);
+    expect(cfg.maxConcurrent).toBe(3);
+    expect(cfg.stateDir).toBe(join(homedir(), "x"));
+    expect(cfg.logToFile).toBe(false);
+    expect(cfg.transcriptsEnabled).toBe(false);
+    expect(cfg.allowedRepoRoots).toEqual([join(homedir(), "code")]);
+  });
+
+  it("rejects max_concurrent < 1 and negative retry knobs", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\nmax_concurrent = 0\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\nmax_transient_retries = -1\n`)),
+    ).toThrow();
+  });
 });

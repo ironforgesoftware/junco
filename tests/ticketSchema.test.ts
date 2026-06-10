@@ -76,9 +76,21 @@ describe("describeTicketSchema()", () => {
       "labels",
       "reviewers",
       "amends_pr",
+      "not_before",
+      "retry_count",
+      "tools",
     ];
     for (const field of expected) {
       expect(s).toContain(`"${field}"`);
     }
+  });
+
+  it("documents retry_count, not_before and tools with the right shapes", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.retry_count.type).toBe("integer");
+    expect(s.properties.not_before.format).toBe("date-time");
+    expect((s.properties.tools.items as Record<string, unknown>).type).toBe("string");
   });
 });

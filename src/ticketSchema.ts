@@ -67,6 +67,24 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         "Pull request number to amend (push additional commits to) instead of opening a new PR.",
     },
+    not_before: {
+      type: "string",
+      format: "date-time",
+      description:
+        "Do not claim this ticket before this UTC instant (ISO 8601). The worker sets this for retry backoff; dispatchers may also set it to schedule work.",
+    },
+    retry_count: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Worker-managed: how many transparent requeue attempts this ticket has consumed. Do not set by hand.",
+    },
+    tools: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Tool allowlist override for this ticket's agent session. Q&A tickets default to a read-only subset (read, grep, find, ls); list tools explicitly (e.g. [read, grep, bash]) to opt in to more.",
+    },
   },
   required: [],
 };

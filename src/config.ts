@@ -101,6 +101,12 @@ const TomlSchema = z.object({
       poll_interval_seconds: z.number().default(15),
       startup_poll_seconds: z.number().default(30),
       startup_wait: z.boolean().default(true),
+      // Resilience: transient failures (endpoint errors with no commits) are
+      // requeued with a not_before backoff up to this many times.
+      max_transient_retries: z.number().int().min(0).default(2),
+      retry_backoff_seconds: z.number().min(0).default(60),
+      // Parallel ticket slots. Tickets targeting the SAME repo always serialize.
+      max_concurrent: z.number().int().min(1).default(1),
     })
     .default({}),
   // Loop-guard supervisor knobs. Python defaults: enabled false; here we
@@ -124,6 +130,9 @@ const TomlSchema = z.object({
       branch_prefix: z.string().default("junco/"),
       worktree_root: z.string().default("~/junco/worktrees"),
       remove_worktree_on_success: z.boolean().default(true),
+      // Containment rail: when non-empty, PR-flow tickets may only target
+      // repos under these roots ([] = anywhere).
+      allowed_repo_roots: z.array(z.string()).default([]),
     })
     .default({}),
   pr: z
@@ -159,6 +168,10 @@ const TomlSchema = z.object({
       health_host: z.string().default("127.0.0.1"),
       health_port: z.number().default(8787),
       log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
+      // Daemon-owned state (worker.log, per-ticket transcripts) lives here.
+      state_dir: z.string().default("~/.local/state/junco"),
+      log_to_file: z.boolean().default(true),
+      transcripts: z.boolean().default(true),
     })
     .default({}),
 });
@@ -198,6 +211,9 @@ export function loadConfig(path: string): Config {
     pollIntervalSeconds: d.worker.poll_interval_seconds,
     startupPollSeconds: d.worker.startup_poll_seconds,
     startupWait: d.worker.startup_wait,
+    maxTransientRetries: d.worker.max_transient_retries,
+    retryBackoffSeconds: d.worker.retry_backoff_seconds,
+    maxConcurrent: d.worker.max_concurrent,
     supervisorEnabled: d.supervisor.enabled,
     supervisorBudgetPerKind: d.supervisor.budget_per_kind,
     supervisorEscalationWindow: d.supervisor.escalation_window_turns,
@@ -209,6 +225,7 @@ export function loadConfig(path: string): Config {
     branchPrefix: d.git.branch_prefix,
     worktreeRoot: expandHome(d.git.worktree_root),
     removeWorktreeOnSuccess: d.git.remove_worktree_on_success,
+    allowedRepoRoots: d.git.allowed_repo_roots.map(expandHome),
     draftByDefault: d.pr.draft_by_default,
     defaultLabels: d.pr.default_labels,
     verifyEnabled: d.verify.enabled,
@@ -225,6 +242,9 @@ export function loadConfig(path: string): Config {
     healthHost: d.observability.health_host,
     healthPort: d.observability.health_port,
     logLevel: d.observability.log_level,
+    stateDir: expandHome(d.observability.state_dir),
+    logToFile: d.observability.log_to_file,
+    transcriptsEnabled: d.observability.transcripts,
   };
 }
 

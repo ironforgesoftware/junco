@@ -43,6 +43,11 @@ export interface Config {
   pollIntervalSeconds: number;
   startupPollSeconds: number;
   startupWait: boolean;
+  // Resilience: transient-failure requeue budget + backoff (worker section).
+  maxTransientRetries: number;
+  retryBackoffSeconds: number;
+  // Parallel ticket slots; same-repo tickets always serialize.
+  maxConcurrent: number;
   // Loop-guard supervisor knobs (parity with the Python [supervisor] section).
   supervisorEnabled: boolean;
   supervisorBudgetPerKind: number;
@@ -56,6 +61,9 @@ export interface Config {
   branchPrefix: string;
   worktreeRoot: string;
   removeWorktreeOnSuccess: boolean;
+  // Containment rail: when non-empty, PR-flow tickets may only target repos
+  // under these roots ([] = anywhere).
+  allowedRepoRoots: string[];
   draftByDefault: boolean;
   defaultLabels: string[];
   verifyEnabled: boolean;
@@ -78,6 +86,10 @@ export interface Config {
   healthHost: string;
   healthPort: number;
   logLevel: "debug" | "info" | "warn" | "error";
+  // Daemon-owned state (worker.log + transcripts/) lives under stateDir.
+  stateDir: string;
+  logToFile: boolean;
+  transcriptsEnabled: boolean;
 }
 export interface Paths {
   inbox: string;
@@ -105,6 +117,12 @@ export interface Ticket {
   body: string;
   frontmatter: Record<string, unknown>;
   hasRepo: boolean;
+  /** ISO instant before which the worker must not claim this ticket (null = no gate). */
+  notBefore: string | null;
+  /** Worker-managed transparent-retry counter (0 on first attempt). */
+  retryCount: number;
+  /** Per-ticket tool allowlist override (null = use the mode default). */
+  tools: string[] | null;
 }
 
 export interface ToolCall {
