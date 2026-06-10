@@ -484,6 +484,93 @@ exit 1
     expect(readFileSync(dst, "utf8")).toContain("status: failed");
   });
 
+  // -------------------------------------------------------------------------
+  // Timeout salvage
+  // -------------------------------------------------------------------------
+
+  /** Session that (optionally) commits, then hangs until runAgent's timeout
+   * timer aborts it — produces a timedOut RunResult. */
+  function timingOutFactory(
+    opts: { commit?: boolean } = {},
+  ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    const { commit = true } = opts;
+    return (_cfg, cwd) => async () => {
+      let resolveHang: (() => void) | null = null;
+      return {
+        subscribe() {
+          return () => {};
+        },
+        async prompt() {
+          if (commit) {
+            writeFileSync(join(cwd, "salvage.txt"), "work before the cutoff\n", "utf8");
+            run(["git", "-C", cwd, "add", "-A"]);
+            run(["git", "-C", cwd, "commit", "-m", "feat: salvage"]);
+          }
+          await new Promise<void>((r) => {
+            resolveHang = r;
+          }); // hang until abort()
+        },
+        dispose() {},
+        abort: async () => {
+          resolveHang?.();
+        },
+      };
+    };
+  }
+
+  it("a timed-out session with commits is salvaged: pushed, PR opened, timeout_partial → done/", async () => {
+    const cfg = makeConfig(h);
+    // timeout_minutes 0.005 → 300ms; the fake commits synchronously, then hangs.
+    const { task, path } = makeTicket(
+      h,
+      "slowpoke.md",
+      `---\nid: slowpoke\nrepo: ${h.work}\ntimeout_minutes: 0.005\n---\n# Slow\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const dst = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: timingOutFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: timeout_partial");
+    expect(text).toContain("pushed: true");
+    expect(text).toContain("Partial run — hit the ticket timeout");
+    const remoteBranches = run([
+      "git",
+      "-C",
+      h.work,
+      "ls-remote",
+      "--heads",
+      "origin",
+      "junco/slowpoke",
+    ]);
+    expect(remoteBranches).toContain("junco/slowpoke");
+  }, 20000);
+
+  it("a timed-out session with no commits fails with a preserved worktree", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "idle.md",
+      `---\nid: idle\nrepo: ${h.work}\ntimeout_minutes: 0.005\n---\n# Idle\n\nDo nothing slowly.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const dst = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: timingOutFactory({ commit: false }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.failed)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: timeout");
+    expect(text).toContain("ticket timeout with no commits");
+    expect(text).toContain("Worktree preserved");
+  }, 20000);
+
   it("a requeued ticket can be re-claimed and run to done/ (no branch collision)", async () => {
     const cfg = makeConfig(h);
     const { task, path } = makeTicket(

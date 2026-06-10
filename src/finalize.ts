@@ -52,9 +52,10 @@ export function finalize(ticketPath: string, result: RunResult, dirs: TerminalDi
 // ---------------------------------------------------------------------------
 
 /**
- * Compute the terminal status for a PR-flow run. Faithful port of the cascade
- * in worker.py finalize_task (lines 2374-2392):
- *   timeout              → result.timedOut
+ * Compute the terminal status for a PR-flow run. Port of the cascade in
+ * worker.py finalize_task (lines 2374-2392), extended with timeout salvage:
+ *   timeout_partial      → timedOut && pushed (commits salvaged before cutoff)
+ *   timeout              → timedOut && !pushed
  *   failed               → phaseError, OR (errorMessage && !abortedByGuard)
  *   aborted_partial      → abortedByGuard && pushed
  *   aborted_no_changes   → abortedByGuard && !pushed
@@ -67,7 +68,7 @@ export function computePrStatus(
   phaseError: string | null,
 ): string {
   const pushed = Boolean(prOutcome && prOutcome.pushed);
-  if (result.timedOut) return "timeout";
+  if (result.timedOut) return pushed ? "timeout_partial" : "timeout";
   if (phaseError) return "failed";
   if (result.errorMessage && !result.abortedByGuard) return "failed";
   if (result.abortedByGuard) return pushed ? "aborted_partial" : "aborted_no_changes";
@@ -136,6 +137,10 @@ function renderPrResult(
   } else if (status === "aborted_no_changes") {
     lines.push(
       `> **Aborted by the loop guard with no committed work.** ${err || "Killed before any commits."}`,
+    );
+  } else if (status === "timeout_partial") {
+    lines.push(
+      `> **⚠️ Partial run — hit the ticket timeout mid-session.** Commits made before the cutoff were salvaged and pushed. Review for completeness; consider an amendment ticket to finish.`,
     );
   }
 

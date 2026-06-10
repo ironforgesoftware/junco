@@ -9,7 +9,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { finalize } from "../src/finalize.js";
+import { finalize, computePrStatus } from "../src/finalize.js";
+import type { PrOutcome } from "../src/prFlow.js";
 import type { RunResult } from "../src/types.js";
 
 function sandbox() {
@@ -57,5 +58,35 @@ describe("finalize", () => {
     const dst = finalize(ticket, { ...ok, errorMessage: "boom" }, { done, failed });
     expect(dst.startsWith(failed)).toBe(true);
     expect(readFileSync(dst, "utf8")).toContain("status: failed");
+  });
+});
+
+describe("computePrStatus (timeout salvage)", () => {
+  const emptyOutcome = (over: Partial<PrOutcome> = {}): PrOutcome => ({
+    statusOverride: null,
+    nwo: null,
+    branch: null,
+    baseBranch: null,
+    prUrl: null,
+    commits: [],
+    pushed: false,
+    worktreePath: null,
+    worktreePreserved: false,
+    amendedPrNumber: null,
+    verification: null,
+    critic: null,
+    criticRetriesUsed: 0,
+    ...over,
+  });
+
+  it("timeout with pushed commits → timeout_partial (done/ routing)", () => {
+    expect(computePrStatus({ ...ok, timedOut: true }, emptyOutcome({ pushed: true }), null)).toBe(
+      "timeout_partial",
+    );
+  });
+
+  it("timeout without a push → timeout (failed/ routing)", () => {
+    expect(computePrStatus({ ...ok, timedOut: true }, emptyOutcome(), null)).toBe("timeout");
+    expect(computePrStatus({ ...ok, timedOut: true }, null, null)).toBe("timeout");
   });
 });

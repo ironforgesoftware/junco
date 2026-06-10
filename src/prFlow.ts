@@ -143,6 +143,14 @@ export function buildPrBody(
     );
   }
 
+  if (result.timedOut) {
+    parts.push(
+      "> ⚠️ **Partial run.** This PR was opened from a session that hit its " +
+        "ticket timeout — commits made before the cutoff were salvaged. Review " +
+        "for completeness; consider an amendment ticket to finish.",
+    );
+  }
+
   // Critic banner (pass / missing).
   const critic = prOutcome.critic;
   if (critic && critic.status === "missing") {
@@ -311,14 +319,10 @@ export async function runPrFlow(
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
   const sinceRef = isAmend(ctx) ? preRunHead : `origin/${ctx.baseBranch}`;
 
-  // --- Phase 5: Hard-exit check (timeout or non-guard error). ---
-  // A guard abort is a SOFT abort — continue through post-processing.
-  // TEMPORARY (replaced by the timeout-salvage task): timeout still hard-exits.
-  if (result.timedOut) {
-    prOutcome.worktreePreserved = true;
-    return finalizePr(claimedPath, result, prOutcome, { dirs });
-  }
-  const hardError = result.errorMessage !== null && !result.abortedByGuard;
+  // --- Phase 5: Hard-exit check (non-guard error). ---
+  // A guard abort is a SOFT abort, and so is a TIMEOUT: both continue through
+  // post-processing so commits made before the cutoff are salvaged into a PR.
+  const hardError = result.errorMessage !== null && !result.abortedByGuard && !result.timedOut;
   if (hardError) {
     // A TRANSIENT error with zero commits is requeued (budget permitting)
     // rather than failed — the inference side hiccuped, not the ticket.
@@ -364,6 +368,15 @@ export async function runPrFlow(
 
     // Phase 8: no-commits gate.
     if (newCommits === 0) {
+      // A timed-out session with nothing committed has nothing to salvage —
+      // preserve the worktree and fail (a timeout is NOT transient: retrying
+      // the same ticket would most likely time out again).
+      if (result.timedOut) {
+        const phaseError = `agent hit the ${Math.round(task.timeoutSeconds / 60)}-minute ticket timeout with no commits`;
+        prOutcome.worktreePreserved = true;
+        log.warn(`${phaseError} — preserving worktree, routing to failed`);
+        return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError });
+      }
       // stop_reason error/length with nothing committed is the transient
       // class — requeue with backoff before falling through to terminal fail.
       if (result.stopReason === "error" || result.stopReason === "length") {
@@ -400,15 +413,16 @@ export async function runPrFlow(
       return finalizePr(claimedPath, result, prOutcome, { dirs });
     }
 
-    // Phase 9: post-session review (skip on a guard-aborted session).
-    const skipPostSessionReview = result.abortedByGuard;
+    // Phase 9: post-session review (skip on a guard-aborted or timed-out
+    // session — the work is by definition incomplete; review would mis-flag).
+    const skipPostSessionReview = result.abortedByGuard || result.timedOut;
     if (skipPostSessionReview) {
       // Record the skip as metadata (parity with worker.py PrOutcome.critic =
       // CriticResult(status="skipped", ...)). The buildPrBody banner only fires
       // on pass/missing, so this never surfaces in the PR body — metadata only.
       prOutcome.critic = {
         status: "skipped",
-        findings: "aborted-by-repetition session",
+        findings: result.timedOut ? "timed-out session" : "aborted-by-repetition session",
         rawOutput: "",
       };
     }

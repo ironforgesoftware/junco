@@ -107,6 +107,7 @@ export const TERMINAL_DONE_STATUSES: ReadonlySet<string> = new Set([
   "completed",
   "completed_no_changes",
   "aborted_partial",
+  "timeout_partial",
 ]);
 
 export interface Ticket {
