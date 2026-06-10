@@ -36,6 +36,7 @@ import { runInitWizard } from "./wizard.js";
 import { runStatusCommand } from "./statusCmd.js";
 import { runListCommand } from "./listCmd.js";
 import { runRetryCommand } from "./retryCmd.js";
+import { runDoctor } from "./doctor.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -73,6 +74,7 @@ Subcommands:
   status       Show daemon / endpoint / queue health at a glance
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
+  doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -306,6 +308,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "retry") {
     const cfg = loadConfigFn(configPath);
     return runRetryCommand(cfg, positionals.slice(1), { all: values.all as boolean }, { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // doctor: preflight external dependencies (loads config itself so a broken
+  // one is reported as a finding instead of crashing the command)
+  // ------------------------------------------------------------
+  if (subcommand === "doctor") {
+    return runDoctor(configPath, { loadConfigFn, printFn });
   }
 
   // ------------------------------------------------------------
