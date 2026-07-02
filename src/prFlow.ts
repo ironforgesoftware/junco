@@ -242,6 +242,12 @@ export function buildPrBody(
     );
   }
 
+  // Bridged tickets: deterministic issue link so merging auto-closes the issue
+  // (never delegated to the prompt).
+  if (task.github && task.github.kind === "pr") {
+    parts.push(`Closes ${task.github.nwo}#${task.github.issue}`);
+  }
+
   const metadataLines = [
     `- Elapsed: ${fmtDuration(Math.round(result.durationMs / 1000))}`,
     `- Tool calls: ${result.toolCalls.length}`,

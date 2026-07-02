@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { runPrFlow } from "../src/prFlow.js";
+import { runPrFlow, buildPrBody, type PrOutcome } from "../src/prFlow.js";
 import { deriveRepoContext } from "../src/repoContext.js";
 import { claim } from "../src/queue.js";
 import { parseTicket } from "../src/ticket.js";
@@ -629,5 +629,62 @@ exit 1
     });
     expect(flow2.dst.startsWith(h.done)).toBe(true);
     expect(readFileSync(flow2.dst, "utf8")).toContain("status: completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildPrBody — github provenance (Closes line)
+// ---------------------------------------------------------------------------
+
+describe("buildPrBody github provenance", () => {
+  const bodyTicket = (github: Ticket["github"]): Ticket => ({
+    ...parseTicket("/q/t.md", `---\nid: t\nrepo: /r\n---\n# T\n\nDo it.\n`, 30),
+    github,
+  });
+  const emptyOutcome: PrOutcome = {
+    statusOverride: null,
+    nwo: "acme/api",
+    branch: "junco/t",
+    baseBranch: "main",
+    prUrl: null,
+    commits: [],
+    pushed: false,
+    worktreePath: null,
+    worktreePreserved: false,
+    amendedPrNumber: null,
+    verification: null,
+    critic: null,
+    criticRetriesUsed: 0,
+  };
+  const okResult = {
+    finalText: "done.",
+    toolCalls: [],
+    usage: { input: 1, output: 1, cacheRead: 0, total: 2 },
+    stopReason: "stop",
+    errorMessage: null,
+    timedOut: false,
+    durationMs: 1000,
+    abortedByGuard: false,
+  };
+  const ctx = {
+    repo: "/r",
+    baseBranch: "main",
+    branchName: "junco/t",
+    prTitle: null,
+    draft: true,
+    labels: [],
+    reviewers: [],
+    amendsPr: null,
+  } as never;
+
+  it("appends a Closes line for bridged pr tickets", () => {
+    const t = bodyTicket({ nwo: "acme/api", issue: 42, kind: "pr" });
+    expect(buildPrBody(t, ctx, emptyOutcome, okResult)).toContain("Closes acme/api#42");
+  });
+
+  it("omits the Closes line for local tickets and ask tickets", () => {
+    expect(buildPrBody(bodyTicket(null), ctx, emptyOutcome, okResult)).not.toContain("Closes ");
+    const ask = bodyTicket({ nwo: "acme/api", issue: 42, kind: "ask" });
+    expect(buildPrBody(ask, ctx, emptyOutcome, okResult)).not.toContain("Closes ");
   });
 });
