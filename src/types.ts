@@ -125,6 +125,13 @@ export const TERMINAL_DONE_STATUSES: ReadonlySet<string> = new Set([
   "timeout_partial",
 ]);
 
+/** Worker-managed GitHub provenance for a bridged ticket (do not set by hand). */
+export interface TicketGithub {
+  nwo: string;
+  issue: number;
+  kind: "pr" | "ask";
+}
+
 export interface Ticket {
   path: string;
   id: string;
@@ -139,6 +146,10 @@ export interface Ticket {
   retryCount: number;
   /** Per-ticket tool allowlist override (null = use the mode default). */
   tools: string[] | null;
+  /** GitHub issue this ticket was bridged from (null = local dispatch). */
+  github: TicketGithub | null;
+  /** Q&A only: directory the session runs in (read-only tools). Null = default. */
+  workdir: string | null;
 }
 
 export interface ToolCall {

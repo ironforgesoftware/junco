@@ -79,10 +79,20 @@ describe("describeTicketSchema()", () => {
       "not_before",
       "retry_count",
       "tools",
+      "github",
+      "workdir",
     ];
     for (const field of expected) {
       expect(s).toContain(`"${field}"`);
     }
+  });
+
+  it("documents github and workdir with the right shapes", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.github.type).toBe("object");
+    expect(s.properties.workdir.type).toBe("string");
   });
 
   it("documents retry_count, not_before and tools with the right shapes", () => {

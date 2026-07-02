@@ -35,6 +35,20 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       ? frontmatter.timeout_minutes
       : defaultTimeoutMinutes;
   const tm = Number.isFinite(tmRaw) && tmRaw > 0 ? tmRaw : defaultTimeoutMinutes;
+  const ghRaw = frontmatter.github;
+  let github: Ticket["github"] = null;
+  if (ghRaw !== null && typeof ghRaw === "object" && !Array.isArray(ghRaw)) {
+    const g = ghRaw as Record<string, unknown>;
+    if (
+      typeof g.nwo === "string" &&
+      typeof g.issue === "number" &&
+      Number.isInteger(g.issue) &&
+      g.issue > 0 &&
+      (g.kind === "pr" || g.kind === "ask")
+    ) {
+      github = { nwo: g.nwo, issue: g.issue, kind: g.kind };
+    }
+  }
   return {
     path,
     id,
@@ -53,5 +67,10 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
     tools: Array.isArray(frontmatter.tools)
       ? frontmatter.tools.filter((t): t is string => typeof t === "string" && t.trim() !== "")
       : null,
+    github,
+    workdir:
+      typeof frontmatter.workdir === "string" && frontmatter.workdir.trim() !== ""
+        ? frontmatter.workdir
+        : null,
   };
 }
