@@ -274,11 +274,17 @@ describe("runPrFlow", () => {
     );
     const ctx = ctxFor(cfg, task);
 
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const flow = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: commitFactory({ commit: true }),
       dirs: { done: h.done, failed: h.failed },
     });
 
+    // Structured result: status/prUrl/commitCount surface for the reporter seam.
+    expect(flow.status).toBe("completed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/123");
+    expect(flow.commitCount).toBeGreaterThan(0);
+    const dst = flow.dst;
     expect(dst.startsWith(h.done)).toBe(true);
     const text = readFileSync(dst, "utf8");
     expect(text).toContain("status: completed");
@@ -307,7 +313,7 @@ describe("runPrFlow", () => {
     );
     const ctx = ctxFor(cfg, task);
 
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: commitFactory({ commit: false }),
       dirs: { done: h.done, failed: h.failed },
     });
@@ -349,7 +355,7 @@ Stay put.
     const ctx = ctxFor(cfg, task);
 
     let agentCalled = false;
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: () => {
         agentCalled = true;
         return commitFactory({ commit: true })(cfg, h.wtsRoot)();
@@ -385,7 +391,7 @@ exit 1
     );
     const ctx = ctxFor(cfg, task);
 
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: commitFactory({ commit: true }),
       dirs: { done: h.done, failed: h.failed },
     });
@@ -418,7 +424,7 @@ exit 1
 
     // The critic returns MISSING on every call (drives ONE corrective re-dispatch).
     // Both the initial and corrective agent turns make a commit.
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: commitFactory({ commit: true }),
       criticSessionFactory: criticFactory("JUNCO_VERIFY: MISSING the X bit"),
       dirs: { done: h.done, failed: h.failed },
@@ -459,7 +465,7 @@ exit 1
     );
     const ctx = ctxFor(cfg, task);
 
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: erroringFactory(),
       dirs: { done: h.done, failed: h.failed },
     });
@@ -482,7 +488,7 @@ exit 1
     );
     const ctx = ctxFor(cfg, task);
 
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: erroringFactory(),
       dirs: { done: h.done, failed: h.failed },
     });
@@ -499,7 +505,7 @@ exit 1
       `---\nid: narrow\nrepo: ${h.work}\ntools: [read, edit]\n---\n# Narrow\n\nDo a thing.\n`,
     );
     const seen: string[][] = [];
-    const dst = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+    const { dst } = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: (passedCfg, cwd) => {
         seen.push(passedCfg.tools);
         return commitFactory({ commit: true })(passedCfg, cwd);
@@ -554,7 +560,7 @@ exit 1
     );
     const ctx = ctxFor(cfg, task);
 
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: timingOutFactory({ commit: true }),
       dirs: { done: h.done, failed: h.failed },
     });
@@ -585,7 +591,7 @@ exit 1
     );
     const ctx = ctxFor(cfg, task);
 
-    const dst = await runPrFlow(cfg, task, path, ctx, {
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: timingOutFactory({ commit: false }),
       dirs: { done: h.done, failed: h.failed },
     });
@@ -605,21 +611,23 @@ exit 1
       `---\nid: retry-roundtrip\nrepo: ${h.work}\n---\n# Roundtrip\n\nDo a thing.\n`,
     );
 
-    const dst1 = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+    const flow1 = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: erroringFactory(),
       dirs: { done: h.done, failed: h.failed },
     });
-    expect(dst1).toContain(join("Junco", "inbox"));
+    expect(flow1.requeued).toBe(true);
+    expect(flow1.status).toBe("requeued");
+    expect(flow1.dst).toContain(join("Junco", "inbox"));
 
     // Second attempt: re-claim (simulating the queue) and run a committing fake.
-    const claimed2 = claim(dst1, h.processing)!;
+    const claimed2 = claim(flow1.dst, h.processing)!;
     const task2 = parseTicket(claimed2, readFileSync(claimed2, "utf8"), 30);
     expect(task2.retryCount).toBe(1);
-    const dst2 = await runPrFlow(cfg, task2, claimed2, ctxFor(cfg, task2), {
+    const flow2 = await runPrFlow(cfg, task2, claimed2, ctxFor(cfg, task2), {
       sessionFactoryFor: commitFactory({ commit: true }),
       dirs: { done: h.done, failed: h.failed },
     });
-    expect(dst2.startsWith(h.done)).toBe(true);
-    expect(readFileSync(dst2, "utf8")).toContain("status: completed");
+    expect(flow2.dst.startsWith(h.done)).toBe(true);
+    expect(readFileSync(flow2.dst, "utf8")).toContain("status: completed");
   });
 });

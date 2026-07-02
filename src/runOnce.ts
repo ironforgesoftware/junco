@@ -142,13 +142,13 @@ export async function executeClaimed(
           defaultLabels: cfg.defaultLabels,
         });
         if (ctx) {
-          const dst = await runPrFlow(cfg, next, claimed, ctx, {
+          const flow = await runPrFlow(cfg, next, claimed, ctx, {
             sessionFactoryFor: deps.sessionFactoryFor,
             criticSessionFactory: deps.criticSessionFactory,
             abortSignal: deps.abortSignal,
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
           });
-          log.info("finalized (pr-flow)", { dst });
+          log.info("finalized (pr-flow)", { dst: flow.dst, status: flow.status });
           return;
         }
         // ctx === null means no usable `repo:` — fall through to the Q&A path.

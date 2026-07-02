@@ -79,6 +79,49 @@ function emptyPrOutcome(ctx: RepoContext): PrOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// PrFlowResult — structured return of runPrFlow (feeds the reporter seam).
+// ---------------------------------------------------------------------------
+
+export interface PrFlowResult {
+  dst: string;
+  status: string; // terminal status, or "requeued"
+  requeued: boolean;
+  prUrl: string | null;
+  commitCount: number;
+  finalText: string; // agent's final message ("" when none)
+  phaseError: string | null; // phase error or agent errorMessage, when failed
+}
+
+function flowResult(
+  fin: { dst: string; status: string },
+  prOutcome: PrOutcome,
+  result: RunResult,
+  phaseError: string | null = null,
+): PrFlowResult {
+  return {
+    dst: fin.dst,
+    status: fin.status,
+    requeued: false,
+    prUrl: prOutcome.prUrl,
+    commitCount: prOutcome.commits.length,
+    finalText: result.finalText,
+    phaseError: phaseError ?? result.errorMessage,
+  };
+}
+
+function requeuedResult(dst: string, result: RunResult): PrFlowResult {
+  return {
+    dst,
+    status: "requeued",
+    requeued: true,
+    prUrl: null,
+    commitCount: 0,
+    finalText: result.finalText,
+    phaseError: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -238,7 +281,7 @@ export async function runPrFlow(
   claimedPath: string,
   ctx: RepoContext,
   deps: PrFlowDeps = {},
-): Promise<string> {
+): Promise<PrFlowResult> {
   const dirs: TerminalDirs = deps.dirs ?? defaultDirs(cfg);
   const prOutcome = emptyPrOutcome(ctx);
   let amendTarget: AmendTarget | null = null;
@@ -259,7 +302,13 @@ export async function runPrFlow(
     if (!(e instanceof GitOpError)) throw e;
     const msg = e.message;
     log.error(`pr-flow pre-check failed for ${claimedPath}: ${msg}`);
-    return finalizePr(claimedPath, emptyRunResult(msg), prOutcome, { dirs, phaseError: msg }).dst;
+    const r = emptyRunResult(msg);
+    return flowResult(
+      finalizePr(claimedPath, r, prOutcome, { dirs, phaseError: msg }),
+      prOutcome,
+      r,
+      msg,
+    );
   }
 
   // --- Phase 2: Plan-lint gate. ---
@@ -280,8 +329,13 @@ export async function runPrFlow(
       }
       const phaseError = formatPlanLintPhaseError(lint.errors);
       log.warn(`plan-lint blocked ${task.id}; not setting up worktree`);
-      return finalizePr(claimedPath, emptyRunResult(phaseError), prOutcome, { dirs, phaseError })
-        .dst;
+      const r = emptyRunResult(phaseError);
+      return flowResult(
+        finalizePr(claimedPath, r, prOutcome, { dirs, phaseError }),
+        prOutcome,
+        r,
+        phaseError,
+      );
     }
   }
 
@@ -296,7 +350,13 @@ export async function runPrFlow(
     if (!(e instanceof GitOpError)) throw e;
     const msg = e.message;
     log.error(`pr-flow pre-check failed for ${claimedPath}: ${msg}`);
-    return finalizePr(claimedPath, emptyRunResult(msg), prOutcome, { dirs, phaseError: msg }).dst;
+    const r = emptyRunResult(msg);
+    return flowResult(
+      finalizePr(claimedPath, r, prOutcome, { dirs, phaseError: msg }),
+      prOutcome,
+      r,
+      msg,
+    );
   }
 
   // --- Phase 4: Run the agent in the worktree. ---
@@ -359,11 +419,11 @@ export async function runPrFlow(
       );
       if (rq.requeued) {
         await cleanupWorktree(cfg, ctx, wtPath);
-        return rq.dst!;
+        return requeuedResult(rq.dst!, result);
       }
     }
     prOutcome.worktreePreserved = true;
-    return finalizePr(claimedPath, result, prOutcome, { dirs }).dst;
+    return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
   }
 
   // --- Phases 6-13: commits, push, PR. Any GitOpError → preserve + failed. ---
@@ -393,7 +453,12 @@ export async function runPrFlow(
         const phaseError = `agent hit the ${Math.round(task.timeoutSeconds / 60)}-minute ticket timeout with no commits`;
         prOutcome.worktreePreserved = true;
         log.warn(`${phaseError} — preserving worktree, routing to failed`);
-        return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }).dst;
+        return flowResult(
+          finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+          prOutcome,
+          result,
+          phaseError,
+        );
       }
       // stop_reason error/length with nothing committed is the transient
       // class — requeue with backoff before falling through to terminal fail.
@@ -401,7 +466,7 @@ export async function runPrFlow(
         const rq = requeueTicket(cfg, claimedPath, task, `stop_reason=${result.stopReason}`);
         if (rq.requeued) {
           await cleanupWorktree(cfg, ctx, wtPath);
-          return rq.dst!;
+          return requeuedResult(rq.dst!, result);
         }
         // budget exhausted → fall through to the existing terminal handling
       }
@@ -412,7 +477,12 @@ export async function runPrFlow(
           "failure, not a successful no-changes outcome";
         prOutcome.worktreePreserved = true;
         log.warn(`${phaseError} — preserving worktree, routing to failed`);
-        return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }).dst;
+        return flowResult(
+          finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+          prOutcome,
+          result,
+          phaseError,
+        );
       }
       if (result.stopReason === "length") {
         const phaseError =
@@ -421,14 +491,19 @@ export async function runPrFlow(
           "thinking or output without converging on a tool call; likely a stall";
         prOutcome.worktreePreserved = true;
         log.warn(`${phaseError} — preserving worktree, routing to failed`);
-        return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }).dst;
+        return flowResult(
+          finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+          prOutcome,
+          result,
+          phaseError,
+        );
       }
       prOutcome.statusOverride = "completed_no_changes";
       log.info(
         `no-changes outcome for ${claimedPath}; skipping ${isAmend(ctx) ? "PR-update" : "PR"}`,
       );
       if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
-      return finalizePr(claimedPath, result, prOutcome, { dirs }).dst;
+      return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
     }
 
     // Phase 9: post-session review (skip on a guard-aborted or timed-out
@@ -511,7 +586,12 @@ export async function runPrFlow(
         `checks passed; ${failedCount} failure(s)`;
       log.warn(`${phaseError} — preserving worktree, skipping push/PR`);
       prOutcome.worktreePreserved = true;
-      return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }).dst;
+      return flowResult(
+        finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+        prOutcome,
+        result,
+        phaseError,
+      );
     }
 
     // Phase 11: push.
@@ -523,7 +603,12 @@ export async function runPrFlow(
     const phaseError = `push/commit failed: ${e.message}`;
     prOutcome.worktreePreserved = true;
     log.error(phaseError);
-    return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }).dst;
+    return flowResult(
+      finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+      prOutcome,
+      result,
+      phaseError,
+    );
   }
 
   // --- Phase 12: open PR (fresh) OR refresh URL (amend). ---
@@ -552,7 +637,12 @@ export async function runPrFlow(
       const phaseError = `gh pr create failed (branch pushed, open manually): ${e.message}`;
       log.error(phaseError);
       if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
-      return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }).dst;
+      return flowResult(
+        finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+        prOutcome,
+        result,
+        phaseError,
+      );
     }
   }
 
@@ -564,7 +654,7 @@ export async function runPrFlow(
   }
 
   // --- Phase 14: finalize success. ---
-  return finalizePr(claimedPath, result, prOutcome, { dirs }).dst;
+  return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
 }
 
 // ---------------------------------------------------------------------------
