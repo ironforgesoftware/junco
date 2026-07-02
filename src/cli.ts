@@ -28,6 +28,7 @@ import { acquireSingletonLock } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
+import { makeGithubReporter } from "./githubReport.js";
 import { log, setLogLevel, setLogFormat, setLogSink, rotateLogIfLarge } from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
@@ -133,7 +134,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const acquireLockFn = deps.acquireLockFn ?? acquireSingletonLock;
   const installSignalHandlersFn = deps.installSignalHandlersFn ?? installSignalHandlers;
   const mainLoopFn = deps.mainLoopFn ?? mainLoop;
-  const runOnceFn = deps.runOnceFn ?? runOnce;
+  // The manual run-once poke reports back to GitHub too when the bridge is on
+  // (a daemon-claimed bridged ticket would otherwise leave its issue stale).
+  const runOnceFn =
+    deps.runOnceFn ??
+    ((c: Config) => runOnce(c, { reporter: c.github.enabled ? makeGithubReporter(c) : undefined }));
 
   // Parse argv
   const { values, positionals } = parseArgs({

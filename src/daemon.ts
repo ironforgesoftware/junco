@@ -28,6 +28,9 @@ import {
   type HealthServerHandle,
   type HealthServerOpts,
 } from "./healthServer.js";
+import { pollGithubInbox, newBridgeState } from "./githubInbox.js";
+import { makeGithubReporter } from "./githubReport.js";
+import type { TicketReporter } from "./reporter.js";
 
 // ---------------------------------------------------------------------------
 // StopFlag
@@ -156,6 +159,8 @@ export interface MainLoopDeps {
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
   startHealthServerFn?: (opts: HealthServerOpts) => Promise<HealthServerHandle>;
+  /** Bridge sweep override (tests). Only consulted when cfg.github.enabled. */
+  bridgeSweepFn?: (cfg: Config) => Promise<number>;
 }
 
 function defaultMkdirs(cfg: Config): void {
@@ -173,6 +178,10 @@ export interface SchedulerDeps {
   executeFn?: (cfg: Config, work: ClaimedWork) => Promise<void>;
   sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
   readyFn?: () => Promise<boolean>;
+  /** Throttled bridge sweep (built by mainLoop); called once per poll tick. */
+  maybeBridgeSweepFn?: () => Promise<void>;
+  /** Lifecycle reporter threaded into the default executeFn. */
+  reporter?: TicketReporter;
 }
 
 /**
@@ -194,7 +203,8 @@ export async function runScheduler(
       claimNextTask(c, o));
   const executeFn =
     deps.executeFn ??
-    ((c: Config, w: ClaimedWork) => executeClaimed(c, w, { abortSignal: stopFlag.forceSignal }));
+    ((c: Config, w: ClaimedWork) =>
+      executeClaimed(c, w, { abortSignal: stopFlag.forceSignal, reporter: deps.reporter }));
   const sleep = deps.sleep ?? sleepInterruptible;
 
   const inflight = new Set<Promise<void>>();
@@ -204,6 +214,7 @@ export async function runScheduler(
 
   while (!stopFlag.requested && !breakAfterDrain) {
     metrics.recordPoll();
+    if (deps.maybeBridgeSweepFn) await deps.maybeBridgeSweepFn();
     let claimedThisPoll = 0;
     while (inflight.size < cfg.maxConcurrent && !stopFlag.requested) {
       const work = await claimFn(cfg, { skipRepoKeys: busyRepos, readyFn: deps.readyFn });
@@ -266,12 +277,36 @@ export async function mainLoop(
   opts: { once?: boolean } = {},
   deps: MainLoopDeps = {},
 ): Promise<void> {
+  // GitHub bridge (issues → inbox) + reporter (labels/comment back). Gated on
+  // cfg.github.enabled: disabled = zero gh calls, local behavior unchanged.
+  const reporter = cfg.github.enabled ? makeGithubReporter(cfg) : undefined;
+  const bridgeSweepFn = cfg.github.enabled ? (deps.bridgeSweepFn ?? defaultBridgeSweep()) : null;
+  let lastSweepMs = -Infinity;
+  const monoMs = (): number => Number(process.hrtime.bigint() / 1_000_000n);
+  const maybeBridgeSweep = async (): Promise<void> => {
+    if (!bridgeSweepFn) return;
+    if (monoMs() - lastSweepMs < cfg.github.pollIntervalSeconds * 1000) return;
+    lastSweepMs = monoMs();
+    try {
+      metrics.recordBridgeSweep(await bridgeSweepFn(cfg));
+    } catch (e) {
+      metrics.recordBridgeError();
+      log.warn("github bridge sweep failed; queue unaffected", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
   // The daemon's default runOnce probes endpoint readiness before claiming,
   // so an endpoint outage queues work instead of burning tickets into failed/.
   const runOnceFn =
     deps.runOnceFn ??
     ((c: Config) =>
-      runOnce(c, { readyFn: () => endpointReachable(c), abortSignal: stopFlag.forceSignal }));
+      runOnce(c, {
+        readyFn: () => endpointReachable(c),
+        abortSignal: stopFlag.forceSignal,
+        reporter,
+      }));
   const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
   const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
   const waitForEndpointFn =
@@ -323,11 +358,14 @@ export async function mainLoop(
         executeFn: deps.executeFn,
         sleep: deps.sleep,
         readyFn: () => endpointReachable(cfg),
+        maybeBridgeSweepFn: maybeBridgeSweep,
+        reporter,
       });
     } else {
       let idleAnnounced = false;
       while (!stopFlag.requested) {
         metrics.recordPoll();
+        await maybeBridgeSweep();
         const handled = await runOnceFn(cfg);
         if (handled) {
           idleAnnounced = false;
@@ -350,4 +388,10 @@ export async function mainLoop(
   }
 
   log.info("worker exiting cleanly");
+}
+
+/** Default bridge sweep: process-lifetime state (label/origin caches) in a closure. */
+function defaultBridgeSweep(): (cfg: Config) => Promise<number> {
+  const state = newBridgeState();
+  return (cfg: Config) => pollGithubInbox(cfg, state);
 }

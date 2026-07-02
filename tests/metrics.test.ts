@@ -309,3 +309,29 @@ describe("multi-ticket tracking (max_concurrent > 1)", () => {
     expect(m.snapshot().currentProgress).toEqual({});
   });
 });
+
+describe("bridge metrics", () => {
+  it("records sweeps, bridged counts, and errors", () => {
+    const m = new RunMetrics(() => new Date("2026-07-02T00:00:00Z"));
+    m.recordBridgeSweep(2);
+    m.recordBridgeSweep(0);
+    m.recordBridgeError();
+    const s = m.snapshot();
+    expect(s.bridgeSweeps).toBe(2);
+    expect(s.ticketsBridged).toBe(2);
+    expect(s.bridgeErrors).toBe(1);
+    expect(s.lastBridgeSweepAt).toBe("2026-07-02T00:00:00.000Z");
+  });
+
+  it("reset clears bridge fields", () => {
+    const m = new RunMetrics();
+    m.recordBridgeSweep(1);
+    m.recordBridgeError();
+    m.reset();
+    const s = m.snapshot();
+    expect(s.bridgeSweeps).toBe(0);
+    expect(s.ticketsBridged).toBe(0);
+    expect(s.bridgeErrors).toBe(0);
+    expect(s.lastBridgeSweepAt).toBeNull();
+  });
+});
