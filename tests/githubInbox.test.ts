@@ -4,10 +4,13 @@ import {
   isEligible,
   nwoFromRemoteUrl,
   issueToTicket,
+  pollGithubInbox,
+  newBridgeState,
   type GhIssue,
 } from "../src/githubInbox.js";
 import { parseTicket } from "../src/ticket.js";
 import type { Config } from "../src/types.js";
+import type { CmdResult } from "../src/git.js";
 
 // Minimal Config for conversion tests — only the fields issueToTicket reads.
 const cfg = {
@@ -128,5 +131,176 @@ describe("issueToTicket", () => {
     expect(t.content).toContain("**Uploads are slow**");
     expect(t.content).toContain("Users report 30s uploads.");
     expect(t.content).toContain("_Background only");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pollGithubInbox — sweep behavior against DI fakes (no network, no shell)
+// ---------------------------------------------------------------------------
+
+describe("pollGithubInbox", () => {
+  type Call = string[];
+  function makeFakes(opts: {
+    issues?: unknown[];
+    events?: string; // NDJSON lines from the --jq filter
+    permission?: string;
+    parent?: string; // "" | "null" | JSON
+    origin?: string;
+    failList?: boolean;
+  }) {
+    const calls: Call[] = [];
+    const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
+    const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "list") {
+        if (opts.failList) throw new Error("api down");
+        return ok(JSON.stringify(opts.issues ?? []));
+      }
+      if (args[0] === "label") return ok("");
+      if (args[0] === "issue" && args[1] === "edit") return ok("");
+      if (args[0] === "api" && args[1] === "graphql") return ok(opts.parent ?? "null");
+      if (args[0] === "api" && String(args[2] ?? "").includes("/events"))
+        return ok(opts.events ?? "");
+      if (args[0] === "api" && String(args[1]).includes("/permission"))
+        return ok(opts.permission ?? "write");
+      throw new Error(`unhandled gh argv: ${args.join(" ")}`);
+    };
+    const gitFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+      calls.push(["git", ...args]);
+      return ok(opts.origin ?? "https://github.com/acme/api.git");
+    };
+    const submitted: { content: string; idHint?: string }[] = [];
+    const submitFn = (_c: unknown, content: string, o?: { idHint?: string }): string => {
+      submitted.push({ content, idHint: o?.idHint });
+      return "/inbox/x.md";
+    };
+    return { ghFn, gitFn, submitFn, calls, submitted };
+  }
+
+  const bridgeCfg = {
+    ...cfg,
+    github: {
+      ...cfg.github,
+      repos: [{ nwo: "acme/api", path: "/home/u/code/api" }],
+    },
+  } as Config;
+  const rawIssue = {
+    number: 42,
+    title: "Add rate limiting",
+    body: "Body.",
+    labels: [{ name: "junco" }],
+  };
+  const labeledEvent = `{"actor":"alice","label":"junco"}`;
+
+  it("bridges an eligible issue: submit then queued label", async () => {
+    const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
+    const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+    expect(n).toBe(1);
+    expect(f.submitted).toHaveLength(1);
+    expect(f.submitted[0].content).toContain(`nwo: "acme/api"`);
+    expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+    const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+    expect(edit).toContain("junco:queued");
+  });
+
+  it("denies without write permission: denied label, no submit", async () => {
+    const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "read" });
+    const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+    expect(n).toBe(0);
+    expect(f.submitted).toHaveLength(0);
+    const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+    expect(edit).toContain("junco:denied");
+  });
+
+  it("fail-closed: no labeled event found → no submit, no label", async () => {
+    const f = makeFakes({ issues: [rawIssue], events: "", permission: "write" });
+    const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+    expect(n).toBe(0);
+    expect(f.submitted).toHaveLength(0);
+    expect(f.calls.find((c) => c[0] === "issue" && c[1] === "edit")).toBeUndefined();
+  });
+
+  it("duplicate submit still applies the queued label", async () => {
+    const f = makeFakes({ issues: [rawIssue], events: labeledEvent });
+    const throwingSubmit = (): string => {
+      throw new Error("ticket already queued: /inbox/gh-acme-api-42.md");
+    };
+    const n = await pollGithubInbox(bridgeCfg, newBridgeState(), {
+      ghFn: f.ghFn,
+      gitFn: f.gitFn,
+      submitFn: throwingSubmit,
+    } as never);
+    expect(n).toBe(1);
+    expect(f.calls.find((c) => c[1] === "edit" && c.includes("junco:queued"))).toBeDefined();
+  });
+
+  it("a non-duplicate submit failure skips the issue (no queued label)", async () => {
+    const f = makeFakes({ issues: [rawIssue], events: labeledEvent });
+    const throwingSubmit = (): string => {
+      throw new Error("EACCES: permission denied");
+    };
+    const n = await pollGithubInbox(bridgeCfg, newBridgeState(), {
+      ghFn: f.ghFn,
+      gitFn: f.gitFn,
+      submitFn: throwingSubmit,
+    } as never);
+    expect(n).toBe(0);
+    expect(f.calls.find((c) => c[1] === "edit")).toBeUndefined();
+  });
+
+  it("origin mismatch disables the repo: no issue list call", async () => {
+    const f = makeFakes({ issues: [rawIssue], origin: "https://github.com/other/thing.git" });
+    const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+    expect(n).toBe(0);
+    expect(f.calls.find((c) => c[0] === "issue" && c[1] === "list")).toBeUndefined();
+  });
+
+  it("caches the origin verdict and ensured labels across sweeps in one state", async () => {
+    const f = makeFakes({ issues: [], events: labeledEvent });
+    const state = newBridgeState();
+    await pollGithubInbox(bridgeCfg, state, f as never);
+    await pollGithubInbox(bridgeCfg, state, f as never);
+    const originProbes = f.calls.filter((c) => c[0] === "git");
+    expect(originProbes).toHaveLength(1);
+    const labelCreates = f.calls.filter((c) => c[0] === "label");
+    expect(labelCreates).toHaveLength(5); // once per lifecycle label, first sweep only
+  });
+
+  it("a repo-level list failure is contained (returns 0, no throw)", async () => {
+    const f = makeFakes({ failList: true });
+    await expect(pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).resolves.toBe(0);
+  });
+
+  it("includes parent context when the issue is a sub-issue", async () => {
+    const f = makeFakes({
+      issues: [rawIssue],
+      events: labeledEvent,
+      parent: `{"title":"Uploads are slow","body":"30s uploads."}`,
+    });
+    await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+    expect(f.submitted[0].content).toContain("## Context: parent issue");
+    expect(f.submitted[0].content).toContain("Uploads are slow");
+  });
+
+  it("takes the LATEST labeled event for the trigger (relabeled issues)", async () => {
+    const events = [
+      `{"actor":"mallory","label":"junco"}`,
+      `{"actor":"someone","label":"bug"}`,
+      `{"actor":"alice","label":"junco"}`,
+    ].join("\n");
+    const perms: string[] = [];
+    const f = makeFakes({ issues: [rawIssue], events });
+    const ghFn = async (c: unknown, args: string[]): Promise<CmdResult> => {
+      if (args[0] === "api" && String(args[1]).includes("/permission")) {
+        perms.push(String(args[1]));
+      }
+      return f.ghFn(c, args);
+    };
+    await pollGithubInbox(bridgeCfg, newBridgeState(), {
+      ghFn,
+      gitFn: f.gitFn,
+      submitFn: f.submitFn,
+    } as never);
+    expect(perms).toEqual(["repos/acme/api/collaborators/alice/permission"]);
   });
 });
