@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import type { Config, Ticket } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
@@ -115,6 +115,38 @@ export async function claimNextTask(
   return null;
 }
 
+/** Validate a Q&A ticket's workdir: must exist, be a directory, and (when the
+ * allowed_repo_roots rail is configured) sit under one of the roots. Invalid →
+ * warn + fall back to the default cwd; never fails the ticket. */
+function resolveQaCwd(t: Ticket, cfg: Config, fallback: string): string {
+  if (!t.workdir) return fallback;
+  const wd = resolve(expandHome(t.workdir));
+  let isDir = false;
+  try {
+    isDir = statSync(wd).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (!isDir) {
+    log.warn("workdir missing or not a directory; using default cwd", { id: t.id, workdir: wd });
+    return fallback;
+  }
+  if (cfg.allowedRepoRoots.length > 0) {
+    const ok = cfg.allowedRepoRoots.some((root) => {
+      const r = resolve(expandHome(root));
+      return wd === r || wd.startsWith(r + sep);
+    });
+    if (!ok) {
+      log.warn("workdir outside allowed_repo_roots; using default cwd", {
+        id: t.id,
+        workdir: wd,
+      });
+      return fallback;
+    }
+  }
+  return wd;
+}
+
 /** Execute one claimed ticket to its terminal state (or a requeue). */
 export async function executeClaimed(
   cfg: Config,
@@ -155,7 +187,9 @@ export async function executeClaimed(
         log.warn("hasRepo ticket produced no repo context; treating as Q&A", { id: next.id });
       }
 
-      const cwd = paths.processing; // Q&A has no worktree; cwd hosts only read-only tools
+      // Q&A has no worktree; cwd hosts only read-only tools. A validated ticket
+      // workdir (e.g. a bridged repo clone) overrides the processing dir.
+      const cwd = resolveQaCwd(next, cfg, paths.processing);
       // Q&A default is the read-only subset; an explicit ticket `tools:` is an
       // owner-authored opt-in and is used verbatim.
       const qaTools = next.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));

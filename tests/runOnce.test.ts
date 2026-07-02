@@ -313,6 +313,63 @@ describe("per-ticket tools override", () => {
   });
 });
 
+describe("Q&A workdir", () => {
+  function sandbox() {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    return { root, j };
+  }
+
+  it("runs the session in a valid workdir", async () => {
+    const { root, j } = sandbox();
+    const wd = mkdtempSync(join(tmpdir(), "junco-wd-"));
+    writeFileSync(join(j, "inbox", "q.md"), `---\nid: q\nworkdir: ${wd}\n---\nask\n`, "utf8");
+    let seenCwd = "";
+    await runOnce(cfg(root), {
+      sessionFactoryFor: (_c, cwd) => {
+        seenCwd = cwd;
+        return fakeFactory();
+      },
+    });
+    expect(seenCwd).toBe(wd);
+  });
+
+  it("falls back to processing/ when workdir does not exist", async () => {
+    const { root, j } = sandbox();
+    writeFileSync(
+      join(j, "inbox", "q.md"),
+      "---\nid: q\nworkdir: /nonexistent-junco-dir\n---\nask\n",
+      "utf8",
+    );
+    let seenCwd = "";
+    await runOnce(cfg(root), {
+      sessionFactoryFor: (_c, cwd) => {
+        seenCwd = cwd;
+        return fakeFactory();
+      },
+    });
+    expect(seenCwd).toBe(join(j, "processing"));
+  });
+
+  it("falls back to processing/ when workdir is outside allowed_repo_roots", async () => {
+    const { root, j } = sandbox();
+    const wd = mkdtempSync(join(tmpdir(), "junco-wd-"));
+    writeFileSync(join(j, "inbox", "q.md"), `---\nid: q\nworkdir: ${wd}\n---\nask\n`, "utf8");
+    let seenCwd = "";
+    const c: Config = { ...cfg(root), allowedRepoRoots: ["/somewhere-else-entirely"] };
+    await runOnce(c, {
+      sessionFactoryFor: (_c, cwd) => {
+        seenCwd = cwd;
+        return fakeFactory();
+      },
+    });
+    expect(seenCwd).toBe(join(j, "processing"));
+  });
+});
+
 describe("claimNextTask (per-repo serialization)", () => {
   it("skips tickets whose repoKey is busy and claims the next eligible", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
