@@ -234,6 +234,48 @@ describe("loadConfig", () => {
   });
 });
 
+describe("[github] config section", () => {
+  it("defaults: disabled, junco labels, 60s poll, no repos", () => {
+    const cfg = loadConfig(writeToml(`vault_root = "/tmp/v"\n`));
+    expect(cfg.github).toEqual({
+      enabled: false,
+      triggerLabel: "junco",
+      askLabel: "junco:ask",
+      pollIntervalSeconds: 60,
+      repos: [],
+    });
+  });
+
+  it("parses repos and derives ask_label from a custom trigger", () => {
+    const cfg = loadConfig(
+      writeToml(
+        `vault_root = "/tmp/v"\n[github]\nenabled = true\ntrigger_label = "bot"\n` +
+          `[[github.repos]]\nnwo = "acme/api"\npath = "~/code/api"\n`,
+      ),
+    );
+    expect(cfg.github.enabled).toBe(true);
+    expect(cfg.github.askLabel).toBe("bot:ask");
+    expect(cfg.github.repos).toHaveLength(1);
+    expect(cfg.github.repos[0].nwo).toBe("acme/api");
+    expect(cfg.github.repos[0].path).toBe(join(homedir(), "code/api")); // ~ expanded
+  });
+
+  it("an explicit ask_label overrides the derived one", () => {
+    const cfg = loadConfig(writeToml(`vault_root = "/tmp/v"\n[github]\nask_label = "question"\n`));
+    expect(cfg.github.askLabel).toBe("question");
+  });
+
+  it("rejects a malformed nwo", () => {
+    expect(() =>
+      loadConfig(
+        writeToml(
+          `vault_root = "/tmp/v"\n[github]\n[[github.repos]]\nnwo = "no-slash"\npath = "/x"\n`,
+        ),
+      ),
+    ).toThrow(/owner\/repo/);
+  });
+});
+
 describe("resolveConfigPath", () => {
   it("explicit path wins, resolved against cwd", () => {
     expect(resolveConfigPath("rel/c.toml", { cwd: () => "/base" })).toBe("/base/rel/c.toml");

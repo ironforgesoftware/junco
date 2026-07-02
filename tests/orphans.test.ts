@@ -63,6 +63,13 @@ function makeConfig(): { cfg: Config; root: string } {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    github: {
+      enabled: false,
+      triggerLabel: "junco",
+      askLabel: "junco:ask",
+      pollIntervalSeconds: 60,
+      repos: [],
+    },
     stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
