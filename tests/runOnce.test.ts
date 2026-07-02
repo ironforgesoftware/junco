@@ -313,6 +313,75 @@ describe("per-ticket tools override", () => {
   });
 });
 
+describe("reporter seam", () => {
+  it("fires onStart then onFinal for a completed Q&A ticket", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "q.md"), "---\nid: q\n---\nask\n", "utf8");
+    const calls: string[] = [];
+    const reporter = {
+      onStart: async () => void calls.push("start"),
+      onRequeue: async () => void calls.push("requeue"),
+      onFinal: async (_t: unknown, o: { status: string }) => void calls.push(`final:${o.status}`),
+    };
+    await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory(), reporter });
+    expect(calls).toEqual(["start", "final:completed"]);
+  });
+
+  it("fires onStart then onRequeue for a transiently-failing Q&A ticket", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "q.md"), "---\nid: q\n---\nask\n", "utf8");
+    const erroring = () => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        throw new Error("fetch failed: ECONNREFUSED");
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+    const calls: string[] = [];
+    const reporter = {
+      onStart: async () => void calls.push("start"),
+      onRequeue: async () => void calls.push("requeue"),
+      onFinal: async () => void calls.push("final"),
+    };
+    await runOnce(cfg(root), { sessionFactoryFor: erroring, reporter });
+    expect(calls).toEqual(["start", "requeue"]);
+  });
+
+  it("a throwing reporter never fails the ticket", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "q.md"), "---\nid: q\n---\nask\n", "utf8");
+    const reporter = {
+      onStart: async () => {
+        throw new Error("reporter down");
+      },
+      onRequeue: async () => {
+        throw new Error("reporter down");
+      },
+      onFinal: async () => {
+        throw new Error("reporter down");
+      },
+    };
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory(), reporter });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "done"))).toHaveLength(1);
+  });
+});
+
 describe("Q&A workdir", () => {
   function sandbox() {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));

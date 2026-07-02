@@ -10,6 +10,12 @@ import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
+import {
+  NOOP_REPORTER,
+  outcomeFromPrFlow,
+  outcomeFromQa,
+  type TicketReporter,
+} from "./reporter.js";
 import { log, withTicket } from "./logging.js";
 import { metrics } from "./metrics.js";
 
@@ -33,6 +39,8 @@ export interface RunDeps {
   /** Operator force-stop signal — aborts the in-flight agent session softly
    * (commits are salvaged). The daemon wires this to StopFlag.forceSignal. */
   abortSignal?: AbortSignal;
+  /** Lifecycle feedback (GitHub bridge). Defaults to a no-op. */
+  reporter?: TicketReporter;
 }
 
 /** One claimed unit of work, ready to execute. */
@@ -161,8 +169,10 @@ export async function executeClaimed(
     // the finally clears it for BOTH the PR-flow and Q&A paths so the daemon
     // reports idle once the task ends, however it ends.
     metrics.taskStarted(next.id);
+    const reporter = deps.reporter ?? NOOP_REPORTER;
     try {
       log.info("claimed", { src: next.path, dst: claimed });
+      await reporter.onStart(next).catch(() => undefined);
 
       // PR-flow ticket (frontmatter has `repo:`): derive the repo context and hand
       // off to the PR orchestrator. A repo-less ctx (null) falls through to Q&A.
@@ -180,6 +190,8 @@ export async function executeClaimed(
             abortSignal: deps.abortSignal,
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
           });
+          if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
+          else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
           log.info("finalized (pr-flow)", { dst: flow.dst, status: flow.status });
           return;
         }
@@ -230,9 +242,13 @@ export async function executeClaimed(
           next,
           result.errorMessage ?? `stop_reason=${result.stopReason}`,
         );
-        if (rq.requeued) return;
+        if (rq.requeued) {
+          await reporter.onRequeue(next).catch(() => undefined);
+          return;
+        }
       }
       const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
+      await reporter.onFinal(next, outcomeFromQa(fin.status, result)).catch(() => undefined);
       log.info("finalized", { dst: fin.dst, status: fin.status });
     } finally {
       metrics.taskEnded(next.id); // also clears this ticket's progress
