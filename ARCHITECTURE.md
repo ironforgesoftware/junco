@@ -116,12 +116,12 @@ The CLI `start` subcommand acquires the **single-instance lock** (`lock.ts`, pid
 
 When the agent is running, `agent/guardManager.ts` subscribes four guards to the Pi event stream:
 
-| Guard | What it detects |
-|---|---|
-| `RepetitionGuard` | The agent repeating the same output |
-| `ToolCallLoopGuard` | The same tool being called in a tight loop |
-| `ToolErrorLoopGuard` | Repeated tool errors with no forward progress |
-| `OutputBudgetGuard` | Total output tokens exceeding the configured budget |
+| Guard                | What it detects                                     |
+| -------------------- | --------------------------------------------------- |
+| `RepetitionGuard`    | The agent repeating the same output                 |
+| `ToolCallLoopGuard`  | The same tool being called in a tight loop          |
+| `ToolErrorLoopGuard` | Repeated tool errors with no forward progress       |
+| `OutputBudgetGuard`  | Total output tokens exceeding the configured budget |
 
 When a guard fires it signals `agent/supervisor.ts`, which decides:
 
@@ -134,11 +134,11 @@ When a guard fires it signals `agent/supervisor.ts`, which decides:
 
 ### Health endpoints (`healthServer.ts`)
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /live` | Liveness — process is up |
-| `GET /ready` | Readiness — inference endpoint is reachable |
-| `GET /health` | Full metrics JSON |
+| Endpoint      | Purpose                                     |
+| ------------- | ------------------------------------------- |
+| `GET /live`   | Liveness — process is up                    |
+| `GET /ready`  | Readiness — inference endpoint is reachable |
+| `GET /health` | Full metrics JSON                           |
 
 The health server binds to loopback by default.
 
@@ -154,63 +154,79 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 
 ## Module map
 
-| File | Responsibility |
-|---|---|
-| `cli.ts` | Entrypoint; subcommands `start`, `run-once`, `submit`, `inbox-path`, `status`, `list`, `retry`, `doctor`, `logs`, `schema`, `init`, `service`. Exposes testable `run(argv, deps)`. |
-| `daemon.ts` | `mainLoop`, `runScheduler` (max_concurrent > 1), `StopFlag` (+ forceSignal), `installSignalHandlers`, `sleepInterruptible`. |
-| `lock.ts` | Single-instance lock — pidfile + PID-liveness stale detection. |
-| `orphans.ts` | `recoverOrphans`: requeue crashed tickets (budget permitting), else → `failed/`. |
-| `health.ts` | `endpointReachable` + `waitForEndpoint` (inference-endpoint probes). |
-| `healthServer.ts` | HTTP health server (`/live`, `/ready`, `/health`). |
-| `metrics.ts` | `RunMetrics` accumulator + process singleton. |
-| `logging.ts` | Structured JSON logger with `AsyncLocalStorage` per-ticket context. |
-| `config.ts` | `loadConfig`: zod-validated TOML → typed `Config`. |
-| `types.ts` | Shared types, `queuePaths`. |
-| `queue.ts` | `discoverTasks` + `claim` (atomic inbox → processing rename). |
-| `ticket.ts` | Parse a ticket (YAML frontmatter + body). |
-| `ticketSchema.ts` | The frontmatter JSON-Schema contract (`junco schema`). |
-| `dispatch.ts` | `inboxPath`, `submitTicket` (atomic placement into inbox). |
-| `runOnce.ts` | `claimNextTask` (discover/filter/priority/claim) + `executeClaimed` (PR flow or Q&A → finalize) + serial `runOnce`. |
-| `planLint.ts` | Deterministic ticket validation before the agent runs. |
-| `prFlow.ts` | `runPrFlow`: the 14-phase PR orchestration. |
-| `finalize.ts` | Compute terminal status, append result block, move ticket atomically. |
-| `repoContext.ts` | Derive the repo context from frontmatter. |
-| `repo.ts` | Validate the repo context. |
-| `worktree.ts` | Provision / prune git worktrees. |
-| `prPrompt.ts` | Build the repo-aware agent preamble (commit rules + working discipline). |
-| `pr.ts` | Count/list commits, commit leftovers, push, `gh pr create`, derive PR title. |
-| `verify.ts` | Run `## Verification` bash blocks in the worktree. |
-| `critic.ts` | In-process diff-vs-spec review; PASS / MISSING verdict; one corrective re-dispatch. |
-| `agent/session.ts` | Pi SDK wiring (`makePiSessionFactory`, provider registration) + `runAgent`. |
-| `agent/runResult.ts` | Event → `RunResult` accumulator. |
-| `agent/guards.ts` | The four loop guards. |
-| `agent/supervisor.ts` | Decides nudge vs kill when a guard fires. |
-| `agent/nudges.ts` | Nudge message templates. |
-| `agent/guardManager.ts` | Subscribes guards to the event stream; routes nudges and kills. |
-| `service.ts` | Render a launchd plist / systemd unit (`junco service`), stop timeouts included. |
-| `requeue.ts` | Transient-failure classification + atomic requeue-to-inbox with backoff. |
-| `statusCmd.ts` | `junco status` — daemon /health + queue counts at a glance. |
-| `listCmd.ts` | `junco list` — newest-first ticket listing with terminal statuses. |
-| `retryCmd.ts` | `junco retry` — clean failed tickets and resubmit to the inbox. |
-| `doctor.ts` | `junco doctor` — preflight config/toolchain/endpoint/model/dirs. |
-| `logsCmd.ts` | `junco logs` — tail/follow the state-dir worker.log. |
+| File                    | Responsibility                                                                                                                                                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cli.ts`                | Entrypoint; subcommands `start`, `run-once`, `submit`, `inbox-path`, `status`, `list`, `retry`, `doctor`, `logs`, `schema`, `init`, `service`. Exposes testable `run(argv, deps)`.                              |
+| `daemon.ts`             | `mainLoop`, `runScheduler` (max_concurrent > 1), `StopFlag` (+ forceSignal), `installSignalHandlers`, `sleepInterruptible`.                                                                                     |
+| `lock.ts`               | Single-instance lock — pidfile + PID-liveness stale detection.                                                                                                                                                  |
+| `orphans.ts`            | `recoverOrphans`: requeue crashed tickets (budget permitting), else → `failed/`.                                                                                                                                |
+| `health.ts`             | `endpointReachable` + `waitForEndpoint` (inference-endpoint probes).                                                                                                                                            |
+| `healthServer.ts`       | HTTP health server (`/live`, `/ready`, `/health`).                                                                                                                                                              |
+| `metrics.ts`            | `RunMetrics` accumulator + process singleton.                                                                                                                                                                   |
+| `logging.ts`            | Structured JSON logger with `AsyncLocalStorage` per-ticket context.                                                                                                                                             |
+| `config.ts`             | `loadConfig`: zod-validated TOML → typed `Config`.                                                                                                                                                              |
+| `types.ts`              | Shared types, `queuePaths`.                                                                                                                                                                                     |
+| `queue.ts`              | `discoverTasks` + `claim` (atomic inbox → processing rename).                                                                                                                                                   |
+| `ticket.ts`             | Parse a ticket (YAML frontmatter + body).                                                                                                                                                                       |
+| `ticketSchema.ts`       | The frontmatter JSON-Schema contract (`junco schema`).                                                                                                                                                          |
+| `dispatch.ts`           | `inboxPath`, `submitTicket` (atomic placement into inbox).                                                                                                                                                      |
+| `runOnce.ts`            | `claimNextTask` (discover/filter/priority/claim) + `executeClaimed` (PR flow or Q&A → finalize) + serial `runOnce`.                                                                                             |
+| `planLint.ts`           | Deterministic ticket validation before the agent runs.                                                                                                                                                          |
+| `prFlow.ts`             | `runPrFlow`: the 14-phase PR orchestration.                                                                                                                                                                     |
+| `finalize.ts`           | Compute terminal status, append result block, move ticket atomically.                                                                                                                                           |
+| `repoContext.ts`        | Derive the repo context from frontmatter.                                                                                                                                                                       |
+| `repo.ts`               | Validate the repo context.                                                                                                                                                                                      |
+| `worktree.ts`           | Provision / prune git worktrees.                                                                                                                                                                                |
+| `prPrompt.ts`           | Build the repo-aware agent preamble (commit rules + working discipline).                                                                                                                                        |
+| `pr.ts`                 | Count/list commits, commit leftovers, push, `gh pr create`, derive PR title.                                                                                                                                    |
+| `verify.ts`             | Run `## Verification` bash blocks in the worktree.                                                                                                                                                              |
+| `critic.ts`             | In-process diff-vs-spec review; PASS / MISSING verdict; one corrective re-dispatch.                                                                                                                             |
+| `agent/session.ts`      | Pi SDK wiring (`makePiSessionFactory`, provider registration) + `runAgent`.                                                                                                                                     |
+| `agent/runResult.ts`    | Event → `RunResult` accumulator.                                                                                                                                                                                |
+| `agent/guards.ts`       | The four loop guards.                                                                                                                                                                                           |
+| `agent/supervisor.ts`   | Decides nudge vs kill when a guard fires.                                                                                                                                                                       |
+| `agent/nudges.ts`       | Nudge message templates.                                                                                                                                                                                        |
+| `agent/guardManager.ts` | Subscribes guards to the event stream; routes nudges and kills.                                                                                                                                                 |
+| `service.ts`            | Render a launchd plist / systemd unit (`junco service`), stop timeouts included.                                                                                                                                |
+| `requeue.ts`            | Transient-failure classification + atomic requeue-to-inbox with backoff.                                                                                                                                        |
+| `githubInbox.ts`        | GitHub bridge, dispatch side: sweep trigger-labeled issues → verify labeler permission (fail-closed) → issue→ticket conversion → `submitTicket`. Process-local caches for label creation + origin cross-checks. |
+| `githubReport.ts`       | GitHub bridge, feedback side: `makeGithubReporter` — lifecycle label flips + the single finalize comment. Best-effort by contract (never fails a ticket).                                                       |
+| `reporter.ts`           | `TicketReporter` seam (onStart/onRequeue/onFinal) + outcome mapping. `executeClaimed` is the only call site; default no-op.                                                                                     |
+| `statusCmd.ts`          | `junco status` — daemon /health + queue counts at a glance.                                                                                                                                                     |
+| `listCmd.ts`            | `junco list` — newest-first ticket listing with terminal statuses.                                                                                                                                              |
+| `retryCmd.ts`           | `junco retry` — clean failed tickets and resubmit to the inbox.                                                                                                                                                 |
+| `doctor.ts`             | `junco doctor` — preflight config/toolchain/endpoint/model/dirs.                                                                                                                                                |
+| `logsCmd.ts`            | `junco logs` — tail/follow the state-dir worker.log.                                                                                                                                                            |
 
 ---
 
 ## Ticket lifecycle through the queue
 
 ```
-inbox/               — submitted by junco submit (or any atomic file write)
+GitHub issue         — trigger-labeled; bridge sweep verifies the labeler's
+  ↓  pollGithubInbox   permission, converts to a ticket (github: provenance
+                       block), submits BEFORE applying junco:queued (a crash
+                       between the two self-heals via the duplicate guard)
+inbox/               — submitted by junco submit, the bridge, or any atomic write
   ↓  claim()         — atomic rename, adds UTC-timestamp prefix
                        (not_before-gated; skipped while its repo is busy)
+                       reporter.onStart: junco:queued → junco:working
 processing/          — owned by the worker; do not touch while worker is live
   ↓  finalize()      — appends result block, atomic rename
   ↘  requeueTicket() — transient failure / crash: back to inbox/ with
                        retry_count++ and a not_before backoff stamp
+                       (reporter.onRequeue flips the label back to queued)
 done/                — terminal: completed, completed_no_changes,
                        aborted_partial, timeout_partial
 failed/              — terminal: plan-lint failure, agent error, verification
                        block, timeout with no commits, retry budget exhausted, …
+  ↓  reporter.onFinal — bridged tickets only: ONE issue comment (PR link +
+                       summary | answer | failure reason), then junco:done|failed
 ```
+
+Reporter calls live **only** in `executeClaimed` (single choke point; `prFlow`
+stays reporter-free — it returns a structured `PrFlowResult` instead). The
+bridge is throttled inside the daemon poll loop (`github.poll_interval_seconds`)
+and makes zero calls when `[github].enabled = false`.
 
 The **stable public contract** is the ticket frontmatter schema (`junco schema` / `ticketSchema.ts`). Changing it is a breaking change for any tool that generates tickets.

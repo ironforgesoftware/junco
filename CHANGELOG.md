@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub-integrated inbox mode.** Trigger-labeled GitHub issues become tickets: the daemon sweeps watched repos (`[github]` config section, default off — zero GitHub calls when disabled), verifies the labeler has write access (fail-closed), copies the issue into the inbox as an ordinary ticket, and reports back with silent lifecycle labels (`junco:queued/working/done/failed/denied`) plus a single finalize comment (PR link + summary, the Q&A answer, or the failure reason). PR bodies gain a deterministic `Closes owner/repo#N`; an ask label routes issues to the read-only Q&A path; sub-issue parents are attached as background context. `junco doctor` validates repo mappings (clone exists, origin matches, reachable via `gh`); `junco status` and `/health` report bridge sweeps.
+- **Ticket schema (additive):** worker-managed `github` provenance block and `workdir` (Q&A session cwd, validated against `allowed_repo_roots`).
+
 ## [0.3.0] - 2026-06-10
 
 ### Added

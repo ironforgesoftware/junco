@@ -18,6 +18,7 @@ Requires **Node ≥ 22.19** (plus `git` + an authenticated `gh` for PR-flow tick
 npx @ironforgesoftware/junco        # first run → setup wizard; afterwards → starts the daemon
 # prefer a global install?  npm install -g @ironforgesoftware/junco   (then the command is just `junco`)
 ```
+
 (Or explicitly: `junco init` runs the same wizard; `junco init --yes` scaffolds defaults non-interactively.)
 
 **2. Start the worker:**
@@ -46,12 +47,13 @@ New to the ticket format? Run `junco schema`, copy a template from `examples/`, 
 3. [CLI reference](#cli-reference)
 4. [Configuration](#configuration)
 5. [Tickets](#tickets)
-6. [Health & observability](#health--observability)
-7. [Running as a service](#running-as-a-service)
-8. [Security model](#security-model)
-9. [Troubleshooting](#troubleshooting)
-10. [Contributing](#contributing)
-11. [License](#license)
+6. [GitHub-integrated mode](#github-integrated-mode)
+7. [Health & observability](#health--observability)
+8. [Running as a service](#running-as-a-service)
+9. [Security model](#security-model)
+10. [Troubleshooting](#troubleshooting)
+11. [Contributing](#contributing)
+12. [License](#license)
 
 ---
 
@@ -123,7 +125,7 @@ junco submit /tmp/my-question.md --config ~/junco/config.toml
 
 **PR-flow ticket** (creates a worktree, runs the agent, opens a draft PR):
 
-```bash
+````bash
 cat > /tmp/my-pr-ticket.md << 'EOF'
 ---
 id: add-hello-util-2026-05-31
@@ -145,13 +147,15 @@ draft: true
 
 ```bash
 npx tsc --noEmit
-```
+````
 
 ## Done when
+
 - [ ] 1 commit on the branch with the new file.
-EOF
+      EOF
 
 junco submit /tmp/my-pr-ticket.md --config ~/junco/config.toml
+
 ```
 
 Watch the daemon pick it up and open a draft PR automatically.
@@ -161,31 +165,33 @@ Watch the daemon pick it up and open a draft PR automatically.
 ## How it works
 
 ```
-  You (or any harness)
-         │
-         │  junco submit <ticket.md>
-         ▼
-  <vault_root>/Junco/inbox/          ← drop tickets here
-         │
-         │  daemon polls every 15s
-         ▼
-  ┌──────────────────────────────────────────────────────┐
-  │  junco daemon                                        │
-  │                                                      │
-  │  1. plan-lint           validate frontmatter         │
-  │  2. claim               inbox/ → processing/         │
-  │  3. git worktree        isolated branch per ticket   │
-  │  4. agent run           drives coding agent          │
-  │     └─ loop guards      supervisor watches each turn │
-  │  5. verification        runs ## Verification block   │
-  │  6. critic              diff-vs-spec check           │
-  │  7. push + PR           gh pr create --draft         │
-  │  8. finalize            processing/ → done/|failed/  │
-  └──────────────────────────────────────────────────────┘
-         │
-         ▼
-  GitHub draft PR  (or answer written in-place for Q&A)
-```
+
+You (or any harness)
+│
+│ junco submit <ticket.md>
+▼
+<vault_root>/Junco/inbox/ ← drop tickets here
+│
+│ daemon polls every 15s
+▼
+┌──────────────────────────────────────────────────────┐
+│ junco daemon │
+│ │
+│ 1. plan-lint validate frontmatter │
+│ 2. claim inbox/ → processing/ │
+│ 3. git worktree isolated branch per ticket │
+│ 4. agent run drives coding agent │
+│ └─ loop guards supervisor watches each turn │
+│ 5. verification runs ## Verification block │
+│ 6. critic diff-vs-spec check │
+│ 7. push + PR gh pr create --draft │
+│ 8. finalize processing/ → done/|failed/ │
+└──────────────────────────────────────────────────────┘
+│
+▼
+GitHub draft PR (or answer written in-place for Q&A)
+
+````
 
 **Plan-lint** runs before the agent starts. Bad tickets (invalid frontmatter, forbidden patterns, nonexistent labels) route directly to `failed/` without consuming any agent tokens.
 
@@ -324,19 +330,19 @@ log_level = "info"                # debug | info | warn | error
 state_dir = "~/.local/state/junco" # worker.log + transcripts/ live here.
 log_to_file = true                # Tee structured logs to <state_dir>/worker.log (10 MB rotation).
 transcripts = true                # Per-ticket event JSONL under <state_dir>/transcripts/.
-```
+````
 
 ### Key knobs to know
 
-| Knob | Effect |
-|---|---|
-| `[model].id` | Which model the agent requests (provider-prefixed, e.g. `omlx/my-model`). |
-| `[model].models_json` | Point at a Pi `models.json` to load the provider+model (api, compat, context window…) from that file. |
-| `[model].base_url` / `api` | Switch inference backends — any OpenAI-compatible `/v1` endpoint, or another Pi `api` style (Anthropic, Google, Bedrock…). |
-| `[verify].block_on_fail` | Set `true` to make verification failures block the PR open (strict mode). |
-| `[supervisor].budget_per_kind` | Raise to allow more nudges before killing a looping agent. |
-| `[worker].startup_wait` | Set `false` to start the daemon even when the endpoint is not yet up. |
-| `[git].remove_worktree_on_success` | Set `false` to retain worktrees after success (debugging). |
+| Knob                               | Effect                                                                                                                     |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `[model].id`                       | Which model the agent requests (provider-prefixed, e.g. `omlx/my-model`).                                                  |
+| `[model].models_json`              | Point at a Pi `models.json` to load the provider+model (api, compat, context window…) from that file.                      |
+| `[model].base_url` / `api`         | Switch inference backends — any OpenAI-compatible `/v1` endpoint, or another Pi `api` style (Anthropic, Google, Bedrock…). |
+| `[verify].block_on_fail`           | Set `true` to make verification failures block the PR open (strict mode).                                                  |
+| `[supervisor].budget_per_kind`     | Raise to allow more nudges before killing a looping agent.                                                                 |
+| `[worker].startup_wait`            | Set `false` to start the daemon even when the endpoint is not yet up.                                                      |
+| `[git].remove_worktree_on_success` | Set `false` to retain worktrees after success (debugging).                                                                 |
 
 ---
 
@@ -346,29 +352,29 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 
 ### Ticket flavors
 
-| Flavor | Trigger | What happens |
-|---|---|---|
-| **Q&A ticket** | No `repo:` field | Agent answers in-place; result written back to the ticket file. No git. |
+| Flavor             | Trigger                 | What happens                                                             |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------ |
+| **Q&A ticket**     | No `repo:` field        | Agent answers in-place; result written back to the ticket file. No git.  |
 | **PR-flow ticket** | `repo: <absolute/path>` | Agent runs in an isolated git worktree; a draft PR is opened on success. |
 
 ### Key frontmatter fields
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | string | Unique ticket identifier. Used as the inbox filename and branch suffix. |
-| `repo` | path | Absolute path to the target git repository. Presence triggers PR flow. |
-| `priority` | `low\|normal\|high` | Processing order within the queue. |
-| `timeout_minutes` | number | Per-ticket wall-clock cap. Overrides `[worker].default_timeout_minutes`. |
-| `base_branch` | string | Branch to fork from. Overrides `[git].default_base_branch`. |
-| `branch_name` | string | Override the auto-generated branch name. |
-| `pr_title` | string | Pull request title. |
-| `draft` | bool | Open PR as draft. Overrides `[pr].draft_by_default`. |
-| `labels` | string[] | Labels to apply to the PR. |
-| `reviewers` | string[] | GitHub handles to request as reviewers. |
-| `amends_pr` | number | PR number — add commits to an existing PR instead of opening a new one. |
-| `tools` | string[] | Per-ticket tool allowlist override. Q&A tickets default to a read-only subset (`read, grep, find, ls`); list tools explicitly (e.g. `[read, grep, bash]`) to opt in to more. |
-| `not_before` | ISO datetime | Don't claim this ticket before this UTC instant. Set by the worker for retry backoff; dispatchers may also set it to schedule work. |
-| `retry_count` | integer | Worker-managed transparent-retry counter. Don't set by hand. |
+| Field             | Type                | Description                                                                                                                                                                  |
+| ----------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`              | string              | Unique ticket identifier. Used as the inbox filename and branch suffix.                                                                                                      |
+| `repo`            | path                | Absolute path to the target git repository. Presence triggers PR flow.                                                                                                       |
+| `priority`        | `low\|normal\|high` | Processing order within the queue.                                                                                                                                           |
+| `timeout_minutes` | number              | Per-ticket wall-clock cap. Overrides `[worker].default_timeout_minutes`.                                                                                                     |
+| `base_branch`     | string              | Branch to fork from. Overrides `[git].default_base_branch`.                                                                                                                  |
+| `branch_name`     | string              | Override the auto-generated branch name.                                                                                                                                     |
+| `pr_title`        | string              | Pull request title.                                                                                                                                                          |
+| `draft`           | bool                | Open PR as draft. Overrides `[pr].draft_by_default`.                                                                                                                         |
+| `labels`          | string[]            | Labels to apply to the PR.                                                                                                                                                   |
+| `reviewers`       | string[]            | GitHub handles to request as reviewers.                                                                                                                                      |
+| `amends_pr`       | number              | PR number — add commits to an existing PR instead of opening a new one.                                                                                                      |
+| `tools`           | string[]            | Per-ticket tool allowlist override. Q&A tickets default to a read-only subset (`read, grep, find, ls`); list tools explicitly (e.g. `[read, grep, bash]`) to opt in to more. |
+| `not_before`      | ISO datetime        | Don't claim this ticket before this UTC instant. Set by the worker for retry backoff; dispatchers may also set it to schedule work.                                          |
+| `retry_count`     | integer             | Worker-managed transparent-retry counter. Don't set by hand.                                                                                                                 |
 
 ### Minimal Q&A ticket
 
@@ -386,7 +392,7 @@ What is the time complexity of binary search and why?
 
 ### Minimal PR-flow ticket
 
-```markdown
+````markdown
 ---
 id: add-util-2026-05-31
 priority: normal
@@ -400,6 +406,7 @@ draft: true
 # Add a utility function
 
 ## Steps
+
 - [ ] Implement the function.
 - [ ] Commit: `git add ... && git commit -m "feat: add utility"`
 
@@ -408,10 +415,13 @@ draft: true
 ```bash
 npx tsc --noEmit
 ```
+````
 
 ## Done when
+
 - [ ] 1 commit on the branch.
-```
+
+````
 
 ### Submitting tickets
 
@@ -424,13 +434,14 @@ cat my-ticket.md | junco submit - --config ~/junco/config.toml
 
 # Print the inbox path:
 junco inbox-path --config ~/junco/config.toml
-```
+````
 
 The bundled `junco-dispatch` skill (for Claude Code) scaffolds well-structured tickets from any Claude session and submits them automatically.
 
 ### Templates
 
 Ticket templates live in the `templates/` directory:
+
 - `templates/plain/task.md` — Q&A ticket template (plain Markdown)
 - `templates/plain/task-code.md` — PR-flow ticket template (plain Markdown)
 - `templates/task.md`, `templates/task-code.md` — the same templates with [Obsidian Templater](https://github.com/SilentVoid13/Templater) date/title placeholders, for Obsidian-vault dispatch setups
@@ -450,15 +461,54 @@ Ticket templates live in the `templates/` directory:
 
 ---
 
+## GitHub-integrated mode
+
+Junco can use **GitHub Issues as a dispatch surface**: label an issue, and the daemon turns it into a ticket, works it in a worktree, opens a PR, and reports back on the issue thread. The local inbox keeps working exactly as before — both surfaces feed the same queue, and with `enabled = false` (the default) Junco makes zero GitHub calls.
+
+```toml
+[github]
+enabled = true
+trigger_label = "junco"        # the approval marker
+poll_interval_seconds = 60     # bridge sweep cadence
+
+[[github.repos]]
+nwo  = "owner/repo"            # repo to watch
+path = "~/code/repo"           # its local clone (origin must point at nwo)
+```
+
+**The loop.** Every sweep, Junco lists open issues carrying the trigger label in each watched repo. An eligible issue (no lifecycle label yet) is verified — **who applied the label, and do they have write access?** — then copied into the inbox as an ordinary ticket: issue title → PR title, issue body → ticket body. From there the normal pipeline runs (atomic claim, worktree, guards, verification, critic, retries). The PR body includes `Closes owner/repo#N`, so merging auto-closes the issue. When the ticket finalizes, Junco posts **one comment** — PR link plus a brief summary, or the failure reason — and GitHub's notifications do the rest.
+
+**Lifecycle labels** signal state silently (no notifications) and are visible in the issue list:
+
+| Label           | Meaning                                                   |
+| --------------- | --------------------------------------------------------- |
+| `junco:queued`  | Copied into the inbox, waiting for a worker slot          |
+| `junco:working` | A session is on it right now                              |
+| `junco:done`    | Finished — see the closing comment (PR link / answer)     |
+| `junco:failed`  | Failed — see the closing comment for the reason           |
+| `junco:denied`  | Trigger label was applied by someone without write access |
+
+**Re-dispatch** is one gesture: remove the lifecycle label and leave the trigger label on — the next sweep picks the issue up fresh. The ticket is a **snapshot**: edits to the issue after dispatch don't propagate (label it again for a fresh run instead).
+
+**Questions, not PRs.** Add the ask label (default `junco:ask`) alongside the trigger label and Junco routes the issue to the read-only Q&A path — the session browses the mapped clone with read-only tools and posts its **answer as the comment**. No branch, no PR.
+
+**The trust model: the label is the approval.** Issue text is untrusted input until someone with write/maintain/admin permission applies the trigger label — and by labeling, they vouch for the body _as it stands_, so **read the issue before you label it**. Junco verifies the labeler's permission through the API (never trusting the label's mere presence, since on many repos anyone can add labels), fails closed on verification errors, only ever executes against clone paths from _your config_ (issue content cannot steer it elsewhere), and cross-checks that each mapped clone's `origin` matches the configured repo so a typo can't ship commits to the wrong place.
+
+**Team workflow (recommended).** Keep reports and work items separate: anyone files issue `#42` describing a problem; a maintainer (or an ask-ticket: _"propose a plan for this"_) drafts a **task as a sub-issue** `#43` with the actual plan and verification steps; the maintainer labels **the task**, not the report. Junco automatically appends the parent issue's title and body to the ticket as background context, and closing the task rolls up into the parent's progress. You're always executing a vetted plan, never raw prose.
+
+**Operational notes.** `junco doctor` checks each mapping (clone exists, origin matches, repo reachable via `gh`); `junco status` and `/health` report sweep counts. Polling cost is one API call per repo per sweep against a 5,000/hr authenticated limit — negligible. Auth is whatever `gh auth login` already holds; there are no new secrets. If GitHub is unreachable, sweeps skip and the local queue keeps running; a lost label flip or comment is cosmetic (the queue files and the PR are the source of truth).
+
+---
+
 ## Health & observability
 
 When `[observability].health_enabled = true`, Junco serves HTTP on `health_host:health_port` (default `127.0.0.1:8787`).
 
-| Endpoint | Success | Use |
-|---|---|---|
-| `GET /live` | `200 {status:"alive", pid, uptimeSeconds}` | Liveness — is the process up? |
-| `GET /ready` | `200 {status:"ready"}` or `503` | Readiness — can the endpoint be reached? |
-| `GET /health` | `200 {status:"ok", ready, metrics:{...}}` | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
+| Endpoint      | Success                                    | Use                                                                                                                                                                                                                                            |
+| ------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /live`   | `200 {status:"alive", pid, uptimeSeconds}` | Liveness — is the process up?                                                                                                                                                                                                                  |
+| `GET /ready`  | `200 {status:"ready"}` or `503`            | Readiness — can the endpoint be reached?                                                                                                                                                                                                       |
+| `GET /health` | `200 {status:"ok", ready, metrics:{...}}`  | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
 
 ```bash
 # Quick checks:
