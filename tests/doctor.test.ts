@@ -10,7 +10,22 @@ const okConfig = {
   stateDir: "/tmp/junco-doc-state",
   gitBin: "git",
   ghBin: "gh",
+  github: {
+    enabled: false,
+    triggerLabel: "junco",
+    askLabel: "junco:ask",
+    pollIntervalSeconds: 60,
+    repos: [],
+  },
 } as unknown as Config;
+
+/** okConfig with the bridge enabled and the given repo mappings. */
+function githubConfig(repos: { nwo: string; path: string }[]): Config {
+  return {
+    ...okConfig,
+    github: { ...okConfig.github, enabled: true, repos },
+  } as Config;
+}
 
 function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
   return {
@@ -107,5 +122,78 @@ describe("runDoctor", () => {
       deps({ lockHolderFn: () => 4242, printFn: (s) => lines.push(s) }),
     );
     expect(lines.join("")).toMatch(/✓ daemon — running \(pid 4242\)/);
+  });
+});
+
+describe("runDoctor github checks", () => {
+  it("disabled bridge → no github lines at all", async () => {
+    const lines: string[] = [];
+    await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    expect(lines.join("")).not.toMatch(/github/);
+  });
+
+  it("warns when enabled with no repos", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({ loadConfigFn: () => githubConfig([]), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/⚠ github — enabled but no repos configured/);
+  });
+
+  it("fails a repo whose origin does not match the nwo", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () => githubConfig([{ nwo: "acme/api", path: "/tmp/clone" }]),
+        execFn: async (_cmd: string, args: string[]) =>
+          args.includes("get-url")
+            ? { code: 0, stdout: "https://github.com/other/thing.git\n", stderr: "" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("")).toMatch(/✗ github repo acme\/api/);
+    expect(lines.join("")).toMatch(/other\/thing/);
+  });
+
+  it("passes a matching repo reachable via gh", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () => githubConfig([{ nwo: "acme/api", path: "/tmp/clone" }]),
+        execFn: async (_cmd: string, args: string[]) =>
+          args.includes("get-url")
+            ? { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ github repo acme\/api/);
+  });
+
+  it("fails a repo not reachable via gh", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () => githubConfig([{ nwo: "acme/api", path: "/tmp/clone" }]),
+        execFn: async (_cmd: string, args: string[]) => {
+          if (args.includes("get-url"))
+            return { code: 0, stdout: "https://github.com/acme/api.git\n", stderr: "" };
+          if (args[0] === "repo" && args[1] === "view")
+            return { code: 1, stdout: "", stderr: "not found" };
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("")).toMatch(/✗ github repo acme\/api — not reachable/);
   });
 });

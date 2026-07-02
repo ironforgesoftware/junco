@@ -59,6 +59,20 @@ export function renderConfigToml(a: WizardAnswers): string {
       `api_key = ${tomlStr(a.apiKey ?? "")}`,
     );
   }
+  lines.push(
+    "",
+    "# --- GitHub-integrated mode (optional) --------------------------------------",
+    "# Bridge trigger-labeled GitHub issues into the inbox and report results back",
+    "# to the issue (lifecycle labels + one comment). Uses your existing `gh` auth.",
+    "# [github]",
+    "# enabled = true",
+    '# trigger_label = "junco"   # the label is the approval; review issues before labeling',
+    "# poll_interval_seconds = 60",
+    "#",
+    "# [[github.repos]]",
+    '# nwo  = "owner/repo"',
+    '# path = "~/code/repo"      # local clone; its origin must point at nwo',
+  );
   return lines.join("\n") + "\n";
 }
 

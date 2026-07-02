@@ -13,6 +13,7 @@ import { endpointReachable } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
+import { nwoFromRemoteUrl } from "./githubInbox.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -133,6 +134,33 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       ["state dir", cfg.stateDir],
     ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
+    }
+
+    // 7b. github bridge (only when enabled — disabled setups print nothing)
+    if (cfg.github.enabled) {
+      if (cfg.github.repos.length === 0) {
+        report("warn", "github", "enabled but no repos configured — the bridge will idle");
+      }
+      for (const repo of cfg.github.repos) {
+        const origin = await execFn(cfg.gitBin, ["-C", repo.path, "remote", "get-url", "origin"]);
+        const actual = origin.code === 0 ? nwoFromRemoteUrl(origin.stdout.trim()) : null;
+        if (actual === null || actual.toLowerCase() !== repo.nwo.toLowerCase()) {
+          report(
+            "fail",
+            `github repo ${repo.nwo}`,
+            origin.code !== 0
+              ? `${repo.path} is not a git clone (or has no origin)`
+              : `origin is ${actual ?? origin.stdout.trim()}, expected ${repo.nwo}`,
+          );
+          continue;
+        }
+        const view = await execFn(cfg.ghBin, ["repo", "view", repo.nwo, "--json", "name"]);
+        report(
+          view.code === 0 ? "ok" : "fail",
+          `github repo ${repo.nwo}`,
+          view.code === 0 ? repo.path : "not reachable via gh (auth? spelling?)",
+        );
+      }
     }
 
     // 8. daemon (informational)

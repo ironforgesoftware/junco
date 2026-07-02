@@ -86,6 +86,23 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
     const cfg = parse(renderConfigToml(a)); // must not throw on parse
     expect(cfg.model.apiKey).toBe("a\\b");
   });
+
+  it("includes a commented [github] example block", () => {
+    const a: WizardAnswers = {
+      vaultRoot: "/tmp/jv",
+      mode: "inline",
+      modelId: "p/m",
+      baseUrl: "http://h/v1",
+      apiKey: "k",
+    };
+    const toml = renderConfigToml(a);
+    expect(toml).toContain("# [github]");
+    expect(toml).toContain('# trigger_label = "junco"');
+    expect(toml).toContain("# [[github.repos]]");
+    // Still parses cleanly (the block is fully commented out).
+    const cfg = parse(toml);
+    expect(cfg.github.enabled).toBe(false);
+  });
 });
 
 describe("defaultAnswers", () => {
