@@ -9,6 +9,12 @@ export interface TerminalDirs {
   failed: string;
 }
 
+/** Where the ticket landed and the terminal status that routed it there. */
+export interface FinalizeResult {
+  dst: string;
+  status: string;
+}
+
 function statusFor(r: RunResult): string {
   if (r.timedOut) return "timeout";
   if (r.errorMessage) return "failed";
@@ -25,7 +31,11 @@ function renderResult(original: string, status: string, r: RunResult): string {
   return `${original.trimEnd()}\n\n---\n<!-- junco-result\n${meta}\n-->\n\n## Result\n\n${stats}\n\n${reply}\n`;
 }
 
-export function finalize(ticketPath: string, result: RunResult, dirs: TerminalDirs): string {
+export function finalize(
+  ticketPath: string,
+  result: RunResult,
+  dirs: TerminalDirs,
+): FinalizeResult {
   const status = statusFor(result);
   const body = renderResult(readFileSync(ticketPath, "utf8"), status, result);
 
@@ -43,7 +53,7 @@ export function finalize(ticketPath: string, result: RunResult, dirs: TerminalDi
   // Single metrics instrumentation point for the Q&A path — after the terminal
   // status is computed and the ticket has been moved into done/ or failed/.
   metrics.recordTask(status, result.usage, result.durationMs);
-  return dst;
+  return { dst, status };
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +174,7 @@ export function finalizePr(
   result: RunResult,
   prOutcome: PrOutcome,
   opts: FinalizePrOpts,
-): string {
+): FinalizeResult {
   const phaseError = opts.phaseError ?? null;
   const status = computePrStatus(result, prOutcome, phaseError);
   const body = renderPrResult(
@@ -187,5 +197,5 @@ export function finalizePr(
   // Single metrics instrumentation point for the PR path — after the terminal
   // status is computed and the ticket has been moved into done/ or failed/.
   metrics.recordTask(status, result.usage, result.durationMs);
-  return dst;
+  return { dst, status };
 }

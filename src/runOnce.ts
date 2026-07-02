@@ -198,11 +198,8 @@ export async function executeClaimed(
         );
         if (rq.requeued) return;
       }
-      const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
-      log.info("finalized", {
-        dst,
-        status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed",
-      });
+      const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
+      log.info("finalized", { dst: fin.dst, status: fin.status });
     } finally {
       metrics.taskEnded(next.id); // also clears this ticket's progress
     }
