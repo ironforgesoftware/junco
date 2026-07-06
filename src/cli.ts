@@ -58,6 +58,8 @@ export interface CliDeps {
   existsFn?: (path: string) => boolean;
   /** The init wizard (tests inject a spy to assert routing without touching the fs). */
   runInitWizardFn?: (configPath: string, opts: { yes?: boolean }) => Promise<number>;
+  /** The dashboard command (tests inject a spy; default lazily imports dashboardCmd.js). */
+  runDashboardFn?: (cfg: Config) => Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +80,7 @@ Subcommands:
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json]  Show (or follow) the worker log
+  dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -339,6 +342,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       lines: Number.isInteger(n) && (n as number) > 0 ? n : undefined,
       json: (values.json as boolean) || undefined,
     });
+  }
+
+  // ------------------------------------------------------------
+  // dashboard: interactive GitHub-mode TUI (Ink is loaded lazily — only paid
+  // for when this subcommand actually runs; every other subcommand stays
+  // React-free).
+  // ------------------------------------------------------------
+  if (subcommand === "dashboard") {
+    const cfg = loadConfigFn(configPath);
+    setLogLevel(cfg.logLevel);
+    const runDashboardFn =
+      deps.runDashboardFn ??
+      (async (c: Config) => {
+        const { runDashboard } = await import("./dashboardCmd.js");
+        return runDashboard(c);
+      });
+    return runDashboardFn(cfg);
   }
 
   // ------------------------------------------------------------

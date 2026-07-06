@@ -636,3 +636,19 @@ describe("run(['init']) — wizard routing", () => {
     }
   });
 });
+
+describe("run(['dashboard']) — routing", () => {
+  it("routes `dashboard` to runDashboardFn with the loaded config", async () => {
+    const { cfg } = freshDispatchVault(); // the file's existing full-Config helper
+    let got: Config | null = null;
+    const code = await run(["dashboard", "--config", "/x/config.toml"], {
+      loadConfigFn: () => cfg,
+      runDashboardFn: async (c) => {
+        got = c;
+        return 0;
+      },
+    });
+    expect(code).toBe(0);
+    expect(got).not.toBeNull();
+  });
+});
