@@ -453,16 +453,21 @@ async function findOwnPlanComment(
   return found;
 }
 
-/** Has an execution ticket with this id already been submitted to the local
- * queue? Scans all four queue dirs for `${id}.md` or a claim-prefixed
- * `*__${id}.md`. A missing dir (ENOENT) counts as absent. Guards against a
- * duplicate submit when a previous sweep queued the ticket but crashed before
- * flipping the label — the next sweep would otherwise re-dispatch it. */
+/** Is an execution ticket with this id currently IN FLIGHT in the local queue?
+ * Scans ONLY inbox/ and processing/ for `${id}.md` or a claim-prefixed
+ * `*__${id}.md`; a missing dir (ENOENT) counts as absent. This guards exactly
+ * the crash window between submit and label swap — during that window the
+ * ticket can only be in those two dirs. done/ and failed/ are deliberately NOT
+ * scanned: a finalized ticket there belongs to a PREVIOUS execution cycle, and
+ * counting it would wedge the documented re-cycle gesture (remove junco:failed
+ * → fresh plan → fresh approval) by skipping the new submit while still
+ * flipping labels to queued. Already-dispatched-this-cycle issues are handled
+ * earlier by the lifecycle-label bail. */
 function executionTicketExists(cfg: Config, id: string): boolean {
   const paths = queuePaths(cfg);
   const exact = `${id}.md`;
   const claimed = `__${id}.md`;
-  for (const dir of [paths.inbox, paths.processing, paths.done, paths.failed]) {
+  for (const dir of [paths.inbox, paths.processing]) {
     let entries: string[];
     try {
       entries = readdirSync(dir);

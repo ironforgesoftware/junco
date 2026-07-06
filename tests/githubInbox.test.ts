@@ -507,6 +507,40 @@ describe("pollGithubInbox", () => {
       expect(edit).not.toContain("--add-label");
     });
 
+    it("a FINALIZED prior execution in done/ does not block a re-cycled plan's submit", async () => {
+      // Re-cycle gesture: remove junco:failed → fresh plan → fresh approval.
+      // The old finalized ticket sits in done/ (or failed/); the new approval
+      // MUST still submit — only inbox/processing indicate an in-flight ticket.
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const done = join(root, "tickets", "done");
+        mkdirSync(done, { recursive: true });
+        writeFileSync(join(done, "1710000000000__gh-acme-api-42.md"), "old run", "utf8");
+        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const f = makeFakes({
+          issues: [readyIssue],
+          events: approvedAfter,
+          permission: "write",
+          comments: [planComment(fencedComment)],
+        });
+        const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+        expect(n).toBe(1);
+        expect(f.submitted).toHaveLength(1); // the fresh plan actually runs
+        expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+        const edit = f.calls.find((c) => c[1] === "edit");
+        expect(edit).toEqual(
+          expect.arrayContaining([
+            "--add-label",
+            "junco:queued",
+            "--remove-label",
+            "junco:plan-ready",
+          ]),
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it("execution ticket already in the local queue → no submit, label swap still happens", async () => {
       const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
       try {
