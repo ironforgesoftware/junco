@@ -8,11 +8,18 @@
  * plus the PR are the source of truth.
  */
 
+import { readdirSync } from "node:fs";
 import type { Config, GithubRepoMapping } from "./types.js";
 import { gh, git } from "./git.js";
+import { queuePaths } from "./config.js";
 import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
 import { PLAN_FENCE, buildPlannerPrompt } from "./planPrompt.js";
+
+/** GitHub's hard cap is 65,536 chars; leave headroom for the truncation note.
+ * Lives here (not githubReport.ts) so buildPlanComment can share it without an
+ * import cycle; githubReport re-exports it for existing importers. */
+export const COMMENT_LIMIT = 60_000;
 
 /** Shape of `gh issue list --json number,title,body,labels`. */
 export interface GhIssue {
@@ -147,14 +154,46 @@ export const PLAN_COMMENT_MARKER = "<!-- junco:plan -->";
 // Mirrors ticket.ts FRONTMATTER_RE — used to STRIP a smuggled block, never to parse it.
 const SMUGGLED_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
 
+/** Longest run of consecutive backticks at the START of any line in `text`.
+ * Line-anchored is sufficient because extractPlanBody is itself line-anchored:
+ * only fences that begin a line can open/close a block. */
+function longestBacktickRun(text: string): number {
+  let max = 0;
+  for (const line of text.split("\n")) {
+    const m = /^(`+)/.exec(line);
+    if (m && m[1].length > max) max = m[1].length;
+  }
+  return max;
+}
+
 /** Pull the plan body out of the LAST ```junco-ticket fence in `text` (planner
- * finalText or a plan comment — same format both places). Any frontmatter block
- * inside the fence is stripped: frontmatter is machine-owned, model output and
- * issue text can never set repo:/workdir:/tools:. Null = no usable plan. */
+ * finalText or a plan comment — same format both places). Fence-length-aware
+ * CommonMark matching: an opening fence of N backticks is closed by the first
+ * later line that is a run of >= N backticks with no info text, so a plan that
+ * itself contains a ```bash block (the template mandates one) does not truncate
+ * at the inner fence. Any frontmatter block inside the fence is stripped:
+ * frontmatter is machine-owned, model output and issue text can never set
+ * repo:/workdir:/tools:. Null = no usable (complete) plan. */
 export function extractPlanBody(text: string): string | null {
-  const re = new RegExp("```" + PLAN_FENCE + "\\s*\\n([\\s\\S]*?)\\n```", "g");
+  const lines = text.split("\n");
+  const openRe = new RegExp("^(`{3,})" + PLAN_FENCE + "\\s*$");
   let last: string | null = null;
-  for (const m of text.matchAll(re)) last = m[1];
+  for (let i = 0; i < lines.length; i++) {
+    const m = openRe.exec(lines[i]);
+    if (!m) continue;
+    const n = m[1].length;
+    const closeRe = new RegExp("^`{" + n + ",}\\s*$");
+    let close = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (closeRe.test(lines[j])) {
+        close = j;
+        break;
+      }
+    }
+    if (close === -1) continue; // no closer → not a complete block; ignore
+    last = lines.slice(i + 1, close).join("\n");
+    i = close; // resume scanning after this block's closer
+  }
   if (last === null) return null;
   const stripped = last.replace(SMUGGLED_FRONTMATTER_RE, "").trim();
   return stripped === "" ? null : stripped;
@@ -171,15 +210,20 @@ export function buildPlanComment(
   const next = opts.requireApproval
     ? `review it, then apply \`${opts.trigger}:approved\` to execute. You can EDIT this comment first — the edited plan is what runs.`
     : `it will execute on the next sweep (\`require_approval = false\`). You can still EDIT this comment before then.`;
+  // Outer fence must outrun any inner fence in the plan (>= 4 backticks so the
+  // template's mandatory ```bash block round-trips through extractPlanBody).
+  const fence = "`".repeat(Math.max(4, longestBacktickRun(planBody) + 1));
   const out =
     `${PLAN_COMMENT_MARKER}\n**Proposed plan** for #${opts.issue} — ${next}\n\n` +
-    "```" +
+    fence +
     PLAN_FENCE +
     "\n" +
     planBody +
-    "\n```\n" +
+    "\n" +
+    fence +
+    "\n" +
     `\n_Re-plan: remove \`${opts.trigger}:plan-ready\` (a newer plan comment supersedes this one)._\n`;
-  return out.length > 60_000 ? null : out;
+  return out.length > COMMENT_LIMIT ? null : out;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +453,27 @@ async function findOwnPlanComment(
   return found;
 }
 
+/** Has an execution ticket with this id already been submitted to the local
+ * queue? Scans all four queue dirs for `${id}.md` or a claim-prefixed
+ * `*__${id}.md`. A missing dir (ENOENT) counts as absent. Guards against a
+ * duplicate submit when a previous sweep queued the ticket but crashed before
+ * flipping the label — the next sweep would otherwise re-dispatch it. */
+function executionTicketExists(cfg: Config, id: string): boolean {
+  const paths = queuePaths(cfg);
+  const exact = `${id}.md`;
+  const claimed = `__${id}.md`;
+  for (const dir of [paths.inbox, paths.processing, paths.done, paths.failed]) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue; // ENOENT or unreadable → nothing here
+    }
+    if (entries.some((e) => e === exact || e.endsWith(claimed))) return true;
+  }
+  return false;
+}
+
 /** Execution ticket from a reviewed plan: machine frontmatter (id, mapped
  * repo path, provenance) + the plan body verbatim. pr_title omitted —
  * derivePrTitle picks the plan's H1. */
@@ -480,6 +545,28 @@ export async function pollGithubInbox(
           const names = new Set(issue.labels.map((l) => l.name));
           if (names.has(ll.planReady)) {
             try {
+              // Already dispatched on a prior sweep (a lifecycle label proves the
+              // execution ticket left the gate) but the label swap that should
+              // have cleared plan-ready/approved was lost. Re-attempt ONLY that
+              // cleanup — never re-submit — and move on.
+              if ([ll.queued, ll.working, ll.done, ll.failed].some((n) => names.has(n))) {
+                const cleanupArgs = [
+                  "issue",
+                  "edit",
+                  String(issue.number),
+                  "--repo",
+                  repo.nwo,
+                  "--remove-label",
+                  ll.planReady,
+                ];
+                if (cfg.github.requireApproval) cleanupArgs.push("--remove-label", ll.approved);
+                await ghFn(cfg, cleanupArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
+                log.info("github bridge: plan-ready lingering after dispatch; cleaned up labels", {
+                  nwo: repo.nwo,
+                  issue: issue.number,
+                });
+                continue;
+              }
               const login = await viewerLogin(cfg, state, ghFn);
               const comment = await findOwnPlanComment(cfg, repo.nwo, issue.number, login, ghFn);
               if (!comment) {
@@ -505,7 +592,16 @@ export async function pollGithubInbox(
                   });
                   continue;
                 }
-                if (approval.atMs === null || approval.atMs <= comment.createdAtMs) {
+                // Fail closed on an unparseable timestamp on EITHER side: an
+                // approval only counts if it is strictly newer than a plan
+                // comment whose own createdAtMs actually parsed.
+                if (
+                  !(
+                    Number.isFinite(comment.createdAtMs) &&
+                    approval.atMs !== null &&
+                    approval.atMs > comment.createdAtMs
+                  )
+                ) {
                   log.warn("github bridge: approval predates the plan comment; re-apply it", {
                     nwo: repo.nwo,
                     issue: issue.number,
@@ -522,13 +618,22 @@ export async function pollGithubInbox(
                 continue;
               }
               const t = buildExecutionTicket(issue.number, repo, planBody);
-              try {
-                submitFn(cfg, t.content, { idHint: t.id });
-              } catch (e) {
-                if (!errMsg(e).includes("already queued")) throw e;
-                log.info("github bridge: execution ticket already queued; re-marking", {
+              // A prior sweep may have queued this ticket then crashed before the
+              // label swap. Detect the existing file and skip re-submit, going
+              // straight to the (idempotent) label swap.
+              if (executionTicketExists(cfg, t.id)) {
+                log.info("github bridge: execution ticket already in local queue; re-marking", {
                   id: t.id,
                 });
+              } else {
+                try {
+                  submitFn(cfg, t.content, { idHint: t.id });
+                } catch (e) {
+                  if (!errMsg(e).includes("already queued")) throw e;
+                  log.info("github bridge: execution ticket already queued; re-marking", {
+                    id: t.id,
+                  });
+                }
               }
               const editArgs = [
                 "issue",

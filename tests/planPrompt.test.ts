@@ -20,7 +20,7 @@ describe("buildPlannerPrompt", () => {
 
   it("contains the fence instruction, the template, and the issue", () => {
     const p = buildPlannerPrompt(opts);
-    expect(p).toContain("```" + PLAN_FENCE);
+    expect(p).toContain("````" + PLAN_FENCE);
     expect(p).toContain("# Junco ticket template");
     expect(p).toContain("Add rate limiting");
     expect(p).toContain("Uploads hammer the API.");

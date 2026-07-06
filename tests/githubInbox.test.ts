@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   lifecycleLabels,
   isEligible,
@@ -14,6 +17,10 @@ import {
 import { parseTicket } from "../src/ticket.js";
 import type { Config } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
+
+// executionTicketExists (approval path) calls queuePaths(cfg); point bridge
+// configs at a vault dir that does not exist so readdirSync ENOENTs → "absent".
+const NX_VAULT = join(tmpdir(), `junco-nx-${Math.random().toString(36).slice(2)}`);
 
 // Minimal Config for conversion tests — only the fields issueToTicket reads.
 const cfg = {
@@ -198,6 +205,8 @@ describe("pollGithubInbox", () => {
 
   const bridgeCfg = {
     ...cfg,
+    vaultRoot: NX_VAULT,
+    juncoSubdir: "tickets",
     github: {
       ...cfg.github,
       repos: [{ nwo: "acme/api", path: "/home/u/code/api" }],
@@ -455,6 +464,79 @@ describe("pollGithubInbox", () => {
       expect(f.submitted[0].content).toContain("# The plan");
       expect(f.submitted[0].content).not.toContain("# Old plan");
     });
+
+    it("plan comment with an unparseable created_at → no submit (postdate fails closed)", async () => {
+      const f = makeFakes({
+        issues: [readyIssue],
+        events: approvedAfter,
+        permission: "write",
+        comments: [planComment(fencedComment, { created_at: "not-a-real-date" })],
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+    });
+
+    it("plan-ready with a lifecycle label already set → label cleanup only, no submit", async () => {
+      const dispatched = {
+        ...readyIssue,
+        labels: [
+          { name: "junco" },
+          { name: "junco:plan-ready" },
+          { name: "junco:approved" },
+          { name: "junco:queued" },
+        ],
+      };
+      const f = makeFakes({
+        issues: [dispatched],
+        events: approvedAfter,
+        permission: "write",
+        comments: [planComment(fencedComment)],
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+      const edit = f.calls.find((c) => c[1] === "edit");
+      expect(edit).toEqual(
+        expect.arrayContaining([
+          "--remove-label",
+          "junco:plan-ready",
+          "--remove-label",
+          "junco:approved",
+        ]),
+      );
+      expect(edit).not.toContain("--add-label");
+    });
+
+    it("execution ticket already in the local queue → no submit, label swap still happens", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const processing = join(root, "tickets", "processing");
+        mkdirSync(processing, { recursive: true });
+        // Claim-prefixed file for the exec-ticket id gh-acme-api-42.
+        writeFileSync(join(processing, "1720000000000__gh-acme-api-42.md"), "stub", "utf8");
+        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const f = makeFakes({
+          issues: [readyIssue],
+          events: approvedAfter,
+          permission: "write",
+          comments: [planComment(fencedComment)],
+        });
+        const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+        expect(n).toBe(1);
+        expect(f.submitted).toHaveLength(0);
+        const edit = f.calls.find((c) => c[1] === "edit");
+        expect(edit).toEqual(
+          expect.arrayContaining([
+            "--add-label",
+            "junco:queued",
+            "--remove-label",
+            "junco:plan-ready",
+          ]),
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 });
 
@@ -480,6 +562,22 @@ describe("extractPlanBody", () => {
     expect(extractPlanBody("no fence here")).toBeNull();
     expect(extractPlanBody("```junco-ticket\n   \n```")).toBeNull();
   });
+
+  it("keeps an inner ```bash block via a 4-backtick outer fence (no truncation)", () => {
+    const plan = "# Title\n\n## Verification\n\n```bash\nnpm test\n```\n\ndone";
+    const text = "chatter\n\n````junco-ticket\n" + plan + "\n````\n\ntrailing";
+    expect(extractPlanBody(text)).toBe(plan);
+  });
+
+  it("still extracts a legacy 3-backtick fence with no inner fences (backward compat)", () => {
+    expect(extractPlanBody("```junco-ticket\n# Legacy\n## Steps\n- go\n```")).toBe(
+      "# Legacy\n## Steps\n- go",
+    );
+  });
+
+  it("ignores an unterminated fence (no complete block)", () => {
+    expect(extractPlanBody("````junco-ticket\n# No closer")).toBeNull();
+  });
 });
 
 describe("buildPlanComment", () => {
@@ -491,7 +589,8 @@ describe("buildPlanComment", () => {
     });
     expect(c).not.toBeNull();
     expect(c).toContain(PLAN_COMMENT_MARKER);
-    expect(c).toContain("```junco-ticket\n# Plan\n## Steps\n```");
+    // Outer fence is >= 4 backticks now (fence-length-aware).
+    expect(c).toContain("````junco-ticket\n# Plan\n## Steps\n````");
     expect(c).toContain("junco:approved");
     expect(extractPlanBody(c!)).toBe("# Plan\n## Steps"); // round-trips
   });
@@ -500,6 +599,22 @@ describe("buildPlanComment", () => {
     const c = buildPlanComment("# P", { issue: 1, trigger: "junco", requireApproval: false });
     expect(c).toContain("next sweep");
     expect(c).not.toContain("junco:approved");
+  });
+
+  it("round-trips a plan containing a ```bash block losslessly", () => {
+    const plan = "# Plan\n\n## Verification\n\n```bash\nnpm test\n```";
+    const c = buildPlanComment(plan, { issue: 7, trigger: "junco", requireApproval: true });
+    expect(c).not.toBeNull();
+    expect(c).toContain("````junco-ticket"); // 4 backticks outruns the inner ```
+    expect(extractPlanBody(c!)).toBe(plan);
+  });
+
+  it("escalates to a 5-backtick outer fence when the plan contains a 4-backtick run", () => {
+    const plan = "# Plan\n\n````\nnested fence sample\n````";
+    const c = buildPlanComment(plan, { issue: 7, trigger: "junco", requireApproval: true });
+    expect(c).not.toBeNull();
+    expect(c).toContain("`````junco-ticket"); // 5 backticks outruns the inner 4
+    expect(extractPlanBody(c!)).toBe(plan);
   });
 
   it("returns null when the plan cannot fit a comment", () => {

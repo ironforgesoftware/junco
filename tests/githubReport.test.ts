@@ -184,11 +184,14 @@ describe("makeGithubReporter", () => {
 
 describe("plan-kind reporting", () => {
   const planTicket = ticket({ nwo: "acme/api", issue: 42, kind: "plan" });
+  // 4-backtick outer fence wrapping an inner ```bash block (the template
+  // mandates one in ## Verification) — must NOT truncate at the inner fence.
   const goodFinal = out({
     kind: "qa",
     status: "completed",
     prUrl: null,
-    finalText: "chatter\n\n```junco-ticket\n# The plan\n## Steps\n- x\n```\n",
+    finalText:
+      "chatter\n\n````junco-ticket\n# The plan\n\n## Verification\n\n```bash\nnpm test\n```\n````\n",
   });
 
   it("onStart/onRequeue are label no-ops for plan tickets", async () => {
@@ -210,6 +213,24 @@ describe("plan-kind reporting", () => {
         "--remove-label",
         "junco:planning",
       ]),
+    );
+  });
+
+  it("onFinal with an oversized plan: failure comment + planning→failed", async () => {
+    const f = fakeGh();
+    const bigPlan = "# Big\n\n" + "x".repeat(70_000);
+    await makeGithubReporter(cfg, f as never).onFinal(
+      planTicket,
+      out({
+        kind: "qa",
+        status: "completed",
+        prUrl: null,
+        finalText: "````junco-ticket\n" + bigPlan + "\n````\n",
+      }),
+    );
+    expect(f.calls[0][1]).toBe("comment");
+    expect(f.calls[1]).toEqual(
+      expect.arrayContaining(["--add-label", "junco:failed", "--remove-label", "junco:planning"]),
     );
   });
 

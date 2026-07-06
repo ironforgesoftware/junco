@@ -12,12 +12,18 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket, type TicketGithub } from "./types.js";
 import type { TicketReporter, TicketOutcome } from "./reporter.js";
-import { lifecycleLabels, extractPlanBody, buildPlanComment } from "./githubInbox.js";
+import {
+  lifecycleLabels,
+  extractPlanBody,
+  buildPlanComment,
+  COMMENT_LIMIT,
+} from "./githubInbox.js";
 import { gh } from "./git.js";
 import { log } from "./logging.js";
 
-/** GitHub's hard cap is 65,536 chars; leave headroom for the truncation note. */
-export const COMMENT_LIMIT = 60_000;
+// COMMENT_LIMIT is defined in githubInbox.ts (buildPlanComment shares it);
+// re-exported here so existing importers keep working without an import cycle.
+export { COMMENT_LIMIT };
 
 const GH_TIMEOUT = 60_000;
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));

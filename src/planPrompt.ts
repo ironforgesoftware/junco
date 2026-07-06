@@ -69,12 +69,14 @@ Rules:
 4. Do NOT include a frontmatter block (no \`---\` header) — the worker builds
    frontmatter itself. Start the plan at the \`# <title>\` heading.
 5. Your FINAL message must contain the finished plan inside a single fenced block
-   tagged \`${PLAN_FENCE}\`, and nothing else of substance:
+   tagged \`${PLAN_FENCE}\`, and nothing else of substance. If your plan itself
+   contains fenced code blocks, the outer fence must use more backticks than any
+   inner fence:
 
-\`\`\`${PLAN_FENCE}
+\`\`\`\`${PLAN_FENCE}
 # <verb-first title>
 ...every template section...
-\`\`\`
+\`\`\`\`
 
 A missing or empty fence fails the ticket.`,
     `--- TICKET TEMPLATE (follow the body sections; ignore its frontmatter guidance) ---\n\n${template}`,
