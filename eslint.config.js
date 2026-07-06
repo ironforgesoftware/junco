@@ -4,7 +4,7 @@ export default tseslint.config(
   { ignores: ["dist/**", "node_modules/**", "docs/**", "worktrees/**"] },
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.ts", "tests/**/*.ts"],
+    files: ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"],
     languageOptions: {
       parserOptions: { project: "./tsconfig.eslint.json", tsconfigRootDir: import.meta.dirname },
     },
