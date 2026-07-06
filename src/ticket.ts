@@ -44,7 +44,7 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       typeof g.issue === "number" &&
       Number.isInteger(g.issue) &&
       g.issue > 0 &&
-      (g.kind === "pr" || g.kind === "ask")
+      (g.kind === "pr" || g.kind === "ask" || g.kind === "plan")
     ) {
       github = { nwo: g.nwo, issue: g.issue, kind: g.kind };
     }

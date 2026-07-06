@@ -94,4 +94,12 @@ describe("parseTicket", () => {
         .github,
     ).toBeNull(); // bad kind
   });
+
+  it("accepts kind: plan in the github block", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: gh-a-b-1-plan\nworkdir: /tmp/c\ngithub:\n  nwo: a/b\n  issue: 1\n  kind: plan\n---\nbody`,
+    );
+    expect(t.github?.kind).toBe("plan");
+  });
 });

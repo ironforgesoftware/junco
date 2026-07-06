@@ -131,7 +131,7 @@ export const TERMINAL_DONE_STATUSES: ReadonlySet<string> = new Set([
 export interface TicketGithub {
   nwo: string;
   issue: number;
-  kind: "pr" | "ask";
+  kind: "pr" | "ask" | "plan";
 }
 
 export interface Ticket {

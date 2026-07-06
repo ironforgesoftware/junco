@@ -97,7 +97,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
       properties: {
         nwo: { type: "string", description: "Repository name-with-owner, e.g. acme/api." },
         issue: { type: "integer", minimum: 1, description: "Source issue number." },
-        kind: { type: "string", enum: ["pr", "ask"], description: "Execution path." },
+        kind: { type: "string", enum: ["pr", "ask", "plan"], description: "Execution path." },
       },
     },
   },

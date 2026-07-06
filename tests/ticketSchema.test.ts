@@ -103,4 +103,11 @@ describe("describeTicketSchema()", () => {
     expect(s.properties.not_before.format).toBe("date-time");
     expect((s.properties.tools.items as Record<string, unknown>).type).toBe("string");
   });
+
+  it("github.kind enum includes plan", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, { properties?: Record<string, { enum?: string[] }> }>;
+    };
+    expect(s.properties.github.properties?.kind.enum).toEqual(["pr", "ask", "plan"]);
+  });
 });
