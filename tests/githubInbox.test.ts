@@ -206,13 +206,31 @@ describe("pollGithubInbox", () => {
   };
   const labeledEvent = `{"actor":"alice","label":"junco"}`;
 
-  it("bridges an eligible issue: submit then queued label", async () => {
+  it("bridges an eligible PR issue into a PLANNING ticket + planning label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
     expect(n).toBe(1);
     expect(f.submitted).toHaveLength(1);
-    expect(f.submitted[0].content).toContain(`nwo: "acme/api"`);
+    expect(f.submitted[0].idHint).toBe("gh-acme-api-42-plan");
+    expect(f.submitted[0].content).toContain("kind: plan");
+    expect(f.submitted[0].content).toContain("workdir:");
+    // Scoped to the machine-built frontmatter block (before the planner prompt body) —
+    // the embedded template further down legitimately shows a "repo:" example field.
+    expect(f.submitted[0].content.split("\n\n")[0]).not.toContain("\nrepo:");
+    expect(f.submitted[0].content).toContain("# Junco ticket template"); // discipline embedded
+    expect(f.submitted[0].content).toContain("Add rate limiting"); // the issue
+    const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+    expect(edit).toContain("junco:planning");
+    expect(edit).not.toContain("junco:queued");
+  });
+
+  it("ask issues keep the direct path: verbatim ask ticket + queued label", async () => {
+    const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
+    const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
+    const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+    expect(n).toBe(1);
     expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+    expect(f.submitted[0].content).toContain("kind: ask");
     const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
     expect(edit).toContain("junco:queued");
   });
@@ -237,7 +255,7 @@ describe("pollGithubInbox", () => {
   it("duplicate submit still applies the queued label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: labeledEvent });
     const throwingSubmit = (): string => {
-      throw new Error("ticket already queued: /inbox/gh-acme-api-42.md");
+      throw new Error("ticket already queued: /inbox/gh-acme-api-42-plan.md");
     };
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), {
       ghFn: f.ghFn,
@@ -245,7 +263,7 @@ describe("pollGithubInbox", () => {
       submitFn: throwingSubmit,
     } as never);
     expect(n).toBe(1);
-    expect(f.calls.find((c) => c[1] === "edit" && c.includes("junco:queued"))).toBeDefined();
+    expect(f.calls.find((c) => c[1] === "edit" && c.includes("junco:planning"))).toBeDefined();
   });
 
   it("a non-duplicate submit failure skips the issue (no queued label)", async () => {
@@ -292,7 +310,7 @@ describe("pollGithubInbox", () => {
       parent: `{"title":"Uploads are slow","body":"30s uploads."}`,
     });
     await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
-    expect(f.submitted[0].content).toContain("## Context: parent issue");
+    expect(f.submitted[0].content).toContain("Parent issue (background only)");
     expect(f.submitted[0].content).toContain("Uploads are slow");
   });
 

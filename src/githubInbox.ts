@@ -12,7 +12,7 @@ import type { Config, GithubRepoMapping } from "./types.js";
 import { gh, git } from "./git.js";
 import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
-import { PLAN_FENCE } from "./planPrompt.js";
+import { PLAN_FENCE, buildPlannerPrompt } from "./planPrompt.js";
 
 /** Shape of `gh issue list --json number,title,body,labels`. */
 export interface GhIssue {
@@ -110,6 +110,36 @@ export function issueToTicket(
     );
   }
   return { id, content: fm.join("\n") + "\n\n" + parts.join("\n\n") + "\n" };
+}
+
+/** Materialize the PLANNING ticket for a raw PR issue: Q&A rails (workdir,
+ * read-only), kind "plan", body = the full planner prompt (transparent — the
+ * inbox file shows exactly what the planner was asked). */
+export function buildPlanningTicket(
+  issue: GhIssue,
+  repo: GithubRepoMapping,
+  parent: { title: string; body: string | null } | null,
+): { id: string; content: string } {
+  const [owner, name] = repo.nwo.split("/");
+  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const id = `gh-${slug(owner)}-${slug(name)}-${issue.number}-plan`;
+  const fm = [
+    "---",
+    `id: ${id}`,
+    `workdir: ${JSON.stringify(repo.path)}`,
+    "github:",
+    `  nwo: ${JSON.stringify(repo.nwo)}`,
+    `  issue: ${issue.number}`,
+    "  kind: plan",
+    "---",
+  ];
+  const prompt = buildPlannerPrompt({
+    title: issue.title,
+    body: issue.body ?? "",
+    nwo: repo.nwo,
+    parent,
+  });
+  return { id, content: fm.join("\n") + "\n\n" + prompt };
 }
 
 export const PLAN_COMMENT_MARKER = "<!-- junco:plan -->";
@@ -388,8 +418,12 @@ export async function pollGithubInbox(
             });
             continue;
           }
-          const parent = await fetchParent(cfg, repo.nwo, issue.number, ghFn);
-          const t = issueToTicket(issue, repo, cfg, parent);
+          const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);
+          const parent = isAsk ? null : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
+          const t = isAsk
+            ? issueToTicket(issue, repo, cfg, null)
+            : buildPlanningTicket(issue, repo, parent);
+          const stateLabel = isAsk ? ll.queued : ll.planning;
           try {
             submitFn(cfg, t.content, { idHint: t.id });
           } catch (e) {
@@ -398,7 +432,7 @@ export async function pollGithubInbox(
           }
           await ghFn(
             cfg,
-            ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.queued],
+            ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", stateLabel],
             { timeoutMs: GH_TIMEOUT, retryNetwork: true },
           );
           bridged++;
@@ -406,6 +440,7 @@ export async function pollGithubInbox(
             nwo: repo.nwo,
             issue: issue.number,
             id: t.id,
+            kind: isAsk ? "ask" : "plan",
           });
         } catch (e) {
           log.warn("github bridge: issue skipped", {
