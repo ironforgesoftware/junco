@@ -159,6 +159,13 @@ describe("applyAction label mapping", () => {
     expect(edit).toEqual(expect.arrayContaining(["--remove-label", "junco:failed"]));
     expect(edit).not.toContain("junco:done");
   });
+  it("recycle with no terminal label is a clean no-op (no edit call)", async () => {
+    const f = fakes();
+    const c = makeGhDashboardClient(cfg, f);
+    const r = await c.applyAction("acme/api", 42, "recycle", ["junco"]);
+    expect(r).toEqual({ ok: true, value: undefined });
+    expect(f.calls.find((a) => a[0] === "issue" && a[1] === "edit")).toBeUndefined();
+  });
 });
 
 describe("validateAndPrepareRepo", () => {

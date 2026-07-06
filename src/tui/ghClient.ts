@@ -156,8 +156,14 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
           }
           case "recycle": {
             const terminal = [ll.done, ll.failed, ll.denied].filter(has);
-            const args = terminal.flatMap((l) => ["--remove-label", l]);
-            return edit(nwo, num, args);
+            // Stale labels (someone already recycled): a flag-less `gh issue
+            // edit` exits 1, so a no-op recycle succeeds without calling gh.
+            if (terminal.length === 0) return;
+            return edit(
+              nwo,
+              num,
+              terminal.flatMap((l) => ["--remove-label", l]),
+            );
           }
         }
       });
