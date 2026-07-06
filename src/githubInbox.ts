@@ -12,6 +12,7 @@ import type { Config, GithubRepoMapping } from "./types.js";
 import { gh, git } from "./git.js";
 import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
+import { PLAN_FENCE } from "./planPrompt.js";
 
 /** Shape of `gh issue list --json number,title,body,labels`. */
 export interface GhIssue {
@@ -109,6 +110,46 @@ export function issueToTicket(
     );
   }
   return { id, content: fm.join("\n") + "\n\n" + parts.join("\n\n") + "\n" };
+}
+
+export const PLAN_COMMENT_MARKER = "<!-- junco:plan -->";
+
+// Mirrors ticket.ts FRONTMATTER_RE — used to STRIP a smuggled block, never to parse it.
+const SMUGGLED_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
+
+/** Pull the plan body out of the LAST ```junco-ticket fence in `text` (planner
+ * finalText or a plan comment — same format both places). Any frontmatter block
+ * inside the fence is stripped: frontmatter is machine-owned, model output and
+ * issue text can never set repo:/workdir:/tools:. Null = no usable plan. */
+export function extractPlanBody(text: string): string | null {
+  const re = new RegExp("```" + PLAN_FENCE + "\\s*\\n([\\s\\S]*?)\\n```", "g");
+  let last: string | null = null;
+  for (const m of text.matchAll(re)) last = m[1];
+  if (last === null) return null;
+  const stripped = last.replace(SMUGGLED_FRONTMATTER_RE, "").trim();
+  return stripped === "" ? null : stripped;
+}
+
+/** Render the ONE plan comment: marker (machine-recoverable) + instructions +
+ * the plan in a fence (readable AND re-extractable). Null when the result
+ * would blow GitHub's comment cap — the caller fails the plan instead of
+ * truncating the machine copy. */
+export function buildPlanComment(
+  planBody: string,
+  opts: { issue: number; trigger: string; requireApproval: boolean },
+): string | null {
+  const next = opts.requireApproval
+    ? `review it, then apply \`${opts.trigger}:approved\` to execute. You can EDIT this comment first — the edited plan is what runs.`
+    : `it will execute on the next sweep (\`require_approval = false\`). You can still EDIT this comment before then.`;
+  const out =
+    `${PLAN_COMMENT_MARKER}\n**Proposed plan** for #${opts.issue} — ${next}\n\n` +
+    "```" +
+    PLAN_FENCE +
+    "\n" +
+    planBody +
+    "\n```\n" +
+    `\n_Re-plan: remove \`${opts.trigger}:plan-ready\` (a newer plan comment supersedes this one)._\n`;
+  return out.length > 60_000 ? null : out;
 }
 
 // ---------------------------------------------------------------------------

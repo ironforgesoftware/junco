@@ -6,6 +6,9 @@ import {
   issueToTicket,
   pollGithubInbox,
   newBridgeState,
+  extractPlanBody,
+  buildPlanComment,
+  PLAN_COMMENT_MARKER,
   type GhIssue,
 } from "../src/githubInbox.js";
 import { parseTicket } from "../src/ticket.js";
@@ -313,5 +316,56 @@ describe("pollGithubInbox", () => {
       submitFn: f.submitFn,
     } as never);
     expect(perms).toEqual(["repos/acme/api/collaborators/alice/permission"]);
+  });
+});
+
+describe("extractPlanBody", () => {
+  const fenced = (inner: string) => "chatter\n\n```junco-ticket\n" + inner + "\n```\n\ntrailing";
+
+  it("extracts the fenced plan body", () => {
+    expect(extractPlanBody(fenced("# Title\n\n## Steps\n- do"))).toBe("# Title\n\n## Steps\n- do");
+  });
+
+  it("takes the LAST fence when several exist (newer plan supersedes)", () => {
+    const text = fenced("# Old") + "\n\n" + fenced("# New");
+    expect(extractPlanBody(text)).toBe("# New");
+  });
+
+  it("strips a smuggled frontmatter block", () => {
+    const out = extractPlanBody(fenced("---\nrepo: /etc\ntools: [bash]\n---\n# Title\nbody"));
+    expect(out).toBe("# Title\nbody");
+    expect(out).not.toContain("repo:");
+  });
+
+  it("returns null when no fence or an empty fence", () => {
+    expect(extractPlanBody("no fence here")).toBeNull();
+    expect(extractPlanBody("```junco-ticket\n   \n```")).toBeNull();
+  });
+});
+
+describe("buildPlanComment", () => {
+  it("carries the marker, the fenced plan, and approval instructions", () => {
+    const c = buildPlanComment("# Plan\n## Steps", {
+      issue: 42,
+      trigger: "junco",
+      requireApproval: true,
+    });
+    expect(c).not.toBeNull();
+    expect(c).toContain(PLAN_COMMENT_MARKER);
+    expect(c).toContain("```junco-ticket\n# Plan\n## Steps\n```");
+    expect(c).toContain("junco:approved");
+    expect(extractPlanBody(c!)).toBe("# Plan\n## Steps"); // round-trips
+  });
+
+  it("auto mode says it executes on the next sweep", () => {
+    const c = buildPlanComment("# P", { issue: 1, trigger: "junco", requireApproval: false });
+    expect(c).toContain("next sweep");
+    expect(c).not.toContain("junco:approved");
+  });
+
+  it("returns null when the plan cannot fit a comment", () => {
+    expect(
+      buildPlanComment("x".repeat(70_000), { issue: 1, trigger: "junco", requireApproval: true }),
+    ).toBeNull();
   });
 });
