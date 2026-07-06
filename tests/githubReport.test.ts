@@ -39,6 +39,14 @@ const cfg = {
     plannerModelId: null,
   },
 } as unknown as Config;
+function fakeGh() {
+  const calls: string[][] = [];
+  const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+    calls.push(args);
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  return { ghFn, calls };
+}
 
 describe("buildFinalComment", () => {
   it("pr success: link + first-paragraph summary", () => {
@@ -98,15 +106,6 @@ describe("buildFinalComment", () => {
 });
 
 describe("makeGithubReporter", () => {
-  function fakeGh() {
-    const calls: string[][] = [];
-    const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
-      calls.push(args);
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    return { ghFn, calls };
-  }
-
   it("onStart flips queued→working", async () => {
     const f = fakeGh();
     await makeGithubReporter(cfg, f as never).onStart(ticket(gt));
@@ -180,5 +179,58 @@ describe("makeGithubReporter", () => {
     expect(calls.find((c) => c[1] === "edit")).toEqual(
       expect.arrayContaining(["--add-label", "junco:done"]),
     );
+  });
+});
+
+describe("plan-kind reporting", () => {
+  const planTicket = ticket({ nwo: "acme/api", issue: 42, kind: "plan" });
+  const goodFinal = out({
+    kind: "qa",
+    status: "completed",
+    prUrl: null,
+    finalText: "chatter\n\n```junco-ticket\n# The plan\n## Steps\n- x\n```\n",
+  });
+
+  it("onStart/onRequeue are label no-ops for plan tickets", async () => {
+    const f = fakeGh();
+    const r = makeGithubReporter(cfg, f as never);
+    await r.onStart(planTicket);
+    await r.onRequeue(planTicket);
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it("onFinal success: posts the plan comment then flips planning→plan-ready", async () => {
+    const f = fakeGh();
+    await makeGithubReporter(cfg, f as never).onFinal(planTicket, goodFinal);
+    expect(f.calls[0][1]).toBe("comment");
+    expect(f.calls[1]).toEqual(
+      expect.arrayContaining([
+        "--add-label",
+        "junco:plan-ready",
+        "--remove-label",
+        "junco:planning",
+      ]),
+    );
+  });
+
+  it("onFinal with no extractable plan: failure comment + planning→failed", async () => {
+    const f = fakeGh();
+    await makeGithubReporter(cfg, f as never).onFinal(
+      planTicket,
+      out({ kind: "qa", status: "completed", prUrl: null, finalText: "no fence here" }),
+    );
+    expect(f.calls[0][1]).toBe("comment");
+    expect(f.calls[1]).toEqual(
+      expect.arrayContaining(["--add-label", "junco:failed", "--remove-label", "junco:planning"]),
+    );
+  });
+
+  it("onFinal failure status: failure comment + planning→failed", async () => {
+    const f = fakeGh();
+    await makeGithubReporter(cfg, f as never).onFinal(
+      planTicket,
+      out({ kind: "qa", status: "failed", prUrl: null, failureReason: "endpoint died" }),
+    );
+    expect(f.calls[1]).toEqual(expect.arrayContaining(["--add-label", "junco:failed"]));
   });
 });

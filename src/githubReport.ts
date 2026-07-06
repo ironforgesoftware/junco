@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket, type TicketGithub } from "./types.js";
 import type { TicketReporter, TicketOutcome } from "./reporter.js";
-import { lifecycleLabels } from "./githubInbox.js";
+import { lifecycleLabels, extractPlanBody, buildPlanComment } from "./githubInbox.js";
 import { gh } from "./git.js";
 import { log } from "./logging.js";
 
@@ -107,37 +107,65 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       });
     }
   };
+  const postComment = async (g: TicketGithub, body: string): Promise<void> => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-ghc-"));
+    const file = join(dir, "comment.md");
+    writeFileSync(file, body, "utf8");
+    try {
+      await ghFn(cfg, ["issue", "comment", String(g.issue), "--repo", g.nwo, "--body-file", file], {
+        timeoutMs: GH_TIMEOUT,
+        retryNetwork: true,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
 
   return {
     async onStart(t: Ticket): Promise<void> {
-      if (!t.github) return;
+      if (!t.github || t.github.kind === "plan") return; // planning label persists
       const g = t.github;
       await guard("onStart", t.id, () => swap(g, ll.working, ll.queued));
     },
     async onRequeue(t: Ticket): Promise<void> {
-      if (!t.github) return;
+      if (!t.github || t.github.kind === "plan") return;
       const g = t.github;
       await guard("onRequeue", t.id, () => swap(g, ll.queued, ll.working));
     },
     async onFinal(t: Ticket, outcome: TicketOutcome): Promise<void> {
       if (!t.github) return;
       const g = t.github;
-      // Comment first — it is the valuable artifact; the label is cosmetic.
-      await guard("final comment", t.id, async () => {
-        const body = buildFinalComment(t, outcome);
-        const dir = mkdtempSync(join(tmpdir(), "junco-ghc-"));
-        const file = join(dir, "comment.md");
-        writeFileSync(file, body, "utf8");
-        try {
-          await ghFn(
-            cfg,
-            ["issue", "comment", String(g.issue), "--repo", g.nwo, "--body-file", file],
-            { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      if (g.kind === "plan") {
+        const done = TERMINAL_DONE_STATUSES.has(outcome.status);
+        const planBody = done ? extractPlanBody(outcome.finalText) : null;
+        const comment = planBody
+          ? buildPlanComment(planBody, {
+              issue: g.issue,
+              trigger: cfg.github.triggerLabel,
+              requireApproval: cfg.github.requireApproval,
+            })
+          : null;
+        if (comment) {
+          await guard("plan comment", t.id, () => postComment(g, comment));
+          await guard("plan labels", t.id, () => swap(g, ll.planReady, ll.planning));
+        } else {
+          const reason = !done
+            ? (outcome.failureReason ?? `status ${outcome.status}`)
+            : planBody === null
+              ? "planner produced no usable plan (missing/empty junco-ticket fence)"
+              : "plan too large for an issue comment";
+          await guard("plan failure comment", t.id, () =>
+            postComment(
+              g,
+              `**Junco could not produce a plan** for this issue.\n\n> ${reason.slice(0, 1000)}\n\n_Remove the \`${ll.failed}\` label to re-plan._\n`,
+            ),
           );
-        } finally {
-          rmSync(dir, { recursive: true, force: true });
+          await guard("plan failure labels", t.id, () => swap(g, ll.failed, ll.planning));
         }
-      });
+        return;
+      }
+      // pr/ask: comment first — it is the valuable artifact; the label is cosmetic.
+      await guard("final comment", t.id, () => postComment(g, buildFinalComment(t, outcome)));
       const done = TERMINAL_DONE_STATUSES.has(outcome.status);
       await guard("final labels", t.id, () => swap(g, done ? ll.done : ll.failed, ll.working));
     },
