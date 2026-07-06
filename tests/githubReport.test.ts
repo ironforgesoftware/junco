@@ -35,6 +35,8 @@ const cfg = {
     askLabel: "junco:ask",
     pollIntervalSeconds: 60,
     repos: [],
+    requireApproval: true,
+    plannerModelId: null,
   },
 } as unknown as Config;
 

@@ -127,6 +127,8 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     },
   };
 }

@@ -90,6 +90,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     },
     ...overrides,
   };
@@ -676,6 +678,8 @@ describe("github bridge wiring", () => {
     askLabel: "junco:ask",
     pollIntervalSeconds: pollSeconds,
     repos: [],
+    requireApproval: true,
+    plannerModelId: null,
   });
 
   it("enabled=false: injected bridgeSweepFn is never called", async () => {

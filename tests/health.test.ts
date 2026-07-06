@@ -70,6 +70,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     },
     ...overrides,
   };

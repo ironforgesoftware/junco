@@ -243,7 +243,25 @@ describe("[github] config section", () => {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     });
+  });
+
+  it("parses require_approval and planner_model_id", () => {
+    const cfg = loadConfig(
+      writeToml(
+        `vault_root = "/tmp/v"\n[github]\nrequire_approval = false\nplanner_model_id = "prov/big"\n`,
+      ),
+    );
+    expect(cfg.github.requireApproval).toBe(false);
+    expect(cfg.github.plannerModelId).toBe("prov/big");
+  });
+
+  it("rejects an empty planner_model_id", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/tmp/v"\n[github]\nplanner_model_id = ""\n`)),
+    ).toThrow();
   });
 
   it("parses repos and derives ask_label from a custom trigger", () => {

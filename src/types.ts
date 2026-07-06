@@ -46,6 +46,8 @@ export interface GithubConfig {
   askLabel: string; // routes an issue to the read-only Q&A path
   pollIntervalSeconds: number; // bridge sweep cadence (independent of worker poll)
   repos: GithubRepoMapping[];
+  requireApproval: boolean; // false ⇒ plan-ready auto-executes next sweep
+  plannerModelId: string | null; // planning-session model id override (same endpoint)
 }
 export interface Config {
   vaultRoot: string;

@@ -65,6 +65,8 @@ function cfg(root: string): Config {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     },
     stateDir: join(root, "state"),
     logToFile: false,

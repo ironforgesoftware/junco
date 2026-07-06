@@ -152,6 +152,8 @@ function makeConfig(work: string, ghBin: string): Config {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     },
     stateDir: "/tmp/junco-repo-test-state",
     logToFile: false,

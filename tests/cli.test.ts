@@ -418,6 +418,8 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     askLabel: "junco:ask",
     pollIntervalSeconds: 60,
     repos: [],
+    requireApproval: true,
+    plannerModelId: null,
   },
 };
 

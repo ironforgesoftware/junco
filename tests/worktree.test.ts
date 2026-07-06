@@ -140,6 +140,8 @@ function makeConfig(work: string, wtsRoot: string): Config {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     },
   };
 }

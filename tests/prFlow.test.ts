@@ -158,6 +158,8 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       askLabel: "junco:ask",
       pollIntervalSeconds: 60,
       repos: [],
+      requireApproval: true,
+      plannerModelId: null,
     },
     stateDir: join(h.root, "state"),
     logToFile: false,

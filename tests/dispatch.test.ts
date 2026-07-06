@@ -66,6 +66,8 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
     askLabel: "junco:ask",
     pollIntervalSeconds: 60,
     repos: [],
+    requireApproval: true,
+    plannerModelId: null,
   },
 };
 
