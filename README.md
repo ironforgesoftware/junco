@@ -463,40 +463,55 @@ Ticket templates live in the `templates/` directory:
 
 ## GitHub-integrated mode
 
-Junco can use **GitHub Issues as a dispatch surface**: label an issue, and the daemon turns it into a ticket, works it in a worktree, opens a PR, and reports back on the issue thread. The local inbox keeps working exactly as before — both surfaces feed the same queue, and with `enabled = false` (the default) Junco makes zero GitHub calls.
+Junco can use **GitHub Issues as a dispatch surface**: label an issue and the daemon drafts an execution plan, posts it for review, and — once approved — works it in a worktree, opens a PR, and reports back on the issue thread. Junco never executes a raw issue directly; it always plans first. The local inbox keeps working exactly as before — both surfaces feed the same queue, and with `enabled = false` (the default) Junco makes zero GitHub calls.
 
 ```toml
 [github]
 enabled = true
 trigger_label = "junco"        # the approval marker
 poll_interval_seconds = 60     # bridge sweep cadence
+require_approval = true        # a write+ collaborator must apply junco:approved before a plan executes
+# planner_model_id = "provider/small-model"   # optional: plan with a different model than execution
 
 [[github.repos]]
 nwo  = "owner/repo"            # repo to watch
 path = "~/code/repo"           # its local clone (origin must point at nwo)
 ```
 
-**The loop.** Every sweep, Junco lists open issues carrying the trigger label in each watched repo. An eligible issue (no lifecycle label yet) is verified — **who applied the label, and do they have write access?** — then copied into the inbox as an ordinary ticket: issue title → PR title, issue body → ticket body. From there the normal pipeline runs (atomic claim, worktree, guards, verification, critic, retries). The PR body includes `Closes owner/repo#N`, so merging auto-closes the issue. When the ticket finalizes, Junco posts **one comment** — PR link plus a brief summary, or the failure reason — and GitHub's notifications do the rest.
+**The two-hop loop.** Every sweep, Junco lists open issues carrying the trigger label in each watched repo.
+
+1. **Dispatch → plan.** An eligible issue (trigger label present, no lifecycle label yet) is verified — **who applied the label, and do they have write access?** — then turned into a _planning_ ticket: a read-only, Q&A-style session at the mapped clone that explores the repo and drafts a plan using the same authoring discipline as the `junco-dispatch` skill (single-sourced from `skills/junco-dispatch/TEMPLATE.md`; see `planPrompt.ts`). Set `planner_model_id` to plan with a cheaper/different model than the one that executes. The issue flips to `junco:planning`.
+2. **Plan → review.** When planning finishes, Junco posts the plan as **one issue comment** — carrying a hidden `<!-- junco:plan -->` anchor so the bridge can recover it later — and flips the issue to `junco:plan-ready`. The comment is ordinary GitHub markdown: **you can edit it**, and whatever it says at approval time is what executes.
+3. **Approve → execute.** With `require_approval = true` (the default), a write+ collaborator applies `junco:approved` after reading the plan comment; Junco checks both that a write+ collaborator applied it and that the approval postdates the plan comment (so a stale approval from before a re-plan can't sneak an old plan through). With `require_approval = false`, the plan executes automatically on the next sweep instead — no human gate. Either way, Junco reads the plan back out of the (possibly edited) comment, builds an ordinary execution ticket from it, swaps `junco:plan-ready`/`junco:approved` for `junco:queued`, and the normal pipeline runs from there (atomic claim, worktree, guards, verification, critic, retries) exactly as for a locally-submitted ticket.
+
+When the execution ticket finalizes, Junco posts **one comment** — PR link plus a brief summary, or the failure reason — and flips to `junco:done`/`junco:failed`. The PR body includes `Closes owner/repo#N`, so merging auto-closes the issue.
+
+**Questions skip planning.** Add the ask label (default `junco:ask`) alongside the trigger label and Junco routes straight to the read-only Q&A path (`junco:queued` directly — no plan, no review, no approval) — the session browses the mapped clone with read-only tools and posts its **answer as the comment**. No branch, no PR.
 
 **Lifecycle labels** signal state silently (no notifications) and are visible in the issue list:
 
-| Label           | Meaning                                                   |
-| --------------- | --------------------------------------------------------- |
-| `junco:queued`  | Copied into the inbox, waiting for a worker slot          |
-| `junco:working` | A session is on it right now                              |
-| `junco:done`    | Finished — see the closing comment (PR link / answer)     |
-| `junco:failed`  | Failed — see the closing comment for the reason           |
-| `junco:denied`  | Trigger label was applied by someone without write access |
+| Label              | Meaning                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `junco:planning`   | A planning session is drafting a plan from the raw issue                                                |
+| `junco:plan-ready` | Plan posted as a comment — awaiting review (and approval, if `require_approval`)                        |
+| `junco:approved`   | Applied by a write+ collaborator after reading the plan; authorizes execution (removed once dispatched) |
+| `junco:queued`     | An execution ticket (or Q&A ticket) is in the inbox, waiting for a worker slot                          |
+| `junco:working`    | A session is on it right now                                                                            |
+| `junco:done`       | Finished — see the closing comment (PR link / answer)                                                   |
+| `junco:failed`     | Failed — see the closing comment for the reason (planning or execution)                                 |
+| `junco:denied`     | Trigger label was applied by someone without write access                                               |
 
-**Re-dispatch** is one gesture: remove the lifecycle label and leave the trigger label on — the next sweep picks the issue up fresh. The ticket is a **snapshot**: edits to the issue after dispatch don't propagate (label it again for a fresh run instead).
+**Re-plan gestures** (all take effect on the next sweep, no restart needed):
 
-**Questions, not PRs.** Add the ask label (default `junco:ask`) alongside the trigger label and Junco routes the issue to the read-only Q&A path — the session browses the mapped clone with read-only tools and posts its **answer as the comment**. No branch, no PR.
+- Remove `junco:plan-ready` (leave the trigger label on) → a fresh planning session runs. If more than one plan comment exists on the issue, the latest one wins.
+- Remove `junco:failed` → the issue re-enters at the top: fresh planning, fresh review, fresh approval.
+- Edit Junco's own plan comment before it's approved → your edit is what executes, not the model's original draft.
 
-**The trust model: the label is the approval.** Issue text is untrusted input until someone with write/maintain/admin permission applies the trigger label — and by labeling, they vouch for the body _as it stands_, so **read the issue before you label it**. Junco verifies the labeler's permission through the API (never trusting the label's mere presence, since on many repos anyone can add labels), fails closed on verification errors, only ever executes against clone paths from _your config_ (issue content cannot steer it elsewhere), and cross-checks that each mapped clone's `origin` matches the configured repo so a typo can't ship commits to the wrong place.
+**Trust model.** Issue text is untrusted input until someone with write/maintain/admin permission applies the trigger label — and by labeling, they vouch for the body _as it stands_, so **read the issue before you label it**. From there, the plan hop adds its own guarantees: the planner emits the ticket **body only**, inside a fenced block — frontmatter (`repo:`/`workdir:`/`tools:`) is always built by the bridge itself, never by model output or issue text; a plan comment only counts as authoritative if it was posted by the bridge's own authenticated `gh` login (a forged marker comment from another contributor can't smuggle in a plan); and an approval only counts if it comes from a write+ collaborator **and** postdates the plan comment it's approving. Junco fails closed on any verification error, only ever executes against clone paths from _your config_ (issue content cannot steer it elsewhere), and cross-checks that each mapped clone's `origin` matches the configured repo so a typo can't ship commits to the wrong place. `require_approval = false` removes the human approval gate entirely — reasonable for a private personal repo where you already trust everyone who can apply the trigger label, but keep the default `true` anywhere else.
 
-**Team workflow (recommended).** Keep reports and work items separate: anyone files issue `#42` describing a problem; a maintainer (or an ask-ticket: _"propose a plan for this"_) drafts a **task as a sub-issue** `#43` with the actual plan and verification steps; the maintainer labels **the task**, not the report. Junco automatically appends the parent issue's title and body to the ticket as background context, and closing the task rolls up into the parent's progress. You're always executing a vetted plan, never raw prose.
+**Team workflow.** Planning is automatic now, so hand-drafting the task issue is optional rather than required: label a raw bug report and Junco drafts the plan itself, posts it for review, and you approve or edit before anything runs. If a report issue already has a task sub-issue with a concrete plan, label the sub-issue instead — Junco automatically appends the parent issue's title and body as background context for the planner, and closing the sub-issue rolls up into the parent's progress. Either way, nothing executes until a human has seen a concrete plan (or you've deliberately opted out via `require_approval = false`).
 
-**Operational notes.** `junco doctor` checks each mapping (clone exists, origin matches, repo reachable via `gh`); `junco status` and `/health` report sweep counts. Polling cost is one API call per repo per sweep against a 5,000/hr authenticated limit — negligible. Auth is whatever `gh auth login` already holds; there are no new secrets. If GitHub is unreachable, sweeps skip and the local queue keeps running; a lost label flip or comment is cosmetic (the queue files and the PR are the source of truth).
+**Operational notes.** `junco doctor` checks each repo mapping (clone exists, origin matches, repo reachable via `gh`) and that the planner template (`skills/junco-dispatch/TEMPLATE.md`) is readable — that check fails preflight rather than warns, since an unreadable template fails every planning ticket. `junco status` and `/health` report sweep counts. Polling cost is a small, fixed number of API calls per repo per sweep against a 5,000/hr authenticated limit — still negligible. Auth is whatever `gh auth login` already holds; there are no new secrets. If GitHub is unreachable, sweeps skip and the local queue keeps running; a lost label flip or comment is cosmetic (the queue files and the PR are the source of truth).
 
 ---
 

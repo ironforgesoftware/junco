@@ -189,6 +189,7 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 | `agent/guardManager.ts` | Subscribes guards to the event stream; routes nudges and kills.                                                                                                                                                 |
 | `service.ts`            | Render a launchd plist / systemd unit (`junco service`), stop timeouts included.                                                                                                                                |
 | `requeue.ts`            | Transient-failure classification + atomic requeue-to-inbox with backoff.                                                                                                                                        |
+| `planPrompt.ts`         | Planner prompt assembly — single-sources `skills/junco-dispatch/TEMPLATE.md` (shared verbatim with the interactive skill) into the planning session's preamble.                                                 |
 | `githubInbox.ts`        | GitHub bridge, dispatch side: sweep trigger-labeled issues → verify labeler permission (fail-closed) → issue→ticket conversion → `submitTicket`. Process-local caches for label creation + origin cross-checks. |
 | `githubReport.ts`       | GitHub bridge, feedback side: `makeGithubReporter` — lifecycle label flips + the single finalize comment. Best-effort by contract (never fails a ticket).                                                       |
 | `reporter.ts`           | `TicketReporter` seam (onStart/onRequeue/onFinal) + outcome mapping. `executeClaimed` is the only call site; default no-op.                                                                                     |
@@ -204,13 +205,35 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 
 ```
 GitHub issue         — trigger-labeled; bridge sweep verifies the labeler's
-  ↓  pollGithubInbox   permission, converts to a ticket (github: provenance
-                       block), submits BEFORE applying junco:queued (a crash
-                       between the two self-heals via the duplicate guard)
+  ↓  pollGithubInbox   permission, then branches on the ask label:
+                         junco:ask present → an ordinary Q&A ticket,
+                                             junco:queued (skips the plan hop)
+                         otherwise         → a PLANNING ticket (kind: plan,
+                                             read-only session at the mapped
+                                             clone; planPrompt.ts assembles
+                                             the prompt), junco:planning
+       │  (planning ticket runs the claim/processing/finalize cycle below
+       │   like any Q&A ticket; reporter.onFinal is where the plan branches)
+       ▼
+  reporter.onFinal (kind: plan) — extracts the plan from the session's
+    junco-ticket fence, posts it as ONE issue comment (<!-- junco:plan -->
+    marker; editable before approval), junco:planning → junco:plan-ready
+    (or, on failure/empty plan: a failure comment, junco:planning → junco:failed)
+       │
+       │  next sweep: require_approval=true waits for a junco:approved applied
+       │  by a verified write+ collaborator AFTER the plan comment's timestamp;
+       │  require_approval=false executes as soon as the plan comment exists.
+       │  Either way, the (possibly hand-edited) comment is read back and an
+       │  EXECUTION ticket (github: provenance block) is built from it —
+       │  submits BEFORE swapping junco:plan-ready/junco:approved for
+       │  junco:queued (a crash between the two self-heals via the duplicate
+       │  guard, same submit-then-label ordering as the ask-label path below)
+       ▼
 inbox/               — submitted by junco submit, the bridge, or any atomic write
   ↓  claim()         — atomic rename, adds UTC-timestamp prefix
                        (not_before-gated; skipped while its repo is busy)
-                       reporter.onStart: junco:queued → junco:working
+                       reporter.onStart: junco:queued → junco:working (plan
+                       tickets skip this — the label stays junco:planning)
 processing/          — owned by the worker; do not touch while worker is live
   ↓  finalize()      — appends result block, atomic rename
   ↘  requeueTicket() — transient failure / crash: back to inbox/ with
@@ -220,13 +243,16 @@ done/                — terminal: completed, completed_no_changes,
                        aborted_partial, timeout_partial
 failed/              — terminal: plan-lint failure, agent error, verification
                        block, timeout with no commits, retry budget exhausted, …
-  ↓  reporter.onFinal — bridged tickets only: ONE issue comment (PR link +
-                       summary | answer | failure reason), then junco:done|failed
+  ↓  reporter.onFinal — pr/ask tickets: ONE issue comment (PR link + summary |
+                       answer | failure reason), then junco:done|failed
 ```
 
 Reporter calls live **only** in `executeClaimed` (single choke point; `prFlow`
-stays reporter-free — it returns a structured `PrFlowResult` instead). The
-bridge is throttled inside the daemon poll loop (`github.poll_interval_seconds`)
-and makes zero calls when `[github].enabled = false`.
+stays reporter-free — it returns a structured `PrFlowResult` instead). Planning
+tickets are ordinary `kind: plan` Q&A tickets under the hood — `githubReport.ts`
+is what special-cases them, branching on `t.github.kind` to run the plan⇄execute
+handoff instead of the terminal comment. The bridge is throttled inside the
+daemon poll loop (`github.poll_interval_seconds`) and makes zero calls when
+`[github].enabled = false`.
 
 The **stable public contract** is the ticket frontmatter schema (`junco schema` / `ticketSchema.ts`). Changing it is a breaking change for any tool that generates tickets.

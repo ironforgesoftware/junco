@@ -68,6 +68,7 @@ export function renderConfigToml(a: WizardAnswers): string {
     "# enabled = true",
     '# trigger_label = "junco"   # the label is the approval; review issues before labeling',
     "# poll_interval_seconds = 60",
+    "# require_approval = true  # plans wait for a junco:approved label from a writer",
     "#",
     "# [[github.repos]]",
     '# nwo  = "owner/repo"',

@@ -179,6 +179,31 @@ describe("runDoctor github checks", () => {
     expect(lines.join("")).toMatch(/✓ github repo acme\/api/);
   });
 
+  it("fails when the dispatch template is unreadable (bridge enabled)", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () => githubConfig([]),
+        readTemplateFn: () => {
+          throw new Error("ENOENT");
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("")).toMatch(/✗ github planner template/);
+  });
+
+  it("reports the template ok when readable", async () => {
+    const lines: string[] = [];
+    await runDoctor(
+      "/x/config.toml",
+      deps({ loadConfigFn: () => githubConfig([]), printFn: (s) => lines.push(s) }),
+    );
+    expect(lines.join("")).toMatch(/✓ github planner template/);
+  });
+
   it("fails a repo not reachable via gh", async () => {
     const lines: string[] = [];
     const code = await runDoctor(

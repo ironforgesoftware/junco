@@ -98,6 +98,7 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
     const toml = renderConfigToml(a);
     expect(toml).toContain("# [github]");
     expect(toml).toContain('# trigger_label = "junco"');
+    expect(toml).toContain("# require_approval = true");
     expect(toml).toContain("# [[github.repos]]");
     // Still parses cleanly (the block is fully commented out).
     const cfg = parse(toml);

@@ -14,6 +14,7 @@ import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
+import { loadDispatchTemplate } from "./planPrompt.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -25,6 +26,7 @@ export interface DoctorDeps {
   fetchModelsFn?: typeof fetchModels;
   accessOkFn?: (dir: string) => boolean;
   lockHolderFn?: (lockPath: string) => number | null;
+  readTemplateFn?: () => string;
   printFn?: (s: string) => void;
 }
 
@@ -138,6 +140,17 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
 
     // 7b. github bridge (only when enabled — disabled setups print nothing)
     if (cfg.github.enabled) {
+      try {
+        (deps.readTemplateFn ?? loadDispatchTemplate)();
+        report("ok", "github planner template", "skills/junco-dispatch/TEMPLATE.md");
+      } catch (e) {
+        report(
+          "fail",
+          "github planner template",
+          `unreadable — planning tickets will fail (${e instanceof Error ? e.message : String(e)})`,
+        );
+      }
+
       if (cfg.github.repos.length === 0) {
         report("warn", "github", "enabled but no repos configured — the bridge will idle");
       }
