@@ -34,13 +34,16 @@ const issue = (labels: string[], over: Partial<GhIssue> = {}): GhIssue => ({
 });
 
 describe("lifecycleLabels", () => {
-  it("derives all five from the trigger", () => {
+  it("derives all eight from the trigger", () => {
     expect(lifecycleLabels("bot")).toEqual({
       queued: "bot:queued",
       working: "bot:working",
       done: "bot:done",
       failed: "bot:failed",
       denied: "bot:denied",
+      planning: "bot:planning",
+      planReady: "bot:plan-ready",
+      approved: "bot:approved",
     });
   });
 });
@@ -59,10 +62,16 @@ describe("isEligible", () => {
       "junco:done",
       "junco:failed",
       "junco:denied",
+      "junco:planning",
+      "junco:plan-ready",
     ];
     for (const l of lifecycle) {
       expect(isEligible(issue(["junco", l]), "junco")).toBe(false);
     }
+  });
+
+  it("approved alone does NOT block eligibility (neutralized by the timestamp rule)", () => {
+    expect(isEligible(issue(["junco", "junco:approved"]), "junco")).toBe(true);
   });
 });
 
@@ -265,7 +274,7 @@ describe("pollGithubInbox", () => {
     const originProbes = f.calls.filter((c) => c[0] === "git");
     expect(originProbes).toHaveLength(1);
     const labelCreates = f.calls.filter((c) => c[0] === "label");
-    expect(labelCreates).toHaveLength(5); // once per lifecycle label, first sweep only
+    expect(labelCreates).toHaveLength(8); // once per lifecycle label, first sweep only
   });
 
   it("a repo-level list failure is contained (returns 0, no throw)", async () => {

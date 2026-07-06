@@ -27,6 +27,9 @@ export interface LifecycleLabels {
   done: string;
   failed: string;
   denied: string;
+  planning: string;
+  planReady: string;
+  approved: string;
 }
 
 /** Lifecycle label names derive from the trigger label. */
@@ -37,6 +40,9 @@ export function lifecycleLabels(trigger: string): LifecycleLabels {
     done: `${trigger}:done`,
     failed: `${trigger}:failed`,
     denied: `${trigger}:denied`,
+    planning: `${trigger}:planning`,
+    planReady: `${trigger}:plan-ready`,
+    approved: `${trigger}:approved`,
   };
 }
 
@@ -46,7 +52,9 @@ export function isEligible(issue: GhIssue, trigger: string): boolean {
   const names = new Set(issue.labels.map((l) => l.name));
   if (!names.has(trigger)) return false;
   const ll = lifecycleLabels(trigger);
-  return ![ll.queued, ll.working, ll.done, ll.failed, ll.denied].some((n) => names.has(n));
+  return ![ll.queued, ll.working, ll.done, ll.failed, ll.denied, ll.planning, ll.planReady].some(
+    (n) => names.has(n),
+  );
 }
 
 /** Parse owner/repo out of a github.com remote URL (https or ssh). Null when
@@ -133,6 +141,9 @@ const LABEL_SPECS: ReadonlyArray<[keyof LifecycleLabels, string, string]> = [
   ["done", "0E8A16", "junco: finished — see the closing comment"],
   ["failed", "B60205", "junco: failed — see the closing comment"],
   ["denied", "5319E7", "junco: trigger label applied without write permission"],
+  ["planning", "C5DEF5", "junco: authoring a plan from this issue"],
+  ["planReady", "D4A72C", "junco: plan posted — review the plan comment"],
+  ["approved", "54AEFF", "apply AFTER reviewing the plan comment to authorize execution"],
 ];
 
 async function originOkFor(
