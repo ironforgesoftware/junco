@@ -205,7 +205,13 @@ export async function executeClaimed(
       // Q&A default is the read-only subset; an explicit ticket `tools:` is an
       // owner-authored opt-in and is used verbatim.
       const qaTools = next.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
-      const qaCfg: Config = { ...cfg, tools: qaTools };
+      // Planning tickets may run a stronger model id (same endpoint/key) —
+      // plan quality is the biggest lever on execution quality.
+      const qaModel =
+        next.github?.kind === "plan" && cfg.github.plannerModelId
+          ? { ...cfg.model, id: cfg.github.plannerModelId }
+          : cfg.model;
+      const qaCfg: Config = { ...cfg, tools: qaTools, model: qaModel };
       // NOTE: if the factory throws (e.g. model unresolved), this rejects and the
       // claimed ticket is left in processing/ — orphan recovery lands in M4.
       const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);

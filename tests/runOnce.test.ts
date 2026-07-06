@@ -476,3 +476,51 @@ describe("claimNextTask (per-repo serialization)", () => {
     expect(w?.repoKey).toBeNull();
   });
 });
+
+describe("planner model override", () => {
+  it("plan-kind tickets swap cfg.model.id when planner_model_id is set", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(
+      join(j, "inbox", "p.md"),
+      `---\nid: gh-a-b-1-plan\ngithub:\n  nwo: a/b\n  issue: 1\n  kind: plan\n---\nplan prompt\n`,
+      "utf8",
+    );
+    const c: Config = {
+      ...cfg(root),
+      github: { ...cfg(root).github, plannerModelId: "prov/big" },
+    };
+    let seenModelId = "";
+    await runOnce(c, {
+      sessionFactoryFor: (passedCfg) => {
+        seenModelId = passedCfg.model.id;
+        return fakeFactory();
+      },
+    });
+    expect(seenModelId).toBe("prov/big");
+  });
+
+  it("non-plan tickets keep the configured model", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "q.md"), "---\nid: q\n---\nask\n", "utf8");
+    const c: Config = {
+      ...cfg(root),
+      github: { ...cfg(root).github, plannerModelId: "prov/big" },
+    };
+    let seenModelId = "";
+    await runOnce(c, {
+      sessionFactoryFor: (passedCfg) => {
+        seenModelId = passedCfg.model.id;
+        return fakeFactory();
+      },
+    });
+    expect(seenModelId).toBe("m");
+  });
+});
