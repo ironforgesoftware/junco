@@ -161,6 +161,8 @@ describe("pollGithubInbox", () => {
     parent?: string; // "" | "null" | JSON
     origin?: string;
     failList?: boolean;
+    comments?: unknown[];
+    viewer?: string;
   }) {
     const calls: Call[] = [];
     const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
@@ -172,7 +174,10 @@ describe("pollGithubInbox", () => {
       }
       if (args[0] === "label") return ok("");
       if (args[0] === "issue" && args[1] === "edit") return ok("");
+      if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
       if (args[0] === "api" && args[1] === "graphql") return ok(opts.parent ?? "null");
+      if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
+        return ok((opts.comments ?? []).map((c) => JSON.stringify(c)).join("\n"));
       if (args[0] === "api" && String(args[2] ?? "").includes("/events"))
         return ok(opts.events ?? "");
       if (args[0] === "api" && String(args[1]).includes("/permission"))
@@ -204,7 +209,7 @@ describe("pollGithubInbox", () => {
     body: "Body.",
     labels: [{ name: "junco" }],
   };
-  const labeledEvent = `{"actor":"alice","label":"junco"}`;
+  const labeledEvent = `{"actor":"alice","label":"junco","created_at":"2026-07-06T00:00:00Z"}`;
 
   it("bridges an eligible PR issue into a PLANNING ticket + planning label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
@@ -334,6 +339,122 @@ describe("pollGithubInbox", () => {
       submitFn: f.submitFn,
     } as never);
     expect(perms).toEqual(["repos/acme/api/collaborators/alice/permission"]);
+  });
+
+  describe("approval scan", () => {
+    const planComment = (body: string, over: Record<string, unknown> = {}) => ({
+      author: "junco-bot",
+      body,
+      created_at: "2026-07-06T10:00:00Z",
+      ...over,
+    });
+    const planBody = "# The plan\n\n## Steps\n- do it";
+    const fencedComment =
+      "<!-- junco:plan -->\nProposed plan\n\n```junco-ticket\n" + planBody + "\n```\n";
+    const readyIssue = {
+      number: 42,
+      title: "Add rate limiting",
+      body: "raw",
+      labels: [{ name: "junco" }, { name: "junco:plan-ready" }, { name: "junco:approved" }],
+    };
+    const approvedAfter = `{"actor":"alice","label":"junco:approved","created_at":"2026-07-06T11:00:00Z"}`;
+    const approvedBefore = `{"actor":"alice","label":"junco:approved","created_at":"2026-07-06T09:00:00Z"}`;
+
+    it("approved plan-ready issue → execution ticket from the comment + label swap", async () => {
+      const f = makeFakes({
+        issues: [readyIssue],
+        events: approvedAfter,
+        permission: "write",
+        comments: [planComment(fencedComment)],
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+      expect(f.submitted[0].content).toContain("kind: pr");
+      expect(f.submitted[0].content).toContain('repo: "/home/u/code/api"');
+      expect(f.submitted[0].content).toContain("# The plan");
+      const edit = f.calls.find((c) => c[1] === "edit");
+      expect(edit).toEqual(
+        expect.arrayContaining([
+          "--add-label",
+          "junco:queued",
+          "--remove-label",
+          "junco:plan-ready",
+          "--remove-label",
+          "junco:approved",
+        ]),
+      );
+    });
+
+    it("plan-ready without approved waits (require_approval on)", async () => {
+      const noApproval = {
+        ...readyIssue,
+        labels: [{ name: "junco" }, { name: "junco:plan-ready" }],
+      };
+      const f = makeFakes({ issues: [noApproval], comments: [planComment(fencedComment)] });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+    });
+
+    it("stale approval (predates the plan comment) is ignored", async () => {
+      const f = makeFakes({
+        issues: [readyIssue],
+        events: approvedBefore,
+        permission: "write",
+        comments: [planComment(fencedComment)],
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+    });
+
+    it("approval by a non-writer is ignored", async () => {
+      const f = makeFakes({
+        issues: [readyIssue],
+        events: approvedAfter,
+        permission: "read",
+        comments: [planComment(fencedComment)],
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+    });
+
+    it("forged plan comment (wrong author) is ignored", async () => {
+      const f = makeFakes({
+        issues: [readyIssue],
+        events: approvedAfter,
+        permission: "write",
+        comments: [planComment(fencedComment, { author: "mallory" })],
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+    });
+
+    it("require_approval=false: plan-ready alone converts", async () => {
+      const autoCfg = {
+        ...bridgeCfg,
+        github: { ...bridgeCfg.github, requireApproval: false },
+      } as Config;
+      const noApproval = {
+        ...readyIssue,
+        labels: [{ name: "junco" }, { name: "junco:plan-ready" }],
+      };
+      const f = makeFakes({ issues: [noApproval], comments: [planComment(fencedComment)] });
+      expect(await pollGithubInbox(autoCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+    });
+
+    it("the LATEST own-authored plan comment wins", async () => {
+      const older = planComment("<!-- junco:plan -->\n```junco-ticket\n# Old plan\n```\n", {
+        created_at: "2026-07-06T08:00:00Z",
+      });
+      const f = makeFakes({
+        issues: [readyIssue],
+        events: approvedAfter,
+        permission: "write",
+        comments: [older, planComment(fencedComment)],
+      });
+      await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(f.submitted[0].content).toContain("# The plan");
+      expect(f.submitted[0].content).not.toContain("# Old plan");
+    });
   });
 });
 

@@ -191,10 +191,12 @@ export interface BridgeState {
   labelsEnsured: Set<string>;
   /** nwo → origin-check verdict (a mismatch disables the repo this process). */
   originOk: Map<string, boolean>;
+  /** Authenticated gh login (cached) — plan comments must be self-authored. */
+  login: string | null;
 }
 
 export function newBridgeState(): BridgeState {
-  return { labelsEnsured: new Set(), originOk: new Map() };
+  return { labelsEnsured: new Set(), originOk: new Map(), login: null };
 }
 
 export interface BridgeDeps {
@@ -277,14 +279,18 @@ async function ensureLabels(
   state.labelsEnsured.add(nwo);
 }
 
-/** Who last applied the trigger label, and may they dispatch? Fail-closed:
- * any verification error → "unverified" (skip this sweep, retry next). */
-async function verifyLabeler(
+/** Who last applied `label`, and may they dispatch? Fail-closed: any
+ * verification error → "unverified" (skip this sweep, retry next). Also used
+ * for the approval label — `atMs` lets the caller compare against the plan
+ * comment's timestamp (a stale approval that predates the current plan must
+ * not authorize it). */
+async function verifyLabelApplier(
   cfg: Config,
   nwo: string,
   issueNumber: number,
+  label: string,
   ghFn: typeof gh,
-): Promise<"ok" | "denied" | "unverified"> {
+): Promise<{ verdict: "ok" | "denied" | "unverified"; atMs: number | null }> {
   try {
     const ev = await ghFn(
       cfg,
@@ -293,7 +299,7 @@ async function verifyLabeler(
         "--paginate",
         `repos/${nwo}/issues/${issueNumber}/events`,
         "--jq",
-        '.[] | select(.event == "labeled") | {actor: .actor.login, label: .label.name}',
+        '.[] | select(.event == "labeled") | {actor: .actor.login, label: .label.name, created_at: .created_at}',
       ],
       { timeoutMs: GH_TIMEOUT, retryNetwork: true },
     );
@@ -301,24 +307,26 @@ async function verifyLabeler(
       .trim()
       .split("\n")
       .filter(Boolean)
-      .map((l) => JSON.parse(l) as { actor: string; label: string });
-    const last = [...events].reverse().find((l) => l.label === cfg.github.triggerLabel);
-    if (!last) return "unverified";
+      .map((l) => JSON.parse(l) as { actor: string; label: string; created_at?: string });
+    const last = [...events].reverse().find((l) => l.label === label);
+    if (!last) return { verdict: "unverified", atMs: null };
     const perm = await ghFn(
       cfg,
       ["api", `repos/${nwo}/collaborators/${last.actor}/permission`, "--jq", ".permission"],
       { timeoutMs: GH_TIMEOUT, retryNetwork: true },
     );
     const p = perm.stdout.trim();
+    const atMs = last.created_at ? Date.parse(last.created_at) : null;
     // The legacy permission field maps maintain→write, so admin|write covers it.
-    return p === "admin" || p === "write" ? "ok" : "denied";
+    return { verdict: p === "admin" || p === "write" ? "ok" : "denied", atMs };
   } catch (e) {
-    log.warn("github bridge: labeler verification failed; skipping issue this sweep", {
+    log.warn("github bridge: label-applier verification failed; skipping this sweep", {
       nwo,
       issue: issueNumber,
+      label,
       error: errMsg(e),
     });
-    return "unverified";
+    return { verdict: "unverified", atMs: null };
   }
 }
 
@@ -358,6 +366,71 @@ async function fetchParent(
   } catch {
     return null; // background context only — never blocks dispatch
   }
+}
+
+async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Promise<string> {
+  if (state.login === null) {
+    const r = await ghFn(cfg, ["api", "user", "--jq", ".login"], {
+      timeoutMs: GH_TIMEOUT,
+      retryNetwork: true,
+    });
+    state.login = r.stdout.trim();
+  }
+  return state.login;
+}
+
+/** Latest plan comment AUTHORED BY the bridge's own login — a contributor's
+ * forged marker comment is never recoverable. Null = nothing usable. */
+async function findOwnPlanComment(
+  cfg: Config,
+  nwo: string,
+  issueNumber: number,
+  login: string,
+  ghFn: typeof gh,
+): Promise<{ body: string; createdAtMs: number } | null> {
+  const r = await ghFn(
+    cfg,
+    [
+      "api",
+      "--paginate",
+      `repos/${nwo}/issues/${issueNumber}/comments`,
+      "--jq",
+      ".[] | {author: .user.login, body: .body, created_at: .created_at}",
+    ],
+    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+  );
+  let found: { body: string; createdAtMs: number } | null = null;
+  for (const line of r.stdout.trim().split("\n").filter(Boolean)) {
+    const c = JSON.parse(line) as { author: string; body: string; created_at: string };
+    if (c.author === login && c.body.includes(PLAN_COMMENT_MARKER)) {
+      found = { body: c.body, createdAtMs: Date.parse(c.created_at) }; // last wins
+    }
+  }
+  return found;
+}
+
+/** Execution ticket from a reviewed plan: machine frontmatter (id, mapped
+ * repo path, provenance) + the plan body verbatim. pr_title omitted —
+ * derivePrTitle picks the plan's H1. */
+export function buildExecutionTicket(
+  issueNumber: number,
+  repo: GithubRepoMapping,
+  planBody: string,
+): { id: string; content: string } {
+  const [owner, name] = repo.nwo.split("/");
+  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const id = `gh-${slug(owner)}-${slug(name)}-${issueNumber}`;
+  const fm = [
+    "---",
+    `id: ${id}`,
+    `repo: ${JSON.stringify(repo.path)}`,
+    "github:",
+    `  nwo: ${JSON.stringify(repo.nwo)}`,
+    `  issue: ${issueNumber}`,
+    "  kind: pr",
+    "---",
+  ];
+  return { id, content: fm.join("\n") + "\n\n" + planBody + "\n" };
 }
 
 /**
@@ -400,13 +473,95 @@ export async function pollGithubInbox(
         ],
         { timeoutMs: GH_TIMEOUT, retryNetwork: true },
       );
-      const issues = (JSON.parse(list.stdout) as GhIssue[]).filter((i) => isEligible(i, trigger));
+      const issues = JSON.parse(list.stdout) as GhIssue[];
 
       for (const issue of issues) {
         try {
-          const verdict = await verifyLabeler(cfg, repo.nwo, issue.number, ghFn);
-          if (verdict === "unverified") continue; // fail-closed; retry next sweep
-          if (verdict === "denied") {
+          const names = new Set(issue.labels.map((l) => l.name));
+          if (names.has(ll.planReady)) {
+            try {
+              const login = await viewerLogin(cfg, state, ghFn);
+              const comment = await findOwnPlanComment(cfg, repo.nwo, issue.number, login, ghFn);
+              if (!comment) {
+                log.warn("github bridge: plan-ready but no own-authored plan comment", {
+                  nwo: repo.nwo,
+                  issue: issue.number,
+                });
+                continue;
+              }
+              if (cfg.github.requireApproval) {
+                if (!names.has(ll.approved)) continue; // awaiting review
+                const approval = await verifyLabelApplier(
+                  cfg,
+                  repo.nwo,
+                  issue.number,
+                  ll.approved,
+                  ghFn,
+                );
+                if (approval.verdict !== "ok") {
+                  log.warn("github bridge: approval not by a verified writer; ignoring", {
+                    nwo: repo.nwo,
+                    issue: issue.number,
+                  });
+                  continue;
+                }
+                if (approval.atMs === null || approval.atMs <= comment.createdAtMs) {
+                  log.warn("github bridge: approval predates the plan comment; re-apply it", {
+                    nwo: repo.nwo,
+                    issue: issue.number,
+                  });
+                  continue;
+                }
+              }
+              const planBody = extractPlanBody(comment.body);
+              if (!planBody) {
+                log.error("github bridge: plan comment has no extractable plan; fix the comment", {
+                  nwo: repo.nwo,
+                  issue: issue.number,
+                });
+                continue;
+              }
+              const t = buildExecutionTicket(issue.number, repo, planBody);
+              try {
+                submitFn(cfg, t.content, { idHint: t.id });
+              } catch (e) {
+                if (!errMsg(e).includes("already queued")) throw e;
+                log.info("github bridge: execution ticket already queued; re-marking", {
+                  id: t.id,
+                });
+              }
+              const editArgs = [
+                "issue",
+                "edit",
+                String(issue.number),
+                "--repo",
+                repo.nwo,
+                "--add-label",
+                ll.queued,
+                "--remove-label",
+                ll.planReady,
+              ];
+              if (cfg.github.requireApproval) editArgs.push("--remove-label", ll.approved);
+              await ghFn(cfg, editArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
+              bridged++;
+              log.info("github bridge: approved plan dispatched for execution", {
+                nwo: repo.nwo,
+                issue: issue.number,
+                id: t.id,
+              });
+            } catch (e) {
+              log.warn("github bridge: approval scan failed for issue; retrying next sweep", {
+                nwo: repo.nwo,
+                issue: issue.number,
+                error: errMsg(e),
+              });
+            }
+            continue;
+          }
+          if (!isEligible(issue, trigger)) continue;
+          const verdict = await verifyLabelApplier(cfg, repo.nwo, issue.number, trigger, ghFn);
+          if (verdict.verdict === "unverified") continue; // fail-closed; retry next sweep
+          if (verdict.verdict === "denied") {
             await ghFn(
               cfg,
               ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.denied],
