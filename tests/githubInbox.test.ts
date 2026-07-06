@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, join as joinPath } from "node:path";
 import {
   lifecycleLabels,
   isEligible,
@@ -17,10 +17,12 @@ import {
 import { parseTicket } from "../src/ticket.js";
 import type { Config } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
+import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 
 // executionTicketExists (approval path) calls queuePaths(cfg); point bridge
 // configs at a vault dir that does not exist so readdirSync ENOENTs → "absent".
 const NX_VAULT = join(tmpdir(), `junco-nx-${Math.random().toString(36).slice(2)}`);
+const NX_STATE_DIR = join(tmpdir(), `junco-state-${Math.random().toString(36).slice(2)}`);
 
 // Minimal Config for conversion tests — only the fields issueToTicket reads.
 const cfg = {
@@ -206,6 +208,7 @@ describe("pollGithubInbox", () => {
   const bridgeCfg = {
     ...cfg,
     vaultRoot: NX_VAULT,
+    stateDir: NX_STATE_DIR,
     juncoSubdir: "tickets",
     github: {
       ...cfg.github,
@@ -570,6 +573,28 @@ describe("pollGithubInbox", () => {
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("watchlist hot-reload", () => {
+    it("a repo added to the watchlist between sweeps is swept without restart", async () => {
+      const stateDir = mkdtempSync(joinPath(tmpdir(), "junco-wl-hot-"));
+      const cfg = {
+        ...bridgeCfg,
+        stateDir,
+        github: { ...bridgeCfg.github, repos: [] }, // nothing in config
+      } as Config;
+      const f = makeFakes({ issues: [] });
+      const state = newBridgeState();
+
+      await pollGithubInbox(cfg, state, f as never);
+      expect(f.calls.find((c) => c[0] === "issue" && c[1] === "list")).toBeUndefined();
+
+      writeWatchlist(watchlistPath(cfg), [{ nwo: "acme/api", path: "/home/u/code/api" }]);
+      await pollGithubInbox(cfg, state, f as never);
+      const list = f.calls.find((c) => c[0] === "issue" && c[1] === "list");
+      expect(list).toBeDefined();
+      expect(list).toContain("acme/api");
     });
   });
 });

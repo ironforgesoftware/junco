@@ -15,6 +15,7 @@ import { queuePaths } from "./config.js";
 import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
 import { PLAN_FENCE, buildPlannerPrompt } from "./planPrompt.js";
+import { resolveWatchedRepos } from "./watchlist.js";
 
 /** GitHub's hard cap is 65,536 chars; leave headroom for the truncation note.
  * Lives here (not githubReport.ts) so buildPlanComment can share it without an
@@ -521,7 +522,7 @@ export async function pollGithubInbox(
   const ll = lifecycleLabels(trigger);
   let bridged = 0;
 
-  for (const repo of cfg.github.repos) {
+  for (const repo of resolveWatchedRepos(cfg)) {
     try {
       if (!(await originOkFor(cfg, repo, state, gitFn))) continue;
       await ensureLabels(cfg, repo.nwo, state, ghFn);
