@@ -134,3 +134,19 @@ describe("RepoList copy", () => {
     expect(f).toContain('none watched — press "w"');
   });
 });
+
+describe("ShortcutBar", () => {
+  it("shows the full key set per context", async () => {
+    const { ShortcutBar } = await import("../src/tui/components/ShortcutBar.js");
+    const repos = render(<ShortcutBar view="main" pane="repos" />).lastFrame()!;
+    for (const k of ["j/k", "w", "x", "r", ":", "?", "q"]) expect(repos).toContain(k);
+    expect(repos).toContain("add repo");
+    const issuesBar = render(<ShortcutBar view="main" pane="issues" />).lastFrame()!;
+    for (const s of ["d dispatch", "a approve", "R re-plan/cycle", "o browser", "enter detail"])
+      expect(issuesBar).toContain(s);
+    expect(render(<ShortcutBar view="detail" pane="issues" />).lastFrame()).toContain("esc back");
+    expect(render(<ShortcutBar view="palette" pane="repos" />).lastFrame()).toContain("enter run");
+    expect(render(<ShortcutBar view="cmdOutput" pane="repos" />).lastFrame()).toContain("re-run");
+    expect(render(<ShortcutBar view="addRepo" pane="repos" />).lastFrame()).toContain("cancel");
+  });
+});

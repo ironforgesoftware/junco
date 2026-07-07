@@ -525,7 +525,7 @@ The screen has three zones:
 - **Issues pane** (right) — the selected repo's trigger-labeled issues, newest-relevant first, each showing a lifecycle glyph and its current state badge (planning / plan-ready / approved / queued / working / done / failed / denied).
 - **Status bar** (bottom) — daemon health (up/down, uptime, tickets bridged) plus a transient toast for the last action's result. Hints stay minimal (`? keys · q quit`); the full key list is under `?`.
 
-Keys:
+A persistent shortcut bar at the bottom of the screen always shows the full key set for wherever you are (repos pane, issues pane, detail, palette, …), so navigation never requires memorization. Keys:
 
 | Key              | Action                                                                                                                                                                               |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

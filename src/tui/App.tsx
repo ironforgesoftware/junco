@@ -24,6 +24,7 @@ import { HelpOverlay } from "./components/HelpOverlay.js";
 import { AddRepoForm } from "./components/AddRepoForm.js";
 import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
+import { ShortcutBar } from "./components/ShortcutBar.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 
 export interface AppProps {
@@ -514,8 +515,6 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "o") return void openBrowser();
   });
 
-  const hints = "? keys · : cmd · q quit";
-
   return (
     <Box flexDirection="column">
       <Box>
@@ -552,7 +551,8 @@ export function App(props: AppProps): React.JSX.Element {
           />
         )}
       </Box>
-      <StatusBar health={health} toast={toast} hints={hints} watchlistError={watchlistError} />
+      <StatusBar health={health} toast={toast} hints="" watchlistError={watchlistError} />
+      <ShortcutBar view={view} pane={pane} />
       {view === "help" && <HelpOverlay trigger={trigger} />}
       {view === "palette" && (
         <CommandPalette
