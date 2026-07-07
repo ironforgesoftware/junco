@@ -227,7 +227,9 @@ export function App(props: AppProps): React.JSX.Element {
     (nwo: string): Promise<void> => {
       return client.listIssues(nwo).then((res) => {
         if (res.ok) {
-          setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value, trigger) }));
+          // staleAt (cache-served issues) gets UI treatment in a later task;
+          // for now the issue list renders the same whether fresh or cached.
+          setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
         } else {
           showToast("error", res.error);
         }

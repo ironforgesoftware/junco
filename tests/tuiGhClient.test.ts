@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { makeGhDashboardClient } from "../src/tui/ghClient.js";
+import { makeGhDashboardClient, cachePathFor } from "../src/tui/ghClient.js";
+import { listOps } from "../src/githubOutbox.js";
 import type { Config } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
+import { GitOpError } from "../src/git.js";
 
 const cfg = {
   ghBin: "gh",
@@ -12,6 +14,7 @@ const cfg = {
   healthEnabled: true,
   healthHost: "127.0.0.1",
   healthPort: 8787,
+  stateDir: mkdtempSync(join(tmpdir(), "junco-ghclient-state-")),
   github: {
     enabled: true,
     triggerLabel: "junco",
@@ -23,6 +26,8 @@ const cfg = {
   },
 } as unknown as Config;
 
+const NET = new GitOpError("gh failed", "connect: network is unreachable", 1);
+
 function fakes(
   opts: {
     issues?: unknown[];
@@ -31,13 +36,15 @@ function fakes(
     viewer?: string;
     origin?: string;
     failArgs?: string; // any gh argv containing this substring throws
+    failErr?: Error; // error to throw on failArgs match (default: plain Error)
   } = {},
 ) {
   const calls: string[][] = [];
   const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
   const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
     calls.push(args);
-    if (opts.failArgs && args.join(" ").includes(opts.failArgs)) throw new Error("gh boom");
+    if (opts.failArgs && args.join(" ").includes(opts.failArgs))
+      throw opts.failErr ?? new Error("gh boom");
     if (args[0] === "issue" && args[1] === "list") return ok(JSON.stringify(opts.issues ?? []));
     if (args[0] === "issue" && args[1] === "view" && args.includes("--json"))
       return ok(JSON.stringify({ body: opts.body ?? "" }));
@@ -75,21 +82,65 @@ describe("listIssues", () => {
     const r = await c.listIssues("acme/api");
     expect(r).toEqual({
       ok: true,
-      value: [
-        {
-          number: 42,
-          title: "Add rate limiting",
-          labels: ["junco", "junco:plan-ready"],
-          updatedAt: "2026-07-06T10:00:00Z",
-          url: "https://github.com/acme/api/issues/42",
-        },
-      ],
+      value: {
+        issues: [
+          {
+            number: 42,
+            title: "Add rate limiting",
+            labels: ["junco", "junco:plan-ready"],
+            updatedAt: "2026-07-06T10:00:00Z",
+            url: "https://github.com/acme/api/issues/42",
+          },
+        ],
+        staleAt: null,
+      },
     });
   });
 
   it("gh failure → ok:false, never throws", async () => {
     const f = fakes({ failArgs: "issue list" });
     const r = await makeGhDashboardClient(cfg, f).listIssues("acme/api");
+    expect(r.ok).toBe(false);
+  });
+
+  it("listIssues success writes the cache and returns staleAt null", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-cache-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const issues = [
+      { number: 1, title: "T", labels: [], updatedAt: "2026-07-06T10:00:00Z", url: "u" },
+    ];
+    const r = await makeGhDashboardClient(c2, fakes({ issues })).listIssues("acme/api");
+    expect(r.ok && r.value.staleAt).toBe(null);
+    const cached = JSON.parse(readFileSync(cachePathFor(c2, "acme/api"), "utf8"));
+    expect(cached.issues).toEqual(r.ok ? r.value.issues : []);
+  });
+
+  it("listIssues offline serves the cache with staleAt set", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-stale-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const issues = [
+      { number: 1, title: "T", labels: [], updatedAt: "2026-07-06T10:00:00Z", url: "u" },
+    ];
+    const first = await makeGhDashboardClient(c2, fakes({ issues })).listIssues("acme/api");
+    const cachedFetchedAt = (
+      JSON.parse(readFileSync(cachePathFor(c2, "acme/api"), "utf8")) as {
+        fetchedAt: string;
+      }
+    ).fetchedAt;
+    const f = fakes({ failArgs: "issue list", failErr: NET });
+    const r = await makeGhDashboardClient(c2, f).listIssues("acme/api");
+    expect(first.ok).toBe(true);
+    expect(r).toEqual({
+      ok: true,
+      value: { issues: first.ok ? first.value.issues : [], staleAt: cachedFetchedAt },
+    });
+  });
+
+  it("listIssues offline with no cache is an error (today's behavior)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-nocache-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const f = fakes({ failArgs: "issue list", failErr: NET });
+    const r = await makeGhDashboardClient(c2, f).listIssues("acme/api");
     expect(r.ok).toBe(false);
   });
 });
@@ -167,8 +218,30 @@ describe("applyAction label mapping", () => {
     const f = fakes();
     const c = makeGhDashboardClient(cfg, f);
     const r = await c.applyAction("acme/api", 42, "recycle", ["junco"]);
-    expect(r).toEqual({ ok: true, value: undefined });
+    expect(r).toEqual({ ok: true, value: { queued: false } });
     expect(f.calls.find((a) => a[0] === "issue" && a[1] === "edit")).toBeUndefined();
+    expect(listOps(cfg)).toHaveLength(0);
+  });
+
+  it("applyAction offline queues a labels op and reports queued:true", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-offline-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const f = fakes({ failArgs: "issue edit", failErr: NET });
+    const r = await makeGhDashboardClient(c2, f).applyAction("acme/api", 42, "dispatch", []);
+    expect(r).toEqual({ ok: true, value: { queued: true } });
+    const ops = listOps(c2);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].op).toMatchObject({ kind: "labels", issue: 42, add: ["junco"], remove: [] });
+  });
+
+  it("applyAction permanent failure still returns ok:false and queues nothing", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-403-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const forbidden = new GitOpError("gh failed", "HTTP 403: Forbidden", 1);
+    const f = fakes({ failArgs: "issue edit", failErr: forbidden });
+    const r = await makeGhDashboardClient(c2, f).applyAction("acme/api", 42, "dispatch", []);
+    expect(r.ok).toBe(false);
+    expect(listOps(c2)).toHaveLength(0);
   });
 });
 

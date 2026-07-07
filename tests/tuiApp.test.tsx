@@ -52,7 +52,7 @@ function makeClient(
   const validatePaths: string[] = [];
   const cloned: string[] = [];
   const client: DashboardClient = {
-    listIssues: async (nwo) => okv(issuesByRepo[nwo] ?? []),
+    listIssues: async (nwo) => okv({ issues: issuesByRepo[nwo] ?? [], staleAt: null }),
     cloneRepo: async (_n, dest) => {
       cloned.push(dest);
       return okv(undefined);
@@ -60,7 +60,7 @@ function makeClient(
     issueDetail: async () => okv({ body: "the body", planComment: "<!-- junco:plan -->plan!" }),
     applyAction: async (...a) => {
       actions.push(a);
-      return opts.failActions ? { ok: false, error: "gh boom" } : okv(undefined);
+      return opts.failActions ? { ok: false, error: "gh boom" } : okv({ queued: false });
     },
     validateAndPrepareRepo: async (_n, path) => {
       validatePaths.push(path);
@@ -84,7 +84,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
   let call = 0;
   const client: DashboardClient = {
     listIssues: async () => {
-      const r = okv(sequence[Math.min(call, sequence.length - 1)]);
+      const r = okv({ issues: sequence[Math.min(call, sequence.length - 1)], staleAt: null });
       call++;
       return r;
     },
@@ -92,7 +92,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     issueDetail: async () => okv({ body: "the body", planComment: null }),
     applyAction: async (...a) => {
       actions.push(a);
-      return okv(undefined);
+      return okv({ queued: false });
     },
     validateAndPrepareRepo: async () => okv(undefined),
     openInBrowser: async () => okv(undefined),
@@ -277,9 +277,10 @@ describe("App", () => {
     const b8 = { ...rawIssue, number: 8, title: "Other thing", updatedAt: "2026-07-06T10:00:00Z" };
     let live: DashIssue[] = [a7, b8]; // #7 top → selected
     const client: DashboardClient = {
-      listIssues: async () => okv(live),
+      listIssues: async () => okv({ issues: live, staleAt: null }),
+      cloneRepo: async () => okv(undefined),
       issueDetail: async () => okv({ body: "the body", planComment: null }),
-      applyAction: async () => okv(undefined),
+      applyAction: async () => okv({ queued: false }),
       validateAndPrepareRepo: async () => okv(undefined),
       openInBrowser: async () => okv(undefined),
       health: async () => ({
@@ -580,12 +581,14 @@ describe("URL paste in add-repo", () => {
 
 describe("refresh animation", () => {
   it("r shows a spinner in the issues header until the reload lands", async () => {
-    let resolveSecond: ((v: Result<DashIssue[]>) => void) | null = null;
+    let resolveSecond:
+      | ((v: Result<{ issues: DashIssue[]; staleAt: string | null }>) => void)
+      | null = null;
     let calls = 0;
     const { client } = makeClient({ "acme/api": [rawIssue] });
     client.listIssues = async () => {
       calls++;
-      if (calls === 1) return okv([rawIssue]);
+      if (calls === 1) return okv({ issues: [rawIssue], staleAt: null });
       return new Promise((res) => {
         resolveSecond = res;
       });
@@ -599,7 +602,7 @@ describe("refresh animation", () => {
     // CI runners (the assertion raced React's commit).
     for (let i = 0; i < 30 && !hasSpinner(); i++) await tick();
     expect(hasSpinner()).toBe(true);
-    resolveSecond!(okv([rawIssue]));
+    resolveSecond!(okv({ issues: [rawIssue], staleAt: null }));
     for (let i = 0; i < 30 && hasSpinner(); i++) await tick();
     expect(hasSpinner()).toBe(false);
   });
