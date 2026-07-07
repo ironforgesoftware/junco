@@ -32,7 +32,13 @@ export interface MetricsSnapshot {
   /** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
   currentProgress: Record<
     string,
-    { turns: number; lastTool: string | null; outputTokens: number; updatedAt: string }
+    {
+      turns: number;
+      lastTool: string | null;
+      outputTokens: number;
+      startedAt: string;
+      updatedAt: string;
+    }
   >;
 }
 
@@ -58,7 +64,13 @@ export class RunMetrics {
   private _lastBridgeSweepAt: Date | null = null;
   private _progress: Record<
     string,
-    { turns: number; lastTool: string | null; outputTokens: number; updatedAt: string }
+    {
+      turns: number;
+      lastTool: string | null;
+      outputTokens: number;
+      startedAt: string;
+      updatedAt: string;
+    }
   > = {};
 
   constructor(now: () => Date = () => new Date()) {
@@ -90,9 +102,19 @@ export class RunMetrics {
     this._bridgeErrors++;
   }
 
-  /** A task entered execution. */
+  /** A task entered execution. Seeds its progress entry (startedAt = now). */
   taskStarted(id: string): void {
     if (!this._current.includes(id)) this._current.push(id);
+    if (!this._progress[id]) {
+      const now = this._now().toISOString();
+      this._progress[id] = {
+        turns: 0,
+        lastTool: null,
+        outputTokens: 0,
+        startedAt: now,
+        updatedAt: now,
+      };
+    }
   }
 
   /** A task left execution (however it ended). Clears its progress too. */
@@ -112,7 +134,12 @@ export class RunMetrics {
     id: string,
     p: { turns: number; lastTool: string | null; outputTokens: number },
   ): void {
-    this._progress[id] = { ...p, updatedAt: this._now().toISOString() };
+    const now = this._now().toISOString();
+    this._progress[id] = {
+      ...p,
+      startedAt: this._progress[id]?.startedAt ?? now,
+      updatedAt: now,
+    };
   }
 
   /** Drop a ticket's progress (always called when the ticket ends). */
