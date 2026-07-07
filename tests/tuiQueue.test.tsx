@@ -1,0 +1,163 @@
+import { describe, it, expect } from "vitest";
+import React from "react";
+import { render } from "ink-testing-library";
+import { QueueStrip } from "../src/tui/components/QueueStrip.js";
+import { queueLabel, fmtElapsed, fmtAge, fmtTokens, fmtClock } from "../src/tui/queueFmt.js";
+import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+
+const NOW = new Date("2026-07-07T10:05:00Z");
+
+const IDLE: QueueSnapshot = {
+  daemonUp: true,
+  maxConcurrent: 1,
+  running: [],
+  waiting: [],
+  recent: [],
+  error: null,
+};
+
+const BUSY: QueueSnapshot = {
+  ...IDLE,
+  running: [
+    {
+      id: "gh-acme-api-46",
+      github: { nwo: "acme/api", issue: 46, kind: "pr" },
+      turns: 14,
+      lastTool: "bash",
+      outputTokens: 12345,
+      startedAt: "2026-07-07T10:00:28Z",
+      stale: false,
+    },
+  ],
+  waiting: [
+    {
+      id: "gh-acme-api-51-plan",
+      github: { nwo: "acme/api", issue: 51, kind: "plan" },
+      kind: "plan",
+      priority: "normal",
+      retryCount: 0,
+      notBefore: null,
+      deferred: false,
+    },
+    {
+      id: "manual-tide-fix",
+      github: null,
+      kind: "pr",
+      priority: "normal",
+      retryCount: 0,
+      notBefore: null,
+      deferred: false,
+    },
+    {
+      id: "gh-acme-api-52-plan",
+      github: { nwo: "acme/api", issue: 52, kind: "plan" },
+      kind: "plan",
+      priority: "normal",
+      retryCount: 1,
+      notBefore: "2026-07-07T11:00:00Z",
+      deferred: true,
+    },
+    {
+      id: "gh-acme-api-53-plan",
+      github: { nwo: "acme/api", issue: 53, kind: "plan" },
+      kind: "plan",
+      priority: "low",
+      retryCount: 0,
+      notBefore: null,
+      deferred: false,
+    },
+  ],
+};
+
+describe("queueFmt", () => {
+  it("queueLabel: bridged → #N word (pr→exec); manual → truncated id", () => {
+    expect(queueLabel({ nwo: "a/b", issue: 46, kind: "pr" }, "x")).toBe("#46 exec");
+    expect(queueLabel({ nwo: "a/b", issue: 9, kind: "plan" }, "x")).toBe("#9 plan");
+    expect(queueLabel({ nwo: "a/b", issue: 3, kind: "ask" }, "x")).toBe("#3 ask");
+    expect(queueLabel(null, "manual-tide-fix")).toBe("manual-tide-fix");
+    expect(queueLabel(null, "a".repeat(30))).toBe("a".repeat(23) + "…");
+  });
+
+  it("fmtElapsed buckets and guards", () => {
+    expect(fmtElapsed("2026-07-07T10:04:15Z", NOW)).toBe("45s");
+    expect(fmtElapsed("2026-07-07T10:00:28Z", NOW)).toBe("4m32s");
+    expect(fmtElapsed("2026-07-07T08:53:00Z", NOW)).toBe("1h12m");
+    expect(fmtElapsed(null, NOW)).toBeNull();
+    expect(fmtElapsed("garbage", NOW)).toBeNull();
+    expect(fmtElapsed("2026-07-07T11:00:00Z", NOW)).toBeNull(); // future
+  });
+
+  it("fmtAge / fmtTokens / fmtClock", () => {
+    expect(fmtAge("2026-07-07T09:53:00Z", NOW)).toBe("12m ago");
+    expect(fmtAge("2026-07-05T10:05:00Z", NOW)).toBe("2d ago");
+    expect(fmtTokens(740)).toBe("740 tok");
+    expect(fmtTokens(12345)).toBe("12.3k tok");
+    expect(fmtTokens(null)).toBeNull();
+    expect(fmtClock("2026-07-07T11:00:00Z")).toMatch(/^\d{2}:\d{2}$/);
+  });
+});
+
+describe("QueueStrip", () => {
+  it("renders loading, idle, and error variants", () => {
+    expect(render(<QueueStrip snap={null} now={NOW} />).lastFrame()).toContain("queue — loading…");
+    expect(render(<QueueStrip snap={IDLE} now={NOW} />).lastFrame()).toContain("queue — idle");
+    expect(
+      render(<QueueStrip snap={{ ...IDLE, error: "clock boom" }} now={NOW} />).lastFrame(),
+    ).toContain("queue unavailable: clock boom");
+  });
+
+  it("renders counts, running progress, and the next-up line", () => {
+    const frame = render(<QueueStrip snap={BUSY} now={NOW} />).lastFrame()!;
+    expect(frame).toContain("queue — 1 running · 4 waiting");
+    expect(frame).toContain("#46 exec");
+    expect(frame).toContain("turn 14");
+    expect(frame).toContain("bash");
+    expect(frame).toContain("12.3k tok");
+    expect(frame).toContain("4m32s");
+    expect(frame).toContain("next:");
+    expect(frame).toContain("1) #51 plan");
+    expect(frame).toContain("2) manual-tide-fix");
+    expect(frame).toContain("⏲3) #52 plan"); // deferred marker
+    expect(frame).toContain("+1 more");
+    expect(frame).toContain("[t]");
+  });
+
+  it("shows max only when maxConcurrent > 1", () => {
+    expect(render(<QueueStrip snap={BUSY} now={NOW} />).lastFrame()).not.toContain("max");
+    expect(
+      render(<QueueStrip snap={{ ...BUSY, maxConcurrent: 3 }} now={NOW} />).lastFrame(),
+    ).toContain("· max 3");
+  });
+
+  it("daemon down: warning + stale running line", () => {
+    const down: QueueSnapshot = {
+      ...BUSY,
+      daemonUp: false,
+      running: [{ ...BUSY.running[0], turns: null, startedAt: null, stale: true }],
+    };
+    const frame = render(<QueueStrip snap={down} now={NOW} />).lastFrame()!;
+    expect(frame).toContain("daemon ○ down — nothing will run");
+    expect(frame).toContain("processing (daemon down)");
+  });
+
+  it("caps running lines at 2 with +N more", () => {
+    const many: QueueSnapshot = {
+      ...IDLE,
+      maxConcurrent: 4,
+      running: [1, 2, 3].map((n) => ({
+        id: `t-${n}`,
+        github: null,
+        turns: n,
+        lastTool: "bash",
+        outputTokens: 100,
+        startedAt: null,
+        stale: false,
+      })),
+    };
+    const frame = render(<QueueStrip snap={many} now={NOW} />).lastFrame()!;
+    expect(frame).toContain("t-1");
+    expect(frame).toContain("t-2");
+    expect(frame).not.toContain("turn 3");
+    expect(frame).toContain("+1 more running");
+  });
+});
