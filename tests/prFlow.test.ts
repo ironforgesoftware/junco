@@ -657,6 +657,7 @@ describe("buildPrBody github provenance", () => {
     verification: null,
     critic: null,
     criticRetriesUsed: 0,
+    prQueued: false,
   };
   const okResult = {
     finalText: "done.",

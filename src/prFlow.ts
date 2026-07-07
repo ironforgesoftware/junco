@@ -58,6 +58,9 @@ export interface PrOutcome {
   verification: VerificationResult | null;
   critic: CriticResult | null;
   criticRetriesUsed: number;
+  /** PR endgame (push/create-PR/finalize comment+label) was parked in the
+   * outbox because GitHub was unreachable — set in Task 4. */
+  prQueued: boolean;
 }
 
 function emptyPrOutcome(ctx: RepoContext): PrOutcome {
@@ -75,6 +78,7 @@ function emptyPrOutcome(ctx: RepoContext): PrOutcome {
     verification: null,
     critic: null,
     criticRetriesUsed: 0,
+    prQueued: false,
   };
 }
 
@@ -90,6 +94,9 @@ export interface PrFlowResult {
   commitCount: number;
   finalText: string; // agent's final message ("" when none)
   phaseError: string | null; // phase error or agent errorMessage, when failed
+  /** Mirrors PrOutcome.prQueued — the reporter uses this to skip the
+   * finalize comment + label flip when the composite outbox op owns them. */
+  prQueued: boolean;
 }
 
 function flowResult(
@@ -106,6 +113,7 @@ function flowResult(
     commitCount: prOutcome.commits.length,
     finalText: result.finalText,
     phaseError: phaseError ?? result.errorMessage,
+    prQueued: prOutcome.prQueued,
   };
 }
 
@@ -118,6 +126,7 @@ function requeuedResult(dst: string, result: RunResult): PrFlowResult {
     commitCount: 0,
     finalText: result.finalText,
     phaseError: null,
+    prQueued: false,
   };
 }
 
