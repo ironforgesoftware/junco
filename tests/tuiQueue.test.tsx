@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { QueueStrip } from "../src/tui/components/QueueStrip.js";
+import { QueueView } from "../src/tui/components/QueueView.js";
 import { queueLabel, fmtElapsed, fmtAge, fmtTokens, fmtClock } from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 
@@ -159,5 +160,65 @@ describe("QueueStrip", () => {
     expect(frame).toContain("t-2");
     expect(frame).not.toContain("turn 3");
     expect(frame).toContain("+1 more running");
+  });
+});
+
+describe("QueueView", () => {
+  const FULL: QueueSnapshot = {
+    ...BUSY,
+    recent: [
+      {
+        id: "gh-acme-api-44",
+        github: { nwo: "acme/api", issue: 44, kind: "pr" },
+        status: "done",
+        finishedAt: "2026-07-07T09:53:00Z",
+      },
+      {
+        id: "gh-acme-api-40",
+        github: { nwo: "acme/api", issue: 40, kind: "pr" },
+        status: "failed",
+        finishedAt: "2026-07-07T09:05:00Z",
+      },
+    ],
+  };
+
+  it("renders all three sections with detail", () => {
+    const frame = render(<QueueView snap={FULL} scroll={0} now={NOW} />).lastFrame()!;
+    expect(frame).toContain("RUNNING (1/1)");
+    expect(frame).toContain("#46 exec");
+    expect(frame).toContain("gh-acme-api-46"); // dim id next to the label
+    expect(frame).toContain("turn 14 · bash · 12.3k tok · 4m32s");
+    expect(frame).toContain("WAITING (4)");
+    expect(frame).toContain("1. #51 plan");
+    expect(frame).toContain("2. manual-tide-fix");
+    expect(frame).toContain("retry 1");
+    expect(frame).toContain("not before");
+    expect(frame).toContain("⏲ deferred");
+    expect(frame).toContain("low"); // non-normal priority shown
+    expect(frame).toContain("RECENT");
+    expect(frame).toContain("✓ #44 exec");
+    expect(frame).toContain("12m ago");
+    expect(frame).toContain("✗ #40 exec");
+  });
+
+  it("renders dim placeholders for empty sections", () => {
+    const frame = render(<QueueView snap={IDLE} scroll={0} now={NOW} />).lastFrame()!;
+    expect(frame).toContain("RUNNING (0/1)");
+    expect(frame).toContain("WAITING (0)");
+    // Empty sections show an em-dash placeholder.
+    expect(frame.split("—").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("scroll slices rendered rows", () => {
+    const top = render(<QueueView snap={FULL} scroll={0} now={NOW} />).lastFrame()!;
+    const scrolled = render(<QueueView snap={FULL} scroll={6} now={NOW} />).lastFrame()!;
+    expect(top).toContain("RUNNING");
+    expect(scrolled).not.toContain("RUNNING (1/1)");
+  });
+
+  it("loading state", () => {
+    expect(render(<QueueView snap={null} scroll={0} now={NOW} />).lastFrame()).toContain(
+      "loading…",
+    );
   });
 });
