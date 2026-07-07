@@ -360,12 +360,12 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write("w");
     await tick();
-    expect(r.lastFrame()).toContain("add repo to watchlist");
+    expect(r.lastFrame()).toContain("Watch a repository");
     r.stdin.write(ESC);
     await tick();
     r.stdin.write("A");
     await tick();
-    expect(r.lastFrame()).not.toContain("add repo to watchlist");
+    expect(r.lastFrame()).not.toContain("Watch a repository");
   });
 
   it("i jumps to the issues pane (d then dispatches the selected issue)", async () => {
@@ -386,7 +386,7 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write(":");
     await tick();
-    expect(r.lastFrame()).toContain("run a junco command");
+    expect(r.lastFrame()).toContain("Runs the junco CLI against this dashboard's config");
     r.stdin.write("doctor");
     await tick();
     r.stdin.write("\r");
@@ -481,11 +481,11 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write(ESC); // -> palette
     await tick();
-    expect(r.lastFrame()).toContain("run a junco command");
+    expect(r.lastFrame()).toContain("Runs the junco CLI against this dashboard's config");
     r.stdin.write(ESC); // -> main
     await tick();
     expect(r.lastFrame()).toContain("issues");
-    expect(r.lastFrame()).not.toContain("run a junco command");
+    expect(r.lastFrame()).not.toContain("Runs the junco CLI against this dashboard's config");
   });
 });
 

@@ -79,7 +79,7 @@ describe("AddRepoForm", () => {
     stdin.write("\r"); // submit
     await new Promise((r) => setTimeout(r, 20));
     expect(submitted).toEqual(["acme/api", "/c/api"]);
-    expect(lastFrame()).toContain("add repo");
+    expect(lastFrame()).toContain("Watch a repository");
   });
 
   it("renders a validation error and busy state", () => {
