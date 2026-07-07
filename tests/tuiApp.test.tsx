@@ -550,13 +550,14 @@ describe("refresh animation", () => {
     const r = renderApp(client, join(mkdtempSync(join(tmpdir(), "junco-rf-")), "wl.json"));
     await tick();
     r.stdin.write("r");
-    await tick();
     const { SPINNER_FRAMES } = await import("../src/tui/components/Spinner.js");
-    const pending = r.lastFrame()!;
-    expect(SPINNER_FRAMES.some((g: string) => pending.includes(g))).toBe(true);
+    const hasSpinner = () => SPINNER_FRAMES.some((g: string) => r.lastFrame()!.includes(g));
+    // Eventually-consistent on both edges — single fixed ticks flaked on slow
+    // CI runners (the assertion raced React's commit).
+    for (let i = 0; i < 30 && !hasSpinner(); i++) await tick();
+    expect(hasSpinner()).toBe(true);
     resolveSecond!(okv([rawIssue]));
-    await tick();
-    const done = r.lastFrame()!;
-    expect(SPINNER_FRAMES.some((g: string) => done.includes(g))).toBe(false);
+    for (let i = 0; i < 30 && hasSpinner(); i++) await tick();
+    expect(hasSpinner()).toBe(false);
   });
 });
