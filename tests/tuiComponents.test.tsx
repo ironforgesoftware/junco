@@ -1,33 +1,13 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { HelpOverlay } from "../src/tui/components/HelpOverlay.js";
 import { CommandOutput } from "../src/tui/components/CommandOutput.js";
 
 // The workspace switch deleted RepoList, IssueTable, StatusBar, ShortcutBar,
-// IssueDetail, and QueueStrip. Their coverage now lives in the re-skinned
-// component suites: tuiRail, tuiIssueList, tuiChrome, tuiPreview, tuiWorkspace.
-// What remains here targets still-living components (HelpOverlay, CommandOutput,
+// IssueDetail, HelpOverlay, and QueueStrip. Their coverage now lives in the
+// re-skinned component suites: tuiRail, tuiIssueList, tuiChrome, tuiPreview,
+// tuiWorkspace. What remains here targets still-living components (CommandOutput,
 // Spinner, TextField).
-
-describe("HelpOverlay", () => {
-  it("documents every key with the configured trigger", () => {
-    const { lastFrame } = render(<HelpOverlay trigger="junco" />);
-    const f = lastFrame()!;
-    for (const k of [
-      "dispatch",
-      "approve",
-      "re-plan",
-      "re-cycle",
-      "add repo",
-      "browser",
-      "refresh",
-      "quit",
-    ]) {
-      expect(f.toLowerCase()).toContain(k);
-    }
-  });
-});
 
 describe("cursor + spinner polish", () => {
   it("Spinner animates through the braille frames", async () => {
