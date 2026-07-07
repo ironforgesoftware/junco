@@ -22,19 +22,37 @@ import { IssueDetail } from "./components/IssueDetail.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { HelpOverlay } from "./components/HelpOverlay.js";
 import { AddRepoForm } from "./components/AddRepoForm.js";
+import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
+import { CommandOutput } from "./components/CommandOutput.js";
+import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 
 export interface AppProps {
   client: DashboardClient;
   trigger: string;
   configRepos: GithubRepoMapping[]; // read-only entries
   watchlistFile: string; // read/write via watchlist.ts
+  /** Resolved config path — spawned palette commands target the same config. */
+  configPath: string;
   issuePollMs?: number; // default 30_000; tests pass large values
   healthPollMs?: number; // default 5_000
+  /** Palette command runner override (tests). Defaults to the real subprocess. */
+  runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>;
   onExit: () => void;
 }
 
 type Pane = "repos" | "issues";
-type View = "main" | "detail" | "help" | "addRepo";
+type View = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput";
+
+interface CmdState {
+  title: string;
+  running: boolean;
+  output: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  /** The invocation, kept for `r` re-run. */
+  name: string;
+  extraArgs: string[];
+}
 interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
   body: string | null;
@@ -73,9 +91,12 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
 }
 
 export function App(props: AppProps): React.JSX.Element {
-  const { client, trigger, configRepos, watchlistFile, onExit } = props;
+  const { client, trigger, configRepos, watchlistFile, configPath, onExit } = props;
   const issuePollMs = props.issuePollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
+  const runCliFn =
+    props.runCliFn ??
+    ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
   const { exit } = useApp();
 
   const initialWatchlist = readWatchlist(watchlistFile);
@@ -96,6 +117,12 @@ export function App(props: AppProps): React.JSX.Element {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [addRepoBusy, setAddRepoBusy] = useState(false);
+  const [paletteFilter, setPaletteFilter] = useState("");
+  const [paletteSel, setPaletteSel] = useState(0);
+  const [paletteArgsMode, setPaletteArgsMode] = useState(false);
+  const [paletteArgs, setPaletteArgs] = useState("");
+  const [cmd, setCmd] = useState<CmdState | null>(null);
+  const [cmdElapsed, setCmdElapsed] = useState(0);
   // Last resolved positional index — the fallback when the selected issue number
   // vanishes from the list (closed/filtered), so the cursor stays near its slot.
   const lastIdxRef = useRef(0);
@@ -265,6 +292,56 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, [client, currentNwo, currentIssue]);
 
+  // Elapsed ticker for a running palette command (1s resolution).
+  useEffect(() => {
+    if (!cmd?.running) return;
+    setCmdElapsed(0);
+    const id = setInterval(() => setCmdElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [cmd?.running, cmd?.name]);
+
+  const runPaletteCommand = useCallback(
+    (name: string, extraArgs: string[]) => {
+      const title = ["junco", name, ...extraArgs].join(" ");
+      setScroll(0);
+      setCmd({
+        title,
+        running: true,
+        output: "",
+        exitCode: null,
+        timedOut: false,
+        name,
+        extraArgs,
+      });
+      setView("cmdOutput");
+      void runCliFn(name, extraArgs).then((r) => {
+        setCmd((prev) =>
+          prev && prev.name === name
+            ? { ...prev, running: false, output: r.output, exitCode: r.code, timedOut: r.timedOut }
+            : prev,
+        );
+      });
+    },
+    [runCliFn],
+  );
+
+  const paletteEnter = useCallback(() => {
+    const visible = filterCommands(PALETTE_COMMANDS, paletteFilter);
+    const current = visible[Math.min(paletteSel, Math.max(0, visible.length - 1))];
+    if (!current) return;
+    if (current.excluded !== null) {
+      setToast(`${current.name}: ${current.excluded}`);
+      return;
+    }
+    if (current.argsHint && !paletteArgsMode) {
+      setPaletteArgsMode(true);
+      return;
+    }
+    const typed = paletteArgs.split(/\s+/).filter(Boolean);
+    const extraArgs = typed.length > 0 ? typed : current.defaultArgs;
+    runPaletteCommand(current.name, extraArgs);
+  }, [paletteFilter, paletteSel, paletteArgsMode, paletteArgs, runPaletteCommand]);
+
   const unwatch = useCallback(() => {
     if (!currentRepo) return;
     if (currentRepo.fromConfig) {
@@ -338,6 +415,37 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
+    if (view === "palette") {
+      // Chars/backspace go to the palette's TextFields; the App routes only
+      // navigation keys here, so typing 'j' filters instead of moving.
+      if (key.escape) {
+        if (paletteArgsMode) {
+          setPaletteArgsMode(false);
+          setPaletteArgs("");
+        } else {
+          setView("main");
+        }
+        return;
+      }
+      if (key.downArrow) {
+        const max = Math.max(0, filterCommands(PALETTE_COMMANDS, paletteFilter).length - 1);
+        return void setPaletteSel((s) => Math.min(s + 1, max));
+      }
+      if (key.upArrow) return void setPaletteSel((s) => Math.max(0, s - 1));
+      if (key.return) return void paletteEnter();
+      return;
+    }
+
+    if (view === "cmdOutput") {
+      if (key.escape) return void setView("palette");
+      if (input === "j" || key.downArrow) return void setScroll((s) => s + 1);
+      if (input === "k" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+      if (input === "r" && cmd && !cmd.running) {
+        return void runPaletteCommand(cmd.name, cmd.extraArgs);
+      }
+      return;
+    }
+
     // main view
     if (input === "q") {
       exit();
@@ -345,9 +453,17 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (input === "?") return void setView("help");
+    if (input === ":") {
+      setPaletteFilter("");
+      setPaletteSel(0);
+      setPaletteArgsMode(false);
+      setPaletteArgs("");
+      setView("palette");
+      return;
+    }
     if (key.tab) return void setPane((p) => (p === "repos" ? "issues" : "repos"));
-    if (input === "h") return void setPane("repos");
-    if (input === "l") return void setPane("issues");
+    if (input === "h" || input === "w") return void setPane("repos");
+    if (input === "l" || input === "i") return void setPane("issues");
     if (input === "A") {
       if (watchlistError) {
         setToast("watchlist unreadable — fix it before adding");
@@ -391,7 +507,7 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "o") return void openBrowser();
   });
 
-  const hints = "? keys · q quit";
+  const hints = "? keys · : cmd · q quit";
 
   return (
     <Box flexDirection="column">
@@ -410,6 +526,16 @@ export function App(props: AppProps): React.JSX.Element {
             loading={detail.loading}
             scroll={scroll}
           />
+        ) : view === "cmdOutput" && cmd ? (
+          <CommandOutput
+            title={cmd.title}
+            running={cmd.running}
+            elapsedS={cmdElapsed}
+            output={cmd.output}
+            scroll={scroll}
+            exitCode={cmd.exitCode}
+            timedOut={cmd.timedOut}
+          />
         ) : (
           <IssueTable
             issues={currentIssues}
@@ -421,6 +547,21 @@ export function App(props: AppProps): React.JSX.Element {
       </Box>
       <StatusBar health={health} toast={toast} hints={hints} watchlistError={watchlistError} />
       {view === "help" && <HelpOverlay trigger={trigger} />}
+      {view === "palette" && (
+        <CommandPalette
+          commands={PALETTE_COMMANDS}
+          filter={paletteFilter}
+          selected={paletteSel}
+          argsMode={paletteArgsMode}
+          argsValue={paletteArgs}
+          onFilter={(v) => {
+            setPaletteFilter(v);
+            setPaletteSel(0);
+          }}
+          onArgs={setPaletteArgs}
+          onCancel={() => setView("main")}
+        />
+      )}
       {view === "addRepo" && (
         <AddRepoForm
           error={addRepoError}

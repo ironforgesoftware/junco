@@ -59,7 +59,7 @@ export interface CliDeps {
   /** The init wizard (tests inject a spy to assert routing without touching the fs). */
   runInitWizardFn?: (configPath: string, opts: { yes?: boolean }) => Promise<number>;
   /** The dashboard command (tests inject a spy; default lazily imports dashboardCmd.js). */
-  runDashboardFn?: (cfg: Config) => Promise<number>;
+  runDashboardFn?: (cfg: Config, configPath: string) => Promise<number>;
   /** The restart command (takes the RESOLVED config path — it matches service
    * units and the worker.lock by path, not by parsed config). */
   runRestartFn?: (configPath: string) => Promise<number>;
@@ -358,11 +358,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     setLogLevel(cfg.logLevel);
     const runDashboardFn =
       deps.runDashboardFn ??
-      (async (c: Config) => {
+      (async (c: Config, p: string) => {
         const { runDashboard } = await import("./dashboardCmd.js");
-        return runDashboard(c);
+        return runDashboard(c, p);
       });
-    return runDashboardFn(cfg);
+    return runDashboardFn(cfg, configPath);
   }
 
   // ------------------------------------------------------------

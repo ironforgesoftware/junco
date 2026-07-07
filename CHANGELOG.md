@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ticket schema (additive):** worker-managed `github` provenance block and `workdir` (Q&A session cwd, validated against `allowed_repo_roots`).
 - **`junco dashboard`** — an interactive terminal UI for GitHub-integrated mode: a repos pane with per-state issue counts, an issues pane with lifecycle glyphs, and a status bar with daemon health, plus in-terminal plan review before dispatch/approve/re-plan. Repos can be added or removed at runtime through a hot-reloaded watchlist file (no daemon restart) that lives alongside, and defers to, `config.toml`'s repo mappings.
 - **`junco restart`** — restart the supervised daemon (picks up config + code changes): discovers the launchd/systemd user unit whose invocation references your config path, kicks it with the platform-correct verb (`launchctl kickstart -k` / `systemctl --user restart`), validates the config first (never bounces onto an unparseable config), and verifies the pid changed.
+- **Dashboard command palette + focus keys** — `:` opens a palette that runs junco CLI subcommands from inside the dashboard (spawns the real CLI against the same config; output + exit code in a scrollable pane; args field for `list`/`retry`/`submit`/`logs`/`service`; `logs` bounded; `init`/`start`/`dashboard` excluded with reasons). `w`/`i` jump straight to the repos/issues panes.
 
 ## [0.3.0] - 2026-06-10
 

@@ -20,7 +20,7 @@ describe("runDashboard", () => {
   it("non-TTY exits 1 with guidance and never renders", async () => {
     let rendered = false;
     const errs: string[] = [];
-    const code = await runDashboard(cfg, {
+    const code = await runDashboard(cfg, "/x/config.toml", {
       isTTY: false,
       renderFn: () => {
         rendered = true;
@@ -35,7 +35,7 @@ describe("runDashboard", () => {
 
   it("TTY renders and resolves when the app exits", async () => {
     let rendered = false;
-    const code = await runDashboard(cfg, {
+    const code = await runDashboard(cfg, "/x/config.toml", {
       isTTY: true,
       renderFn: () => {
         rendered = true;
@@ -55,7 +55,7 @@ describe("runDashboard", () => {
     } as unknown as Config;
     let rendered = false;
     const errs: string[] = [];
-    const code = await runDashboard(disabled, {
+    const code = await runDashboard(disabled, "/x/config.toml", {
       isTTY: true,
       renderFn: () => {
         rendered = true;

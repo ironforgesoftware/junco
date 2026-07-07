@@ -13,7 +13,11 @@ export interface DashboardDeps {
   printErr?: (s: string) => void;
 }
 
-export async function runDashboard(cfg: Config, deps: DashboardDeps = {}): Promise<number> {
+export async function runDashboard(
+  cfg: Config,
+  configPath: string,
+  deps: DashboardDeps = {},
+): Promise<number> {
   const isTTY = deps.isTTY ?? Boolean(process.stdout.isTTY && process.stdin.isTTY);
   const printErr = deps.printErr ?? ((s: string) => process.stderr.write(s));
   if (!isTTY) {
@@ -52,6 +56,8 @@ export async function runDashboard(cfg: Config, deps: DashboardDeps = {}): Promi
       trigger: cfg.github.triggerLabel,
       configRepos: cfg.github.repos,
       watchlistFile: watchlistPath(cfg),
+      // The palette spawns CLI subcommands against this same config.
+      configPath,
       // App drives useApp().exit() itself; this stays a no-op hook point.
       onExit: () => {},
     }),

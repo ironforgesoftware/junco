@@ -531,6 +531,7 @@ Keys:
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `j` / `k`        | move selection (repo or issue, depending on the focused pane)                                                                                                                                       |
 | `tab`, `h` / `l` | switch panes (repos ↔ issues)                                                                                                                                                                       |
+| `w` / `i`        | jump straight to the watched-repos pane / the issues pane                                                                                                                                           |
 | `enter`          | open issue detail — full body plus the posted plan comment, in-terminal, before you decide                                                                                                          |
 | `d`              | dispatch (adds the trigger label)                                                                                                                                                                   |
 | `D`              | dispatch as ask — read-only Q&A, no plan, no PR                                                                                                                                                     |
@@ -540,10 +541,13 @@ Keys:
 | `A`              | add a repo to the watchlist — validates the local clone's origin against the given `owner/repo`, confirms the repo is reachable via `gh`, and creates the trigger label if it doesn't already exist |
 | `x`              | unwatch a repo (watchlist entries only — entries from `config.toml` are read-only in the dashboard and report where they're defined instead)                                                        |
 | `r`              | refresh the current repo's issues now                                                                                                                                                               |
+| `:`              | command palette — run junco CLI subcommands without leaving the dashboard (see below)                                                                                                               |
 | `?`              | show/hide the full key list                                                                                                                                                                         |
 | `q`              | quit                                                                                                                                                                                                |
 
 Every action is an ordinary label mutation made through your own `gh` auth — the same trust model as labeling an issue by hand on GitHub. Dispatch/approve/re-plan don't run anything themselves; they just move labels that the daemon's sweep acts on.
+
+**The command palette** (`:`) runs the junco CLI from inside the dashboard: type to filter, `enter` to run (commands that take arguments — `list`, `retry`, `submit`, `logs`, `service` — get an args field first), and the command's real output appears in a scrollable pane with its exit code (`r` re-runs, `esc` returns). Under the hood each run spawns the actual `junco` CLI against the dashboard's own config — no reimplementation, no drift, and no shell in the middle. `logs` runs bounded (`-n 200`); `init`, `start`, and `dashboard` are shown greyed-out with the reason they can't run here (use `restart` for the daemon).
 
 Repos added with `A` (and removed with `x`) live in a small JSON watchlist file at `<state_dir>/github-watchlist.json`, separate from `config.toml`. The daemon's bridge sweep re-reads this file every sweep, so watchlist changes take effect without a restart. Where a repo appears in both, the `config.toml` `[[github.repos]]` entry wins — that's also why config-sourced repos aren't removable from the dashboard.
 

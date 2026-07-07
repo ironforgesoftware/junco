@@ -8,6 +8,7 @@ import { App } from "../src/tui/App.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
 import type { DashboardClient, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
+import type { CliRunResult } from "../src/tui/cliRunner.js";
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
 
@@ -76,15 +77,22 @@ const rawIssue: DashIssue = {
 };
 const readyIssue: DashIssue = { ...rawIssue, number: 9, labels: ["junco", "junco:plan-ready"] };
 
-function renderApp(client: DashboardClient, watchlistFile: string, issuePollMs = 999999) {
+function renderApp(
+  client: DashboardClient,
+  watchlistFile: string,
+  issuePollMs = 999999,
+  runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
+) {
   return render(
     <App
       client={client}
       trigger="junco"
       configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
       watchlistFile={watchlistFile}
+      configPath="/x/config.toml"
       issuePollMs={issuePollMs}
       healthPollMs={999999}
+      runCliFn={runCliFn}
       onExit={() => {}}
     />,
   );
@@ -281,5 +289,144 @@ describe("App", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].path.startsWith(homedir())).toBe(true);
     expect(validatePaths[0].startsWith(homedir())).toBe(true);
+  });
+});
+
+describe("command palette + focus keys", () => {
+  const wl2 = () => join(mkdtempSync(join(tmpdir(), "junco-pal-")), "wl.json");
+  const ESC = String.fromCharCode(27);
+
+  function makeRunner(result: Partial<CliRunResult> = {}) {
+    const runs: [string, string[]][] = [];
+    const runCliFn = async (name: string, extraArgs: string[]): Promise<CliRunResult> => {
+      runs.push([name, extraArgs]);
+      return { code: 0, output: "captured output line", timedOut: false, ...result };
+    };
+    return { runs, runCliFn };
+  }
+
+  it("w and i jump panes directly (w->repos: j moves the repo cursor)", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const file = wl2();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("i"); // issues pane
+    await tick();
+    r.stdin.write("w"); // back to repos pane
+    await tick();
+    r.stdin.write("j"); // moves the REPO cursor, proving repos pane is focused
+    await tick();
+    expect(r.lastFrame()!.includes("alx/coral")).toBe(true);
+    expect(/▸ alx\/coral/.test(r.lastFrame()!)).toBe(true);
+  });
+
+  it("':' opens the palette; running a command shows its captured output + exit", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeRunner();
+    const r = renderApp(client, wl2(), 999999, runCliFn);
+    await tick();
+    r.stdin.write(":");
+    await tick();
+    expect(r.lastFrame()).toContain("run a junco command");
+    r.stdin.write("doctor");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    await tick();
+    expect(runs).toEqual([["doctor", []]]);
+    const f = r.lastFrame()!;
+    expect(f).toContain("junco doctor");
+    expect(f).toContain("captured output line");
+    expect(f).toContain("exit 0");
+  });
+
+  it("args flow: list -> args field -> typed args reach the runner", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeRunner();
+    const r = renderApp(client, wl2(), 999999, runCliFn);
+    await tick();
+    r.stdin.write(":");
+    await tick();
+    r.stdin.write("list");
+    await tick();
+    r.stdin.write("\r"); // argsHint present -> args mode
+    await tick();
+    expect(r.lastFrame()).toContain("args:");
+    r.stdin.write("failed");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(runs).toEqual([["list", ["failed"]]]);
+  });
+
+  it("logs runs with bounded default args when none are typed", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeRunner();
+    const r = renderApp(client, wl2(), 999999, runCliFn);
+    await tick();
+    r.stdin.write(":");
+    await tick();
+    r.stdin.write("logs");
+    await tick();
+    r.stdin.write("\r"); // args mode
+    await tick();
+    r.stdin.write("\r"); // empty -> defaults
+    await tick();
+    expect(runs).toEqual([["logs", ["-n", "200"]]]);
+  });
+
+  it("excluded commands toast the reason and never run", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeRunner();
+    const r = renderApp(client, wl2(), 999999, runCliFn);
+    await tick();
+    r.stdin.write(":");
+    await tick();
+    r.stdin.write("init");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(runs).toHaveLength(0);
+    expect(r.lastFrame()).toContain("can't nest inside the dashboard");
+  });
+
+  it("palette restart does not unmount the dashboard", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeRunner({ output: "restarted: pid 1 -> 2" });
+    const r = renderApp(client, wl2(), 999999, runCliFn);
+    await tick();
+    r.stdin.write(":");
+    await tick();
+    r.stdin.write("restart");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    await tick();
+    expect(runs).toEqual([["restart", []]]);
+    const f = r.lastFrame()!;
+    expect(f).toContain("restarted: pid 1 -> 2");
+    expect(f).toContain("exit 0"); // app alive and rendering post-resolve
+  });
+
+  it("esc unwinds output -> palette -> main", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runCliFn } = makeRunner();
+    const r = renderApp(client, wl2(), 999999, runCliFn);
+    await tick();
+    r.stdin.write(":");
+    await tick();
+    r.stdin.write("status");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    await tick();
+    r.stdin.write(ESC); // -> palette
+    await tick();
+    expect(r.lastFrame()).toContain("run a junco command");
+    r.stdin.write(ESC); // -> main
+    await tick();
+    expect(r.lastFrame()).toContain("issues");
+    expect(r.lastFrame()).not.toContain("run a junco command");
   });
 });

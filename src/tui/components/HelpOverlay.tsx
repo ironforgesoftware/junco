@@ -5,6 +5,8 @@ export function HelpOverlay({ trigger }: { trigger: string }): React.JSX.Element
   const rows: [string, string][] = [
     ["j/k", "move selection"],
     ["tab · h/l", "switch panes"],
+    ["w / i", "jump to watched repos / issues pane"],
+    [":", "command palette — run junco CLI commands"],
     ["enter", "issue detail (body + plan)"],
     ["d", `dispatch (adds \`${trigger}\`)`],
     ["D", "dispatch as ask (read-only Q&A)"],
