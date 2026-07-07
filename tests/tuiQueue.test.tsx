@@ -183,7 +183,9 @@ describe("QueueView", () => {
   };
 
   it("renders all three sections with detail", () => {
-    const frame = render(<QueueView snap={FULL} scroll={0} now={NOW} />).lastFrame()!;
+    const frame = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} />,
+    ).lastFrame()!;
     expect(frame).toContain("RUNNING (1/1)");
     expect(frame).toContain("#46 exec");
     expect(frame).toContain("gh-acme-api-46"); // dim id next to the label
@@ -202,7 +204,9 @@ describe("QueueView", () => {
   });
 
   it("renders dim placeholders for empty sections", () => {
-    const frame = render(<QueueView snap={IDLE} scroll={0} now={NOW} />).lastFrame()!;
+    const frame = render(
+      <QueueView snap={IDLE} scroll={0} now={NOW} height={20} focused={false} />,
+    ).lastFrame()!;
     expect(frame).toContain("RUNNING (0/1)");
     expect(frame).toContain("WAITING (0)");
     // Empty sections show an em-dash placeholder.
@@ -210,15 +214,21 @@ describe("QueueView", () => {
   });
 
   it("scroll slices rendered rows", () => {
-    const top = render(<QueueView snap={FULL} scroll={0} now={NOW} />).lastFrame()!;
-    const scrolled = render(<QueueView snap={FULL} scroll={6} now={NOW} />).lastFrame()!;
+    const top = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} />,
+    ).lastFrame()!;
+    const scrolled = render(
+      <QueueView snap={FULL} scroll={6} now={NOW} height={20} focused={false} />,
+    ).lastFrame()!;
     expect(top).toContain("RUNNING");
     expect(scrolled).not.toContain("RUNNING (1/1)");
   });
 
   it("loading state", () => {
-    expect(render(<QueueView snap={null} scroll={0} now={NOW} />).lastFrame()).toContain(
-      "loading…",
-    );
+    expect(
+      render(
+        <QueueView snap={null} scroll={0} now={NOW} height={20} focused={false} />,
+      ).lastFrame(),
+    ).toContain("loading…");
   });
 });

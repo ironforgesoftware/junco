@@ -611,7 +611,15 @@ export function App(props: AppProps): React.JSX.Element {
             timedOut={cmd.timedOut}
           />
         ) : view === "queue" ? (
-          <QueueView snap={queueSnap} scroll={scroll} now={queueNow} />
+          <QueueView
+            snap={queueSnap}
+            scroll={scroll}
+            now={queueNow}
+            // height 27 → 24-row viewport (height-3), exactly the old PAGE=24;
+            // interim until the workspace switch wires real pane heights
+            height={27}
+            focused={false}
+          />
         ) : (
           <IssueTable
             issues={currentIssues}

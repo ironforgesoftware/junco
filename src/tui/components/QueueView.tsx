@@ -2,10 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { QueueSnapshot, QueueWaiting } from "../queueSnapshot.js";
 import { queueLabel, progressLine, fmtAge, fmtClock } from "../queueFmt.js";
-
-// Ink can't erase lines that overflow the terminal (repaints duplicate into
-// scrollback), so window the rows like IssueDetail/CommandOutput do.
-const PAGE = 24;
+import { theme } from "../theme.js";
 
 function waitingNote(w: QueueWaiting): string {
   const parts: string[] = [];
@@ -22,10 +19,14 @@ export function QueueView({
   snap,
   scroll,
   now,
+  height,
+  focused,
 }: {
   snap: QueueSnapshot | null;
   scroll: number;
   now: Date;
+  height: number;
+  focused: boolean;
 }): React.JSX.Element {
   if (snap === null) {
     return (
@@ -43,6 +44,12 @@ export function QueueView({
       </Text>,
     );
   };
+
+  rows.push(
+    <Text key="title" bold color={focused ? theme.accent : undefined}>
+      queue
+    </Text>,
+  );
 
   rows.push(
     <Text key="run-h" bold>
@@ -115,8 +122,15 @@ export function QueueView({
   }
 
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1} flexGrow={1}>
-      {rows.slice(scroll, scroll + PAGE)}
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={focused ? theme.accent : theme.border}
+      paddingX={1}
+      flexGrow={1}
+      height={height}
+    >
+      {rows.slice(scroll, scroll + Math.max(1, height - 3))}
     </Box>
   );
 }

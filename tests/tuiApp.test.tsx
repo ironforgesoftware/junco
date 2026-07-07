@@ -635,8 +635,12 @@ describe("queue strip + queue view", () => {
     await until(() => (r.lastFrame() ?? "").includes("queue —"));
     r.stdin.write("t");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    // The re-skinned QueueView puts a "queue" title row above RUNNING, so it
+    // takes two steps to scroll the header off (Task 8 migrates this test).
+    r.stdin.write("]");
     r.stdin.write("]");
     await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("[");
     r.stdin.write("[");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
   });
