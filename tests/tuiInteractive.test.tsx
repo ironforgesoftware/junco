@@ -62,7 +62,7 @@ describe("AddRepoForm", () => {
     const { stdin, lastFrame } = render(
       <AddRepoForm
         error={null}
-        busy={false}
+        busyText={null}
         onSubmit={(nwo, path) => {
           submitted = [nwo, path];
         }}
@@ -86,14 +86,14 @@ describe("AddRepoForm", () => {
     const e = render(
       <AddRepoForm
         error="clone origin is other/thing"
-        busy={false}
+        busyText={null}
         onSubmit={() => {}}
         onCancel={() => {}}
       />,
     );
     expect(e.lastFrame()).toContain("origin");
     const b = render(
-      <AddRepoForm error={null} busy={true} onSubmit={() => {}} onCancel={() => {}} />,
+      <AddRepoForm error={null} busyText={"validating…"} onSubmit={() => {}} onCancel={() => {}} />,
     );
     expect(b.lastFrame()).toContain("validating");
   });

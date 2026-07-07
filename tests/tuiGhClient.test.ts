@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { makeGhDashboardClient } from "../src/tui/ghClient.js";
 import type { Config } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
@@ -42,6 +45,7 @@ function fakes(
     if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
     if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
       return ok((opts.comments ?? []).map((c) => JSON.stringify(c)).join("\n"));
+    if (args[0] === "repo" && args[1] === "clone") return ok("");
     if (args[0] === "repo" && args[1] === "view") return ok("");
     if (args[0] === "label" && args[1] === "list") return ok("");
     if (args[0] === "label" && args[1] === "create") return ok("");
@@ -212,5 +216,30 @@ describe("health", () => {
     }) as unknown as typeof fetch;
     const c2 = makeGhDashboardClient(cfg, { ...fakes(), fetchFn: fetchBad });
     expect((await c2.health()).up).toBe(false);
+  });
+});
+
+describe("cloneRepo", () => {
+  it("clones via gh repo clone into the destination", async () => {
+    const f = fakes();
+    const dest = join(mkdtempSync(join(tmpdir(), "junco-clone-")), "acme", "api");
+    const r = await makeGhDashboardClient(cfg, f).cloneRepo("acme/api", dest);
+    expect(r.ok).toBe(true);
+    expect(f.calls).toContainEqual(["repo", "clone", "acme/api", dest]);
+  });
+
+  it("reuses an existing destination without cloning", async () => {
+    const f = fakes();
+    const dest = mkdtempSync(join(tmpdir(), "junco-clone-exists-"));
+    const r = await makeGhDashboardClient(cfg, f).cloneRepo("acme/api", dest);
+    expect(r.ok).toBe(true);
+    expect(f.calls.find((c) => c[0] === "repo" && c[1] === "clone")).toBeUndefined();
+  });
+
+  it("clone failure → ok:false with the error", async () => {
+    const f = fakes({ failArgs: "repo clone" });
+    const dest = join(mkdtempSync(join(tmpdir(), "junco-clone-fail-")), "x");
+    const r = await makeGhDashboardClient(cfg, f).cloneRepo("acme/api", dest);
+    expect(r.ok).toBe(false);
   });
 });

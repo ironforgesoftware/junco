@@ -14,6 +14,7 @@ import { lifecycleLabels } from "../githubInbox.js";
 import type { WatchlistEntry } from "../watchlist.js";
 import { readWatchlist, writeWatchlist } from "../watchlist.js";
 import { expandHome } from "../config.js";
+import { join } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
 import { RepoList } from "./components/RepoList.js";
 import type { RepoRow } from "./components/RepoList.js";
@@ -34,6 +35,8 @@ export interface AppProps {
   watchlistFile: string; // read/write via watchlist.ts
   /** Resolved config path — spawned palette commands target the same config. */
   configPath: string;
+  /** Managed clones root (<state_dir>/repos) — auto-clone destination. */
+  clonesDir: string;
   issuePollMs?: number; // default 30_000; tests pass large values
   healthPollMs?: number; // default 5_000
   /** Palette command runner override (tests). Defaults to the real subprocess. */
@@ -95,7 +98,7 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
 }
 
 export function App(props: AppProps): React.JSX.Element {
-  const { client, trigger, configRepos, watchlistFile, configPath, onExit } = props;
+  const { client, trigger, configRepos, watchlistFile, configPath, clonesDir, onExit } = props;
   const issuePollMs = props.issuePollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
   const runCliFn =
@@ -120,7 +123,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [toast, setToast] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
-  const [addRepoBusy, setAddRepoBusy] = useState(false);
+  const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
   const [paletteFilter, setPaletteFilter] = useState("");
   const [paletteSel, setPaletteSel] = useState(0);
   const [paletteArgsMode, setPaletteArgsMode] = useState(false);
@@ -378,11 +381,25 @@ export function App(props: AppProps): React.JSX.Element {
         setToast("watchlist unreadable — fix it before writing");
         return;
       }
-      const expanded = expandHome(path); // ONE expansion point: validate + store agree
-      setAddRepoBusy(true);
+      // Empty path = clone into the managed directory for the operator.
+      let expanded: string;
       setAddRepoError(null);
+      if (path.trim() === "") {
+        const [owner, repo] = nwo.split("/");
+        expanded = join(clonesDir, owner ?? nwo, repo ?? "repo");
+        setAddRepoBusy("cloning repository…");
+        const cloned = await client.cloneRepo(nwo, expanded);
+        if (!cloned.ok) {
+          setAddRepoBusy(null);
+          setAddRepoError(cloned.error);
+          return;
+        }
+      } else {
+        expanded = expandHome(path); // ONE expansion point: validate + store agree
+      }
+      setAddRepoBusy("validating…");
       const res = await client.validateAndPrepareRepo(nwo, expanded);
-      setAddRepoBusy(false);
+      setAddRepoBusy(null);
       if (!res.ok) {
         setAddRepoError(res.error);
         return;
@@ -572,7 +589,7 @@ export function App(props: AppProps): React.JSX.Element {
       {view === "addRepo" && (
         <AddRepoForm
           error={addRepoError}
-          busy={addRepoBusy}
+          busyText={addRepoBusy}
           onSubmit={(nwo, path) => void handleAddRepo(nwo, path)}
           onCancel={() => setView("main")}
         />

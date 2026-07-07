@@ -531,7 +531,7 @@ A persistent shortcut bar at the bottom of the screen always shows the full key 
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `j` / `k`        | move selection (repo or issue, depending on the focused pane)                                                                                                                        |
 | `tab`, `h` / `l` | switch panes (repos ↔ issues)                                                                                                                                                        |
-| `w`              | add a repo to the watchlist (same as `A`)                                                                                                                                            |
+| `w`              | add a repo to the watchlist (same as `A`) — leave the clone path empty and junco clones it for you into `<state_dir>/repos/<owner>/<repo>`                                           |
 | `i`              | jump straight to the issues pane                                                                                                                                                     |
 | `enter`          | open issue detail — full body plus the posted plan comment, in-terminal, before you decide                                                                                           |
 | `d`              | dispatch (adds the trigger label)                                                                                                                                                    |

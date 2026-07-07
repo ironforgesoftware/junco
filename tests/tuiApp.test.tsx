@@ -11,6 +11,7 @@ import type { DashIssue } from "../src/tui/state.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
+const CLONES_DIR = "/x/state/repos";
 
 function makeClient(
   issuesByRepo: Record<string, DashIssue[]>,
@@ -18,8 +19,13 @@ function makeClient(
 ) {
   const actions: unknown[][] = [];
   const validatePaths: string[] = [];
+  const cloned: string[] = [];
   const client: DashboardClient = {
     listIssues: async (nwo) => okv(issuesByRepo[nwo] ?? []),
+    cloneRepo: async (_n, dest) => {
+      cloned.push(dest);
+      return okv(undefined);
+    },
     issueDetail: async () => okv({ body: "the body", planComment: "<!-- junco:plan -->plan!" }),
     applyAction: async (...a) => {
       actions.push(a);
@@ -37,7 +43,7 @@ function makeClient(
       ticketsBridged: 0,
     }),
   };
-  return { client, actions, validatePaths };
+  return { client, actions, validatePaths, cloned };
 }
 
 /** A client whose listIssues walks a fixed sequence of responses (call N →
@@ -51,6 +57,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
       call++;
       return r;
     },
+    cloneRepo: async () => okv(undefined),
     issueDetail: async () => okv({ body: "the body", planComment: null }),
     applyAction: async (...a) => {
       actions.push(a);
@@ -90,6 +97,7 @@ function renderApp(
       configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
       watchlistFile={watchlistFile}
       configPath="/x/config.toml"
+      clonesDir={CLONES_DIR}
       issuePollMs={issuePollMs}
       healthPollMs={999999}
       runCliFn={runCliFn}
@@ -437,5 +445,48 @@ describe("command palette + focus keys", () => {
     await tick();
     expect(r.lastFrame()).toContain("issues");
     expect(r.lastFrame()).not.toContain("run a junco command");
+  });
+});
+
+describe("auto-clone add-repo", () => {
+  const wl3 = () => join(mkdtempSync(join(tmpdir(), "junco-ac-")), "wl.json");
+
+  it("empty path clones into the managed dir, validates it, and watches it", async () => {
+    const { client, cloned, validatePaths } = makeClient({ "acme/api": [] });
+    const file = wl3();
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("alx/coral");
+    await tick();
+    r.stdin.write("\r"); // -> path field
+    await tick();
+    r.stdin.write("\r"); // EMPTY path -> auto-clone
+    await tick();
+    await tick();
+    const managed = join(CLONES_DIR, "alx", "coral");
+    expect(cloned).toEqual([managed]);
+    expect(validatePaths).toEqual([managed]);
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: managed }]);
+  });
+
+  it("clone failure surfaces as a form error, nothing written", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    client.cloneRepo = async () => ({ ok: false, error: "clone exploded" });
+    const file = wl3();
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("alx/coral");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    await tick();
+    expect(r.lastFrame()).toContain("clone exploded");
+    expect(readWatchlist(file).entries).toEqual([]);
   });
 });

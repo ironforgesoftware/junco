@@ -4,6 +4,7 @@
  * is loaded dynamically (the daemon and every other subcommand stay React-free).
  */
 
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import type React from "react";
 
@@ -58,6 +59,8 @@ export async function runDashboard(
       watchlistFile: watchlistPath(cfg),
       // The palette spawns CLI subcommands against this same config.
       configPath,
+      // Managed clones for the add-repo "empty path = clone for me" flow.
+      clonesDir: join(cfg.stateDir, "repos"),
       // App drives useApp().exit() itself; this stays a no-op hook point.
       onExit: () => {},
     }),

@@ -5,6 +5,8 @@
  * bridge's permission gates apply unchanged.
  */
 
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Config } from "../types.js";
 import { gh, git } from "../git.js";
 import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
@@ -21,6 +23,9 @@ export interface HealthInfo {
 
 export interface DashboardClient {
   listIssues(nwo: string): Promise<Result<DashIssue[]>>;
+  /** Clone `nwo` into `dest` via the user's gh auth. An existing dest is
+   * reused (validation still gates it). */
+  cloneRepo(nwo: string, dest: string): Promise<Result<void>>;
   issueDetail(
     nwo: string,
     num: number,
@@ -101,6 +106,16 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
           updatedAt: i.updatedAt,
           url: i.url,
         }));
+      });
+    },
+
+    cloneRepo(nwo, dest) {
+      return attempt(async () => {
+        if (existsSync(dest)) return; // reuse — validateAndPrepareRepo decides
+        mkdirSync(dirname(dest), { recursive: true });
+        await ghFn(cfg, ["repo", "clone", nwo, dest], {
+          timeoutMs: 300_000, // full clone; big repos take a while
+        });
       });
     },
 
