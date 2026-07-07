@@ -146,6 +146,17 @@ export function outboxDepth(cfg: Config, deps: OutboxDeps = {}): number {
   }
 }
 
+/** Count of poisoned ops parked in github-outbox/dead/ (0 when the dir has
+ * never been created — nothing has dead-lettered yet). */
+export function deadCount(cfg: Config, deps: OutboxDeps = {}): number {
+  const readdirFn = deps.readdirFn ?? readdirSync;
+  try {
+    return readdirFn(outboxPaths(cfg).dead).filter((n) => n.endsWith(".json")).length;
+  } catch {
+    return 0;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // tryOrEnqueue — the seam every integration layer calls through: try the live
 // GitHub call, and only fall back to the durable outbox when the failure is
@@ -200,6 +211,9 @@ export async function tryOrEnqueue(
 // rest while the network is down) and everything from that point on is
 // counted as `remaining` without being touched. Non-network failures are the
 // op's fault: bump attempts/lastError and dead-letter at MAX_OP_ATTEMPTS.
+// Two flushers may race over the same dir (daemon sweep + `junco outbox
+// flush`): every op-file mutation treats ENOENT as "the other flusher claimed
+// it" — a silent skip counted in neither sent nor dead, never a throw.
 // ---------------------------------------------------------------------------
 
 export interface FlushDeps extends OutboxDeps {
@@ -215,6 +229,14 @@ export interface FlushResult {
 
 function marker(id: string): string {
   return `${OUTBOX_MARKER_PREFIX}${id} -->`;
+}
+
+/** ENOENT from an op-file mutation means a CONCURRENT flusher (the daemon
+ * sweep vs a manual `junco outbox flush` — both walk the same dir) already
+ * removed/renamed the file after we read it. That op is the other flusher's
+ * to count; here it is a silent skip, never an error. */
+function isEnoent(e: unknown): boolean {
+  return (e as NodeJS.ErrnoException | null)?.code === "ENOENT";
 }
 
 /** Word-boundary excerpt for the flushed finalize comment (same policy as
@@ -246,11 +268,21 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
   const result: FlushResult = { sent: 0, dead: 0, remaining: 0, offline: false };
   const ops = listOps(cfg, deps);
 
-  const rewrite = (s: StoredOp): void => {
+  /** Persist updated bookkeeping (attempts/lastError/pr checkpoints) back to
+   * the op file. Returns false when a concurrent flusher stole the file
+   * (ENOENT) — callers must then stop counting the op as theirs. */
+  const rewrite = (s: StoredOp): boolean => {
     const { path, ...rest } = s;
     const tmp = `${path}.tmp`;
-    writeFileFn(tmp, JSON.stringify(rest, null, 2));
-    renameFn(tmp, path);
+    try {
+      writeFileFn(tmp, JSON.stringify(rest, null, 2));
+      renameFn(tmp, path);
+      return true;
+    } catch (e) {
+      if (!isEnoent(e)) throw e;
+      log.info("outbox op claimed by a concurrent flusher — skipping rewrite", { id: s.id });
+      return false;
+    }
   };
 
   const postCommentIdempotent = async (
@@ -384,7 +416,15 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
     }
     try {
       await execute(s);
-      rmFn(s.path);
+      try {
+        rmFn(s.path);
+      } catch (e) {
+        if (!isEnoent(e)) throw e; // non-ENOENT rm failure → op-failure path below
+        log.info("outbox op claimed by a concurrent flusher — not counting as sent", {
+          id: s.id,
+        });
+        continue; // the other flusher's send, not ours
+      }
       result.sent++;
     } catch (e) {
       if (isOffline(e)) {
@@ -396,12 +436,19 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
       s.lastError = describeError(e);
       if (s.attempts >= MAX_OP_ATTEMPTS) {
         mkdirFn(dead);
-        renameFn(s.path, join(dead, basename(s.path)));
+        try {
+          renameFn(s.path, join(dead, basename(s.path)));
+        } catch (e2) {
+          if (!isEnoent(e2)) throw e2;
+          log.info("outbox op claimed by a concurrent flusher — not dead-lettering", {
+            id: s.id,
+          });
+          continue; // its fate (dead or sent) is the other flusher's to count
+        }
         result.dead++;
         log.warn("outbox op dead-lettered", { id: s.id, error: s.lastError });
       } else {
-        rewrite(s);
-        result.remaining++;
+        if (rewrite(s)) result.remaining++;
       }
     }
   }

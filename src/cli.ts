@@ -81,6 +81,7 @@ Subcommands:
   status       Show daemon / endpoint / queue health at a glance
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
+  outbox [flush]      List or push the offline GitHub backlog
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
@@ -326,6 +327,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "retry") {
     const cfg = loadConfigFn(configPath);
     return runRetryCommand(cfg, positionals.slice(1), { all: values.all as boolean }, { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // outbox: list or flush the offline GitHub backlog (src/githubOutbox.ts)
+  // ------------------------------------------------------------
+  if (subcommand === "outbox") {
+    const cfg = loadConfigFn(configPath);
+    const { runOutboxCommand } = await import("./outboxCmd.js");
+    return runOutboxCommand(cfg, positionals.slice(1), { printFn });
   }
 
   // ------------------------------------------------------------

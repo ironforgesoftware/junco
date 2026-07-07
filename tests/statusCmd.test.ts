@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runStatusCommand, fmtUptime } from "../src/statusCmd.js";
+import { outboxPaths } from "../src/githubOutbox.js";
 import type { Config } from "../src/types.js";
 
 describe("fmtUptime", () => {
@@ -33,6 +34,7 @@ describe("runStatusCommand", () => {
       juncoSubdir: "",
       healthHost: "127.0.0.1",
       healthPort: 8787,
+      stateDir: join(root, "state"),
     } as unknown as Config;
     out = [];
   });
@@ -138,6 +140,33 @@ describe("runStatusCommand", () => {
     const text = out.join("");
     expect(text).toMatch(/daemon: {4}not running/);
     expect(text).toMatch(/inbox 1/);
+  });
+
+  it("omits the outbox line when nothing is queued or dead", async () => {
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    expect(out.join("")).not.toMatch(/outbox:/);
+  });
+
+  it("shows the outbox line (queued + dead) after the queue line, placed after it", async () => {
+    const { dir, dead } = outboxPaths(cfg);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "1-a-labels.json"), "{}", "utf8");
+    writeFileSync(join(dir, "2-b-labels.json"), "{}", "utf8");
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(dead, "3-c-labels.json"), "{}", "utf8");
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    const lines = out.join("").split("\n");
+    const queueIdx = lines.findIndex((l) => l.startsWith("queue:"));
+    const outboxIdx = lines.findIndex((l) => l.startsWith("outbox:"));
+    expect(queueIdx).toBeGreaterThanOrEqual(0);
+    expect(outboxIdx).toBe(queueIdx + 1);
+    expect(lines[outboxIdx]).toMatch(/outbox: {4}2 queued · 1 dead/);
   });
 
   it("lock held but /health unreachable → 'not responding'", async () => {

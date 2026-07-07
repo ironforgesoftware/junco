@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -7,6 +7,7 @@ import {
   enqueueOp,
   listOps,
   outboxDepth,
+  deadCount,
   flushOutbox,
   tryOrEnqueue,
   isOffline,
@@ -76,6 +77,24 @@ describe("outbox store", () => {
     const cfg = cfgAt(join(tmpdir(), "junco-obx-nonexistent-xyz"));
     expect(listOps(cfg)).toEqual([]);
     expect(outboxDepth(cfg)).toBe(0);
+  });
+});
+
+describe("deadCount", () => {
+  it("counts only .json files in the dead/ subdir", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-dead-"));
+    const cfg = cfgAt(root);
+    const { dead } = outboxPaths(cfg);
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(dead, "a.json"), "{}", "utf8");
+    writeFileSync(join(dead, "b.json"), "{}", "utf8");
+    writeFileSync(join(dead, "notes.txt"), "x", "utf8");
+    expect(deadCount(cfg)).toBe(2);
+  });
+
+  it("missing dead/ dir (nothing ever dead-lettered) → 0", () => {
+    const cfg = cfgAt(join(tmpdir(), "junco-obx-dead-nonexistent-xyz"));
+    expect(deadCount(cfg)).toBe(0);
   });
 });
 
@@ -195,6 +214,70 @@ describe("flushOutbox", () => {
     const last = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(last).toMatchObject({ dead: 1, remaining: 0 });
     expect(outboxDepth(cfg)).toBe(0);
+    expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1);
+  });
+
+  it("concurrent-flusher race: ENOENT from rm after success is a silent skip, not sent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-race1-"));
+    const cfg = cfgAt(root);
+    const stolen = enqueueOp(cfg, "dashboard", { ...LABELS });
+    enqueueOp(cfg, "dashboard", { ...LABELS, issue: 8 });
+    const f = fakes(() => undefined);
+    const enoent = Object.assign(new Error("ENOENT: no such file or directory"), {
+      code: "ENOENT",
+    });
+    const r = await flushOutbox(cfg, {
+      ghFn: f.ghFn,
+      gitFn: f.gitFn,
+      // The other flusher already deleted the first op's file.
+      rmFn: (p: string) => {
+        if (p.includes(stolen)) throw enoent;
+        rmSync(p, { force: true });
+      },
+    });
+    expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+    expect(outboxDepth(cfg)).toBe(1); // the stolen file is the other flusher's to remove
+  });
+
+  it("concurrent-flusher race: ENOENT from the dead-letter rename skips (no dead count, no throw)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-race2-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    const f = fakes(() => {
+      throw PERM_ERR;
+    });
+    // Burn attempts up to MAX-1 with the real rename (rewrite path).
+    for (let i = 1; i < MAX_OP_ATTEMPTS; i++)
+      await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    const enoent = Object.assign(new Error("ENOENT: no such file or directory"), {
+      code: "ENOENT",
+    });
+    const last = await flushOutbox(cfg, {
+      ghFn: f.ghFn,
+      gitFn: f.gitFn,
+      renameFn: () => {
+        throw enoent;
+      },
+    });
+    expect(last).toMatchObject({ sent: 0, dead: 0, remaining: 0, offline: false });
+  });
+
+  it("mixed pass: op0 dead-letters and op1 goes offline in the same flush", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-mixed-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS }); // issue 7 — will dead-letter
+    const f1 = fakes(() => {
+      throw PERM_ERR;
+    });
+    for (let i = 1; i < MAX_OP_ATTEMPTS; i++)
+      await flushOutbox(cfg, { ghFn: f1.ghFn, gitFn: f1.gitFn }); // attempts → MAX-1
+    enqueueOp(cfg, "dashboard", { ...LABELS, issue: 8 }); // fresh — will hit the network
+    const f2 = fakes((_tool, args) => {
+      if (args.includes("8")) throw NET_ERR;
+      throw PERM_ERR;
+    });
+    const r = await flushOutbox(cfg, { ghFn: f2.ghFn, gitFn: f2.gitFn });
+    expect(r).toMatchObject({ sent: 0, dead: 1, remaining: 1, offline: true });
     expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1);
   });
 

@@ -1,0 +1,68 @@
+/**
+ * `junco outbox [flush]` — operator visibility + manual push for the offline
+ * GitHub outbox (src/githubOutbox.ts). No args: list what's parked. `flush`:
+ * replay it now instead of waiting for the daemon's throttled sweep.
+ */
+
+import type { Config } from "./types.js";
+import {
+  listOps,
+  deadCount,
+  flushOutbox,
+  type FlushDeps,
+  type FlushResult,
+  type OutboxOp,
+  type StoredOp,
+} from "./githubOutbox.js";
+import { fmtAge } from "./tui/queueFmt.js";
+
+export interface OutboxCmdDeps extends FlushDeps {
+  printFn?: (s: string) => void;
+}
+
+/** `push`/`pr` ops carry a branch; `labels`/`comment` ops always have an
+ * issueKey instead (nwo+issue are required fields on those kinds). */
+function branchOf(op: OutboxOp): string | null {
+  return "branch" in op ? op.branch : null;
+}
+
+function opLine(s: StoredOp, now: Date): string {
+  const key = s.issueKey ?? branchOf(s.op) ?? "?";
+  const err = s.lastError ? ` lastError=${s.lastError}` : "";
+  return `${fmtAge(s.createdAt, now)} ${s.op.kind} ${key} attempts=${s.attempts}${err}\n`;
+}
+
+export async function runOutboxCommand(
+  cfg: Config,
+  args: string[],
+  deps: OutboxCmdDeps = {},
+): Promise<number> {
+  const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+
+  if (args[0] === "flush") {
+    let result: FlushResult;
+    try {
+      result = await flushOutbox(cfg, deps);
+    } catch (e) {
+      // flushOutbox is designed to contain its own failures (mirroring the
+      // daemon sweep's guard in githubInbox.pollGithubInbox); if it ever does
+      // throw, the operator gets one clean line — not a raw fatal log.
+      print(`outbox flush failed: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+    print(`sent ${result.sent} · dead ${result.dead} · remaining ${result.remaining}\n`);
+    if (result.offline) print(`offline — will retry when GitHub is reachable\n`);
+    return result.dead > 0 ? 1 : 0;
+  }
+
+  const now = (deps.nowFn ?? (() => new Date()))();
+  const ops = listOps(cfg, deps);
+  const dead = deadCount(cfg, deps);
+  if (ops.length === 0) {
+    print("outbox empty\n");
+  } else {
+    for (const s of ops) print(opLine(s, now));
+  }
+  if (dead > 0) print(`dead: ${dead}\n`);
+  return 0;
+}

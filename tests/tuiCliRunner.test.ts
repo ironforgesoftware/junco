@@ -36,7 +36,7 @@ function deps(child: ReturnType<typeof fakeChild>, timeoutMs = 5_000) {
 }
 
 describe("PALETTE_COMMANDS roster", () => {
-  it("carries 11 runnable and 3 excluded-with-reason entries", () => {
+  it("carries 12 runnable and 3 excluded-with-reason entries", () => {
     const runnable = PALETTE_COMMANDS.filter((c) => c.excluded === null);
     const excluded = PALETTE_COMMANDS.filter((c) => c.excluded !== null);
     expect(runnable.map((c) => c.name).sort()).toEqual(
@@ -45,6 +45,7 @@ describe("PALETTE_COMMANDS roster", () => {
         "inbox-path",
         "list",
         "logs",
+        "outbox",
         "restart",
         "retry",
         "run-once",

@@ -34,6 +34,7 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("status", null, "Daemon / endpoint / queue health at a glance"),
   cmd("list", "[box]", "List tickets per queue box (inbox|processing|done|failed)"),
   cmd("retry", "<name…|--all>", "Move failed tickets back to the inbox"),
+  cmd("outbox", "[flush]", "List or push the offline GitHub backlog"),
   cmd("doctor", null, "Preflight: config, git, gh auth, endpoint, model, dirs"),
   cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200", "--human"]),
   cmd("run-once", null, "Process one task and exit (no lock)"),
