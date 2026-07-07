@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { finalize, computePrStatus } from "../src/finalize.js";
+import { finalize, finalizePr, computePrStatus } from "../src/finalize.js";
 import type { PrOutcome } from "../src/prFlow.js";
 import type { RunResult } from "../src/types.js";
 
@@ -91,5 +91,50 @@ describe("computePrStatus (timeout salvage)", () => {
   it("timeout without a push → timeout (failed/ routing)", () => {
     expect(computePrStatus({ ...ok, timedOut: true }, emptyOutcome(), null)).toBe("timeout");
     expect(computePrStatus({ ...ok, timedOut: true }, null, null)).toBe("timeout");
+  });
+});
+
+describe("finalizePr offline note", () => {
+  const outcome = (over: Partial<PrOutcome> = {}): PrOutcome => ({
+    statusOverride: null,
+    nwo: "owner/repo",
+    branch: "junco/q1",
+    baseBranch: "main",
+    prUrl: null,
+    commits: [],
+    pushed: false,
+    worktreePath: null,
+    worktreePreserved: true,
+    amendedPrNumber: null,
+    verification: null,
+    critic: null,
+    criticRetriesUsed: 0,
+    prQueued: false,
+    staleBase: false,
+    ...over,
+  });
+
+  it("renders the offline-queue note in the Result section when prQueued", () => {
+    const { ticket, done, failed } = sandbox();
+    const { dst, status } = finalizePr(ticket, ok, outcome({ prQueued: true }), {
+      dirs: { done, failed },
+    });
+    expect(status).toBe("completed");
+    expect(dst.startsWith(done)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain(
+      "PR queued for offline push — junco will open it automatically when GitHub is reachable.",
+    );
+  });
+
+  it("omits the note on a normal PR finalize", () => {
+    const { ticket, done, failed } = sandbox();
+    const { dst } = finalizePr(
+      ticket,
+      ok,
+      outcome({ prUrl: "https://github.com/owner/repo/pull/1", pushed: true }),
+      { dirs: { done, failed } },
+    );
+    expect(readFileSync(dst, "utf8")).not.toContain("PR queued for offline push");
   });
 });

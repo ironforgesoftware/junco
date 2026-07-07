@@ -201,6 +201,11 @@ export async function runWithRetry<T>(
 // git / gh wrappers
 // ---------------------------------------------------------------------------
 
+/** git/gh call options: RunOpts + opt-in network retry. `retryBaseDelayMs`
+ * overrides runWithRetry's base backoff (default 1000ms) — it exists so tests
+ * that script network failures don't eat seconds of real backoff. */
+export type GitCallOpts = RunOpts & { retryNetwork?: boolean; retryBaseDelayMs?: number };
+
 /**
  * Run a git command via `cfg.gitBin`.
  * If `retryNetwork` is true, wraps in `runWithRetry` with label `git <subcommand>`.
@@ -208,14 +213,14 @@ export async function runWithRetry<T>(
 export async function git(
   cfg: { gitBin: string },
   args: string[],
-  opts?: RunOpts & { retryNetwork?: boolean },
+  opts?: GitCallOpts,
 ): Promise<CmdResult> {
-  const { retryNetwork, ...runOpts } = opts ?? {};
+  const { retryNetwork, retryBaseDelayMs, ...runOpts } = opts ?? {};
   const argv = [cfg.gitBin, ...args];
   const label = `git ${args[0] ?? ""}`;
 
   if (retryNetwork) {
-    return runWithRetry(label, () => runCmd(argv, runOpts));
+    return runWithRetry(label, () => runCmd(argv, runOpts), { baseDelayMs: retryBaseDelayMs });
   }
   return runCmd(argv, runOpts);
 }
@@ -227,14 +232,14 @@ export async function git(
 export async function gh(
   cfg: { ghBin: string },
   args: string[],
-  opts?: RunOpts & { retryNetwork?: boolean },
+  opts?: GitCallOpts,
 ): Promise<CmdResult> {
-  const { retryNetwork, ...runOpts } = opts ?? {};
+  const { retryNetwork, retryBaseDelayMs, ...runOpts } = opts ?? {};
   const argv = [cfg.ghBin, ...args];
   const label = `gh ${args.slice(0, 2).join(" ")}`;
 
   if (retryNetwork) {
-    return runWithRetry(label, () => runCmd(argv, runOpts));
+    return runWithRetry(label, () => runCmd(argv, runOpts), { baseDelayMs: retryBaseDelayMs });
   }
   return runCmd(argv, runOpts);
 }

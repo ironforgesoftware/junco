@@ -36,7 +36,8 @@ import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./criti
 import { buildPromptWithRepoContext } from "./prPrompt.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
 import { GuardManager } from "./agent/guardManager.js";
-import { finalizePr, type TerminalDirs } from "./finalize.js";
+import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
+import { enqueueOp, isOffline } from "./githubOutbox.js";
 import { queuePaths } from "./config.js";
 import { log } from "./logging.js";
 
@@ -61,6 +62,9 @@ export interface PrOutcome {
   /** PR endgame (push/create-PR/finalize comment+label) was parked in the
    * outbox because GitHub was unreachable — set in Task 4. */
   prQueued: boolean;
+  /** The base branch could not be fetched (offline) so the worktree was cut
+   * from a possibly-stale local `origin/<base>` — buildPrBody flags it. */
+  staleBase: boolean;
 }
 
 function emptyPrOutcome(ctx: RepoContext): PrOutcome {
@@ -79,6 +83,7 @@ function emptyPrOutcome(ctx: RepoContext): PrOutcome {
     critic: null,
     criticRetriesUsed: 0,
     prQueued: false,
+    staleBase: false,
   };
 }
 
@@ -203,6 +208,10 @@ export function buildPrBody(
     );
   }
 
+  if (prOutcome.staleBase) {
+    parts.push("> ⚠️ Built offline from a possibly stale base — rebase check recommended.");
+  }
+
   // Critic banner (pass / missing).
   const critic = prOutcome.critic;
   if (critic && critic.status === "missing") {
@@ -288,6 +297,9 @@ export interface PrFlowDeps {
   abortSignal?: AbortSignal;
   /** Live progress hook (turns, last tool, output tokens) for /health. */
   onProgress?: (p: { turns: number; lastTool: string | null; outputTokens: number }) => void;
+  /** Network-retry backoff base for fetch/push/PR-create (default 1000ms) —
+   * tests that script offline failures pass ~5ms so the suite stays fast. */
+  retryBaseDelayMs?: number;
 }
 
 export async function runPrFlow(
@@ -358,8 +370,13 @@ export async function runPrFlow(
   let wtPath: string;
   let preRunHead: string;
   try {
-    wtPath = await prepareWorktree(cfg, ctx, task.id);
+    const wtSignals = { staleBase: false };
+    wtPath = await prepareWorktree(cfg, ctx, task.id, {
+      signals: wtSignals,
+      retryBaseDelayMs: deps.retryBaseDelayMs,
+    });
     prOutcome.worktreePath = wtPath;
+    prOutcome.staleBase = wtSignals.staleBase;
     preRunHead = await currentHeadSha(cfg, wtPath);
   } catch (e) {
     if (!(e instanceof GitOpError)) throw e;
@@ -440,6 +457,32 @@ export async function runPrFlow(
     prOutcome.worktreePreserved = true;
     return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
   }
+
+  // Park the whole push → PR → comment → labels sequence in the outbox when
+  // GitHub is unreachable — the ticket's work is already committed locally, so
+  // it finalizes DONE and the durable op replays the network side effects when
+  // connectivity returns. `pushed` records whether the branch already landed.
+  const queueOfflinePr = (pushed: boolean): string => {
+    const title = derivePrTitle(ctx, task);
+    const bodyText = buildPrBody(task, ctx, prOutcome, result);
+    const status = computePrStatus(result, prOutcome, null);
+    return enqueueOp(cfg, "prflow", {
+      kind: "pr",
+      repoPath: ctx.repo,
+      branch: ctx.branchName,
+      nwo,
+      issue: task.github?.issue ?? null,
+      base: ctx.baseBranch,
+      title,
+      bodyText,
+      draft: ctx.draft,
+      labels: ctx.labels,
+      reviewers: ctx.reviewers,
+      finalize: task.github ? { ticketId: task.id, status, finalText: result.finalText } : null,
+      pushed,
+      prUrl: null,
+    });
+  };
 
   // --- Phases 6-13: commits, push, PR. Any GitOpError → preserve + failed. ---
   try {
@@ -610,11 +653,33 @@ export async function runPrFlow(
     }
 
     // Phase 11: push.
-    await pushBranch(cfg, wtPath, ctx.branchName);
+    await pushBranch(cfg, wtPath, ctx.branchName, deps.retryBaseDelayMs);
     prOutcome.pushed = true;
     log.info(`pushed ${ctx.branchName} (${newCommits} new commit${newCommits === 1 ? "" : "s"})`);
   } catch (e) {
     if (!(e instanceof GitOpError)) throw e;
+    if (isOffline(e) && !isAmend(ctx)) {
+      // Offline fresh-PR endgame: the branch never pushed — park the whole
+      // push → PR → comment → labels sequence in one composite op. The work is
+      // DONE locally, so the ticket finalizes as it earned (no phaseError).
+      const opId = queueOfflinePr(false /* pushed */);
+      prOutcome.prQueued = true;
+      prOutcome.worktreePreserved = true;
+      log.info(`github unreachable — PR queued to outbox (${opId})`);
+      return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
+    }
+    if (isOffline(e) && isAmend(ctx)) {
+      // Offline amend: only the push is unknown; the PR URL is already known, so
+      // the reporter posts its normal finalize comment (which itself queues if
+      // still offline). Just park the push.
+      enqueueOp(cfg, "prflow", { kind: "push", repoPath: ctx.repo, branch: ctx.branchName });
+      prOutcome.prQueued = false; // URL known; reporter comment proceeds normally
+      prOutcome.pushed = false;
+      prOutcome.worktreePreserved = true;
+      prOutcome.prUrl = amendTarget?.prUrl ?? null;
+      log.info("github unreachable — amend push queued to outbox");
+      return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
+    }
     const phaseError = `push/commit failed: ${e.message}`;
     prOutcome.worktreePreserved = true;
     log.error(phaseError);
@@ -638,7 +703,14 @@ export async function runPrFlow(
       const bodyText = buildPrBody(task, ctx, prOutcome, result);
       const bodyFile = writePrBodyTempfile(bodyText);
       try {
-        prOutcome.prUrl = await openPullRequest(cfg, ctx, nwo, title, bodyFile);
+        prOutcome.prUrl = await openPullRequest(
+          cfg,
+          ctx,
+          nwo,
+          title,
+          bodyFile,
+          deps.retryBaseDelayMs,
+        );
       } finally {
         try {
           rmSync(bodyFile, { force: true });
@@ -649,6 +721,16 @@ export async function runPrFlow(
       log.info(`opened PR ${prOutcome.prUrl} for ${claimedPath}`);
     } catch (e) {
       if (!(e instanceof GitOpError)) throw e;
+      if (isOffline(e)) {
+        // Push already succeeded; only the PR-create (+ comment + labels) is
+        // unreachable — checkpoint pushed:true so replay skips straight to the
+        // create. Worktree is preserved (skip cleanup on every offline branch).
+        const opId = queueOfflinePr(true /* pushed */);
+        prOutcome.prQueued = true;
+        prOutcome.worktreePreserved = true;
+        log.info(`github unreachable — PR queued to outbox (${opId})`);
+        return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
+      }
       const phaseError = `gh pr create failed (branch pushed, open manually): ${e.message}`;
       log.error(phaseError);
       if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
