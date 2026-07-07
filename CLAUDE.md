@@ -39,6 +39,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 - Scheduler/daemon tests: an instant-resolve fake `sleep` starves the macrotask queue (the loop spins on microtasks; `setTimeout`-based fake tasks never settle → OOM). Yield a real tick: `await new Promise((r) => setTimeout(r, 1))`.
 - Repo/PR/worktree tests run a real git harness (bare remote + clone in tmp); they need `git config user.*` (CI sets it globally).
 - Prettier may reformat files between your read and your edit; re-read before editing and run `npx prettier --write` on touched files before committing.
+- Ink/TUI tests: never assert one fixed `setTimeout` tick after a state change — slow CI runners race React's commit (this flaked a release gate). Loop-until-condition with a bounded retry, then assert.
 
 ## The repo doubles as the maintainer's live runtime — do not disturb
 
@@ -59,7 +60,7 @@ SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
 
 - Branch `feat/<topic>` off `main`; conventional commits (`feat:`, `fix:`, `refactor:`, `chore:`, optional scope); suite green at every commit.
 - **No AI attribution, ever:** no `Co-Authored-By: Claude` trailers, no "Generated with Claude Code" lines. Subagent-driven commits auto-append the trailer — amend it away before finishing.
-- **Release HOLD (absolute):** never push, tag, `gh release create`, or publish without the maintainer's explicit, per-release approval — generic approval of the work does not cover release actions. Once approved, the flow is: bump `package.json` + `CHANGELOG.md` (Keep a Changelog) → merge to `main` → push → CI green → annotated tag `vX.Y.Z` → `gh release create vX.Y.Z` (this triggers `.github/workflows/publish.yml` → npm publish with provenance) → verify with `npm view @ironforgesoftware/junco version`.
+- **Release HOLD (absolute):** never push, tag, `gh release create`, or publish without the maintainer's explicit, per-release approval — generic approval of the work does not cover release actions. Once approved, the flow is: bump `package.json` + `CHANGELOG.md` (Keep a Changelog) → merge to `main` → push → CI green → annotated tag `vX.Y.Z` → `gh release create vX.Y.Z` (this triggers `.github/workflows/publish.yml` → npm publish with provenance) → verify with `npm view @ironforgesoftware/junco version`. `publish.yml` checks out the TAG — a gate-blocking fix after tagging means delete release+tag, fix, re-tag, re-release (harmless while nothing reached npm).
 - The npm package ships only the `files` allowlist (`dist`, `templates`, `skills`, `examples`, README/CHANGELOG/LICENSE). Everything that ships is **stack-agnostic**: no personal-setup strings in wizard text, templates, README, or the `junco-dispatch` skill; user-visible runtime text says "inference endpoint", never a specific server.
 
 ## Maintaining this file
