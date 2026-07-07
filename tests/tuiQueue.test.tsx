@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { QueueStrip } from "../src/tui/components/QueueStrip.js";
 import { QueueView } from "../src/tui/components/QueueView.js";
 import { queueLabel, fmtElapsed, fmtAge, fmtTokens, fmtClock } from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
@@ -98,70 +97,8 @@ describe("queueFmt", () => {
   });
 });
 
-describe("QueueStrip", () => {
-  it("renders loading, idle, and error variants", () => {
-    expect(render(<QueueStrip snap={null} now={NOW} />).lastFrame()).toContain("queue — loading…");
-    expect(render(<QueueStrip snap={IDLE} now={NOW} />).lastFrame()).toContain("queue — idle");
-    expect(
-      render(<QueueStrip snap={{ ...IDLE, error: "clock boom" }} now={NOW} />).lastFrame(),
-    ).toContain("queue unavailable: clock boom");
-  });
-
-  it("renders counts, running progress, and the next-up line", () => {
-    const frame = render(<QueueStrip snap={BUSY} now={NOW} />).lastFrame()!;
-    expect(frame).toContain("queue — 1 running · 4 waiting");
-    expect(frame).toContain("#46 exec");
-    expect(frame).toContain("turn 14");
-    expect(frame).toContain("bash");
-    expect(frame).toContain("12.3k tok");
-    expect(frame).toContain("4m32s");
-    expect(frame).toContain("next:");
-    expect(frame).toContain("1) #51 plan");
-    expect(frame).toContain("2) manual-tide-fix");
-    expect(frame).toContain("⏲3) #52 plan"); // deferred marker
-    expect(frame).toContain("+1 more");
-    expect(frame).toContain("[t]");
-  });
-
-  it("shows max only when maxConcurrent > 1", () => {
-    expect(render(<QueueStrip snap={BUSY} now={NOW} />).lastFrame()).not.toContain("max");
-    expect(
-      render(<QueueStrip snap={{ ...BUSY, maxConcurrent: 3 }} now={NOW} />).lastFrame(),
-    ).toContain("· max 3");
-  });
-
-  it("daemon down: warning + stale running line", () => {
-    const down: QueueSnapshot = {
-      ...BUSY,
-      daemonUp: false,
-      running: [{ ...BUSY.running[0], turns: null, startedAt: null, stale: true }],
-    };
-    const frame = render(<QueueStrip snap={down} now={NOW} />).lastFrame()!;
-    expect(frame).toContain("daemon ○ down — nothing will run");
-    expect(frame).toContain("processing (daemon down)");
-  });
-
-  it("caps running lines at 2 with +N more", () => {
-    const many: QueueSnapshot = {
-      ...IDLE,
-      maxConcurrent: 4,
-      running: [1, 2, 3].map((n) => ({
-        id: `t-${n}`,
-        github: null,
-        turns: n,
-        lastTool: "bash",
-        outputTokens: 100,
-        startedAt: null,
-        stale: false,
-      })),
-    };
-    const frame = render(<QueueStrip snap={many} now={NOW} />).lastFrame()!;
-    expect(frame).toContain("t-1");
-    expect(frame).toContain("t-2");
-    expect(frame).not.toContain("turn 3");
-    expect(frame).toContain("+1 more running");
-  });
-});
+// QueueStrip was deleted in the workspace switch; the rail's compact queue card
+// (tests/tuiRail.test.tsx) covers its role now.
 
 describe("QueueView", () => {
   const FULL: QueueSnapshot = {

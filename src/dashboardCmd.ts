@@ -55,8 +55,11 @@ export async function runDashboard(
     import("react"),
     import("ink"),
   ]);
+  // Alt buffer — fullscreen, zero scrollback pollution, terminal restored on
+  // exit; a no-op when non-interactive, and the TTY guard exits before this anyway.
   const renderFn =
-    deps.renderFn ?? ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true }));
+    deps.renderFn ??
+    ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true, alternateScreen: true }));
 
   const client = makeGhDashboardClient(cfg);
   const instance = renderFn(

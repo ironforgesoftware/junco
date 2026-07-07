@@ -56,6 +56,7 @@ describe("CommandOutput", () => {
         scroll={0}
         exitCode={null}
         timedOut={false}
+        height={24}
       />,
     );
     const f = lastFrame()!;
@@ -73,6 +74,7 @@ describe("CommandOutput", () => {
         scroll={0}
         exitCode={0}
         timedOut={false}
+        height={24}
       />,
     );
     const f = lastFrame()!;
@@ -91,6 +93,7 @@ describe("CommandOutput", () => {
         scroll={0}
         exitCode={null}
         timedOut={true}
+        height={24}
       />,
     );
     expect(lastFrame()).toContain("timed out");

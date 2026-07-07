@@ -30,7 +30,13 @@ export function QueueView({
 }): React.JSX.Element {
   if (snap === null) {
     return (
-      <Box borderStyle="round" paddingX={1} flexGrow={1}>
+      <Box
+        borderStyle="round"
+        borderColor={focused ? theme.accent : theme.border}
+        paddingX={1}
+        flexGrow={1}
+        height={height}
+      >
         <Text dimColor>queue — loading…</Text>
       </Box>
     );

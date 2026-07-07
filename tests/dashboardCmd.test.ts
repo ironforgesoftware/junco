@@ -82,4 +82,10 @@ describe("lazy loading discipline", () => {
     expect(src).not.toMatch(/^import .* from "\.\/dashboardCmd\.js"/m);
     expect(src).not.toMatch(/from "ink"/);
   });
+
+  it("renders the dashboard on the alternate screen buffer (fullscreen)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/dashboardCmd.ts", import.meta.url), "utf8");
+    expect(src).toContain("alternateScreen: true");
+  });
 });
