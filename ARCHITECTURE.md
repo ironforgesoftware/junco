@@ -156,7 +156,7 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 
 | File                    | Responsibility                                                                                                                                                                                                  |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cli.ts`                | Entrypoint; subcommands `start`, `run-once`, `submit`, `inbox-path`, `status`, `list`, `retry`, `doctor`, `logs`, `schema`, `init`, `service`. Exposes testable `run(argv, deps)`.                              |
+| `cli.ts`                | Entrypoint; subcommands `start`, `run-once`, `submit`, `inbox-path`, `status`, `list`, `retry`, `doctor`, `dashboard`, `logs`, `schema`, `init`, `service`. Exposes testable `run(argv, deps)`.                 |
 | `daemon.ts`             | `mainLoop`, `runScheduler` (max_concurrent > 1), `StopFlag` (+ forceSignal), `installSignalHandlers`, `sleepInterruptible`.                                                                                     |
 | `lock.ts`               | Single-instance lock — pidfile + PID-liveness stale detection.                                                                                                                                                  |
 | `orphans.ts`            | `recoverOrphans`: requeue crashed tickets (budget permitting), else → `failed/`.                                                                                                                                |
@@ -198,6 +198,9 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 | `retryCmd.ts`           | `junco retry` — clean failed tickets and resubmit to the inbox.                                                                                                                                                 |
 | `doctor.ts`             | `junco doctor` — preflight config/toolchain/endpoint/model/dirs.                                                                                                                                                |
 | `logsCmd.ts`            | `junco logs` — tail/follow the state-dir worker.log.                                                                                                                                                            |
+| `watchlist.ts`          | Dynamic watchlist; `resolveWatchedRepos` — config ∪ file, config wins; bridge reads per sweep.                                                                                                                  |
+| `tui/`                  | Ink dashboard: pure state derivation, gh client seam, components, App.                                                                                                                                          |
+| `dashboardCmd.ts`       | `junco dashboard` — TTY guard + lazy Ink load.                                                                                                                                                                  |
 
 ---
 

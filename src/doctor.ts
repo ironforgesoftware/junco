@@ -15,6 +15,7 @@ import { splitModelId } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
+import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -151,10 +152,11 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         );
       }
 
-      if (cfg.github.repos.length === 0) {
+      const watchedRepos = resolveWatchedRepos(cfg);
+      if (watchedRepos.length === 0) {
         report("warn", "github", "enabled but no repos configured — the bridge will idle");
       }
-      for (const repo of cfg.github.repos) {
+      for (const repo of watchedRepos) {
         const origin = await execFn(cfg.gitBin, ["-C", repo.path, "remote", "get-url", "origin"]);
         const actual = origin.code === 0 ? nwoFromRemoteUrl(origin.stdout.trim()) : null;
         if (actual === null || actual.toLowerCase() !== repo.nwo.toLowerCase()) {
@@ -174,6 +176,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           view.code === 0 ? repo.path : "not reachable via gh (auth? spelling?)",
         );
       }
+      report("ok", "github watchlist", watchlistPath(cfg));
     }
 
     // 8. daemon (informational)

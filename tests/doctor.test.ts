@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runDoctor, type DoctorDeps } from "../src/doctor.js";
+import { writeWatchlist } from "../src/watchlist.js";
 import type { Config } from "../src/types.js";
 
 const okConfig = {
@@ -222,5 +226,27 @@ describe("runDoctor github checks", () => {
     );
     expect(code).toBe(1);
     expect(lines.join("")).toMatch(/✗ github repo acme\/api — not reachable/);
+  });
+
+  it("validates watchlist entries alongside config mappings", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-wl-"));
+    writeWatchlist(join(stateDir, "github-watchlist.json"), [
+      { nwo: "alx/coral", path: "/tmp/coral" },
+    ]);
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () => ({ ...githubConfig([]), stateDir }) as Config,
+        execFn: async (_cmd: string, args: string[]) =>
+          args.includes("get-url")
+            ? { code: 0, stdout: "https://github.com/alx/coral.git\n", stderr: "" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toContain("✓ github repo alx/coral");
+    expect(lines.join("")).toContain("watchlist");
   });
 });

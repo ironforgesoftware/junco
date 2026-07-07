@@ -227,6 +227,7 @@ All commands accept `--config <path>` to point at a non-default `config.toml`. W
 | `junco list [box]` | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses. |
 | `junco retry <name…\|--all>` | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped. |
 | `junco doctor` | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/state dirs writable. |
+| `junco dashboard` | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. Needs a real TTY. |
 | `junco logs [-f] [-n N] [--json]` | Tail (or follow) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`. |
 | `junco --help` / `-h` | Print usage. |
 
@@ -512,6 +513,38 @@ When the execution ticket finalizes, Junco posts **one comment** — PR link plu
 **Team workflow.** Planning is automatic now, so hand-drafting the task issue is optional rather than required: label a raw bug report and Junco drafts the plan itself, posts it for review, and you approve or edit before anything runs. If a report issue already has a task sub-issue with a concrete plan, label the sub-issue instead — Junco automatically appends the parent issue's title and body as background context for the planner, and closing the sub-issue rolls up into the parent's progress. Either way, nothing executes until a human has seen a concrete plan (or you've deliberately opted out via `require_approval = false`).
 
 **Operational notes.** `junco doctor` checks each repo mapping (clone exists, origin matches, repo reachable via `gh`) and that the planner template (`skills/junco-dispatch/TEMPLATE.md`) is readable — that check fails preflight rather than warns, since an unreadable template fails every planning ticket. `junco status` and `/health` report sweep counts. Polling cost is a small, fixed number of API calls per repo per sweep against a 5,000/hr authenticated limit — still negligible. Auth is whatever `gh auth login` already holds; there are no new secrets. If GitHub is unreachable, sweeps skip and the local queue keeps running, and most lost label flips or comments are cosmetic (the queue files and the PR are the source of truth) — with one exception. On the **plan hop**, if the `junco:planning → junco:plan-ready` flip is lost _after_ the plan comment has already posted, the issue strands in `junco:planning` and won't advance to review on its own (the bridge won't re-plan an issue that still carries `junco:planning`). Recover by hand: apply `junco:plan-ready` yourself (the plan comment is already on the thread), or remove `junco:planning` to re-plan from scratch.
+
+### Dashboard
+
+`junco dashboard` is an interactive terminal UI over the same GitHub-integrated mode described above — a faster loop than watching labels change on the web. It needs an interactive terminal; run it from a real TTY, not piped or backgrounded.
+
+The screen has three zones:
+
+- **Repos pane** (left) — every watched repo, with a per-state issue-count badge (plan-ready / working / failed) and a `(cfg)` marker on entries that came from `config.toml` rather than the watchlist.
+- **Issues pane** (right) — the selected repo's trigger-labeled issues, newest-relevant first, each showing a lifecycle glyph and its current state badge (planning / plan-ready / approved / queued / working / done / failed / denied).
+- **Status bar** (bottom) — daemon health (up/down, uptime, tickets bridged) plus a transient toast for the last action's result. Hints stay minimal (`? keys · q quit`); the full key list is under `?`.
+
+Keys:
+
+| Key              | Action                                                                                                                                                                                              |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `j` / `k`        | move selection (repo or issue, depending on the focused pane)                                                                                                                                       |
+| `tab`, `h` / `l` | switch panes (repos ↔ issues)                                                                                                                                                                       |
+| `enter`          | open issue detail — full body plus the posted plan comment, in-terminal, before you decide                                                                                                          |
+| `d`              | dispatch (adds the trigger label)                                                                                                                                                                   |
+| `D`              | dispatch as ask — read-only Q&A, no plan, no PR                                                                                                                                                     |
+| `a`              | approve the posted plan (only available once a plan is ready)                                                                                                                                       |
+| `R`              | re-plan or re-cycle, whichever applies to the issue's current state                                                                                                                                 |
+| `o`              | open the issue in your browser                                                                                                                                                                      |
+| `A`              | add a repo to the watchlist — validates the local clone's origin against the given `owner/repo`, confirms the repo is reachable via `gh`, and creates the trigger label if it doesn't already exist |
+| `x`              | unwatch a repo (watchlist entries only — entries from `config.toml` are read-only in the dashboard and report where they're defined instead)                                                        |
+| `r`              | refresh the current repo's issues now                                                                                                                                                               |
+| `?`              | show/hide the full key list                                                                                                                                                                         |
+| `q`              | quit                                                                                                                                                                                                |
+
+Every action is an ordinary label mutation made through your own `gh` auth — the same trust model as labeling an issue by hand on GitHub. Dispatch/approve/re-plan don't run anything themselves; they just move labels that the daemon's sweep acts on.
+
+Repos added with `A` (and removed with `x`) live in a small JSON watchlist file at `<state_dir>/github-watchlist.json`, separate from `config.toml`. The daemon's bridge sweep re-reads this file every sweep, so watchlist changes take effect without a restart. Where a repo appears in both, the `config.toml` `[[github.repos]]` entry wins — that's also why config-sourced repos aren't removable from the dashboard.
 
 ---
 
