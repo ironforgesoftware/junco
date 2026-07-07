@@ -468,9 +468,10 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (key.tab) return void setPane((p) => (p === "repos" ? "issues" : "repos"));
-    if (input === "h" || input === "w") return void setPane("repos");
+    if (input === "h") return void setPane("repos");
     if (input === "l" || input === "i") return void setPane("issues");
-    if (input === "A") {
+    // `w` is the watchlist key (opens add-repo); `A` remains as an alias.
+    if (input === "A" || input === "w") {
       if (watchlistError) {
         setToast("watchlist unreadable — fix it before adding");
         return;

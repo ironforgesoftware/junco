@@ -527,23 +527,24 @@ The screen has three zones:
 
 Keys:
 
-| Key              | Action                                                                                                                                                                                              |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `j` / `k`        | move selection (repo or issue, depending on the focused pane)                                                                                                                                       |
-| `tab`, `h` / `l` | switch panes (repos ↔ issues)                                                                                                                                                                       |
-| `w` / `i`        | jump straight to the watched-repos pane / the issues pane                                                                                                                                           |
-| `enter`          | open issue detail — full body plus the posted plan comment, in-terminal, before you decide                                                                                                          |
-| `d`              | dispatch (adds the trigger label)                                                                                                                                                                   |
-| `D`              | dispatch as ask — read-only Q&A, no plan, no PR                                                                                                                                                     |
-| `a`              | approve the posted plan (only available once a plan is ready)                                                                                                                                       |
-| `R`              | re-plan or re-cycle, whichever applies to the issue's current state                                                                                                                                 |
-| `o`              | open the issue in your browser                                                                                                                                                                      |
-| `A`              | add a repo to the watchlist — validates the local clone's origin against the given `owner/repo`, confirms the repo is reachable via `gh`, and creates the trigger label if it doesn't already exist |
-| `x`              | unwatch a repo (watchlist entries only — entries from `config.toml` are read-only in the dashboard and report where they're defined instead)                                                        |
-| `r`              | refresh the current repo's issues now                                                                                                                                                               |
-| `:`              | command palette — run junco CLI subcommands without leaving the dashboard (see below)                                                                                                               |
-| `?`              | show/hide the full key list                                                                                                                                                                         |
-| `q`              | quit                                                                                                                                                                                                |
+| Key              | Action                                                                                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `j` / `k`        | move selection (repo or issue, depending on the focused pane)                                                                                                                        |
+| `tab`, `h` / `l` | switch panes (repos ↔ issues)                                                                                                                                                        |
+| `w`              | add a repo to the watchlist (same as `A`)                                                                                                                                            |
+| `i`              | jump straight to the issues pane                                                                                                                                                     |
+| `enter`          | open issue detail — full body plus the posted plan comment, in-terminal, before you decide                                                                                           |
+| `d`              | dispatch (adds the trigger label)                                                                                                                                                    |
+| `D`              | dispatch as ask — read-only Q&A, no plan, no PR                                                                                                                                      |
+| `a`              | approve the posted plan (only available once a plan is ready)                                                                                                                        |
+| `R`              | re-plan or re-cycle, whichever applies to the issue's current state                                                                                                                  |
+| `o`              | open the issue in your browser                                                                                                                                                       |
+| `A`              | alias of `w` — validates the local clone's origin against the given `owner/repo`, confirms the repo is reachable via `gh`, and creates the trigger label if it doesn't already exist |
+| `x`              | unwatch a repo (watchlist entries only — entries from `config.toml` are read-only in the dashboard and report where they're defined instead)                                         |
+| `r`              | refresh the current repo's issues now                                                                                                                                                |
+| `:`              | command palette — run junco CLI subcommands without leaving the dashboard (see below)                                                                                                |
+| `?`              | show/hide the full key list                                                                                                                                                          |
+| `q`              | quit                                                                                                                                                                                 |
 
 Every action is an ordinary label mutation made through your own `gh` auth — the same trust model as labeling an issue by hand on GitHub. Dispatch/approve/re-plan don't run anything themselves; they just move labels that the daemon's sweep acts on.
 

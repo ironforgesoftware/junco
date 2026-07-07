@@ -305,20 +305,29 @@ describe("command palette + focus keys", () => {
     return { runs, runCliFn };
   }
 
-  it("w and i jump panes directly (w->repos: j moves the repo cursor)", async () => {
-    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
-    const file = wl2();
-    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
-    const r = renderApp(client, file);
+  it("w opens the add-repo form (the watchlist key; A stays as an alias)", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const r = renderApp(client, wl2());
     await tick();
-    r.stdin.write("i"); // issues pane
+    r.stdin.write("w");
     await tick();
-    r.stdin.write("w"); // back to repos pane
+    expect(r.lastFrame()).toContain("add repo to watchlist");
+    r.stdin.write(ESC);
     await tick();
-    r.stdin.write("j"); // moves the REPO cursor, proving repos pane is focused
+    r.stdin.write("A"); // the alias still works
     await tick();
-    expect(r.lastFrame()!.includes("alx/coral")).toBe(true);
-    expect(/▸ alx\/coral/.test(r.lastFrame()!)).toBe(true);
+    expect(r.lastFrame()).toContain("add repo to watchlist");
+  });
+
+  it("i jumps to the issues pane (d then dispatches the selected issue)", async () => {
+    const { client, actions } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wl2());
+    await tick();
+    r.stdin.write("i"); // issues pane via direct jump — no tab needed
+    await tick();
+    r.stdin.write("d");
+    await tick();
+    expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
   });
 
   it("':' opens the palette; running a command shows its captured output + exit", async () => {
