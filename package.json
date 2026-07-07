@@ -50,6 +50,7 @@
     "lint": "eslint src tests",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\"",
+    "daemon:restart": "npm run build && junco restart",
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {

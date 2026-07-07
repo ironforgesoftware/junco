@@ -228,6 +228,7 @@ All commands accept `--config <path>` to point at a non-default `config.toml`. W
 | `junco retry <name…\|--all>` | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped. |
 | `junco doctor` | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/state dirs writable. |
 | `junco dashboard` | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. Needs a real TTY. |
+| `junco restart` | Restart the supervised daemon so it picks up config and code changes: finds the launchd/systemd user unit referencing your config, kicks it with the platform-correct verb, verifies the pid changed. |
 | `junco logs [-f] [-n N] [--json]` | Tail (or follow) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`. |
 | `junco --help` / `-h` | Print usage. |
 
@@ -604,6 +605,10 @@ systemctl --user enable --now junco
 `junco start` acquires `worker.lock` (next to `config.toml`). If a second instance starts while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
 
 `junco run-once` does **not** acquire the lock — it is safe for cron and dev use alongside a running daemon.
+
+### Restarting after config or code changes
+
+The daemon reads its config and code once at startup. `junco restart` bounces the supervised daemon correctly: it discovers the launchd plist / systemd user unit that references your config path and uses `launchctl kickstart -k` / `systemctl --user restart` — the verbs that relaunch unconditionally. (A plain SIGTERM is _not_ a restart: with launchd's `SuccessfulExit=false` keep-alive, a graceful exit stays down.) It validates the config first — refusing to bounce the daemon onto a config it can't parse — and confirms the new pid before reporting success.
 
 ---
 

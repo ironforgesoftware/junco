@@ -60,6 +60,9 @@ export interface CliDeps {
   runInitWizardFn?: (configPath: string, opts: { yes?: boolean }) => Promise<number>;
   /** The dashboard command (tests inject a spy; default lazily imports dashboardCmd.js). */
   runDashboardFn?: (cfg: Config) => Promise<number>;
+  /** The restart command (takes the RESOLVED config path — it matches service
+   * units and the worker.lock by path, not by parsed config). */
+  runRestartFn?: (configPath: string) => Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +84,7 @@ Subcommands:
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
+  restart      Restart the supervised daemon (picks up config + code changes)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -359,6 +363,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         return runDashboard(c);
       });
     return runDashboardFn(cfg);
+  }
+
+  // ------------------------------------------------------------
+  // restart: kick the service unit supervising this config's daemon so it
+  // picks up config + dist changes. The config is loaded first purely as
+  // fail-fast validation — never bounce the daemon onto a config it can't
+  // parse (the restarted process would crash-loop under its supervisor).
+  // ------------------------------------------------------------
+  if (subcommand === "restart") {
+    try {
+      loadConfigFn(configPath);
+    } catch (e) {
+      process.stderr.write(
+        `config invalid — not restarting: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      return 1;
+    }
+    const runRestartFn =
+      deps.runRestartFn ??
+      (async (p: string) => (await import("./restartCmd.js")).runRestartCommand(p));
+    return runRestartFn(configPath);
   }
 
   // ------------------------------------------------------------

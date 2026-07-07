@@ -652,3 +652,39 @@ describe("run(['dashboard']) — routing", () => {
     expect(got).not.toBeNull();
   });
 });
+
+describe("run(['restart']) — routing", () => {
+  it("routes `restart` to runRestartFn with the RESOLVED config path (config validated first)", async () => {
+    const { cfg } = freshDispatchVault();
+    let gotPath: string | null = null;
+    let loaded = false;
+    const code = await run(["restart", "--config", "/x/config.toml"], {
+      loadConfigFn: () => {
+        loaded = true;
+        return cfg;
+      },
+      runRestartFn: async (p) => {
+        gotPath = p;
+        return 0;
+      },
+    });
+    expect(code).toBe(0);
+    expect(loaded).toBe(true); // broken config fails fast before any kick
+    expect(gotPath).toBe("/x/config.toml");
+  });
+
+  it("a broken config aborts before the restart fn runs", async () => {
+    let ran = false;
+    const code = await run(["restart", "--config", "/x/config.toml"], {
+      loadConfigFn: () => {
+        throw new Error("bad toml");
+      },
+      runRestartFn: async () => {
+        ran = true;
+        return 0;
+      },
+    });
+    expect(code).not.toBe(0);
+    expect(ran).toBe(false);
+  });
+});
