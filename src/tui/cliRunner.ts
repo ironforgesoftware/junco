@@ -1,0 +1,104 @@
+/**
+ * Command-palette roster + subprocess runner.
+ *
+ * The dashboard runs CLI subcommands by SPAWNING the real junco CLI (argv
+ * arrays only — no shell, no injection surface) with the dashboard's own
+ * --config, capturing merged stdout+stderr for the output view. Thin shell:
+ * a future subcommand needs only a roster row here.
+ */
+
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+export interface PaletteCommand {
+  name: string;
+  /** Placeholder hint for the args field; null = takes no args. */
+  argsHint: string | null;
+  description: string;
+  /** Args always prepended when none are typed (e.g. bounded logs). */
+  defaultArgs: string[];
+  /** Non-null = not runnable from the palette; the string is the reason. */
+  excluded: string | null;
+}
+
+const cmd = (
+  name: string,
+  argsHint: string | null,
+  description: string,
+  defaultArgs: string[] = [],
+  excluded: string | null = null,
+): PaletteCommand => ({ name, argsHint, description, defaultArgs, excluded });
+
+/** Mirrors cli.ts USAGE — a consistency test pins runnable names to it. */
+export const PALETTE_COMMANDS: PaletteCommand[] = [
+  cmd("status", null, "Daemon / endpoint / queue health at a glance"),
+  cmd("list", "[box]", "List tickets per queue box (inbox|processing|done|failed)"),
+  cmd("retry", "<name…|--all>", "Move failed tickets back to the inbox"),
+  cmd("doctor", null, "Preflight: config, git, gh auth, endpoint, model, dirs"),
+  cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200"]),
+  cmd("run-once", null, "Process one task and exit (no lock)"),
+  cmd("restart", null, "Restart the supervised daemon"),
+  cmd("service", "[--platform launchd|systemd]", "Render a service file"),
+  cmd("inbox-path", null, "Print the inbox directory path"),
+  cmd("schema", null, "Print the ticket frontmatter JSON Schema"),
+  cmd("submit", "<file|->", "Submit a ticket to the inbox"),
+  cmd("init", null, "Setup wizard", [], "interactive wizard — can't nest inside the dashboard"),
+  cmd("dashboard", null, "This dashboard", [], "already running"),
+  cmd("start", null, "Start the daemon", [], "foreground daemon would block — use restart"),
+];
+
+export interface CliRunResult {
+  code: number | null;
+  output: string;
+  timedOut: boolean;
+}
+
+export interface CliRunnerDeps {
+  spawnFn?: typeof spawn;
+  cliPath?: string;
+  timeoutMs?: number;
+}
+
+// From dist/tui/cliRunner.js, ../cli.js is dist/cli.js — the shipped entry.
+// (Tests always inject cliPath; the default only runs in a built tree.)
+const DEFAULT_CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
+
+/** Run one subcommand; resolves ALWAYS (errors land in `output`). */
+export function runCliCommand(
+  configPath: string,
+  name: string,
+  extraArgs: string[],
+  deps: CliRunnerDeps = {},
+): Promise<CliRunResult> {
+  const spawnFn = deps.spawnFn ?? spawn;
+  const cliPath = deps.cliPath ?? DEFAULT_CLI_PATH;
+  const timeoutMs = deps.timeoutMs ?? 120_000;
+
+  return new Promise((resolvePromise) => {
+    const chunks: string[] = [];
+    let settled = false;
+    let timedOut = false;
+    const child = spawnFn(process.execPath, [cliPath, name, ...extraArgs, "--config", configPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+
+    const settle = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise({ code: timedOut ? null : code, output: chunks.join(""), timedOut });
+    };
+
+    child.stdout?.on("data", (d: Buffer) => chunks.push(d.toString()));
+    child.stderr?.on("data", (d: Buffer) => chunks.push(d.toString()));
+    child.on("close", (code: number | null) => settle(code));
+    child.on("error", (e: Error) => {
+      chunks.push(String(e.message ?? e));
+      settle(null);
+    });
+  });
+}
