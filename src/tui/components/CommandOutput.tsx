@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { Spinner } from "./Spinner.js";
 
 const VISIBLE_LINES = 24;
 
@@ -31,7 +32,14 @@ export function CommandOutput({
     <Box flexDirection="column" borderStyle="round" paddingX={1} flexGrow={1}>
       <Text bold>
         {title}{" "}
-        <Text color={running ? "cyan" : timedOut || exitCode ? "red" : "green"}>[{status}]</Text>
+        <Text color={running ? "cyan" : timedOut || exitCode ? "red" : "green"}>
+          {running && (
+            <>
+              <Spinner />{" "}
+            </>
+          )}
+          [{status}]
+        </Text>
       </Text>
       {visible.map((l, i) => (
         <Text key={i} wrap="truncate-end">

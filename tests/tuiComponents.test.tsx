@@ -5,6 +5,7 @@ import { RepoList } from "../src/tui/components/RepoList.js";
 import { IssueTable } from "../src/tui/components/IssueTable.js";
 import { StatusBar } from "../src/tui/components/StatusBar.js";
 import { HelpOverlay } from "../src/tui/components/HelpOverlay.js";
+import { CommandOutput } from "../src/tui/components/CommandOutput.js";
 
 describe("RepoList", () => {
   it("marks the selected repo, config entries, and per-state counts", () => {
@@ -148,5 +149,68 @@ describe("ShortcutBar", () => {
     expect(render(<ShortcutBar view="palette" pane="repos" />).lastFrame()).toContain("enter run");
     expect(render(<ShortcutBar view="cmdOutput" pane="repos" />).lastFrame()).toContain("re-run");
     expect(render(<ShortcutBar view="addRepo" pane="repos" />).lastFrame()).toContain("cancel");
+  });
+});
+
+describe("cursor + spinner polish", () => {
+  it("Spinner animates through the braille frames", async () => {
+    const { Spinner, SPINNER_FRAMES } = await import("../src/tui/components/Spinner.js");
+    const r = render(<Spinner />);
+    const first = r.lastFrame()!;
+    expect(SPINNER_FRAMES.some((f: string) => first.includes(f))).toBe(true);
+    await new Promise((res) => setTimeout(res, 250));
+    expect(r.lastFrame()).not.toBe(first); // frame advanced
+    r.unmount();
+  });
+
+  it("TextField shows a block cursor on the focused field — even when empty", async () => {
+    const { TextField } = await import("../src/tui/components/TextField.js");
+    const focusedEmpty = render(
+      <TextField
+        value=""
+        onChange={() => {}}
+        onSubmit={() => {}}
+        focus={true}
+        placeholder="hint"
+      />,
+    ).lastFrame()!;
+    expect(focusedEmpty).toContain("█");
+    expect(focusedEmpty).toContain("hint");
+    const blurredEmpty = render(
+      <TextField
+        value=""
+        onChange={() => {}}
+        onSubmit={() => {}}
+        focus={false}
+        placeholder="hint"
+      />,
+    ).lastFrame()!;
+    expect(blurredEmpty).not.toContain("█");
+    const focusedFilled = render(
+      <TextField
+        value="acme"
+        onChange={() => {}}
+        onSubmit={() => {}}
+        focus={true}
+        placeholder="hint"
+      />,
+    ).lastFrame()!;
+    expect(focusedFilled).toContain("acme█");
+  });
+
+  it("CommandOutput shows a spinner glyph while running", async () => {
+    const { SPINNER_FRAMES } = await import("../src/tui/components/Spinner.js");
+    const f = render(
+      <CommandOutput
+        title="junco doctor"
+        running={true}
+        elapsedS={1}
+        output=""
+        scroll={0}
+        exitCode={null}
+        timedOut={false}
+      />,
+    ).lastFrame()!;
+    expect(SPINNER_FRAMES.some((g: string) => f.includes(g))).toBe(true);
   });
 });

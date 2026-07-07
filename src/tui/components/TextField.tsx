@@ -24,9 +24,20 @@ export function TextField({
     },
     { isActive: focus },
   );
-  return value === "" ? (
-    <Text dimColor>{placeholder}</Text>
-  ) : (
-    <Text>{value + (focus ? "▏" : "")}</Text>
+  // The block cursor marks the ACTIVE field — including when it's empty, so
+  // the operator always sees where their keystrokes will land.
+  if (value === "") {
+    return (
+      <Text>
+        {focus && <Text color="cyan">█</Text>}
+        <Text dimColor>{placeholder}</Text>
+      </Text>
+    );
+  }
+  return (
+    <Text>
+      {value}
+      {focus && <Text color="cyan">█</Text>}
+    </Text>
   );
 }

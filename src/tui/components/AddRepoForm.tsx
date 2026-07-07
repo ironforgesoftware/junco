@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { TextField } from "./TextField.js";
+import { Spinner } from "./Spinner.js";
 
 export function AddRepoForm({
   error,
@@ -53,7 +54,11 @@ export function AddRepoForm({
         />
       </Box>
       <Text dimColor>Leave the clone path empty and junco clones the repo for you.</Text>
-      {busyText && <Text color="cyan">{busyText}</Text>}
+      {busyText && (
+        <Text color="cyan">
+          <Spinner /> {busyText}
+        </Text>
+      )}
       {error && <Text color="red">{error}</Text>}
       <Text dimColor>enter next/submit · esc cancel</Text>
     </Box>

@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { DashIssue } from "../state.js";
 import { deriveState, stateMeta } from "../state.js";
+import { Spinner } from "./Spinner.js";
 
 const VISIBLE_LINES = 24;
 
@@ -41,7 +42,11 @@ export function IssueDetail({
         #{issue.number} {issue.title}{" "}
         <Text color={stateMeta(st).color}>[{stateMeta(st).badge}]</Text>
       </Text>
-      {loading && <Text dimColor>loading…</Text>}
+      {loading && (
+        <Text dimColor>
+          <Spinner /> loading issue details…
+        </Text>
+      )}
       {visible.map((l, i) => (
         <Text key={i} wrap="truncate-end">
           {l || " "}
