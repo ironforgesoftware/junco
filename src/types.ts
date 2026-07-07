@@ -154,6 +154,10 @@ export interface Ticket {
   workdir: string | null;
 }
 
+/** Claim-order priority ranking (higher claims first). Shared by runOnce.ts
+ * (scheduling) and tui/queueSnapshot.ts (display) — keep this the ONLY definition. */
+export const PRIORITY_RANK: Record<Ticket["priority"], number> = { high: 2, normal: 1, low: 0 };
+
 export interface ToolCall {
   name: string;
   args: unknown;

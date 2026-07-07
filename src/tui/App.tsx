@@ -27,6 +27,9 @@ import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
 import { ShortcutBar } from "./components/ShortcutBar.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
+import { QueueStrip } from "./components/QueueStrip.js";
+import { QueueView } from "./components/QueueView.js";
+import type { QueueSnapshot } from "./queueSnapshot.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -39,13 +42,16 @@ export interface AppProps {
   clonesDir: string;
   issuePollMs?: number; // default 30_000; tests pass large values
   healthPollMs?: number; // default 5_000
+  /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
+  queueFn: () => Promise<QueueSnapshot>;
+  queuePollMs?: number; // default 2_000
   /** Palette command runner override (tests). Defaults to the real subprocess. */
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>;
   onExit: () => void;
 }
 
 type Pane = "repos" | "issues";
-type View = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput";
+type View = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput" | "queue";
 
 interface CmdState {
   title: string;
@@ -98,9 +104,11 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
 }
 
 export function App(props: AppProps): React.JSX.Element {
-  const { client, trigger, configRepos, watchlistFile, configPath, clonesDir, onExit } = props;
+  const { client, trigger, configRepos, watchlistFile, configPath, clonesDir, queueFn, onExit } =
+    props;
   const issuePollMs = props.issuePollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
+  const queuePollMs = props.queuePollMs ?? 2_000;
   const runCliFn =
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
@@ -122,6 +130,8 @@ export function App(props: AppProps): React.JSX.Element {
   const [scroll, setScroll] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
+  const [queueNow, setQueueNow] = useState<Date>(() => new Date());
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
   const [paletteFilter, setPaletteFilter] = useState("");
@@ -235,6 +245,23 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [client, healthPollMs]);
+
+  // Queue polling (also fires once on mount).
+  useEffect(() => {
+    let alive = true;
+    const run = async (): Promise<void> => {
+      const s = await queueFn();
+      if (!alive) return;
+      setQueueSnap(s);
+      setQueueNow(new Date());
+    };
+    void run();
+    const id = setInterval(() => void run(), queuePollMs);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [queueFn, queuePollMs]);
 
   const setIssueLabels = useCallback((nwo: string, num: number, labels: string[]) => {
     setIssues((prev) => {
@@ -448,6 +475,13 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
+    if (view === "queue") {
+      if (key.escape || input === "t") return void setView("main");
+      if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
+      if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+      return;
+    }
+
     if (view === "palette") {
       // Chars/backspace go to the palette's TextFields; the App routes only
       // navigation keys here, so typing 'j' filters instead of moving.
@@ -486,6 +520,11 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (input === "?") return void setView("help");
+    if (input === "t") {
+      setScroll(0);
+      setView("queue");
+      return;
+    }
     if (input === ":") {
       setPaletteFilter("");
       setPaletteSel(0);
@@ -571,6 +610,8 @@ export function App(props: AppProps): React.JSX.Element {
             exitCode={cmd.exitCode}
             timedOut={cmd.timedOut}
           />
+        ) : view === "queue" ? (
+          <QueueView snap={queueSnap} scroll={scroll} now={queueNow} />
         ) : (
           <IssueTable
             issues={currentIssues}
@@ -581,6 +622,7 @@ export function App(props: AppProps): React.JSX.Element {
           />
         )}
       </Box>
+      <QueueStrip snap={queueSnap} now={queueNow} />
       <StatusBar health={health} toast={toast} hints="" watchlistError={watchlistError} />
       <ShortcutBar view={view} pane={pane} />
       {view === "help" && <HelpOverlay trigger={trigger} />}

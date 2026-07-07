@@ -9,9 +9,39 @@ import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
 import type { DashboardClient, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
+import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
 const CLONES_DIR = "/x/state/repos";
+
+const QUEUE_SNAP: QueueSnapshot = {
+  daemonUp: true,
+  maxConcurrent: 1,
+  running: [
+    {
+      id: "gh-acme-api-46",
+      github: { nwo: "acme/api", issue: 46, kind: "pr" },
+      turns: 3,
+      lastTool: "bash",
+      outputTokens: 500,
+      startedAt: "2026-07-07T10:00:00Z",
+      stale: false,
+    },
+  ],
+  waiting: [
+    {
+      id: "gh-acme-api-51-plan",
+      github: { nwo: "acme/api", issue: 51, kind: "plan" },
+      kind: "plan",
+      priority: "normal",
+      retryCount: 0,
+      notBefore: null,
+      deferred: false,
+    },
+  ],
+  recent: [],
+  error: null,
+};
 
 function makeClient(
   issuesByRepo: Record<string, DashIssue[]>,
@@ -89,6 +119,7 @@ function renderApp(
   watchlistFile: string,
   issuePollMs = 999999,
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
+  queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
 ) {
   return render(
     <App
@@ -100,6 +131,8 @@ function renderApp(
       clonesDir={CLONES_DIR}
       issuePollMs={issuePollMs}
       healthPollMs={999999}
+      queuePollMs={999999}
+      queueFn={queueFn}
       runCliFn={runCliFn}
       onExit={() => {}}
     />,
@@ -107,6 +140,14 @@ function renderApp(
 }
 const tick = () => new Promise((r) => setTimeout(r, 30));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function until(cond: () => boolean, tries = 50): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (cond()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  expect(cond()).toBe(true); // final assert with a real failure message
+}
 
 describe("App", () => {
   const wl = () => join(mkdtempSync(join(tmpdir(), "junco-app-")), "wl.json");
@@ -559,5 +600,51 @@ describe("refresh animation", () => {
     resolveSecond!(okv([rawIssue]));
     for (let i = 0; i < 30 && hasSpinner(); i++) await tick();
     expect(hasSpinner()).toBe(false);
+  });
+});
+
+describe("queue strip + queue view", () => {
+  it("renders the strip from the initial queue poll", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    await until(() => (r.lastFrame() ?? "").includes("queue — 1 running · 1 waiting"));
+    expect(r.lastFrame()).toContain("#46 exec");
+  });
+
+  it("t opens the queue view, esc returns; t toggles too", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q2-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    await until(() => (r.lastFrame() ?? "").includes("queue —"));
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    expect(r.lastFrame()).toContain("WAITING (1)");
+    r.stdin.write(String.fromCharCode(27)); // esc — reuse the file's ESC const if in scope
+    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("t"); // t closes as well
+    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+  });
+
+  it("queue view scrolls with ] and [", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q3-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    await until(() => (r.lastFrame() ?? "").includes("queue —"));
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("]");
+    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("[");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+  });
+
+  it("shortcut bar advertises t in main view", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q4-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    await until(() => (r.lastFrame() ?? "").includes("t queue"));
   });
 });

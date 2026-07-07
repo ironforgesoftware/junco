@@ -199,7 +199,7 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 | `doctor.ts`             | `junco doctor` — preflight config/toolchain/endpoint/model/dirs.                                                                                                                                                |
 | `logsCmd.ts`            | `junco logs` — tail/follow the state-dir worker.log.                                                                                                                                                            |
 | `watchlist.ts`          | Dynamic watchlist; `resolveWatchedRepos` — config ∪ file, config wins; bridge reads per sweep.                                                                                                                  |
-| `tui/`                  | Ink dashboard: pure state derivation, gh client seam, components, App.                                                                                                                                          |
+| `tui/`                  | Ink dashboard: pure state derivation, gh client seam, queue snapshot (claim-order mirror + /health progress), components, App.                                                                                  |
 | `dashboardCmd.ts`       | `junco dashboard` — TTY guard + lazy Ink load.                                                                                                                                                                  |
 
 ---

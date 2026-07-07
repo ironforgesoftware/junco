@@ -310,6 +310,47 @@ describe("multi-ticket tracking (max_concurrent > 1)", () => {
   });
 });
 
+describe("progress startedAt (dashboard elapsed-time support)", () => {
+  it("taskStarted seeds a progress entry stamped startedAt", () => {
+    const t = new Date("2026-07-07T10:00:00Z");
+    const m = new RunMetrics(() => t);
+    m.taskStarted("t-1");
+    const p0 = m.snapshot().currentProgress["t-1"];
+    expect(p0).toBeDefined();
+    expect(p0.startedAt).toBe("2026-07-07T10:00:00.000Z");
+    expect(p0.turns).toBe(0);
+    expect(p0.lastTool).toBeNull();
+    expect(p0.outputTokens).toBe(0);
+  });
+
+  it("setTaskProgress preserves startedAt and advances updatedAt", () => {
+    let t = new Date("2026-07-07T10:00:00Z");
+    const m = new RunMetrics(() => t);
+    m.taskStarted("t-1");
+    t = new Date("2026-07-07T10:05:00Z");
+    m.setTaskProgress("t-1", { turns: 4, lastTool: "bash", outputTokens: 1200 });
+    const p = m.snapshot().currentProgress["t-1"];
+    expect(p.startedAt).toBe("2026-07-07T10:00:00.000Z");
+    expect(p.updatedAt).toBe("2026-07-07T10:05:00.000Z");
+    expect(p.turns).toBe(4);
+  });
+
+  it("setTaskProgress without a prior taskStarted defaults startedAt to now", () => {
+    const m = new RunMetrics(() => new Date("2026-07-07T10:00:00Z"));
+    m.setTaskProgress("t-2", { turns: 1, lastTool: null, outputTokens: 0 });
+    expect(m.snapshot().currentProgress["t-2"].startedAt).toBe("2026-07-07T10:00:00.000Z");
+  });
+
+  it("taskStarted twice does not reset startedAt", () => {
+    let t = new Date("2026-07-07T10:00:00Z");
+    const m = new RunMetrics(() => t);
+    m.taskStarted("t-1");
+    t = new Date("2026-07-07T10:09:00Z");
+    m.taskStarted("t-1"); // idempotent re-add must not clobber
+    expect(m.snapshot().currentProgress["t-1"].startedAt).toBe("2026-07-07T10:00:00.000Z");
+  });
+});
+
 describe("bridge metrics", () => {
   it("records sweeps, bridged counts, and errors", () => {
     const m = new RunMetrics(() => new Date("2026-07-02T00:00:00Z"));
