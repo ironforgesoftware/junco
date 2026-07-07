@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import type { Config, Ticket } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
@@ -10,6 +10,12 @@ import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
+import {
+  NOOP_REPORTER,
+  outcomeFromPrFlow,
+  outcomeFromQa,
+  type TicketReporter,
+} from "./reporter.js";
 import { log, withTicket } from "./logging.js";
 import { metrics } from "./metrics.js";
 
@@ -33,6 +39,8 @@ export interface RunDeps {
   /** Operator force-stop signal — aborts the in-flight agent session softly
    * (commits are salvaged). The daemon wires this to StopFlag.forceSignal. */
   abortSignal?: AbortSignal;
+  /** Lifecycle feedback (GitHub bridge). Defaults to a no-op. */
+  reporter?: TicketReporter;
 }
 
 /** One claimed unit of work, ready to execute. */
@@ -115,6 +123,38 @@ export async function claimNextTask(
   return null;
 }
 
+/** Validate a Q&A ticket's workdir: must exist, be a directory, and (when the
+ * allowed_repo_roots rail is configured) sit under one of the roots. Invalid →
+ * warn + fall back to the default cwd; never fails the ticket. */
+function resolveQaCwd(t: Ticket, cfg: Config, fallback: string): string {
+  if (!t.workdir) return fallback;
+  const wd = resolve(expandHome(t.workdir));
+  let isDir = false;
+  try {
+    isDir = statSync(wd).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (!isDir) {
+    log.warn("workdir missing or not a directory; using default cwd", { id: t.id, workdir: wd });
+    return fallback;
+  }
+  if (cfg.allowedRepoRoots.length > 0) {
+    const ok = cfg.allowedRepoRoots.some((root) => {
+      const r = resolve(expandHome(root));
+      return wd === r || wd.startsWith(r + sep);
+    });
+    if (!ok) {
+      log.warn("workdir outside allowed_repo_roots; using default cwd", {
+        id: t.id,
+        workdir: wd,
+      });
+      return fallback;
+    }
+  }
+  return wd;
+}
+
 /** Execute one claimed ticket to its terminal state (or a requeue). */
 export async function executeClaimed(
   cfg: Config,
@@ -129,8 +169,10 @@ export async function executeClaimed(
     // the finally clears it for BOTH the PR-flow and Q&A paths so the daemon
     // reports idle once the task ends, however it ends.
     metrics.taskStarted(next.id);
+    const reporter = deps.reporter ?? NOOP_REPORTER;
     try {
       log.info("claimed", { src: next.path, dst: claimed });
+      await reporter.onStart(next).catch(() => undefined);
 
       // PR-flow ticket (frontmatter has `repo:`): derive the repo context and hand
       // off to the PR orchestrator. A repo-less ctx (null) falls through to Q&A.
@@ -142,24 +184,34 @@ export async function executeClaimed(
           defaultLabels: cfg.defaultLabels,
         });
         if (ctx) {
-          const dst = await runPrFlow(cfg, next, claimed, ctx, {
+          const flow = await runPrFlow(cfg, next, claimed, ctx, {
             sessionFactoryFor: deps.sessionFactoryFor,
             criticSessionFactory: deps.criticSessionFactory,
             abortSignal: deps.abortSignal,
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
           });
-          log.info("finalized (pr-flow)", { dst });
+          if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
+          else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
+          log.info("finalized (pr-flow)", { dst: flow.dst, status: flow.status });
           return;
         }
         // ctx === null means no usable `repo:` — fall through to the Q&A path.
         log.warn("hasRepo ticket produced no repo context; treating as Q&A", { id: next.id });
       }
 
-      const cwd = paths.processing; // Q&A has no worktree; cwd hosts only read-only tools
+      // Q&A has no worktree; cwd hosts only read-only tools. A validated ticket
+      // workdir (e.g. a bridged repo clone) overrides the processing dir.
+      const cwd = resolveQaCwd(next, cfg, paths.processing);
       // Q&A default is the read-only subset; an explicit ticket `tools:` is an
       // owner-authored opt-in and is used verbatim.
       const qaTools = next.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
-      const qaCfg: Config = { ...cfg, tools: qaTools };
+      // Planning tickets may run a stronger model id (same endpoint/key) —
+      // plan quality is the biggest lever on execution quality.
+      const qaModel =
+        next.github?.kind === "plan" && cfg.github.plannerModelId
+          ? { ...cfg.model, id: cfg.github.plannerModelId }
+          : cfg.model;
+      const qaCfg: Config = { ...cfg, tools: qaTools, model: qaModel };
       // NOTE: if the factory throws (e.g. model unresolved), this rejects and the
       // claimed ticket is left in processing/ — orphan recovery lands in M4.
       const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
@@ -196,13 +248,14 @@ export async function executeClaimed(
           next,
           result.errorMessage ?? `stop_reason=${result.stopReason}`,
         );
-        if (rq.requeued) return;
+        if (rq.requeued) {
+          await reporter.onRequeue(next).catch(() => undefined);
+          return;
+        }
       }
-      const dst = finalize(claimed, result, { done: paths.done, failed: paths.failed });
-      log.info("finalized", {
-        dst,
-        status: result.timedOut ? "timeout" : result.errorMessage ? "failed" : "completed",
-      });
+      const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
+      await reporter.onFinal(next, outcomeFromQa(fin.status, result)).catch(() => undefined);
+      log.info("finalized", { dst: fin.dst, status: fin.status });
     } finally {
       metrics.taskEnded(next.id); // also clears this ticket's progress
     }

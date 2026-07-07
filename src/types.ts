@@ -34,6 +34,21 @@ export interface ModelConfig {
   thinkingLevel: string; // worker default thinking level
   compat: ModelCompat;
 }
+/** One watched GitHub repo: name-with-owner and its local clone. */
+export interface GithubRepoMapping {
+  nwo: string; // "owner/repo"
+  path: string; // local clone path (expanded)
+}
+/** `[github]` — the issues→inbox bridge. Disabled by default (zero gh calls). */
+export interface GithubConfig {
+  enabled: boolean;
+  triggerLabel: string; // approval label; lifecycle labels derive from it
+  askLabel: string; // routes an issue to the read-only Q&A path
+  pollIntervalSeconds: number; // bridge sweep cadence (independent of worker poll)
+  repos: GithubRepoMapping[];
+  requireApproval: boolean; // false ⇒ plan-ready auto-executes next sweep
+  plannerModelId: string | null; // planning-session model id override (same endpoint)
+}
 export interface Config {
   vaultRoot: string;
   juncoSubdir: string;
@@ -90,6 +105,8 @@ export interface Config {
   stateDir: string;
   logToFile: boolean;
   transcriptsEnabled: boolean;
+  // GitHub-integrated inbox mode (issues → tickets bridge). See githubInbox.ts.
+  github: GithubConfig;
 }
 export interface Paths {
   inbox: string;
@@ -110,6 +127,13 @@ export const TERMINAL_DONE_STATUSES: ReadonlySet<string> = new Set([
   "timeout_partial",
 ]);
 
+/** Worker-managed GitHub provenance for a bridged ticket (do not set by hand). */
+export interface TicketGithub {
+  nwo: string;
+  issue: number;
+  kind: "pr" | "ask" | "plan";
+}
+
 export interface Ticket {
   path: string;
   id: string;
@@ -124,6 +148,10 @@ export interface Ticket {
   retryCount: number;
   /** Per-ticket tool allowlist override (null = use the mode default). */
   tools: string[] | null;
+  /** GitHub issue this ticket was bridged from (null = local dispatch). */
+  github: TicketGithub | null;
+  /** Q&A only: directory the session runs in (read-only tools). Null = default. */
+  workdir: string | null;
 }
 
 export interface ToolCall {

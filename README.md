@@ -18,6 +18,7 @@ Requires **Node ≥ 22.19** (plus `git` + an authenticated `gh` for PR-flow tick
 npx @ironforgesoftware/junco        # first run → setup wizard; afterwards → starts the daemon
 # prefer a global install?  npm install -g @ironforgesoftware/junco   (then the command is just `junco`)
 ```
+
 (Or explicitly: `junco init` runs the same wizard; `junco init --yes` scaffolds defaults non-interactively.)
 
 **2. Start the worker:**
@@ -46,12 +47,13 @@ New to the ticket format? Run `junco schema`, copy a template from `examples/`, 
 3. [CLI reference](#cli-reference)
 4. [Configuration](#configuration)
 5. [Tickets](#tickets)
-6. [Health & observability](#health--observability)
-7. [Running as a service](#running-as-a-service)
-8. [Security model](#security-model)
-9. [Troubleshooting](#troubleshooting)
-10. [Contributing](#contributing)
-11. [License](#license)
+6. [GitHub-integrated mode](#github-integrated-mode)
+7. [Health & observability](#health--observability)
+8. [Running as a service](#running-as-a-service)
+9. [Security model](#security-model)
+10. [Troubleshooting](#troubleshooting)
+11. [Contributing](#contributing)
+12. [License](#license)
 
 ---
 
@@ -123,7 +125,7 @@ junco submit /tmp/my-question.md --config ~/junco/config.toml
 
 **PR-flow ticket** (creates a worktree, runs the agent, opens a draft PR):
 
-```bash
+````bash
 cat > /tmp/my-pr-ticket.md << 'EOF'
 ---
 id: add-hello-util-2026-05-31
@@ -145,13 +147,15 @@ draft: true
 
 ```bash
 npx tsc --noEmit
-```
+````
 
 ## Done when
+
 - [ ] 1 commit on the branch with the new file.
-EOF
+      EOF
 
 junco submit /tmp/my-pr-ticket.md --config ~/junco/config.toml
+
 ```
 
 Watch the daemon pick it up and open a draft PR automatically.
@@ -161,31 +165,33 @@ Watch the daemon pick it up and open a draft PR automatically.
 ## How it works
 
 ```
-  You (or any harness)
-         │
-         │  junco submit <ticket.md>
-         ▼
-  <vault_root>/Junco/inbox/          ← drop tickets here
-         │
-         │  daemon polls every 15s
-         ▼
-  ┌──────────────────────────────────────────────────────┐
-  │  junco daemon                                        │
-  │                                                      │
-  │  1. plan-lint           validate frontmatter         │
-  │  2. claim               inbox/ → processing/         │
-  │  3. git worktree        isolated branch per ticket   │
-  │  4. agent run           drives coding agent          │
-  │     └─ loop guards      supervisor watches each turn │
-  │  5. verification        runs ## Verification block   │
-  │  6. critic              diff-vs-spec check           │
-  │  7. push + PR           gh pr create --draft         │
-  │  8. finalize            processing/ → done/|failed/  │
-  └──────────────────────────────────────────────────────┘
-         │
-         ▼
-  GitHub draft PR  (or answer written in-place for Q&A)
-```
+
+You (or any harness)
+│
+│ junco submit <ticket.md>
+▼
+<vault_root>/Junco/inbox/ ← drop tickets here
+│
+│ daemon polls every 15s
+▼
+┌──────────────────────────────────────────────────────┐
+│ junco daemon │
+│ │
+│ 1. plan-lint validate frontmatter │
+│ 2. claim inbox/ → processing/ │
+│ 3. git worktree isolated branch per ticket │
+│ 4. agent run drives coding agent │
+│ └─ loop guards supervisor watches each turn │
+│ 5. verification runs ## Verification block │
+│ 6. critic diff-vs-spec check │
+│ 7. push + PR gh pr create --draft │
+│ 8. finalize processing/ → done/|failed/ │
+└──────────────────────────────────────────────────────┘
+│
+▼
+GitHub draft PR (or answer written in-place for Q&A)
+
+````
 
 **Plan-lint** runs before the agent starts. Bad tickets (invalid frontmatter, forbidden patterns, nonexistent labels) route directly to `failed/` without consuming any agent tokens.
 
@@ -221,6 +227,8 @@ All commands accept `--config <path>` to point at a non-default `config.toml`. W
 | `junco list [box]` | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses. |
 | `junco retry <name…\|--all>` | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped. |
 | `junco doctor` | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/state dirs writable. |
+| `junco dashboard` | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. Needs a real TTY. |
+| `junco restart` | Restart the supervised daemon so it picks up config and code changes: finds the launchd/systemd user unit referencing your config, kicks it with the platform-correct verb, verifies the pid changed. |
 | `junco logs [-f] [-n N] [--json]` | Tail (or follow) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`. |
 | `junco --help` / `-h` | Print usage. |
 
@@ -324,19 +332,19 @@ log_level = "info"                # debug | info | warn | error
 state_dir = "~/.local/state/junco" # worker.log + transcripts/ live here.
 log_to_file = true                # Tee structured logs to <state_dir>/worker.log (10 MB rotation).
 transcripts = true                # Per-ticket event JSONL under <state_dir>/transcripts/.
-```
+````
 
 ### Key knobs to know
 
-| Knob | Effect |
-|---|---|
-| `[model].id` | Which model the agent requests (provider-prefixed, e.g. `omlx/my-model`). |
-| `[model].models_json` | Point at a Pi `models.json` to load the provider+model (api, compat, context window…) from that file. |
-| `[model].base_url` / `api` | Switch inference backends — any OpenAI-compatible `/v1` endpoint, or another Pi `api` style (Anthropic, Google, Bedrock…). |
-| `[verify].block_on_fail` | Set `true` to make verification failures block the PR open (strict mode). |
-| `[supervisor].budget_per_kind` | Raise to allow more nudges before killing a looping agent. |
-| `[worker].startup_wait` | Set `false` to start the daemon even when the endpoint is not yet up. |
-| `[git].remove_worktree_on_success` | Set `false` to retain worktrees after success (debugging). |
+| Knob                               | Effect                                                                                                                     |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `[model].id`                       | Which model the agent requests (provider-prefixed, e.g. `omlx/my-model`).                                                  |
+| `[model].models_json`              | Point at a Pi `models.json` to load the provider+model (api, compat, context window…) from that file.                      |
+| `[model].base_url` / `api`         | Switch inference backends — any OpenAI-compatible `/v1` endpoint, or another Pi `api` style (Anthropic, Google, Bedrock…). |
+| `[verify].block_on_fail`           | Set `true` to make verification failures block the PR open (strict mode).                                                  |
+| `[supervisor].budget_per_kind`     | Raise to allow more nudges before killing a looping agent.                                                                 |
+| `[worker].startup_wait`            | Set `false` to start the daemon even when the endpoint is not yet up.                                                      |
+| `[git].remove_worktree_on_success` | Set `false` to retain worktrees after success (debugging).                                                                 |
 
 ---
 
@@ -346,29 +354,29 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 
 ### Ticket flavors
 
-| Flavor | Trigger | What happens |
-|---|---|---|
-| **Q&A ticket** | No `repo:` field | Agent answers in-place; result written back to the ticket file. No git. |
+| Flavor             | Trigger                 | What happens                                                             |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------ |
+| **Q&A ticket**     | No `repo:` field        | Agent answers in-place; result written back to the ticket file. No git.  |
 | **PR-flow ticket** | `repo: <absolute/path>` | Agent runs in an isolated git worktree; a draft PR is opened on success. |
 
 ### Key frontmatter fields
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | string | Unique ticket identifier. Used as the inbox filename and branch suffix. |
-| `repo` | path | Absolute path to the target git repository. Presence triggers PR flow. |
-| `priority` | `low\|normal\|high` | Processing order within the queue. |
-| `timeout_minutes` | number | Per-ticket wall-clock cap. Overrides `[worker].default_timeout_minutes`. |
-| `base_branch` | string | Branch to fork from. Overrides `[git].default_base_branch`. |
-| `branch_name` | string | Override the auto-generated branch name. |
-| `pr_title` | string | Pull request title. |
-| `draft` | bool | Open PR as draft. Overrides `[pr].draft_by_default`. |
-| `labels` | string[] | Labels to apply to the PR. |
-| `reviewers` | string[] | GitHub handles to request as reviewers. |
-| `amends_pr` | number | PR number — add commits to an existing PR instead of opening a new one. |
-| `tools` | string[] | Per-ticket tool allowlist override. Q&A tickets default to a read-only subset (`read, grep, find, ls`); list tools explicitly (e.g. `[read, grep, bash]`) to opt in to more. |
-| `not_before` | ISO datetime | Don't claim this ticket before this UTC instant. Set by the worker for retry backoff; dispatchers may also set it to schedule work. |
-| `retry_count` | integer | Worker-managed transparent-retry counter. Don't set by hand. |
+| Field             | Type                | Description                                                                                                                                                                  |
+| ----------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`              | string              | Unique ticket identifier. Used as the inbox filename and branch suffix.                                                                                                      |
+| `repo`            | path                | Absolute path to the target git repository. Presence triggers PR flow.                                                                                                       |
+| `priority`        | `low\|normal\|high` | Processing order within the queue.                                                                                                                                           |
+| `timeout_minutes` | number              | Per-ticket wall-clock cap. Overrides `[worker].default_timeout_minutes`.                                                                                                     |
+| `base_branch`     | string              | Branch to fork from. Overrides `[git].default_base_branch`.                                                                                                                  |
+| `branch_name`     | string              | Override the auto-generated branch name.                                                                                                                                     |
+| `pr_title`        | string              | Pull request title.                                                                                                                                                          |
+| `draft`           | bool                | Open PR as draft. Overrides `[pr].draft_by_default`.                                                                                                                         |
+| `labels`          | string[]            | Labels to apply to the PR.                                                                                                                                                   |
+| `reviewers`       | string[]            | GitHub handles to request as reviewers.                                                                                                                                      |
+| `amends_pr`       | number              | PR number — add commits to an existing PR instead of opening a new one.                                                                                                      |
+| `tools`           | string[]            | Per-ticket tool allowlist override. Q&A tickets default to a read-only subset (`read, grep, find, ls`); list tools explicitly (e.g. `[read, grep, bash]`) to opt in to more. |
+| `not_before`      | ISO datetime        | Don't claim this ticket before this UTC instant. Set by the worker for retry backoff; dispatchers may also set it to schedule work.                                          |
+| `retry_count`     | integer             | Worker-managed transparent-retry counter. Don't set by hand.                                                                                                                 |
 
 ### Minimal Q&A ticket
 
@@ -386,7 +394,7 @@ What is the time complexity of binary search and why?
 
 ### Minimal PR-flow ticket
 
-```markdown
+````markdown
 ---
 id: add-util-2026-05-31
 priority: normal
@@ -400,6 +408,7 @@ draft: true
 # Add a utility function
 
 ## Steps
+
 - [ ] Implement the function.
 - [ ] Commit: `git add ... && git commit -m "feat: add utility"`
 
@@ -408,10 +417,13 @@ draft: true
 ```bash
 npx tsc --noEmit
 ```
+````
 
 ## Done when
+
 - [ ] 1 commit on the branch.
-```
+
+````
 
 ### Submitting tickets
 
@@ -424,13 +436,14 @@ cat my-ticket.md | junco submit - --config ~/junco/config.toml
 
 # Print the inbox path:
 junco inbox-path --config ~/junco/config.toml
-```
+````
 
 The bundled `junco-dispatch` skill (for Claude Code) scaffolds well-structured tickets from any Claude session and submits them automatically.
 
 ### Templates
 
 Ticket templates live in the `templates/` directory:
+
 - `templates/plain/task.md` — Q&A ticket template (plain Markdown)
 - `templates/plain/task-code.md` — PR-flow ticket template (plain Markdown)
 - `templates/task.md`, `templates/task-code.md` — the same templates with [Obsidian Templater](https://github.com/SilentVoid13/Templater) date/title placeholders, for Obsidian-vault dispatch setups
@@ -450,15 +463,105 @@ Ticket templates live in the `templates/` directory:
 
 ---
 
+## GitHub-integrated mode
+
+Junco can use **GitHub Issues as a dispatch surface**: label an issue and the daemon drafts an execution plan, posts it for review, and — once approved — works it in a worktree, opens a PR, and reports back on the issue thread. Junco never executes a raw issue directly; it always plans first. The local inbox keeps working exactly as before — both surfaces feed the same queue, and with `enabled = false` (the default) Junco makes zero GitHub calls.
+
+```toml
+[github]
+enabled = true
+trigger_label = "junco"        # the approval marker
+poll_interval_seconds = 60     # bridge sweep cadence
+require_approval = true        # a write+ collaborator must apply junco:approved before a plan executes
+# planner_model_id = "provider/small-model"   # optional: plan with a different model than execution
+
+[[github.repos]]
+nwo  = "owner/repo"            # repo to watch
+path = "~/code/repo"           # its local clone (origin must point at nwo)
+```
+
+**The two-hop loop.** Every sweep, Junco lists open issues carrying the trigger label in each watched repo.
+
+1. **Dispatch → plan.** An eligible issue (trigger label present, no lifecycle label yet) is verified — **who applied the label, and do they have write access?** — then turned into a _planning_ ticket: a read-only, Q&A-style session at the mapped clone that explores the repo and drafts a plan using the same authoring discipline as the `junco-dispatch` skill (single-sourced from `skills/junco-dispatch/TEMPLATE.md`; see `planPrompt.ts`). Set `planner_model_id` to plan with a cheaper/different model than the one that executes. The issue flips to `junco:planning`.
+2. **Plan → review.** When planning finishes, Junco posts the plan as **one issue comment** — carrying a hidden `<!-- junco:plan -->` anchor so the bridge can recover it later — and flips the issue to `junco:plan-ready`. The comment is ordinary GitHub markdown: **you can edit it**, and whatever it says at approval time is what executes.
+3. **Approve → execute.** With `require_approval = true` (the default), a write+ collaborator applies `junco:approved` after reading the plan comment; Junco checks both that a write+ collaborator applied it and that the approval postdates the plan comment (so a stale approval from before a re-plan can't sneak an old plan through). With `require_approval = false`, the plan executes automatically on the next sweep instead — no human gate. Either way, Junco reads the plan back out of the (possibly edited) comment, builds an ordinary execution ticket from it, swaps `junco:plan-ready`/`junco:approved` for `junco:queued`, and the normal pipeline runs from there (atomic claim, worktree, guards, verification, critic, retries) exactly as for a locally-submitted ticket.
+
+When the execution ticket finalizes, Junco posts **one comment** — PR link plus a brief summary, or the failure reason — and flips to `junco:done`/`junco:failed`. The PR body includes `Closes owner/repo#N`, so merging auto-closes the issue.
+
+**Questions skip planning.** Add the ask label (default `junco:ask`) alongside the trigger label and Junco routes straight to the read-only Q&A path (`junco:queued` directly — no plan, no review, no approval) — the session browses the mapped clone with read-only tools and posts its **answer as the comment**. No branch, no PR.
+
+**Lifecycle labels** signal state silently (no notifications) and are visible in the issue list:
+
+| Label              | Meaning                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `junco:planning`   | A planning session is drafting a plan from the raw issue                                                |
+| `junco:plan-ready` | Plan posted as a comment — awaiting review (and approval, if `require_approval`)                        |
+| `junco:approved`   | Applied by a write+ collaborator after reading the plan; authorizes execution (removed once dispatched) |
+| `junco:queued`     | An execution ticket (or Q&A ticket) is in the inbox, waiting for a worker slot                          |
+| `junco:working`    | A session is on it right now                                                                            |
+| `junco:done`       | Finished — see the closing comment (PR link / answer)                                                   |
+| `junco:failed`     | Failed — see the closing comment for the reason (planning or execution)                                 |
+| `junco:denied`     | Trigger label was applied by someone without write access                                               |
+
+**Re-plan gestures** (all take effect on the next sweep, no restart needed):
+
+- Remove `junco:plan-ready` (leave the trigger label on) → a fresh planning session runs. If more than one plan comment exists on the issue, the latest one wins.
+- Remove `junco:failed` → the issue re-enters at the top: fresh planning, fresh review, fresh approval.
+- Edit Junco's own plan comment before it's approved → your edit is what executes, not the model's original draft.
+
+**Trust model.** Issue text is untrusted input until someone with write/maintain/admin permission applies the trigger label — and by labeling, they vouch for the body _as it stands_, so **read the issue before you label it**. From there, the plan hop adds its own guarantees: the planner emits the ticket **body only**, inside a fenced block — frontmatter (`repo:`/`workdir:`/`tools:`) is always built by the bridge itself, never by model output or issue text; a plan comment only counts as authoritative if it was posted by the bridge's own authenticated `gh` login (a forged marker comment from another contributor can't smuggle in a plan); and an approval only counts if it comes from a write+ collaborator **and** postdates the plan comment it's approving. Junco fails closed on any verification error, only ever executes against clone paths from _your config_ (issue content cannot steer it elsewhere), and cross-checks that each mapped clone's `origin` matches the configured repo so a typo can't ship commits to the wrong place. `require_approval = false` removes the human approval gate entirely — reasonable for a private personal repo where you already trust everyone who can apply the trigger label, but keep the default `true` anywhere else. Note too that with `require_approval = false`, anyone who can apply labels — including a triage-only collaborator, whose label edits are _not_ permission-verified on the plan hop — can re-apply `junco:plan-ready` to replay an existing plan comment straight into execution; one more reason auto mode belongs only on a private personal repo.
+
+**Team workflow.** Planning is automatic now, so hand-drafting the task issue is optional rather than required: label a raw bug report and Junco drafts the plan itself, posts it for review, and you approve or edit before anything runs. If a report issue already has a task sub-issue with a concrete plan, label the sub-issue instead — Junco automatically appends the parent issue's title and body as background context for the planner, and closing the sub-issue rolls up into the parent's progress. Either way, nothing executes until a human has seen a concrete plan (or you've deliberately opted out via `require_approval = false`).
+
+**Operational notes.** `junco doctor` checks each repo mapping (clone exists, origin matches, repo reachable via `gh`) and that the planner template (`skills/junco-dispatch/TEMPLATE.md`) is readable — that check fails preflight rather than warns, since an unreadable template fails every planning ticket. `junco status` and `/health` report sweep counts. Polling cost is a small, fixed number of API calls per repo per sweep against a 5,000/hr authenticated limit — still negligible. Auth is whatever `gh auth login` already holds; there are no new secrets. If GitHub is unreachable, sweeps skip and the local queue keeps running, and most lost label flips or comments are cosmetic (the queue files and the PR are the source of truth) — with one exception. On the **plan hop**, if the `junco:planning → junco:plan-ready` flip is lost _after_ the plan comment has already posted, the issue strands in `junco:planning` and won't advance to review on its own (the bridge won't re-plan an issue that still carries `junco:planning`). Recover by hand: apply `junco:plan-ready` yourself (the plan comment is already on the thread), or remove `junco:planning` to re-plan from scratch.
+
+### Dashboard
+
+`junco dashboard` is an interactive terminal UI over the same GitHub-integrated mode described above — a faster loop than watching labels change on the web. It needs an interactive terminal; run it from a real TTY, not piped or backgrounded.
+
+The screen has three zones:
+
+- **Repos pane** (left) — every watched repo, with a per-state issue-count badge (plan-ready / working / failed) and a `(cfg)` marker on entries that came from `config.toml` rather than the watchlist.
+- **Issues pane** (right) — the selected repo's trigger-labeled issues, newest-relevant first, each showing a lifecycle glyph and its current state badge (planning / plan-ready / approved / queued / working / done / failed / denied).
+- **Status bar** (bottom) — daemon health (up/down, uptime, tickets bridged) plus a transient toast for the last action's result. Hints stay minimal (`? keys · q quit`); the full key list is under `?`.
+
+A persistent shortcut bar at the bottom of the screen always shows the full key set for wherever you are (repos pane, issues pane, detail, palette, …), so navigation never requires memorization. Keys:
+
+| Key              | Action                                                                                                                                                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `j` / `k`        | move selection (repo or issue, depending on the focused pane)                                                                                                                                                                                                                |
+| `tab`, `h` / `l` | switch panes (repos ↔ issues)                                                                                                                                                                                                                                                |
+| `w`              | add a repo to the watchlist — paste `owner/repo` or a github.com URL; leave the clone path empty and junco clones it for you into `<state_dir>/repos/<owner>/<repo>`. Validates the clone's origin, confirms reachability via `gh`, and creates the trigger label if missing |
+| `i`              | jump straight to the issues pane                                                                                                                                                                                                                                             |
+| `enter`          | open issue detail — full body plus the posted plan comment, in-terminal, before you decide                                                                                                                                                                                   |
+| `d`              | dispatch (adds the trigger label)                                                                                                                                                                                                                                            |
+| `D`              | dispatch as ask — read-only Q&A, no plan, no PR                                                                                                                                                                                                                              |
+| `a`              | approve the posted plan (only available once a plan is ready)                                                                                                                                                                                                                |
+| `R`              | re-plan or re-cycle, whichever applies to the issue's current state                                                                                                                                                                                                          |
+| `o`              | open the issue in your browser                                                                                                                                                                                                                                               |
+| `x`              | unwatch a repo (watchlist entries only — entries from `config.toml` are read-only in the dashboard and report where they're defined instead)                                                                                                                                 |
+| `r`              | refresh the current repo's issues now                                                                                                                                                                                                                                        |
+| `:`              | command palette — run junco CLI subcommands without leaving the dashboard (see below)                                                                                                                                                                                        |
+| `?`              | show/hide the full key list                                                                                                                                                                                                                                                  |
+| `q`              | quit                                                                                                                                                                                                                                                                         |
+
+Every action is an ordinary label mutation made through your own `gh` auth — the same trust model as labeling an issue by hand on GitHub. Dispatch/approve/re-plan don't run anything themselves; they just move labels that the daemon's sweep acts on.
+
+**The command palette** (`:`) runs the junco CLI from inside the dashboard: type to filter, `enter` to run (commands that take arguments — `list`, `retry`, `submit`, `logs`, `service` — get an args field first), and the command's real output appears in a scrollable pane with its exit code (`r` re-runs, `esc` returns). Under the hood each run spawns the actual `junco` CLI against the dashboard's own config — no reimplementation, no drift, and no shell in the middle. `logs` runs bounded (`-n 200`); `init`, `start`, and `dashboard` are shown greyed-out with the reason they can't run here (use `restart` for the daemon).
+
+Repos added with `w` (and removed with `x`) live in a small JSON watchlist file at `<state_dir>/github-watchlist.json`, separate from `config.toml`. The daemon's bridge sweep re-reads this file every sweep, so watchlist changes take effect without a restart. Where a repo appears in both, the `config.toml` `[[github.repos]]` entry wins — that's also why config-sourced repos aren't removable from the dashboard.
+
+---
+
 ## Health & observability
 
 When `[observability].health_enabled = true`, Junco serves HTTP on `health_host:health_port` (default `127.0.0.1:8787`).
 
-| Endpoint | Success | Use |
-|---|---|---|
-| `GET /live` | `200 {status:"alive", pid, uptimeSeconds}` | Liveness — is the process up? |
-| `GET /ready` | `200 {status:"ready"}` or `503` | Readiness — can the endpoint be reached? |
-| `GET /health` | `200 {status:"ok", ready, metrics:{...}}` | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
+| Endpoint      | Success                                    | Use                                                                                                                                                                                                                                            |
+| ------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /live`   | `200 {status:"alive", pid, uptimeSeconds}` | Liveness — is the process up?                                                                                                                                                                                                                  |
+| `GET /ready`  | `200 {status:"ready"}` or `503`            | Readiness — can the endpoint be reached?                                                                                                                                                                                                       |
+| `GET /health` | `200 {status:"ok", ready, metrics:{...}}`  | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
 
 ```bash
 # Quick checks:
@@ -506,6 +609,10 @@ systemctl --user enable --now junco
 `junco start` acquires `worker.lock` (next to `config.toml`). If a second instance starts while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
 
 `junco run-once` does **not** acquire the lock — it is safe for cron and dev use alongside a running daemon.
+
+### Restarting after config or code changes
+
+The daemon reads its config and code once at startup. `junco restart` bounces the supervised daemon correctly: it discovers the launchd plist / systemd user unit that references your config path and uses `launchctl kickstart -k` / `systemctl --user restart` — the verbs that relaunch unconditionally. (A plain SIGTERM is _not_ a restart: with launchd's `SuccessfulExit=false` keep-alive, a graceful exit stays down.) It validates the config first — refusing to bounce the daemon onto a config it can't parse — and confirms the new pid before reporting success.
 
 ---
 

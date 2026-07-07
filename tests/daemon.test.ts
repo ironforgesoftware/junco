@@ -84,6 +84,15 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 0,
     logLevel: "info",
+    github: {
+      enabled: false,
+      triggerLabel: "junco",
+      askLabel: "junco:ask",
+      pollIntervalSeconds: 60,
+      repos: [],
+      requireApproval: true,
+      plannerModelId: null,
+    },
     ...overrides,
   };
 }
@@ -655,5 +664,93 @@ describe("runScheduler", () => {
     };
     await runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep });
     expect(okRan).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub bridge wiring
+// ---------------------------------------------------------------------------
+
+describe("github bridge wiring", () => {
+  const bridgeGithub = (pollSeconds: number) => ({
+    enabled: true,
+    triggerLabel: "junco",
+    askLabel: "junco:ask",
+    pollIntervalSeconds: pollSeconds,
+    repos: [],
+    requireApproval: true,
+    plannerModelId: null,
+  });
+
+  it("enabled=false: injected bridgeSweepFn is never called", async () => {
+    let sweeps = 0;
+    const cfg = makeConfig(); // github.enabled false in fixtures
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: async () => {
+        stop.requestStop();
+        return false;
+      },
+      bridgeSweepFn: async () => {
+        sweeps++;
+        return 0;
+      },
+    });
+    await mainLoop(cfg, stop, {}, deps);
+    expect(sweeps).toBe(0);
+  });
+
+  it("enabled=true: sweeps on the first poll and throttles within the interval", async () => {
+    let sweeps = 0;
+    let polls = 0;
+    const cfg = makeConfig({ github: bridgeGithub(3600) });
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: async () => {
+        polls++;
+        if (polls >= 3) stop.requestStop();
+        return true; // handled → loop continues without sleeping
+      },
+      bridgeSweepFn: async () => {
+        sweeps++;
+        return 0;
+      },
+    });
+    await mainLoop(cfg, stop, {}, deps);
+    expect(polls).toBe(3);
+    expect(sweeps).toBe(1); // 3600s interval → only the first iteration sweeps
+  });
+
+  it("a sweep error does not crash the loop", async () => {
+    const cfg = makeConfig({ github: bridgeGithub(60) });
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: async () => {
+        stop.requestStop();
+        return false;
+      },
+      bridgeSweepFn: async () => {
+        throw new Error("github down");
+      },
+    });
+    await expect(mainLoop(cfg, stop, {}, deps)).resolves.toBeUndefined();
+  });
+
+  it("scheduler mode (max_concurrent > 1) also sweeps", async () => {
+    let sweeps = 0;
+    const cfg = makeConfig({ github: bridgeGithub(3600), maxConcurrent: 2 });
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      claimFn: async () => {
+        stop.requestStop();
+        return null;
+      },
+      bridgeSweepFn: async () => {
+        sweeps++;
+        return 0;
+      },
+    });
+    await mainLoop(cfg, stop, {}, deps as never);
+    expect(sweeps).toBe(1);
   });
 });

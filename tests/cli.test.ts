@@ -412,6 +412,15 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   logLevel: "info",
+  github: {
+    enabled: false,
+    triggerLabel: "junco",
+    askLabel: "junco:ask",
+    pollIntervalSeconds: 60,
+    repos: [],
+    requireApproval: true,
+    plannerModelId: null,
+  },
 };
 
 let dispatchTmpDirs: string[] = [];
@@ -625,5 +634,57 @@ describe("run(['init']) — wizard routing", () => {
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: origTTY, configurable: true });
     }
+  });
+});
+
+describe("run(['dashboard']) — routing", () => {
+  it("routes `dashboard` to runDashboardFn with the loaded config", async () => {
+    const { cfg } = freshDispatchVault(); // the file's existing full-Config helper
+    let got: Config | null = null;
+    const code = await run(["dashboard", "--config", "/x/config.toml"], {
+      loadConfigFn: () => cfg,
+      runDashboardFn: async (c) => {
+        got = c;
+        return 0;
+      },
+    });
+    expect(code).toBe(0);
+    expect(got).not.toBeNull();
+  });
+});
+
+describe("run(['restart']) — routing", () => {
+  it("routes `restart` to runRestartFn with the RESOLVED config path (config validated first)", async () => {
+    const { cfg } = freshDispatchVault();
+    let gotPath: string | null = null;
+    let loaded = false;
+    const code = await run(["restart", "--config", "/x/config.toml"], {
+      loadConfigFn: () => {
+        loaded = true;
+        return cfg;
+      },
+      runRestartFn: async (p) => {
+        gotPath = p;
+        return 0;
+      },
+    });
+    expect(code).toBe(0);
+    expect(loaded).toBe(true); // broken config fails fast before any kick
+    expect(gotPath).toBe("/x/config.toml");
+  });
+
+  it("a broken config aborts before the restart fn runs", async () => {
+    let ran = false;
+    const code = await run(["restart", "--config", "/x/config.toml"], {
+      loadConfigFn: () => {
+        throw new Error("bad toml");
+      },
+      runRestartFn: async () => {
+        ran = true;
+        return 0;
+      },
+    });
+    expect(code).not.toBe(0);
+    expect(ran).toBe(false);
   });
 });

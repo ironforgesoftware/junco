@@ -28,6 +28,7 @@ import { acquireSingletonLock } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
+import { makeGithubReporter } from "./githubReport.js";
 import { log, setLogLevel, setLogFormat, setLogSink, rotateLogIfLarge } from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
@@ -57,6 +58,11 @@ export interface CliDeps {
   existsFn?: (path: string) => boolean;
   /** The init wizard (tests inject a spy to assert routing without touching the fs). */
   runInitWizardFn?: (configPath: string, opts: { yes?: boolean }) => Promise<number>;
+  /** The dashboard command (tests inject a spy; default lazily imports dashboardCmd.js). */
+  runDashboardFn?: (cfg: Config, configPath: string) => Promise<number>;
+  /** The restart command (takes the RESOLVED config path — it matches service
+   * units and the worker.lock by path, not by parsed config). */
+  runRestartFn?: (configPath: string) => Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +82,9 @@ Subcommands:
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
-  logs [-f] [-n N] [--json]  Show (or follow) the worker log
+  logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
+  dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
+  restart      Restart the supervised daemon (picks up config + code changes)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   schema       Print the ticket frontmatter JSON Schema and exit
 
@@ -133,7 +141,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const acquireLockFn = deps.acquireLockFn ?? acquireSingletonLock;
   const installSignalHandlersFn = deps.installSignalHandlersFn ?? installSignalHandlers;
   const mainLoopFn = deps.mainLoopFn ?? mainLoop;
-  const runOnceFn = deps.runOnceFn ?? runOnce;
+  // The manual run-once poke reports back to GitHub too when the bridge is on
+  // (a daemon-claimed bridged ticket would otherwise leave its issue stale).
+  const runOnceFn =
+    deps.runOnceFn ??
+    ((c: Config) => runOnce(c, { reporter: c.github.enabled ? makeGithubReporter(c) : undefined }));
 
   // Parse argv
   const { values, positionals } = parseArgs({
@@ -148,6 +160,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       follow: { type: "boolean", short: "f", default: false },
       lines: { type: "string", short: "n" },
       json: { type: "boolean", default: false },
+      human: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -332,8 +345,48 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return runLogsCommand(cfg, {
       follow: values.follow as boolean,
       lines: Number.isInteger(n) && (n as number) > 0 ? n : undefined,
-      json: (values.json as boolean) || undefined,
+      // --human forces the readable format even when stdout is a pipe (the
+      // dashboard palette runs logs through a captured subprocess).
+      json: (values.human as boolean) ? false : (values.json as boolean) || undefined,
     });
+  }
+
+  // ------------------------------------------------------------
+  // dashboard: interactive GitHub-mode TUI (Ink is loaded lazily — only paid
+  // for when this subcommand actually runs; every other subcommand stays
+  // React-free).
+  // ------------------------------------------------------------
+  if (subcommand === "dashboard") {
+    const cfg = loadConfigFn(configPath);
+    setLogLevel(cfg.logLevel);
+    const runDashboardFn =
+      deps.runDashboardFn ??
+      (async (c: Config, p: string) => {
+        const { runDashboard } = await import("./dashboardCmd.js");
+        return runDashboard(c, p);
+      });
+    return runDashboardFn(cfg, configPath);
+  }
+
+  // ------------------------------------------------------------
+  // restart: kick the service unit supervising this config's daemon so it
+  // picks up config + dist changes. The config is loaded first purely as
+  // fail-fast validation — never bounce the daemon onto a config it can't
+  // parse (the restarted process would crash-loop under its supervisor).
+  // ------------------------------------------------------------
+  if (subcommand === "restart") {
+    try {
+      loadConfigFn(configPath);
+    } catch (e) {
+      process.stderr.write(
+        `config invalid — not restarting: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      return 1;
+    }
+    const runRestartFn =
+      deps.runRestartFn ??
+      (async (p: string) => (await import("./restartCmd.js")).runRestartCommand(p));
+    return runRestartFn(configPath);
   }
 
   // ------------------------------------------------------------

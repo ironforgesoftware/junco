@@ -63,6 +63,12 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
       `processed: ${m.tasksProcessed} (${m.tasksSucceeded} ok / ${m.tasksFailed} failed) · tokens in=${m.totalTokensIn} out=${m.totalTokensOut}`,
       `last task: ${m.lastTaskStatus ?? "—"}${m.lastTaskAt ? ` @ ${m.lastTaskAt}` : ""}`,
     ];
+    // GitHub bridge line — only when it has actually done (or failed) something.
+    if (Number(m.bridgeSweeps ?? 0) > 0 || Number(m.bridgeErrors ?? 0) > 0) {
+      detailLines.push(
+        `bridge:    ${m.bridgeSweeps} sweeps · ${m.ticketsBridged} bridged · ${m.bridgeErrors} errors`,
+      );
+    }
   } catch {
     const holder = deps.lockPath ? lockHolderFn(deps.lockPath) : null;
     daemonLine = holder

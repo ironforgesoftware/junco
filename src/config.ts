@@ -208,6 +208,24 @@ const TomlSchema = z.object({
       transcripts: z.boolean().default(true),
     })
     .default({}),
+  github: z
+    .object({
+      enabled: z.boolean().default(false),
+      trigger_label: z.string().min(1).default("junco"),
+      ask_label: z.string().min(1).optional(),
+      poll_interval_seconds: z.number().min(5).default(60),
+      require_approval: z.boolean().default(true),
+      planner_model_id: z.string().min(1).optional(),
+      repos: z
+        .array(
+          z.object({
+            nwo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "github.repos[].nwo must be owner/repo"),
+            path: z.string().min(1),
+          }),
+        )
+        .default([]),
+    })
+    .default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -279,6 +297,15 @@ export function loadConfig(path: string): Config {
     stateDir: expandHome(d.observability.state_dir),
     logToFile: d.observability.log_to_file,
     transcriptsEnabled: d.observability.transcripts,
+    github: {
+      enabled: d.github.enabled,
+      triggerLabel: d.github.trigger_label,
+      askLabel: d.github.ask_label ?? `${d.github.trigger_label}:ask`,
+      pollIntervalSeconds: d.github.poll_interval_seconds,
+      requireApproval: d.github.require_approval,
+      plannerModelId: d.github.planner_model_id ?? null,
+      repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
+    },
   };
 }
 

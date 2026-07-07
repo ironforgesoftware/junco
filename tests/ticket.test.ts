@@ -70,4 +70,36 @@ describe("parseTicket", () => {
     expect(t.retryCount).toBe(0);
     expect(t.tools).toEqual(["read"]);
   });
+
+  it("parses a github provenance block and workdir", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: gh-acme-api-42\nworkdir: /tmp/clone\ngithub:\n  nwo: acme/api\n  issue: 42\n  kind: ask\n---\nbody`,
+    );
+    expect(t.github).toEqual({ nwo: "acme/api", issue: 42, kind: "ask" });
+    expect(t.workdir).toBe("/tmp/clone");
+  });
+
+  it("defaults github/workdir to null and rejects malformed blocks", () => {
+    expect(parseTicket("/q/a.md", "---\nid: x\n---\nbody").github).toBeNull();
+    expect(parseTicket("/q/a.md", "---\nid: x\n---\nbody").workdir).toBeNull();
+    const bad = parseTicket(
+      "/q/a.md",
+      `---\nid: x\nworkdir: ""\ngithub:\n  nwo: acme/api\n  issue: -1\n  kind: pr\n---\nbody`,
+    );
+    expect(bad.github).toBeNull(); // negative issue number
+    expect(bad.workdir).toBeNull(); // empty string
+    expect(
+      parseTicket("/q/a.md", `---\ngithub:\n  nwo: acme/api\n  issue: 7\n  kind: nope\n---\nb`)
+        .github,
+    ).toBeNull(); // bad kind
+  });
+
+  it("accepts kind: plan in the github block", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: gh-a-b-1-plan\nworkdir: /tmp/c\ngithub:\n  nwo: a/b\n  issue: 1\n  kind: plan\n---\nbody`,
+    );
+    expect(t.github?.kind).toBe("plan");
+  });
 });

@@ -60,6 +60,15 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   logLevel: "info",
+  github: {
+    enabled: false,
+    triggerLabel: "junco",
+    askLabel: "junco:ask",
+    pollIntervalSeconds: 60,
+    repos: [],
+    requireApproval: true,
+    plannerModelId: null,
+  },
 };
 
 function makeConfig(vaultRoot: string): Config {

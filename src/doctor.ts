@@ -13,6 +13,9 @@ import { endpointReachable } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
+import { nwoFromRemoteUrl } from "./githubInbox.js";
+import { loadDispatchTemplate } from "./planPrompt.js";
+import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -24,6 +27,7 @@ export interface DoctorDeps {
   fetchModelsFn?: typeof fetchModels;
   accessOkFn?: (dir: string) => boolean;
   lockHolderFn?: (lockPath: string) => number | null;
+  readTemplateFn?: () => string;
   printFn?: (s: string) => void;
 }
 
@@ -133,6 +137,46 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       ["state dir", cfg.stateDir],
     ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
+    }
+
+    // 7b. github bridge (only when enabled — disabled setups print nothing)
+    if (cfg.github.enabled) {
+      try {
+        (deps.readTemplateFn ?? loadDispatchTemplate)();
+        report("ok", "github planner template", "skills/junco-dispatch/TEMPLATE.md");
+      } catch (e) {
+        report(
+          "fail",
+          "github planner template",
+          `unreadable — planning tickets will fail (${e instanceof Error ? e.message : String(e)})`,
+        );
+      }
+
+      const watchedRepos = resolveWatchedRepos(cfg);
+      if (watchedRepos.length === 0) {
+        report("warn", "github", "enabled but no repos configured — the bridge will idle");
+      }
+      for (const repo of watchedRepos) {
+        const origin = await execFn(cfg.gitBin, ["-C", repo.path, "remote", "get-url", "origin"]);
+        const actual = origin.code === 0 ? nwoFromRemoteUrl(origin.stdout.trim()) : null;
+        if (actual === null || actual.toLowerCase() !== repo.nwo.toLowerCase()) {
+          report(
+            "fail",
+            `github repo ${repo.nwo}`,
+            origin.code !== 0
+              ? `${repo.path} is not a git clone (or has no origin)`
+              : `origin is ${actual ?? origin.stdout.trim()}, expected ${repo.nwo}`,
+          );
+          continue;
+        }
+        const view = await execFn(cfg.ghBin, ["repo", "view", repo.nwo, "--json", "name"]);
+        report(
+          view.code === 0 ? "ok" : "fail",
+          `github repo ${repo.nwo}`,
+          view.code === 0 ? repo.path : "not reachable via gh (auth? spelling?)",
+        );
+      }
+      report("ok", "github watchlist", watchlistPath(cfg));
     }
 
     // 8. daemon (informational)

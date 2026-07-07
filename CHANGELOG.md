@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-06
+
+### Added
+
+- **GitHub-integrated inbox mode.** Trigger-labeled GitHub issues are **planned first, then executed**: the daemon sweeps watched repos (`[github]` config section, default off — zero GitHub calls when disabled), verifies the labeler has write access (fail-closed), and dispatches a daemon-authored planning ticket built from the `junco-dispatch` skill's template (read-only session at the mapped clone; `planner_model_id` optionally plans with a different model). The plan is posted back as one editable issue comment for review; a write+ collaborator applies `junco:approved` to authorize execution (or set `require_approval = false` to auto-execute — recommended only for trusted private repos), and Junco then reads the (possibly edited) plan back out of the comment to build the execution ticket. Silent lifecycle labels track every step (`junco:planning/plan-ready/approved/queued/working/done/failed/denied`), and exactly one finalize comment lands per hop (the plan, or the PR link + summary / Q&A answer / failure reason). PR bodies gain a deterministic `Closes owner/repo#N`; an ask label skips planning entirely and routes straight to the read-only Q&A path; sub-issue parents are attached as background context for the planner. `junco doctor` validates repo mappings (clone exists, origin matches, reachable via `gh`) and that the planner template is readable; `junco status` and `/health` report bridge sweeps.
+- **Ticket schema (additive):** worker-managed `github` provenance block and `workdir` (Q&A session cwd, validated against `allowed_repo_roots`).
+- **`junco dashboard`** — an interactive terminal UI for GitHub-integrated mode: a repos pane with per-state issue counts, an issues pane with lifecycle glyphs, and a status bar with daemon health, plus in-terminal plan review before dispatch/approve/re-plan. Repos can be added or removed at runtime through a hot-reloaded watchlist file (no daemon restart) that lives alongside, and defers to, `config.toml`'s repo mappings.
+- **`junco restart`** — restart the supervised daemon (picks up config + code changes): discovers the launchd/systemd user unit whose invocation references your config path, kicks it with the platform-correct verb (`launchctl kickstart -k` / `systemctl --user restart`), validates the config first (never bounces onto an unparseable config), and verifies the pid changed.
+- **Dashboard command palette + focus keys** — `:` opens a palette that runs junco CLI subcommands from inside the dashboard (spawns the real CLI against the same config; output + exit code in a scrollable pane; args field for `list`/`retry`/`submit`/`logs`/`service`; `logs` bounded; `init`/`start`/`dashboard` excluded with reasons). `w` opens add-repo (the watchlist key); `i` jumps to the issues pane; a persistent context-aware shortcut bar shows the full key set at all times. Add-repo can auto-clone: leave the path empty and the repo is cloned into a managed directory under the state dir, then validated and watched as usual.
+
 ## [0.3.0] - 2026-06-10
 
 ### Added

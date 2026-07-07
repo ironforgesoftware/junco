@@ -85,6 +85,21 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         "Tool allowlist override for this ticket's agent session. Q&A tickets default to a read-only subset (read, grep, find, ls); list tools explicitly (e.g. [read, grep, bash]) to opt in to more.",
     },
+    workdir: {
+      type: "string",
+      description:
+        "Q&A tickets only: directory the session runs in (read-only tools). Defaults to the worker's processing directory.",
+    },
+    github: {
+      type: "object",
+      description:
+        "Worker-managed: provenance of a ticket bridged from a GitHub issue. Do not set by hand.",
+      properties: {
+        nwo: { type: "string", description: "Repository name-with-owner, e.g. acme/api." },
+        issue: { type: "integer", minimum: 1, description: "Source issue number." },
+        kind: { type: "string", enum: ["pr", "ask", "plan"], description: "Execution path." },
+      },
+    },
   },
   required: [],
 };

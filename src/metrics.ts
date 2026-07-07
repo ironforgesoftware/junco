@@ -24,6 +24,11 @@ export interface MetricsSnapshot {
   totalDurationMs: number;
   lastTaskAt: string | null; // ISO of the most recent recordTask()
   lastTaskStatus: string | null;
+  // GitHub bridge (issues → inbox): sweep counters, 0/null when disabled.
+  bridgeSweeps: number;
+  lastBridgeSweepAt: string | null;
+  ticketsBridged: number;
+  bridgeErrors: number;
   /** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
   currentProgress: Record<
     string,
@@ -47,6 +52,10 @@ export class RunMetrics {
   private _totalDurationMs = 0;
   private _lastTaskAt: Date | null = null;
   private _lastTaskStatus: string | null = null;
+  private _bridgeSweeps = 0;
+  private _ticketsBridged = 0;
+  private _bridgeErrors = 0;
+  private _lastBridgeSweepAt: Date | null = null;
   private _progress: Record<
     string,
     { turns: number; lastTool: string | null; outputTokens: number; updatedAt: string }
@@ -67,6 +76,18 @@ export class RunMetrics {
   recordPoll(): void {
     this._pollCount++;
     this._lastPollAt = this._now();
+  }
+
+  /** A bridge sweep completed; `bridged` = tickets materialized this sweep. */
+  recordBridgeSweep(bridged: number): void {
+    this._bridgeSweeps++;
+    this._ticketsBridged += bridged;
+    this._lastBridgeSweepAt = this._now();
+  }
+
+  /** A bridge sweep failed (queue unaffected). */
+  recordBridgeError(): void {
+    this._bridgeErrors++;
   }
 
   /** A task entered execution. */
@@ -150,6 +171,10 @@ export class RunMetrics {
       totalDurationMs: this._totalDurationMs,
       lastTaskAt: this._lastTaskAt ? this._lastTaskAt.toISOString() : null,
       lastTaskStatus: this._lastTaskStatus,
+      bridgeSweeps: this._bridgeSweeps,
+      lastBridgeSweepAt: this._lastBridgeSweepAt ? this._lastBridgeSweepAt.toISOString() : null,
+      ticketsBridged: this._ticketsBridged,
+      bridgeErrors: this._bridgeErrors,
       currentProgress: { ...this._progress },
     };
   }
@@ -169,6 +194,10 @@ export class RunMetrics {
     this._totalDurationMs = 0;
     this._lastTaskAt = null;
     this._lastTaskStatus = null;
+    this._bridgeSweeps = 0;
+    this._ticketsBridged = 0;
+    this._bridgeErrors = 0;
+    this._lastBridgeSweepAt = null;
     this._progress = {};
   }
 }

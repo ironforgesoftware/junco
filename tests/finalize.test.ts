@@ -37,7 +37,8 @@ const ok: RunResult = {
 describe("finalize", () => {
   it("writes reply + status to done/ and leaves no temp file", () => {
     const { ticket, done, failed } = sandbox();
-    const dst = finalize(ticket, ok, { done, failed });
+    const { dst, status } = finalize(ticket, ok, { done, failed });
+    expect(status).toBe("completed");
     expect(dst.startsWith(done)).toBe(true);
     const text = readFileSync(dst, "utf8");
     expect(text).toContain("status: completed");
@@ -48,14 +49,16 @@ describe("finalize", () => {
 
   it("routes timed-out runs to failed/", () => {
     const { ticket, done, failed } = sandbox();
-    const dst = finalize(ticket, { ...ok, timedOut: true }, { done, failed });
+    const { dst, status } = finalize(ticket, { ...ok, timedOut: true }, { done, failed });
+    expect(status).toBe("timeout");
     expect(dst.startsWith(failed)).toBe(true);
     expect(readFileSync(dst, "utf8")).toContain("status: timeout");
   });
 
   it("routes errored runs to failed/", () => {
     const { ticket, done, failed } = sandbox();
-    const dst = finalize(ticket, { ...ok, errorMessage: "boom" }, { done, failed });
+    const { dst, status } = finalize(ticket, { ...ok, errorMessage: "boom" }, { done, failed });
+    expect(status).toBe("failed");
     expect(dst.startsWith(failed)).toBe(true);
     expect(readFileSync(dst, "utf8")).toContain("status: failed");
   });
