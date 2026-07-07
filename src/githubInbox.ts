@@ -234,7 +234,9 @@ export function buildPlanComment(
 export interface BridgeState {
   /** nwo set whose lifecycle labels were ensured this process. */
   labelsEnsured: Set<string>;
-  /** nwo → origin-check verdict (a mismatch disables the repo this process). */
+  /** `${nwo}|${path}` → origin-check verdict (a mismatch disables the repo this
+   * process). Keyed by path too so a watchlist hot-reload that corrects (or
+   * breaks) a mapped path is re-validated instead of served from a stale nwo. */
   originOk: Map<string, boolean>;
   /** Authenticated gh login (cached) — plan comments must be self-authored. */
   login: string | null;
@@ -270,7 +272,8 @@ async function originOkFor(
   state: BridgeState,
   gitFn: typeof git,
 ): Promise<boolean> {
-  const cached = state.originOk.get(repo.nwo);
+  const key = `${repo.nwo.toLowerCase()}|${repo.path}`;
+  const cached = state.originOk.get(key);
   if (cached !== undefined) return cached;
   let ok = false;
   try {
@@ -290,7 +293,7 @@ async function originOkFor(
       error: errMsg(e),
     });
   }
-  state.originOk.set(repo.nwo, ok);
+  state.originOk.set(key, ok);
   return ok;
 }
 

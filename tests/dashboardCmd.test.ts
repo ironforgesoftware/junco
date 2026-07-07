@@ -45,6 +45,28 @@ describe("runDashboard", () => {
     expect(code).toBe(0);
     expect(rendered).toBe(true);
   });
+
+  // Fix 4: the bridge never sweeps when github.enabled=false, so dispatches from
+  // the UI would sit forever. Refuse to launch a live-looking dashboard.
+  it("github.enabled=false exits 1 with guidance and never renders", async () => {
+    const disabled = {
+      ...cfg,
+      github: { ...cfg.github, enabled: false },
+    } as unknown as Config;
+    let rendered = false;
+    const errs: string[] = [];
+    const code = await runDashboard(disabled, {
+      isTTY: true,
+      renderFn: () => {
+        rendered = true;
+        return { waitUntilExit: async () => {} };
+      },
+      printErr: (s) => errs.push(s),
+    });
+    expect(code).toBe(1);
+    expect(rendered).toBe(false);
+    expect(errs.join("")).toContain("enabled = false");
+  });
 });
 
 describe("lazy loading discipline", () => {

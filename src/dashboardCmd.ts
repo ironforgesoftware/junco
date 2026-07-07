@@ -24,6 +24,17 @@ export async function runDashboard(cfg: Config, deps: DashboardDeps = {}): Promi
     return 1;
   }
 
+  // The daemon only sweeps GitHub when the bridge is enabled; with it off, a
+  // dispatch from the UI would sit forever while the dashboard looks live. Refuse
+  // rather than mislead. (Checked before the Ink import so the guard stays cheap.)
+  if (!cfg.github.enabled) {
+    printErr(
+      "GitHub mode is disabled ([github] enabled = false); the daemon will not act on dispatches. " +
+        "Enable it in config.toml.\n",
+    );
+    return 1;
+  }
+
   const [{ App }, { makeGhDashboardClient }, { watchlistPath }, react, ink] = await Promise.all([
     import("./tui/App.js"),
     import("./tui/ghClient.js"),
@@ -35,19 +46,16 @@ export async function runDashboard(cfg: Config, deps: DashboardDeps = {}): Promi
     deps.renderFn ?? ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true }));
 
   const client = makeGhDashboardClient(cfg);
-  let exitRequested = false;
   const instance = renderFn(
     react.createElement(App, {
       client,
       trigger: cfg.github.triggerLabel,
       configRepos: cfg.github.repos,
       watchlistFile: watchlistPath(cfg),
-      onExit: () => {
-        exitRequested = true;
-      },
+      // App drives useApp().exit() itself; this stays a no-op hook point.
+      onExit: () => {},
     }),
   );
   await instance.waitUntilExit();
-  void exitRequested;
   return 0;
 }

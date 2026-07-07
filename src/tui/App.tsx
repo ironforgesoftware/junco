@@ -13,6 +13,7 @@ import { allowedActions, deriveState, sortIssues } from "./state.js";
 import { lifecycleLabels } from "../githubInbox.js";
 import type { WatchlistEntry } from "../watchlist.js";
 import { readWatchlist, writeWatchlist } from "../watchlist.js";
+import { expandHome } from "../config.js";
 import type { GithubRepoMapping } from "../types.js";
 import { RepoList } from "./components/RepoList.js";
 import type { RepoRow } from "./components/RepoList.js";
@@ -35,6 +36,7 @@ export interface AppProps {
 type Pane = "repos" | "issues";
 type View = "main" | "detail" | "help" | "addRepo";
 interface DetailState {
+  issue: DashIssue; // snapshot taken at open — never re-read from the live list
   body: string | null;
   planComment: string | null;
   loading: boolean;
@@ -76,24 +78,27 @@ export function App(props: AppProps): React.JSX.Element {
   const healthPollMs = props.healthPollMs ?? 5_000;
   const { exit } = useApp();
 
+  const initialWatchlist = readWatchlist(watchlistFile);
   const [watchlistEntries, setWatchlistEntries] = useState<WatchlistEntry[]>(
-    () => readWatchlist(watchlistFile).entries,
+    initialWatchlist.entries,
   );
+  const [watchlistError, setWatchlistError] = useState<string | null>(initialWatchlist.error);
   const [repoIdx, setRepoIdx] = useState(0);
   const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
-  const [issueIdx, setIssueIdx] = useState(0);
+  // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
+  // so a poll that re-sorts the list keeps the cursor on the same issue.
+  const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
   const [pane, setPane] = useState<Pane>("repos");
   const [view, setView] = useState<View>("main");
-  const [detail, setDetail] = useState<DetailState>({
-    body: null,
-    planComment: null,
-    loading: false,
-  });
+  const [detail, setDetail] = useState<DetailState | null>(null);
   const [scroll, setScroll] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [addRepoBusy, setAddRepoBusy] = useState(false);
+  // Last resolved positional index — the fallback when the selected issue number
+  // vanishes from the list (closed/filtered), so the cursor stays near its slot.
+  const lastIdxRef = useRef(0);
 
   // Config repos ∪ watchlist, deduped by nwo (config wins) — recomputed after
   // every watchlist write since setWatchlistEntries drives this memo.
@@ -112,7 +117,17 @@ export function App(props: AppProps): React.JSX.Element {
   const currentRepo = repoMappings[repoIdxSafe];
   const currentNwo = currentRepo?.nwo;
   const currentIssues = currentNwo ? (issues[currentNwo] ?? []) : [];
-  const issueIdxSafe = Math.max(0, Math.min(issueIdx, currentIssues.length - 1));
+  // Resolve the anchored number to a live index; fall back to the clamped last
+  // index only when that issue is gone.
+  const selNum = currentNwo ? selectedNum[currentNwo] : undefined;
+  const byNum = selNum !== undefined ? currentIssues.findIndex((i) => i.number === selNum) : -1;
+  const issueIdxSafe =
+    currentIssues.length === 0
+      ? 0
+      : byNum >= 0
+        ? byNum
+        : Math.min(lastIdxRef.current, currentIssues.length - 1);
+  lastIdxRef.current = issueIdxSafe;
   const currentIssue = currentIssues[issueIdxSafe];
 
   // Per-repo issue counts for the RepoList badges, derived from loaded issues.
@@ -141,9 +156,23 @@ export function App(props: AppProps): React.JSX.Element {
   // Load issues for the selected repo (initial mount + every selection change).
   useEffect(() => {
     if (!currentNwo) return;
-    setIssueIdx(0);
     loadIssues(currentNwo);
   }, [currentNwo, loadIssues]);
+
+  // Keep the per-repo anchored selection valid: pick the top row on first load,
+  // and when the selected issue disappears fall back to the same slot. A number
+  // that is still present is left untouched so re-sorts don't move the cursor.
+  useEffect(() => {
+    if (!currentNwo) return;
+    const arr = issues[currentNwo];
+    if (!arr || arr.length === 0) return;
+    setSelectedNum((m) => {
+      const cur = m[currentNwo];
+      if (cur !== undefined && arr.some((i) => i.number === cur)) return m;
+      const idx = Math.max(0, Math.min(lastIdxRef.current, arr.length - 1));
+      return { ...m, [currentNwo]: arr[idx].number };
+    });
+  }, [currentNwo, issues]);
 
   // Issue polling — reads the live selection from a ref so the interval never
   // goes stale as the operator navigates.
@@ -209,15 +238,21 @@ export function App(props: AppProps): React.JSX.Element {
   const openDetail = useCallback(() => {
     if (!currentNwo || !currentIssue) return;
     const nwo = currentNwo;
-    const num = currentIssue.number;
+    const snapshot = currentIssue; // frozen at open — the header never swaps mid-read
+    const num = snapshot.number;
     setScroll(0);
-    setDetail({ body: null, planComment: null, loading: true });
+    setDetail({ issue: snapshot, body: null, planComment: null, loading: true });
     setView("detail");
     void client.issueDetail(nwo, num).then((res) => {
       if (res.ok) {
-        setDetail({ body: res.value.body, planComment: res.value.planComment, loading: false });
+        setDetail({
+          issue: snapshot,
+          body: res.value.body,
+          planComment: res.value.planComment,
+          loading: false,
+        });
       } else {
-        setDetail({ body: null, planComment: null, loading: false });
+        setDetail({ issue: snapshot, body: null, planComment: null, loading: false });
         setToast(res.error);
       }
     });
@@ -236,31 +271,52 @@ export function App(props: AppProps): React.JSX.Element {
       setToast(`${currentRepo.nwo} is defined in config.toml`);
       return;
     }
-    const cur = readWatchlist(watchlistFile).entries;
+    if (watchlistError) {
+      setToast("watchlist unreadable — fix it before writing");
+      return;
+    }
+    // Re-read at write time: never clobber a file that went corrupt since mount.
+    const { entries: cur, error } = readWatchlist(watchlistFile);
+    if (error) {
+      setWatchlistError(error);
+      setToast("watchlist unreadable — not written");
+      return;
+    }
     const next = cur.filter((e) => e.nwo.toLowerCase() !== currentRepo.nwo.toLowerCase());
     writeWatchlist(watchlistFile, next);
     setWatchlistEntries(next);
     setToast(`unwatched ${currentRepo.nwo}`);
-  }, [currentRepo, watchlistFile]);
+  }, [currentRepo, watchlistFile, watchlistError]);
 
   const handleAddRepo = useCallback(
     async (nwo: string, path: string): Promise<void> => {
+      if (watchlistError) {
+        setToast("watchlist unreadable — fix it before writing");
+        return;
+      }
+      const expanded = expandHome(path); // ONE expansion point: validate + store agree
       setAddRepoBusy(true);
       setAddRepoError(null);
-      const res = await client.validateAndPrepareRepo(nwo, path);
+      const res = await client.validateAndPrepareRepo(nwo, expanded);
       setAddRepoBusy(false);
       if (!res.ok) {
         setAddRepoError(res.error);
         return;
       }
-      const cur = readWatchlist(watchlistFile).entries;
-      const next = [...cur, { nwo, path }];
+      const { entries: cur, error } = readWatchlist(watchlistFile);
+      if (error) {
+        setWatchlistError(error);
+        setView("main");
+        setToast("watchlist unreadable — not written");
+        return;
+      }
+      const next = [...cur, { nwo, path: expanded }];
       writeWatchlist(watchlistFile, next);
       setWatchlistEntries(next);
       setView("main");
       setToast(`watching ${nwo}`);
     },
-    [client, watchlistFile],
+    [client, watchlistFile, watchlistError],
   );
 
   useInput((input, key) => {
@@ -293,6 +349,10 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "h") return void setPane("repos");
     if (input === "l") return void setPane("issues");
     if (input === "A") {
+      if (watchlistError) {
+        setToast("watchlist unreadable — fix it before adding");
+        return;
+      }
       setAddRepoError(null);
       setView("addRepo");
       return;
@@ -311,11 +371,15 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
-    // issues pane
-    if (input === "j" || key.downArrow) {
-      return void setIssueIdx((i) => Math.min(i + 1, currentIssues.length - 1));
-    }
-    if (input === "k" || key.upArrow) return void setIssueIdx((i) => Math.max(0, i - 1));
+    // issues pane — move the anchored NUMBER, not a bare index.
+    const moveIssue = (delta: number): void => {
+      if (!currentNwo || currentIssues.length === 0) return;
+      const next = Math.max(0, Math.min(issueIdxSafe + delta, currentIssues.length - 1));
+      const num = currentIssues[next].number;
+      setSelectedNum((m) => ({ ...m, [currentNwo]: num }));
+    };
+    if (input === "j" || key.downArrow) return void moveIssue(1);
+    if (input === "k" || key.upArrow) return void moveIssue(-1);
     if (key.return) return void openDetail();
     if (input === "d") return void runAction("dispatch");
     if (input === "D") return void runAction("dispatchAsk");
@@ -337,9 +401,9 @@ export function App(props: AppProps): React.JSX.Element {
           selected={repoIdxSafe}
           focused={view === "main" && pane === "repos"}
         />
-        {view === "detail" && currentIssue ? (
+        {view === "detail" && detail ? (
           <IssueDetail
-            issue={currentIssue}
+            issue={detail.issue}
             trigger={trigger}
             body={detail.body}
             planComment={detail.planComment}
@@ -355,7 +419,7 @@ export function App(props: AppProps): React.JSX.Element {
           />
         )}
       </Box>
-      <StatusBar health={health} toast={toast} hints={hints} />
+      <StatusBar health={health} toast={toast} hints={hints} watchlistError={watchlistError} />
       {view === "help" && <HelpOverlay trigger={trigger} />}
       {view === "addRepo" && (
         <AddRepoForm

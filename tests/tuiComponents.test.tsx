@@ -81,6 +81,30 @@ describe("StatusBar", () => {
     );
     expect(lastFrame()).toContain("daemon ○ not running");
   });
+
+  // Fix 6: a multi-line, oversized toast (raw gh stderr) must not blow up the
+  // single-line bar — newlines collapse to " · " and everything truncates.
+  it("collapses newline-laden long toasts onto one line", () => {
+    const long = "gh error\n" + "x".repeat(500) + "\nmore detail";
+    const withToast = render(<StatusBar health={null} toast={long} hints="q quit" />);
+    const noToast = render(<StatusBar health={null} toast={null} hints="q quit" />);
+    const lineCount = (s: string): number => s.split("\n").length;
+    expect(lineCount(withToast.lastFrame()!)).toBe(lineCount(noToast.lastFrame()!));
+    expect(withToast.lastFrame()).toContain("·"); // newlines became separators
+  });
+
+  it("renders a persistent watchlist-error banner", () => {
+    const { lastFrame } = render(
+      <StatusBar
+        health={null}
+        toast={null}
+        hints=""
+        watchlistError="watchlist is not valid JSON: boom"
+      />,
+    );
+    expect(lastFrame()).toContain("watchlist:");
+    expect(lastFrame()).toContain("not valid JSON");
+  });
 });
 
 describe("HelpOverlay", () => {

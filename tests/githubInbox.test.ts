@@ -315,6 +315,46 @@ describe("pollGithubInbox", () => {
     expect(labelCreates).toHaveLength(8); // once per lifecycle label, first sweep only
   });
 
+  it("origin cache is keyed by path: a corrected watchlist path re-validates", async () => {
+    // Watchlist-driven (config repos empty) so the path can hot-reload between
+    // sweeps; the origin verdict must not stick to a stale path for the nwo.
+    const dir = mkdtempSync(join(tmpdir(), "junco-originkey-"));
+    const wlCfg = {
+      ...bridgeCfg,
+      stateDir: dir,
+      github: { ...bridgeCfg.github, repos: [] },
+    } as Config;
+    const wlFile = watchlistPath(wlCfg);
+    const calls: string[][] = [];
+    const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
+    const gitFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+      calls.push(["git", ...args]);
+      const path = args[1]; // -C <path> remote get-url origin
+      return ok(
+        path === "/good" ? "https://github.com/acme/api.git" : "https://github.com/other/thing.git",
+      );
+    };
+    const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "list") return ok(JSON.stringify([]));
+      if (args[0] === "label") return ok("");
+      throw new Error(`unhandled gh argv: ${args.join(" ")}`);
+    };
+    const submitFn = (): string => "/inbox/x.md";
+    try {
+      const state = newBridgeState();
+      writeWatchlist(wlFile, [{ nwo: "acme/api", path: "/bad" }]);
+      await pollGithubInbox(wlCfg, state, { ghFn, gitFn, submitFn } as never);
+      expect(calls.find((c) => c[0] === "issue" && c[1] === "list")).toBeUndefined(); // disabled
+
+      writeWatchlist(wlFile, [{ nwo: "acme/api", path: "/good" }]);
+      await pollGithubInbox(wlCfg, state, { ghFn, gitFn, submitFn } as never);
+      expect(calls.find((c) => c[0] === "issue" && c[1] === "list")).toBeDefined(); // re-validated
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a repo-level list failure is contained (returns 0, no throw)", async () => {
     const f = makeFakes({ failList: true });
     await expect(pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).resolves.toBe(0);
