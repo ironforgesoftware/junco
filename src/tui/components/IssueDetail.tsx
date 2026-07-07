@@ -54,8 +54,8 @@ export function IssueDetail({
       ))}
       {lines.length > VISIBLE_LINES && (
         <Text dimColor>
-          j/k scroll · {scroll + 1}-{Math.min(scroll + VISIBLE_LINES, lines.length)}/{lines.length}{" "}
-          · esc back
+          [ / ] scroll · {scroll + 1}-{Math.min(scroll + VISIBLE_LINES, lines.length)}/
+          {lines.length} · esc back
         </Text>
       )}
     </Box>

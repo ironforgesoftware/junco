@@ -10,7 +10,7 @@ export function shortcutsFor(view: BarView, pane: BarPane): [string, string][] {
   switch (view) {
     case "detail":
       return [
-        ["j/k", "scroll"],
+        ["[ / ]", "scroll"],
         ["esc", "back"],
       ];
     case "palette":
@@ -22,7 +22,7 @@ export function shortcutsFor(view: BarView, pane: BarPane): [string, string][] {
       ];
     case "cmdOutput":
       return [
-        ["j/k", "scroll"],
+        ["[ / ]", "scroll"],
         ["r", "re-run"],
         ["esc", "back"],
       ];

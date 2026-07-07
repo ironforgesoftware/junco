@@ -49,11 +49,18 @@ function fakeGh() {
 }
 
 describe("buildFinalComment", () => {
-  it("pr success: link + first-paragraph summary", () => {
+  it("pr success: link + a generous excerpt (not just the first paragraph)", () => {
     const c = buildFinalComment(ticket(gt), out({}));
     expect(c).toContain("Opened https://github.com/acme/api/pull/7");
     expect(c).toContain("Implemented the limiter.");
-    expect(c).not.toContain("More detail here."); // only the first paragraph
+    expect(c).toContain("More detail here."); // chatty lead-ins no longer eat the summary
+  });
+
+  it("pr success: very long final text is cut at a boundary with an ellipsis", () => {
+    const long = "word ".repeat(300).trim(); // ~1500 chars, no paragraph breaks
+    const c = buildFinalComment(ticket(gt), out({ finalText: long }));
+    expect(c).toContain("…");
+    expect(c.length).toBeLessThan(long.length);
   });
 
   it("partial salvage is called out explicitly", () => {

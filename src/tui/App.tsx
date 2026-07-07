@@ -443,8 +443,8 @@ export function App(props: AppProps): React.JSX.Element {
 
     if (view === "detail") {
       if (key.escape) return void setView("main");
-      if (input === "j" || key.downArrow) return void setScroll((s) => s + 1);
-      if (input === "k" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+      if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
+      if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
       return;
     }
 
@@ -471,8 +471,8 @@ export function App(props: AppProps): React.JSX.Element {
 
     if (view === "cmdOutput") {
       if (key.escape) return void setView("palette");
-      if (input === "j" || key.downArrow) return void setScroll((s) => s + 1);
-      if (input === "k" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+      if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
+      if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
       if (input === "r" && cmd && !cmd.running) {
         return void runPaletteCommand(cmd.name, cmd.extraArgs);
       }

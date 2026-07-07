@@ -28,13 +28,18 @@ export { COMMENT_LIMIT };
 const GH_TIMEOUT = 60_000;
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-function firstParagraph(text: string, cap = 600): string {
-  const p =
-    text
-      .trim()
-      .split(/\n\s*\n/)[0]
-      ?.trim() ?? "";
-  return p.length > cap ? p.slice(0, cap) + "…" : p;
+/** A generous excerpt of the agent's final message. First-paragraph-only
+ * proved too narrow in practice (models often open with process narration
+ * before the real summary), so include up to `cap` chars, cutting at the
+ * last paragraph/word boundary. */
+function excerpt(text: string, cap = 700): string {
+  const t = text.trim();
+  if (t.length <= cap) return t;
+  const slice = t.slice(0, cap);
+  const atPara = slice.lastIndexOf("\n\n");
+  const atWord = slice.lastIndexOf(" ");
+  const cut = atPara > cap * 0.4 ? atPara : atWord > 0 ? atWord : cap;
+  return slice.slice(0, cut).trimEnd() + " …";
 }
 
 export function buildFinalComment(ticket: Ticket, outcome: TicketOutcome): string {
@@ -58,7 +63,7 @@ export function buildFinalComment(ticket: Ticket, outcome: TicketOutcome): strin
           "cutoff were salvaged into the PR. Review for completeness.",
       );
     }
-    const summary = firstParagraph(outcome.finalText);
+    const summary = excerpt(outcome.finalText);
     if (summary) parts.push(summary);
   } else if (done) {
     parts.push(`Finished with status \`${outcome.status}\` — no pull request was needed.`);

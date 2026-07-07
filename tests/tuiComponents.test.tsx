@@ -145,7 +145,9 @@ describe("ShortcutBar", () => {
     const issuesBar = render(<ShortcutBar view="main" pane="issues" />).lastFrame()!;
     for (const s of ["d dispatch", "a approve", "R re-plan/cycle", "o browser", "enter detail"])
       expect(issuesBar).toContain(s);
-    expect(render(<ShortcutBar view="detail" pane="issues" />).lastFrame()).toContain("esc back");
+    const detailBar = render(<ShortcutBar view="detail" pane="issues" />).lastFrame()!;
+    expect(detailBar).toContain("esc back");
+    expect(detailBar).toContain("[ / ] scroll");
     expect(render(<ShortcutBar view="palette" pane="repos" />).lastFrame()).toContain("enter run");
     expect(render(<ShortcutBar view="cmdOutput" pane="repos" />).lastFrame()).toContain("re-run");
     expect(render(<ShortcutBar view="addRepo" pane="repos" />).lastFrame()).toContain("cancel");
