@@ -373,7 +373,7 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write("\r"); // empty -> defaults
     await tick();
-    expect(runs).toEqual([["logs", ["-n", "200"]]]);
+    expect(runs).toEqual([["logs", ["-n", "200", "--human"]]]);
   });
 
   it("excluded commands toast the reason and never run", async () => {

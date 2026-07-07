@@ -60,7 +60,7 @@ describe("PALETTE_COMMANDS roster", () => {
 
   it("logs runs bounded by default (never -f)", () => {
     const logs = PALETTE_COMMANDS.find((c) => c.name === "logs")!;
-    expect(logs.defaultArgs).toEqual(["-n", "200"]);
+    expect(logs.defaultArgs).toEqual(["-n", "200", "--human"]);
     expect(logs.defaultArgs).not.toContain("-f");
   });
 });
@@ -112,5 +112,34 @@ describe("runCliCommand", () => {
     const r = await p;
     expect(r.code).toBeNull();
     expect(r.output).toContain("ENOENT");
+  });
+});
+
+describe("roster ↔ CLI USAGE consistency", () => {
+  it("every runnable roster name is a documented cli.ts subcommand", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8");
+    const usage = src.slice(src.indexOf("Subcommands:"), src.indexOf("Options:"));
+    for (const c of PALETTE_COMMANDS.filter((c) => c.excluded === null)) {
+      expect(usage, `roster entry '${c.name}' missing from cli.ts USAGE`).toMatch(
+        new RegExp(`^\\s{2}${c.name}(\\s|$)`, "m"),
+      );
+    }
+  });
+
+  it("logs default args force the human format for piped capture", () => {
+    const logs = PALETTE_COMMANDS.find((c) => c.name === "logs")!;
+    expect(logs.defaultArgs).toEqual(["-n", "200", "--human"]);
+  });
+
+  it("a synchronous spawn throw still resolves", async () => {
+    const r = await runCliCommand("/cfg/config.toml", "status", [], {
+      cliPath: "/fake/cli.js",
+      spawnFn: (() => {
+        throw new Error("sync spawn boom");
+      }) as never,
+    });
+    expect(r.code).toBeNull();
+    expect(r.output).toContain("sync spawn boom");
   });
 });

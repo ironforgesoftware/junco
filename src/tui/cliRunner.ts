@@ -35,7 +35,7 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("list", "[box]", "List tickets per queue box (inbox|processing|done|failed)"),
   cmd("retry", "<name…|--all>", "Move failed tickets back to the inbox"),
   cmd("doctor", null, "Preflight: config, git, gh auth, endpoint, model, dirs"),
-  cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200"]),
+  cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200", "--human"]),
   cmd("run-once", null, "Process one task and exit (no lock)"),
   cmd("restart", null, "Restart the supervised daemon"),
   cmd("service", "[--platform launchd|systemd]", "Render a service file"),
@@ -78,9 +78,16 @@ export function runCliCommand(
     const chunks: string[] = [];
     let settled = false;
     let timedOut = false;
-    const child = spawnFn(process.execPath, [cliPath, name, ...extraArgs, "--config", configPath], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawnFn(process.execPath, [cliPath, name, ...extraArgs, "--config", configPath], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (e) {
+      // "Always resolves" holds even for a synchronous spawn throw.
+      resolvePromise({ code: null, output: String((e as Error).message ?? e), timedOut: false });
+      return;
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");

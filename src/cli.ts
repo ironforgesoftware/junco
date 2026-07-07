@@ -82,7 +82,7 @@ Subcommands:
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
-  logs [-f] [-n N] [--json]  Show (or follow) the worker log
+  logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
   restart      Restart the supervised daemon (picks up config + code changes)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
@@ -160,6 +160,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       follow: { type: "boolean", short: "f", default: false },
       lines: { type: "string", short: "n" },
       json: { type: "boolean", default: false },
+      human: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -344,7 +345,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     return runLogsCommand(cfg, {
       follow: values.follow as boolean,
       lines: Number.isInteger(n) && (n as number) > 0 ? n : undefined,
-      json: (values.json as boolean) || undefined,
+      // --human forces the readable format even when stdout is a pipe (the
+      // dashboard palette runs logs through a captured subprocess).
+      json: (values.human as boolean) ? false : (values.json as boolean) || undefined,
     });
   }
 

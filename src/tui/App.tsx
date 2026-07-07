@@ -52,6 +52,9 @@ interface CmdState {
   /** The invocation, kept for `r` re-run. */
   name: string;
   extraArgs: string[];
+  /** Monotonic run token — a stale resolution (same command re-run while the
+   * first subprocess was still going) must not clobber the newer run. */
+  token: number;
 }
 interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
@@ -298,11 +301,13 @@ export function App(props: AppProps): React.JSX.Element {
     setCmdElapsed(0);
     const id = setInterval(() => setCmdElapsed((s) => s + 1), 1000);
     return () => clearInterval(id);
-  }, [cmd?.running, cmd?.name]);
+  }, [cmd?.running, cmd?.token]);
 
+  const cmdTokenRef = useRef(0);
   const runPaletteCommand = useCallback(
     (name: string, extraArgs: string[]) => {
       const title = ["junco", name, ...extraArgs].join(" ");
+      const token = ++cmdTokenRef.current;
       setScroll(0);
       setCmd({
         title,
@@ -312,11 +317,12 @@ export function App(props: AppProps): React.JSX.Element {
         timedOut: false,
         name,
         extraArgs,
+        token,
       });
       setView("cmdOutput");
       void runCliFn(name, extraArgs).then((r) => {
         setCmd((prev) =>
-          prev && prev.name === name
+          prev && prev.token === token
             ? { ...prev, running: false, output: r.output, exitCode: r.code, timedOut: r.timedOut }
             : prev,
         );

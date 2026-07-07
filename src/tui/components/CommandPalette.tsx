@@ -71,7 +71,7 @@ export function CommandPalette({
           />
         </Box>
       )}
-      <Text dimColor>enter run · j/k move · esc close</Text>
+      <Text dimColor>enter run · ↑/↓ move · esc close</Text>
     </Box>
   );
 }
