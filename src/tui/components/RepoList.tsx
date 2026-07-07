@@ -29,9 +29,9 @@ export function RepoList({
       minWidth={24}
     >
       <Text bold dimColor={!focused}>
-        repos
+        GitHub repositories
       </Text>
-      {repos.length === 0 && <Text dimColor>none watched — press A</Text>}
+      {repos.length === 0 && <Text dimColor>none watched — press "w"</Text>}
       {repos.map((r, i) => {
         const badges = COUNT_ORDER.filter((s) => (r.counts[s] ?? 0) > 0)
           .map((s) => `${r.counts[s]}${stateMeta(s).glyph}`)

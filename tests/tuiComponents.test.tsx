@@ -125,3 +125,12 @@ describe("HelpOverlay", () => {
     }
   });
 });
+
+describe("RepoList copy", () => {
+  it("titles the pane 'GitHub repositories' and the empty state points at w", () => {
+    const { lastFrame } = render(<RepoList repos={[]} selected={0} focused={true} />);
+    const f = lastFrame()!;
+    expect(f).toContain("GitHub repositories");
+    expect(f).toContain('none watched — press "w"');
+  });
+});
