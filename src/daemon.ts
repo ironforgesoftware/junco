@@ -31,6 +31,7 @@ import {
 import { pollGithubInbox, newBridgeState } from "./githubInbox.js";
 import { makeGithubReporter } from "./githubReport.js";
 import type { TicketReporter } from "./reporter.js";
+import { outboxDepth } from "./githubOutbox.js";
 
 // ---------------------------------------------------------------------------
 // StopFlag
@@ -390,8 +391,17 @@ export async function mainLoop(
   log.info("worker exiting cleanly");
 }
 
-/** Default bridge sweep: process-lifetime state (label/origin caches) in a closure. */
+/** Default bridge sweep: process-lifetime state (label/origin caches) in a
+ * closure. Also wires the outbox-flush metrics hook: pollGithubInbox flushes
+ * the outbox before its repo loop and reports the result via onFlush, which
+ * we route to the metrics singleton here — the same layer that records
+ * recordBridgeSweep off this function's own return value, one call site up
+ * in maybeBridgeSweep. depth is recomputed per flush (outboxDepth is a cheap
+ * readdir) so the gauge reflects what's left in the queue right now. */
 function defaultBridgeSweep(): (cfg: Config) => Promise<number> {
   const state = newBridgeState();
-  return (cfg: Config) => pollGithubInbox(cfg, state);
+  return (cfg: Config) =>
+    pollGithubInbox(cfg, state, {
+      onFlush: (fr) => metrics.recordOutboxFlush(fr, outboxDepth(cfg)),
+    });
 }

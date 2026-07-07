@@ -360,6 +360,64 @@ describe("pollGithubInbox", () => {
     await expect(pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).resolves.toBe(0);
   });
 
+  describe("outbox flush", () => {
+    it("sweep flushes the outbox before listing issues", async () => {
+      const order: string[] = [];
+      const f = makeFakes({ issues: [] });
+      const ghFn = async (c: unknown, args: string[]) => {
+        if (args[0] === "issue" && args[1] === "list") order.push("list");
+        return f.ghFn(c, args);
+      };
+      const flushFn = async () => {
+        order.push("flush");
+        return { sent: 0, dead: 0, remaining: 0, offline: false };
+      };
+      await pollGithubInbox(bridgeCfg, newBridgeState(), {
+        ghFn,
+        gitFn: f.gitFn,
+        submitFn: f.submitFn,
+        flushFn,
+      } as never);
+      expect(order).toEqual(["flush", "list"]);
+    });
+
+    it("sweep continues quietly when flush reports offline", async () => {
+      const f = makeFakes({ failList: true });
+      const flushFn = async () => ({ sent: 0, dead: 0, remaining: 4, offline: true });
+      await expect(
+        pollGithubInbox(bridgeCfg, newBridgeState(), { ...f, flushFn } as never),
+      ).resolves.toBe(0);
+    });
+
+    it("a flushFn that throws is contained; the sweep still runs", async () => {
+      const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
+      const flushFn = async () => {
+        throw new Error("disk full");
+      };
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), {
+        ghFn: f.ghFn,
+        gitFn: f.gitFn,
+        submitFn: f.submitFn,
+        flushFn,
+      } as never);
+      expect(n).toBe(1); // the rest of the sweep proceeded unaffected
+    });
+
+    it("invokes onFlush with the flush result", async () => {
+      const f = makeFakes({ issues: [] });
+      const received: unknown[] = [];
+      const flushFn = async () => ({ sent: 1, dead: 0, remaining: 0, offline: false });
+      await pollGithubInbox(bridgeCfg, newBridgeState(), {
+        ghFn: f.ghFn,
+        gitFn: f.gitFn,
+        submitFn: f.submitFn,
+        flushFn,
+        onFlush: (fr: unknown) => received.push(fr),
+      } as never);
+      expect(received).toEqual([{ sent: 1, dead: 0, remaining: 0, offline: false }]);
+    });
+  });
+
   it("includes parent context when the issue is a sub-issue", async () => {
     const f = makeFakes({
       issues: [rawIssue],

@@ -376,3 +376,40 @@ describe("bridge metrics", () => {
     expect(s.lastBridgeSweepAt).toBeNull();
   });
 });
+
+describe("outbox metrics", () => {
+  it("outbox counters accumulate and snapshot additively", () => {
+    const m = new RunMetrics(() => new Date("2026-07-07T10:00:00Z"));
+    m.recordOutboxEnqueue();
+    m.recordOutboxFlush({ sent: 2, dead: 1, remaining: 3, offline: false }, 3);
+    const s = m.snapshot();
+    expect(s.outboxEnqueued).toBe(1);
+    expect(s.outboxFlushed).toBe(2);
+    expect(s.outboxDead).toBe(1);
+    expect(s.outboxDepth).toBe(3);
+    expect(s.lastFlushAt).toBe("2026-07-07T10:00:00.000Z");
+  });
+
+  it("outboxDepth is a gauge (last-flush value, not accumulated) while sent/dead accumulate", () => {
+    const m = new RunMetrics(() => new Date("2026-07-07T10:00:00Z"));
+    m.recordOutboxFlush({ sent: 2, dead: 1, remaining: 5, offline: false }, 5);
+    m.recordOutboxFlush({ sent: 1, dead: 0, remaining: 0, offline: false }, 0);
+    const s = m.snapshot();
+    expect(s.outboxFlushed).toBe(3);
+    expect(s.outboxDead).toBe(1);
+    expect(s.outboxDepth).toBe(0);
+  });
+
+  it("reset clears outbox fields", () => {
+    const m = new RunMetrics();
+    m.recordOutboxEnqueue();
+    m.recordOutboxFlush({ sent: 1, dead: 1, remaining: 2, offline: false }, 2);
+    m.reset();
+    const s = m.snapshot();
+    expect(s.outboxDepth).toBe(0);
+    expect(s.outboxEnqueued).toBe(0);
+    expect(s.outboxFlushed).toBe(0);
+    expect(s.outboxDead).toBe(0);
+    expect(s.lastFlushAt).toBeNull();
+  });
+});
