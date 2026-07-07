@@ -15,6 +15,7 @@ describe("Header", () => {
         queueRunning={1}
         queueWaiting={2}
         watchlistError={null}
+        outboxDepth={0}
         now={NOW}
       />,
     ).lastFrame()!;
@@ -34,12 +35,42 @@ describe("Header", () => {
         queueRunning={0}
         queueWaiting={0}
         watchlistError="corrupt json"
+        outboxDepth={0}
         now={NOW}
       />,
     ).lastFrame()!;
     expect(f).toContain("daemon ○");
     expect(f).toContain("watchlist!");
     expect(f).not.toContain("◐0"); // queue chip hidden when empty
+  });
+  it("shows the unpushed outbox chip when depth > 0, hidden at 0", () => {
+    const withDepth = render(
+      <Header
+        repoNwo="acme/api"
+        daemonUp={true}
+        uptimeSeconds={60}
+        queueRunning={0}
+        queueWaiting={0}
+        watchlistError={null}
+        outboxDepth={3}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(withDepth).toContain("⇡3 unpushed");
+
+    const noDepth = render(
+      <Header
+        repoNwo="acme/api"
+        daemonUp={true}
+        uptimeSeconds={60}
+        queueRunning={0}
+        queueWaiting={0}
+        watchlistError={null}
+        outboxDepth={0}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(noDepth).not.toContain("unpushed");
   });
 });
 

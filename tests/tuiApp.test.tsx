@@ -42,6 +42,7 @@ const QUEUE_SNAP: QueueSnapshot = {
   ],
   recent: [],
   error: null,
+  outboxDepth: 4,
 };
 
 function makeClient(
@@ -199,6 +200,18 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("gh boom"));
     expect(actions).toHaveLength(1);
     expect(r.lastFrame()).not.toContain("planning"); // rolled back
+  });
+
+  it("queued action toasts offline info and keeps the optimistic label (no rollback)", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue] });
+    const client: DashboardClient = { ...base, applyAction: async () => okv({ queued: true }) };
+    const r = renderApp(client, wl());
+    await tick();
+    r.stdin.write("\t"); // focus issues pane
+    await tick();
+    r.stdin.write("d");
+    await until(() => (r.lastFrame() ?? "").includes("offline — action queued"));
+    expect(r.lastFrame()).toContain("planning"); // optimistic label NOT rolled back
   });
 
   it("add-repo flow validates then persists to the watchlist", async () => {

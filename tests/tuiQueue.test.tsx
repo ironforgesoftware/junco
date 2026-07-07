@@ -14,6 +14,7 @@ const IDLE: QueueSnapshot = {
   waiting: [],
   recent: [],
   error: null,
+  outboxDepth: 0,
 };
 
 const BUSY: QueueSnapshot = {

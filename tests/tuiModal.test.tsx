@@ -32,5 +32,6 @@ describe("HelpModal", () => {
     expect(f).toContain("1/2/3");
     expect(f).toContain("/"); // filter key documented
     expect(f).toContain("press any key to close");
+    expect(f).toContain("unpushed"); // outbox chip documented in the system section
   });
 });

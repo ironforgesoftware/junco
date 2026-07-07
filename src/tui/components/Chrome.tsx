@@ -19,6 +19,7 @@ export function Header({
   queueRunning,
   queueWaiting,
   watchlistError,
+  outboxDepth,
   now,
 }: {
   repoNwo: string | null;
@@ -27,6 +28,8 @@ export function Header({
   queueRunning: number;
   queueWaiting: number;
   watchlistError: string | null;
+  /** Ops parked in the GitHub outbox — hidden at 0. */
+  outboxDepth: number;
   now: Date;
 }): React.JSX.Element {
   const daemon =
@@ -42,6 +45,7 @@ export function Header({
       </Text>
       <Box flexGrow={1} />
       {watchlistError !== null && <Text color={theme.warn}>watchlist!</Text>}
+      {outboxDepth > 0 && <Text color={theme.warn}>⇡{outboxDepth} unpushed</Text>}
       <Text color={daemonUp ? theme.success : theme.warn}>{daemon}</Text>
       {queueRunning + queueWaiting > 0 && (
         <Text color={theme.info}>

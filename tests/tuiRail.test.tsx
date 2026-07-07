@@ -6,6 +6,7 @@ import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 
 const QUEUE: QueueSnapshot = {
   daemonUp: true,
+  outboxDepth: 0,
   maxConcurrent: 1,
   running: [
     {

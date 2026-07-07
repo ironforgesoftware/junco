@@ -130,6 +130,8 @@ export function App(props: AppProps): React.JSX.Element {
   const [watchlistError, setWatchlistError] = useState<string | null>(initialWatchlist.error);
   const [repoIdx, setRepoIdx] = useState(0);
   const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
+  // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
+  const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
   const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
@@ -227,9 +229,8 @@ export function App(props: AppProps): React.JSX.Element {
     (nwo: string): Promise<void> => {
       return client.listIssues(nwo).then((res) => {
         if (res.ok) {
-          // staleAt (cache-served issues) gets UI treatment in a later task;
-          // for now the issue list renders the same whether fresh or cached.
           setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
+          setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
         } else {
           showToast("error", res.error);
         }
@@ -376,12 +377,17 @@ export function App(props: AppProps): React.JSX.Element {
         if (!res.ok) {
           setIssueLabels(nwo, num, prevLabels);
           showToast("error", res.error);
+        } else if (res.value.queued) {
+          // GitHub was unreachable — the edit landed durably in the outbox
+          // instead of live. The optimistic label is correct either way (the
+          // bridge will reconcile once flushed), so this is NOT a rollback.
+          showToast("info", `offline — action queued (⇡${queueSnap?.outboxDepth ?? "?"})`);
         } else {
           showToast("success", `${action} applied`);
         }
       });
     },
-    [client, currentNwo, currentIssue, trigger, setIssueLabels, showToast],
+    [client, currentNwo, currentIssue, trigger, setIssueLabels, showToast, queueSnap],
   );
 
   const openDetail = useCallback(() => {
@@ -802,6 +808,7 @@ export function App(props: AppProps): React.JSX.Element {
           queueRunning={queueSnap?.running.length ?? 0}
           queueWaiting={queueSnap?.waiting.length ?? 0}
           watchlistError={watchlistError}
+          outboxDepth={queueSnap?.outboxDepth ?? 0}
           now={queueNow}
         />
       }
@@ -854,6 +861,7 @@ export function App(props: AppProps): React.JSX.Element {
           filtering={filtering}
           height={listHeight}
           now={queueNow}
+          staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
         />
       )}
       {layout.mode === "wide" && view === "main" && (

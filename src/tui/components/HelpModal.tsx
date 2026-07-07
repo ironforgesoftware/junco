@@ -76,6 +76,7 @@ export function HelpModal({
         rows={[
           ["?", "this help"],
           ["q", "quit (terminal restored)"],
+          ["⇡", "unpushed GitHub ops — flushed automatically; junco outbox flush pushes now"],
         ]}
       />
       <Box marginTop={1}>

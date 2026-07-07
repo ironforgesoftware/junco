@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeQueueSnapshotFn, stripStamp } from "../src/tui/queueSnapshot.js";
+import { enqueueOp } from "../src/githubOutbox.js";
 import type { Config } from "../src/types.js";
 
 /** Minimal config over a sandboxed queue root (same cast style as dashboardCmd.test.ts). */
@@ -243,6 +244,34 @@ describe("recent", () => {
     expect(snap.recent[0].id).toBe("done-4"); // highest mtime
     expect(snap.recent.map((r) => r.status)).toContain("failed");
     expect(new Date(snap.recent[0].finishedAt).getTime()).toBe(4000);
+  });
+});
+
+describe("outboxDepth", () => {
+  it("counts queued outbox ops for the config's state dir; empty is 0", async () => {
+    const d = setupDirs();
+    const stateDir = join(d.root, "state");
+    const cfg = makeQueueCfg(d.root, { stateDir } as Partial<Config>);
+
+    const empty = await makeQueueSnapshotFn(cfg, { fetchFn: downFetch })();
+    expect(empty.outboxDepth).toBe(0);
+
+    enqueueOp(cfg, "dashboard", {
+      kind: "labels",
+      nwo: "a/b",
+      issue: 7,
+      add: ["junco"],
+      remove: [],
+    });
+    enqueueOp(cfg, "dashboard", {
+      kind: "labels",
+      nwo: "a/b",
+      issue: 8,
+      add: ["junco"],
+      remove: [],
+    });
+    const snap = await makeQueueSnapshotFn(cfg, { fetchFn: downFetch })();
+    expect(snap.outboxDepth).toBe(2);
   });
 });
 

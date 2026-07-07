@@ -55,6 +55,7 @@ describe("IssueList", () => {
         filtering={false}
         height={20}
         now={NOW}
+        staleAt={null}
       />,
     ).lastFrame()!;
     expect(f).toContain("2 issues · 3");
@@ -62,6 +63,25 @@ describe("IssueList", () => {
     expect(f).toContain("#52");
     expect(f).toContain("plan-ready");
     expect(f).toContain("60m");
+    expect(f).not.toContain("offline ·");
+  });
+  it("staleAt renders an offline badge with the cached-at clock time; null hides it", () => {
+    const f = render(
+      <IssueList
+        issues={three}
+        trigger="junco"
+        selected={0}
+        focused={true}
+        refreshing={false}
+        filter=""
+        filtering={false}
+        height={20}
+        now={NOW}
+        staleAt="2026-07-07T14:00:00Z"
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("offline ·");
+    expect(f).toMatch(/offline · \d{2}:\d{2}/);
   });
   it("filter chip renders in the title while active", () => {
     const f = render(
@@ -75,6 +95,7 @@ describe("IssueList", () => {
         filtering={true}
         height={20}
         now={NOW}
+        staleAt={null}
       />,
     ).lastFrame()!;
     expect(f).toContain("/reef");
@@ -91,6 +112,7 @@ describe("IssueList", () => {
         filtering={false}
         height={20}
         now={NOW}
+        staleAt={null}
       />,
     ).lastFrame()!;
     expect(f).toContain("no issues match /zzz");
@@ -109,6 +131,7 @@ describe("IssueList", () => {
         filtering={false}
         height={12}
         now={NOW}
+        staleAt={null}
       />,
     ).lastFrame()!;
     expect(f).toContain("Issue number 40");

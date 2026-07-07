@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { windowSlice } from "../window.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
 import { Spinner } from "./Spinner.js";
+import { fmtClock } from "../queueFmt.js";
 
 export function relTime(iso: string, now: Date): string {
   const ms = now.getTime() - (Date.parse(iso) || now.getTime());
@@ -25,6 +26,8 @@ export interface IssueListProps {
   filtering: boolean;
   height: number;
   now: Date;
+  /** listIssues' cache-served fetchedAt (offline) — null when the list is fresh. */
+  staleAt: string | null;
 }
 
 /** Pane 2: windowed issue rows with full-row selection bars and aligned
@@ -39,6 +42,7 @@ export function IssueList({
   filtering,
   height,
   now,
+  staleAt,
 }: IssueListProps): React.JSX.Element {
   const listHeight = Math.max(1, height - 4); // borders + title + position line
   const prev = useRef(0);
@@ -67,6 +71,7 @@ export function IssueList({
             <Spinner />
           </>
         )}
+        {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
       {issues.length === 0 && filter !== "" && (
         <Text dimColor>no issues match /{filter} — esc clears the filter</Text>

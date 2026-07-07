@@ -12,6 +12,7 @@ import type { Config, TicketGithub, Ticket } from "../types.js";
 import { PRIORITY_RANK } from "../types.js";
 import { queuePaths } from "../config.js";
 import { parseTicket } from "../ticket.js";
+import { outboxDepth as computeOutboxDepth } from "../githubOutbox.js";
 
 export interface QueueRunning {
   id: string;
@@ -49,6 +50,8 @@ export interface QueueSnapshot {
   waiting: QueueWaiting[]; // claim order
   recent: QueueRecent[]; // newest-first, cap 5
   error: string | null;
+  /** Count of ops parked in the GitHub outbox (offline store-and-forward). */
+  outboxDepth: number;
 }
 
 export interface QueueSnapshotDeps {
@@ -117,6 +120,11 @@ export function makeQueueSnapshotFn(
       waiting: [],
       recent: [],
       error: null,
+      // Best-effort 0 for the catch path below — outboxDepth itself never
+      // throws (it swallows readdir failures internally), but an unrelated
+      // failure earlier in the try (e.g. nowFn) must still yield a renderable
+      // snapshot rather than an undefined field.
+      outboxDepth: 0,
     };
     try {
       const now = nowFn().getTime();
@@ -227,7 +235,11 @@ export function makeQueueSnapshotFn(
           };
         });
 
-      return { ...base, daemonUp, running, waiting, recent };
+      // Reuse the same readdirFn the rest of this snapshot was built with
+      // (test fakes then cover both the queue dirs and the outbox dir).
+      const outboxDepth = computeOutboxDepth(cfg, { readdirFn });
+
+      return { ...base, daemonUp, running, waiting, recent, outboxDepth };
     } catch (e) {
       return { ...base, error: e instanceof Error ? e.message : String(e) };
     }
