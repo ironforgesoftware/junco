@@ -163,7 +163,7 @@ describe("App", () => {
     const file = wl();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("A");
+    r.stdin.write("w");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -269,7 +269,7 @@ describe("App", () => {
     await tick();
     expect(r.lastFrame()).toContain("watchlist:");
     expect(r.lastFrame()!.toLowerCase()).toContain("json");
-    r.stdin.write("A"); // add flow refused
+    r.stdin.write("w"); // add flow refused
     await tick();
     expect(r.lastFrame()!.toLowerCase()).toContain("unreadable");
     expect(readFileSync(file, "utf8")).toBe(before); // bytes untouched
@@ -282,7 +282,7 @@ describe("App", () => {
     const file = wl();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("A");
+    r.stdin.write("w");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -313,7 +313,7 @@ describe("command palette + focus keys", () => {
     return { runs, runCliFn };
   }
 
-  it("w opens the add-repo form (the watchlist key; A stays as an alias)", async () => {
+  it("w opens the add-repo form; A is NOT an alias anymore", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl2());
     await tick();
@@ -322,9 +322,9 @@ describe("command palette + focus keys", () => {
     expect(r.lastFrame()).toContain("add repo to watchlist");
     r.stdin.write(ESC);
     await tick();
-    r.stdin.write("A"); // the alias still works
+    r.stdin.write("A");
     await tick();
-    expect(r.lastFrame()).toContain("add repo to watchlist");
+    expect(r.lastFrame()).not.toContain("add repo to watchlist");
   });
 
   it("i jumps to the issues pane (d then dispatches the selected issue)", async () => {
@@ -532,5 +532,31 @@ describe("URL paste in add-repo", () => {
     expect(r.lastFrame()).toContain("owner/repo or a github.com URL");
     expect(cloned).toEqual([]);
     expect(readWatchlist(file).entries).toEqual([]);
+  });
+});
+
+describe("refresh animation", () => {
+  it("r shows a spinner in the issues header until the reload lands", async () => {
+    let resolveSecond: ((v: Result<DashIssue[]>) => void) | null = null;
+    let calls = 0;
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    client.listIssues = async () => {
+      calls++;
+      if (calls === 1) return okv([rawIssue]);
+      return new Promise((res) => {
+        resolveSecond = res;
+      });
+    };
+    const r = renderApp(client, join(mkdtempSync(join(tmpdir(), "junco-rf-")), "wl.json"));
+    await tick();
+    r.stdin.write("r");
+    await tick();
+    const { SPINNER_FRAMES } = await import("../src/tui/components/Spinner.js");
+    const pending = r.lastFrame()!;
+    expect(SPINNER_FRAMES.some((g: string) => pending.includes(g))).toBe(true);
+    resolveSecond!(okv([rawIssue]));
+    await tick();
+    const done = r.lastFrame()!;
+    expect(SPINNER_FRAMES.some((g: string) => done.includes(g))).toBe(false);
   });
 });

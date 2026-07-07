@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { DashIssue } from "../state.js";
 import { deriveState, stateMeta } from "../state.js";
+import { Spinner } from "./Spinner.js";
 
 function relTime(iso: string): string {
   const ms = Date.now() - (Date.parse(iso) || Date.now());
@@ -18,11 +19,13 @@ export function IssueTable({
   trigger,
   selected,
   focused,
+  refreshing = false,
 }: {
   issues: DashIssue[];
   trigger: string;
   selected: number;
   focused: boolean;
+  refreshing?: boolean;
 }): React.JSX.Element {
   return (
     <Box
@@ -33,7 +36,13 @@ export function IssueTable({
       flexGrow={1}
     >
       <Text bold dimColor={!focused}>
-        issues
+        issues{" "}
+        {refreshing && (
+          <>
+            <Spinner />
+            <Text dimColor> refreshing…</Text>
+          </>
+        )}
       </Text>
       {issues.length === 0 && (
         <Text dimColor>

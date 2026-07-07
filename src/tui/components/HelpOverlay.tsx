@@ -13,7 +13,7 @@ export function HelpOverlay({ trigger }: { trigger: string }): React.JSX.Element
     ["a", "approve the posted plan"],
     ["R", "re-plan / re-cycle (by state)"],
     ["o", "open in browser"],
-    ["w · A", "add repo to watchlist"],
+    ["w", "add repo to watchlist"],
     ["x", "unwatch repo"],
     ["r", "refresh now"],
     ["q", "quit"],

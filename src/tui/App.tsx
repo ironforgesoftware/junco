@@ -130,6 +130,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [paletteArgs, setPaletteArgs] = useState("");
   const [cmd, setCmd] = useState<CmdState | null>(null);
   const [cmdElapsed, setCmdElapsed] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   // Last resolved positional index — the fallback when the selected issue number
   // vanishes from the list (closed/filtered), so the cursor stays near its slot.
   const lastIdxRef = useRef(0);
@@ -175,8 +176,8 @@ export function App(props: AppProps): React.JSX.Element {
   });
 
   const loadIssues = useCallback(
-    (nwo: string) => {
-      void client.listIssues(nwo).then((res) => {
+    (nwo: string): Promise<void> => {
+      return client.listIssues(nwo).then((res) => {
         if (res.ok) {
           setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value, trigger) }));
         } else {
@@ -190,7 +191,7 @@ export function App(props: AppProps): React.JSX.Element {
   // Load issues for the selected repo (initial mount + every selection change).
   useEffect(() => {
     if (!currentNwo) return;
-    loadIssues(currentNwo);
+    void loadIssues(currentNwo);
   }, [currentNwo, loadIssues]);
 
   // Keep the per-repo anchored selection valid: pick the top row on first load,
@@ -215,7 +216,7 @@ export function App(props: AppProps): React.JSX.Element {
   useEffect(() => {
     const id = setInterval(() => {
       const nwo = nwoRef.current;
-      if (nwo) loadIssues(nwo);
+      if (nwo) void loadIssues(nwo);
     }, issuePollMs);
     return () => clearInterval(id);
   }, [issuePollMs, loadIssues]);
@@ -496,8 +497,8 @@ export function App(props: AppProps): React.JSX.Element {
     if (key.tab) return void setPane((p) => (p === "repos" ? "issues" : "repos"));
     if (input === "h") return void setPane("repos");
     if (input === "l" || input === "i") return void setPane("issues");
-    // `w` is the watchlist key (opens add-repo); `A` remains as an alias.
-    if (input === "A" || input === "w") {
+    // `w` is the watchlist key (opens add-repo).
+    if (input === "w") {
       if (watchlistError) {
         setToast("watchlist unreadable — fix it before adding");
         return;
@@ -507,7 +508,10 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (input === "r") {
-      if (currentNwo) loadIssues(currentNwo);
+      if (currentNwo) {
+        setRefreshing(true);
+        void loadIssues(currentNwo).finally(() => setRefreshing(false));
+      }
       return;
     }
 
@@ -573,6 +577,7 @@ export function App(props: AppProps): React.JSX.Element {
             trigger={trigger}
             selected={issueIdxSafe}
             focused={view === "main" && pane === "issues"}
+            refreshing={refreshing}
           />
         )}
       </Box>
