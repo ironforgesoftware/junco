@@ -1,4 +1,4 @@
-/** Pure presentation helpers shared by QueueStrip and QueueView. */
+/** Pure presentation helpers shared by the Rail queue card and QueueView. */
 
 import type { TicketGithub } from "../types.js";
 

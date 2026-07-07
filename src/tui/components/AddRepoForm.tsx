@@ -25,8 +25,7 @@ export function AddRepoForm({
   });
 
   return (
-    <Box flexDirection="column" borderStyle="double" paddingX={2} paddingY={1} minWidth={50}>
-      <Text bold>add repo to watchlist</Text>
+    <Box flexDirection="column" minWidth={50}>
       <Text dimColor>
         Watch a repository so its issues show up here and the daemon acts on them.
       </Text>

@@ -94,3 +94,14 @@ export function sortIssues(issues: DashIssue[], trigger: string): DashIssue[] {
     return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
   });
 }
+
+/** Live `/` filter: case-insensitive substring across #number, title, and the
+ * lifecycle badge. Blank query returns the input array identity (cheap no-op). */
+export function filterIssues(issues: DashIssue[], q: string, trigger: string): DashIssue[] {
+  const s = q.trim().toLowerCase();
+  if (s === "") return issues;
+  return issues.filter((i) => {
+    const badge = stateMeta(deriveState(i.labels, trigger)).badge;
+    return `#${i.number}`.includes(s) || i.title.toLowerCase().includes(s) || badge.includes(s);
+  });
+}
