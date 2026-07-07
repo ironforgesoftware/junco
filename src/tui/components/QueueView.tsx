@@ -3,7 +3,9 @@ import { Box, Text } from "ink";
 import type { QueueSnapshot, QueueWaiting } from "../queueSnapshot.js";
 import { queueLabel, progressLine, fmtAge, fmtClock } from "../queueFmt.js";
 
-const PAGE = 100; // rows rendered from `scroll`; terminal height clips the rest
+// Ink can't erase lines that overflow the terminal (repaints duplicate into
+// scrollback), so window the rows like IssueDetail/CommandOutput do.
+const PAGE = 24;
 
 function waitingNote(w: QueueWaiting): string {
   const parts: string[] = [];
