@@ -312,7 +312,7 @@ describe("multi-ticket tracking (max_concurrent > 1)", () => {
 
 describe("progress startedAt (dashboard elapsed-time support)", () => {
   it("taskStarted seeds a progress entry stamped startedAt", () => {
-    let t = new Date("2026-07-07T10:00:00Z");
+    const t = new Date("2026-07-07T10:00:00Z");
     const m = new RunMetrics(() => t);
     m.taskStarted("t-1");
     const p0 = m.snapshot().currentProgress["t-1"];
