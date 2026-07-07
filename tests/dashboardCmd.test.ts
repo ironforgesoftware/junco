@@ -4,7 +4,12 @@ import type { Config } from "../src/types.js";
 
 const cfg = {
   stateDir: "/tmp/junco-dash-test",
+  vaultRoot: "/tmp/junco-dash-test-vault",
+  juncoSubdir: "Junco",
+  maxConcurrent: 1,
   healthEnabled: false,
+  healthHost: "127.0.0.1",
+  healthPort: 0,
   github: {
     enabled: true,
     triggerLabel: "junco",

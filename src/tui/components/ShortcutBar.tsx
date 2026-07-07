@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 
-export type BarView = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput";
+export type BarView = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput" | "queue";
 export type BarPane = "repos" | "issues";
 
 /** The full key set for the CURRENT context — a persistent, glanceable bar
@@ -12,6 +12,11 @@ export function shortcutsFor(view: BarView, pane: BarPane): [string, string][] {
       return [
         ["[ / ]", "scroll"],
         ["esc", "back"],
+      ];
+    case "queue":
+      return [
+        ["[ / ]", "scroll"],
+        ["esc/t", "back"],
       ];
     case "palette":
       return [
@@ -41,6 +46,7 @@ export function shortcutsFor(view: BarView, pane: BarPane): [string, string][] {
             ["w", "add repo"],
             ["x", "unwatch"],
             ["r", "refresh"],
+            ["t", "queue"],
             [":", "commands"],
             ["?", "help"],
             ["q", "quit"],
@@ -54,6 +60,7 @@ export function shortcutsFor(view: BarView, pane: BarPane): [string, string][] {
             ["R", "re-plan/cycle"],
             ["o", "browser"],
             ["tab/h", "repos"],
+            ["t", "queue"],
             [":", "commands"],
             ["?", "help"],
             ["q", "quit"],

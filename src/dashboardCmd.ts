@@ -40,10 +40,18 @@ export async function runDashboard(
     return 1;
   }
 
-  const [{ App }, { makeGhDashboardClient }, { watchlistPath }, react, ink] = await Promise.all([
+  const [
+    { App },
+    { makeGhDashboardClient },
+    { watchlistPath },
+    { makeQueueSnapshotFn },
+    react,
+    ink,
+  ] = await Promise.all([
     import("./tui/App.js"),
     import("./tui/ghClient.js"),
     import("./watchlist.js"),
+    import("./tui/queueSnapshot.js"),
     import("react"),
     import("ink"),
   ]);
@@ -61,6 +69,7 @@ export async function runDashboard(
       configPath,
       // Managed clones for the add-repo "empty path = clone for me" flow.
       clonesDir: join(cfg.stateDir, "repos"),
+      queueFn: makeQueueSnapshotFn(cfg),
       // App drives useApp().exit() itself; this stays a no-op hook point.
       onExit: () => {},
     }),

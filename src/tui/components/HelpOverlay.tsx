@@ -16,6 +16,7 @@ export function HelpOverlay({ trigger }: { trigger: string }): React.JSX.Element
     ["w", "add repo to watchlist"],
     ["x", "unwatch repo"],
     ["r", "refresh now"],
+    ["t", "queue — running / waiting / recent tickets"],
     ["q", "quit"],
   ];
   return (
