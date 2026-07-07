@@ -19,3 +19,12 @@ Runner failures (ENOENT, non-zero exit, timeout kill) render in the output view 
 ## Testing
 
 Runner unit tests with a fake `spawnFn` (capture/merge, exit code, timeout SIGKILL, ENOENT); palette frame tests (filter, selection, greyed exclusions with reasons, args step); App wiring tests (`:` opens, run populates output view, `esc` unwinds, `w`/`i` focus, palette `restart` does not unmount the app); roster-vs-USAGE consistency test (every runnable roster name appears in cli.ts USAGE).
+
+## Addendum (v1.2, approved): auto-clone in add-repo
+
+- Leaving the clone-path field EMPTY clones the repo into the managed directory `<state_dir>/repos/<owner>/<repo>` (no new config key — `state_dir` already governs location) via `gh repo clone` (user's auth + protocol preferences), then validates and watches exactly as before. Explicit paths keep working unchanged.
+- `DashboardClient.cloneRepo(nwo, dest)` — Result-returning; an existing dest directory is reused (validation still gates it); clone timeout 300s; failures land in the form error.
+- Form: path placeholder documents "empty = clone for me"; `busy` becomes `busyText` so the operator sees "cloning repository…" vs "validating…" honestly.
+- `AppProps.clonesDir` threaded from dashboardCmd (`join(cfg.stateDir, "repos")`).
+- Security unchanged: the origin cross-check still runs on the managed clone; the path never comes from issue content.
+- Tasks: (1) ghClient.cloneRepo + tests; (2) AddRepoForm empty-path submit + busyText + tests; (3) App auto-clone branch + clonesDir threading + docs.
