@@ -529,7 +529,7 @@ The screen has three zones:
 - **Issues pane** (middle, pane 2) — the selected repo's trigger-labeled issues, newest-relevant first, each showing a lifecycle glyph and its current state badge (planning / plan-ready / approved / queued / working / done / failed / denied).
 - **Preview pane** (right, pane 3, wide terminals only at ≥110 columns) — the selected issue's full body and posted plan comment, auto-loaded as you move through the list.
 
-A persistent shortcut bar at the bottom of the screen always shows the full key set for wherever you are (repos pane, issues pane, detail, palette, …), so navigation never requires memorization. Keys:
+A persistent shortcut bar at the bottom of the screen shows the keys relevant to wherever you are (repos pane, issues pane, detail, palette, …); press `?` for the full key reference. Keys:
 
 | Key              | Action                                                                                                                                                                                                                                                                       |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

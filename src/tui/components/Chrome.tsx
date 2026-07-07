@@ -34,7 +34,7 @@ export function Header({
   const hhmm = now.toTimeString().slice(0, 5);
   return (
     <Box paddingX={1} gap={2}>
-      <Text backgroundColor={theme.accent} color="#191724" bold>
+      <Text backgroundColor={theme.accent} color={theme.brandInk} bold>
         {" junco "}
       </Text>
       <Text bold wrap="truncate">

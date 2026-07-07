@@ -245,10 +245,10 @@ describe("App", () => {
     const r = renderApp(client, wl());
     await tick();
     r.stdin.write("?");
-    // The HelpModal is taller than a 30-row terminal, so the Workspace centers
-    // it and clips both ends (the "junco dashboard — keys" title scrolls off the
-    // top). Assert on a centered, help-specific section header instead.
-    await until(() => (r.lastFrame() ?? "").includes("act on issue"));
+    // The HelpModal is taller than a 30-row terminal; the Workspace top-aligns
+    // it so the title survives even though the bottom clips.
+    await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
+    expect(r.lastFrame()).toContain("act on issue");
   });
 
   // Fix 1(a): selection is anchored to the issue NUMBER, so a poll that re-sorts
@@ -800,5 +800,36 @@ describe("workspace wide mode", () => {
     expect(r.lastFrame()).toContain("── plan ──"); // pane not blank — just scrolled
     r.stdin.write("[");
     await until(() => (r.lastFrame() ?? "").includes("the body")); // back to the top
+  });
+
+  // Regression: a wide terminal shrinking below 110 cols while pane 3 (preview)
+  // is focused must not strand focus on a pane that no longer renders.
+  it("shrinking below wide while pane 3 is focused clamps focus back to pane 2", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const file = wl6();
+    const appEl = (size: { columns: number; rows: number }) => (
+      <App
+        client={client}
+        trigger="junco"
+        configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+        watchlistFile={file}
+        configPath="/x/config.toml"
+        clonesDir={CLONES_DIR}
+        issuePollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => QUEUE_SNAP}
+        sizeOverride={size}
+        onExit={() => {}}
+      />
+    );
+    const r = render(appEl({ columns: 130, rows: 30 }));
+    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    r.stdin.write("3"); // focus pane 3 directly
+    await until(() => (r.lastFrame() ?? "").includes("o browser")); // pane-3 footer hints
+    r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
+    // Pane 2's footer hint set is back: enter→detail (medium mode) and d dispatch.
+    await until(() => (r.lastFrame() ?? "").includes("enter detail"));
+    expect(r.lastFrame()).toContain("d dispatch");
   });
 });

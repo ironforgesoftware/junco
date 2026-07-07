@@ -15,6 +15,7 @@ export function Workspace({
   toast,
   hints,
   modal,
+  modalAlign = "center",
   children,
 }: {
   size: TerminalSize;
@@ -23,6 +24,9 @@ export function Workspace({
   toast: { kind: ToastKind; text: string } | null;
   hints: [string, string][];
   modal: React.ReactNode | null;
+  /** Vertical alignment for the modal body — "top" for modals taller than
+   * common terminal heights, where centering would clip the title. */
+  modalAlign?: "center" | "top";
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -34,7 +38,7 @@ export function Workspace({
             <Text dimColor>terminal too small — junco needs at least 60×14</Text>
           </Center>
         ) : modal !== null ? (
-          <Center>{modal}</Center>
+          <Center align={modalAlign}>{modal}</Center>
         ) : (
           children
         )}

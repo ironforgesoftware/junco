@@ -5,6 +5,7 @@
 export const theme = {
   accent: "#eb6f92",
   selectionBg: "#2a2e3a",
+  brandInk: "#191724", // chip text on the accent background
   border: "gray",
   success: "green",
   warn: "yellow",

@@ -313,10 +313,12 @@ export function App(props: AppProps): React.JSX.Element {
   const previewIssue = filteredIssues[issueIdxSafe] ?? null;
   const previewKey = currentNwo && previewIssue ? `${currentNwo}#${previewIssue.number}` : null;
   // A new preview target starts at the top — a leftover offset (from a longer
-  // previous body) must not blank the freshly-selected issue's pane.
+  // previous body) must not blank the freshly-selected issue's pane. Gated to
+  // the live wide-mode preview only: other views (detail, queue, cmdOutput)
+  // own and reset `scroll` themselves on exit, so this must not fire for them.
   useEffect(() => {
-    setScroll(0);
-  }, [previewKey]);
+    if (view === "main" && layout.mode === "wide") setScroll(0);
+  }, [previewKey, view, layout.mode]);
   useEffect(() => {
     if (layout.mode !== "wide" || previewKey === null || !currentNwo || !previewIssue) return;
     const cached = previewCache.current.get(previewKey);
@@ -539,6 +541,13 @@ export function App(props: AppProps): React.JSX.Element {
     [client, watchlistFile, watchlistError, clonesDir, showToast],
   );
 
+  // A wide terminal that shrinks below 110 cols while pane 3 (preview) is
+  // focused would otherwise leave focus on a pane that no longer renders —
+  // pull it back onto the issues pane instead of stranding it.
+  useEffect(() => {
+    if (layout.mode !== "wide" && pane === 3) setPane(2);
+  }, [layout.mode, pane]);
+
   useInput((input, key) => {
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return;
@@ -546,7 +555,10 @@ export function App(props: AppProps): React.JSX.Element {
     // Toast is dismissed by the next keystroke, before it is acted on.
     if (toast) {
       setToast(null);
-      if (toastTimer.current) clearTimeout(toastTimer.current);
+      if (toastTimer.current) {
+        clearTimeout(toastTimer.current);
+        toastTimer.current = null;
+      }
     }
 
     if (view === "help") {
@@ -794,6 +806,7 @@ export function App(props: AppProps): React.JSX.Element {
       toast={toast}
       hints={hints}
       modal={modal}
+      modalAlign={view === "help" ? "top" : "center"}
     >
       <Rail
         repos={repoRows}
