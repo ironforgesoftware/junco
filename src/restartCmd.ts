@@ -128,7 +128,9 @@ export async function runRestartCommand(
   const timeoutMs = deps.timeoutMs ?? 15_000;
   const lockPath = join(dirname(resolve(configPath)), "worker.lock");
 
-  const svc = await discoverService(configPath, deps);
+  // Thread the DEFAULTED print fn down — discoverService's multi-match warn
+  // must reach stdout even when the caller (the CLI) injects no printFn.
+  const svc = await discoverService(configPath, { ...deps, printFn: print });
   if (!svc) {
     print(
       "no service unit references this config — nothing to restart.\n" +
