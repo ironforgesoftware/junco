@@ -35,7 +35,11 @@ export function IssueTable({
       <Text bold dimColor={!focused}>
         issues
       </Text>
-      {issues.length === 0 && <Text dimColor>no open issues</Text>}
+      {issues.length === 0 && (
+        <Text dimColor>
+          no open issues — create one on GitHub, then select it here and press d to dispatch
+        </Text>
+      )}
       {issues.map((iss, i) => {
         const st = deriveState(iss.labels, trigger);
         const meta = stateMeta(st);

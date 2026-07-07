@@ -35,6 +35,7 @@ export function CommandPalette({
   return (
     <Box flexDirection="column" borderStyle="double" paddingX={2} paddingY={1} minWidth={60}>
       <Text bold>run a junco command</Text>
+      <Text dimColor>Runs the junco CLI against this dashboard's config; output opens here.</Text>
       <Box gap={1}>
         <Text dimColor>:</Text>
         <TextField

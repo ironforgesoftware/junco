@@ -21,6 +21,9 @@ export function HelpOverlay({ trigger }: { trigger: string }): React.JSX.Element
   return (
     <Box flexDirection="column" borderStyle="double" paddingX={2} paddingY={1}>
       <Text bold>junco dashboard — keys</Text>
+      <Text dimColor>
+        flow: d dispatch → junco posts a plan → enter to read it → a approve → PR opens
+      </Text>
       {rows.map(([k, d]) => (
         <Box key={k} gap={2}>
           <Box minWidth={10}>

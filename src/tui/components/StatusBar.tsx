@@ -30,7 +30,7 @@ export function StatusBar({
       ? "daemon …"
       : health.up
         ? `daemon ●${fmtUp(health.uptimeSeconds)}${health.ticketsBridged !== null ? ` · ${health.ticketsBridged} bridged` : ""}`
-        : "daemon ○ not running";
+        : "daemon ○ not running — try `junco restart`";
   return (
     <Box borderStyle="round" paddingX={1} gap={2}>
       <Text color={health?.up ? "green" : "yellow"}>{daemon}</Text>

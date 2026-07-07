@@ -24,7 +24,13 @@ export function IssueDetail({
   const lines: string[] = [];
   if (body !== null) lines.push(...body.split("\n"));
   if (planComment !== null) {
-    lines.push("", "── plan comment ──", ...planComment.split("\n"));
+    lines.push(
+      "",
+      "── plan comment ──",
+      ...planComment.split("\n"),
+      "",
+      "(esc to go back — approve with a from the issues pane)",
+    );
   } else if (!loading) {
     lines.push("", "(no plan posted yet)");
   }

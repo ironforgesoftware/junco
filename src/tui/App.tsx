@@ -10,7 +10,7 @@ import { Box, useApp, useInput } from "ink";
 import type { DashboardClient, HealthInfo } from "./ghClient.js";
 import type { DashAction, DashIssue } from "./state.js";
 import { allowedActions, deriveState, sortIssues } from "./state.js";
-import { lifecycleLabels } from "../githubInbox.js";
+import { lifecycleLabels, parseRepoInput } from "../githubInbox.js";
 import type { WatchlistEntry } from "../watchlist.js";
 import { readWatchlist, writeWatchlist } from "../watchlist.js";
 import { expandHome } from "../config.js";
@@ -376,11 +376,19 @@ export function App(props: AppProps): React.JSX.Element {
   }, [currentRepo, watchlistFile, watchlistError]);
 
   const handleAddRepo = useCallback(
-    async (nwo: string, path: string): Promise<void> => {
+    async (rawNwo: string, path: string): Promise<void> => {
+      let nwo = rawNwo;
       if (watchlistError) {
         setToast("watchlist unreadable — fix it before writing");
         return;
       }
+      // Accept bare owner/repo or a pasted github.com URL.
+      const parsed = parseRepoInput(nwo);
+      if (parsed === null) {
+        setAddRepoError("enter owner/repo or a github.com URL (e.g. https://github.com/acme/api)");
+        return;
+      }
+      nwo = parsed;
       // Empty path = clone into the managed directory for the operator.
       let expanded: string;
       setAddRepoError(null);

@@ -26,6 +26,10 @@ export function AddRepoForm({
   return (
     <Box flexDirection="column" borderStyle="double" paddingX={2} paddingY={1} minWidth={50}>
       <Text bold>add repo to watchlist</Text>
+      <Text dimColor>
+        Watch a repository so its issues show up here and the daemon acts on them.
+      </Text>
+      <Text dimColor>Paste an owner/repo or a full github.com URL.</Text>
       <Box gap={1}>
         <Text dimColor>owner/repo:</Text>
         <TextField
@@ -33,7 +37,7 @@ export function AddRepoForm({
           onChange={setNwo}
           onSubmit={() => setField("path")}
           focus={!busy && field === "nwo"}
-          placeholder="acme/api"
+          placeholder="acme/api or https://github.com/acme/api"
         />
       </Box>
       <Box gap={1}>
@@ -48,6 +52,7 @@ export function AddRepoForm({
           placeholder="empty = clone for me · or ~/code/api"
         />
       </Box>
+      <Text dimColor>Leave the clone path empty and junco clones the repo for you.</Text>
       {busyText && <Text color="cyan">{busyText}</Text>}
       {error && <Text color="red">{error}</Text>}
       <Text dimColor>enter next/submit · esc cancel</Text>

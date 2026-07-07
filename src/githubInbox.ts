@@ -76,6 +76,16 @@ export function nwoFromRemoteUrl(url: string): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
+/** Normalize human repo input — bare `owner/repo` OR a github.com URL
+ * (https/ssh, .git optional) — to canonical `owner/repo`. Null = unusable.
+ * The dashboard's add-repo form accepts pasted URLs through this. */
+export function parseRepoInput(input: string): string | null {
+  const t = input.trim();
+  if (t === "") return null;
+  if (/^(https?:\/\/|git@|ssh:\/\/)/.test(t)) return nwoFromRemoteUrl(t);
+  return /^[\w.-]+\/[\w.-]+$/.test(t) ? t : null;
+}
+
 /** Convert an eligible issue into a Junco ticket file (id + full content).
  * JSON.stringify produces valid YAML double-quoted scalars — titles and paths
  * with quotes/colons round-trip through parseTicket. */

@@ -490,3 +490,47 @@ describe("auto-clone add-repo", () => {
     expect(readWatchlist(file).entries).toEqual([]);
   });
 });
+
+describe("URL paste in add-repo", () => {
+  const wl4 = () => join(mkdtempSync(join(tmpdir(), "junco-url-")), "wl.json");
+
+  it("a pasted github URL normalizes to owner/repo everywhere", async () => {
+    const { client, cloned, validatePaths } = makeClient({ "acme/api": [] });
+    const file = wl4();
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("https://github.com/alxedelweiss/hawaiian-coral");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("\r"); // empty path -> auto-clone
+    await tick();
+    await tick();
+    const managed = join(CLONES_DIR, "alxedelweiss", "hawaiian-coral");
+    expect(cloned).toEqual([managed]);
+    expect(validatePaths).toEqual([managed]);
+    expect(readWatchlist(file).entries).toEqual([
+      { nwo: "alxedelweiss/hawaiian-coral", path: managed },
+    ]);
+  });
+
+  it("unusable input shows guidance, nothing runs", async () => {
+    const { client, cloned } = makeClient({ "acme/api": [] });
+    const file = wl4();
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("not a repo");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(r.lastFrame()).toContain("owner/repo or a github.com URL");
+    expect(cloned).toEqual([]);
+    expect(readWatchlist(file).entries).toEqual([]);
+  });
+});

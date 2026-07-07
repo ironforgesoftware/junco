@@ -722,3 +722,23 @@ describe("buildPlanComment", () => {
     ).toBeNull();
   });
 });
+
+describe("parseRepoInput", () => {
+  it.each([
+    ["acme/api", "acme/api"],
+    ["https://github.com/alxedelweiss/hawaiian-coral", "alxedelweiss/hawaiian-coral"],
+    ["https://github.com/acme/api.git", "acme/api"],
+    ["git@github.com:acme/api.git", "acme/api"],
+    ["  acme/api  ", "acme/api"],
+  ])("%s -> %s", async (input, expected) => {
+    const { parseRepoInput } = await import("../src/githubInbox.js");
+    expect(parseRepoInput(input)).toBe(expected);
+  });
+
+  it("rejects garbage and non-github urls", async () => {
+    const { parseRepoInput } = await import("../src/githubInbox.js");
+    expect(parseRepoInput("not a repo")).toBeNull();
+    expect(parseRepoInput("https://gitlab.com/a/b")).toBeNull();
+    expect(parseRepoInput("")).toBeNull();
+  });
+});
