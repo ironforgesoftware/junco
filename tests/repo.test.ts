@@ -526,6 +526,12 @@ describe("validateRepoContext — push_remote (fork mode)", () => {
     ).rejects.toThrow(/not a valid git remote name/);
   }, 15000);
 
+  it("rejects a push_remote with a leading hyphen (reads as a git flag)", async () => {
+    await expect(validateRepoContext(cfg, forkCtx({ pushRemote: "-flag" }))).rejects.toThrow(
+      /not a valid git remote name/,
+    );
+  }, 15000);
+
   it("checks branch collision against the FORK, not origin", async () => {
     // Plant junco/x on the fork bare only.
     run(["git", "-C", h.work, "push", "fork", "HEAD:refs/heads/junco/x"]);

@@ -126,8 +126,8 @@ export async function ensureExternalClone(
   await gitFn(cfg, ["-C", path, "remote", "add", "fork", `https://github.com/${forkNwo}.git`], {
     // This point is only reached when the fork remote was confirmed ABSENT
     // (or the clone is brand new): check:false covers races only — a
-    // concurrent run that added it between our get-url probe and here. The
-    // get-url probe above is the arbiter on next call, not this add.
+    // concurrent run that added it between our `config --get` probe and here.
+    // The `config --get` probe above is the arbiter on next call, not this add.
     check: false,
   });
   return { path, forkNwo };

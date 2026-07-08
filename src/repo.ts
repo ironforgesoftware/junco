@@ -197,10 +197,12 @@ export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promis
     throw new GitOpError(`gh could not determine nameWithOwner for ${ctx.repo}`);
   }
 
-  // push_remote resolution. The remote NAME is validated (a "-"-prefixed value
-  // would be parsed as a git flag), and for a non-origin remote the fork's nwo
-  // is derived from the remote URL — never guessed from a username.
-  if (!/^[A-Za-z0-9_-]+$/.test(ctx.pushRemote)) {
+  // push_remote resolution. The remote NAME is validated: a leading '-' would
+  // read as a git flag, so the anchor forbids it (interior hyphens are fine);
+  // the config-key probe below (`git config --get remote.<name>.url`) is the
+  // second rail. For a non-origin remote the fork's nwo is derived from the
+  // remote URL — never guessed from a username.
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(ctx.pushRemote)) {
     throw new GitOpError(
       `push_remote ${JSON.stringify(ctx.pushRemote)} is not a valid git remote name`,
     );

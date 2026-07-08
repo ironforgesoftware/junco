@@ -133,10 +133,10 @@ export async function pushBranch(
  * Port of worker.py `open_pull_request` (lines 2038-2063).
  *
  * Builds the gh pr create argv faithfully:
- *   gh pr create --repo nwo --base ctx.baseBranch --head ctx.branchName
+ *   gh pr create --repo nwo --base ctx.baseBranch --head [<fork-owner>:]branch
  *                --title title --body-file bodyFile
  *                [--draft]
- *                [--label label …]
+ *                [--label label …]   (skipped in fork mode — see openPullRequest)
  *                [--reviewer rv …]
  *
  * The PR URL is the LAST line of stdout that starts with "https://".
