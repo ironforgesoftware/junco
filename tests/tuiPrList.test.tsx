@@ -306,4 +306,79 @@ describe("PrList", () => {
     expect(f).toContain("#42");
     expect(f).toContain("#43");
   });
+
+  it("hides nwo cell when showNwo={false}", () => {
+    const prs = [
+      {
+        ...pr(42, "Fix widget"),
+        nwo: "owner/repo",
+      },
+    ];
+    const f = render(
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        showNwo={false}
+      />,
+    ).lastFrame()!;
+
+    expect(f).not.toContain("owner/repo");
+    expect(f).toContain("Fix widget");
+  });
+
+  it("shows nwo cell by default when showNwo prop omitted", () => {
+    const prs = [
+      {
+        ...pr(42, "Fix widget"),
+        nwo: "owner/repo",
+      },
+    ];
+    const f = render(
+      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+    ).lastFrame()!;
+
+    expect(f).toContain("owner/repo");
+  });
+
+  it("keeps every row on one line with showNwo={false} at narrow width", () => {
+    const prs = [
+      {
+        ...pr(
+          12345,
+          "A very long title that might wrap or truncate in the display area to test frame width constraints",
+        ),
+        nwo: "organization-with-a-long-name/very-long-repository-name-that-keeps-going",
+        checks: { pass: 15, fail: 3, pending: 2, total: 20 },
+      },
+      pr(7, "Short one"),
+    ];
+    const f = render(
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        showNwo={false}
+      />,
+    ).lastFrame()!;
+
+    const lines = f.split("\n");
+    // A wrapped row would overflow the fixed-height box.
+    expect(lines.length).toBe(20);
+    // The #12345 row is exactly one line…
+    const rows = lines.filter((l) => l.includes("#12345"));
+    expect(rows).toHaveLength(1);
+    // …and carries all its fixed cells on that same line.
+    expect(rows[0]).toContain("✗3");
+    expect(rows[0]).toContain("✓15");
+    expect(rows[0]).toContain("◍2");
+    expect(rows[0]).toContain("checks-failing");
+    expect(rows[0]).toContain("60m");
+  });
 });

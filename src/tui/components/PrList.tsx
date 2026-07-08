@@ -30,6 +30,7 @@ export interface PrListProps {
   height: number;
   now: Date;
   staleAt: string | null; // any repo served from cache → oldest fetchedAt
+  showNwo?: boolean; // show nwo cell; default true for multi-repo view
 }
 
 /** Pane 2: windowed PR rows with full-row selection bars and aligned
@@ -41,6 +42,7 @@ export function PrList({
   height,
   now,
   staleAt,
+  showNwo = true,
 }: PrListProps): React.JSX.Element {
   const listHeight = Math.max(1, height - 4); // borders + title + position line
   const prev = useRef(0);
@@ -100,11 +102,13 @@ export function PrList({
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{prItem.title}</Text>
             </Box>
-            <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
-              <Text dimColor wrap="truncate-start">
-                {prItem.nwo}
-              </Text>
-            </Box>
+            {showNwo && (
+              <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
+                <Text dimColor wrap="truncate-start">
+                  {prItem.nwo}
+                </Text>
+              </Box>
+            )}
             {checksStr !== "" && (
               <Box flexShrink={0}>
                 <Text color={checksColor}>{checksStr}</Text>
