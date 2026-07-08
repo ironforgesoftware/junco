@@ -61,6 +61,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -72,6 +75,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     branchPrefix: "junco/",
     worktreeRoot: "/tmp/worktrees",
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -88,6 +92,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 0,
     logLevel: "info",
+    stateDir: "/tmp/vault/state",
+    logToFile: false,
+    transcriptsEnabled: false,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -112,6 +119,8 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
 } {
   const deps: Required<MainLoopDeps> = {
     runOnceFn: vi.fn(async () => false),
+    claimFn: vi.fn(async () => null),
+    executeFn: vi.fn(async () => {}),
     recoverOrphansFn: vi.fn(() => {}),
     pruneFn: vi.fn(() => {}),
     waitForEndpointFn: vi.fn(async () => {}),
@@ -120,6 +129,8 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
     startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
+    bridgeSweepFn: vi.fn(async () => 0),
+    outboxDrainFn: vi.fn(async () => ({ sent: 0, dead: 0, remaining: 0, offline: false })),
     ...overrides,
   };
   return { deps };
