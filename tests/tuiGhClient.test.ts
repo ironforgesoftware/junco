@@ -15,6 +15,7 @@ const cfg = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   stateDir: mkdtempSync(join(tmpdir(), "junco-ghclient-state-")),
+  branchPrefix: "junco/",
   github: {
     enabled: true,
     triggerLabel: "junco",
@@ -31,6 +32,7 @@ const NET = new GitOpError("gh failed", "connect: network is unreachable", 1);
 function fakes(
   opts: {
     issues?: unknown[];
+    prs?: unknown[];
     body?: string;
     comments?: { author: string; body: string; created_at: string }[];
     viewer?: string;
@@ -49,6 +51,8 @@ function fakes(
     if (args[0] === "issue" && args[1] === "view" && args.includes("--json"))
       return ok(JSON.stringify({ body: opts.body ?? "" }));
     if (args[0] === "issue" && (args[1] === "edit" || args[1] === "view")) return ok("");
+    if (args[0] === "pr" && args[1] === "list") return ok(JSON.stringify(opts.prs ?? []));
+    if (args[0] === "pr" && args[1] === "view") return ok("");
     if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
     if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
       return ok((opts.comments ?? []).map((c) => JSON.stringify(c)).join("\n"));
@@ -157,6 +161,177 @@ describe("listIssues", () => {
     const c2 = { ...cfg, stateDir } as Config;
     const f = fakes({ failArgs: "issue list", failErr: NET });
     const r = await makeGhDashboardClient(c2, f).listIssues("acme/api");
+    expect(r.ok).toBe(false);
+  });
+});
+
+function rawPr(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    number: 12,
+    title: "Add retry logic",
+    url: "https://github.com/acme/api/pull/12",
+    headRefName: "junco/add-retry-logic",
+    baseRefName: "main",
+    isDraft: false,
+    state: "OPEN",
+    reviewDecision: "APPROVED",
+    statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+    additions: 10,
+    deletions: 2,
+    changedFiles: 3,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-06T10:00:00Z",
+    mergedAt: null,
+    labels: [{ name: "junco" }],
+    author: { login: "junco-bot" },
+    ...overrides,
+  };
+}
+
+describe("listPrs", () => {
+  it("maps gh json to DashPr[] incl. author.login, labels→names, and injects nwo", async () => {
+    const f = fakes({ prs: [rawPr()] });
+    const c = makeGhDashboardClient(cfg, f);
+    const r = await c.listPrs("acme/api");
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        prs: [
+          {
+            number: 12,
+            title: "Add retry logic",
+            url: "https://github.com/acme/api/pull/12",
+            headRefName: "junco/add-retry-logic",
+            baseRefName: "main",
+            isDraft: false,
+            state: "OPEN",
+            reviewDecision: "APPROVED",
+            mergeable: "MERGEABLE",
+            mergeStateStatus: "CLEAN",
+            checks: { pass: 1, fail: 0, pending: 0, total: 1 },
+            additions: 10,
+            deletions: 2,
+            changedFiles: 3,
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-06T10:00:00Z",
+            mergedAt: null,
+            author: "junco-bot",
+            labels: ["junco"],
+            nwo: "acme/api",
+          },
+        ],
+        staleAt: null,
+      },
+    });
+  });
+
+  it("calls gh with the exact pr list args", async () => {
+    const f = fakes({ prs: [rawPr()] });
+    await makeGhDashboardClient(cfg, f).listPrs("acme/api");
+    expect(f.calls).toContainEqual([
+      "pr",
+      "list",
+      "--repo",
+      "acme/api",
+      "--state",
+      "all",
+      "--limit",
+      "50",
+      "--json",
+      "number,title,url,headRefName,baseRefName,isDraft,state,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,additions,deletions,changedFiles,createdAt,updatedAt,mergedAt,labels,author",
+    ]);
+  });
+
+  it("drops PRs whose head branch isn't under the configured junco prefix", async () => {
+    const junco = rawPr({ number: 12, headRefName: "junco/add-retry-logic" });
+    const other = rawPr({ number: 13, headRefName: "feature/other-thing" });
+    const f = fakes({ prs: [junco, other] });
+    const r = await makeGhDashboardClient(cfg, f).listPrs("acme/api");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.prs.map((p) => p.number)).toEqual([12]);
+    }
+  });
+
+  it("tolerates a null statusCheckRollup (reduceChecks zeroes it)", async () => {
+    const f = fakes({ prs: [rawPr({ statusCheckRollup: null })] });
+    const r = await makeGhDashboardClient(cfg, f).listPrs("acme/api");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.prs[0].checks).toEqual({ pass: 0, fail: 0, pending: 0, total: 0 });
+  });
+
+  it("tolerates a garbage (non-array) statusCheckRollup", async () => {
+    const f = fakes({ prs: [rawPr({ statusCheckRollup: "not-an-array" })] });
+    const r = await makeGhDashboardClient(cfg, f).listPrs("acme/api");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.prs[0].checks).toEqual({ pass: 0, fail: 0, pending: 0, total: 0 });
+  });
+
+  it("gh failure → ok:false, never throws", async () => {
+    const f = fakes({ failArgs: "pr list" });
+    const r = await makeGhDashboardClient(cfg, f).listPrs("acme/api");
+    expect(r.ok).toBe(false);
+  });
+
+  it("listPrs success writes the prs- cache and returns staleAt null", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prcache-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const r = await makeGhDashboardClient(c2, fakes({ prs: [rawPr()] })).listPrs("acme/api");
+    expect(r.ok && r.value.staleAt).toBe(null);
+    const path = join(stateDir, "github-cache", "prs-acme__api.json");
+    const cached = JSON.parse(readFileSync(path, "utf8"));
+    expect(cached.prs).toEqual(r.ok ? r.value.prs : []);
+  });
+
+  it("listPrs offline serves the cache with staleAt set", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prstale-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const first = await makeGhDashboardClient(c2, fakes({ prs: [rawPr()] })).listPrs("acme/api");
+    const path = join(stateDir, "github-cache", "prs-acme__api.json");
+    const cachedFetchedAt = (JSON.parse(readFileSync(path, "utf8")) as { fetchedAt: string })
+      .fetchedAt;
+    const f = fakes({ failArgs: "pr list", failErr: NET });
+    const r = await makeGhDashboardClient(c2, f).listPrs("acme/api");
+    expect(first.ok).toBe(true);
+    expect(r).toEqual({
+      ok: true,
+      value: { prs: first.ok ? first.value.prs : [], staleAt: cachedFetchedAt },
+    });
+  });
+
+  it("listPrs offline with no cache is an error (today's behavior)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prnocache-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const f = fakes({ failArgs: "pr list", failErr: NET });
+    const r = await makeGhDashboardClient(c2, f).listPrs("acme/api");
+    expect(r.ok).toBe(false);
+  });
+
+  it("permanent (non-network) error never reads the cache, even if one exists", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prpermanent-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    // Seed a valid cache first.
+    await makeGhDashboardClient(c2, fakes({ prs: [rawPr()] })).listPrs("acme/api");
+    const forbidden = new GitOpError("gh failed", "HTTP 403: Forbidden", 1);
+    const f = fakes({ failArgs: "pr list", failErr: forbidden });
+    const r = await makeGhDashboardClient(c2, f).listPrs("acme/api");
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("openPrInBrowser", () => {
+  it("calls gh pr view --web with the PR number and repo", async () => {
+    const f = fakes();
+    const r = await makeGhDashboardClient(cfg, f).openPrInBrowser("acme/api", 12);
+    expect(r.ok).toBe(true);
+    expect(f.calls).toContainEqual(["pr", "view", "12", "--repo", "acme/api", "--web"]);
+  });
+
+  it("gh failure → ok:false, never throws", async () => {
+    const f = fakes({ failArgs: "pr view" });
+    const r = await makeGhDashboardClient(cfg, f).openPrInBrowser("acme/api", 12);
     expect(r.ok).toBe(false);
   });
 });

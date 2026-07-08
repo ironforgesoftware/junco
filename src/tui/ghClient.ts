@@ -12,6 +12,7 @@ import { gh, git } from "../git.js";
 import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
 import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
 import type { DashIssue, DashAction } from "./state.js";
+import { reduceChecks, ticketSlugFromBranch, type DashPr } from "./prState.js";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -22,10 +23,67 @@ interface IssueCache {
   issues: DashIssue[];
 }
 
+interface PrCache {
+  fetchedAt: string; // ISO
+  prs: DashPr[];
+}
+
 /** `<state_dir>/github-cache/issues-<owner>__<repo>.json` — `/` in the nwo
  * would otherwise collide with the path separator. */
 export function cachePathFor(cfg: Config, nwo: string): string {
   return join(cfg.stateDir, "github-cache", `issues-${nwo.replace(/\//g, "__")}.json`);
+}
+
+/** `<state_dir>/github-cache/prs-<owner>__<repo>.json` — a sibling path to
+ * `cachePathFor`, kept separate (not a param on it) so issues and PRs never
+ * collide in the same file. Not exported: nothing outside this module needs
+ * to address the PR cache directly. */
+function prCachePathFor(cfg: Config, nwo: string): string {
+  return join(cfg.stateDir, "github-cache", `prs-${nwo.replace(/\//g, "__")}.json`);
+}
+
+const PR_LIST_JSON_FIELDS = [
+  "number",
+  "title",
+  "url",
+  "headRefName",
+  "baseRefName",
+  "isDraft",
+  "state",
+  "reviewDecision",
+  "statusCheckRollup",
+  "mergeable",
+  "mergeStateStatus",
+  "additions",
+  "deletions",
+  "changedFiles",
+  "createdAt",
+  "updatedAt",
+  "mergedAt",
+  "labels",
+  "author",
+].join(",");
+
+interface RawPr {
+  number: number;
+  title: string;
+  url: string;
+  headRefName: string;
+  baseRefName: string;
+  isDraft: boolean;
+  state: string;
+  reviewDecision: string | null;
+  statusCheckRollup: unknown;
+  mergeable: string | null;
+  mergeStateStatus: string | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt: string | null;
+  labels: { name: string }[];
+  author: { login: string };
 }
 
 /** Mirrors the applyAction switch's add/remove lists EXACTLY — including the
@@ -91,6 +149,11 @@ export interface DashboardClient {
    * network failure serves the cache with `staleAt` set to when it was
    * written; a network failure with no cache is `ok: false` as before. */
   listIssues(nwo: string): Promise<Result<{ issues: DashIssue[]; staleAt: string | null }>>;
+  /** Junco-authored PRs only: kept iff the head branch is under
+   * `cfg.branchPrefix` (the filter that recovers the free ticket linkage —
+   * see `ticketSlugFromBranch`). Same fresh/cache-serve/offline contract as
+   * `listIssues`, mirrored against its own `prs-` cache file. */
+  listPrs(nwo: string): Promise<Result<{ prs: DashPr[]; staleAt: string | null }>>;
   /** Clone `nwo` into `dest` via the user's gh auth. An existing dest is
    * reused (validation still gates it). */
   cloneRepo(nwo: string, dest: string): Promise<Result<void>>;
@@ -108,6 +171,7 @@ export interface DashboardClient {
   ): Promise<Result<{ queued: boolean }>>;
   validateAndPrepareRepo(nwo: string, path: string): Promise<Result<void>>;
   openInBrowser(nwo: string, num: number): Promise<Result<void>>;
+  openPrInBrowser(nwo: string, num: number): Promise<Result<void>>;
   health(): Promise<HealthInfo>;
 }
 
@@ -177,6 +241,32 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
     }
   };
 
+  const writePrCache = (nwo: string, prs: DashPr[]): void => {
+    const path = prCachePathFor(cfg, nwo);
+    mkdirFn(dirname(path));
+    const tmp = `${path}.tmp`;
+    const stored: PrCache = { fetchedAt: new Date().toISOString(), prs };
+    writeFileFn(tmp, JSON.stringify(stored));
+    renameFn(tmp, path);
+  };
+
+  const readPrCache = (nwo: string): PrCache | null => {
+    try {
+      const parsed: unknown = JSON.parse(readFileFn(prCachePathFor(cfg, nwo)));
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Array.isArray((parsed as Partial<PrCache>).prs) ||
+        typeof (parsed as Partial<PrCache>).fetchedAt !== "string"
+      ) {
+        return null; // wrong shape (e.g. hand-edited or from a future format) — treated as absent
+      }
+      return parsed as PrCache;
+    } catch {
+      return null; // no cache yet, or unreadable/corrupt — treated as absent
+    }
+  };
+
   return {
     listIssues(nwo) {
       return attempt(async () => {
@@ -220,6 +310,67 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
           const cached = readCache(nwo);
           if (cached === null) throw e; // no cache — today's ok:false behavior
           return { issues: cached.issues, staleAt: cached.fetchedAt };
+        }
+      });
+    },
+
+    listPrs(nwo) {
+      return attempt(async () => {
+        try {
+          const r = await ghFn(
+            cfg,
+            [
+              "pr",
+              "list",
+              "--repo",
+              nwo,
+              "--state",
+              "all",
+              "--limit",
+              "50",
+              "--json",
+              PR_LIST_JSON_FIELDS,
+            ],
+            { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+          );
+          const raw = JSON.parse(r.stdout) as RawPr[];
+          const prs = raw
+            .map(
+              (p): DashPr => ({
+                number: p.number,
+                title: p.title,
+                url: p.url,
+                headRefName: p.headRefName,
+                baseRefName: p.baseRefName,
+                isDraft: p.isDraft,
+                state: p.state,
+                reviewDecision: p.reviewDecision,
+                mergeable: p.mergeable,
+                mergeStateStatus: p.mergeStateStatus,
+                checks: reduceChecks(p.statusCheckRollup),
+                additions: p.additions,
+                deletions: p.deletions,
+                changedFiles: p.changedFiles,
+                createdAt: p.createdAt,
+                updatedAt: p.updatedAt,
+                mergedAt: p.mergedAt,
+                author: p.author.login,
+                labels: p.labels.map((l) => l.name),
+                nwo,
+              }),
+            )
+            // Junco-authored PRs only — the branch-prefix filter recovers the
+            // ticket linkage (ticketSlugFromBranch) and keeps the cache compact.
+            .filter((p) => ticketSlugFromBranch(p.headRefName, cfg.branchPrefix) !== null);
+          writePrCache(nwo, prs);
+          return { prs, staleAt: null };
+        } catch (e) {
+          // Cache serve is only for network-shaped failures; a permanent
+          // error (bad repo, auth) stays ok:false with no cache read.
+          if (!isOffline(e)) throw e;
+          const cached = readPrCache(nwo);
+          if (cached === null) throw e; // no cache — today's ok:false behavior
+          return { prs: cached.prs, staleAt: cached.fetchedAt };
         }
       });
     },
@@ -343,6 +494,14 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
     openInBrowser(nwo, num) {
       return attempt(async () => {
         await ghFn(cfg, ["issue", "view", String(num), "--repo", nwo, "--web"], {
+          timeoutMs: GH_TIMEOUT,
+        });
+      });
+    },
+
+    openPrInBrowser(nwo, num) {
+      return attempt(async () => {
+        await ghFn(cfg, ["pr", "view", String(num), "--repo", nwo, "--web"], {
           timeoutMs: GH_TIMEOUT,
         });
       });

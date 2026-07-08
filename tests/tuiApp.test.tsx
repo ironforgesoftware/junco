@@ -69,6 +69,7 @@ function makeClient(
   const cloned: string[] = [];
   const client: DashboardClient = {
     listIssues: async (nwo) => okv({ issues: issuesByRepo[nwo] ?? [], staleAt: null }),
+    listPrs: async () => okv({ prs: [], staleAt: null }),
     cloneRepo: async (_n, dest) => {
       cloned.push(dest);
       return okv(undefined);
@@ -83,6 +84,7 @@ function makeClient(
       return path === "/bad" ? { ok: false, error: "clone origin is other/thing" } : okv(undefined);
     },
     openInBrowser: async () => okv(undefined),
+    openPrInBrowser: async () => okv(undefined),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -111,6 +113,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
       call++;
       return r;
     },
+    listPrs: async () => okv({ prs: [], staleAt: null }),
     cloneRepo: async () => okv(undefined),
     issueDetail: async () => okv({ body: "the body", planComment: null }),
     applyAction: async (...a) => {
@@ -119,6 +122,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     },
     validateAndPrepareRepo: async () => okv(undefined),
     openInBrowser: async () => okv(undefined),
+    openPrInBrowser: async () => okv(undefined),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -321,11 +325,13 @@ describe("App", () => {
     let live: DashIssue[] = [a7, b8]; // #7 top → selected
     const client: DashboardClient = {
       listIssues: async () => okv({ issues: live, staleAt: null }),
+      listPrs: async () => okv({ prs: [], staleAt: null }),
       cloneRepo: async () => okv(undefined),
       issueDetail: async () => okv({ body: "the body", planComment: null }),
       applyAction: async () => okv({ queued: false }),
       validateAndPrepareRepo: async () => okv(undefined),
       openInBrowser: async () => okv(undefined),
+      openPrInBrowser: async () => okv(undefined),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,
