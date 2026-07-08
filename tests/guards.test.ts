@@ -38,7 +38,6 @@ describe("DEFAULT_TOOL_LOOP_THRESHOLDS", () => {
 describe("RepetitionGuard", () => {
   it("returns false for non-string input", () => {
     const g = new RepetitionGuard();
-    // @ts-expect-error — intentional bad input mirror of Python isinstance check
     expect(g.update(42)).toBe(false);
     expect(g.tripped).toBe(false);
   });
@@ -496,7 +495,6 @@ describe("OutputBudgetGuard", () => {
     const g = new OutputBudgetGuard(1000, 2000);
     expect(g.observeOutputTokens(0)).toBe(false);
     expect(g.observeOutputTokens(-5)).toBe(false);
-    // @ts-expect-error — intentional bad input
     expect(g.observeOutputTokens(null)).toBe(false);
     expect(g.turnOutputTokens).toBe(0);
     expect(g.tripped).toBe(false);
@@ -504,7 +502,6 @@ describe("OutputBudgetGuard", () => {
 
   it("non-integer tokens are ignored", () => {
     const g = new OutputBudgetGuard(1000, 2000);
-    // @ts-expect-error — intentional bad input
     expect(g.observeOutputTokens(1.5)).toBe(false);
     expect(g.turnOutputTokens).toBe(0);
   });

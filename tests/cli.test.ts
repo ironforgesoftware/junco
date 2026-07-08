@@ -385,6 +385,9 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   pollIntervalSeconds: 15,
   startupPollSeconds: 30,
   startupWait: true,
+  maxTransientRetries: 2,
+  retryBackoffSeconds: 60,
+  maxConcurrent: 1,
   supervisorEnabled: false,
   supervisorBudgetPerKind: 1,
   supervisorEscalationWindow: 3,
@@ -396,6 +399,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   branchPrefix: "junco/",
   worktreeRoot: "/tmp/worktrees",
   removeWorktreeOnSuccess: true,
+  allowedRepoRoots: [],
   draftByDefault: true,
   defaultLabels: [],
   verifyEnabled: false,
@@ -412,6 +416,9 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   logLevel: "info",
+  stateDir: "/tmp/vault/state",
+  logToFile: false,
+  transcriptsEnabled: false,
   github: {
     enabled: false,
     triggerLabel: "junco",
@@ -588,7 +595,7 @@ describe("run(['init', '--config', p])", () => {
 
 describe("run(['init']) — wizard routing", () => {
   it("runs the wizard when no config exists (and passes yes:false)", async () => {
-    const wizard = vi.fn(async () => 0);
+    const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
     const code = await run(["init", "--config", "/nope/config.toml"], {
       existsFn: () => false,
       runInitWizardFn: wizard,
@@ -600,7 +607,7 @@ describe("run(['init']) — wizard routing", () => {
   });
 
   it("passes --yes through to the wizard", async () => {
-    const wizard = vi.fn(async () => 0);
+    const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
     await run(["init", "--yes", "--config", "/nope/config.toml"], {
       existsFn: () => false,
       runInitWizardFn: wizard,

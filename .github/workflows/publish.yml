@@ -2,15 +2,18 @@ name: Publish to npm
 
 # Publishes the package whenever a GitHub Release is published.
 #
-# Release flow:
-#   1. Bump "version" in package.json (+ update CHANGELOG.md).
-#   2. Commit, then tag it: git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+# Release flow (see CLAUDE.md "Git & release" — Release HOLD applies):
+#   1. Bump "version" in package.json (+ update CHANGELOG.md) via a PR to main.
+#   2. After merge + quality gate green: git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
 #   3. Create a GitHub Release for that tag (gh release create vX.Y.Z ...).
-# This workflow then builds, tests (via the prepublishOnly hook), and publishes
-# with npm provenance — no local 2FA dance required.
 #
-# Requires a repo secret NPM_TOKEN: an npm granular/automation token scoped to
-# the @ironforgesoftware org with publish (read+write) and 2FA-bypass enabled.
+# Auth is npm "trusted publishing" (GitHub OIDC) — no NPM_TOKEN secret. The
+# package's Trusted Publisher on npmjs.com must point at this repo + this
+# workflow filename (publish.yml). Deliberately NOT set here:
+#   - setup-node's registry-url: it writes an .npmrc _authToken placeholder,
+#     and any token (even a placeholder) makes npm skip OIDC.
+#   - setup-node's cache: restoring a cache into a publishing job is a
+#     cache-poisoning vector; a cold npm ci costs seconds.
 
 on:
   release:
@@ -18,22 +21,36 @@ on:
 
 permissions:
   contents: read
-  id-token: write # required for npm provenance (signed via GitHub OIDC)
+  id-token: write # OIDC token for npm trusted publishing + provenance
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-node@v6.4.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false # publish needs no git credentials; don't leave a token in .git/config
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
+          # belt for the "no cache in a publishing job" rule above: setup-node
+          # auto-caches if package.json ever grows a packageManager field
+          package-manager-cache: false
+      # Trusted publishing needs npm >= 11.5.1; node's bundled npm may lag.
+      - run: npm install -g npm@latest
+      - name: Verify release tag matches package.json version
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$pkg" ]; then
+            echo "::error::release tag $GITHUB_REF_NAME does not match package.json version $pkg"
+            exit 1
+          fi
       - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
       # `npm publish` runs the prepublishOnly hook (npm run build && npm test)
-      # before publishing. --access public covers the scoped package (also set
-      # in package.json publishConfig); --provenance attaches a verified
-      # build-to-source attestation, shown on the npm package page.
+      # before publishing. --provenance stays explicit: npm docs say trusted
+      # publishing implies it, but that default has not held reliably.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

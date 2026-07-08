@@ -23,13 +23,13 @@ import type { Config } from "../src/types.js";
 function cfgAt(root: string): Config {
   return { stateDir: root } as unknown as Config;
 }
-const LABELS = {
+const LABELS: Extract<OutboxOp, { kind: "labels" }> = {
   kind: "labels",
   nwo: "a/b",
   issue: 7,
   add: ["junco:approved"],
   remove: [],
-} as const;
+};
 
 /** Build an issue-create StoredOp for the outbox — mirrors the LABELS const
  * above as a per-test fixture with overridable fields. */
