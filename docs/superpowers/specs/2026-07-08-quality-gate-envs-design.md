@@ -57,3 +57,21 @@ actionlint (validates workflow_call wiring statically) + zizmor (must stay 0 hig
 0 medium beyond the accepted `adhoc-packages` low, which lives in publish.yml) + YAML
 parse; the live proof is the PR's own gate run, which the ruleset now requires green
 before merge.
+
+## Revision (same day): one check run per OS
+
+After seeing the merge-box checks list (9 quality-gate entries incl. 2 skipped smoke
+rows), the maintainer chose the minimal-entries variant: **one job per OS** (3 check
+runs total: `quality gate (ubuntu-latest)`, `quality gate (macos-latest)`, and the
+required `quality-gate` aggregate). GitHub creates one check run per job — including
+skipped and reusable-workflow inner jobs — so this is the floor while covering both
+OSes in parallel; a literal single check is impossible cross-OS.
+
+Consequences:
+- `env-gate.yml` is deleted — with one inner job per environment the reusable
+  workflow added a layer with no grouping benefit.
+- Each OS job runs sequentially: full gate on the engines floor (node 22.19.0,
+  including the packaged-CLI smoke test), then re-install/build/test on node 24.
+  The static checks (lint/format/typecheck) run once per OS — they are
+  node-version-independent.
+- Job timeout 25 (one job now does both node versions); aggregate unchanged.
