@@ -1134,6 +1134,7 @@ export function App(props: AppProps): React.JSX.Element {
           now={queueNow}
           height={listHeight}
           focused
+          titleLabel="pr"
         />
       ) : view === "prs" ? (
         <PrList

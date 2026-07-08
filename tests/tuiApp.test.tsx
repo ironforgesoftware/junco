@@ -606,6 +606,7 @@ describe("PRs view", () => {
     r.stdin.write("\r"); // enter -> prDetail
     await until(() => (r.lastFrame() ?? "").includes("checks:"));
     expect(r.lastFrame()).toContain("PR eleven");
+    expect(r.lastFrame()).not.toContain("3 pr"); // no pane-3 numbering in the fullscreen overlay
     r.stdin.write(ESC); // back to the prs view
     await until(() => (r.lastFrame() ?? "").includes("p pull requests"));
     expect(r.lastFrame()).toContain("PR eleven"); // selection survived the round trip
@@ -1277,6 +1278,10 @@ describe("workspace wide mode", () => {
     r.stdin.write("\r"); // enter -> prDetail
     await until(() => (r.lastFrame() ?? "").includes("checks:"));
     expect(r.lastFrame()).toContain("branch:");
+    // The fullscreen overlay reuses PrPreview, but "3" names a pane that
+    // doesn't exist here — the pane-3-flavored title must not leak in.
+    expect(r.lastFrame()).not.toContain("3 pr");
+    expect(r.lastFrame()).toContain("pr · #10");
     r.stdin.write(ESC);
     await until(() => (r.lastFrame() ?? "").includes("o open")); // back to pane-3 footer
     expect(r.lastFrame()).toContain("#10"); // selection/list intact
