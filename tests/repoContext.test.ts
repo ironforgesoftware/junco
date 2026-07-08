@@ -193,6 +193,31 @@ describe("deriveBranchName", () => {
 });
 
 // ---------------------------------------------------------------------------
+// push_remote / forkNwo
+// ---------------------------------------------------------------------------
+describe("push_remote", () => {
+  const opts = {
+    defaultBaseBranch: "main",
+    branchPrefix: "junco/",
+    draftByDefault: true,
+    defaultLabels: [],
+  };
+  it("defaults pushRemote to origin and forkNwo to null", () => {
+    const ctx = deriveRepoContext({ repo: "/r" }, "t1", opts)!;
+    expect(ctx.pushRemote).toBe("origin");
+    expect(ctx.forkNwo).toBeNull();
+  });
+  it("carries a trimmed push_remote through", () => {
+    const ctx = deriveRepoContext({ repo: "/r", push_remote: " fork " }, "t1", opts)!;
+    expect(ctx.pushRemote).toBe("fork");
+  });
+  it("treats a blank push_remote as origin", () => {
+    const ctx = deriveRepoContext({ repo: "/r", push_remote: "   " }, "t1", opts)!;
+    expect(ctx.pushRemote).toBe("origin");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // asStrList
 // ---------------------------------------------------------------------------
 describe("asStrList", () => {

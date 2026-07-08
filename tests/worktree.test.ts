@@ -157,6 +157,8 @@ function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoCo
     labels: [],
     reviewers: [],
     amendsPr: null,
+    pushRemote: "origin",
+    forkNwo: null,
     ...overrides,
   };
 }

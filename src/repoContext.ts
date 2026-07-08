@@ -10,6 +10,11 @@ export interface RepoContext {
   labels: string[];
   reviewers: string[];
   amendsPr: number | null;
+  /** Git remote the PR flow pushes to ("origin" unless the ticket sets push_remote). */
+  pushRemote: string;
+  /** owner/repo of the push remote when it differs from origin — resolved by
+   * validateRepoContext from the remote's URL; null until then (and for origin). */
+  forkNwo: string | null;
 }
 
 export function isAmend(ctx: RepoContext): boolean {
@@ -112,6 +117,12 @@ export function deriveRepoContext(
     }
   }
 
+  const pushRemoteRaw = frontmatter.push_remote;
+  const pushRemote =
+    typeof pushRemoteRaw === "string" && pushRemoteRaw.trim() !== ""
+      ? pushRemoteRaw.trim()
+      : "origin";
+
   return {
     repo,
     baseBranch,
@@ -121,5 +132,7 @@ export function deriveRepoContext(
     labels,
     reviewers,
     amendsPr,
+    pushRemote,
+    forkNwo: null,
   };
 }

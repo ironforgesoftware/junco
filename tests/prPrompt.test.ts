@@ -24,6 +24,8 @@ const FRESH_CTX: RepoContext = {
   labels: [],
   reviewers: [],
   amendsPr: null,
+  pushRemote: "origin",
+  forkNwo: null,
 };
 
 const AMEND_CTX: RepoContext = {
@@ -35,6 +37,8 @@ const AMEND_CTX: RepoContext = {
   labels: [],
   reviewers: [],
   amendsPr: 99,
+  pushRemote: "origin",
+  forkNwo: null,
 };
 
 const AMEND_TARGET: AmendTarget = {
