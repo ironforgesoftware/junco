@@ -96,6 +96,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     ...overrides,
   };
@@ -684,6 +685,7 @@ describe("github bridge wiring", () => {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   });
 
   it("enabled=false: injected bridgeSweepFn is never called", async () => {
@@ -775,6 +777,7 @@ describe("outbox drain (local mode)", () => {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   });
   const enabledGithub = (pollSeconds: number) => ({
     ...disabledGithub(pollSeconds),

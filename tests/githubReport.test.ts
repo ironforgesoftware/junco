@@ -41,6 +41,7 @@ const cfg = {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   },
 } as unknown as Config;
 // Offline-outbox tests need a real stateDir (enqueueOp writes files under

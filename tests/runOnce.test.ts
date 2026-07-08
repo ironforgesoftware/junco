@@ -67,6 +67,7 @@ function cfg(root: string): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     stateDir: join(root, "state"),
     logToFile: false,

@@ -24,6 +24,7 @@ function cfgWith(stateDir: string, repos: { nwo: string; path: string }[]): Conf
       repos,
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
   } as unknown as Config;
 }

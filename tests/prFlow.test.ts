@@ -161,6 +161,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     stateDir: join(h.root, "state"),
     logToFile: false,

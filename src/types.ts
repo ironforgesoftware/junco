@@ -48,6 +48,7 @@ export interface GithubConfig {
   repos: GithubRepoMapping[];
   requireApproval: boolean; // false ⇒ plan-ready auto-executes next sweep
   plannerModelId: string | null; // planning-session model id override (same endpoint)
+  externalReposRoot: string; // managed clones of unowned repos (fork-PR flow)
 }
 export interface Config {
   vaultRoot: string;

@@ -68,6 +68,7 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   },
 };
 

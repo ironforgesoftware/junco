@@ -129,6 +129,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
   };
 }

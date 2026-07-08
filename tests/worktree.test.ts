@@ -142,6 +142,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
   };
 }

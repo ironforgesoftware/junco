@@ -20,6 +20,7 @@ function cfg(repos: GithubRepoMapping[] = []): Config {
       repos,
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
   } as unknown as Config;
 }

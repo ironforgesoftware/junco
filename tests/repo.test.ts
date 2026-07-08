@@ -154,6 +154,7 @@ function makeConfig(work: string, ghBin: string): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     stateDir: "/tmp/junco-repo-test-state",
     logToFile: false,

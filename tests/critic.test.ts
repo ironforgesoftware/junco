@@ -98,6 +98,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     ...overrides,
   };

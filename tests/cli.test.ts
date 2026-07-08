@@ -420,6 +420,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   },
 };
 
