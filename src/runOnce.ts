@@ -24,7 +24,7 @@ import { metrics } from "./metrics.js";
 // session a read-only tool subset so a stray write/bash/edit can't corrupt the
 // claimed ticket sitting in processing/ (PR-flow tickets in a worktree get the
 // full set in a later milestone).
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+export const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
 export interface RunDeps {
   // Injection seam: returns a session factory for (cfg, cwd). Defaults to the real Pi SDK.
