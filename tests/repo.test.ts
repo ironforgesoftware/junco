@@ -197,6 +197,43 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// Fork harness — file scope so it's shared by "push_remote (fork mode)" and
+// "resolveAmendTarget — fork PRs" below.
+// ---------------------------------------------------------------------------
+
+let tmp: string;
+let h: ReturnType<typeof setupForkHarness>;
+let cfg: Config;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "junco-fork-test-"));
+  h = setupForkHarness(tmp);
+  const ghBin = join(tmp, "fake-gh.sh");
+  writeFakeGh(ghBin);
+  cfg = makeConfig(h.work, ghBin);
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+function forkCtx(over: Partial<RepoContext> = {}): RepoContext {
+  return {
+    repo: h.work,
+    baseBranch: "main",
+    branchName: "junco/x",
+    draft: true,
+    prTitle: null,
+    labels: [],
+    reviewers: [],
+    amendsPr: null,
+    pushRemote: "fork",
+    forkNwo: null,
+    ...over,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // validateRepoContext — fresh mode
 // ---------------------------------------------------------------------------
 
@@ -471,36 +508,6 @@ describe("allowed_repo_roots", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateRepoContext — push_remote (fork mode)", () => {
-  let tmp: string;
-  let h: ReturnType<typeof setupForkHarness>;
-  let cfg: Config;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "junco-fork-test-"));
-    h = setupForkHarness(tmp);
-    const ghBin = join(tmp, "fake-gh.sh");
-    writeFakeGh(ghBin);
-    cfg = makeConfig(h.work, ghBin);
-  });
-
-  afterEach(() => {
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  const forkCtx = (over: Partial<RepoContext> = {}): RepoContext => ({
-    repo: h.work,
-    baseBranch: "main",
-    branchName: "junco/x",
-    draft: true,
-    prTitle: null,
-    labels: [],
-    reviewers: [],
-    amendsPr: null,
-    pushRemote: "fork",
-    forkNwo: null,
-    ...over,
-  });
-
   it("resolves forkNwo from the fork remote URL", async () => {
     const ctx = forkCtx();
     await validateRepoContext(cfg, ctx);
@@ -533,5 +540,54 @@ describe("validateRepoContext — push_remote (fork mode)", () => {
     const boxed = { ...cfg, allowedRepoRoots: ["/nowhere"] };
     boxed.github = { ...cfg.github, externalReposRoot: tmp }; // h.work lives under tmp
     await expect(validateRepoContext(boxed, forkCtx())).resolves.toBeTruthy();
+  }, 15000);
+});
+
+// ---------------------------------------------------------------------------
+// resolveAmendTarget — fork PRs (cross-repo PR whose head is our own fork)
+// ---------------------------------------------------------------------------
+
+describe("resolveAmendTarget — fork PRs", () => {
+  const crossJson = (owner: string) =>
+    JSON.stringify({
+      state: "OPEN",
+      headRefName: "junco/x",
+      baseRefName: "main",
+      isDraft: true,
+      url: "https://github.com/up/stream/pull/9",
+      isCrossRepository: true,
+      headRepositoryOwner: { login: owner },
+      headRepository: { name: "stream" },
+    });
+
+  it("allows a cross-repo PR whose head is our fork", async () => {
+    process.env.FAKE_GH_PR_JSON = crossJson("me");
+    try {
+      const ctx = forkCtx({ amendsPr: 9, forkNwo: FORK_NWO });
+      const t = await resolveAmendTarget(cfg, ctx, "up/stream");
+      expect(t.headRef).toBe("junco/x");
+    } finally {
+      delete process.env.FAKE_GH_PR_JSON;
+    }
+  }, 15000);
+
+  it("still refuses someone else's fork", async () => {
+    process.env.FAKE_GH_PR_JSON = crossJson("stranger");
+    try {
+      const ctx = forkCtx({ amendsPr: 9, forkNwo: FORK_NWO });
+      await expect(resolveAmendTarget(cfg, ctx, "up/stream")).rejects.toThrow(/cross-repo/);
+    } finally {
+      delete process.env.FAKE_GH_PR_JSON;
+    }
+  }, 15000);
+
+  it("refuses a cross-repo PR when the ticket has no push_remote", async () => {
+    process.env.FAKE_GH_PR_JSON = crossJson("me");
+    try {
+      const ctx = forkCtx({ amendsPr: 9, pushRemote: "origin", forkNwo: null });
+      await expect(resolveAmendTarget(cfg, ctx, "up/stream")).rejects.toThrow(/push_remote/);
+    } finally {
+      delete process.env.FAKE_GH_PR_JSON;
+    }
   }, 15000);
 });

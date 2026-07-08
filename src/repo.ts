@@ -33,7 +33,8 @@ export interface AmendTarget {
 /**
  * Port of worker.py `resolve_amend_target` (lines 1776-1812).
  *
- * Queries gh for the PR's metadata; refuses closed/merged/cross-repo PRs.
+ * Queries gh for the PR's metadata; refuses closed/merged PRs, and refuses
+ * cross-repo PRs unless the head is the operator's own fork (ctx.forkNwo).
  */
 export async function resolveAmendTarget(
   cfg: Config,
@@ -55,7 +56,7 @@ export async function resolveAmendTarget(
         "--repo",
         nwo,
         "--json",
-        "state,headRefName,baseRefName,isDraft,url,isCrossRepository",
+        "state,headRefName,baseRefName,isDraft,url,isCrossRepository,headRepositoryOwner,headRepository",
       ],
       { cwd: ctx.repo, retryNetwork: true },
     );
@@ -82,9 +83,28 @@ export async function resolveAmendTarget(
   }
 
   if (data["isCrossRepository"]) {
-    throw new GitOpError(
-      `PR #${ctx.amendsPr} is from a fork (cross-repo); worker cannot push to it`,
+    // Cross-repo PRs are refused UNLESS the head is the operator's own fork
+    // (ctx.forkNwo, derived from ctx.pushRemote in validateRepoContext) —
+    // anyone else's fork keeps the blanket refusal.
+    const owner = String(
+      (data["headRepositoryOwner"] as Record<string, unknown> | undefined)?.["login"] ?? "",
     );
+    const name = String(
+      (data["headRepository"] as Record<string, unknown> | undefined)?.["name"] ?? "",
+    );
+    const headNwo = owner && name ? `${owner}/${name}` : null;
+    const ownFork =
+      ctx.forkNwo !== null &&
+      headNwo !== null &&
+      headNwo.toLowerCase() === ctx.forkNwo.toLowerCase();
+    if (!ownFork) {
+      throw new GitOpError(
+        `PR #${ctx.amendsPr} is from a fork (cross-repo); worker cannot push to it` +
+          (ctx.forkNwo === null
+            ? " — set push_remote on the ticket to amend a PR from YOUR fork"
+            : ` — PR head ${headNwo ?? "unknown"} is not the ${ctx.pushRemote} remote (${ctx.forkNwo})`),
+      );
+    }
   }
 
   const head = String(data["headRefName"] ?? "");
