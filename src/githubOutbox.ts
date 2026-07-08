@@ -268,6 +268,38 @@ function prFlushComment(finalize: { finalText: string }, prUrl: string): string 
 
 const FINDING_LABEL_DEFAULT = { color: "ededed", description: "" };
 
+// Fingerprints already filed on <nwo>: scan the bodies of every issue
+// carrying the finding label (state all, most recent 500). Bodies can be
+// null (githubInbox.ts GhIssue precedent) — treated as empty.
+export async function fetchFindingMarkers(
+  cfg: Config,
+  nwo: string,
+  ghFn: typeof gh,
+): Promise<Set<string>> {
+  const listed = await ghFn(
+    cfg,
+    [
+      "issue",
+      "list",
+      "--repo",
+      nwo,
+      "--label",
+      FINDING_LABEL,
+      "--state",
+      "all",
+      "--limit",
+      "500",
+      "--json",
+      "body",
+    ],
+    { timeoutMs: GH_TIMEOUT },
+  );
+  const bodies = (JSON.parse(listed.stdout) as { body: string | null }[]).map((b) =>
+    typeof b.body === "string" ? b.body : "",
+  );
+  return extractFindingMarkers(bodies);
+}
+
 /** Idempotently create the labels an issue-create op needs (`gh label create
  * --force` is create-or-update — same precedent as ensureLabels in
  * githubInbox.ts:320-348). Known finding labels take their color/description
@@ -462,26 +494,8 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
         // Two offline assess runs can enqueue duplicate fingerprints; FIFO
         // convergence depends on op N+1's list seeing the issue op N just
         // created.
-        const listed = await ghFn(
-          cfg,
-          [
-            "issue",
-            "list",
-            "--repo",
-            op.nwo,
-            "--label",
-            FINDING_LABEL,
-            "--state",
-            "all",
-            "--limit",
-            "500",
-            "--json",
-            "body",
-          ],
-          { timeoutMs: GH_TIMEOUT },
-        );
-        const bodies = (JSON.parse(listed.stdout) as { body: string }[]).map((b) => b.body);
-        if (extractFindingMarkers(bodies).has(op.fingerprint)) return; // already filed
+        const markers = await fetchFindingMarkers(cfg, op.nwo, ghFn);
+        if (markers.has(op.fingerprint)) return; // already filed
         const dir = mkdtempSync(join(tmpdir(), "junco-obxi-"));
         const file = join(dir, "issue.md");
         writeFileSync(file, op.bodyText, "utf8");

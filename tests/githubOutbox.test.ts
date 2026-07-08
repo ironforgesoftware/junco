@@ -441,6 +441,27 @@ describe("flushOutbox", () => {
       ).toBe(false);
     });
 
+    it("replay dedup: null issue bodies are tolerated (ignored), a later body's marker still dedups", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-ic1b-"));
+      const cfg = cfgAt(root);
+      const fp = "deadbeefcafebabe";
+      enqueueOp(cfg, "assess", mkIssueCreateOp({ fingerprint: fp }));
+      const f = fakes((_tool, args) => {
+        if (args[0] === "issue" && args[1] === "list") {
+          return {
+            stdout: JSON.stringify([{ body: null }, { body: `some body\n${findingMarker(fp)}` }]),
+          };
+        }
+        return undefined;
+      });
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+      expect(outboxDepth(cfg)).toBe(0);
+      expect(
+        f.calls.some((c) => c.tool === "gh" && c.args[0] === "issue" && c.args[1] === "create"),
+      ).toBe(false);
+    });
+
     it("create path: labels first, then issue list, then issue create with title/body-file/labels", async () => {
       const root = mkdtempSync(join(tmpdir(), "junco-obx-ic2-"));
       const cfg = cfgAt(root);
