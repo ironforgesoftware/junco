@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { validateRepoContext, resolveAmendTarget } from "../src/repo.js";
 import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
+import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
@@ -463,4 +464,74 @@ describe("allowed_repo_roots", () => {
     const ctx = makeContext("/srv/allowed-evil");
     await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/allowed_repo_roots/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// validateRepoContext — push_remote (fork mode)
+// ---------------------------------------------------------------------------
+
+describe("validateRepoContext — push_remote (fork mode)", () => {
+  let tmp: string;
+  let h: ReturnType<typeof setupForkHarness>;
+  let cfg: Config;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "junco-fork-test-"));
+    h = setupForkHarness(tmp);
+    const ghBin = join(tmp, "fake-gh.sh");
+    writeFakeGh(ghBin);
+    cfg = makeConfig(h.work, ghBin);
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const forkCtx = (over: Partial<RepoContext> = {}): RepoContext => ({
+    repo: h.work,
+    baseBranch: "main",
+    branchName: "junco/x",
+    draft: true,
+    prTitle: null,
+    labels: [],
+    reviewers: [],
+    amendsPr: null,
+    pushRemote: "fork",
+    forkNwo: null,
+    ...over,
+  });
+
+  it("resolves forkNwo from the fork remote URL", async () => {
+    const ctx = forkCtx();
+    await validateRepoContext(cfg, ctx);
+    expect(ctx.forkNwo).toBe(FORK_NWO);
+  }, 15000);
+
+  it("rejects a push_remote that is not a remote on the clone", async () => {
+    await expect(validateRepoContext(cfg, forkCtx({ pushRemote: "nope" }))).rejects.toThrow(
+      /push_remote/,
+    );
+  }, 15000);
+
+  it("rejects a push_remote with flag-shaped characters", async () => {
+    await expect(
+      validateRepoContext(cfg, forkCtx({ pushRemote: "--upload-pack=x" })),
+    ).rejects.toThrow(/not a valid git remote name/);
+  }, 15000);
+
+  it("checks branch collision against the FORK, not origin", async () => {
+    // Plant junco/x on the fork bare only.
+    run(["git", "-C", h.work, "push", "fork", "HEAD:refs/heads/junco/x"]);
+    await expect(validateRepoContext(cfg, forkCtx())).rejects.toThrow(/already exists/);
+    // …and a branch existing on ORIGIN must NOT collide in fork mode.
+    run(["git", "-C", h.work, "push", "origin", "HEAD:refs/heads/junco/y"]);
+    const ok = forkCtx({ branchName: "junco/y" });
+    await expect(validateRepoContext(cfg, ok)).resolves.toBeTruthy();
+  }, 15000);
+
+  it("appends externalReposRoot to allowed_repo_roots containment", async () => {
+    const boxed = { ...cfg, allowedRepoRoots: ["/nowhere"] };
+    boxed.github = { ...cfg.github, externalReposRoot: tmp }; // h.work lives under tmp
+    await expect(validateRepoContext(boxed, forkCtx())).resolves.toBeTruthy();
+  }, 15000);
 });
