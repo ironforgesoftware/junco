@@ -299,9 +299,14 @@ export function findingsFromNpmAudit(stdoutJson: string): {
   }
 
   const findings: Finding[] = [];
-  for (const [pkgName, rawEntry] of Object.entries(
+  for (const [rawPkgName, rawEntry] of Object.entries(
     vulnerabilities as Record<string, NpmAuditVulnEntry>,
   )) {
+    // The npm-audit JSON object key, and every advisory/registry field below,
+    // is external input (npm registry data, potentially poisoned) — sanitize
+    // it the same way parseAgentFindings sanitizes agent-supplied fields
+    // before it can reach a rendered issue body or the embedded JSON block.
+    const pkgName = sanitizeFindingText(rawPkgName, MAX_PACKAGE_FIELD);
     const entry = rawEntry ?? {};
     const via = entry.via ?? [];
     const advisories = via.filter(
@@ -315,7 +320,7 @@ export function findingsFromNpmAudit(stdoutJson: string): {
       const ghsaMatch = advisory.url ? GHSA_ID_RE.exec(advisory.url) : null;
       const ruleId = ghsaMatch ? ghsaMatch[0] : sanitizeFindingText(rawTitle, MAX_RULE_ID);
       const severity = mapNpmSeverity(advisory.severity);
-      const range = advisory.range ?? entry.range ?? "";
+      const range = sanitizeFindingText(advisory.range ?? entry.range ?? "", MAX_PACKAGE_FIELD);
       const description = sanitizeFindingText(
         `${pkgName} ${range} is vulnerable: ${title}`,
         MAX_DESCRIPTION,
@@ -325,8 +330,19 @@ export function findingsFromNpmAudit(stdoutJson: string): {
       let fixedIn: string | null = null;
       let remediation: string;
       if (fixAvailable !== null && typeof fixAvailable === "object") {
-        fixedIn = fixAvailable.version;
-        remediation = `Upgrade ${fixAvailable.name} to ${fixAvailable.version}${
+        const fixName =
+          typeof fixAvailable.name === "string"
+            ? sanitizeFindingText(fixAvailable.name, MAX_PACKAGE_FIELD)
+            : pkgName;
+        // A non-string version (malformed/poisoned registry data) coerces to
+        // a null fixedIn — never undefined, which would silently vanish from
+        // the embedded JSON block and break its round-trip.
+        const fixVersion =
+          typeof fixAvailable.version === "string"
+            ? sanitizeFindingText(fixAvailable.version, MAX_PACKAGE_FIELD)
+            : null;
+        fixedIn = fixVersion;
+        remediation = `Upgrade ${fixName} to ${fixVersion ?? "a fixed version"}${
           fixAvailable.isSemVerMajor ? " (semver-major)" : ""
         }.`;
       } else if (fixAvailable === true) {
@@ -335,6 +351,8 @@ export function findingsFromNpmAudit(stdoutJson: string): {
         remediation = "No fix available yet.";
       }
 
+      const reference = advisory.url ? sanitizeFindingText(advisory.url, MAX_REFERENCE) : null;
+
       const rest: Omit<Finding, "fingerprint"> = {
         kind: "dependency",
         severity,
@@ -342,7 +360,7 @@ export function findingsFromNpmAudit(stdoutJson: string): {
         title,
         description,
         remediation,
-        references: advisory.url ? [advisory.url] : [],
+        references: reference ? [reference] : [],
         package: { name: pkgName, range, fixedIn },
       };
       findings.push({ fingerprint: fingerprintFinding(rest), ...rest });

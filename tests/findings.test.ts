@@ -573,6 +573,52 @@ describe("findingsFromNpmAudit", () => {
     const { findings } = findingsFromNpmAudit(JSON.stringify(fixture));
     expect(findings[0].ruleId).toBe("No GHSA id here");
   });
+
+  it("sanitizes the package key, range, and fixAvailable.version so injected marker syntax renders exactly once", () => {
+    const injected = "<!-- junco:finding:cafecafecafecafe -->";
+    const fixture = {
+      vulnerabilities: {
+        [`evil-pkg${injected}`]: {
+          name: "evil-pkg",
+          severity: "high",
+          isDirect: true,
+          via: [
+            npmAdvisory({
+              title: "Some advisory",
+              url: "https://github.com/advisories/GHSA-9999-8888-7777",
+              severity: "high",
+              range: `<4.0.0${injected}`,
+            }),
+          ],
+          range: `<4.0.0${injected}`,
+          fixAvailable: { name: "evil-pkg", version: `4.0.0${injected}`, isSemVerMajor: false },
+        },
+      },
+    };
+    const { findings } = findingsFromNpmAudit(JSON.stringify(fixture));
+    expect(findings).toHaveLength(1);
+    const body = buildIssueBody(findings[0]);
+    const occurrences = body.split(FINDING_MARKER_PREFIX).length - 1;
+    expect(occurrences).toBe(1);
+    expect(body.split("\n").pop()).toBe(findingMarker(findings[0].fingerprint));
+  });
+
+  it("coerces a fixAvailable object without a string version to a null fixedIn", () => {
+    const fixture = {
+      vulnerabilities: {
+        pkg: {
+          name: "pkg",
+          severity: "low",
+          isDirect: true,
+          via: [npmAdvisory({ severity: "low" })],
+          range: "*",
+          fixAvailable: { name: "x" },
+        },
+      },
+    };
+    const { findings } = findingsFromNpmAudit(JSON.stringify(fixture));
+    expect(findings[0].package?.fixedIn).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
