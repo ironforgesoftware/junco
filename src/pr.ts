@@ -173,8 +173,12 @@ export async function openPullRequest(
     argv.push("--draft");
   }
 
-  for (const label of ctx.labels) {
-    argv.push("--label", label);
+  // Fork PRs are label-free — the upstream label namespace is not ours (spec
+  // etiquette invariant); skip the whole loop when in fork mode.
+  if (ctx.forkNwo === null) {
+    for (const label of ctx.labels) {
+      argv.push("--label", label);
+    }
   }
 
   for (const rv of ctx.reviewers) {

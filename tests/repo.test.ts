@@ -530,6 +530,8 @@ describe("validateRepoContext — push_remote (fork mode)", () => {
     // Plant junco/x on the fork bare only.
     run(["git", "-C", h.work, "push", "fork", "HEAD:refs/heads/junco/x"]);
     await expect(validateRepoContext(cfg, forkCtx())).rejects.toThrow(/already exists/);
+    // Fork-mode collisions point the operator at the amend iteration path.
+    await expect(validateRepoContext(cfg, forkCtx())).rejects.toThrow(/amends_pr/);
     // …and a branch existing on ORIGIN must NOT collide in fork mode.
     run(["git", "-C", h.work, "push", "origin", "HEAD:refs/heads/junco/y"]);
     const ok = forkCtx({ branchName: "junco/y" });

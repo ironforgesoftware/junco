@@ -282,6 +282,16 @@ export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promis
     retryNetwork: true,
   });
   if (bls.code === 0 && bls.stdout.trim()) {
+    // Fork mode: an existing branch is usually the open PR from a prior
+    // dispatch — point the operator at the amend iteration path rather than
+    // just "pick a different branch". Origin mode keeps the terse message.
+    if (ctx.pushRemote !== "origin") {
+      throw new GitOpError(
+        `branch ${JSON.stringify(ctx.branchName)} already exists on fork; ` +
+          `to push feedback commits to the open PR, dispatch a ticket with ` +
+          `amends_pr: <PR#> and push_remote: ${ctx.pushRemote} — or pick a different branch_name`,
+      );
+    }
     throw new GitOpError(
       `branch ${JSON.stringify(ctx.branchName)} already exists on ${ctx.pushRemote}; pick a different branch_name or delete the remote branch first`,
     );

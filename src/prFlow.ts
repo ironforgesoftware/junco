@@ -479,7 +479,8 @@ export async function runPrFlow(
       title,
       bodyText,
       draft: ctx.draft,
-      labels: ctx.labels,
+      // Fork PRs are label-free — the upstream label namespace is not ours.
+      labels: ctx.forkNwo !== null ? [] : ctx.labels,
       reviewers: ctx.reviewers,
       // External tickets stay silent on the upstream issue — no comment/label
       // replay when connectivity returns (etiquette invariant).

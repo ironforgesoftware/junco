@@ -521,6 +521,9 @@ describe("openPullRequest", () => {
     const ctx = makeContext(work, {
       branchName: "junco/fp",
       forkNwo: FORK_NWO,
+      // A default workflow label would normally flow into --label; on a fork PR
+      // the upstream label namespace is not ours, so it must be suppressed.
+      labels: ["junco"],
     });
 
     const bodyFile = join(tmpRoot, "body.md");
@@ -536,6 +539,8 @@ describe("openPullRequest", () => {
       const argv = readFileSync(logFile, "utf8");
       expect(argv).toContain("--head me:junco/fp");
       expect(argv).toContain("--repo up/stream");
+      // Fork PRs are label-free — the upstream label namespace is not ours.
+      expect(argv).not.toContain("--label");
     } finally {
       delete process.env.FAKE_GH_OUTPUT;
       delete process.env.FAKE_GH_EXIT_CODE;

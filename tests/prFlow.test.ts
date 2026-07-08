@@ -956,7 +956,8 @@ exec ${JSON.stringify(realGit)} "$@"
     );
     chmodSync(gitBin, 0o755);
 
-    const cfg = makeConfig(h, { gitBin });
+    // A default workflow label would flow into ctx.labels; a fork PR must drop it.
+    const cfg = makeConfig(h, { gitBin, defaultLabels: ["junco"] });
     const { task, path } = makeTicket(h, "gh-up-stream-7.md", forkTicketContent(h.work));
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true }),
@@ -970,6 +971,7 @@ exec ${JSON.stringify(realGit)} "$@"
     const pr = ops.find((o) => o.op.kind === "pr")!.op as Extract<OutboxOp, { kind: "pr" }>;
     expect(pr.remote).toBe("fork");
     expect(pr.head).toBe(`${FORK_NWO.split("/")[0]}:junco/gh-up-stream-7`);
+    expect(pr.labels).toEqual([]); // fork PRs are label-free (upstream namespace not ours)
     expect(pr.finalize).toBeNull(); // external — no upstream comment/label replay
   }, 30000);
 });
