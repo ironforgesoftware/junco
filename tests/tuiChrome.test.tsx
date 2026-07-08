@@ -61,6 +61,8 @@ describe("Header", () => {
         queueWaiting={2}
         watchlistError={null}
         outboxDepth={0}
+        prAttention={0}
+        prFailing={false}
       />,
     ).lastFrame()!;
     expect(f).toContain("🐦");
@@ -83,6 +85,8 @@ describe("Header", () => {
         queueWaiting={0}
         watchlistError="corrupt json"
         outboxDepth={0}
+        prAttention={0}
+        prFailing={false}
       />,
     ).lastFrame()!;
     expect(f).toContain("daemon ○");
@@ -101,6 +105,8 @@ describe("Header", () => {
         queueWaiting={0}
         watchlistError={null}
         outboxDepth={3}
+        prAttention={0}
+        prFailing={false}
       />,
     ).lastFrame()!;
     expect(withDepth).toContain("⇡3 unpushed");
@@ -116,6 +122,8 @@ describe("Header", () => {
         queueWaiting={0}
         watchlistError={null}
         outboxDepth={0}
+        prAttention={0}
+        prFailing={false}
       />,
     ).lastFrame()!;
     expect(noDepth).not.toContain("unpushed");
@@ -131,6 +139,8 @@ describe("Header pulse", () => {
     queueWaiting: 0,
     watchlistError: null,
     outboxDepth: 0,
+    prAttention: 0,
+    prFailing: false,
   };
 
   it("renders the full pulse row when healthy: review, task counts, last-task, tokens, bridge", () => {
@@ -227,6 +237,65 @@ describe("Header pulse", () => {
   });
 });
 
+describe("Header PR attention chip", () => {
+  const base = {
+    repoNwo: "acme/api",
+    health: UP_BARE,
+    reviewCount: 0,
+    now: NOW,
+    queueRunning: 0,
+    queueWaiting: 0,
+    watchlistError: null,
+    outboxDepth: 0,
+  };
+
+  it("hidden at 0, shown as ⚑N PR at 3", () => {
+    const hidden = render(
+      <Header {...base} mode="wide" prAttention={0} prFailing={false} />,
+    ).lastFrame()!;
+    expect(hidden).not.toContain("PR");
+
+    const shown = render(
+      <Header {...base} mode="wide" prAttention={3} prFailing={false} />,
+    ).lastFrame()!;
+    expect(shown).toContain("⚑3 PR");
+  });
+
+  it("renders after the ●N review chip", () => {
+    const f = render(
+      <Header {...base} mode="wide" reviewCount={2} prAttention={3} prFailing={false} />,
+    ).lastFrame()!;
+    expect(f.indexOf("review")).toBeLessThan(f.indexOf("⚑3 PR"));
+  });
+
+  // The actual ANSI color (theme.error vs theme.warn) isn't observable in a
+  // captured frame — non-TTY output strips it, same as every other colored
+  // chip in this file — so this only proves both prFailing branches render.
+  it("renders the chip in both the warn (prFailing=false) and error (prFailing=true) paths", () => {
+    const warnPath = render(
+      <Header {...base} mode="wide" prAttention={3} prFailing={false} />,
+    ).lastFrame()!;
+    expect(warnPath).toContain("⚑3 PR");
+
+    const errorPath = render(
+      <Header {...base} mode="wide" prAttention={3} prFailing={true} />,
+    ).lastFrame()!;
+    expect(errorPath).toContain("⚑3 PR");
+  });
+
+  it("is essentials tier — present in both wide and medium (non-wide) mode", () => {
+    const wide = render(
+      <Header {...base} mode="wide" prAttention={5} prFailing={false} />,
+    ).lastFrame()!;
+    expect(wide).toContain("⚑5 PR");
+
+    const medium = render(
+      <Header {...base} mode="medium" prAttention={5} prFailing={false} />,
+    ).lastFrame()!;
+    expect(medium).toContain("⚑5 PR");
+  });
+});
+
 describe("Toast", () => {
   it("renders the text when live and a blank row when not", () => {
     expect(render(<Toast toast={{ kind: "error", text: "gh boom" }} />).lastFrame()).toContain(
@@ -256,6 +325,14 @@ describe("Footer / hintsFor", () => {
     expect(keys).toContain("/");
     expect(keys).toContain("←/→");
     expect(keys).toContain("q");
+  });
+  it("main pane 2 advertises the PRs view key, placed next to the queue key", () => {
+    const pairs = hintsFor("main", 2, "wide", false);
+    const pIdx = pairs.findIndex(([k]) => k === "p");
+    const tIdx = pairs.findIndex(([k]) => k === "t");
+    expect(pairs.find(([k]) => k === "p")?.[1]).toBe("PRs");
+    expect(tIdx).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(pIdx - tIdx)).toBe(1);
   });
   it("medium mode enter says detail and the pane hint drops to ←/repos", () => {
     const pairs = hintsFor("main", 2, "medium", false);

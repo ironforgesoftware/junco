@@ -607,6 +607,45 @@ describe("PRs view", () => {
     await until(() => prCalls.length > 0);
     expect(prCalls).toEqual([["acme/api", 10]]); // anchor held despite the re-sort
   });
+
+  // Unwatching a repo must clear its PRs from the aggregate synchronously —
+  // the ⚑ attention chip reflects only currently watched repos, never ghost
+  // data lingering until the next poll (the reviewCount rule). listPrs here
+  // never resolves a second time, so a passing test proves the synchronous
+  // prune in unwatch(), not a refetch.
+  it("unwatching a repo clears its contribution to the ⚑ PR attention chip", async () => {
+    const failing = makePr({
+      nwo: "alx/coral",
+      number: 30,
+      title: "Coral failing PR",
+      url: "https://github.com/alx/coral/pull/30",
+      headRefName: "junco/coral-fail",
+      checks: { pass: 0, fail: 1, pending: 0, total: 1 },
+    });
+    const { client: base } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const served = new Set<string>();
+    const client: DashboardClient = {
+      ...base,
+      // Serve each repo's PR list exactly once; every later call hangs forever.
+      listPrs: (nwo: string) => {
+        if (served.has(nwo)) return new Promise<never>(() => {});
+        served.add(nwo);
+        return Promise.resolve(okv({ prs: nwo === "alx/coral" ? [failing] : [], staleAt: null }));
+      },
+    };
+    const file = wlp();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderApp(client, file);
+    await until(() => (r.lastFrame() ?? "").includes("⚑1 PR"));
+    r.stdin.write("j"); // select alx/coral (pane 1)
+    await tick();
+    r.stdin.write("x"); // unwatch — the prs aggregate prunes with the mapping
+    await until(() => !(r.lastFrame() ?? "").includes("⚑1 PR"));
+    expect(readWatchlist(file).entries).toEqual([]);
+    r.stdin.write("p"); // the PRs view itself must not list the pruned PR either
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests ·"));
+    expect(r.lastFrame()).not.toContain("Coral failing PR");
+  });
 });
 
 describe("command palette + focus keys", () => {

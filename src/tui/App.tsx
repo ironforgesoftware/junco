@@ -26,7 +26,7 @@ import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
 import { PrList } from "./components/PrList.js";
 import { PrPreview } from "./components/PrPreview.js";
-import { sortPrs, type DashPr } from "./prState.js";
+import { derivePrState, sortPrs, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
 import { HelpModal } from "./components/HelpModal.js";
 import { AddRepoForm } from "./components/AddRepoForm.js";
@@ -285,6 +285,26 @@ export function App(props: AppProps): React.JSX.Element {
       ),
     [repoMappings, issues, trigger],
   );
+
+  // Header pulse: junco-authored PRs needing attention — checks-failing or
+  // changes-requested — across the cross-repo aggregate. prFailing picks the
+  // chip's color (error outranks warn — the operator should see the worse
+  // news first, same precedence rule as derivePrState itself). Scoped to
+  // repoMappings (same rule as reviewCount above) so an unwatched repo's
+  // leftover PRs can never inflate the count between polls; unwatch() also
+  // prunes `prs` synchronously, so this scoping is the belt to that suspender.
+  const prAttention = useMemo(() => {
+    const watched = new Set(repoMappings.map((r) => r.nwo));
+    return prs.filter((p) => {
+      if (!watched.has(p.nwo)) return false;
+      const s = derivePrState(p);
+      return s === "checks-failing" || s === "changes-requested";
+    }).length;
+  }, [prs, repoMappings]);
+  const prFailing = useMemo(() => {
+    const watched = new Set(repoMappings.map((r) => r.nwo));
+    return prs.some((p) => watched.has(p.nwo) && derivePrState(p) === "checks-failing");
+  }, [prs, repoMappings]);
 
   const loadIssues = useCallback(
     (nwo: string): Promise<void> => {
@@ -625,6 +645,9 @@ export function App(props: AppProps): React.JSX.Element {
       delete rest[gone];
       return rest;
     });
+    // ...and its PRs from the cross-repo aggregate — the ⚑ attention chip and
+    // the PRs view must drop the repo immediately, not on the next poll.
+    setPrs((prev) => prev.filter((p) => p.nwo !== gone));
     showToast("success", `unwatched ${currentRepo.nwo}`);
   }, [currentRepo, watchlistFile, watchlistError, showToast]);
 
@@ -984,6 +1007,8 @@ export function App(props: AppProps): React.JSX.Element {
           queueWaiting={queueSnap?.waiting.length ?? 0}
           watchlistError={watchlistError}
           outboxDepth={queueSnap?.outboxDepth ?? 0}
+          prAttention={prAttention}
+          prFailing={prFailing}
         />
       }
       toast={toast}

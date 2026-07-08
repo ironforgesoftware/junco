@@ -68,6 +68,7 @@ export function HelpModal({
           ["x", "unwatch repo"],
           ["r", "refresh now"],
           ["t", "queue view"],
+          ["p", "PR tracking — junco-authored PRs across watched repos"],
           [":", "command palette"],
         ]}
       />

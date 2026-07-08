@@ -1,6 +1,6 @@
 # junco
 
-*A local-first worker that turns tickets into pull requests.*
+_A local-first worker that turns tickets into pull requests._
 
 [![npm](https://img.shields.io/npm/v/%40ironforgesoftware%2Fjunco)](https://www.npmjs.com/package/@ironforgesoftware/junco)
 [![CI](https://github.com/ironforgesoftware/junco/actions/workflows/test.yml/badge.svg)](https://github.com/ironforgesoftware/junco/actions/workflows/test.yml)
@@ -39,15 +39,15 @@ the dispatch side.
   closing the issue on merge.
 - **Plans before code** — the plan is an editable comment on the issue, and
   nothing executes until an approval that junco verifies (who applied it,
-  and that it came *after* the plan).
+  and that it came _after_ the plan).
 - **Local-first by design** — your machine, your git, your `gh` auth, your
   choice of inference endpoint. There is no third service in the loop.
 - **Offline-tolerant** — when GitHub is unreachable, an outbox queues the
   comments, labels, and PR pushes durably and drains itself on reconnect.
   The queue keeps working; finished work is never lost to a dead network.
 - **A dashboard worth living in** — a fullscreen terminal UI for the whole
-  loop: watch repos, read plans, approve, track the queue, and run any junco
-  command from a palette without leaving it.
+  loop: watch repos, read plans, approve, track the queue, track your open
+  PRs, and run any junco command from a palette without leaving it.
 - **Supervised, not hopeful** — loop guards catch stuck agents, timeouts
   salvage the commits already made, transient failures retry with backoff,
   and every run leaves a full transcript.
@@ -90,27 +90,28 @@ model is explicit about who can approve what.
 
 ## Documentation
 
-| Guide | What's inside |
-| --- | --- |
-| [Tickets](docs/tickets.md) | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle |
-| [Configuration](docs/configuration.md) | The annotated `config.toml` reference and the knobs worth knowing |
-| [GitHub mode](docs/github-mode.md) | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model |
-| [Dashboard](docs/dashboard.md) | Every pane, key, and the command palette |
-| [Operations](docs/operations.md) | Health endpoint, running as a service, security model, troubleshooting |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | The runtime, module by module — accurate and maintained |
+| Guide                                  | What's inside                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------------ |
+| [Tickets](docs/tickets.md)             | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle   |
+| [Configuration](docs/configuration.md) | The annotated `config.toml` reference and the knobs worth knowing                    |
+| [GitHub mode](docs/github-mode.md)     | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model |
+| [Dashboard](docs/dashboard.md)         | Every pane, key, and the command palette                                             |
+| [Operations](docs/operations.md)       | Health endpoint, running as a service, security model, troubleshooting               |
+| [ARCHITECTURE.md](ARCHITECTURE.md)     | The runtime, module by module — accurate and maintained                              |
 
 ## CLI at a glance
 
-| | |
-| --- | --- |
-| `junco start` / `junco restart` | run the daemon / restart the installed service |
-| `junco submit <file>` | queue a ticket (also reads stdin) |
-| `junco dashboard` | the fullscreen TUI |
-| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility |
-| `junco retry <name…\|--all>` | move failed tickets back to the inbox |
-| `junco outbox [flush]` | inspect or push the offline GitHub backlog |
-| `junco doctor` | preflight config, git/gh auth, endpoint, model |
-| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install |
+|                                                 |                                                        |
+| ----------------------------------------------- | ------------------------------------------------------ |
+| `junco start` / `junco restart`                 | run the daemon / restart the installed service         |
+| `junco submit <file>`                           | queue a ticket (also reads stdin)                      |
+| `junco dashboard`                               | the fullscreen TUI                                     |
+| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                      |
+| `junco prs`                                     | list junco-authored pull requests across watched repos |
+| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                  |
+| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog             |
+| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model         |
+| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                 |
 
 ## Contributing
 

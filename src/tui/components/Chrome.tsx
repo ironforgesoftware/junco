@@ -41,6 +41,8 @@ export function Header({
   queueWaiting,
   watchlistError,
   outboxDepth,
+  prAttention,
+  prFailing,
 }: {
   repoNwo: string | null;
   /** Extended /health snapshot, null before the first poll resolves. */
@@ -56,6 +58,11 @@ export function Header({
   watchlistError: string | null;
   /** Ops parked in the GitHub outbox — hidden at 0. */
   outboxDepth: number;
+  /** junco-authored PRs needing attention (checks-failing or changes-requested)
+   * across the watched repos loaded so far — hidden at 0. */
+  prAttention: number;
+  /** True when any of those PRs is checks-failing — picks the chip's color. */
+  prFailing: boolean;
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -88,6 +95,9 @@ export function Header({
       <Box flexShrink={0} gap={2}>
         {watchlistError !== null && <Text color={theme.warn}>watchlist!</Text>}
         {reviewCount > 0 && <Text color={theme.warn}>●{reviewCount} review</Text>}
+        {prAttention > 0 && (
+          <Text color={prFailing ? theme.error : theme.warn}>⚑{prAttention} PR</Text>
+        )}
         {wide && health?.up && (
           <Text>
             <Text color={theme.success}>✓{health.tasksSucceeded ?? 0}</Text>
@@ -240,6 +250,7 @@ export function hintsFor(
     ["a", "approve"],
     ["/", "filter"],
     ["t", "queue"],
+    ["p", "PRs"],
     ["?", "help"],
     ["q", "quit"],
   ];
