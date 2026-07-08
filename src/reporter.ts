@@ -15,6 +15,9 @@ export interface TicketOutcome {
   prUrl: string | null;
   finalText: string;
   failureReason: string | null;
+  /** PR endgame parked in the outbox; the composite op owns the finalize
+   * comment + label flip. */
+  prQueued?: boolean;
 }
 
 export interface TicketReporter {
@@ -39,6 +42,7 @@ export function outcomeFromPrFlow(flow: PrFlowResult): TicketOutcome {
     prUrl: flow.prUrl,
     finalText: flow.finalText,
     failureReason: flow.phaseError,
+    prQueued: flow.prQueued ?? false,
   };
 }
 

@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { buildFinalComment, makeGithubReporter, COMMENT_LIMIT } from "../src/githubReport.js";
 import type { TicketOutcome } from "../src/reporter.js";
 import type { Ticket, Config } from "../src/types.js";
-import type { CmdResult } from "../src/git.js";
+import { GitOpError, type CmdResult } from "../src/git.js";
+import { listOps } from "../src/githubOutbox.js";
 
 const ticket = (github: Ticket["github"]): Ticket => ({
   path: "/q/t.md",
@@ -39,6 +43,9 @@ const cfg = {
     plannerModelId: null,
   },
 } as unknown as Config;
+// Offline-outbox tests need a real stateDir (enqueueOp writes files under
+// <stateDir>/github-outbox/) — a per-test mkdtemp keeps them sandboxed.
+const repCfg = (root: string): Config => ({ ...cfg, stateDir: root }) as Config;
 function fakeGh() {
   const calls: string[][] = [];
   const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
@@ -260,5 +267,63 @@ describe("plan-kind reporting", () => {
       out({ kind: "qa", status: "failed", prUrl: null, failureReason: "endpoint died" }),
     );
     expect(f.calls[1]).toEqual(expect.arrayContaining(["--add-label", "junco:failed"]));
+  });
+});
+
+describe("reporter offline (outbox)", () => {
+  const NET = new GitOpError("gh failed", "connect: network is unreachable", 1);
+  const prTicket = ticket(gt);
+
+  it("onStart label swap queues a labels op when offline", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-obx-"));
+    const rc = repCfg(root);
+    const ghFn = async (): Promise<CmdResult> => {
+      throw NET;
+    };
+    const reporter = makeGithubReporter(rc, { ghFn } as never);
+    await reporter.onStart(prTicket);
+    const ops = listOps(rc);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].op).toMatchObject({
+      kind: "labels",
+      add: ["junco:working"],
+      remove: ["junco:queued"],
+    });
+  });
+
+  it("onFinal comment + labels queue as two ops offline (comment first)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-obx2-"));
+    const rc = repCfg(root);
+    const ghFn = async (): Promise<CmdResult> => {
+      throw NET;
+    };
+    const reporter = makeGithubReporter(rc, { ghFn } as never);
+    await reporter.onFinal(
+      prTicket,
+      out({ status: "completed", prUrl: "https://x/pr/1", finalText: "done!" }),
+    );
+    const kinds = listOps(rc).map((o) => o.op.kind);
+    expect(kinds).toEqual(["comment", "labels"]);
+  });
+
+  it("non-network errors keep the warn-and-swallow contract (nothing queued)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-obx3-"));
+    const rc = repCfg(root);
+    const ghFn = async (): Promise<CmdResult> => {
+      throw new GitOpError("gh failed", "HTTP 403", 1);
+    };
+    const reporter = makeGithubReporter(rc, { ghFn } as never);
+    await expect(reporter.onStart(prTicket)).resolves.toBeUndefined();
+    expect(listOps(rc)).toHaveLength(0);
+  });
+
+  it("prQueued outcome skips finalize comment AND label flip", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-obx4-"));
+    const rc = repCfg(root);
+    const f = fakeGh();
+    const reporter = makeGithubReporter(rc, f as never);
+    await reporter.onFinal(prTicket, out({ prUrl: null, finalText: "x", prQueued: true }));
+    expect(f.calls).toHaveLength(0);
+    expect(listOps(rc)).toHaveLength(0);
   });
 });

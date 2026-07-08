@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { Config, Ticket } from "./types.js";
+import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
@@ -18,8 +19,6 @@ import {
 } from "./reporter.js";
 import { log, withTicket } from "./logging.js";
 import { metrics } from "./metrics.js";
-
-const PRIORITY_RANK: Record<string, number> = { high: 2, normal: 1, low: 0 };
 
 // A Q&A ticket has no worktree and shouldn't mutate the filesystem; give its
 // session a read-only tool subset so a stray write/bash/edit can't corrupt the

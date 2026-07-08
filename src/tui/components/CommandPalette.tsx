@@ -33,8 +33,7 @@ export function CommandPalette({
   const current = visible[Math.min(selected, Math.max(0, visible.length - 1))];
   void onCancel; // esc handled by the App's router; prop kept for symmetry
   return (
-    <Box flexDirection="column" borderStyle="double" paddingX={2} paddingY={1} minWidth={60}>
-      <Text bold>run a junco command</Text>
+    <Box flexDirection="column" minWidth={60}>
       <Text dimColor>Runs the junco CLI against this dashboard's config; output opens here.</Text>
       <Box gap={1}>
         <Text dimColor>:</Text>

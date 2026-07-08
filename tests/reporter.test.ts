@@ -11,6 +11,7 @@ const flow: PrFlowResult = {
   commitCount: 3,
   finalText: "Did the thing.\n\nDetails...",
   phaseError: null,
+  prQueued: false,
 };
 const qaResult: RunResult = {
   finalText: "The answer.",
@@ -31,6 +32,7 @@ describe("outcome mapping", () => {
       prUrl: "https://github.com/acme/api/pull/7",
       finalText: "Did the thing.\n\nDetails...",
       failureReason: null,
+      prQueued: false,
     });
   });
 

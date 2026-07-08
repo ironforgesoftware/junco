@@ -13,8 +13,8 @@ import { CLAIM_PREFIX_RE } from "./requeue.js";
 
 /**
  * Cut everything from the FIRST appended junco-result separator onward.
- * (Known limitation, documented in the README: a ticket BODY containing the
- * literal separator loses its tail when retried.)
+ * (Known limitation, documented in docs/tickets.md: a ticket BODY containing
+ * the literal separator loses its tail when retried.)
  */
 export function stripResultArtifacts(content: string): string {
   const idx = content.indexOf("\n---\n<!-- junco-result");

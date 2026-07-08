@@ -20,6 +20,7 @@ import {
 } from "./githubInbox.js";
 import { gh } from "./git.js";
 import { log } from "./logging.js";
+import { tryOrEnqueue, type OutboxOp } from "./githubOutbox.js";
 
 // COMMENT_LIMIT is defined in githubInbox.ts (buildPlanComment shares it);
 // re-exported here so existing importers keep working without an import cycle.
@@ -107,11 +108,19 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       { timeoutMs: GH_TIMEOUT, retryNetwork: true },
     );
   };
-  const guard = async (label: string, id: string, fn: () => Promise<void>): Promise<void> => {
+  // Outbox-aware guard: on a network-shaped failure, fn's side effect is
+  // parked in the durable outbox (op) instead of being lost; any other
+  // failure keeps the old best-effort contract — warn and swallow, since a
+  // stale label/lost comment is cosmetic.
+  const guardOrQueue = async (
+    label: string,
+    id: string,
+    op: OutboxOp,
+    fn: () => Promise<void>,
+  ): Promise<void> => {
     try {
-      await fn();
+      await tryOrEnqueue(cfg, "reporter", op, fn);
     } catch (e) {
-      // Best-effort by contract: a stale label/lost comment is cosmetic.
       log.warn(`github reporter: ${label} failed (issue state on GitHub may be stale)`, {
         id,
         error: errMsg(e),
@@ -136,12 +145,22 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
     async onStart(t: Ticket): Promise<void> {
       if (!t.github || t.github.kind === "plan") return; // planning label persists
       const g = t.github;
-      await guard("onStart", t.id, () => swap(g, ll.working, ll.queued));
+      await guardOrQueue(
+        "onStart",
+        t.id,
+        { kind: "labels", nwo: g.nwo, issue: g.issue, add: [ll.working], remove: [ll.queued] },
+        () => swap(g, ll.working, ll.queued),
+      );
     },
     async onRequeue(t: Ticket): Promise<void> {
       if (!t.github || t.github.kind === "plan") return;
       const g = t.github;
-      await guard("onRequeue", t.id, () => swap(g, ll.queued, ll.working));
+      await guardOrQueue(
+        "onRequeue",
+        t.id,
+        { kind: "labels", nwo: g.nwo, issue: g.issue, add: [ll.queued], remove: [ll.working] },
+        () => swap(g, ll.queued, ll.working),
+      );
     },
     async onFinal(t: Ticket, outcome: TicketOutcome): Promise<void> {
       if (!t.github) return;
@@ -157,28 +176,63 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
             })
           : null;
         if (comment) {
-          await guard("plan comment", t.id, () => postComment(g, comment));
-          await guard("plan labels", t.id, () => swap(g, ll.planReady, ll.planning));
+          await guardOrQueue(
+            "plan comment",
+            t.id,
+            { kind: "comment", nwo: g.nwo, issue: g.issue, body: comment },
+            () => postComment(g, comment),
+          );
+          await guardOrQueue(
+            "plan labels",
+            t.id,
+            {
+              kind: "labels",
+              nwo: g.nwo,
+              issue: g.issue,
+              add: [ll.planReady],
+              remove: [ll.planning],
+            },
+            () => swap(g, ll.planReady, ll.planning),
+          );
         } else {
           const reason = !done
             ? (outcome.failureReason ?? `status ${outcome.status}`)
             : planBody === null
               ? "planner produced no usable plan (missing/empty junco-ticket fence)"
               : "plan too large for an issue comment";
-          await guard("plan failure comment", t.id, () =>
-            postComment(
-              g,
-              `**Junco could not produce a plan** for this issue.\n\n> ${reason.slice(0, 1000)}\n\n_Remove the \`${ll.failed}\` label to re-plan._\n`,
-            ),
+          const failureComment = `**Junco could not produce a plan** for this issue.\n\n> ${reason.slice(0, 1000)}\n\n_Remove the \`${ll.failed}\` label to re-plan._\n`;
+          await guardOrQueue(
+            "plan failure comment",
+            t.id,
+            { kind: "comment", nwo: g.nwo, issue: g.issue, body: failureComment },
+            () => postComment(g, failureComment),
           );
-          await guard("plan failure labels", t.id, () => swap(g, ll.failed, ll.planning));
+          await guardOrQueue(
+            "plan failure labels",
+            t.id,
+            { kind: "labels", nwo: g.nwo, issue: g.issue, add: [ll.failed], remove: [ll.planning] },
+            () => swap(g, ll.failed, ll.planning),
+          );
         }
         return;
       }
+      if (outcome.prQueued) return; // composite outbox op owns comment + flip
       // pr/ask: comment first — it is the valuable artifact; the label is cosmetic.
-      await guard("final comment", t.id, () => postComment(g, buildFinalComment(t, outcome)));
+      const finalComment = buildFinalComment(t, outcome);
+      await guardOrQueue(
+        "final comment",
+        t.id,
+        { kind: "comment", nwo: g.nwo, issue: g.issue, body: finalComment },
+        () => postComment(g, finalComment),
+      );
       const done = TERMINAL_DONE_STATUSES.has(outcome.status);
-      await guard("final labels", t.id, () => swap(g, done ? ll.done : ll.failed, ll.working));
+      const finalLabel = done ? ll.done : ll.failed;
+      await guardOrQueue(
+        "final labels",
+        t.id,
+        { kind: "labels", nwo: g.nwo, issue: g.issue, add: [finalLabel], remove: [ll.working] },
+        () => swap(g, finalLabel, ll.working),
+      );
     },
   };
 }

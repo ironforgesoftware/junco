@@ -106,17 +106,20 @@ export async function commitLeftovers(
 /**
  * Port of worker.py `push_branch` (lines 2034-2035).
  * Pushes the named branch to origin with --set-upstream.
- * Uses network retry and a 3-minute timeout.
+ * Uses network retry and a 3-minute timeout. `retryBaseDelayMs` overrides the
+ * retry backoff base (default 1000ms) — tests scripting offline pushes pass ~5ms.
  */
 export async function pushBranch(
   cfg: { gitBin: string },
   wtPath: string,
   branch: string,
+  retryBaseDelayMs?: number,
 ): Promise<void> {
   await git(cfg, ["push", "--set-upstream", "origin", branch], {
     cwd: wtPath,
     timeoutMs: 180_000,
     retryNetwork: true,
+    retryBaseDelayMs,
   });
 }
 
@@ -143,6 +146,7 @@ export async function openPullRequest(
   nwo: string,
   title: string,
   bodyFile: string,
+  retryBaseDelayMs?: number,
 ): Promise<string> {
   const argv: string[] = [
     "pr",
@@ -175,6 +179,7 @@ export async function openPullRequest(
     cwd: cfg.worktreeRoot,
     timeoutMs: 120_000,
     retryNetwork: true,
+    retryBaseDelayMs,
   });
 
   // Mirror Python: url = cp.stdout.strip().splitlines()[-1] if cp.stdout.strip() else ""

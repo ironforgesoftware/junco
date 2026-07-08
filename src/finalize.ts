@@ -137,6 +137,14 @@ function renderPrResult(
   }
   if (prLines.length > 0) lines.push(prLines.join("\n"));
 
+  // Offline endgame: the PR was parked in the outbox (no URL yet). Say so in the
+  // Result section — the composite op opens it when GitHub is reachable again.
+  if (prOutcome.prQueued) {
+    lines.push(
+      "PR queued for offline push — junco will open it automatically when GitHub is reachable.",
+    );
+  }
+
   const err = phaseError || r.errorMessage;
   if ((status === "failed" || status === "timeout") && err) {
     lines.push(`> **${status === "timeout" ? "Timed out" : "Failed"}.** ${err}`);

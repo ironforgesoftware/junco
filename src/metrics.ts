@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { TERMINAL_DONE_STATUSES } from "./types.js";
+import type { FlushResult } from "./githubOutbox.js";
 
 export interface MetricsSnapshot {
   startedAt: string | null; // ISO; null until markStarted()
@@ -29,10 +30,24 @@ export interface MetricsSnapshot {
   lastBridgeSweepAt: string | null;
   ticketsBridged: number;
   bridgeErrors: number;
+  // GitHub outbox (store-and-forward side effects): outboxDepth is a GAUGE
+  // (the queue length as of the last flush, not accumulated); the rest are
+  // running counters. 0/null until the first sweep flush.
+  outboxDepth: number;
+  outboxEnqueued: number;
+  outboxFlushed: number;
+  outboxDead: number;
+  lastFlushAt: string | null;
   /** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
   currentProgress: Record<
     string,
-    { turns: number; lastTool: string | null; outputTokens: number; updatedAt: string }
+    {
+      turns: number;
+      lastTool: string | null;
+      outputTokens: number;
+      startedAt: string;
+      updatedAt: string;
+    }
   >;
 }
 
@@ -56,9 +71,20 @@ export class RunMetrics {
   private _ticketsBridged = 0;
   private _bridgeErrors = 0;
   private _lastBridgeSweepAt: Date | null = null;
+  private _outboxDepth = 0;
+  private _outboxEnqueued = 0;
+  private _outboxFlushed = 0;
+  private _outboxDead = 0;
+  private _lastFlushAt: Date | null = null;
   private _progress: Record<
     string,
-    { turns: number; lastTool: string | null; outputTokens: number; updatedAt: string }
+    {
+      turns: number;
+      lastTool: string | null;
+      outputTokens: number;
+      startedAt: string;
+      updatedAt: string;
+    }
   > = {};
 
   constructor(now: () => Date = () => new Date()) {
@@ -90,9 +116,39 @@ export class RunMetrics {
     this._bridgeErrors++;
   }
 
-  /** A task entered execution. */
+  /** An op was parked in the outbox (offline fallback). NOT wired into
+   * tryOrEnqueue — that seam runs in the dashboard process too, and this
+   * singleton is daemon-process-only. Depth (recordOutboxFlush, sweep-
+   * computed) is the authoritative gauge either way; this counter is
+   * available for a daemon-side caller (e.g. the reporter path) that wants a
+   * cumulative enqueue count, if one is wired up later. */
+  recordOutboxEnqueue(): void {
+    this._outboxEnqueued++;
+  }
+
+  /** A sweep's outbox flush completed. `sent`/`dead` accumulate across
+   * flushes; `depth` overwrites (it's a gauge — the queue length as of THIS
+   * flush, sweep-computed via outboxDepth(cfg)). */
+  recordOutboxFlush(r: FlushResult, depth: number): void {
+    this._outboxFlushed += r.sent;
+    this._outboxDead += r.dead;
+    this._outboxDepth = depth;
+    this._lastFlushAt = this._now();
+  }
+
+  /** A task entered execution. Seeds its progress entry (startedAt = now). */
   taskStarted(id: string): void {
     if (!this._current.includes(id)) this._current.push(id);
+    if (!this._progress[id]) {
+      const now = this._now().toISOString();
+      this._progress[id] = {
+        turns: 0,
+        lastTool: null,
+        outputTokens: 0,
+        startedAt: now,
+        updatedAt: now,
+      };
+    }
   }
 
   /** A task left execution (however it ended). Clears its progress too. */
@@ -112,7 +168,12 @@ export class RunMetrics {
     id: string,
     p: { turns: number; lastTool: string | null; outputTokens: number },
   ): void {
-    this._progress[id] = { ...p, updatedAt: this._now().toISOString() };
+    const now = this._now().toISOString();
+    this._progress[id] = {
+      ...p,
+      startedAt: this._progress[id]?.startedAt ?? now,
+      updatedAt: now,
+    };
   }
 
   /** Drop a ticket's progress (always called when the ticket ends). */
@@ -175,6 +236,11 @@ export class RunMetrics {
       lastBridgeSweepAt: this._lastBridgeSweepAt ? this._lastBridgeSweepAt.toISOString() : null,
       ticketsBridged: this._ticketsBridged,
       bridgeErrors: this._bridgeErrors,
+      outboxDepth: this._outboxDepth,
+      outboxEnqueued: this._outboxEnqueued,
+      outboxFlushed: this._outboxFlushed,
+      outboxDead: this._outboxDead,
+      lastFlushAt: this._lastFlushAt ? this._lastFlushAt.toISOString() : null,
       currentProgress: { ...this._progress },
     };
   }
@@ -198,6 +264,11 @@ export class RunMetrics {
     this._ticketsBridged = 0;
     this._bridgeErrors = 0;
     this._lastBridgeSweepAt = null;
+    this._outboxDepth = 0;
+    this._outboxEnqueued = 0;
+    this._outboxFlushed = 0;
+    this._outboxDead = 0;
+    this._lastFlushAt = null;
     this._progress = {};
   }
 }

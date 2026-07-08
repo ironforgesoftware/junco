@@ -16,6 +16,7 @@ import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
 import { PLAN_FENCE, buildPlannerPrompt } from "./planPrompt.js";
 import { resolveWatchedRepos } from "./watchlist.js";
+import { flushOutbox, type FlushResult } from "./githubOutbox.js";
 
 /** GitHub's hard cap is 65,536 chars; leave headroom for the truncation note.
  * Lives here (not githubReport.ts) so buildPlanComment can share it without an
@@ -260,6 +261,15 @@ export interface BridgeDeps {
   ghFn?: typeof gh;
   gitFn?: typeof git;
   submitFn?: (cfg: Config, content: string, opts?: { idHint?: string }) => string;
+  /** Outbox replay, run before the repo loop so a reconnect auto-drains
+   * within one sweep. Defaults to the real flushOutbox — every caller gets
+   * flush-first behavior for free unless a test overrides it. */
+  flushFn?: typeof flushOutbox;
+  /** Fired with the flush result right after it completes. The daemon layer
+   * uses this to route metrics (mirrors how recordBridgeSweep is recorded
+   * one layer up, at the bridgeSweepFn call site) without githubInbox.ts
+   * importing the metrics singleton itself. */
+  onFlush?: (r: FlushResult) => void;
 }
 
 const GH_TIMEOUT = 60_000;
@@ -522,6 +532,14 @@ export function buildExecutionTicket(
  * repo and issue level — the queue never depends on GitHub being up. Ordering
  * per issue: submit BEFORE label, so a crash between the two self-heals (the
  * next sweep re-submits, hits the duplicate guard, and re-applies the label).
+ *
+ * Flush-first: the outbox is replayed BEFORE the repo/issue loop, so a
+ * reconnect after an outage auto-drains within a single sweep instead of
+ * waiting on whatever unrelated GitHub call happens to run next. flushOutbox
+ * is designed to never throw, but it's guarded here anyway (the sweep's usual
+ * error posture — contained, logged, never fatal) and its offline-ness never
+ * gates the rest of the sweep: an offline flush leaves the per-repo/per-issue
+ * try/catches below to absorb whatever GitHub calls also fail.
  */
 export async function pollGithubInbox(
   cfg: Config,
@@ -531,8 +549,16 @@ export async function pollGithubInbox(
   const ghFn = deps.ghFn ?? gh;
   const gitFn = deps.gitFn ?? git;
   const submitFn = deps.submitFn ?? submitTicket;
+  const flushFn = deps.flushFn ?? flushOutbox;
   const trigger = cfg.github.triggerLabel;
   const ll = lifecycleLabels(trigger);
+
+  try {
+    const fr = await flushFn(cfg);
+    deps.onFlush?.(fr);
+  } catch (e) {
+    log.warn("github bridge: outbox flush failed; continuing sweep", { error: errMsg(e) });
+  }
   let bridged = 0;
 
   for (const repo of resolveWatchedRepos(cfg)) {

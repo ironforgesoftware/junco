@@ -4,7 +4,12 @@ import type { Config } from "../src/types.js";
 
 const cfg = {
   stateDir: "/tmp/junco-dash-test",
+  vaultRoot: "/tmp/junco-dash-test-vault",
+  juncoSubdir: "Junco",
+  maxConcurrent: 1,
   healthEnabled: false,
+  healthHost: "127.0.0.1",
+  healthPort: 0,
   github: {
     enabled: true,
     triggerLabel: "junco",
@@ -76,5 +81,11 @@ describe("lazy loading discipline", () => {
     expect(src).toContain('await import("./dashboardCmd.js")');
     expect(src).not.toMatch(/^import .* from "\.\/dashboardCmd\.js"/m);
     expect(src).not.toMatch(/from "ink"/);
+  });
+
+  it("renders the dashboard on the alternate screen buffer (fullscreen)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/dashboardCmd.ts", import.meta.url), "utf8");
+    expect(src).toContain("alternateScreen: true");
   });
 });

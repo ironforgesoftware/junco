@@ -16,6 +16,7 @@ import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
 import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
+import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -177,6 +178,18 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         );
       }
       report("ok", "github watchlist", watchlistPath(cfg));
+    }
+
+    // 7c. github outbox backlog / dead-letters — informational warns, never
+    // fail doctor (the daemon's throttled sweep or `junco outbox flush`
+    // clears them; a stuck backlog just means GitHub side effects are late).
+    const backlog = outboxDepth(cfg);
+    if (backlog > 0) {
+      report("warn", "outbox backlog", `${backlog} queued (junco outbox flush)`);
+    }
+    const stuck = deadCount(cfg);
+    if (stuck > 0) {
+      report("warn", "outbox dead-letters", `${stuck} in ${outboxPaths(cfg).dead}`);
     }
 
     // 8. daemon (informational)

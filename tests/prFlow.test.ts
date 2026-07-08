@@ -25,7 +25,8 @@ import { runPrFlow, buildPrBody, type PrOutcome } from "../src/prFlow.js";
 import { deriveRepoContext } from "../src/repoContext.js";
 import { claim } from "../src/queue.js";
 import { parseTicket } from "../src/ticket.js";
-import type { Config, Ticket } from "../src/types.js";
+import { listOps, type OutboxOp } from "../src/githubOutbox.js";
+import { TERMINAL_DONE_STATUSES, type Config, type Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
 
 // ---------------------------------------------------------------------------
@@ -632,6 +633,185 @@ exit 1
     expect(flow2.dst.startsWith(h.done)).toBe(true);
     expect(readFileSync(flow2.dst, "utf8")).toContain("status: completed");
   });
+
+  // -------------------------------------------------------------------------
+  // Offline endgame (outbox) — Task 4
+  // -------------------------------------------------------------------------
+
+  /**
+   * Write an executable git shim that fails the named subcommand with a
+   * scripted stderr line and delegates everything else to the real git — the
+   * gitBin equivalent of the fake-gh script. `subcommand` is matched as a
+   * standalone argv token (none of the flow's other git calls carry it).
+   */
+  function gitFailShim(name: string, subcommand: string, stderrLine: string): string {
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const p = join(h.root, name);
+    writeFileSync(
+      p,
+      `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "${subcommand}" ]; then
+    echo ${JSON.stringify(stderrLine)} >&2
+    exit 1
+  fi
+done
+exec ${JSON.stringify(realGit)} "$@"
+`,
+      "utf8",
+    );
+    chmodSync(p, 0o755);
+    return p;
+  }
+
+  /** A fake gh that answers `repo view` but fails `pr create` however scripted. */
+  function ghShim(name: string, prCreateBody: string): string {
+    const p = join(h.root, name);
+    writeFileSync(
+      p,
+      `#!/bin/sh
+args="$*"
+case "$args" in
+  "repo view --json nameWithOwner -q .nameWithOwner"*)
+    echo "owner/repo"; exit 0 ;;
+  "pr create "*)
+    ${prCreateBody} ;;
+  *)
+    echo "fake-gh: unhandled: $args" >&2; exit 1 ;;
+esac
+`,
+      "utf8",
+    );
+    chmodSync(p, 0o755);
+    return p;
+  }
+
+  const NET = "connect: network is unreachable";
+
+  async function runFlowWithOfflinePush(): Promise<{
+    flow: Awaited<ReturnType<typeof runPrFlow>>;
+    cfg: Config;
+  }> {
+    // Real gh (repo view works, but push dies first); git shim fails `push`.
+    const cfg = makeConfig(h, { gitBin: gitFailShim("git-offpush.sh", "push", NET) });
+    const { task, path } = makeTicket(
+      h,
+      "offpush.md",
+      `---\nid: offpush\nrepo: ${h.work}\n---\n# Add a feature\n\nDo it.\n`,
+    );
+    // A bridged ticket → the queued op carries a finalize block.
+    task.github = { nwo: "owner/repo", issue: 7, kind: "pr" };
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5, // don't eat real network backoff in tests
+    });
+    return { flow, cfg };
+  }
+
+  async function runFlowWithOfflinePrCreate(): Promise<{
+    flow: Awaited<ReturnType<typeof runPrFlow>>;
+    cfg: Config;
+  }> {
+    // Real git (push lands on the bare remote); fake-gh fails `pr create` offline.
+    const cfg = makeConfig(h, { ghBin: ghShim("gh-offpr.sh", `echo "${NET}" >&2; exit 1`) });
+    const { task, path } = makeTicket(
+      h,
+      "offpr.md",
+      `---\nid: offpr\nrepo: ${h.work}\n---\n# Add a feature\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+    return { flow, cfg };
+  }
+
+  async function runFlowWithPermanentPushFailure(): Promise<{
+    flow: Awaited<ReturnType<typeof runPrFlow>>;
+    cfg: Config;
+  }> {
+    // Non-network push failure ("denied") — not ours to queue.
+    const cfg = makeConfig(h, {
+      gitBin: gitFailShim("git-denied.sh", "push", "remote: Permission to owner/repo.git denied"),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "denied.md",
+      `---\nid: denied\nrepo: ${h.work}\n---\n# Add a feature\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+    return { flow, cfg };
+  }
+
+  it("offline push queues a composite pr op and finalizes done with prQueued", async () => {
+    const { flow, cfg } = await runFlowWithOfflinePush();
+    expect(flow.requeued).toBe(false);
+    expect(TERMINAL_DONE_STATUSES.has(flow.status)).toBe(true);
+    expect(flow.prUrl).toBeNull();
+    expect(flow.prQueued).toBe(true);
+    const ops = listOps(cfg);
+    expect(ops).toHaveLength(1);
+    const op = ops[0].op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(op.kind).toBe("pr");
+    expect(op.branch).toMatch(/^junco\//);
+    expect(op.finalize?.status).toBe(flow.status);
+    expect(op.pushed).toBe(false);
+    // Worktree preserved (never cleaned on an offline branch).
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0);
+  });
+
+  it("offline gh pr create (after successful push) checkpoints pushed:true", async () => {
+    const { flow, cfg } = await runFlowWithOfflinePrCreate();
+    expect(flow.prQueued).toBe(true);
+    const op = listOps(cfg)[0].op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(op.pushed).toBe(true);
+    expect(op.prUrl).toBeNull();
+    // The branch really landed on the remote before gh failed.
+    expect(run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/offpr"])).toContain(
+      "junco/offpr",
+    );
+  });
+
+  it("non-network push failure keeps today's behavior (phaseError, no op)", async () => {
+    const { flow, cfg } = await runFlowWithPermanentPushFailure();
+    expect(flow.prQueued ?? false).toBe(false);
+    expect(listOps(cfg)).toHaveLength(0);
+    expect(flow.phaseError).toContain("push/commit failed");
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+  });
+
+  it("offline base fetch proceeds from local base and stamps the PR body stale", async () => {
+    // Capture the PR body gh received so we can assert the stale-base banner.
+    const capture = join(h.root, "pr-body-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/123"; exit 0`;
+    const cfg = makeConfig(h, {
+      ghBin: ghShim("gh-capture.sh", prCreate),
+      gitBin: gitFailShim("git-nofetch.sh", "fetch", NET),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "stale.md",
+      `---\nid: stale\nrepo: ${h.work}\n---\n# Add a feature\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+    expect(flow.status).toBe("completed");
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/123");
+    expect(readFileSync(capture, "utf8")).toContain("Built offline from a possibly stale base");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -657,6 +837,8 @@ describe("buildPrBody github provenance", () => {
     verification: null,
     critic: null,
     criticRetriesUsed: 0,
+    prQueued: false,
+    staleBase: false,
   };
   const okResult = {
     finalText: "done.",
@@ -688,5 +870,13 @@ describe("buildPrBody github provenance", () => {
     expect(buildPrBody(bodyTicket(null), ctx, emptyOutcome, okResult)).not.toContain("Closes ");
     const ask = bodyTicket({ nwo: "acme/api", issue: 42, kind: "ask" });
     expect(buildPrBody(ask, ctx, emptyOutcome, okResult)).not.toContain("Closes ");
+  });
+
+  it("stamps a stale-base warning when the outcome was built offline", () => {
+    const t = bodyTicket(null);
+    expect(buildPrBody(t, ctx, { ...emptyOutcome, staleBase: true }, okResult)).toContain(
+      "> ⚠️ Built offline from a possibly stale base — rebase check recommended.",
+    );
+    expect(buildPrBody(t, ctx, emptyOutcome, okResult)).not.toContain("stale base");
   });
 });

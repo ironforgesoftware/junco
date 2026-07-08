@@ -40,27 +40,40 @@ export async function runDashboard(
     return 1;
   }
 
-  const [{ App }, { makeGhDashboardClient }, { watchlistPath }, react, ink] = await Promise.all([
+  const [
+    { App },
+    { makeGhDashboardClient },
+    { watchlistPath },
+    { makeQueueSnapshotFn },
+    react,
+    ink,
+  ] = await Promise.all([
     import("./tui/App.js"),
     import("./tui/ghClient.js"),
     import("./watchlist.js"),
+    import("./tui/queueSnapshot.js"),
     import("react"),
     import("ink"),
   ]);
+  // Alt buffer — fullscreen, zero scrollback pollution, terminal restored on
+  // exit; a no-op when non-interactive, and the TTY guard exits before this anyway.
   const renderFn =
-    deps.renderFn ?? ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true }));
+    deps.renderFn ??
+    ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true, alternateScreen: true }));
 
   const client = makeGhDashboardClient(cfg);
   const instance = renderFn(
     react.createElement(App, {
       client,
       trigger: cfg.github.triggerLabel,
+      branchPrefix: cfg.branchPrefix,
       configRepos: cfg.github.repos,
       watchlistFile: watchlistPath(cfg),
       // The palette spawns CLI subcommands against this same config.
       configPath,
       // Managed clones for the add-repo "empty path = clone for me" flow.
       clonesDir: join(cfg.stateDir, "repos"),
+      queueFn: makeQueueSnapshotFn(cfg),
       // App drives useApp().exit() itself; this stays a no-op hook point.
       onExit: () => {},
     }),

@@ -310,6 +310,47 @@ describe("multi-ticket tracking (max_concurrent > 1)", () => {
   });
 });
 
+describe("progress startedAt (dashboard elapsed-time support)", () => {
+  it("taskStarted seeds a progress entry stamped startedAt", () => {
+    const t = new Date("2026-07-07T10:00:00Z");
+    const m = new RunMetrics(() => t);
+    m.taskStarted("t-1");
+    const p0 = m.snapshot().currentProgress["t-1"];
+    expect(p0).toBeDefined();
+    expect(p0.startedAt).toBe("2026-07-07T10:00:00.000Z");
+    expect(p0.turns).toBe(0);
+    expect(p0.lastTool).toBeNull();
+    expect(p0.outputTokens).toBe(0);
+  });
+
+  it("setTaskProgress preserves startedAt and advances updatedAt", () => {
+    let t = new Date("2026-07-07T10:00:00Z");
+    const m = new RunMetrics(() => t);
+    m.taskStarted("t-1");
+    t = new Date("2026-07-07T10:05:00Z");
+    m.setTaskProgress("t-1", { turns: 4, lastTool: "bash", outputTokens: 1200 });
+    const p = m.snapshot().currentProgress["t-1"];
+    expect(p.startedAt).toBe("2026-07-07T10:00:00.000Z");
+    expect(p.updatedAt).toBe("2026-07-07T10:05:00.000Z");
+    expect(p.turns).toBe(4);
+  });
+
+  it("setTaskProgress without a prior taskStarted defaults startedAt to now", () => {
+    const m = new RunMetrics(() => new Date("2026-07-07T10:00:00Z"));
+    m.setTaskProgress("t-2", { turns: 1, lastTool: null, outputTokens: 0 });
+    expect(m.snapshot().currentProgress["t-2"].startedAt).toBe("2026-07-07T10:00:00.000Z");
+  });
+
+  it("taskStarted twice does not reset startedAt", () => {
+    let t = new Date("2026-07-07T10:00:00Z");
+    const m = new RunMetrics(() => t);
+    m.taskStarted("t-1");
+    t = new Date("2026-07-07T10:09:00Z");
+    m.taskStarted("t-1"); // idempotent re-add must not clobber
+    expect(m.snapshot().currentProgress["t-1"].startedAt).toBe("2026-07-07T10:00:00.000Z");
+  });
+});
+
 describe("bridge metrics", () => {
   it("records sweeps, bridged counts, and errors", () => {
     const m = new RunMetrics(() => new Date("2026-07-02T00:00:00Z"));
@@ -333,5 +374,42 @@ describe("bridge metrics", () => {
     expect(s.ticketsBridged).toBe(0);
     expect(s.bridgeErrors).toBe(0);
     expect(s.lastBridgeSweepAt).toBeNull();
+  });
+});
+
+describe("outbox metrics", () => {
+  it("outbox counters accumulate and snapshot additively", () => {
+    const m = new RunMetrics(() => new Date("2026-07-07T10:00:00Z"));
+    m.recordOutboxEnqueue();
+    m.recordOutboxFlush({ sent: 2, dead: 1, remaining: 3, offline: false }, 3);
+    const s = m.snapshot();
+    expect(s.outboxEnqueued).toBe(1);
+    expect(s.outboxFlushed).toBe(2);
+    expect(s.outboxDead).toBe(1);
+    expect(s.outboxDepth).toBe(3);
+    expect(s.lastFlushAt).toBe("2026-07-07T10:00:00.000Z");
+  });
+
+  it("outboxDepth is a gauge (last-flush value, not accumulated) while sent/dead accumulate", () => {
+    const m = new RunMetrics(() => new Date("2026-07-07T10:00:00Z"));
+    m.recordOutboxFlush({ sent: 2, dead: 1, remaining: 5, offline: false }, 5);
+    m.recordOutboxFlush({ sent: 1, dead: 0, remaining: 0, offline: false }, 0);
+    const s = m.snapshot();
+    expect(s.outboxFlushed).toBe(3);
+    expect(s.outboxDead).toBe(1);
+    expect(s.outboxDepth).toBe(0);
+  });
+
+  it("reset clears outbox fields", () => {
+    const m = new RunMetrics();
+    m.recordOutboxEnqueue();
+    m.recordOutboxFlush({ sent: 1, dead: 1, remaining: 2, offline: false }, 2);
+    m.reset();
+    const s = m.snapshot();
+    expect(s.outboxDepth).toBe(0);
+    expect(s.outboxEnqueued).toBe(0);
+    expect(s.outboxFlushed).toBe(0);
+    expect(s.outboxDead).toBe(0);
+    expect(s.lastFlushAt).toBeNull();
   });
 });

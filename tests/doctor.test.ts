@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDoctor, type DoctorDeps } from "../src/doctor.js";
 import { writeWatchlist } from "../src/watchlist.js";
+import { outboxPaths } from "../src/githubOutbox.js";
 import type { Config } from "../src/types.js";
 
 const okConfig = {
@@ -248,5 +249,44 @@ describe("runDoctor github checks", () => {
     expect(code).toBe(0);
     expect(lines.join("")).toContain("✓ github repo alx/coral");
     expect(lines.join("")).toContain("watchlist");
+  });
+});
+
+describe("runDoctor outbox checks", () => {
+  it("no backlog, no dead-letters → no outbox lines, still ready", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/outbox/);
+  });
+
+  it("warns on a queued backlog (does not fail doctor)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obx-"));
+    const { dir } = outboxPaths({ stateDir } as unknown as Config);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "1-a-labels.json"), "{}", "utf8");
+    writeFileSync(join(dir, "2-b-labels.json"), "{}", "utf8");
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/⚠ outbox backlog — 2 queued \(junco outbox flush\)/);
+  });
+
+  it("warns on dead-letters, mentioning the dead/ dir (does not fail doctor)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obxdead-"));
+    const { dead } = outboxPaths({ stateDir } as unknown as Config);
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(dead, "1-a-labels.json"), "{}", "utf8");
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/⚠ outbox dead-letters/);
+    expect(lines.join("")).toContain(dead);
   });
 });

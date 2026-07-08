@@ -18,7 +18,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
-import { git } from "./git.js";
+import { git, isNetworkError } from "./git.js";
 import { isAmend } from "./repoContext.js";
 import { log } from "./logging.js";
 import type { RepoContext } from "./repoContext.js";
@@ -107,12 +107,18 @@ export function linkNodeModules(repoPath: string, wtPath: string): void {
  * Amend mode: fetch the existing head branch, create a worktree checked out
  *   on that branch.
  *
- * Returns the worktree path.
+ * Returns the worktree path. When `opts.signals` is supplied and the fresh-mode
+ * base fetch fails with a network error, the fetch is tolerated (worktree is cut
+ * from the local `origin/<base>` ref) and `signals.staleBase` is flipped true so
+ * the PR body can flag the possibly-stale base — everything else still throws.
+ * `opts.retryBaseDelayMs` overrides the fetch's network-retry backoff base
+ * (tests scripting offline fetches pass ~5ms).
  */
 export async function prepareWorktree(
   cfg: Config,
   ctx: RepoContext,
   taskId: string,
+  opts: { signals?: { staleBase: boolean }; retryBaseDelayMs?: number } = {},
 ): Promise<string> {
   // Ensure worktreeRoot exists
   mkdirSync(cfg.worktreeRoot, { recursive: true });
@@ -149,6 +155,7 @@ export async function prepareWorktree(
       cwd: ctx.repo,
       timeoutMs: 180_000,
       retryNetwork: true,
+      retryBaseDelayMs: opts.retryBaseDelayMs,
     });
 
     // Force-reset the local branch pointer to origin's tip (check:false —
@@ -185,12 +192,25 @@ export async function prepareWorktree(
     return wtPath;
   }
 
-  // Fresh-ticket mode: fetch base, create a NEW feature branch.
-  await git(cfg, ["fetch", "origin", ctx.baseBranch], {
-    cwd: ctx.repo,
-    timeoutMs: 180_000,
-    retryNetwork: true,
-  });
+  // Fresh-ticket mode: fetch base, create a NEW feature branch. Offline
+  // tolerance: a network-shaped fetch failure is survivable — the worktree is
+  // cut from whatever `origin/<base>` we already have locally, and the caller
+  // is told the base may be stale (see signals.staleBase).
+  try {
+    await git(cfg, ["fetch", "origin", ctx.baseBranch], {
+      cwd: ctx.repo,
+      timeoutMs: 180_000,
+      retryNetwork: true,
+      retryBaseDelayMs: opts.retryBaseDelayMs,
+    });
+  } catch (e) {
+    if (e instanceof GitOpError && isNetworkError(e.stderr)) {
+      log.warn("offline — proceeding from local base");
+      if (opts.signals) opts.signals.staleBase = true;
+    } else {
+      throw e;
+    }
+  }
 
   try {
     await git(cfg, ["worktree", "add", "-b", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`], {

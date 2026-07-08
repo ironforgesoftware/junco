@@ -6,22 +6,72 @@ import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { App } from "../src/tui/App.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
-import type { DashboardClient, Result } from "../src/tui/ghClient.js";
+import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
+import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
+import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
 const CLONES_DIR = "/x/state/repos";
+const ESC = String.fromCharCode(27);
+
+/** Every pulse field populated — the header-pulse wiring tests share this. */
+const RICH_HEALTH: HealthInfo = {
+  up: true,
+  uptimeSeconds: 3600,
+  lastBridgeSweepAt: null,
+  ticketsBridged: 0,
+  tasksProcessed: 10,
+  tasksSucceeded: 8,
+  tasksFailed: 2,
+  lastTaskStatus: "completed",
+  lastTaskAt: new Date().toISOString(),
+  totalTokensOut: 45_000,
+  bridgeErrors: 0,
+};
+
+const QUEUE_SNAP: QueueSnapshot = {
+  daemonUp: true,
+  maxConcurrent: 1,
+  running: [
+    {
+      id: "gh-acme-api-46",
+      github: { nwo: "acme/api", issue: 46, kind: "pr" },
+      turns: 3,
+      lastTool: "bash",
+      outputTokens: 500,
+      startedAt: "2026-07-07T10:00:00Z",
+      stale: false,
+    },
+  ],
+  waiting: [
+    {
+      id: "gh-acme-api-51-plan",
+      github: { nwo: "acme/api", issue: 51, kind: "plan" },
+      kind: "plan",
+      priority: "normal",
+      retryCount: 0,
+      notBefore: null,
+      deferred: false,
+    },
+  ],
+  recent: [],
+  error: null,
+  outboxDepth: 4,
+};
 
 function makeClient(
   issuesByRepo: Record<string, DashIssue[]>,
-  opts: { failActions?: boolean } = {},
+  opts: { failActions?: boolean; prsByRepo?: Record<string, DashPr[]> } = {},
 ) {
   const actions: unknown[][] = [];
   const validatePaths: string[] = [];
   const cloned: string[] = [];
+  const prCalls: [string, number][] = [];
   const client: DashboardClient = {
-    listIssues: async (nwo) => okv(issuesByRepo[nwo] ?? []),
+    listIssues: async (nwo) => okv({ issues: issuesByRepo[nwo] ?? [], staleAt: null }),
+    listPrs: async (nwo) => okv({ prs: opts.prsByRepo?.[nwo] ?? [], staleAt: null }),
     cloneRepo: async (_n, dest) => {
       cloned.push(dest);
       return okv(undefined);
@@ -29,21 +79,32 @@ function makeClient(
     issueDetail: async () => okv({ body: "the body", planComment: "<!-- junco:plan -->plan!" }),
     applyAction: async (...a) => {
       actions.push(a);
-      return opts.failActions ? { ok: false, error: "gh boom" } : okv(undefined);
+      return opts.failActions ? { ok: false, error: "gh boom" } : okv({ queued: false });
     },
     validateAndPrepareRepo: async (_n, path) => {
       validatePaths.push(path);
       return path === "/bad" ? { ok: false, error: "clone origin is other/thing" } : okv(undefined);
     },
     openInBrowser: async () => okv(undefined),
+    openPrInBrowser: async (nwo, num) => {
+      prCalls.push([nwo, num]);
+      return okv(undefined);
+    },
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
       lastBridgeSweepAt: null,
       ticketsBridged: 0,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
     }),
   };
-  return { client, actions, validatePaths, cloned };
+  return { client, actions, validatePaths, cloned, prCalls };
 }
 
 /** A client whose listIssues walks a fixed sequence of responses (call N →
@@ -53,27 +114,101 @@ function makeSeqClient(sequence: DashIssue[][]) {
   let call = 0;
   const client: DashboardClient = {
     listIssues: async () => {
-      const r = okv(sequence[Math.min(call, sequence.length - 1)]);
+      const r = okv({ issues: sequence[Math.min(call, sequence.length - 1)], staleAt: null });
       call++;
       return r;
     },
+    listPrs: async () => okv({ prs: [], staleAt: null }),
     cloneRepo: async () => okv(undefined),
     issueDetail: async () => okv({ body: "the body", planComment: null }),
     applyAction: async (...a) => {
       actions.push(a);
-      return okv(undefined);
+      return okv({ queued: false });
     },
     validateAndPrepareRepo: async () => okv(undefined),
     openInBrowser: async () => okv(undefined),
+    openPrInBrowser: async () => okv(undefined),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
       lastBridgeSweepAt: null,
       ticketsBridged: 0,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
     }),
   };
   return { client, actions };
 }
+
+/** A client whose listPrs walks a fixed sequence of responses (call N →
+ * sequence[min(N, len-1)]) so a test can deliver a re-sorted PR poll. Records
+ * openPrInBrowser calls so the anchored selection can be asserted. */
+function makePrSeqClient(sequence: DashPr[][]) {
+  const prCalls: [string, number][] = [];
+  let call = 0;
+  const client: DashboardClient = {
+    listIssues: async () => okv({ issues: [], staleAt: null }),
+    listPrs: async () => {
+      const r = okv({ prs: sequence[Math.min(call, sequence.length - 1)], staleAt: null });
+      call++;
+      return r;
+    },
+    cloneRepo: async () => okv(undefined),
+    issueDetail: async () => okv({ body: "the body", planComment: null }),
+    applyAction: async () => okv({ queued: false }),
+    validateAndPrepareRepo: async () => okv(undefined),
+    openInBrowser: async () => okv(undefined),
+    openPrInBrowser: async (nwo, num) => {
+      prCalls.push([nwo, num]);
+      return okv(undefined);
+    },
+    health: async () => ({
+      up: true,
+      uptimeSeconds: 60,
+      lastBridgeSweepAt: null,
+      ticketsBridged: 0,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
+    }),
+  };
+  return { client, prCalls };
+}
+
+/** DashPr fixture — junco-branch head so it survives the branch-prefix filter;
+ * override the fields a test cares about. */
+const makePr = (over: Partial<DashPr> = {}): DashPr => ({
+  number: 100,
+  title: "Some PR",
+  url: "https://github.com/acme/api/pull/100",
+  headRefName: "junco/some-slug",
+  baseRefName: "main",
+  isDraft: false,
+  state: "OPEN",
+  reviewDecision: null,
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
+  checks: { pass: 1, fail: 0, pending: 0, total: 1 },
+  additions: 10,
+  deletions: 2,
+  changedFiles: 3,
+  createdAt: "2026-07-05T10:00:00Z",
+  updatedAt: "2026-07-06T10:00:00Z",
+  mergedAt: null,
+  author: "junco-bot",
+  labels: [],
+  nwo: "acme/api",
+  ...over,
+});
 
 const rawIssue: DashIssue = {
   number: 7,
@@ -89,18 +224,28 @@ function renderApp(
   watchlistFile: string,
   issuePollMs = 999999,
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
+  queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
+  prPollMs = 999999,
 ) {
   return render(
     <App
       client={client}
       trigger="junco"
+      branchPrefix="junco/"
       configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
       watchlistFile={watchlistFile}
       configPath="/x/config.toml"
       clonesDir={CLONES_DIR}
       issuePollMs={issuePollMs}
       healthPollMs={999999}
+      queuePollMs={999999}
+      prPollMs={prPollMs}
+      queueFn={queueFn}
       runCliFn={runCliFn}
+      // Medium layout: single body pane, so enter still opens the detail view
+      // (the legacy flows the App-level tests exercise); wide-mode tests below
+      // opt into 130 cols explicitly.
+      sizeOverride={{ columns: 100, rows: 30 }}
       onExit={() => {}}
     />,
   );
@@ -108,21 +253,29 @@ function renderApp(
 const tick = () => new Promise((r) => setTimeout(r, 30));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+async function until(cond: () => boolean, tries = 50): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (cond()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  expect(cond()).toBe(true); // final assert with a real failure message
+}
+
 describe("App", () => {
   const wl = () => join(mkdtempSync(join(tmpdir(), "junco-app-")), "wl.json");
 
   it("loads and renders issues for the selected repo", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue, readyIssue] });
     const r = renderApp(client, wl());
-    await tick();
-    expect(r.lastFrame()).toContain("#7 Fix uploads");
+    // Initial listIssues is async — bounded until-loop, never a fixed tick.
+    await until(() => (r.lastFrame() ?? "").includes("#7 Fix uploads"));
     expect(r.lastFrame()).toContain("plan-ready"); // sorted: #9 first, but both visible
   });
 
   it("dispatch on a raw issue applies the action optimistically", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t"); // focus issues pane
     await tick();
     r.stdin.write("d");
@@ -134,28 +287,37 @@ describe("App", () => {
   it("approve is refused on a raw issue with a reason toast (no client call)", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t");
     await tick();
     r.stdin.write("a");
-    await tick();
+    // The refusal is now an auto-expiring toast — assert presence, not persistence.
+    await until(() => r.lastFrame()!.toLowerCase().includes("not available"));
     expect(actions).toHaveLength(0);
-    expect(r.lastFrame()!.toLowerCase()).toContain("not available");
   });
 
   it("failed action rolls back the optimistic update with a toast", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] }, { failActions: true });
     const r = renderApp(client, wl());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t");
     await tick();
     r.stdin.write("d");
-    await tick();
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("gh boom"));
     expect(actions).toHaveLength(1);
-    const f = r.lastFrame()!;
-    expect(f).toContain("gh boom");
-    expect(f).not.toContain("planning"); // rolled back
+    expect(r.lastFrame()).not.toContain("planning"); // rolled back
+  });
+
+  it("queued action toasts offline info and keeps the optimistic label (no rollback)", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue] });
+    const client: DashboardClient = { ...base, applyAction: async () => okv({ queued: true }) };
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
+    r.stdin.write("\t"); // focus issues pane
+    await tick();
+    r.stdin.write("d");
+    await until(() => (r.lastFrame() ?? "").includes("offline — action queued"));
+    expect(r.lastFrame()).toContain("planning"); // optimistic label NOT rolled back
   });
 
   it("add-repo flow validates then persists to the watchlist", async () => {
@@ -176,10 +338,11 @@ describe("App", () => {
     r.stdin.write("/c/coral");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    // The submit kicks an async validate→write→load chain; a fixed tick races
+    // React's commit on slow runners (this exact class flaked a release gate).
+    await until(() => readWatchlist(file).entries.length > 0);
     expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
-    expect(r.lastFrame()).toContain("alx/coral");
+    await until(() => (r.lastFrame() ?? "").includes("alx/coral"));
   });
 
   it("unwatch removes watchlist entries but refuses config entries", async () => {
@@ -189,8 +352,7 @@ describe("App", () => {
     const r = renderApp(client, file);
     await tick();
     r.stdin.write("x"); // selected = acme/api (config)
-    await tick();
-    expect(r.lastFrame()).toContain("config.toml");
+    await until(() => (r.lastFrame() ?? "").includes("config.toml"));
     r.stdin.write("j"); // select alx/coral
     await tick();
     r.stdin.write("x");
@@ -198,13 +360,15 @@ describe("App", () => {
     expect(readWatchlist(file).entries).toEqual([]);
   });
 
-  it("? toggles the help overlay", async () => {
+  it("? opens the help modal", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl());
     await tick();
     r.stdin.write("?");
-    await tick();
-    expect(r.lastFrame()).toContain("junco dashboard — keys");
+    // The HelpModal is taller than a 30-row terminal; the Workspace top-aligns
+    // it so the title survives even though the bottom clips.
+    await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
+    expect(r.lastFrame()).toContain("act on issue");
   });
 
   // Fix 1(a): selection is anchored to the issue NUMBER, so a poll that re-sorts
@@ -218,7 +382,7 @@ describe("App", () => {
     const second = [a7, { ...b8, updatedAt: "2026-07-06T14:00:00Z" }];
     const { client, actions } = makeSeqClient([first, second]);
     const r = renderApp(client, wl(), 60);
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // first load anchored
     r.stdin.write("\t"); // focus issues pane; selection anchored to #7
     await wait(140); // let the interval poll deliver the re-sorted `second`
     r.stdin.write("d"); // dispatch the SELECTED issue
@@ -233,16 +397,26 @@ describe("App", () => {
     const b8 = { ...rawIssue, number: 8, title: "Other thing", updatedAt: "2026-07-06T10:00:00Z" };
     let live: DashIssue[] = [a7, b8]; // #7 top → selected
     const client: DashboardClient = {
-      listIssues: async () => okv(live),
+      listIssues: async () => okv({ issues: live, staleAt: null }),
+      listPrs: async () => okv({ prs: [], staleAt: null }),
+      cloneRepo: async () => okv(undefined),
       issueDetail: async () => okv({ body: "the body", planComment: null }),
-      applyAction: async () => okv(undefined),
+      applyAction: async () => okv({ queued: false }),
       validateAndPrepareRepo: async () => okv(undefined),
       openInBrowser: async () => okv(undefined),
+      openPrInBrowser: async () => okv(undefined),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,
         lastBridgeSweepAt: null,
         ticketsBridged: 0,
+        tasksProcessed: null,
+        tasksSucceeded: null,
+        tasksFailed: null,
+        lastTaskStatus: null,
+        lastTaskAt: null,
+        totalTokensOut: null,
+        bridgeErrors: null,
       }),
     };
     const r = renderApp(client, wl(), 60);
@@ -266,12 +440,11 @@ describe("App", () => {
     writeFileSync(file, "{ not valid json", "utf8");
     const before = readFileSync(file, "utf8");
     const r = renderApp(client, file);
-    await tick();
-    expect(r.lastFrame()).toContain("watchlist:");
-    expect(r.lastFrame()!.toLowerCase()).toContain("json");
+    // The persistent corrupt-watchlist signal is now the Header's compact
+    // "watchlist!" banner chip (the JSON parse detail no longer shows inline).
+    await until(() => (r.lastFrame() ?? "").includes("watchlist!"));
     r.stdin.write("w"); // add flow refused
-    await tick();
-    expect(r.lastFrame()!.toLowerCase()).toContain("unreadable");
+    await until(() => r.lastFrame()!.toLowerCase().includes("unreadable"));
     expect(readFileSync(file, "utf8")).toBe(before); // bytes untouched
   });
 
@@ -298,11 +471,185 @@ describe("App", () => {
     expect(entries[0].path.startsWith(homedir())).toBe(true);
     expect(validatePaths[0].startsWith(homedir())).toBe(true);
   });
+
+  // Header pulse wiring at the DEFAULT 100-col (medium) size: the row must
+  // stay on exactly one line (layout.ts budgets CHROME_ROWS), the brand mark
+  // must survive width pressure, and the wide-only chips (record/last/tok)
+  // must be dropped by design — they live in `junco status` instead.
+  it("keeps the header on one line at 100 cols; medium drops the wide-only chips", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue, readyIssue] });
+    const client: DashboardClient = { ...base, health: async () => RICH_HEALTH };
+    const r = renderApp(client, wl());
+    await until(
+      () =>
+        (r.lastFrame() ?? "").includes("●1 review") && (r.lastFrame() ?? "").includes("daemon ●"),
+    );
+    const birdLines = r
+      .lastFrame()!
+      .split("\n")
+      .filter((l) => l.includes("🐦"));
+    expect(birdLines).toHaveLength(1); // header did not wrap...
+    expect(birdLines[0]).toContain("daemon"); // ...and the row runs brand → daemon intact
+    expect(birdLines[0]).toContain("●1 review"); // essential chip present in medium
+    expect(birdLines[0]).not.toContain("✓8"); // wide-only chips absent by design
+    expect(birdLines[0]).not.toContain("last ");
+    expect(birdLines[0]).not.toContain("tok ");
+  });
+
+  // Unwatching a repo must clear its cached issues from the pulse — the review
+  // chip reflects only currently watched repos, never ghost data.
+  it("unwatching a repo clears its contribution to the review chip", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [readyIssue] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("j"); // select alx/coral (pane 1) — its issues load
+    await until(() => (r.lastFrame() ?? "").includes("●1 review"));
+    r.stdin.write("x"); // unwatch — the issues/staleAt entries drop with the mapping
+    await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
+    expect(readWatchlist(file).entries).toEqual([]);
+  });
+});
+
+describe("PRs view", () => {
+  const wlp = () => join(mkdtempSync(join(tmpdir(), "junco-prs-")), "wl.json");
+
+  it("p opens the PRs view, esc returns; p toggles too", async () => {
+    const pr = makePr({ number: 42, title: "My PR" });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderApp(client, wlp());
+    await tick();
+    r.stdin.write("p"); // open PRs view
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests ·"));
+    expect(r.lastFrame()).toContain("My PR");
+    r.stdin.write(ESC); // back to main
+    await until(() => !(r.lastFrame() ?? "").includes("p pull requests ·"));
+    r.stdin.write("p"); // re-open
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests ·"));
+    r.stdin.write("p"); // p toggles closed too
+    await until(() => !(r.lastFrame() ?? "").includes("p pull requests ·"));
+  });
+
+  it("aggregates junco PRs across every watched repo, attention-first", async () => {
+    // acme/api (config) contributes a failing PR; alx/coral (watchlist) a merged
+    // one. Both must render, and the failing PR sorts above the merged one.
+    const failing = makePr({
+      nwo: "acme/api",
+      number: 10,
+      title: "Failing PR",
+      checks: { pass: 0, fail: 1, pending: 0, total: 1 },
+      updatedAt: "2026-07-06T10:00:00Z",
+    });
+    const merged = makePr({
+      nwo: "alx/coral",
+      number: 20,
+      title: "Merged PR",
+      url: "https://github.com/alx/coral/pull/20",
+      headRefName: "junco/merged-slug",
+      state: "MERGED",
+      mergedAt: "2026-07-06T09:00:00Z",
+      updatedAt: "2026-07-06T09:00:00Z",
+    });
+    const { client } = makeClient(
+      { "acme/api": [], "alx/coral": [] },
+      { prsByRepo: { "acme/api": [failing], "alx/coral": [merged] } },
+    );
+    const file = wlp();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("Failing PR"));
+    const f = r.lastFrame()!;
+    expect(f).toContain("Merged PR"); // both repos aggregated into one flat list
+    expect(f.indexOf("Failing PR")).toBeLessThan(f.indexOf("Merged PR")); // attention first
+  });
+
+  it("o opens the selected PR in the browser with its {nwo, number}", async () => {
+    const pr = makePr({ nwo: "acme/api", number: 42, title: "My PR" });
+    const { client, prCalls } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderApp(client, wlp());
+    await tick();
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("My PR"));
+    r.stdin.write("o");
+    await until(() => prCalls.length > 0);
+    expect(prCalls).toEqual([["acme/api", 42]]);
+  });
+
+  it("keeps selection on the same PR number when a poll re-sorts the list", async () => {
+    // Both PRs share a group (checks-pending); #10 is newer → top → anchored.
+    const a = makePr({
+      nwo: "acme/api",
+      number: 10,
+      title: "PR ten",
+      checks: { pass: 0, fail: 0, pending: 1, total: 1 },
+      updatedAt: "2026-07-06T12:00:00Z",
+    });
+    const b = makePr({
+      nwo: "acme/api",
+      number: 11,
+      title: "PR eleven",
+      headRefName: "junco/eleven",
+      checks: { pass: 0, fail: 0, pending: 1, total: 1 },
+      updatedAt: "2026-07-06T10:00:00Z",
+    });
+    const first = [a, b];
+    const second = [a, { ...b, updatedAt: "2026-07-06T14:00:00Z" }]; // #11 now newest → top
+    const { client, prCalls } = makePrSeqClient([first, second]);
+    const r = renderApp(client, wlp(), 999999, undefined, undefined, 60); // prPollMs=60
+    await tick();
+    r.stdin.write("p"); // open PRs view; selection anchored to #10
+    await until(() => (r.lastFrame() ?? "").includes("PR ten"));
+    await wait(140); // let the interval poll deliver the re-sorted `second`
+    r.stdin.write("o"); // open the ANCHORED pr
+    await until(() => prCalls.length > 0);
+    expect(prCalls).toEqual([["acme/api", 10]]); // anchor held despite the re-sort
+  });
+
+  // Unwatching a repo must clear its PRs from the aggregate synchronously —
+  // the ⚑ attention chip reflects only currently watched repos, never ghost
+  // data lingering until the next poll (the reviewCount rule). listPrs here
+  // never resolves a second time, so a passing test proves the synchronous
+  // prune in unwatch(), not a refetch.
+  it("unwatching a repo clears its contribution to the ⚑ PR attention chip", async () => {
+    const failing = makePr({
+      nwo: "alx/coral",
+      number: 30,
+      title: "Coral failing PR",
+      url: "https://github.com/alx/coral/pull/30",
+      headRefName: "junco/coral-fail",
+      checks: { pass: 0, fail: 1, pending: 0, total: 1 },
+    });
+    const { client: base } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const served = new Set<string>();
+    const client: DashboardClient = {
+      ...base,
+      // Serve each repo's PR list exactly once; every later call hangs forever.
+      listPrs: (nwo: string) => {
+        if (served.has(nwo)) return new Promise<never>(() => {});
+        served.add(nwo);
+        return Promise.resolve(okv({ prs: nwo === "alx/coral" ? [failing] : [], staleAt: null }));
+      },
+    };
+    const file = wlp();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderApp(client, file);
+    await until(() => (r.lastFrame() ?? "").includes("⚑1 PR"));
+    r.stdin.write("j"); // select alx/coral (pane 1)
+    await tick();
+    r.stdin.write("x"); // unwatch — the prs aggregate prunes with the mapping
+    await until(() => !(r.lastFrame() ?? "").includes("⚑1 PR"));
+    expect(readWatchlist(file).entries).toEqual([]);
+    r.stdin.write("p"); // the PRs view itself must not list the pruned PR either
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests ·"));
+    expect(r.lastFrame()).not.toContain("Coral failing PR");
+  });
 });
 
 describe("command palette + focus keys", () => {
   const wl2 = () => join(mkdtempSync(join(tmpdir(), "junco-pal-")), "wl.json");
-  const ESC = String.fromCharCode(27);
 
   function makeRunner(result: Partial<CliRunResult> = {}) {
     const runs: [string, string[]][] = [];
@@ -319,18 +666,18 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write("w");
     await tick();
-    expect(r.lastFrame()).toContain("add repo to watchlist");
+    expect(r.lastFrame()).toContain("Watch a repository");
     r.stdin.write(ESC);
     await tick();
     r.stdin.write("A");
     await tick();
-    expect(r.lastFrame()).not.toContain("add repo to watchlist");
+    expect(r.lastFrame()).not.toContain("Watch a repository");
   });
 
   it("i jumps to the issues pane (d then dispatches the selected issue)", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl2());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("i"); // issues pane via direct jump — no tab needed
     await tick();
     r.stdin.write("d");
@@ -345,16 +692,17 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write(":");
     await tick();
-    expect(r.lastFrame()).toContain("run a junco command");
+    expect(r.lastFrame()).toContain("run a junco command"); // App-level Modal title
+    expect(r.lastFrame()).toContain("Runs the junco CLI against this dashboard's config");
     r.stdin.write("doctor");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    // Async runCliFn resolution — bounded until-loop, never fixed ticks
+    // (this assertion raced React's commit on a slow CI runner).
+    await until(() => (r.lastFrame() ?? "").includes("captured output line"));
     expect(runs).toEqual([["doctor", []]]);
     const f = r.lastFrame()!;
     expect(f).toContain("junco doctor");
-    expect(f).toContain("captured output line");
     expect(f).toContain("exit 0");
   });
 
@@ -403,9 +751,9 @@ describe("command palette + focus keys", () => {
     r.stdin.write("init");
     await tick();
     r.stdin.write("\r");
-    await tick();
+    // Exclusion reason is now an auto-expiring toast under the modal.
+    await until(() => (r.lastFrame() ?? "").includes("can't nest inside the dashboard"));
     expect(runs).toHaveLength(0);
-    expect(r.lastFrame()).toContain("can't nest inside the dashboard");
   });
 
   it("palette restart does not unmount the dashboard", async () => {
@@ -418,11 +766,10 @@ describe("command palette + focus keys", () => {
     r.stdin.write("restart");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    // Async runCliFn resolution — bounded until-loop, never fixed ticks.
+    await until(() => (r.lastFrame() ?? "").includes("restarted: pid 1 -> 2"));
     expect(runs).toEqual([["restart", []]]);
     const f = r.lastFrame()!;
-    expect(f).toContain("restarted: pid 1 -> 2");
     expect(f).toContain("exit 0"); // app alive and rendering post-resolve
   });
 
@@ -436,15 +783,14 @@ describe("command palette + focus keys", () => {
     r.stdin.write("status");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("captured output line")); // output view up
     r.stdin.write(ESC); // -> palette
     await tick();
-    expect(r.lastFrame()).toContain("run a junco command");
+    expect(r.lastFrame()).toContain("Runs the junco CLI against this dashboard's config");
     r.stdin.write(ESC); // -> main
     await tick();
     expect(r.lastFrame()).toContain("issues");
-    expect(r.lastFrame()).not.toContain("run a junco command");
+    expect(r.lastFrame()).not.toContain("Runs the junco CLI against this dashboard's config");
   });
 });
 
@@ -463,8 +809,9 @@ describe("auto-clone add-repo", () => {
     r.stdin.write("\r"); // -> path field
     await tick();
     r.stdin.write("\r"); // EMPTY path -> auto-clone
-    await tick();
-    await tick();
+    // Async clone→validate→write chain — bounded until-loop (fixed ticks
+    // raced React's commit on slow CI runners).
+    await until(() => readWatchlist(file).entries.length > 0);
     const managed = join(CLONES_DIR, "alx", "coral");
     expect(cloned).toEqual([managed]);
     expect(validatePaths).toEqual([managed]);
@@ -484,9 +831,9 @@ describe("auto-clone add-repo", () => {
     r.stdin.write("\r");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
-    expect(r.lastFrame()).toContain("clone exploded");
+    // Async validate→clone chain — bounded until-loop, never fixed ticks
+    // (flaked on CI: assertion ran before the clone rejection committed).
+    await until(() => (r.lastFrame() ?? "").includes("clone exploded"));
     expect(readWatchlist(file).entries).toEqual([]);
   });
 });
@@ -506,8 +853,8 @@ describe("URL paste in add-repo", () => {
     r.stdin.write("\r");
     await tick();
     r.stdin.write("\r"); // empty path -> auto-clone
-    await tick();
-    await tick();
+    // Async clone→validate→write chain — bounded until-loop, not fixed ticks.
+    await until(() => readWatchlist(file).entries.length > 0);
     const managed = join(CLONES_DIR, "alxedelweiss", "hawaiian-coral");
     expect(cloned).toEqual([managed]);
     expect(validatePaths).toEqual([managed]);
@@ -528,8 +875,7 @@ describe("URL paste in add-repo", () => {
     r.stdin.write("\r");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    expect(r.lastFrame()).toContain("owner/repo or a github.com URL");
+    await until(() => (r.lastFrame() ?? "").includes("owner/repo or a github.com URL"));
     expect(cloned).toEqual([]);
     expect(readWatchlist(file).entries).toEqual([]);
   });
@@ -537,12 +883,14 @@ describe("URL paste in add-repo", () => {
 
 describe("refresh animation", () => {
   it("r shows a spinner in the issues header until the reload lands", async () => {
-    let resolveSecond: ((v: Result<DashIssue[]>) => void) | null = null;
+    let resolveSecond:
+      | ((v: Result<{ issues: DashIssue[]; staleAt: string | null }>) => void)
+      | null = null;
     let calls = 0;
     const { client } = makeClient({ "acme/api": [rawIssue] });
     client.listIssues = async () => {
       calls++;
-      if (calls === 1) return okv([rawIssue]);
+      if (calls === 1) return okv({ issues: [rawIssue], staleAt: null });
       return new Promise((res) => {
         resolveSecond = res;
       });
@@ -556,8 +904,300 @@ describe("refresh animation", () => {
     // CI runners (the assertion raced React's commit).
     for (let i = 0; i < 30 && !hasSpinner(); i++) await tick();
     expect(hasSpinner()).toBe(true);
-    resolveSecond!(okv([rawIssue]));
+    resolveSecond!(okv({ issues: [rawIssue], staleAt: null }));
     for (let i = 0; i < 30 && hasSpinner(); i++) await tick();
     expect(hasSpinner()).toBe(false);
+  });
+});
+
+describe("queue rail + queue view", () => {
+  it("renders the queue card in the rail from the initial poll", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    // The old QueueStrip counts line is gone; the rail's compact queue card
+    // carries the running label + waiting count instead.
+    await until(() => (r.lastFrame() ?? "").includes("#46 exec"));
+    expect(r.lastFrame()).toContain("1 waiting"); // QUEUE_SNAP has one waiting ticket
+  });
+
+  it("t opens the queue view, esc returns; t toggles too", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q2-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    await until(() => (r.lastFrame() ?? "").includes("#46 exec")); // queue snapshot loaded
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    expect(r.lastFrame()).toContain("WAITING (1)");
+    r.stdin.write(ESC);
+    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("t"); // t closes as well
+    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+  });
+
+  it("queue view scrolls with ] and [", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q3-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    await until(() => (r.lastFrame() ?? "").includes("#46 exec"));
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    // QueueView renders a "queue" title row above RUNNING, so two ] presses are
+    // needed to slice the RUNNING header out of the (unclamped) scroll window.
+    r.stdin.write("]");
+    r.stdin.write("]");
+    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("[");
+    r.stdin.write("[");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+  });
+
+  it("footer advertises t queue when the issues pane is focused", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-tui-q4-"));
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, join(dir, "wl.json"));
+    await until(() => (r.lastFrame() ?? "").includes("1 repos")); // mounted
+    r.stdin.write("2"); // focus the issues pane — its footer carries the t hint
+    await until(() => (r.lastFrame() ?? "").includes("t queue"));
+  });
+});
+
+describe("workspace filter + pane navigation (medium)", () => {
+  const wl5 = () => join(mkdtempSync(join(tmpdir(), "junco-ws-")), "wl.json");
+  const upl: DashIssue = {
+    number: 7,
+    title: "Fix uploads",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T10:00:00Z",
+    url: "https://github.com/acme/api/issues/7",
+  };
+  const db: DashIssue = {
+    number: 9,
+    title: "Database migration",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T09:00:00Z",
+    url: "https://github.com/acme/api/issues/9",
+  };
+
+  it("/ filters the issue list, then esc clears it", async () => {
+    const { client } = makeClient({ "acme/api": [upl, db] });
+    const r = renderApp(client, wl5());
+    await until(() => (r.lastFrame() ?? "").includes("Database migration"));
+    r.stdin.write("/");
+    await tick();
+    r.stdin.write("upl"); // substring of "Fix uploads" only
+    await until(() => !(r.lastFrame() ?? "").includes("Database migration"));
+    expect(r.lastFrame()).toContain("Fix uploads");
+    expect(r.lastFrame()).toContain("/upl"); // active-filter chip in the pane title
+    r.stdin.write(ESC); // clears the filter + leaves typing mode
+    await until(() => (r.lastFrame() ?? "").includes("Database migration"));
+  });
+
+  it("1 / 2 jump panes — the footer follows the focused pane", async () => {
+    // Frames strip ANSI, so accent-title focus is asserted via the pane-specific
+    // footer (pane 1 → unwatch; pane 2 → dispatch) rather than color.
+    const { client } = makeClient({ "acme/api": [upl] });
+    const r = renderApp(client, wl5());
+    await until(() => (r.lastFrame() ?? "").includes("x unwatch")); // pane 1 footer
+    r.stdin.write("2");
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch")); // pane 2 footer
+    expect(r.lastFrame()).not.toContain("x unwatch");
+    r.stdin.write("1");
+    await until(() => (r.lastFrame() ?? "").includes("x unwatch"));
+  });
+
+  it("g / G jump to the first / last issue", async () => {
+    const { client, actions } = makeClient({ "acme/api": [readyIssue, rawIssue] });
+    const r = renderApp(client, wl5());
+    await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
+    r.stdin.write("2"); // focus issues; sorted [#9 plan-ready, #7 raw]
+    await tick();
+    r.stdin.write("G"); // last → #7 (raw)
+    await tick();
+    r.stdin.write("d"); // dispatch is valid only on the raw issue
+    await until(() => actions.length === 1);
+    expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
+    r.stdin.write("g"); // first → #9 (plan-ready)
+    await tick();
+    r.stdin.write("d"); // not allowed there → refusal toast, no new action
+    await until(() => r.lastFrame()!.toLowerCase().includes("not available"));
+    expect(actions).toHaveLength(1);
+  });
+
+  it("3 is inert at medium width (there is no preview pane)", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wl5());
+    await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
+    r.stdin.write("2");
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write("3");
+    await tick();
+    expect(r.lastFrame()).not.toContain("browser"); // no pane 3 to focus onto
+    expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
+  });
+
+  // → mirrors `3`/`l` at medium width: there is no pane 3 to reach, so it's inert.
+  it("→ is inert at medium width, same as 3 (no preview pane to reach)", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wl5());
+    await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
+    r.stdin.write("2");
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write(ESC + "[C"); // →
+    await tick();
+    expect(r.lastFrame()).not.toContain("browser"); // no pane 3 to focus onto
+    expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
+  });
+});
+
+describe("workspace wide mode", () => {
+  const wl6 = () => join(mkdtempSync(join(tmpdir(), "junco-wide-")), "wl.json");
+  function renderWide(client: DashboardClient, watchlistFile: string) {
+    return render(
+      <App
+        client={client}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+        watchlistFile={watchlistFile}
+        configPath="/x/config.toml"
+        clonesDir={CLONES_DIR}
+        issuePollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => QUEUE_SNAP}
+        sizeOverride={{ columns: 130, rows: 30 }}
+        onExit={() => {}}
+      />,
+    );
+  }
+
+  it("preview pane autoloads the selected issue's body", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    await until(() => (r.lastFrame() ?? "").includes("the body")); // debounce 300ms < until budget
+  });
+
+  // Wide terminals get the FULL header pulse (record, last task, tokens) —
+  // the same fixture that medium mode drops down to essentials.
+  it("wide mode renders the full header pulse", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue, readyIssue] });
+    const client: DashboardClient = { ...base, health: async () => RICH_HEALTH };
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("✓8"));
+    const birdLine = r
+      .lastFrame()!
+      .split("\n")
+      .find((l) => l.includes("🐦"))!;
+    expect(birdLine).toContain("●1 review");
+    expect(birdLine).toContain("✓8");
+    expect(birdLine).toContain("✗2");
+    expect(birdLine).toContain("last ✓");
+    expect(birdLine).toContain("tok 45k");
+    expect(birdLine).toContain("daemon ●");
+  });
+
+  it("renders the PrPreview card in pane 3 for the selected PR", async () => {
+    const pr = makePr({ nwo: "acme/api", number: 42, title: "Wide PR" });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderWide(client, wl6());
+    await tick();
+    r.stdin.write("p"); // open PRs view
+    // `3 pr · #42` is the PrPreview pane title — unambiguous vs the issue "3 preview".
+    await until(() => (r.lastFrame() ?? "").includes("3 pr · #42"));
+    expect(r.lastFrame()).toContain("Wide PR");
+  });
+
+  it("enter focuses the preview pane (footer shows scroll + browser hints)", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    r.stdin.write("2"); // focus issues pane
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write("\r"); // enter → focus pane 3 (preview), NOT the detail view
+    await until(() => (r.lastFrame() ?? "").includes("o browser"));
+    expect(r.lastFrame()).toContain("scroll");
+  });
+
+  // Regression: `scroll` is shared across views — a queue-view offset must not
+  // bleed into the pane-3 preview on the way back (it rendered from "line N",
+  // blanking short bodies entirely).
+  it("returning from the queue view does not bleed its scroll into the preview", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("the body")); // preview autoloaded
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    r.stdin.write("]");
+    r.stdin.write("]");
+    r.stdin.write("]");
+    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)")); // queue scrolled
+    r.stdin.write(ESC); // back to main — the offset must reset with it
+    // The preview shows the body's FIRST line again (fake body is one line, so
+    // any residual offset would leave the pane without it).
+    await until(() => (r.lastFrame() ?? "").includes("the body"));
+    // Pane-3 scrolling itself still works: focus it, then [ / ] move the window.
+    r.stdin.write("2");
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write("\r"); // focus pane 3
+    await until(() => (r.lastFrame() ?? "").includes("o browser"));
+    r.stdin.write("]"); // scroll 1 → the single-line body slides off
+    await until(() => !(r.lastFrame() ?? "").includes("the body"));
+    expect(r.lastFrame()).toContain("── plan ──"); // pane not blank — just scrolled
+    r.stdin.write("[");
+    await until(() => (r.lastFrame() ?? "").includes("the body")); // back to the top
+  });
+
+  // Regression: a wide terminal shrinking below 110 cols while pane 3 (preview)
+  // is focused must not strand focus on a pane that no longer renders.
+  it("shrinking below wide while pane 3 is focused clamps focus back to pane 2", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const file = wl6();
+    const appEl = (size: { columns: number; rows: number }) => (
+      <App
+        client={client}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+        watchlistFile={file}
+        configPath="/x/config.toml"
+        clonesDir={CLONES_DIR}
+        issuePollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => QUEUE_SNAP}
+        sizeOverride={size}
+        onExit={() => {}}
+      />
+    );
+    const r = render(appEl({ columns: 130, rows: 30 }));
+    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    r.stdin.write("3"); // focus pane 3 directly
+    await until(() => (r.lastFrame() ?? "").includes("o browser")); // pane-3 footer hints
+    r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
+    // Pane 2's footer hint set is back: enter→detail (medium mode) and d dispatch.
+    await until(() => (r.lastFrame() ?? "").includes("enter detail"));
+    expect(r.lastFrame()).toContain("d dispatch");
+  });
+
+  // → is the advertised primary pane-movement key (l is now the quiet alias) —
+  // from pane 2 in wide mode it must reach pane 3 exactly like l/enter do, and
+  // ← must walk it back one pane at a time to pane 1.
+  it("→ from pane 2 focuses the preview; ← twice returns to pane 1", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    r.stdin.write("2"); // focus issues pane
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write(ESC + "[C"); // → focuses pane 3 (preview)
+    await until(() => (r.lastFrame() ?? "").includes("o browser"));
+    expect(r.lastFrame()).toContain("← issues"); // pane 3 footer now leads with ←
+    r.stdin.write(ESC + "[D"); // ← back to pane 2
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write(ESC + "[D"); // ← back to pane 1
+    await until(() => (r.lastFrame() ?? "").includes("x unwatch"));
   });
 });

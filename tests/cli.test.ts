@@ -653,6 +653,48 @@ describe("run(['dashboard']) — routing", () => {
   });
 });
 
+describe("run(['outbox'])", () => {
+  it("returns 0 and prints 'outbox empty' when nothing is queued", async () => {
+    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    const code = await run(["outbox", "--config", configPath], {
+      loadConfigFn: () => cfgWithState,
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+    expect(captured.join("")).toBe("outbox empty\n");
+  });
+
+  it("routes `outbox flush` to the flush path (exit 0 on a clean flush of nothing)", async () => {
+    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    const code = await run(["outbox", "flush", "--config", configPath], {
+      loadConfigFn: () => cfgWithState,
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+    expect(captured.join("")).toMatch(/sent 0 · dead 0 · remaining 0/);
+  });
+});
+
+describe("run(['prs'])", () => {
+  it("returns 0 and prints the no-watched-repos guidance when none are configured", async () => {
+    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    const code = await run(["prs", "--config", configPath], {
+      loadConfigFn: () => cfgWithState,
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+    expect(captured.join("")).toBe(
+      "no watched repositories — add [[github.repos]] to config.toml or watch one from the dashboard\n",
+    );
+  });
+});
+
 describe("run(['restart']) — routing", () => {
   it("routes `restart` to runRestartFn with the RESOLVED config path (config validated first)", async () => {
     const { cfg } = freshDispatchVault();
