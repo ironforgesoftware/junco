@@ -17,13 +17,13 @@ the dispatch side.
 
 ```text
  🐦 junco  acme/reef-api      ●2 review · ✓14 · last ✓ 4m · daemon ● up 6h · ◐1 ⏳2
-╭ 1 repos ───────────╮╭ 2 issues · 14 ─────────────────────╮╭ 3 preview ───────────────╮
-│▌acme/reef-api  2●  ││▌● #52 Fix reef color…   plan-ready ││ #52 Fix reef color       │
-│ acme/tide-cli      ││ ◐ #46 Bleaching alert      working ││ grading [plan-ready]     │
-│────────────────────││ ○ #61 Add tide tables          3h  ││                          │
-│ queue              ││ ✓ #44 Coral survey       done  2d  ││ The grading LUT clips    │
-│ ◐ #46 · turn 14    ││                                    ││ at shallow-water bands…  │
-│ 2 waiting          ││                             2/14   ││ ── plan ──               │
+╭ 1 repos ───────────╮╭ 2 issues · 14 ─────────────────────╮╭ 3 PRs · acme/reef-api ───╮
+│▌acme/reef-api  2●  ││▌● #52 Fix reef color…   plan-ready ││▌✗ #52 fix-color-lut    ✗2│
+│ acme/tide-cli      ││ ◐ #46 Bleaching alert      working ││ ◐ #48 tide-table-cache ◍1│
+│────────────────────││ ○ #61 Add tide tables          3h  ││ ● #41 alert-copy-tweak ✓4│
+│ queue              ││ ✓ #44 Coral survey       done  2d  ││                          │
+│ ◐ #46 · turn 14    ││                                    ││                          │
+│ 2 waiting          ││                             2/14   ││                          │
 ╰────────────────────╯╰────────────────────────────────────╯╰──────────────────────────╯
  ↑/↓ move · ←/→ panes · enter preview · d dispatch · a approve · / filter · ? help
 ```
