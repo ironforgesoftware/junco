@@ -41,3 +41,40 @@ jobs:
           git config --global user.name "junco-ci"
       - run: npm run build
       - run: npm test
+
+  smoke:
+    name: package smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          # engines floor: the shipped tarball must install and run on the
+          # minimum supported node
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: bash scripts/package-smoke.sh
+
+  # The single status check that ties every environment leg together. Branch
+  # protection requires exactly this context: "quality-gate".
+  gate:
+    name: quality-gate
+    needs: [test, smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail unless every leg succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "::error::A quality-gate leg did not succeed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
+          exit 1
+      - name: All legs green
+        run: echo "quality gate passed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
