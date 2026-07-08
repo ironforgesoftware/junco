@@ -279,10 +279,26 @@ describe("App", () => {
     );
     const r = renderApp(client, wl());
     await until(() => (r.lastFrame() ?? "").includes("#7"));
-    expect(r.lastFrame()).toContain("↻ 0s"); // fetched moments ago
+    await until(() => (r.lastFrame() ?? "").includes("↻ 0s")); // fetched moments ago
     r.stdin.write("p");
     await until(() => (r.lastFrame() ?? "").includes("pull requests"));
     await until(() => (r.lastFrame() ?? "").includes("↻ 0s"));
+  });
+
+  it("all-repos-down PR poll does not advance the freshness stamp", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue] });
+    const client: DashboardClient = {
+      ...base,
+      listPrs: async () => ({ ok: false, error: "network down" }),
+    };
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("pull requests"));
+    // Every watched repo's listPrs failed — the aggregate stamp must not
+    // claim freshness. If the guard in loadPrs were removed/inverted,
+    // prsFetchedAt would be set at mount and "↻ 0s" would render here.
+    expect(r.lastFrame() ?? "").not.toContain("↻");
   });
 
   it("dispatch on a raw issue applies the action optimistically", async () => {
