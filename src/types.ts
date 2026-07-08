@@ -150,6 +150,8 @@ export interface Ticket {
   tools: string[] | null;
   /** GitHub issue this ticket was bridged from (null = local dispatch). */
   github: TicketGithub | null;
+  /** Assessment flavor options (null = regular PR/Q&A flow). */
+  assess: { autoPlan: boolean } | null;
   /** Q&A only: directory the session runs in (read-only tools). Null = default. */
   workdir: string | null;
 }
