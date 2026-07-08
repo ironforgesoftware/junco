@@ -1,0 +1,63 @@
+/**
+ * Pure click resolver: terminal cell → what's under it. Mirrors the frame
+ * that Workspace + the panes render, using the SAME geometry helpers the
+ * components consume — the two cannot drift independently.
+ * Row map: y=0 header, body y ∈ [1, 1+bodyRows), then toast + footer.
+ * Column bands: rail [0, railWidth), middle [railWidth, columns−previewWidth),
+ * preview [columns−previewWidth, columns) (wide mode only).
+ */
+
+import type { Layout } from "./layout.js";
+import { LINK_LINE_ROW, PANE_CONTENT_ROW, listRowsHeight, railListHeight } from "./geometry.js";
+
+export type HitTarget =
+  | { type: "pane"; pane: 1 | 2 | 3 }
+  | { type: "repoRow"; index: number }
+  | { type: "issueRow"; index: number }
+  | { type: "prRow"; index: number }
+  | { type: "linkLine" }
+  | { type: "none" };
+
+export interface HitContext {
+  layout: Layout;
+  columns: number;
+  /** Only the two row-bearing views resolve clicks; others never call this. */
+  view: "main" | "prs";
+  repoCount: number;
+  /** Rows in the middle list — filtered issues (main) or the PR aggregate (prs). */
+  listCount: number;
+  /** Window starts — the App's lifted windowSlice offsets. */
+  railStart: number;
+  listStart: number;
+  /** Preview pane is showing a card, so its ↗ line exists and is clickable. */
+  hasPreviewTarget: boolean;
+}
+
+export function hitTest(ctx: HitContext, x: number, y: number): HitTarget {
+  const { layout, columns, view } = ctx;
+  if (layout.mode === "tooSmall") return { type: "none" };
+  const r = y - 1; // pane-relative row: every pane spans the full body height
+  if (r < 0 || r >= layout.bodyRows) return { type: "none" };
+
+  if (x < layout.railWidth) {
+    if (view === "prs") return { type: "none" }; // rail isn't interactive in the PRs view
+    const i = r - PANE_CONTENT_ROW;
+    const visible = Math.min(ctx.repoCount - ctx.railStart, railListHeight(layout.bodyRows));
+    if (i >= 0 && i < visible) return { type: "repoRow", index: ctx.railStart + i };
+    return { type: "pane", pane: 1 };
+  }
+
+  if (layout.mode === "wide" && x >= columns - layout.previewWidth) {
+    if (r === LINK_LINE_ROW && ctx.hasPreviewTarget) return { type: "linkLine" };
+    return view === "main" ? { type: "pane", pane: 3 } : { type: "none" };
+  }
+
+  const i = r - PANE_CONTENT_ROW;
+  const visible = Math.min(ctx.listCount - ctx.listStart, listRowsHeight(layout.bodyRows));
+  if (i >= 0 && i < visible) {
+    return view === "main"
+      ? { type: "issueRow", index: ctx.listStart + i }
+      : { type: "prRow", index: ctx.listStart + i };
+  }
+  return view === "main" ? { type: "pane", pane: 2 } : { type: "none" };
+}
