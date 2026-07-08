@@ -184,6 +184,7 @@ export function hintsFor(
     case "detail":
       return [
         ["↑/↓", "scroll"],
+        ["o", "browser"],
         ["esc", "back"],
       ];
     case "queue":
@@ -226,6 +227,7 @@ export function hintsFor(
       ["→", "issues"],
       ["w", "add repo"],
       ["x", "unwatch"],
+      ["o", "repo"],
       ["r", "refresh"],
       [":", "commands"],
       ["?", "help"],

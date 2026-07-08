@@ -57,7 +57,7 @@ export function HelpModal({
           ["D", "dispatch as ask (read-only Q&A)"],
           ["a", "approve the posted plan"],
           ["R", "re-plan / re-cycle (by state)"],
-          ["o", "open in browser"],
+          ["o", "open in browser (repo page from pane 1)"],
         ]}
       />
       <Section

@@ -69,6 +69,7 @@ function makeClient(
   const validatePaths: string[] = [];
   const cloned: string[] = [];
   const prCalls: [string, number][] = [];
+  const repoOpens: string[] = [];
   const client: DashboardClient = {
     listIssues: async (nwo) => okv({ issues: issuesByRepo[nwo] ?? [], staleAt: null }),
     listPrs: async (nwo) => okv({ prs: opts.prsByRepo?.[nwo] ?? [], staleAt: null }),
@@ -90,6 +91,10 @@ function makeClient(
       prCalls.push([nwo, num]);
       return okv(undefined);
     },
+    openRepoInBrowser: async (nwo) => {
+      repoOpens.push(nwo);
+      return okv(undefined);
+    },
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -104,7 +109,7 @@ function makeClient(
       bridgeErrors: null,
     }),
   };
-  return { client, actions, validatePaths, cloned, prCalls };
+  return { client, actions, validatePaths, cloned, prCalls, repoOpens };
 }
 
 /** A client whose listIssues walks a fixed sequence of responses (call N →
@@ -128,6 +133,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     validateAndPrepareRepo: async () => okv(undefined),
     openInBrowser: async () => okv(undefined),
     openPrInBrowser: async () => okv(undefined),
+    openRepoInBrowser: async () => okv(undefined),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -167,6 +173,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
       prCalls.push([nwo, num]);
       return okv(undefined);
     },
+    openRepoInBrowser: async () => okv(undefined),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -270,6 +277,34 @@ describe("App", () => {
     // Initial listIssues is async — bounded until-loop, never a fixed tick.
     await until(() => (r.lastFrame() ?? "").includes("#7 Fix uploads"));
     expect(r.lastFrame()).toContain("plan-ready"); // sorted: #9 first, but both visible
+  });
+
+  it("o on the rail opens the repository page", async () => {
+    const { client, repoOpens } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("1"); // focus the rail
+    r.stdin.write("o");
+    await until(() => repoOpens.length === 1);
+    expect(repoOpens).toEqual(["acme/api"]);
+  });
+
+  it("o in the detail view opens the snapshotted issue", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const issueOpens: number[] = [];
+    client.openInBrowser = async (_nwo, num) => {
+      issueOpens.push(num);
+      return okv(undefined);
+    };
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("2");
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch")); // pane 2 focused first
+    r.stdin.write("\r"); // medium layout → detail view
+    await until(() => (r.lastFrame() ?? "").includes("the body"));
+    r.stdin.write("o");
+    await until(() => issueOpens.length === 1);
+    expect(issueOpens).toEqual([7]);
   });
 
   it("shows the freshness stamp after issues load, and in the PRs view", async () => {
@@ -434,6 +469,7 @@ describe("App", () => {
       validateAndPrepareRepo: async () => okv(undefined),
       openInBrowser: async () => okv(undefined),
       openPrInBrowser: async () => okv(undefined),
+      openRepoInBrowser: async () => okv(undefined),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,

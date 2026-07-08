@@ -598,6 +598,13 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, [client, currentNwo, currentIssue, showToast]);
 
+  const openRepoBrowser = useCallback(() => {
+    if (!currentRepo) return;
+    void client.openRepoInBrowser(currentRepo.nwo).then((res) => {
+      if (!res.ok) showToast("error", res.error);
+    });
+  }, [client, currentRepo, showToast]);
+
   // Elapsed ticker for a running palette command (1s resolution).
   useEffect(() => {
     if (!cmd?.running) return;
@@ -781,6 +788,14 @@ export function App(props: AppProps): React.JSX.Element {
         setScroll(0); // shared offset — don't bleed it into the pane-3 preview
         return void setView("main");
       }
+      if (input === "o") {
+        if (currentNwo && detail) {
+          void client.openInBrowser(currentNwo, detail.issue.number).then((res) => {
+            if (!res.ok) showToast("error", res.error);
+          });
+        }
+        return;
+      }
       if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
       if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
       return;
@@ -962,6 +977,7 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "g") return void setRepoIdx(0);
       if (input === "G") return void setRepoIdx(repoMappings.length - 1);
       if (input === "x") return void unwatch();
+      if (input === "o") return void openRepoBrowser();
       return;
     }
 
