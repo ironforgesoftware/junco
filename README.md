@@ -3,7 +3,7 @@
 _A local-first worker that turns tickets into pull requests._
 
 [![npm](https://img.shields.io/npm/v/%40ironforgesoftware%2Fjunco)](https://www.npmjs.com/package/@ironforgesoftware/junco)
-[![CI](https://github.com/ironforgesoftware/junco/actions/workflows/test.yml/badge.svg)](https://github.com/ironforgesoftware/junco/actions/workflows/test.yml)
+[![CI](https://github.com/ironforgesoftware/junco/actions/workflows/quality-gate.yml/badge.svg)](https://github.com/ironforgesoftware/junco/actions/workflows/quality-gate.yml)
 [![node](https://img.shields.io/node/v/%40ironforgesoftware%2Fjunco)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/%40ironforgesoftware%2Fjunco)](LICENSE)
 

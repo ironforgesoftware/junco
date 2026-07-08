@@ -14,10 +14,11 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | All tests | `npm test` (vitest, ~700 tests, a few seconds) |
 | One file | `npx vitest run tests/<name>.test.ts` |
 | Lint | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`) |
+| Typecheck | `npm run typecheck` (tsc over src/ + tests/ via `tsconfig.eslint.json` — vitest does not type-check) |
 | Format | `npm run format` / `npm run format:check` (prettier, 100 cols) |
-| Full gate | `npm run lint && npm run format:check && npm run build && npm test` |
+| Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test` |
 
-Run the full gate before claiming work done; CI (`.github/workflows/test.yml`) runs it on push/PR across ubuntu/macos × node 22.19/24.
+Run the full gate before claiming work done; CI (`.github/workflows/quality-gate.yml`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test; the aggregate `quality-gate` check is required to merge.
 
 **Exit-code trap:** piping vitest into `grep`/`tail` makes the pipeline exit with the *filter's* status — a failing suite reads as green. Capture it explicitly: `npx vitest run > /tmp/out 2>&1; echo "exit: $?"`.
 
@@ -35,7 +36,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 
 ## Testing gotchas (each of these has burned a session)
 
-- **Adding a `Config` field? Update every test fixture that builds a full `Config` literal** — `tests/{runOnce,prFlow,orphans,repo,worktree,daemon}.test.ts` each have a `makeConfig`/`cfg()` helper. Misses fail at *runtime* (`undefined` arithmetic), not compile time: vitest doesn't type-check and `tsconfig.json` excludes `tests/`.
+- **Adding a `Config` field? Update every test fixture that builds a full `Config` literal** — `tests/{runOnce,prFlow,orphans,repo,worktree,daemon}.test.ts` each have a `makeConfig`/`cfg()` helper. `npm run typecheck` catches misses at CI time (vitest doesn't type-check and `tsconfig.json` excludes `tests/` — the eslint tsconfig covers them).
 - Scheduler/daemon tests: an instant-resolve fake `sleep` starves the macrotask queue (the loop spins on microtasks; `setTimeout`-based fake tasks never settle → OOM). Yield a real tick: `await new Promise((r) => setTimeout(r, 1))`.
 - Repo/PR/worktree tests run a real git harness (bare remote + clone in tmp); they need `git config user.*` (CI sets it globally).
 - Prettier may reformat files between your read and your edit; re-read before editing and run `npx prettier --write` on touched files before committing.
@@ -65,7 +66,7 @@ worktrees. Details: `docs/parallel-sessions.md`.
 
 - Branch `feat/<topic>` off `main`; conventional commits (`feat:`, `fix:`, `refactor:`, `chore:`, optional scope); suite green at every commit.
 - **No AI attribution, ever:** no `Co-Authored-By: Claude` trailers, no "Generated with Claude Code" lines. Subagent-driven commits auto-append the trailer — amend it away before finishing.
-- **Release HOLD (absolute):** never push, tag, `gh release create`, or publish without the maintainer's explicit, per-release approval — generic approval of the work does not cover release actions. Once approved, the flow is: bump `package.json` + `CHANGELOG.md` (Keep a Changelog) → merge to `main` → push → CI green → annotated tag `vX.Y.Z` → `gh release create vX.Y.Z` (this triggers `.github/workflows/publish.yml` → npm publish with provenance) → verify with `npm view @ironforgesoftware/junco version`. `publish.yml` checks out the TAG — a gate-blocking fix after tagging means delete release+tag, fix, re-tag, re-release (harmless while nothing reached npm).
+- **Release HOLD (absolute):** never push, tag, `gh release create`, or publish without the maintainer's explicit, per-release approval — generic approval of the work does not cover release actions. Once approved, the flow is: bump `package.json` + `CHANGELOG.md` (Keep a Changelog) via PR → quality gate green → merge → annotated tag `vX.Y.Z` → `gh release create vX.Y.Z` (this triggers `.github/workflows/publish.yml` → npm publish via OIDC trusted publishing with provenance (no NPM_TOKEN)) → verify with `npm view @ironforgesoftware/junco version`. `publish.yml` checks out the TAG — a gate-blocking fix after tagging means delete release+tag, fix, re-tag, re-release (harmless while nothing reached npm).
 - The npm package ships only the `files` allowlist (`dist`, `templates`, `skills`, `examples`, README/CHANGELOG/LICENSE). Everything that ships is **stack-agnostic**: no personal-setup strings in wizard text, templates, README, or the `junco-dispatch` skill; user-visible runtime text says "inference endpoint", never a specific server.
 
 ## Maintaining this file
