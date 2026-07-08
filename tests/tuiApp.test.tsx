@@ -341,6 +341,37 @@ describe("App", () => {
     expect(r.lastFrame() ?? "").not.toContain("↻");
   });
 
+  it("cache-served (offline) PR poll does not advance the freshness stamp either", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue] });
+    const staleIso = new Date(Date.now() - 5 * 60_000).toISOString();
+    let call = 0;
+    const client: DashboardClient = {
+      ...base,
+      listPrs: async () => {
+        const res =
+          call === 0
+            ? okv({ prs: [makePr()], staleAt: staleIso })
+            : ({ ok: false, error: "network down" } as const);
+        call++;
+        return res;
+      },
+    };
+    const r = renderApp(client, wl(), 999999, undefined, undefined, 150); // prPollMs=150
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("pull requests"));
+    // Poll 1 is cache-served (staleAt set on an ok:true result) — the offline
+    // marker renders while it's the freshest data we have.
+    await until(() => (r.lastFrame() ?? "").includes("offline"));
+    // Poll 2 (all repos down) clears prStaleAt to null — wait for it to land
+    // before asserting, so this can't race the interval.
+    await until(() => !(r.lastFrame() ?? "").includes("offline"));
+    // Cache-served poll 1 must NOT have stamped prsFetchedAt — if it had (the
+    // pre-fix guard only checked `res.ok`), the title would fall back to it
+    // once staleAt clears and render "↻ 0s" here.
+    expect(r.lastFrame() ?? "").not.toContain("↻");
+  });
+
   it("dispatch on a raw issue applies the action optimistically", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());

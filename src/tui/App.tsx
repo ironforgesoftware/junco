@@ -382,9 +382,12 @@ export function App(props: AppProps): React.JSX.Element {
         }
         setPrs(sortPrs(all));
         setPrStaleAt(oldestStale);
-        // Stamp only when at least one repo answered — an all-repos-down poll must
-        // not claim the aggregate is fresh.
-        if (results.some((r) => r.ok)) setPrsFetchedAt(new Date().toISOString());
+        // Stamp only on a fresh (non-cache-served) result — an all-repos-down
+        // poll, or one served entirely from the on-disk cache while offline,
+        // must not claim the aggregate is fresh.
+        if (results.some((r) => r.ok && r.value.staleAt === null)) {
+          setPrsFetchedAt(new Date().toISOString());
+        }
       });
     },
     [client, repoMappings],
