@@ -660,4 +660,47 @@ describe("runAssessFlow", () => {
     expect(gh.calls.some((a) => a[0] === "issue" && a[1] === "create")).toBe(false);
     expect(readdirSync(join(j, "failed"))).toHaveLength(1);
   });
+
+  it("per-finding non-network create failure continues with remaining findings", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    let createAttempts = 0;
+    const gh = fakeGh((args) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
+      if (args[0] === "issue" && args[1] === "create") {
+        createAttempts++;
+        if (createAttempts === 1) {
+          throw new GitOpError("gh failed", "HTTP 422: Validation Failed", 1);
+        }
+        return { stdout: "https://github.com/o/r/issues/1\n" };
+      }
+      return undefined;
+    });
+    const finalText = findingsFence([
+      codeFinding("FAIL-1", "src/index.ts", "First Finding"),
+      codeFinding("OK-1", "src/a.ts", "Second Finding"),
+    ]);
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: () => fakeSession(finalText),
+    });
+
+    // One finding succeeded, one failed
+    expect(r.created).toBe(1);
+    expect(r.failed).toBe(1);
+    // Both were attempted
+    const createCalls = gh.calls.filter((a) => a[0] === "issue" && a[1] === "create");
+    expect(createCalls).toHaveLength(2);
+    // Ticket finalized to done/ (not failed/)
+    const doneFiles = readdirSync(join(j, "done"));
+    expect(doneFiles).toHaveLength(1);
+    // Summary mentions the failure
+    const body = readFileSync(join(j, "done", doneFiles[0]), "utf8");
+    expect(body).toMatch(/422|[Ff]ail|[Ee]rror/);
+  });
 });
