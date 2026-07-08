@@ -50,6 +50,11 @@ SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
   node /path/to/junco/dist/cli.js init --yes && <smoke> ; cd / && rm -rf "$SB"
 ```
 
+Parallel dev sessions: `claude -w <topic>` from the repo root, or a manual worktree under the
+gitignored `worktrees-manual/` — **never under `worktrees/`** (daemon-owned; junco force-removes
+paths there). The main checkout is the daemon's build home — park it on `main`, do feature work in
+worktrees. Details: `docs/parallel-sessions.md`.
+
 ## Debugging & visibility
 
 - `node dist/cli.js doctor` — preflight config, git/gh auth, endpoint, model, dirs.
