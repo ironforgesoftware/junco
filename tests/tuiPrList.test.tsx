@@ -381,4 +381,48 @@ describe("PrList", () => {
     expect(rows[0]).toContain("checks-failing");
     expect(rows[0]).toContain("60m");
   });
+
+  it("renders a title override verbatim, replacing the default composition", () => {
+    const prs = [pr(42, "Fix widget")];
+    const f = render(
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        title="3 PRs · acme/reef"
+      />,
+    ).lastFrame()!;
+
+    expect(f).toContain("3 PRs · acme/reef");
+    expect(f).not.toContain("p pull requests");
+  });
+
+  it("renders an emptyText override on empty rows, replacing the default copy", () => {
+    const f = render(
+      <PrList
+        prs={[]}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        emptyText="no junco PRs for this repo"
+      />,
+    ).lastFrame()!;
+
+    expect(f).toContain("no junco PRs for this repo");
+    expect(f).not.toContain("no junco PRs found across watched repos");
+  });
+
+  it("falls back to the default title and empty text when neither override is passed", () => {
+    const f = render(
+      <PrList prs={[]} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+    ).lastFrame()!;
+
+    expect(f).toContain("p pull requests · 0");
+    expect(f).toContain("no junco PRs found across watched repos");
+  });
 });

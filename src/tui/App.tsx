@@ -24,7 +24,7 @@ import { Header, hintsFor, type HintView } from "./components/Chrome.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
-import { PrList } from "./components/PrList.js";
+import { PrList, NWO_MAX_WIDTH } from "./components/PrList.js";
 import { PrPreview } from "./components/PrPreview.js";
 import { derivePrState, sortPrs, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
@@ -100,6 +100,16 @@ interface DetailState {
 interface PrDetailState {
   pr: DashPr;
   from: "main" | "prs";
+}
+
+/** Pane 3's title composes "3 PRs · <nwo>" from a nwo of unbounded length —
+ * mirrors PrList's own truncate-start nwo cell (NWO_MAX_WIDTH) so the title
+ * clamps to the same budget rather than wrapping the pane onto a second line,
+ * which would corrupt PrList's height/windowing math (CHROME one-line
+ * discipline: every pane title is exactly one row). */
+function truncateNwoStart(nwo: string): string {
+  if (nwo.length <= NWO_MAX_WIDTH) return nwo;
+  return `…${nwo.slice(nwo.length - (NWO_MAX_WIDTH - 1))}`;
 }
 
 /** Compute the optimistic label set for an action — the operator sees motion
@@ -291,6 +301,9 @@ export function App(props: AppProps): React.JSX.Element {
         : Math.min(lastPane3IdxRef.current, repoPrs.length - 1);
   lastPane3IdxRef.current = pane3IdxSafe;
   const selectedPane3Pr = repoPrs[pane3IdxSafe] ?? null;
+  // Pane 3's title identifies the scoped repo (mockup: "3 PRs · acme/reef");
+  // no repo selected (empty rail) falls back to the bare pane label.
+  const pane3Title = currentNwo ? `3 PRs · ${truncateNwoStart(currentNwo)}` : "3 PRs";
 
   // Per-repo issue counts for the rail badges, derived from loaded issues.
   const repoRows: RailRepo[] = repoMappings.map((r) => {
@@ -1165,6 +1178,8 @@ export function App(props: AppProps): React.JSX.Element {
               height={listHeight}
               now={queueNow}
               staleAt={prStaleAt}
+              title={pane3Title}
+              emptyText="no junco PRs for this repo"
             />
           </Box>
         ) : null)}

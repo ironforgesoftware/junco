@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { App } from "../src/tui/App.js";
+import { NWO_MAX_WIDTH } from "../src/tui/components/PrList.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
 import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
@@ -1155,6 +1156,68 @@ describe("workspace wide mode", () => {
     expect(r.lastFrame()).not.toContain("#10");
   });
 
+  // Pane 3's title identifies the scoped repo per the approved mockup
+  // ("3 PRs · acme/reef") and must track the rail's selection, same as the
+  // row content does above.
+  it("pane 3 title identifies the scoped repo; switching repos updates the title", async () => {
+    const apiPr = makePr({ nwo: "acme/api", number: 10, title: "PR" });
+    const coralPr = makePr({
+      nwo: "alx/coral",
+      number: 20,
+      title: "PR",
+      url: "https://github.com/alx/coral/pull/20",
+      headRefName: "junco/coral-slug",
+    });
+    const { client } = makeClient(
+      { "acme/api": [], "alx/coral": [] },
+      { prsByRepo: { "acme/api": [apiPr], "alx/coral": [coralPr] } },
+    );
+    const file = wl6();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderWide(client, file);
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api"));
+    r.stdin.write("j"); // pane 1 defaults focused — select alx/coral
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · alx/coral"));
+    expect(r.lastFrame()).not.toContain("3 PRs · acme/api");
+  });
+
+  // A nwo too long to fit the narrow wide-mode preview pane must truncate
+  // from the START (tail kept — the discriminating repo-name part) rather
+  // than wrap the title onto a second line, which would corrupt PrList's
+  // height/windowing math (CHROME one-line pane-title discipline).
+  it("a very long nwo truncates from the start so the pane-3 title stays on one line", async () => {
+    const longNwo = "organization-with-a-long-name/very-long-repository-name-that-keeps-going";
+    const pr = makePr({ nwo: longNwo, number: 10, title: "PR" });
+    const { client } = makeClient({ [longNwo]: [] }, { prsByRepo: { [longNwo]: [pr] } });
+    const r = render(
+      <App
+        client={client}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[{ nwo: longNwo, path: "/c/long" }]}
+        watchlistFile={wl6()}
+        configPath="/x/config.toml"
+        clonesDir={CLONES_DIR}
+        issuePollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => QUEUE_SNAP}
+        sizeOverride={{ columns: 130, rows: 30 }}
+        onExit={() => {}}
+      />,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("#10"));
+    const tail = longNwo.slice(longNwo.length - (NWO_MAX_WIDTH - 1));
+    const frame = r.lastFrame() ?? "";
+    // Found as one contiguous substring — proves it rendered on a single
+    // physical line (a wrap would split it across two "\n"-joined lines).
+    expect(frame).toContain(`3 PRs · …${tail}`);
+    // Scoped to pane 3's own title line — the header's bird line legitimately
+    // shows the full untruncated nwo elsewhere in the frame.
+    const titleLine = frame.split("\n").find((l) => l.includes("3 PRs ·"))!;
+    expect(titleLine).not.toContain(longNwo);
+  });
+
   it("pane-3 PR rows omit the nwo cell", async () => {
     const pr = makePr({ nwo: "acme/api", number: 10, title: "PR" });
     const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
@@ -1261,10 +1324,14 @@ describe("workspace wide mode", () => {
     expect(detailCalls).toBe(0);
   });
 
-  it("pane 3 shows the empty state when the selected repo has zero junco PRs", async () => {
+  // Pane 3's empty state is scoped to the one repo (not the cross-repo copy
+  // the standalone `p` view uses) — the mockup titles the pane per-repo, so
+  // the empty state must read that way too.
+  it("pane 3 shows the scoped empty state when the selected repo has zero junco PRs", async () => {
     const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [] } });
     const r = renderWide(client, wl6());
-    await until(() => (r.lastFrame() ?? "").includes("no junco PRs found"));
+    await until(() => (r.lastFrame() ?? "").includes("no junco PRs for this repo"));
+    expect(r.lastFrame()).not.toContain("no junco PRs found across watched repos");
   });
 
   it("renders the PrPreview card in pane 3 for the selected PR, in the p view", async () => {
@@ -1274,9 +1341,23 @@ describe("workspace wide mode", () => {
     await tick();
     r.stdin.write("p"); // open PRs view
     // `3 pr · #42` is the PrPreview pane title — unambiguous vs pane 3's own
-    // "p pull requests" title in the main view.
+    // "3 PRs · <nwo>" title in the main view.
     await until(() => (r.lastFrame() ?? "").includes("3 pr · #42"));
     expect(r.lastFrame()).toContain("Wide PR");
+  });
+
+  // The standalone `p` view's call site passes neither `title` nor
+  // `emptyText` — it must keep rendering PrList's stock cross-repo title,
+  // completely unaffected by pane 3's repo-scoped override (a distinct call
+  // site with its own props).
+  it("the standalone p view keeps PrList's stock title, unaffected by pane 3's scoped title", async () => {
+    const pr = makePr({ nwo: "acme/api", number: 42, title: "Wide PR" });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3, wide main view
+    r.stdin.write("p"); // open the standalone PRs view
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests · 1"));
+    expect(r.lastFrame()).not.toContain("3 PRs · acme/api"); // pane 3's slot is gone in this view
   });
 
   // Regression: a wide terminal shrinking below 110 cols while pane 3 (the
@@ -1303,7 +1384,7 @@ describe("workspace wide mode", () => {
       />
     );
     const r = render(appEl({ columns: 130, rows: 30 }));
-    await until(() => (r.lastFrame() ?? "").includes("p pull requests")); // pane 3 mounted, wide
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write("3"); // focus pane 3 directly
     await until(() => (r.lastFrame() ?? "").includes("o open")); // pane-3 footer hints
     r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
@@ -1319,7 +1400,7 @@ describe("workspace wide mode", () => {
   it("→ from pane 2 focuses pane 3; ← twice returns to pane 1", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderWide(client, wl6());
-    await until(() => (r.lastFrame() ?? "").includes("p pull requests")); // pane 3 mounted, wide
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write("2"); // focus issues pane
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write(ESC + "[C"); // → focuses pane 3
