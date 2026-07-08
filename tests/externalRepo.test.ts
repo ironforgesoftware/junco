@@ -79,9 +79,9 @@ describe("ensureFork", () => {
 describe("ensureExternalClone", () => {
   it("existing clone with a fork remote: derives forkNwo from the URL, zero gh calls", async () => {
     const f = fakes((c) => {
-      if (c.bin === "git" && c.args.join(" ").endsWith("remote get-url origin"))
+      if (c.bin === "git" && c.args.join(" ").endsWith("config --get remote.origin.url"))
         return { stdout: "https://github.com/up/stream.git\n" };
-      if (c.bin === "git" && c.args.join(" ").endsWith("remote get-url fork"))
+      if (c.bin === "git" && c.args.join(" ").endsWith("config --get remote.fork.url"))
         return { stdout: "https://github.com/me/stream.git\n" };
       return { code: 1 };
     });
@@ -93,9 +93,9 @@ describe("ensureExternalClone", () => {
   it("existing clone without a fork remote: provisions the fork and adds the remote", async () => {
     const f = fakes((c) => {
       const a = c.args.join(" ");
-      if (c.bin === "git" && a.endsWith("remote get-url origin"))
+      if (c.bin === "git" && a.endsWith("config --get remote.origin.url"))
         return { stdout: "https://github.com/up/stream.git\n" };
-      if (c.bin === "git" && a.endsWith("remote get-url fork")) return { code: 1 }; // absent
+      if (c.bin === "git" && a.endsWith("config --get remote.fork.url")) return { code: 1 }; // absent
       if (
         c.bin === "git" &&
         a === `-C ${join("/ext", "up", "stream")} remote add fork https://github.com/me/stream.git`
@@ -121,9 +121,9 @@ describe("ensureExternalClone", () => {
   it("throws when the existing fork remote URL is not a github.com URL", async () => {
     const f = fakes((c) => {
       const a = c.args.join(" ");
-      if (c.bin === "git" && a.endsWith("remote get-url origin"))
+      if (c.bin === "git" && a.endsWith("config --get remote.origin.url"))
         return { stdout: "https://github.com/up/stream.git\n" };
-      if (c.bin === "git" && a.endsWith("remote get-url fork"))
+      if (c.bin === "git" && a.endsWith("config --get remote.fork.url"))
         return { stdout: "git://weird/thing\n" };
       return { code: 1 };
     });
@@ -157,7 +157,7 @@ describe("ensureExternalClone", () => {
 
   it("refuses an existing dir whose origin is not the upstream", async () => {
     const f = fakes((c) => {
-      if (c.bin === "git" && c.args.join(" ").endsWith("remote get-url origin"))
+      if (c.bin === "git" && c.args.join(" ").endsWith("config --get remote.origin.url"))
         return { stdout: "https://github.com/other/thing.git\n" };
       return { code: 1 };
     });

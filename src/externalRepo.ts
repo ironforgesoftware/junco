@@ -88,14 +88,20 @@ export async function ensureExternalClone(
   const path = externalClonePath(cfg, nwo);
 
   if (existsFn(path)) {
-    const origin = await gitFn(cfg, ["-C", path, "remote", "get-url", "origin"], { check: false });
+    // Read raw git config (not resolved via url.<base>.insteadOf rewrites) to ensure
+    // nwoFromRemoteUrl sees the canonical github.com URL, not a rewritten target.
+    const origin = await gitFn(cfg, ["-C", path, "config", "--get", "remote.origin.url"], {
+      check: false,
+    });
     const originNwo = origin.code === 0 ? nwoFromRemoteUrl(origin.stdout.trim()) : null;
     if (originNwo === null || originNwo.toLowerCase() !== nwo.toLowerCase()) {
       throw new GitOpError(
         `${path} exists but its origin is ${originNwo ?? "not a github remote"}, expected ${nwo}`,
       );
     }
-    const fr = await gitFn(cfg, ["-C", path, "remote", "get-url", "fork"], { check: false });
+    const fr = await gitFn(cfg, ["-C", path, "config", "--get", "remote.fork.url"], {
+      check: false,
+    });
     if (fr.code === 0) {
       // The fork remote is the source of truth once it exists — never guess
       // past it. An unparseable URL fails loud instead of silently falling
