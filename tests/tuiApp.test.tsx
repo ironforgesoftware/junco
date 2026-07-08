@@ -90,6 +90,10 @@ function makeClient(
       prCalls.push([nwo, num]);
       return okv(undefined);
     },
+    repoPermission: async () => okv({ canPush: true }),
+    prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    dispatchTicket: async (nwo, num) =>
+      okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -128,6 +132,10 @@ function makeSeqClient(sequence: DashIssue[][]) {
     validateAndPrepareRepo: async () => okv(undefined),
     openInBrowser: async () => okv(undefined),
     openPrInBrowser: async () => okv(undefined),
+    repoPermission: async () => okv({ canPush: true }),
+    prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    dispatchTicket: async (nwo, num) =>
+      okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -167,6 +175,10 @@ function makePrSeqClient(sequence: DashPr[][]) {
       prCalls.push([nwo, num]);
       return okv(undefined);
     },
+    repoPermission: async () => okv({ canPush: true }),
+    prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    dispatchTicket: async (nwo, num) =>
+      okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -405,6 +417,10 @@ describe("App", () => {
       validateAndPrepareRepo: async () => okv(undefined),
       openInBrowser: async () => okv(undefined),
       openPrInBrowser: async () => okv(undefined),
+      repoPermission: async () => okv({ canPush: true }),
+      prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+      dispatchTicket: async (nwo, num) =>
+        okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,

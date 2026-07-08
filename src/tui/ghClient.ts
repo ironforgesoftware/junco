@@ -14,6 +14,8 @@ import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
 import type { DashIssue, DashAction } from "./state.js";
 import type { DashPr } from "./prState.js";
 import { fetchJuncoPrs } from "../githubPrs.js";
+import { ensureExternalClone } from "../externalRepo.js";
+import { dispatchIssue } from "../externalDispatch.js";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -129,6 +131,12 @@ export interface DashboardClient {
   validateAndPrepareRepo(nwo: string, path: string): Promise<Result<void>>;
   openInBrowser(nwo: string, num: number): Promise<Result<void>>;
   openPrInBrowser(nwo: string, num: number): Promise<Result<void>>;
+  /** ADMIN/MAINTAIN/WRITE → `canPush: true`; everything else (READ/TRIAGE/null) → false. */
+  repoPermission(nwo: string): Promise<Result<{ canPush: boolean }>>;
+  /** Idempotently provision the managed clone (+fork +fork remote) for an unowned `nwo`. */
+  prepareExternalRepo(nwo: string): Promise<Result<{ path: string; forkNwo: string }>>;
+  /** Build + submit a ticket for `nwo#num` via the shared dispatch core. */
+  dispatchTicket(nwo: string, num: number): Promise<Result<{ id: string; destPath: string }>>;
   health(): Promise<HealthInfo>;
 }
 
@@ -140,6 +148,8 @@ export interface GhClientDeps {
   writeFileFn?: (p: string, s: string) => void;
   renameFn?: (a: string, b: string) => void;
   mkdirFn?: (d: string) => void;
+  ensureCloneFn?: typeof ensureExternalClone;
+  dispatchIssueFn?: typeof dispatchIssue;
 }
 
 const GH_TIMEOUT = 30_000;
@@ -420,6 +430,32 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         await ghFn(cfg, ["pr", "view", String(num), "--repo", nwo, "--web"], {
           timeoutMs: GH_TIMEOUT,
         });
+      });
+    },
+
+    repoPermission(nwo) {
+      return attempt(async () => {
+        const r = await ghFn(
+          cfg,
+          ["repo", "view", nwo, "--json", "viewerPermission", "--jq", ".viewerPermission"],
+          { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+        );
+        const perm = r.stdout.trim();
+        return { canPush: ["ADMIN", "MAINTAIN", "WRITE"].includes(perm) };
+      });
+    },
+
+    prepareExternalRepo(nwo) {
+      return attempt(() => (deps.ensureCloneFn ?? ensureExternalClone)(cfg, nwo, { ghFn, gitFn }));
+    },
+
+    dispatchTicket(nwo, num) {
+      return attempt(async () => {
+        const r = await (deps.dispatchIssueFn ?? dispatchIssue)(cfg, `${nwo}#${num}`, {
+          ghFn,
+          gitFn,
+        });
+        return { id: r.id, destPath: r.destPath };
       });
     },
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -40,6 +40,7 @@ function fakes(
     origin?: string;
     failArgs?: string; // any gh argv containing this substring throws
     failErr?: Error; // error to throw on failArgs match (default: plain Error)
+    permissions?: Record<string, string>; // nwo -> viewerPermission, for `repo view --json viewerPermission`
   } = {},
 ) {
   const calls: string[][] = [];
@@ -58,6 +59,8 @@ function fakes(
     if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
       return ok((opts.comments ?? []).map((c) => JSON.stringify(c)).join("\n"));
     if (args[0] === "repo" && args[1] === "clone") return ok("");
+    if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission"))
+      return ok(`${opts.permissions?.[args[2]] ?? "READ"}\n`);
     if (args[0] === "repo" && args[1] === "view") return ok("");
     if (args[0] === "label" && args[1] === "list") return ok("");
     if (args[0] === "label" && args[1] === "create") return ok("");
@@ -533,6 +536,90 @@ describe("cloneRepo", () => {
     const f = fakes({ failArgs: "repo clone" });
     const dest = join(mkdtempSync(join(tmpdir(), "junco-clone-fail-")), "x");
     const r = await makeGhDashboardClient(cfg, f).cloneRepo("acme/api", dest);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("repoPermission", () => {
+  it("repoPermission maps viewerPermission to canPush", async () => {
+    const f = fakes({ permissions: { "up/stream": "READ", "own/repo": "WRITE" } });
+    const client = makeGhDashboardClient(cfg, f);
+    const r = await client.repoPermission("up/stream");
+    expect(r).toEqual({ ok: true, value: { canPush: false } });
+    expect(await client.repoPermission("own/repo")).toEqual({
+      ok: true,
+      value: { canPush: true },
+    });
+    expect(f.calls).toContainEqual([
+      "repo",
+      "view",
+      "up/stream",
+      "--json",
+      "viewerPermission",
+      "--jq",
+      ".viewerPermission",
+    ]);
+  });
+
+  it("gh failure → ok:false, never throws", async () => {
+    const f = fakes({ failArgs: "viewerPermission" });
+    const r = await makeGhDashboardClient(cfg, f).repoPermission("acme/api");
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("prepareExternalRepo", () => {
+  it("delegates to ensureExternalClone via the injectable seam", async () => {
+    const f = fakes();
+    const ensureCloneFn = vi.fn(async (_c: unknown, _nwo: string, _d: unknown) => ({
+      path: "/x/external/up/stream",
+      forkNwo: "me/stream",
+    }));
+    const r = await makeGhDashboardClient(cfg, { ...f, ensureCloneFn }).prepareExternalRepo(
+      "up/stream",
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: { path: "/x/external/up/stream", forkNwo: "me/stream" },
+    });
+    expect(ensureCloneFn).toHaveBeenCalledWith(cfg, "up/stream", expect.anything());
+  });
+
+  it("provisioning failure → ok:false, never throws", async () => {
+    const ensureCloneFn = vi.fn(async (_c: unknown, _nwo: string, _d: unknown) => {
+      throw new Error("fork boom");
+    });
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), ensureCloneFn }).prepareExternalRepo(
+      "up/stream",
+    );
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("dispatchTicket", () => {
+  it("dispatchTicket delegates to the dispatch core with owner/repo#N", async () => {
+    const dispatchSpy = vi.fn(async (_c: unknown, _ref: string, _d: unknown) => ({
+      id: "gh-up-stream-7",
+      destPath: "/tmp/dest",
+      external: true,
+      clonePath: "/tmp/clone",
+      forkNwo: "me/stream",
+    }));
+    const client = makeGhDashboardClient(cfg, { ...fakes(), dispatchIssueFn: dispatchSpy });
+    const r = await client.dispatchTicket("up/stream", 7);
+    expect(r.ok).toBe(true);
+    expect(r).toEqual({ ok: true, value: { id: "gh-up-stream-7", destPath: "/tmp/dest" } });
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.anything(), "up/stream#7", expect.anything());
+  });
+
+  it("dispatch failure → ok:false, never throws", async () => {
+    const dispatchSpy = vi.fn(async (_c: unknown, _ref: string, _d: unknown) => {
+      throw new Error("dispatch boom");
+    });
+    const r = await makeGhDashboardClient(cfg, {
+      ...fakes(),
+      dispatchIssueFn: dispatchSpy,
+    }).dispatchTicket("up/stream", 7);
     expect(r.ok).toBe(false);
   });
 });
