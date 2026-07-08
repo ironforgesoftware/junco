@@ -421,6 +421,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     requireApproval: true,
     plannerModelId: null,
   },
+  assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
 };
 
 let dispatchTmpDirs: string[] = [];

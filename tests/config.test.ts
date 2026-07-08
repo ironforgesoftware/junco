@@ -294,6 +294,42 @@ describe("[github] config section", () => {
   });
 });
 
+describe("[assess] config section", () => {
+  it("defaults: maxIssuesPerRun 20, minSeverity low, npmBin npm", () => {
+    const cfg = loadConfig(writeToml(`vault_root = "/tmp/v"\n`));
+    expect(cfg.assess).toEqual({
+      maxIssuesPerRun: 20,
+      minSeverity: "low",
+      npmBin: "npm",
+    });
+  });
+
+  it("parses explicit [assess] values and maps to camelCase", () => {
+    const cfg = loadConfig(
+      writeToml(
+        `vault_root = "/tmp/v"\n[assess]\nmax_issues_per_run = 5\nmin_severity = "high"\nnpm_bin = "pnpm"\n`,
+      ),
+    );
+    expect(cfg.assess).toEqual({
+      maxIssuesPerRun: 5,
+      minSeverity: "high",
+      npmBin: "pnpm",
+    });
+  });
+
+  it("rejects max_issues_per_run = 0 (min(1))", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/tmp/v"\n[assess]\nmax_issues_per_run = 0\n`)),
+    ).toThrow();
+  });
+
+  it("rejects min_severity = extreme (enum validation)", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/tmp/v"\n[assess]\nmin_severity = "extreme"\n`)),
+    ).toThrow();
+  });
+});
+
 describe("resolveConfigPath", () => {
   it("explicit path wins, resolved against cwd", () => {
     expect(resolveConfigPath("rel/c.toml", { cwd: () => "/base" })).toBe("/base/rel/c.toml");

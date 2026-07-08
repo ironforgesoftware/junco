@@ -68,6 +68,7 @@ function cfg(root: string): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,

@@ -69,6 +69,7 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
     requireApproval: true,
     plannerModelId: null,
   },
+  assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
 };
 
 function makeConfig(vaultRoot: string): Config {

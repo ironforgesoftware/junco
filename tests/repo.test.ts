@@ -155,6 +155,7 @@ function makeConfig(work: string, ghBin: string): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: "/tmp/junco-repo-test-state",
     logToFile: false,
     transcriptsEnabled: false,
