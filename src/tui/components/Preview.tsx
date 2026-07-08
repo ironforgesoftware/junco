@@ -1,7 +1,8 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, Transform } from "ink";
 import { theme } from "../theme.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
+import { hyperlink, shortResourceRef } from "../links.js";
 import { Spinner } from "./Spinner.js";
 
 export interface PreviewProps {
@@ -32,8 +33,9 @@ export function Preview({
   width,
   paneNumber = false,
 }: PreviewProps): React.JSX.Element {
-  // Reserved rows: borders ×2, pane title, issue heading (when an issue is shown), footer line.
-  const viewHeight = Math.max(1, height - (issue !== null ? 5 : 4));
+  // Reserved rows: borders ×2, pane title, footer line — plus, when an issue is
+  // shown, its heading and the ↗ link line (LINK_LINE_ROW in geometry.ts).
+  const viewHeight = Math.max(1, height - (issue !== null ? 6 : 4));
   const lines: string[] = [];
   if (body !== null) lines.push(...body.split("\n"));
   if (planComment !== null) lines.push("", "── plan ──", ...planComment.split("\n"));
@@ -60,6 +62,13 @@ export function Preview({
           #{issue.number} {issue.title}{" "}
           {st !== null && <Text color={stateMeta(st).color}>[{stateMeta(st).badge}]</Text>}
         </Text>
+      )}
+      {issue !== null && (
+        <Transform transform={(s) => hyperlink(s, issue.url)}>
+          <Text dimColor wrap="truncate">
+            ↗ {shortResourceRef(issue.url)}
+          </Text>
+        </Transform>
       )}
       {loading && (
         <Text dimColor>

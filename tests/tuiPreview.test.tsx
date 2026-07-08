@@ -65,4 +65,15 @@ describe("Preview", () => {
     expect(top).toContain("3 preview");
     expect(scrolled).toContain("3 preview");
   });
+  it("renders the ↗ link line directly under the heading", () => {
+    const f = render(<Preview {...base} issue={ISSUE} paneNumber />).lastFrame()!;
+    expect(f).toContain("↗ a/b#52");
+    // Fixed geometry row: border(0), title(1), heading(2), link(3) = LINK_LINE_ROW.
+    const rows = f.split("\n");
+    expect(rows[3]).toContain("↗");
+  });
+  it("no issue → no link line", () => {
+    const f = render(<Preview {...base} issue={null} />).lastFrame()!;
+    expect(f).not.toContain("↗");
+  });
 });
