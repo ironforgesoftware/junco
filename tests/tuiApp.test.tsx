@@ -37,7 +37,7 @@ const QUEUE_SNAP: QueueSnapshot = {
   running: [
     {
       id: "gh-acme-api-46",
-      github: { nwo: "acme/api", issue: 46, kind: "pr" },
+      github: { nwo: "acme/api", issue: 46, kind: "pr", external: false },
       turns: 3,
       lastTool: "bash",
       outputTokens: 500,
@@ -48,7 +48,7 @@ const QUEUE_SNAP: QueueSnapshot = {
   waiting: [
     {
       id: "gh-acme-api-51-plan",
-      github: { nwo: "acme/api", issue: 51, kind: "plan" },
+      github: { nwo: "acme/api", issue: 51, kind: "plan", external: false },
       kind: "plan",
       priority: "normal",
       retryCount: 0,

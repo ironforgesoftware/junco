@@ -114,7 +114,7 @@ describe("issueToTicket", () => {
     expect(parsed.hasRepo).toBe(true);
     expect(parsed.frontmatter.repo).toBe("/home/u/code/api");
     expect(parsed.frontmatter.pr_title).toBe("Add rate limiting");
-    expect(parsed.github).toEqual({ nwo: "acme/api", issue: 42, kind: "pr" });
+    expect(parsed.github).toEqual({ nwo: "acme/api", issue: 42, kind: "pr", external: false });
     expect(parsed.workdir).toBeNull();
     expect(parsed.body).toContain("# Add rate limiting");
     expect(parsed.body).toContain("Sliding window on /upload.");
@@ -137,7 +137,7 @@ describe("issueToTicket", () => {
     );
     const parsed = parseTicket(`/in/${t.id}.md`, t.content);
     expect(parsed.frontmatter.pr_title).toBe(`Fix: "it's broken" — #1 [urgent]`);
-    expect(parsed.github).toEqual({ nwo: "acme/api", issue: 42, kind: "pr" });
+    expect(parsed.github).toEqual({ nwo: "acme/api", issue: 42, kind: "pr", external: false });
   });
 
   it("handles an empty issue body (title-only ticket)", () => {

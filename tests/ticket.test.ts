@@ -76,7 +76,7 @@ describe("parseTicket", () => {
       "/q/a.md",
       `---\nid: gh-acme-api-42\nworkdir: /tmp/clone\ngithub:\n  nwo: acme/api\n  issue: 42\n  kind: ask\n---\nbody`,
     );
-    expect(t.github).toEqual({ nwo: "acme/api", issue: 42, kind: "ask" });
+    expect(t.github).toEqual({ nwo: "acme/api", issue: 42, kind: "ask", external: false });
     expect(t.workdir).toBe("/tmp/clone");
   });
 
@@ -101,5 +101,19 @@ describe("parseTicket", () => {
       `---\nid: gh-a-b-1-plan\nworkdir: /tmp/c\ngithub:\n  nwo: a/b\n  issue: 1\n  kind: plan\n---\nbody`,
     );
     expect(t.github?.kind).toBe("plan");
+  });
+
+  it("parses github.external true and defaults it to false", () => {
+    const withExt = parseTicket(
+      "t.md",
+      `---\nid: x\nrepo: /r\ngithub:\n  nwo: "o/r"\n  issue: 7\n  kind: pr\n  external: true\n---\nbody`,
+    );
+    expect(withExt.github).toEqual({ nwo: "o/r", issue: 7, kind: "pr", external: true });
+
+    const without = parseTicket(
+      "t.md",
+      `---\nid: x\nrepo: /r\ngithub:\n  nwo: "o/r"\n  issue: 7\n  kind: pr\n---\nbody`,
+    );
+    expect(without.github).toEqual({ nwo: "o/r", issue: 7, kind: "pr", external: false });
   });
 });

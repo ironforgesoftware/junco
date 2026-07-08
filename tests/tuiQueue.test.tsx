@@ -29,7 +29,7 @@ const BUSY: QueueSnapshot = {
   running: [
     {
       id: "gh-acme-api-46",
-      github: { nwo: "acme/api", issue: 46, kind: "pr" },
+      github: { nwo: "acme/api", issue: 46, kind: "pr", external: false },
       turns: 14,
       lastTool: "bash",
       outputTokens: 12345,
@@ -40,7 +40,7 @@ const BUSY: QueueSnapshot = {
   waiting: [
     {
       id: "gh-acme-api-51-plan",
-      github: { nwo: "acme/api", issue: 51, kind: "plan" },
+      github: { nwo: "acme/api", issue: 51, kind: "plan", external: false },
       kind: "plan",
       priority: "normal",
       retryCount: 0,
@@ -58,7 +58,7 @@ const BUSY: QueueSnapshot = {
     },
     {
       id: "gh-acme-api-52-plan",
-      github: { nwo: "acme/api", issue: 52, kind: "plan" },
+      github: { nwo: "acme/api", issue: 52, kind: "plan", external: false },
       kind: "plan",
       priority: "normal",
       retryCount: 1,
@@ -67,7 +67,7 @@ const BUSY: QueueSnapshot = {
     },
     {
       id: "gh-acme-api-53-plan",
-      github: { nwo: "acme/api", issue: 53, kind: "plan" },
+      github: { nwo: "acme/api", issue: 53, kind: "plan", external: false },
       kind: "plan",
       priority: "low",
       retryCount: 0,
@@ -79,9 +79,13 @@ const BUSY: QueueSnapshot = {
 
 describe("queueFmt", () => {
   it("queueLabel: bridged → #N word (pr→exec); manual → truncated id", () => {
-    expect(queueLabel({ nwo: "a/b", issue: 46, kind: "pr" }, "x")).toBe("#46 exec");
-    expect(queueLabel({ nwo: "a/b", issue: 9, kind: "plan" }, "x")).toBe("#9 plan");
-    expect(queueLabel({ nwo: "a/b", issue: 3, kind: "ask" }, "x")).toBe("#3 ask");
+    expect(queueLabel({ nwo: "a/b", issue: 46, kind: "pr", external: false }, "x")).toBe(
+      "#46 exec",
+    );
+    expect(queueLabel({ nwo: "a/b", issue: 9, kind: "plan", external: false }, "x")).toBe(
+      "#9 plan",
+    );
+    expect(queueLabel({ nwo: "a/b", issue: 3, kind: "ask", external: false }, "x")).toBe("#3 ask");
     expect(queueLabel(null, "manual-tide-fix")).toBe("manual-tide-fix");
     expect(queueLabel(null, "a".repeat(30))).toBe("a".repeat(23) + "…");
   });
@@ -130,13 +134,13 @@ describe("QueueView", () => {
     recent: [
       {
         id: "gh-acme-api-44",
-        github: { nwo: "acme/api", issue: 44, kind: "pr" },
+        github: { nwo: "acme/api", issue: 44, kind: "pr", external: false },
         status: "done",
         finishedAt: "2026-07-07T09:53:00Z",
       },
       {
         id: "gh-acme-api-40",
-        github: { nwo: "acme/api", issue: 40, kind: "pr" },
+        github: { nwo: "acme/api", issue: 40, kind: "pr", external: false },
         status: "failed",
         finishedAt: "2026-07-07T09:05:00Z",
       },

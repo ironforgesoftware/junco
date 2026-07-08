@@ -133,6 +133,8 @@ export interface TicketGithub {
   nwo: string;
   issue: number;
   kind: "pr" | "ask" | "plan";
+  /** Repo the operator does not control: reporter is a no-op for this ticket. */
+  external: boolean;
 }
 
 export interface Ticket {

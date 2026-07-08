@@ -108,7 +108,12 @@ describe("waiting list", () => {
       ["b-repo", "pr"],
       ["c-bare", "ask"],
     ]);
-    expect(snap.waiting[0].github).toEqual({ nwo: "acme/api", issue: 46, kind: "plan" });
+    expect(snap.waiting[0].github).toEqual({
+      nwo: "acme/api",
+      issue: 46,
+      kind: "plan",
+      external: false,
+    });
     expect(snap.waiting[1].github).toBeNull();
   });
 
@@ -155,7 +160,7 @@ describe("running", () => {
     expect(snap.running).toEqual([
       {
         id: "gh-acme-api-46",
-        github: { nwo: "acme/api", issue: 46, kind: "pr" },
+        github: { nwo: "acme/api", issue: 46, kind: "pr", external: false },
         turns: 14,
         lastTool: "bash",
         outputTokens: 12345,
@@ -195,7 +200,7 @@ describe("running", () => {
     expect(snap.running).toEqual([
       {
         id: "gh-acme-api-9-plan",
-        github: { nwo: "acme/api", issue: 9, kind: "plan" },
+        github: { nwo: "acme/api", issue: 9, kind: "plan", external: false },
         turns: null,
         lastTool: null,
         outputTokens: null,

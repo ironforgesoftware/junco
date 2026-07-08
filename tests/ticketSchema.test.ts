@@ -110,4 +110,10 @@ describe("describeTicketSchema()", () => {
     };
     expect(s.properties.github.properties?.kind.enum).toEqual(["pr", "ask", "plan"]);
   });
+
+  it("documents push_remote and github.external (additive contract)", () => {
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<string, any>;
+    expect(props.push_remote).toMatchObject({ type: "string", pattern: "^[A-Za-z0-9_-]+$" });
+    expect(props.github.properties.external).toMatchObject({ type: "boolean" });
+  });
 });

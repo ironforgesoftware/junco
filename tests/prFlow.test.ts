@@ -701,7 +701,7 @@ esac
       `---\nid: offpush\nrepo: ${h.work}\n---\n# Add a feature\n\nDo it.\n`,
     );
     // A bridged ticket → the queued op carries a finalize block.
-    task.github = { nwo: "owner/repo", issue: 7, kind: "pr" };
+    task.github = { nwo: "owner/repo", issue: 7, kind: "pr", external: false };
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true }),
       dirs: { done: h.done, failed: h.failed },
@@ -863,13 +863,13 @@ describe("buildPrBody github provenance", () => {
   } as never;
 
   it("appends a Closes line for bridged pr tickets", () => {
-    const t = bodyTicket({ nwo: "acme/api", issue: 42, kind: "pr" });
+    const t = bodyTicket({ nwo: "acme/api", issue: 42, kind: "pr", external: false });
     expect(buildPrBody(t, ctx, emptyOutcome, okResult)).toContain("Closes acme/api#42");
   });
 
   it("omits the Closes line for local tickets and ask tickets", () => {
     expect(buildPrBody(bodyTicket(null), ctx, emptyOutcome, okResult)).not.toContain("Closes ");
-    const ask = bodyTicket({ nwo: "acme/api", issue: 42, kind: "ask" });
+    const ask = bodyTicket({ nwo: "acme/api", issue: 42, kind: "ask", external: false });
     expect(buildPrBody(ask, ctx, emptyOutcome, okResult)).not.toContain("Closes ");
   });
 

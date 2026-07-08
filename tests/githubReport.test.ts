@@ -22,7 +22,7 @@ const ticket = (github: Ticket["github"]): Ticket => ({
   github,
   workdir: null,
 });
-const gt = { nwo: "acme/api", issue: 42, kind: "pr" as const };
+const gt = { nwo: "acme/api", issue: 42, kind: "pr" as const, external: false };
 const out = (o: Partial<TicketOutcome>): TicketOutcome => ({
   kind: "pr",
   status: "completed",
@@ -198,7 +198,7 @@ describe("makeGithubReporter", () => {
 });
 
 describe("plan-kind reporting", () => {
-  const planTicket = ticket({ nwo: "acme/api", issue: 42, kind: "plan" });
+  const planTicket = ticket({ nwo: "acme/api", issue: 42, kind: "plan", external: false });
   // 4-backtick outer fence wrapping an inner ```bash block (the template
   // mandates one in ## Verification) — must NOT truncate at the inner fence.
   const goodFinal = out({
