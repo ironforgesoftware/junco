@@ -28,6 +28,7 @@ import { parseTicket } from "../src/ticket.js";
 import { listOps, type OutboxOp } from "../src/githubOutbox.js";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
+import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -816,6 +817,164 @@ esac
 });
 
 // ---------------------------------------------------------------------------
+// Fork PR flow (Task 10) — push to a non-origin remote, open the PR against
+// upstream with a cross-repo --head, and keep the outbox silent on the upstream
+// issue for external tickets.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fork-flavoured harness: `origin` -> upstream.git, `fork` -> a github.com URL
+ * rewritten (via insteadOf) to a local fork.git. Shaped as the module's
+ * `Harness` so makeConfig/makeTicket/ctxFor/commitFactory all apply unchanged.
+ * The fake gh answers `repo view` with the UPSTREAM nwo and records `pr create`
+ * argv to `argsFile` so the cross-repo --head can be asserted.
+ */
+function setupFork(): {
+  h: Harness;
+  upstream: string;
+  forkRemote: string;
+  argsFile: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), "junco-prflow-fork-"));
+  const fh = setupForkHarness(root); // creates upstream.git, fork.git, work under root
+  const wtsRoot = join(root, "wts");
+  const processing = join(root, "processing");
+  const done = join(root, "done");
+  const failed = join(root, "failed");
+  [wtsRoot, processing, done, failed].forEach((d) => mkdirSync(d, { recursive: true }));
+
+  const argsFile = join(root, "gh-args.log");
+  const ghBin = join(root, "fake-gh-fork.sh");
+  writeFileSync(
+    ghBin,
+    `#!/bin/sh
+args="$*"
+case "$args" in
+  "repo view --json nameWithOwner -q .nameWithOwner"*)
+    echo "\${FAKE_GH_NWO:-up/stream}"; exit 0 ;;
+  "pr create "*)
+    printf '%s\\n' "$*" >> ${JSON.stringify(argsFile)}
+    echo "https://github.com/up/stream/pull/7"; exit 0 ;;
+  *)
+    echo "fake-gh: unhandled: $args" >&2; exit 1 ;;
+esac
+`,
+    "utf8",
+  );
+  chmodSync(ghBin, 0o755);
+
+  const h: Harness = {
+    root,
+    remote: fh.upstream,
+    work: fh.work,
+    wtsRoot,
+    ghBin,
+    processing,
+    done,
+    failed,
+  };
+  return { h, upstream: fh.upstream, forkRemote: fh.forkRemote, argsFile };
+}
+
+/** External fork ticket: push_remote fork + a bridged, external github block. */
+function forkTicketContent(work: string): string {
+  return `---
+id: gh-up-stream-7
+repo: ${JSON.stringify(work)}
+push_remote: fork
+pr_title: "Fix the thing"
+github:
+  nwo: "up/stream"
+  issue: 7
+  kind: pr
+  external: true
+---
+# Fix the thing
+`;
+}
+
+describe("runPrFlow — fork PR flow", () => {
+  let h: Harness;
+  let upstream: string;
+  let forkRemote: string;
+  let argsFile: string;
+
+  beforeEach(() => {
+    ({ h, upstream, forkRemote, argsFile } = setupFork());
+  });
+  afterEach(() => {
+    rmSync(h.root, { recursive: true, force: true });
+  });
+
+  it("fork ticket: pushes to the fork, opens PR --head me:branch against upstream", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(h, "gh-up-stream-7.md", forkTicketContent(h.work));
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.prUrl).toBe("https://github.com/up/stream/pull/7");
+    expect(readFileSync(flow.dst, "utf8")).toContain("pushed: true");
+
+    // Branch landed on the FORK bare, not upstream.
+    expect(
+      run(["git", "-C", forkRemote, "rev-parse", "refs/heads/junco/gh-up-stream-7"]).trim(),
+    ).toBeTruthy();
+    expect(() =>
+      run(["git", "-C", upstream, "rev-parse", "refs/heads/junco/gh-up-stream-7"]),
+    ).toThrow();
+
+    // gh pr create carried the cross-repo head form <fork-owner>:<branch>.
+    const create = readFileSync(argsFile, "utf8");
+    expect(create).toContain("--head me:junco/gh-up-stream-7");
+    expect(create).toContain("--repo up/stream");
+  }, 30000);
+
+  it("offline fork ticket: queued pr op has remote/head set and finalize null (external)", async () => {
+    // A git shim that fails only `push` with a network-shaped stderr → the whole
+    // push→PR→finalize endgame parks in the outbox. Everything else (config,
+    // ls-remote, fetch, worktree add) delegates to the real git.
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const NET = "connect: network is unreachable";
+    const gitBin = join(h.root, "git-offpush-fork.sh");
+    writeFileSync(
+      gitBin,
+      `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "push" ]; then
+    echo ${JSON.stringify(NET)} >&2
+    exit 1
+  fi
+done
+exec ${JSON.stringify(realGit)} "$@"
+`,
+      "utf8",
+    );
+    chmodSync(gitBin, 0o755);
+
+    const cfg = makeConfig(h, { gitBin });
+    const { task, path } = makeTicket(h, "gh-up-stream-7.md", forkTicketContent(h.work));
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5, // don't eat real network backoff in tests
+    });
+
+    expect(flow.prQueued).toBe(true);
+    expect(TERMINAL_DONE_STATUSES.has(flow.status)).toBe(true);
+    const ops = listOps(cfg);
+    const pr = ops.find((o) => o.op.kind === "pr")!.op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(pr.remote).toBe("fork");
+    expect(pr.head).toBe(`${FORK_NWO.split("/")[0]}:junco/gh-up-stream-7`);
+    expect(pr.finalize).toBeNull(); // external — no upstream comment/label replay
+  }, 30000);
+});
+
+// ---------------------------------------------------------------------------
 // buildPrBody — github provenance (Closes line)
 // ---------------------------------------------------------------------------
 
@@ -860,11 +1019,20 @@ describe("buildPrBody github provenance", () => {
     labels: [],
     reviewers: [],
     amendsPr: null,
+    pushRemote: "origin",
+    forkNwo: null,
   } as never;
 
   it("appends a Closes line for bridged pr tickets", () => {
     const t = bodyTicket({ nwo: "acme/api", issue: 42, kind: "pr", external: false });
     expect(buildPrBody(t, ctx, emptyOutcome, okResult)).toContain("Closes acme/api#42");
+  });
+
+  it("external ticket PR body still carries the Closes footer", () => {
+    // External (fork) tickets still auto-close the upstream issue on merge — the
+    // deterministic Closes footer is fork-agnostic and must survive.
+    const t = bodyTicket({ nwo: "up/stream", issue: 7, kind: "pr", external: true });
+    expect(buildPrBody(t, ctx, emptyOutcome, okResult)).toContain("Closes up/stream#7");
   });
 
   it("omits the Closes line for local tickets and ask tickets", () => {
