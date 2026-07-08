@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
+import { Box } from "ink";
 import { render } from "ink-testing-library";
 import { PrList } from "../src/tui/components/PrList.js";
 import { type DashPr } from "../src/tui/prState.js";
@@ -427,42 +428,98 @@ describe("PrList", () => {
   });
 
   it("truncates title on one line when offline suffix present at narrow width (44 cols pane)", () => {
-    // Simulate pane 3 at 110-col terminal: 44 cols wide, height 20.
+    // Simulate pane 3 at 110-col terminal: 44 cols wide, height 20. PrList has
+    // no width prop of its own (PrListProps carries none) — the real caller
+    // constrains it by wrapping in a fixed-width Box, mirroring App.tsx's
+    // pane-3 wrapper: <Box width={layout.previewWidth} height={listHeight}>.
     // Long title that would collide with " offline · HH:MM" (~16 cols) suffix.
     const longTitle = "3 PRs · acme/rgesoftware/junco"; // ~31 chars; with suffix ~47 chars total
     const prs = Array.from({ length: 17 }, (_, i) => pr(i + 1, `PR ${i + 1}`));
 
     const f = render(
-      <PrList
-        prs={prs}
-        selected={0}
-        focused={true}
-        height={20}
-        width={44}
-        now={NOW}
-        staleAt="2026-07-07T12:00:00Z"
-        title={longTitle}
-      />,
+      <Box width={44} height={20}>
+        <PrList
+          prs={prs}
+          selected={0}
+          focused={true}
+          height={20}
+          now={NOW}
+          staleAt="2026-07-07T12:00:00Z"
+          title={longTitle}
+        />
+      </Box>,
     ).lastFrame()!;
 
     const lines = f.split("\n");
-    // Find the title line (contains the title text and offline marker)
+
+    // Find the title line (contains the title text).
     const titleLines = lines.filter((l) => l.includes("PRs"));
     expect(titleLines.length).toBe(1); // title must be on exactly one line
-
-    // The title line must contain both the title and offline suffix on that one line
-    expect(titleLines[0]).toContain("PRs");
     expect(titleLines[0]).toContain("offline");
 
-    // All expected PR rows must be visible: the window is height 20 - 4 (borders+title+footer) = 16 rows.
-    // With 17 PRs, rows 1-16 should be visible when selected=0.
-    const visiblePrLines = lines.filter((l) => l.match(/PR \d+/));
-    expect(visiblePrLines.length).toBeGreaterThanOrEqual(16);
+    // No line other than the title line carries a clock fragment. A wrapped
+    // title splits the trailing " offline · HH:MM" so "HH:MM" (or "· HH:MM")
+    // lands alone on the next row, sharing the box's border character —
+    // confirmed against the un-fixed component, which renders exactly that
+    // stray "  05:00" row directly under the title.
+    const clockLines = lines.filter((l) => /\d{2}:\d{2}/.test(l));
+    const strayClockLines = clockLines.filter((l) => !titleLines.includes(l));
+    expect(strayClockLines).toEqual([]);
 
-    // No wrapped fragments of "offline" on separate lines (e.g., line starting with "  offline" or " HH:MM" fragments)
-    const wrappedOfflineLines = lines.filter(
-      (l) => l.trim().startsWith("offline") || l.match(/^\s*\d{2}:\d{2}/),
-    );
-    expect(wrappedOfflineLines.length).toBe(0);
+    // PR rows must be visible AND contiguous. Match the row's leading "#N"
+    // badge, not the title cell's "PR N" text — that cell is flexGrow and
+    // legitimately truncates at these widths independent of the bug under
+    // test. Against the un-fixed component this catches #8 vanishing
+    // outright from the middle of the window (rows go straight from #7 to
+    // #9): the extra wrapped title line consumes one of the box's 20 fixed
+    // height rows, and Ink drops a row from the windowSlice rather than
+    // truncating the tail.
+    const prNumbers = lines
+      .map((l) => l.match(/#(\d+)/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => Number(m[1]));
+    expect(prNumbers.length).toBeGreaterThanOrEqual(16);
+    for (let i = 1; i < prNumbers.length; i++) {
+      expect(prNumbers[i]).toBe(prNumbers[i - 1] + 1);
+    }
+  });
+
+  it("truncates default title with offline suffix at narrow width (36 cols, 3-digit PR count)", () => {
+    // p-view latent variant: same collision, but the stock (non-overridden)
+    // title composed from prs.length, at an even narrower pane width.
+    const prs = Array.from({ length: 103 }, (_, i) => pr(i + 1, `PR ${i + 1}`));
+
+    const f = render(
+      <Box width={36} height={20}>
+        <PrList
+          prs={prs}
+          selected={0}
+          focused={true}
+          height={20}
+          now={NOW}
+          staleAt="2026-07-07T12:00:00Z"
+        />
+      </Box>,
+    ).lastFrame()!;
+
+    const lines = f.split("\n");
+
+    const titleLines = lines.filter((l) => l.includes("pull requests"));
+    expect(titleLines.length).toBe(1);
+    expect(titleLines[0]).toContain("103");
+    expect(titleLines[0]).toContain("offline");
+
+    const clockLines = lines.filter((l) => /\d{2}:\d{2}/.test(l));
+    const strayClockLines = clockLines.filter((l) => !titleLines.includes(l));
+    expect(strayClockLines).toEqual([]);
+
+    const prNumbers = lines
+      .map((l) => l.match(/#(\d+)/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => Number(m[1]));
+    expect(prNumbers.length).toBeGreaterThanOrEqual(16);
+    for (let i = 1; i < prNumbers.length; i++) {
+      expect(prNumbers[i]).toBe(prNumbers[i - 1] + 1);
+    }
   });
 });
