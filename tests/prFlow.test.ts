@@ -359,9 +359,9 @@ Stay put.
 
     let agentCalled = false;
     const { dst } = await runPrFlow(cfg, task, path, ctx, {
-      sessionFactoryFor: () => {
+      sessionFactoryFor: (cfg2, cwd) => () => {
         agentCalled = true;
-        return commitFactory({ commit: true })(cfg, h.wtsRoot)();
+        return commitFactory({ commit: true })(cfg2, cwd)();
       },
       dirs: { done: h.done, failed: h.failed },
     });

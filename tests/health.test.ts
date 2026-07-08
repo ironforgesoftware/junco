@@ -93,8 +93,11 @@ describe("endpointReachable", () => {
     let capturedUrl: string | undefined;
     let capturedHeaders: Record<string, string> | undefined;
 
-    const fetchFn = async (url: string, init?: RequestInit): Promise<Response> => {
-      capturedUrl = url;
+    const fetchFn = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      capturedUrl = String(input);
       capturedHeaders = init?.headers as Record<string, string>;
       return { ok: true } as Response;
     };

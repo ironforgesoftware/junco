@@ -152,7 +152,7 @@ describe("PrPreview", () => {
       headRefName: "junco/task-123-fix-widget",
     });
     const f = render(
-      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} />,
+      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />,
     ).lastFrame()!;
 
     expect(f).toContain("ticket: task-123-fix-widget");
@@ -163,7 +163,7 @@ describe("PrPreview", () => {
       headRefName: "feature/hand-authored",
     });
     const f = render(
-      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} />,
+      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />,
     ).lastFrame()!;
 
     expect(f).toContain("ticket: —");
@@ -208,7 +208,7 @@ describe("PrPreview", () => {
       headRefName: longBranch,
     });
     const f = render(
-      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} />,
+      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />,
     ).lastFrame()!;
 
     // Should contain slug-tail at the end (might lose 1-2 chars due to rendering width constraints)

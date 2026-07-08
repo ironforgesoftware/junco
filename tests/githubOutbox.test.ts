@@ -21,13 +21,13 @@ import type { Config } from "../src/types.js";
 function cfgAt(root: string): Config {
   return { stateDir: root } as unknown as Config;
 }
-const LABELS = {
+const LABELS: Extract<OutboxOp, { kind: "labels" }> = {
   kind: "labels",
   nwo: "a/b",
   issue: 7,
   add: ["junco:approved"],
   remove: [],
-} as const;
+};
 
 describe("outbox store", () => {
   it("enqueue writes one atomic JSON file; list round-trips the envelope", () => {

@@ -594,7 +594,7 @@ describe("run(['init', '--config', p])", () => {
 
 describe("run(['init']) — wizard routing", () => {
   it("runs the wizard when no config exists (and passes yes:false)", async () => {
-    const wizard = vi.fn(async () => 0);
+    const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
     const code = await run(["init", "--config", "/nope/config.toml"], {
       existsFn: () => false,
       runInitWizardFn: wizard,
@@ -606,7 +606,7 @@ describe("run(['init']) — wizard routing", () => {
   });
 
   it("passes --yes through to the wizard", async () => {
-    const wizard = vi.fn(async () => 0);
+    const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
     await run(["init", "--yes", "--config", "/nope/config.toml"], {
       existsFn: () => false,
       runInitWizardFn: wizard,

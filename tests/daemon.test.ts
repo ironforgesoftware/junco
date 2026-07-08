@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "../src/types.js";
 import type { ClaimedWork } from "../src/runOnce.js";
-import type { HealthServerHandle } from "../src/healthServer.js";
+import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import {
@@ -485,7 +485,7 @@ describe("mainLoop — observability", () => {
     const cfg = makeConfig({ healthEnabled: true });
     const stop = new StopFlag();
     const handle = makeFakeHealthHandle();
-    const startHealthServerFn = vi.fn(async () => handle);
+    const startHealthServerFn = vi.fn(async (_opts: HealthServerOpts) => handle);
     const { deps } = makeDeps({
       startHealthServerFn,
       runOnceFn: vi.fn(async () => false),
@@ -498,7 +498,7 @@ describe("mainLoop — observability", () => {
 
     expect(startHealthServerFn).toHaveBeenCalledTimes(1);
     // It receives the configured host/port + the metrics singleton + a probe.
-    const arg = startHealthServerFn.mock.calls[0][0];
+    const arg = startHealthServerFn.mock.calls[0]![0]!;
     expect(arg.host).toBe(cfg.healthHost);
     expect(arg.port).toBe(cfg.healthPort);
     expect(arg.metrics).toBe(metrics);

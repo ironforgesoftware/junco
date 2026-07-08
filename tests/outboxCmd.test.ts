@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runOutboxCommand } from "../src/outboxCmd.js";
-import { outboxPaths, enqueueOp, MAX_OP_ATTEMPTS } from "../src/githubOutbox.js";
+import { outboxPaths, enqueueOp, MAX_OP_ATTEMPTS, type OutboxOp } from "../src/githubOutbox.js";
 import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
 
@@ -11,13 +11,13 @@ function cfgAt(root: string): Config {
   return { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
 }
 
-const LABELS = {
+const LABELS: Extract<OutboxOp, { kind: "labels" }> = {
   kind: "labels",
   nwo: "a/b",
   issue: 7,
   add: ["junco:approved"],
   remove: [],
-} as const;
+};
 
 /** Write a StoredOp file directly (bypassing enqueueOp) so attempts/lastError
  * can be pinned without burning real flush cycles. */
