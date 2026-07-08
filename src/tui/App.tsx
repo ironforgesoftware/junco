@@ -150,6 +150,11 @@ export function App(props: AppProps): React.JSX.Element {
   const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
   // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
   const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
+  // Freshness stamps: when each pane's data last came back fresh from GitHub.
+  // Cache-served (offline) loads do NOT update these — the stamp then shows the
+  // cache's own age via staleAt, which outranks fetchedAt in the panes.
+  const [issuesFetchedAt, setIssuesFetchedAt] = useState<Record<string, string>>({});
+  const [prsFetchedAt, setPrsFetchedAt] = useState<string | null>(null);
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
   const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
@@ -342,6 +347,9 @@ export function App(props: AppProps): React.JSX.Element {
         if (res.ok) {
           setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
           setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
+          if (res.value.staleAt === null) {
+            setIssuesFetchedAt((prev) => ({ ...prev, [nwo]: new Date().toISOString() }));
+          }
         } else {
           showToast("error", res.error);
         }
@@ -371,6 +379,9 @@ export function App(props: AppProps): React.JSX.Element {
         }
         setPrs(sortPrs(all));
         setPrStaleAt(oldestStale);
+        // Stamp only when at least one repo answered — an all-repos-down poll must
+        // not claim the aggregate is fresh.
+        if (results.some((r) => r.ok)) setPrsFetchedAt(new Date().toISOString());
       });
     },
     [client, repoMappings],
@@ -670,6 +681,12 @@ export function App(props: AppProps): React.JSX.Element {
       return rest;
     });
     setStaleAt((prev) => {
+      if (!(gone in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[gone];
+      return rest;
+    });
+    setIssuesFetchedAt((prev) => {
       if (!(gone in prev)) return prev;
       const rest = { ...prev };
       delete rest[gone];
@@ -1088,6 +1105,7 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={prStaleAt}
+          fetchedAt={prsFetchedAt}
           window={prWindow}
         />
       ) : (
@@ -1102,6 +1120,7 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
+          fetchedAt={currentNwo ? (issuesFetchedAt[currentNwo] ?? null) : null}
           window={issueWindow}
         />
       )}

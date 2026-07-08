@@ -15,6 +15,15 @@ export function relTime(iso: string, now: Date): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+/** relTime with a seconds tier below one minute — the pane freshness stamp.
+ * Future timestamps clamp to 0s (the 2s poll clock can lag the fetch clock). */
+export function relTimeShort(iso: string, now: Date): string {
+  const ms = Math.max(0, now.getTime() - (Date.parse(iso) || now.getTime()));
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return relTime(iso, now);
+}
+
 export interface IssueListProps {
   issues: DashIssue[]; // already filtered by the App
   trigger: string;
@@ -27,6 +36,8 @@ export interface IssueListProps {
   now: Date;
   /** listIssues' cache-served fetchedAt (offline) — null when the list is fresh. */
   staleAt: string | null;
+  /** Last fresh listIssues completion — the ↻ stamp; staleAt (cache age) wins when offline. */
+  fetchedAt: string | null;
   window: { start: number; end: number };
 }
 
@@ -43,6 +54,7 @@ export function IssueList({
   height,
   now,
   staleAt,
+  fetchedAt,
   window,
 }: IssueListProps): React.JSX.Element {
   return (
@@ -67,6 +79,9 @@ export function IssueList({
             {" "}
             <Spinner />
           </>
+        )}
+        {(staleAt ?? fetchedAt) !== null && (
+          <Text dimColor> ↻ {relTimeShort((staleAt ?? fetchedAt) as string, now)}</Text>
         )}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>

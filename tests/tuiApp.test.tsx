@@ -272,6 +272,19 @@ describe("App", () => {
     expect(r.lastFrame()).toContain("plan-ready"); // sorted: #9 first, but both visible
   });
 
+  it("shows the freshness stamp after issues load, and in the PRs view", async () => {
+    const { client } = makeClient(
+      { "acme/api": [rawIssue] },
+      { prsByRepo: { "acme/api": [makePr()] } },
+    );
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    expect(r.lastFrame()).toContain("↻ 0s"); // fetched moments ago
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("pull requests"));
+    await until(() => (r.lastFrame() ?? "").includes("↻ 0s"));
+  });
+
   it("dispatch on a raw issue applies the action optimistically", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());

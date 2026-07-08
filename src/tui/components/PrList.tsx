@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
 import { fmtClock } from "../queueFmt.js";
-import { relTime } from "./IssueList.js";
+import { relTime, relTimeShort } from "./IssueList.js";
 
 function checksToString(checks: {
   pass: number;
@@ -29,6 +29,8 @@ export interface PrListProps {
   height: number;
   now: Date;
   staleAt: string | null; // any repo served from cache → oldest fetchedAt
+  /** Last fresh listPrs completion — the ↻ stamp; staleAt (cache age) wins when offline. */
+  fetchedAt: string | null;
   window: { start: number; end: number };
 }
 
@@ -41,6 +43,7 @@ export function PrList({
   height,
   now,
   staleAt,
+  fetchedAt,
   window,
 }: PrListProps): React.JSX.Element {
   return (
@@ -54,6 +57,9 @@ export function PrList({
     >
       <Text bold color={focused ? theme.accent : undefined}>
         p pull requests · {prs.length}
+        {(staleAt ?? fetchedAt) !== null && (
+          <Text dimColor> ↻ {relTimeShort((staleAt ?? fetchedAt) as string, now)}</Text>
+        )}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
       {prs.length === 0 && (

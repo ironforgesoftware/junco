@@ -48,6 +48,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -65,6 +66,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -87,6 +89,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -120,6 +123,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: 4 }}
       />,
     ).lastFrame()!;
@@ -150,6 +154,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: 3 }}
       />,
     ).lastFrame()!;
@@ -171,6 +176,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: 2 }}
       />,
     ).lastFrame()!;
@@ -189,6 +195,7 @@ describe("PrList", () => {
         height={12}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={windowSlice(many.length, listRowsHeight(12), 39, 0)}
       />,
     ).lastFrame()!;
@@ -207,6 +214,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: 0 }}
       />,
     ).lastFrame()!;
@@ -224,6 +232,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt="2026-07-07T12:00:00Z"
+        fetchedAt={null}
         window={{ start: 0, end: 0 }}
       />,
     ).lastFrame()!;
@@ -242,6 +251,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt="2026-07-07T12:00:00Z"
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -260,6 +270,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -271,6 +282,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -299,6 +311,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -332,6 +345,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -368,6 +382,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
@@ -390,6 +405,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
         window={{ start: 0, end: prs.length }}
       />,
     );
@@ -400,5 +416,23 @@ describe("PrList", () => {
     // This is hard to test without color inspection, but we can at least verify both appear
     expect(f).toContain("#42");
     expect(f).toContain("#43");
+  });
+
+  it("renders ↻ age from fetchedAt", () => {
+    const now = new Date("2026-07-08T12:00:00Z");
+    const prs = [pr(42, "Fix widget")];
+    const f = render(
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={now}
+        staleAt={null}
+        fetchedAt="2026-07-08T11:59:15Z"
+        window={{ start: 0, end: prs.length }}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("↻ 45s");
   });
 });
