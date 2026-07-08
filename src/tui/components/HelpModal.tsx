@@ -67,6 +67,8 @@ export function HelpModal({
           ["w", "add repo to watchlist"],
           ["x", "unwatch repo"],
           ["r", "refresh now"],
+          ["s", "assess the selected repo (audit for vulnerabilities, file issues)"],
+          ["S", "assess with --auto-plan (findings carry the trigger label)"],
           ["t", "queue view"],
           ["p", "PR tracking — junco-authored PRs across watched repos"],
           [":", "command palette"],

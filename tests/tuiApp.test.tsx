@@ -831,6 +831,108 @@ describe("command palette + focus keys", () => {
   });
 });
 
+describe("assess hotkey (s/S)", () => {
+  const wl7 = () => join(mkdtempSync(join(tmpdir(), "junco-assess-")), "wl.json");
+
+  function makeAssessRunner(result: Partial<CliRunResult> = {}) {
+    const runs: [string, string[]][] = [];
+    const runCliFn = async (name: string, extraArgs: string[]): Promise<CliRunResult> => {
+      runs.push([name, extraArgs]);
+      return { code: 0, output: "queued: /x/inbox/assess-acme-api.md", timedOut: false, ...result };
+    };
+    return { runs, runCliFn };
+  }
+
+  it("s calls the runner once with (assess, [nwo]); success exit shows a toast with the nwo", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").includes("acme/api: queued:"));
+    expect(runs).toEqual([["assess", ["acme/api"]]]);
+  });
+
+  it("S includes --auto-plan in the runner args", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("S");
+    await until(() => runs.length > 0);
+    expect(runs).toEqual([["assess", ["acme/api", "--auto-plan"]]]);
+  });
+
+  it("nonzero exit shows an error toast with the first non-empty output line", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runCliFn } = makeAssessRunner({
+      code: 1,
+      output: "\njunco assess: 'acme/api' is not watched — add it under [[github.repos]]\n",
+    });
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").includes("is not watched"));
+  });
+
+  it("no watched repos: s shows an error toast and never calls the runner", async () => {
+    const { client } = makeClient({});
+    const { runs, runCliFn } = makeAssessRunner();
+    const file = wl7();
+    const r = render(
+      <App
+        client={client}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[]}
+        watchlistFile={file}
+        configPath="/x/config.toml"
+        clonesDir={CLONES_DIR}
+        issuePollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => QUEUE_SNAP}
+        runCliFn={runCliFn}
+        sizeOverride={{ columns: 100, rows: 30 }}
+        onExit={() => {}}
+      />,
+    );
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").toLowerCase().includes("no repo selected"));
+    expect(runs).toHaveLength(0);
+  });
+
+  it("double press while in flight: exactly one runner call; the second press toasts already-running", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const runs: [string, string[]][] = [];
+    const runCliFn = (name: string, extraArgs: string[]): Promise<CliRunResult> => {
+      runs.push([name, extraArgs]);
+      return new Promise<CliRunResult>(() => {}); // never resolves — still "in flight"
+    };
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("s");
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").toLowerCase().includes("already running"));
+    expect(runs).toEqual([["assess", ["acme/api"]]]);
+  });
+
+  it("s while the / filter input is active does not trigger the runner", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("/"); // enter filter-typing mode
+    await tick();
+    r.stdin.write("s"); // captured as filter text, not the assess hotkey
+    await tick();
+    expect(r.lastFrame()).toContain("/s"); // landed in the filter chip
+    expect(runs).toHaveLength(0);
+  });
+});
+
 describe("auto-clone add-repo", () => {
   const wl3 = () => join(mkdtempSync(join(tmpdir(), "junco-ac-")), "wl.json");
 

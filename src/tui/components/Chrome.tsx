@@ -234,6 +234,7 @@ export function hintsFor(
       ["w", "add repo"],
       ["x", "unwatch"],
       ["r", "refresh"],
+      ["s", "assess"],
       [":", "commands"],
       ["?", "help"],
       ["q", "quit"],

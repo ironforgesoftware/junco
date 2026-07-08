@@ -112,6 +112,17 @@ function truncateNwoStart(nwo: string): string {
   return `…${nwo.slice(nwo.length - (NWO_MAX_WIDTH - 1))}`;
 }
 
+/** First non-empty, trimmed line of a captured CLI output — where assessCmd's
+ * queued / "not watched" / "already queued" messages live (src/assessCmd.ts
+ * prints exactly one line per outcome, sometimes followed by blank padding). */
+function firstNonEmptyLine(s: string): string | null {
+  for (const raw of s.split("\n")) {
+    const line = raw.trim();
+    if (line) return line;
+  }
+  return null;
+}
+
 /** Compute the optimistic label set for an action — the operator sees motion
  * immediately; the bridge later reconciles to the authoritative labels. */
 function optimisticLabels(action: DashAction, labels: string[], trigger: string): string[] {
@@ -581,6 +592,53 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, [client, currentNwo, currentIssue, showToast]);
 
+  // Repos currently mid-`assess` — guards a second `s`/`S` press on the same
+  // repo from double-spawning the CLI while the first run is still going.
+  const assessInFlightRef = useRef<Set<string>>(new Set());
+  // Flips false on unmount. `assess` spawns a real subprocess (cliRunner's
+  // default timeout is 120s) — the `.then` below must not setState after the
+  // dashboard has already exited.
+  const aliveRef = useRef(true);
+  useEffect(
+    () => () => {
+      aliveRef.current = false;
+    },
+    [],
+  );
+
+  // Fire-and-toast, mirroring `d`/`a`: no view switch, the selected repo's nwo
+  // is captured at press time, and the result surfaces as a toast whenever it
+  // lands (Toast renders at the Workspace level regardless of the current view).
+  const runAssess = useCallback(
+    (autoPlan: boolean) => {
+      if (!currentNwo) {
+        showToast("error", "no repo selected");
+        return;
+      }
+      const nwo = currentNwo;
+      if (assessInFlightRef.current.has(nwo)) {
+        showToast("info", "assess already running");
+        return;
+      }
+      assessInFlightRef.current.add(nwo);
+      showToast("info", `assessing ${nwo}…`);
+      const args = autoPlan ? [nwo, "--auto-plan"] : [nwo];
+      void runCliFn("assess", args).then((r) => {
+        assessInFlightRef.current.delete(nwo);
+        if (!aliveRef.current) return;
+        const line = firstNonEmptyLine(r.output);
+        if (r.code === 0) {
+          showToast("success", line ? `${nwo}: ${line}` : `assessed ${nwo}`);
+        } else {
+          // Nonzero exit: assessCmd's first line carries the reason ("not
+          // watched", "already queued", etc.) — relay it as-is.
+          showToast("error", line ?? `assess failed for ${nwo}`);
+        }
+      });
+    },
+    [currentNwo, runCliFn, showToast],
+  );
+
   // Elapsed ticker for a running palette command (1s resolution).
   useEffect(() => {
     if (!cmd?.running) return;
@@ -957,6 +1015,11 @@ export function App(props: AppProps): React.JSX.Element {
       }
       return;
     }
+    // `s`/`S` assess the rail-selected repo — global to the main view (the
+    // selection is global state), unlike `d`/`D`/`a` below which are scoped
+    // to the issues pane because they act on the selected ISSUE.
+    if (input === "s") return void runAssess(false);
+    if (input === "S") return void runAssess(true);
 
     if (pane === 1) {
       if (input === "j" || key.downArrow) {
