@@ -190,15 +190,15 @@ describe("App", () => {
   it("loads and renders issues for the selected repo", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue, readyIssue] });
     const r = renderApp(client, wl());
-    await tick();
-    expect(r.lastFrame()).toContain("#7 Fix uploads");
+    // Initial listIssues is async — bounded until-loop, never a fixed tick.
+    await until(() => (r.lastFrame() ?? "").includes("#7 Fix uploads"));
     expect(r.lastFrame()).toContain("plan-ready"); // sorted: #9 first, but both visible
   });
 
   it("dispatch on a raw issue applies the action optimistically", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t"); // focus issues pane
     await tick();
     r.stdin.write("d");
@@ -210,7 +210,7 @@ describe("App", () => {
   it("approve is refused on a raw issue with a reason toast (no client call)", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t");
     await tick();
     r.stdin.write("a");
@@ -222,7 +222,7 @@ describe("App", () => {
   it("failed action rolls back the optimistic update with a toast", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] }, { failActions: true });
     const r = renderApp(client, wl());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t");
     await tick();
     r.stdin.write("d");
@@ -235,7 +235,7 @@ describe("App", () => {
     const { client: base } = makeClient({ "acme/api": [rawIssue] });
     const client: DashboardClient = { ...base, applyAction: async () => okv({ queued: true }) };
     const r = renderApp(client, wl());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t"); // focus issues pane
     await tick();
     r.stdin.write("d");
@@ -261,10 +261,11 @@ describe("App", () => {
     r.stdin.write("/c/coral");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    // The submit kicks an async validate→write→load chain; a fixed tick races
+    // React's commit on slow runners (this exact class flaked a release gate).
+    await until(() => readWatchlist(file).entries.length > 0);
     expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
-    expect(r.lastFrame()).toContain("alx/coral");
+    await until(() => (r.lastFrame() ?? "").includes("alx/coral"));
   });
 
   it("unwatch removes watchlist entries but refuses config entries", async () => {
@@ -304,7 +305,7 @@ describe("App", () => {
     const second = [a7, { ...b8, updatedAt: "2026-07-06T14:00:00Z" }];
     const { client, actions } = makeSeqClient([first, second]);
     const r = renderApp(client, wl(), 60);
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // first load anchored
     r.stdin.write("\t"); // focus issues pane; selection anchored to #7
     await wait(140); // let the interval poll deliver the re-sorted `second`
     r.stdin.write("d"); // dispatch the SELECTED issue
@@ -461,7 +462,7 @@ describe("command palette + focus keys", () => {
   it("i jumps to the issues pane (d then dispatches the selected issue)", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl2());
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("i"); // issues pane via direct jump — no tab needed
     await tick();
     r.stdin.write("d");
@@ -481,12 +482,12 @@ describe("command palette + focus keys", () => {
     r.stdin.write("doctor");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    // Async runCliFn resolution — bounded until-loop, never fixed ticks
+    // (this assertion raced React's commit on a slow CI runner).
+    await until(() => (r.lastFrame() ?? "").includes("captured output line"));
     expect(runs).toEqual([["doctor", []]]);
     const f = r.lastFrame()!;
     expect(f).toContain("junco doctor");
-    expect(f).toContain("captured output line");
     expect(f).toContain("exit 0");
   });
 
@@ -550,11 +551,10 @@ describe("command palette + focus keys", () => {
     r.stdin.write("restart");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    // Async runCliFn resolution — bounded until-loop, never fixed ticks.
+    await until(() => (r.lastFrame() ?? "").includes("restarted: pid 1 -> 2"));
     expect(runs).toEqual([["restart", []]]);
     const f = r.lastFrame()!;
-    expect(f).toContain("restarted: pid 1 -> 2");
     expect(f).toContain("exit 0"); // app alive and rendering post-resolve
   });
 
@@ -568,8 +568,7 @@ describe("command palette + focus keys", () => {
     r.stdin.write("status");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("captured output line")); // output view up
     r.stdin.write(ESC); // -> palette
     await tick();
     expect(r.lastFrame()).toContain("Runs the junco CLI against this dashboard's config");
@@ -595,8 +594,9 @@ describe("auto-clone add-repo", () => {
     r.stdin.write("\r"); // -> path field
     await tick();
     r.stdin.write("\r"); // EMPTY path -> auto-clone
-    await tick();
-    await tick();
+    // Async clone→validate→write chain — bounded until-loop (fixed ticks
+    // raced React's commit on slow CI runners).
+    await until(() => readWatchlist(file).entries.length > 0);
     const managed = join(CLONES_DIR, "alx", "coral");
     expect(cloned).toEqual([managed]);
     expect(validatePaths).toEqual([managed]);
@@ -616,9 +616,9 @@ describe("auto-clone add-repo", () => {
     r.stdin.write("\r");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
-    expect(r.lastFrame()).toContain("clone exploded");
+    // Async validate→clone chain — bounded until-loop, never fixed ticks
+    // (flaked on CI: assertion ran before the clone rejection committed).
+    await until(() => (r.lastFrame() ?? "").includes("clone exploded"));
     expect(readWatchlist(file).entries).toEqual([]);
   });
 });
@@ -638,8 +638,8 @@ describe("URL paste in add-repo", () => {
     r.stdin.write("\r");
     await tick();
     r.stdin.write("\r"); // empty path -> auto-clone
-    await tick();
-    await tick();
+    // Async clone→validate→write chain — bounded until-loop, not fixed ticks.
+    await until(() => readWatchlist(file).entries.length > 0);
     const managed = join(CLONES_DIR, "alxedelweiss", "hawaiian-coral");
     expect(cloned).toEqual([managed]);
     expect(validatePaths).toEqual([managed]);
@@ -660,8 +660,7 @@ describe("URL paste in add-repo", () => {
     r.stdin.write("\r");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    expect(r.lastFrame()).toContain("owner/repo or a github.com URL");
+    await until(() => (r.lastFrame() ?? "").includes("owner/repo or a github.com URL"));
     expect(cloned).toEqual([]);
     expect(readWatchlist(file).entries).toEqual([]);
   });
