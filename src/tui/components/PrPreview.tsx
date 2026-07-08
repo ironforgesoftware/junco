@@ -11,6 +11,7 @@ export interface PrPreviewProps {
   height: number;
   width?: number; // set → fixed width; undefined → flexGrow 1
   focused: boolean;
+  titleLabel?: string; // pane title prefix; default "3 pr" for the p-view's pane-3 slot
 }
 
 function reviewDecisionToString(reviewDecision: string | null): string {
@@ -56,6 +57,7 @@ export function PrPreview({
   height,
   width,
   focused,
+  titleLabel = "3 pr",
 }: PrPreviewProps): React.JSX.Element {
   // Height budget (mirrors Preview.tsx): borders ×2 + pane title. Content rows
   // are built most-important-first so that slicing drops the least important
@@ -141,7 +143,8 @@ export function PrPreview({
       flexGrow={width === undefined ? 1 : undefined}
     >
       <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
-        3 pr{pr ? ` · #${pr.number}` : ""}
+        {titleLabel}
+        {pr ? ` · #${pr.number}` : ""}
       </Text>
 
       {pr === null && <Text dimColor>select a pull request — its status renders here</Text>}

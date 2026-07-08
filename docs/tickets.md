@@ -8,10 +8,11 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 
 ## Ticket flavors
 
-| Flavor             | Trigger                 | What happens                                                             |
-| ------------------ | ----------------------- | ------------------------------------------------------------------------ |
-| **Q&A ticket**     | No `repo:` field        | Agent answers in-place; result written back to the ticket file. No git.  |
-| **PR-flow ticket** | `repo: <absolute/path>` | Agent runs in an isolated git worktree; a draft PR is opened on success. |
+| Flavor                | Trigger                                            | What happens                                                                                                                                                         |
+| --------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Q&A ticket**        | No `repo:` field                                   | Agent answers in-place; result written back to the ticket file. No git.                                                                                              |
+| **PR-flow ticket**    | `repo: <absolute/path>`                            | Agent runs in an isolated git worktree; a draft PR is opened on success.                                                                                             |
+| **Assessment ticket** | `assess:` mapping present (checked before `repo:`) | `npm audit` + a read-only agent audit of the `repo:` target; findings file as GitHub issues instead of opening a PR. → [Vulnerability assessment guide](./assess.md) |
 
 ## Key frontmatter fields
 
@@ -31,6 +32,7 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 | `tools`           | string[]            | Per-ticket tool allowlist override. Q&A tickets default to a read-only subset (`read, grep, find, ls`); list tools explicitly (e.g. `[read, grep, bash]`) to opt in to more. |
 | `not_before`      | ISO datetime        | Don't claim this ticket before this UTC instant. Set by the worker for retry backoff; dispatchers may also set it to schedule work.                                          |
 | `retry_count`     | integer             | Worker-managed transparent-retry counter. Don't set by hand.                                                                                                                 |
+| `assess`          | mapping             | Selects the assessment flavor (see above). `{ auto_plan: bool }`. Machine-composed by `junco assess` — don't set by hand. → [Vulnerability assessment guide](./assess.md)    |
 
 ## Minimal Q&A ticket
 
@@ -142,7 +144,7 @@ You (or any harness)
 ▼
 GitHub draft PR (or answer written in-place for Q&A)
 
-````
+```
 
 **Plan-lint** runs before the agent starts. Bad tickets (invalid frontmatter, forbidden patterns, nonexistent labels) route directly to `failed/` without consuming any agent tokens.
 

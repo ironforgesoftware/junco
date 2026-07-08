@@ -72,6 +72,7 @@ function makeConfig(): { cfg: Config; root: string } {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,

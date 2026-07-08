@@ -100,7 +100,13 @@ log_level = "info"                # debug | info | warn | error
 state_dir = "~/.local/state/junco" # worker.log + transcripts/ live here.
 log_to_file = true                # Tee structured logs to <state_dir>/worker.log (10 MB rotation).
 transcripts = true                # Per-ticket event JSONL under <state_dir>/transcripts/.
-````
+
+# ── Vulnerability assessment (junco assess) ──────────────────────────────────
+[assess]
+max_issues_per_run = 20           # Cap on issues filed per assessment run. See docs/assess.md.
+min_severity = "low"              # Findings ranked below this are dropped. critical | high | medium | low
+npm_bin = "npm"                   # Binary for the dependency scan (`<npm_bin> audit --json`).
+```
 
 ## Key knobs to know
 

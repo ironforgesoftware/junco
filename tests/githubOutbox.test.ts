@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -11,10 +11,12 @@ import {
   flushOutbox,
   tryOrEnqueue,
   isOffline,
+  ensureFindingLabels,
   MAX_OP_ATTEMPTS,
   OUTBOX_MARKER_PREFIX,
   type OutboxOp,
 } from "../src/githubOutbox.js";
+import { findingMarker, FINDING_LABEL_SPECS } from "../src/findings.js";
 import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
 
@@ -28,6 +30,23 @@ const LABELS: Extract<OutboxOp, { kind: "labels" }> = {
   add: ["junco:approved"],
   remove: [],
 };
+
+/** Build an issue-create StoredOp for the outbox — mirrors the LABELS const
+ * above as a per-test fixture with overridable fields. */
+function mkIssueCreateOp(
+  overrides: Partial<Extract<OutboxOp, { kind: "issue-create" }>> = {},
+): OutboxOp {
+  const fingerprint = overrides.fingerprint ?? "deadbeefcafebabe";
+  return {
+    kind: "issue-create",
+    nwo: "a/b",
+    title: "[high] Vulnerable lodash (GHSA-xxxx-yyyy-zzzz)",
+    bodyText: `body text\n\n${findingMarker(fingerprint)}`,
+    labels: ["junco:finding", "severity/high"],
+    fingerprint,
+    ...overrides,
+  };
+}
 
 describe("outbox store", () => {
   it("enqueue writes one atomic JSON file; list round-trips the envelope", () => {
@@ -400,5 +419,178 @@ describe("flushOutbox", () => {
     });
     const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(r.sent).toBe(1);
+  });
+
+  describe("issue-create op", () => {
+    it("replay dedup: marker already present upstream skips create, op consumed", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-ic1-"));
+      const cfg = cfgAt(root);
+      const fp = "deadbeefcafebabe";
+      enqueueOp(cfg, "assess", mkIssueCreateOp({ fingerprint: fp }));
+      const f = fakes((_tool, args) => {
+        if (args[0] === "issue" && args[1] === "list") {
+          return { stdout: JSON.stringify([{ body: `some body\n${findingMarker(fp)}` }]) };
+        }
+        return undefined;
+      });
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+      expect(outboxDepth(cfg)).toBe(0);
+      expect(
+        f.calls.some((c) => c.tool === "gh" && c.args[0] === "issue" && c.args[1] === "create"),
+      ).toBe(false);
+    });
+
+    it("replay dedup: null issue bodies are tolerated (ignored), a later body's marker still dedups", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-ic1b-"));
+      const cfg = cfgAt(root);
+      const fp = "deadbeefcafebabe";
+      enqueueOp(cfg, "assess", mkIssueCreateOp({ fingerprint: fp }));
+      const f = fakes((_tool, args) => {
+        if (args[0] === "issue" && args[1] === "list") {
+          return {
+            stdout: JSON.stringify([{ body: null }, { body: `some body\n${findingMarker(fp)}` }]),
+          };
+        }
+        return undefined;
+      });
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+      expect(outboxDepth(cfg)).toBe(0);
+      expect(
+        f.calls.some((c) => c.tool === "gh" && c.args[0] === "issue" && c.args[1] === "create"),
+      ).toBe(false);
+    });
+
+    it("create path: labels first, then issue list, then issue create with title/body-file/labels", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-ic2-"));
+      const cfg = cfgAt(root);
+      const op = mkIssueCreateOp({}) as Extract<OutboxOp, { kind: "issue-create" }>;
+      enqueueOp(cfg, "assess", op);
+      let capturedBody: string | null = null;
+      const f = fakes((_tool, args) => {
+        if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
+        if (args[0] === "issue" && args[1] === "create") {
+          const idx = args.indexOf("--body-file");
+          capturedBody = readFileSync(args[idx + 1], "utf8");
+          return { stdout: "https://github.com/a/b/issues/1\n" };
+        }
+        return undefined;
+      });
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+
+      const kinds = f.calls.map((c) => c.args.slice(0, 2).join(" "));
+      expect(kinds).toEqual(["label create", "label create", "issue list", "issue create"]);
+
+      const createCall = f.calls[3];
+      expect(createCall.args).toContain("--title");
+      expect(createCall.args[createCall.args.indexOf("--title") + 1]).toBe(op.title);
+      for (const l of op.labels) expect(createCall.args).toContain(l);
+      expect(capturedBody).toBe(op.bodyText);
+    });
+
+    it("two duplicate ops in one flush converge to a single issue create", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-ic3-"));
+      const cfg = cfgAt(root);
+      const fp = "cafebabedeadbeef";
+      enqueueOp(cfg, "assess", mkIssueCreateOp({ fingerprint: fp }));
+      enqueueOp(cfg, "assess", mkIssueCreateOp({ fingerprint: fp }));
+      let recordedBody: string | null = null;
+      let createCount = 0;
+      const f = fakes((_tool, args) => {
+        if (args[0] === "issue" && args[1] === "list") {
+          return { stdout: JSON.stringify(recordedBody ? [{ body: recordedBody }] : []) };
+        }
+        if (args[0] === "issue" && args[1] === "create") {
+          createCount++;
+          const idx = args.indexOf("--body-file");
+          recordedBody = readFileSync(args[idx + 1], "utf8");
+          return { stdout: "https://github.com/a/b/issues/2\n" };
+        }
+        return undefined;
+      });
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 2, dead: 0, remaining: 0, offline: false });
+      expect(createCount).toBe(1);
+      expect(outboxDepth(cfg)).toBe(0);
+    });
+
+    it("offline: issue list network failure halts the flush, attempts untouched", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-ic4-"));
+      const cfg = cfgAt(root);
+      enqueueOp(cfg, "assess", mkIssueCreateOp({}));
+      const f = fakes((_tool, args) => {
+        if (args[0] === "issue" && args[1] === "list") throw NET_ERR;
+        return undefined;
+      });
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 0, dead: 0, remaining: 1, offline: true });
+      expect(listOps(cfg)[0].attempts).toBe(0);
+    });
+
+    it("dead-letters at MAX_OP_ATTEMPTS when issue create fails with a permanent error", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-ic5-"));
+      const cfg = cfgAt(root);
+      enqueueOp(cfg, "assess", mkIssueCreateOp({}));
+      const f = fakes((_tool, args) => {
+        if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
+        if (args[0] === "issue" && args[1] === "create") throw PERM_ERR;
+        return undefined;
+      });
+      for (let i = 1; i < MAX_OP_ATTEMPTS; i++) {
+        const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+        expect(r).toMatchObject({ sent: 0, dead: 0, remaining: 1 });
+        expect(listOps(cfg)[0].attempts).toBe(i);
+      }
+      const last = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(last).toMatchObject({ dead: 1, remaining: 0 });
+      expect(outboxDepth(cfg)).toBe(0);
+      expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1);
+      // Confirms the real issue-create path ran (labels + list) on every
+      // attempt, not e.g. an unknown-kind fallthrough that also happens to
+      // dead-letter after MAX_OP_ATTEMPTS.
+      expect(f.calls.filter((c) => c.args[0] === "issue" && c.args[1] === "list")).toHaveLength(
+        MAX_OP_ATTEMPTS,
+      );
+      expect(
+        f.calls.filter((c) => c.args[0] === "label" && c.args[1] === "create"),
+      ).not.toHaveLength(0);
+    });
+  });
+});
+
+describe("ensureFindingLabels", () => {
+  it("known labels get their FINDING_LABEL_SPECS color/description; unknown gets the neutral default; --force present", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-efl-"));
+    const cfg = cfgAt(root);
+    const f = fakes(() => undefined);
+    await ensureFindingLabels(cfg, "a/b", ["junco:finding", "custom-trigger"], f.ghFn);
+    expect(f.calls).toHaveLength(2);
+    const [, color, description] = FINDING_LABEL_SPECS[0];
+    expect(f.calls[0].args).toEqual([
+      "label",
+      "create",
+      "junco:finding",
+      "--repo",
+      "a/b",
+      "--color",
+      color,
+      "--description",
+      description,
+      "--force",
+    ]);
+    expect(f.calls[1].args).toEqual([
+      "label",
+      "create",
+      "custom-trigger",
+      "--repo",
+      "a/b",
+      "--color",
+      "ededed",
+      "--description",
+      "",
+      "--force",
+    ]);
   });
 });

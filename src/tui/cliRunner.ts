@@ -36,6 +36,11 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("retry", "<name…|--all>", "Move failed tickets back to the inbox"),
   cmd("outbox", "[flush]", "List or push the offline GitHub backlog"),
   cmd("prs", null, "List junco-authored pull requests"),
+  cmd(
+    "assess",
+    "<path|owner/repo> [--auto-plan]",
+    "Audit a repo for vulnerabilities and file GitHub issues",
+  ),
   cmd("doctor", null, "Preflight: config, git, gh auth, endpoint, model, dirs"),
   cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200", "--human"]),
   cmd("run-once", null, "Process one task and exit (no lock)"),

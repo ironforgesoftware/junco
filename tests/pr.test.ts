@@ -137,6 +137,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
   };
 }
 

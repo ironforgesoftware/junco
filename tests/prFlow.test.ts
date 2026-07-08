@@ -162,6 +162,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: join(h.root, "state"),
     logToFile: false,
     transcriptsEnabled: false,

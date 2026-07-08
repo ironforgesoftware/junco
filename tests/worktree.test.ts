@@ -150,6 +150,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
   };
 }
 
