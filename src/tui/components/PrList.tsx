@@ -64,7 +64,7 @@ export function PrList({
       flexGrow={1}
       height={height}
     >
-      <Text bold color={focused ? theme.accent : undefined}>
+      <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
         {title ?? `p pull requests · ${prs.length}`}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>

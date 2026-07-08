@@ -425,4 +425,44 @@ describe("PrList", () => {
     expect(f).toContain("p pull requests · 0");
     expect(f).toContain("no junco PRs found across watched repos");
   });
+
+  it("truncates title on one line when offline suffix present at narrow width (44 cols pane)", () => {
+    // Simulate pane 3 at 110-col terminal: 44 cols wide, height 20.
+    // Long title that would collide with " offline · HH:MM" (~16 cols) suffix.
+    const longTitle = "3 PRs · acme/rgesoftware/junco"; // ~31 chars; with suffix ~47 chars total
+    const prs = Array.from({ length: 17 }, (_, i) => pr(i + 1, `PR ${i + 1}`));
+
+    const f = render(
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        width={44}
+        now={NOW}
+        staleAt="2026-07-07T12:00:00Z"
+        title={longTitle}
+      />,
+    ).lastFrame()!;
+
+    const lines = f.split("\n");
+    // Find the title line (contains the title text and offline marker)
+    const titleLines = lines.filter((l) => l.includes("PRs"));
+    expect(titleLines.length).toBe(1); // title must be on exactly one line
+
+    // The title line must contain both the title and offline suffix on that one line
+    expect(titleLines[0]).toContain("PRs");
+    expect(titleLines[0]).toContain("offline");
+
+    // All expected PR rows must be visible: the window is height 20 - 4 (borders+title+footer) = 16 rows.
+    // With 17 PRs, rows 1-16 should be visible when selected=0.
+    const visiblePrLines = lines.filter((l) => l.match(/PR \d+/));
+    expect(visiblePrLines.length).toBeGreaterThanOrEqual(16);
+
+    // No wrapped fragments of "offline" on separate lines (e.g., line starting with "  offline" or " HH:MM" fragments)
+    const wrappedOfflineLines = lines.filter(
+      (l) => l.trim().startsWith("offline") || l.match(/^\s*\d{2}:\d{2}/),
+    );
+    expect(wrappedOfflineLines.length).toBe(0);
+  });
 });
