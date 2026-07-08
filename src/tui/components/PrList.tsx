@@ -1,7 +1,6 @@
-import React, { useRef } from "react";
+import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { windowSlice } from "../window.js";
 import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
 import { fmtClock } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
@@ -30,6 +29,7 @@ export interface PrListProps {
   height: number;
   now: Date;
   staleAt: string | null; // any repo served from cache → oldest fetchedAt
+  window: { start: number; end: number };
 }
 
 /** Pane 2: windowed PR rows with full-row selection bars and aligned
@@ -41,12 +41,8 @@ export function PrList({
   height,
   now,
   staleAt,
+  window,
 }: PrListProps): React.JSX.Element {
-  const listHeight = Math.max(1, height - 4); // borders + title + position line
-  const prev = useRef(0);
-  const { start, end } = windowSlice(prs.length, listHeight, selected, prev.current);
-  prev.current = start;
-
   return (
     <Box
       flexDirection="column"
@@ -65,8 +61,8 @@ export function PrList({
           no junco PRs found across watched repos — junco opens PRs from dispatched tickets
         </Text>
       )}
-      {prs.slice(start, end).map((prItem, i) => {
-        const idx = start + i;
+      {prs.slice(window.start, window.end).map((prItem, i) => {
+        const idx = window.start + i;
         const sel = idx === selected;
         const st = derivePrState(prItem);
         const meta = prStateMeta(st);
@@ -120,7 +116,7 @@ export function PrList({
         );
       })}
       <Box flexGrow={1} />
-      {prs.length > listHeight && (
+      {prs.length > window.end - window.start && (
         <Text dimColor>
           {Math.min(selected + 1, prs.length)}/{prs.length}
         </Text>

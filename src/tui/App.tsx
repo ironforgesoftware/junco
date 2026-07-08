@@ -19,6 +19,8 @@ import { join } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
 import { computeLayout } from "./layout.js";
+import { windowSlice } from "./window.js";
+import { listRowsHeight, railListHeight } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
 import { Header, hintsFor, type HintView } from "./components/Chrome.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
@@ -256,6 +258,34 @@ export function App(props: AppProps): React.JSX.Element {
         : Math.min(lastPrIdxRef.current, prs.length - 1);
   lastPrIdxRef.current = prIdxSafe;
   const selectedPr = prs[prIdxSafe] ?? null;
+
+  // Window slices live HERE (not inside the list components) so that rendering
+  // and mouse hit-testing share one offset — the sticky prevStart refs move up
+  // with them. Geometry helpers keep the budgets in lockstep with the panes.
+  const railPrev = useRef(0);
+  const railWindow = windowSlice(
+    repoMappings.length,
+    railListHeight(layout.bodyRows),
+    repoIdxSafe,
+    railPrev.current,
+  );
+  railPrev.current = railWindow.start;
+  const issuePrev = useRef(0);
+  const issueWindow = windowSlice(
+    filteredIssues.length,
+    listRowsHeight(layout.bodyRows),
+    issueIdxSafe,
+    issuePrev.current,
+  );
+  issuePrev.current = issueWindow.start;
+  const prPrev = useRef(0);
+  const prWindow = windowSlice(
+    prs.length,
+    listRowsHeight(layout.bodyRows),
+    prIdxSafe,
+    prPrev.current,
+  );
+  prPrev.current = prWindow.start;
 
   // Per-repo issue counts for the rail badges, derived from loaded issues.
   const repoRows: RailRepo[] = repoMappings.map((r) => {
@@ -1023,6 +1053,7 @@ export function App(props: AppProps): React.JSX.Element {
         queue={queueSnap}
         width={layout.railWidth}
         height={listHeight}
+        window={railWindow}
       />
       {view === "queue" ? (
         <QueueView snap={queueSnap} scroll={scroll} now={queueNow} height={listHeight} focused />
@@ -1057,6 +1088,7 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={prStaleAt}
+          window={prWindow}
         />
       ) : (
         <IssueList
@@ -1070,6 +1102,7 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
+          window={issueWindow}
         />
       )}
       {layout.mode === "wide" &&

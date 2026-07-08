@@ -1,7 +1,6 @@
-import React, { useRef } from "react";
+import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { windowSlice } from "../window.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
 import { Spinner } from "./Spinner.js";
 import { fmtClock } from "../queueFmt.js";
@@ -28,6 +27,7 @@ export interface IssueListProps {
   now: Date;
   /** listIssues' cache-served fetchedAt (offline) — null when the list is fresh. */
   staleAt: string | null;
+  window: { start: number; end: number };
 }
 
 /** Pane 2: windowed issue rows with full-row selection bars and aligned
@@ -43,11 +43,8 @@ export function IssueList({
   height,
   now,
   staleAt,
+  window,
 }: IssueListProps): React.JSX.Element {
-  const listHeight = Math.max(1, height - 4); // borders + title + position line
-  const prev = useRef(0);
-  const { start, end } = windowSlice(issues.length, listHeight, selected, prev.current);
-  prev.current = start;
   return (
     <Box
       flexDirection="column"
@@ -81,8 +78,8 @@ export function IssueList({
           no open issues — create one on GitHub, then select it here and press d to dispatch
         </Text>
       )}
-      {issues.slice(start, end).map((iss, i) => {
-        const idx = start + i;
+      {issues.slice(window.start, window.end).map((iss, i) => {
+        const idx = window.start + i;
         const sel = idx === selected;
         const st = deriveState(iss.labels, trigger);
         const meta = stateMeta(st);
@@ -105,7 +102,7 @@ export function IssueList({
         );
       })}
       <Box flexGrow={1} />
-      {issues.length > listHeight && (
+      {issues.length > window.end - window.start && (
         <Text dimColor>
           {Math.min(selected + 1, issues.length)}/{issues.length}
         </Text>

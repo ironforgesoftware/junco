@@ -3,6 +3,8 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { PrList } from "../src/tui/components/PrList.js";
 import { type DashPr } from "../src/tui/prState.js";
+import { windowSlice } from "../src/tui/window.js";
+import { listRowsHeight } from "../src/tui/geometry.js";
 
 const NOW = new Date("2026-07-07T14:00:00Z");
 
@@ -39,7 +41,15 @@ describe("PrList", () => {
   it("renders title with count and selection bar on first row", () => {
     const prs = [pr(42, "Fix widget"), pr(43, "Add feature")];
     const f = render(
-      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
     expect(f).toContain("p pull requests · 2");
     expect(f).toContain("▌");
@@ -48,7 +58,15 @@ describe("PrList", () => {
   it("renders PR number padStart(5) and title", () => {
     const prs = [pr(42, "Fix widget")];
     const f = render(
-      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
     expect(f).toContain("#42");
     expect(f).toContain("Fix widget");
@@ -62,7 +80,15 @@ describe("PrList", () => {
       },
     ];
     const f = render(
-      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
     expect(f).toContain("owner/repo");
     expect(f).toContain("◔"); // review-pending glyph
@@ -94,6 +120,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        window={{ start: 0, end: 4 }}
       />,
     ).lastFrame()!;
 
@@ -123,6 +150,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        window={{ start: 0, end: 3 }}
       />,
     ).lastFrame()!;
 
@@ -143,6 +171,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        window={{ start: 0, end: 2 }}
       />,
     ).lastFrame()!;
 
@@ -153,7 +182,15 @@ describe("PrList", () => {
   it("windows to height minus 4 (borders+title+position line) with position indicator when list > height", () => {
     const many = Array.from({ length: 40 }, (_, i) => pr(i + 1, `PR number ${i + 1}`));
     const f = render(
-      <PrList prs={many} selected={39} focused={true} height={12} now={NOW} staleAt={null} />,
+      <PrList
+        prs={many}
+        selected={39}
+        focused={true}
+        height={12}
+        now={NOW}
+        staleAt={null}
+        window={windowSlice(many.length, listRowsHeight(12), 39, 0)}
+      />,
     ).lastFrame()!;
 
     expect(f).toContain("PR number 40");
@@ -163,7 +200,15 @@ describe("PrList", () => {
 
   it("shows empty state when prs empty and staleAt null", () => {
     const f = render(
-      <PrList prs={[]} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={[]}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: 0 }}
+      />,
     ).lastFrame()!;
 
     expect(f).toContain("no junco PRs found across watched repos");
@@ -179,6 +224,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt="2026-07-07T12:00:00Z"
+        window={{ start: 0, end: 0 }}
       />,
     ).lastFrame()!;
 
@@ -196,6 +242,7 @@ describe("PrList", () => {
         height={20}
         now={NOW}
         staleAt="2026-07-07T12:00:00Z"
+        window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
 
@@ -206,10 +253,26 @@ describe("PrList", () => {
   it("renders with accent border when focused, plain border when not", () => {
     const prs = [pr(42, "Test PR")];
     const f1 = render(
-      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
     const f2 = render(
-      <PrList prs={prs} selected={0} focused={false} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={false}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
 
     // focused version should have the title with accent
@@ -229,7 +292,15 @@ describe("PrList", () => {
       },
     ];
     const f = render(
-      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
 
     const lines = f.split("\n");
@@ -254,7 +325,15 @@ describe("PrList", () => {
       pr(7, "Short one"),
     ];
     const f = render(
-      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
 
     const lines = f.split("\n");
@@ -282,7 +361,15 @@ describe("PrList", () => {
   it("selection bar only on selected row", () => {
     const prs = [pr(42, "First"), pr(43, "Second"), pr(44, "Third")];
     const f = render(
-      <PrList prs={prs} selected={1} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={1}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     ).lastFrame()!;
 
     const lines = f.split("\n");
@@ -296,7 +383,15 @@ describe("PrList", () => {
   it("dims #number unless selected", () => {
     const prs = [pr(42, "First"), pr(43, "Second")];
     const rendered = render(
-      <PrList prs={prs} selected={0} focused={true} height={20} now={NOW} staleAt={null} />,
+      <PrList
+        prs={prs}
+        selected={0}
+        focused={true}
+        height={20}
+        now={NOW}
+        staleAt={null}
+        window={{ start: 0, end: prs.length }}
+      />,
     );
     const f = rendered.lastFrame()!;
 

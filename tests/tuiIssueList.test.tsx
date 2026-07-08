@@ -3,6 +3,8 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { IssueList, relTime } from "../src/tui/components/IssueList.js";
 import { filterIssues, type DashIssue } from "../src/tui/state.js";
+import { windowSlice } from "../src/tui/window.js";
+import { listRowsHeight } from "../src/tui/geometry.js";
 
 const NOW = new Date("2026-07-07T14:00:00Z");
 const iss = (number: number, title: string, labels: string[] = ["junco"]): DashIssue => ({
@@ -56,6 +58,7 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
     expect(f).toContain("2 issues · 3");
@@ -78,6 +81,7 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt="2026-07-07T14:00:00Z"
+        window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
     expect(f).toContain("offline ·");
@@ -96,6 +100,7 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        window={{ start: 0, end: 1 }}
       />,
     ).lastFrame()!;
     expect(f).toContain("/reef");
@@ -113,6 +118,7 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        window={{ start: 0, end: 0 }}
       />,
     ).lastFrame()!;
     expect(f).toContain("no issues match /zzz");
@@ -132,6 +138,7 @@ describe("IssueList", () => {
         height={12}
         now={NOW}
         staleAt={null}
+        window={windowSlice(many.length, listRowsHeight(12), 39, 0)}
       />,
     ).lastFrame()!;
     expect(f).toContain("Issue number 40");
