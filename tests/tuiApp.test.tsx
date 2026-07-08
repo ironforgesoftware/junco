@@ -575,6 +575,107 @@ describe("App", () => {
     await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
     expect(readWatchlist(file).entries).toEqual([]);
   });
+
+  // SGR helpers — 1-based wire coords.
+  const click = (x1: number, y1: number) => `\u001b[<0;${x1};${y1}M\u001b[<0;${x1};${y1}m`;
+  const wheelDown = (x1: number, y1: number) => `\u001b[<65;${x1};${y1}M`;
+
+  describe("mouse", () => {
+    // NOTE: these assertions are deliberately independent of sortIssues order —
+    // they anchor on row POSITIONS (frame lines), never on which issue number
+    // happens to sort first.
+    it("first click focuses pane 2 + selects; second click on the same row enters detail", async () => {
+      const { client } = makeClient({ "acme/api": [rawIssue] });
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      // Issue rows start at absolute y=4 (1-based): header(1) + border(2) + title(3).
+      r.stdin.write(click(30, 4)); // pane was 1 → this click only focuses + selects
+      await wait(50); // openDetail would flip the view synchronously — a beat is plenty
+      expect(r.lastFrame() ?? "").not.toContain("the body"); // still the list
+      r.stdin.write(click(30, 4)); // now pane 2 + already selected → Enter → detail (medium)
+      await until(() => (r.lastFrame() ?? "").includes("the body"));
+    });
+
+    it("click on a rail row switches repos", async () => {
+      const { client } = makeClient({
+        "acme/api": [rawIssue],
+        "beta/web": [{ ...rawIssue, number: 42, title: "Beta bug" }],
+      });
+      const file = wl();
+      writeWatchlist(file, [{ nwo: "beta/web", path: "/c/web" }]);
+      const r = renderApp(client, file);
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      r.stdin.write(click(3, 5)); // rail row 2 (y=5 → index 1) → beta/web
+      await until(() => (r.lastFrame() ?? "").includes("Beta bug"));
+    });
+
+    it("wheel over the issue list moves the selection down one row", async () => {
+      const { client } = makeClient({ "acme/api": [rawIssue, readyIssue] });
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      // Selection starts on row 0 (frame line 3); after one wheel-down the issue
+      // pane's ▌ bar must be on row 1 (frame line 4) — whatever issue sorts there.
+      // (The rail's own ▌ sits left of x=26; slice the line to the issues pane.)
+      const issueBarOn = (line: number): boolean =>
+        ((r.lastFrame() ?? "").split("\n")[line] ?? "").slice(26).includes("▌");
+      await until(() => issueBarOn(3));
+      r.stdin.write(wheelDown(30, 5));
+      await until(() => issueBarOn(4) && !issueBarOn(3));
+    });
+
+    it("prs view: click the selected row opens the PR; ↗ link line opens it too (wide)", async () => {
+      const { client, prCalls } = makeClient(
+        { "acme/api": [] },
+        { prsByRepo: { "acme/api": [makePr()] } },
+      );
+      const r = render(
+        <App
+          client={client}
+          trigger="junco"
+          branchPrefix="junco/"
+          configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+          watchlistFile={wl()}
+          configPath="/x/config.toml"
+          clonesDir={CLONES_DIR}
+          issuePollMs={999999}
+          healthPollMs={999999}
+          queuePollMs={999999}
+          prPollMs={999999}
+          queueFn={async () => QUEUE_SNAP}
+          sizeOverride={{ columns: 130, rows: 30 }}
+          onExit={() => {}}
+        />,
+      );
+      // Wide-mode pane 3 renders the ISSUE preview in the "main" view — the PR
+      // title can only appear once the view actually switches to "prs" (Task 5's
+      // PrPreview wiring), so the readiness wait belongs after the keypress.
+      r.stdin.write("p");
+      await until(() => (r.lastFrame() ?? "").includes("pull requests"));
+      await until(() => (r.lastFrame() ?? "").includes("Some PR"));
+      r.stdin.write(click(30, 4)); // row 0 is selected from mount → click opens
+      await until(() => prCalls.length === 1);
+      expect(prCalls[0]).toEqual(["acme/api", 100]);
+      // 130 cols wide → preview band starts at x=79 (1-based); link line y=5.
+      r.stdin.write(click(85, 5));
+      await until(() => prCalls.length === 2);
+      r.unmount();
+    });
+
+    it("leaked mouse sequences never reach the / filter", async () => {
+      const { client } = makeClient({ "acme/api": [rawIssue] });
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      r.stdin.write("/");
+      await until(() => (r.lastFrame() ?? "").includes("filter")); // filtering hints active
+      // A press on the header (y=1 → hit target "none") travels BOTH paths: a
+      // real mouse event (harmless no-op) AND a leaked useInput keypress. Without
+      // the guard, ink would hand "[<0;30;1M" to the filter as typed text.
+      r.stdin.write("\u001b[<0;30;1M");
+      r.stdin.write("up");
+      await until(() => (r.lastFrame() ?? "").includes("/up"));
+      expect(r.lastFrame() ?? "").not.toContain("/[<"); // no garbage prefix in the filter
+    });
+  });
 });
 
 describe("PRs view", () => {

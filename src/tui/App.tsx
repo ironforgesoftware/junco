@@ -38,6 +38,9 @@ import { QueueView } from "./components/QueueView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import type { ToastKind } from "./theme.js";
+import { useMouse } from "./useMouse.js";
+import { hitTest, type HitContext } from "./hitTest.js";
+import { isMouseInput, type MouseEvent as TuiMouseEvent } from "./mouse.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -765,18 +768,67 @@ export function App(props: AppProps): React.JSX.Element {
     if (layout.mode !== "wide" && pane === 3) setPane(2);
   }, [layout.mode, pane]);
 
+  // Move the anchored NUMBER, not a bare index — a re-sorting poll must keep
+  // the cursor on the same issue. Hoisted (was inline in useInput) so both
+  // keyboard and mouse (wheel/click) drive the same selection logic.
+  const moveIssue = (delta: number): void => {
+    if (!currentNwo || filteredIssues.length === 0) return;
+    const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
+    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
+  };
+  const moveIssueTo = (idx: number): void => {
+    if (!currentNwo || filteredIssues.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
+    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
+  };
+
+  // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
+  // must keep the cursor on the same PR. Hoisted for the same reason as above.
+  const movePr = (delta: number): void => {
+    if (prs.length === 0) return;
+    const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
+    setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
+  };
+  const movePrTo = (idx: number): void => {
+    if (prs.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, prs.length - 1));
+    setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
+  };
+
+  const openSelectedPr = useCallback(() => {
+    if (!selectedPr) return;
+    const { nwo, number } = selectedPr;
+    void client.openPrInBrowser(nwo, number).then((res) => {
+      if (!res.ok) showToast("error", res.error);
+    });
+  }, [client, selectedPr, showToast]);
+
+  const enterIssue = (): void => {
+    if (layout.mode === "wide") setPane(3);
+    else openDetail();
+  };
+
+  // Dismiss an active toast on the next input (keyboard keystroke or mouse
+  // press) — shared so both useInput and onMouseEvent apply the same rule.
+  const dismissToast = (): void => {
+    if (!toast) return;
+    setToast(null);
+    if (toastTimer.current) {
+      clearTimeout(toastTimer.current);
+      toastTimer.current = null;
+    }
+  };
+
   useInput((input, key) => {
+    // Mouse reporting leaks SGR sequences into useInput as keypresses (ink
+    // strips the ESC) — drop them; onMouseEvent owns the real events via stdin.
+    if (isMouseInput(input)) return;
+
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return;
 
     // Toast is dismissed by the next keystroke, before it is acted on.
-    if (toast) {
-      setToast(null);
-      if (toastTimer.current) {
-        clearTimeout(toastTimer.current);
-        toastTimer.current = null;
-      }
-    }
+    dismissToast();
 
     if (view === "help") {
       setView("main"); // any key closes
@@ -816,31 +868,11 @@ export function App(props: AppProps): React.JSX.Element {
         setScroll(0); // shared offset — don't bleed it into the pane-3 preview
         return void setView("main");
       }
-      // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
-      // must keep the cursor on the same PR.
-      const movePr = (delta: number): void => {
-        if (prs.length === 0) return;
-        const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
-        setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
-      };
-      const movePrTo = (idx: number): void => {
-        if (prs.length === 0) return;
-        const clamped = Math.max(0, Math.min(idx, prs.length - 1));
-        setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
-      };
       if (input === "j" || key.downArrow) return void movePr(1);
       if (input === "k" || key.upArrow) return void movePr(-1);
       if (input === "g") return void movePrTo(0);
       if (input === "G") return void movePrTo(prs.length - 1);
-      if (input === "o" || key.return) {
-        if (selectedPr) {
-          const { nwo, number } = selectedPr;
-          void client.openPrInBrowser(nwo, number).then((res) => {
-            if (!res.ok) showToast("error", res.error);
-          });
-        }
-        return;
-      }
+      if (input === "o" || key.return) return void openSelectedPr();
       if (input === "r") return void loadPrs();
       return;
     }
@@ -996,21 +1028,11 @@ export function App(props: AppProps): React.JSX.Element {
       if (filter !== "") setFilter("");
       return;
     }
-    const moveIssue = (delta: number): void => {
-      if (!currentNwo || filteredIssues.length === 0) return;
-      const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
-      setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
-    };
-    const moveIssueTo = (idx: number): void => {
-      if (!currentNwo || filteredIssues.length === 0) return;
-      const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
-      setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
-    };
     if (input === "j" || key.downArrow) return void moveIssue(1);
     if (input === "k" || key.upArrow) return void moveIssue(-1);
     if (input === "g") return void moveIssueTo(0);
     if (input === "G") return void moveIssueTo(filteredIssues.length - 1);
-    if (key.return) return void (layout.mode === "wide" ? setPane(3) : openDetail());
+    if (key.return) return void enterIssue();
     if (input === "d") return void runAction("dispatch");
     if (input === "D") return void runAction("dispatchAsk");
     if (input === "a") return void runAction("approve");
@@ -1020,6 +1042,72 @@ export function App(props: AppProps): React.JSX.Element {
     }
     if (input === "o") return void openBrowser();
   });
+
+  const onMouseEvent = (ev: TuiMouseEvent): void => {
+    // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
+    if (view === "help" || view === "palette" || view === "addRepo") return;
+    if (ev.kind === "release") return; // presses act on press, not release
+    if (ev.kind === "press") dismissToast();
+
+    // Full-body scroll views: wheel scrolls, clicks have no targets (v1).
+    if (view === "detail" || view === "queue" || view === "cmdOutput") {
+      if (ev.kind === "wheelDown") setScroll((s) => s + 1);
+      if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
+      return;
+    }
+
+    const ctx: HitContext = {
+      layout,
+      columns: size.columns,
+      view: view === "prs" ? "prs" : "main",
+      repoCount: repoMappings.length,
+      listCount: view === "prs" ? prs.length : filteredIssues.length,
+      railStart: railWindow.start,
+      listStart: view === "prs" ? prWindow.start : issueWindow.start,
+      hasPreviewTarget:
+        layout.mode === "wide" && (view === "prs" ? selectedPr !== null : previewIssue !== null),
+    };
+    const hit = hitTest(ctx, ev.x, ev.y);
+
+    if (ev.kind === "wheelUp" || ev.kind === "wheelDown") {
+      const d = ev.kind === "wheelDown" ? 1 : -1;
+      if (hit.type === "repoRow" || (hit.type === "pane" && hit.pane === 1)) {
+        setRepoIdx((i) => Math.max(0, Math.min(i + d, repoMappings.length - 1)));
+      } else if (hit.type === "issueRow" || (hit.type === "pane" && hit.pane === 2)) {
+        moveIssue(d);
+      } else if (hit.type === "prRow") {
+        movePr(d);
+      } else if (hit.type === "linkLine" || (hit.type === "pane" && hit.pane === 3)) {
+        if (view === "main") setScroll((s) => Math.max(0, s + d)); // PrPreview has no scroll
+      }
+      return;
+    }
+
+    // ev.kind === "press"
+    switch (hit.type) {
+      case "repoRow":
+        setPane(1);
+        setRepoIdx(hit.index);
+        return;
+      case "issueRow":
+        if (pane === 2 && hit.index === issueIdxSafe) return void enterIssue();
+        setPane(2);
+        moveIssueTo(hit.index);
+        return;
+      case "prRow":
+        if (hit.index === prIdxSafe) return void openSelectedPr();
+        movePrTo(hit.index);
+        return;
+      case "linkLine":
+        return void (view === "prs" ? openSelectedPr() : openBrowser());
+      case "pane":
+        setPane(hit.pane);
+        return;
+      case "none":
+        return;
+    }
+  };
+  useMouse(onMouseEvent);
 
   const hints = hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
