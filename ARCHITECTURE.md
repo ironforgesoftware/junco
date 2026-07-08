@@ -67,10 +67,13 @@ A ticket is a Markdown file with a YAML frontmatter block validated against the 
     If block_on_fail and verification failures → preserve worktree + fail.
 
 10. Push
-    Branch is pushed to origin (pr.ts).
+    Branch is pushed to ctx.pushRemote (pr.ts) — origin by default; in
+    fork-PR mode (push_remote: fork) it pushes to the operator's fork remote.
 
 11. Open / update PR
     gh pr create --draft   (or, in amend mode, the existing PR auto-updates).
+    In fork-PR mode the PR is opened against upstream with
+    --head <fork-owner>:<branch>.
 
 12. Finalize
     Worktree pruned; finalize.ts computes the terminal status, appends a result
@@ -156,7 +159,7 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 
 | File                    | Responsibility                                                                                                                                                                                                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cli.ts`                | Entrypoint; subcommands `start`, `run-once`, `submit`, `inbox-path`, `status`, `list`, `retry`, `outbox`, `prs`, `doctor`, `dashboard`, `logs`, `schema`, `init`, `service`, `restart`. Exposes testable `run(argv, deps)`.                                                                         |
+| `cli.ts`                | Entrypoint; subcommands `start`, `run-once`, `submit`, `dispatch`, `inbox-path`, `status`, `list`, `retry`, `outbox`, `prs`, `doctor`, `dashboard`, `logs`, `schema`, `init`, `service`, `restart`. Exposes testable `run(argv, deps)`.                                 |
 | `daemon.ts`             | `mainLoop`, `runScheduler` (max_concurrent > 1), `StopFlag` (+ forceSignal), `installSignalHandlers`, `sleepInterruptible`.                                                                                                                                             |
 | `lock.ts`               | Single-instance lock — pidfile + PID-liveness stale detection.                                                                                                                                                                                                          |
 | `orphans.ts`            | `recoverOrphans`: requeue crashed tickets (budget permitting), else → `failed/`.                                                                                                                                                                                        |
@@ -193,7 +196,9 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 | `githubOutbox.ts`       | Offline store-and-forward for GitHub side effects: FIFO op files under `<state_dir>/github-outbox/`, `tryOrEnqueue` seam (try live, queue on network error), flush executor (checkpointed composite PR ops, comment idempotency markers, dead-letter after 3 attempts). |
 | `githubInbox.ts`        | GitHub bridge, dispatch side: sweep trigger-labeled issues → verify labeler permission (fail-closed) → issue→ticket conversion → `submitTicket`. Process-local caches for label creation + origin cross-checks.                                                         |
 | `githubReport.ts`       | GitHub bridge, feedback side: `makeGithubReporter` — lifecycle label flips + the single finalize comment. Best-effort by contract (never fails a ticket); wraps label/comment ops through `tryOrEnqueue` for offline durability.                                        |
-| `githubPrs.ts`          | Shared junco-PR listing: gh pr list fetch + DashPr mapping + branch-prefix filter — consumed by the dashboard client and prsCmd.                                                                                                                                      |
+| `githubPrs.ts`          | Shared junco-PR listing: gh pr list fetch + DashPr mapping + branch-prefix filter — consumed by the dashboard client and prsCmd.                                                                                                                                        |
+| `externalRepo.ts`       | Fork + managed-clone provisioning for unowned repos: idempotently ensures a fork and a managed clone under `github.external_repos_root` (origin = upstream, `fork` remote = the operator's fork — the only push target).                                                |
+| `externalDispatch.ts`   | Label-free issue dispatch (the shared core behind `junco dispatch` and the TUI external dispatch): builds a machine-authored ticket from gh JSON (untrusted issue text stays in the body), provisions the fork clone for unowned repos, and submits.                    |
 | `reporter.ts`           | `TicketReporter` seam (onStart/onRequeue/onFinal) + outcome mapping. `executeClaimed` is the only call site; default no-op.                                                                                                                                             |
 | `statusCmd.ts`          | `junco status` — daemon /health + queue counts at a glance.                                                                                                                                                                                                             |
 | `listCmd.ts`            | `junco list` — newest-first ticket listing with terminal statuses.                                                                                                                                                                                                      |
