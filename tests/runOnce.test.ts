@@ -1,9 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+  chmodSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { runOnce, claimNextTask } from "../src/runOnce.js";
-import type { Config } from "../src/types.js";
+import type { Config, Ticket } from "../src/types.js";
+import type { AssessFlowResult } from "../src/assessFlow.js";
 
 function cfg(root: string): Config {
   return {
@@ -68,6 +77,7 @@ function cfg(root: string): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
@@ -95,6 +105,36 @@ function fakeFactory() {
     },
     async prompt() {
       await new Promise((r) => setTimeout(r, 5));
+    },
+    dispose() {},
+    abort: async () => {},
+  });
+}
+
+// A scriptable session (parameterized on the emitted text) — used by the
+// assess end-to-end test below, mirroring tests/assessFlow.test.ts's
+// fakeSession helper.
+function fakeSession(finalText: string) {
+  return async () => ({
+    subscribe(l: (e: any) => void) {
+      queueMicrotask(() => {
+        l({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: finalText },
+        });
+        l({
+          type: "turn_end",
+          message: {
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+          },
+        });
+        l({ type: "agent_end", messages: [], willRetry: false });
+      });
+      return () => {};
+    },
+    async prompt() {
+      await new Promise((r) => setTimeout(r, 1));
     },
     dispose() {},
     abort: async () => {},
@@ -522,5 +562,229 @@ describe("planner model override", () => {
       },
     });
     expect(seenModelId).toBe("m");
+  });
+});
+
+describe("assess routing", () => {
+  // A zeroed RunResult, mirroring assessFlow.ts's emptyRunResult — the fake
+  // assessFlowFn below needs a well-formed `result` field on its
+  // AssessFlowResult since outcomeFromQa dereferences it.
+  function fakeRunResult(finalText: string): AssessFlowResult["result"] {
+    return {
+      finalText,
+      toolCalls: [],
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      stopReason: "stop",
+      errorMessage: null,
+      timedOut: false,
+      durationMs: 5,
+      abortedByGuard: false,
+    };
+  }
+
+  it("branch ordering: an assess ticket (which also carries repo:) is routed to the assess flow, never the PR flow", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    // A repo: that a PR flow would happily accept (deriveRepoContext only
+    // needs a truthy string — it doesn't check existence), PLUS assess: {}.
+    // If the branch order regresses (hasRepo checked first), this ticket
+    // gets routed into runPrFlow instead of the fake assessFlowFn below.
+    const repo = mkdtempSync(join(tmpdir(), "junco-assess-repo-"));
+    const wtRoot = mkdtempSync(join(tmpdir(), "junco-assess-wt-"));
+    writeFileSync(
+      join(j, "inbox", "a.md"),
+      `---\nid: assess-1\nassess: {}\nrepo: ${repo}\n---\n# Assess\nscan for vulns\n`,
+      "utf8",
+    );
+
+    const assessCalls: Array<{ cfg: Config; ticketId: string; claimedPath: string }> = [];
+    const fakeAssessFlowFn = async (
+      passedCfg: Config,
+      ticket: Ticket,
+      claimedPath: string,
+    ): Promise<AssessFlowResult> => {
+      assessCalls.push({ cfg: passedCfg, ticketId: ticket.id, claimedPath });
+      return {
+        dst: join(j, "done", "a.md"),
+        status: "completed",
+        requeued: false,
+        result: fakeRunResult("assess done"),
+        found: 0,
+        deduped: 0,
+        created: 0,
+        queuedOffline: 0,
+        dropped: 0,
+        capped: 0,
+        failed: 0,
+        urls: [],
+      };
+    };
+
+    let sessionFactoryCalls = 0;
+    const finalCalls: Array<{ kind: string; status: string; finalText: string }> = [];
+    const requeueCalls: string[] = [];
+    const reporter = {
+      onStart: async (): Promise<void> => undefined,
+      onRequeue: async (): Promise<void> => void requeueCalls.push("requeue"),
+      onFinal: async (
+        _t: unknown,
+        o: { kind: string; status: string; finalText: string },
+      ): Promise<void> => void finalCalls.push(o),
+    };
+
+    const c: Config = { ...cfg(root), worktreeRoot: wtRoot };
+    const handled = await runOnce(c, {
+      assessFlowFn: fakeAssessFlowFn,
+      sessionFactoryFor: () => {
+        sessionFactoryCalls++;
+        return fakeFactory();
+      },
+      reporter,
+    });
+
+    expect(handled).toBe(true);
+    // The fake assess flow was invoked with the right ticket — proves the
+    // assess branch fired.
+    expect(assessCalls).toHaveLength(1);
+    expect(assessCalls[0].ticketId).toBe("assess-1");
+    // The PR flow was NOT entered: its session factory (shared seam) was
+    // never invoked, and it never touched the worktree root.
+    expect(sessionFactoryCalls).toBe(0);
+    expect(readdirSync(wtRoot)).toHaveLength(0);
+    // Reporter got the assess flow's outcome as a qa-kind final.
+    expect(requeueCalls).toHaveLength(0);
+    expect(finalCalls).toHaveLength(1);
+    expect(finalCalls[0]).toMatchObject({
+      kind: "qa",
+      status: "completed",
+      finalText: "assess done",
+    });
+  });
+
+  it("requeue parity: a requeued assess flow fires onRequeue, not onFinal", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    const repo = mkdtempSync(join(tmpdir(), "junco-assess-repo-"));
+    writeFileSync(
+      join(j, "inbox", "a.md"),
+      `---\nid: assess-2\nassess: {}\nrepo: ${repo}\n---\n# Assess\nscan for vulns\n`,
+      "utf8",
+    );
+
+    const fakeAssessFlowFn = async (): Promise<AssessFlowResult> => ({
+      dst: join(j, "inbox", "a.md"),
+      status: "requeued",
+      requeued: true,
+      result: fakeRunResult(""),
+      found: 0,
+      deduped: 0,
+      created: 0,
+      queuedOffline: 0,
+      dropped: 0,
+      capped: 0,
+      failed: 0,
+      urls: [],
+    });
+
+    const calls: string[] = [];
+    const reporter = {
+      onStart: async (): Promise<void> => void calls.push("start"),
+      onRequeue: async (): Promise<void> => void calls.push("requeue"),
+      onFinal: async (): Promise<void> => void calls.push("final"),
+    };
+
+    const handled = await runOnce(cfg(root), { assessFlowFn: fakeAssessFlowFn, reporter });
+
+    expect(handled).toBe(true);
+    expect(calls).toEqual(["start", "requeue"]);
+  });
+
+  it("end-to-end through the real assess flow: files a live issue and lands the ticket in done/", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+
+    // A real tiny git repo — the assess target — with one committed file the
+    // agent's finding will cite (the hallucination filter requires the cited
+    // path to exist on disk).
+    const repo = mkdtempSync(join(tmpdir(), "junco-assess-e2e-"));
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "index.ts"), "export const x = 1;\n", "utf8");
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "CI",
+      GIT_AUTHOR_EMAIL: "ci@example.com",
+      GIT_COMMITTER_NAME: "CI",
+      GIT_COMMITTER_EMAIL: "ci@example.com",
+    };
+    const runGit = (args: string[]): void => {
+      execFileSync("git", args, { cwd: repo, env: gitEnv });
+    };
+    runGit(["init", "-q", "-b", "main"]);
+    runGit(["config", "commit.gpgsign", "false"]);
+    runGit(["add", "src/index.ts"]);
+    runGit(["commit", "-q", "-m", "seed"]);
+    runGit(["remote", "add", "origin", "git@github.com:acme/demo.git"]);
+
+    // A fake gh script that logs every invocation and answers the three
+    // subcommands runAssessFlow issues: dedup list, label ensure, issue
+    // create.
+    const ghLog = join(root, "gh.log");
+    const ghBin = join(root, "fake-gh.sh");
+    writeFileSync(
+      ghBin,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(ghLog)}
+case "$1 $2" in
+  "issue list") echo '[]'; exit 0 ;;
+  "label create") exit 0 ;;
+  "issue create") echo 'https://github.com/acme/demo/issues/1'; exit 0 ;;
+  *) echo "fake-gh: unhandled: $*" >&2; exit 1 ;;
+esac
+`,
+      "utf8",
+    );
+    chmodSync(ghBin, 0o755);
+
+    writeFileSync(
+      join(j, "inbox", "a.md"),
+      `---\nid: assess-e2e\nassess: {}\nrepo: ${repo}\n---\n# Assess\nscan for vulns\n`,
+      "utf8",
+    );
+
+    const finding = {
+      kind: "code",
+      severity: "high",
+      ruleId: "XSS-1",
+      title: "Reflected XSS",
+      description: "desc",
+      location: { path: "src/index.ts" },
+    };
+    const finalText = "found things\n\n```junco-findings\n" + JSON.stringify([finding]) + "\n```";
+
+    const c: Config = {
+      ...cfg(root),
+      ghBin,
+      allowedRepoRoots: [repo],
+    };
+    const handled = await runOnce(c, { sessionFactoryFor: () => fakeSession(finalText) });
+
+    expect(handled).toBe(true);
+    const doneFiles = readdirSync(join(j, "done"));
+    expect(doneFiles).toHaveLength(1);
+    const body = readFileSync(join(j, "done", doneFiles[0]), "utf8");
+    expect(body).toContain("<!-- junco-result");
+    expect(body).toContain("https://github.com/acme/demo/issues/1");
+
+    const ghCalls = readFileSync(ghLog, "utf8").trim().split("\n");
+    expect(ghCalls.some((l) => l.startsWith("issue create"))).toBe(true);
   });
 });

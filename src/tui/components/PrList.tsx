@@ -20,8 +20,10 @@ function checksToString(checks: {
 }
 
 /** Widest the dim repo cell may grow; longer nwos truncate from the start so
- * the repo-name tail (the discriminating part) stays visible. */
-const NWO_MAX_WIDTH = 24;
+ * the repo-name tail (the discriminating part) stays visible. Exported so
+ * callers composing their own title (pane 3's repo-scoped monitor) can mirror
+ * this same clamp instead of inventing a second budget. */
+export const NWO_MAX_WIDTH = 24;
 
 export interface PrListProps {
   prs: DashPr[]; // already sorted by the App
@@ -30,6 +32,9 @@ export interface PrListProps {
   height: number;
   now: Date;
   staleAt: string | null; // any repo served from cache → oldest fetchedAt
+  showNwo?: boolean; // show nwo cell; default true for multi-repo view
+  title?: string; // pane title; default "p pull requests · N"
+  emptyText?: string; // empty-state message; default the cross-repo copy below
 }
 
 /** Pane 2: windowed PR rows with full-row selection bars and aligned
@@ -41,6 +46,9 @@ export function PrList({
   height,
   now,
   staleAt,
+  showNwo = true,
+  title,
+  emptyText,
 }: PrListProps): React.JSX.Element {
   const listHeight = Math.max(1, height - 4); // borders + title + position line
   const prev = useRef(0);
@@ -56,13 +64,14 @@ export function PrList({
       flexGrow={1}
       height={height}
     >
-      <Text bold color={focused ? theme.accent : undefined}>
-        p pull requests · {prs.length}
+      <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
+        {title ?? `p pull requests · ${prs.length}`}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
       {prs.length === 0 && (
         <Text dimColor>
-          no junco PRs found across watched repos — junco opens PRs from dispatched tickets
+          {emptyText ??
+            "no junco PRs found across watched repos — junco opens PRs from dispatched tickets"}
         </Text>
       )}
       {prs.slice(start, end).map((prItem, i) => {
@@ -100,11 +109,13 @@ export function PrList({
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{prItem.title}</Text>
             </Box>
-            <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
-              <Text dimColor wrap="truncate-start">
-                {prItem.nwo}
-              </Text>
-            </Box>
+            {showNwo && (
+              <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
+                <Text dimColor wrap="truncate-start">
+                  {prItem.nwo}
+                </Text>
+              </Box>
+            )}
             {checksStr !== "" && (
               <Box flexShrink={0}>
                 <Text color={checksColor}>{checksStr}</Text>

@@ -26,7 +26,7 @@ function writeOp(
   id: string,
   fields: {
     createdAt: string;
-    origin: "dashboard" | "reporter" | "prflow";
+    origin: "dashboard" | "reporter" | "prflow" | "assess";
     issueKey: string | null;
     attempts: number;
     lastError: string | null;
@@ -129,6 +129,33 @@ describe("runOutboxCommand — list", () => {
     const code = await runOutboxCommand(cfg, [], { printFn: (s) => out.push(s) });
     expect(code).toBe(0);
     expect(out.join("")).toMatch(/<malformed>/);
+  });
+
+  it("issue-create op renders a line with the nwo and the fingerprint (no live issue/branch to key by)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obxcmd-issuecreate-"));
+    const cfg = cfgAt(root);
+    writeOp(cfg, "1-0000-aaaa-issue-create", {
+      createdAt: "2026-07-07T10:00:00Z",
+      origin: "assess",
+      issueKey: null,
+      attempts: 0,
+      lastError: null,
+      op: {
+        kind: "issue-create",
+        nwo: "a/b",
+        title: "[high] Vulnerable lodash (GHSA-xxxx-yyyy-zzzz)",
+        bodyText: "body text\n\n<!-- junco:finding:deadbeefcafebabe -->",
+        labels: ["junco:finding", "severity/high"],
+        fingerprint: "deadbeefcafebabe",
+      },
+    });
+    const out: string[] = [];
+    const code = await runOutboxCommand(cfg, [], {
+      printFn: (s) => out.push(s),
+      nowFn: () => new Date("2026-07-07T10:00:30Z"),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/issue-create a\/b deadbeefcafebabe attempts=0/);
   });
 
   it("op lines + dead footer when both present", async () => {

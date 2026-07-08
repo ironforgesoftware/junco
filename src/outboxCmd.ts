@@ -33,11 +33,18 @@ function isOutboxOp(op: unknown): op is OutboxOp {
   return typeof op === "object" && op !== null && "kind" in op;
 }
 
+/** issue-create ops have no live issue yet (nothing to key by) and no
+ * branch, so the generic issueKey/branch fallback would print "?" — show
+ * `<nwo> <fingerprint>` instead, the readable target for an op that's still
+ * store-and-forward. */
+function targetOf(op: OutboxOp, issueKey: string | null): string {
+  if (op.kind === "issue-create") return `${op.nwo} ${op.fingerprint}`;
+  return issueKey ?? branchOf(op) ?? "?";
+}
+
 function opLine(s: StoredOp, now: Date): string {
   const err = s.lastError ? ` lastError=${s.lastError}` : "";
-  const target = isOutboxOp(s.op)
-    ? `${s.op.kind} ${s.issueKey ?? branchOf(s.op) ?? "?"}`
-    : "<malformed>";
+  const target = isOutboxOp(s.op) ? `${s.op.kind} ${targetOf(s.op, s.issueKey)}` : "<malformed>";
   return `${fmtAge(s.createdAt, now)} ${target} attempts=${s.attempts}${err}\n`;
 }
 

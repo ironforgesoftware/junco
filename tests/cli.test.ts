@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, type MockedFunction, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
@@ -421,6 +421,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     requireApproval: true,
     plannerModelId: null,
   },
+  assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
 };
 
 let dispatchTmpDirs: string[] = [];
@@ -692,6 +693,40 @@ describe("run(['prs'])", () => {
     expect(captured.join("")).toBe(
       "no watched repositories — add [[github.repos]] to config.toml or watch one from the dashboard\n",
     );
+  });
+});
+
+describe("run(['assess']) — routing", () => {
+  it("routes `assess <path> --auto-plan` to runAssessCommand, threading the flag into the queued ticket", async () => {
+    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const repoDir = mkdtempSync(join(tmpdir(), "junco-cli-assess-repo-"));
+    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    const code = await run(["assess", repoDir, "--auto-plan", "--config", configPath], {
+      loadConfigFn: () => cfgWithState,
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const files = readdirSync(inboxDir).filter((f) => f.startsWith("assess-"));
+    expect(files).toHaveLength(1);
+    const content = readFileSync(join(inboxDir, files[0]), "utf8");
+    expect(content).toContain("auto_plan: true");
+    expect(content).toContain(`repo: ${JSON.stringify(repoDir)}`);
+    expect(captured.join("")).toMatch(/auto-plan/i);
+  });
+
+  it("no target -> exit 2, usage line", async () => {
+    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    const code = await run(["assess", "--config", configPath], {
+      loadConfigFn: () => cfgWithState,
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(2);
+    expect(captured.join("")).toMatch(/usage/i);
   });
 });
 

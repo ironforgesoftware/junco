@@ -97,6 +97,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     ...overrides,
   };
 }

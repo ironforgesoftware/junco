@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { App } from "../src/tui/App.js";
+import { NWO_MAX_WIDTH } from "../src/tui/components/PrList.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
 import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
@@ -578,6 +579,42 @@ describe("PRs view", () => {
     expect(prCalls).toEqual([["acme/api", 42]]);
   });
 
+  it("enter opens the prDetail overlay (from prs); esc returns with selection intact; o still opens the browser", async () => {
+    const a = makePr({
+      nwo: "acme/api",
+      number: 10,
+      title: "PR ten",
+      updatedAt: "2026-07-06T12:00:00Z",
+    });
+    const b = makePr({
+      nwo: "acme/api",
+      number: 11,
+      title: "PR eleven",
+      headRefName: "junco/eleven",
+      updatedAt: "2026-07-06T10:00:00Z",
+    });
+    const { client, prCalls } = makeClient(
+      { "acme/api": [] },
+      { prsByRepo: { "acme/api": [a, b] } },
+    );
+    const r = renderApp(client, wlp());
+    await tick();
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("PR ten"));
+    r.stdin.write("j"); // move to PR eleven
+    await tick();
+    r.stdin.write("\r"); // enter -> prDetail
+    await until(() => (r.lastFrame() ?? "").includes("checks:"));
+    expect(r.lastFrame()).toContain("PR eleven");
+    expect(r.lastFrame()).not.toContain("3 pr"); // no pane-3 numbering in the fullscreen overlay
+    r.stdin.write(ESC); // back to the prs view
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests"));
+    expect(r.lastFrame()).toContain("PR eleven"); // selection survived the round trip
+    r.stdin.write("o"); // o still opens the browser, unchanged
+    await until(() => prCalls.length > 0);
+    expect(prCalls).toEqual([["acme/api", 11]]);
+  });
+
   it("keeps selection on the same PR number when a poll re-sorts the list", async () => {
     // Both PRs share a group (checks-pending); #10 is newer → top → anchored.
     const a = makePr({
@@ -791,6 +828,108 @@ describe("command palette + focus keys", () => {
     await tick();
     expect(r.lastFrame()).toContain("issues");
     expect(r.lastFrame()).not.toContain("Runs the junco CLI against this dashboard's config");
+  });
+});
+
+describe("assess hotkey (s/S)", () => {
+  const wl7 = () => join(mkdtempSync(join(tmpdir(), "junco-assess-")), "wl.json");
+
+  function makeAssessRunner(result: Partial<CliRunResult> = {}) {
+    const runs: [string, string[]][] = [];
+    const runCliFn = async (name: string, extraArgs: string[]): Promise<CliRunResult> => {
+      runs.push([name, extraArgs]);
+      return { code: 0, output: "queued: /x/inbox/assess-acme-api.md", timedOut: false, ...result };
+    };
+    return { runs, runCliFn };
+  }
+
+  it("s calls the runner once with (assess, [nwo]); success exit shows a toast with the nwo", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").includes("acme/api: queued:"));
+    expect(runs).toEqual([["assess", ["acme/api"]]]);
+  });
+
+  it("S includes --auto-plan in the runner args", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("S");
+    await until(() => runs.length > 0);
+    expect(runs).toEqual([["assess", ["acme/api", "--auto-plan"]]]);
+  });
+
+  it("nonzero exit shows an error toast with the first non-empty output line", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const { runCliFn } = makeAssessRunner({
+      code: 1,
+      output: "\njunco assess: 'acme/api' is not watched — add it under [[github.repos]]\n",
+    });
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").includes("is not watched"));
+  });
+
+  it("no watched repos: s shows an error toast and never calls the runner", async () => {
+    const { client } = makeClient({});
+    const { runs, runCliFn } = makeAssessRunner();
+    const file = wl7();
+    const r = render(
+      <App
+        client={client}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[]}
+        watchlistFile={file}
+        configPath="/x/config.toml"
+        clonesDir={CLONES_DIR}
+        issuePollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => QUEUE_SNAP}
+        runCliFn={runCliFn}
+        sizeOverride={{ columns: 100, rows: 30 }}
+        onExit={() => {}}
+      />,
+    );
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").toLowerCase().includes("no repo selected"));
+    expect(runs).toHaveLength(0);
+  });
+
+  it("double press while in flight: exactly one runner call; the second press toasts already-running", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const runs: [string, string[]][] = [];
+    const runCliFn = (name: string, extraArgs: string[]): Promise<CliRunResult> => {
+      runs.push([name, extraArgs]);
+      return new Promise<CliRunResult>(() => {}); // never resolves — still "in flight"
+    };
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await tick();
+    r.stdin.write("s");
+    await tick();
+    r.stdin.write("s");
+    await until(() => (r.lastFrame() ?? "").toLowerCase().includes("already running"));
+    expect(runs).toEqual([["assess", ["acme/api"]]]);
+  });
+
+  it("s while the / filter input is active does not trigger the runner", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("/"); // enter filter-typing mode
+    await tick();
+    r.stdin.write("s"); // captured as filter text, not the assess hotkey
+    await tick();
+    expect(r.lastFrame()).toContain("/s"); // landed in the filter chip
+    expect(runs).toHaveLength(0);
   });
 });
 
@@ -1026,7 +1165,7 @@ describe("workspace filter + pane navigation (medium)", () => {
     expect(actions).toHaveLength(1);
   });
 
-  it("3 is inert at medium width (there is no preview pane)", async () => {
+  it("3 is inert at medium width (there is no pane 3 to reach)", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl5());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
@@ -1034,12 +1173,12 @@ describe("workspace filter + pane navigation (medium)", () => {
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write("3");
     await tick();
-    expect(r.lastFrame()).not.toContain("browser"); // no pane 3 to focus onto
+    expect(r.lastFrame()).not.toContain("o open"); // pane-3's hint never leaked in
     expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
   });
 
   // → mirrors `3`/`l` at medium width: there is no pane 3 to reach, so it's inert.
-  it("→ is inert at medium width, same as 3 (no preview pane to reach)", async () => {
+  it("→ is inert at medium width, same as 3 (no pane 3 to reach)", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl5());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
@@ -1047,7 +1186,7 @@ describe("workspace filter + pane navigation (medium)", () => {
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write(ESC + "[C"); // →
     await tick();
-    expect(r.lastFrame()).not.toContain("browser"); // no pane 3 to focus onto
+    expect(r.lastFrame()).not.toContain("o open"); // pane-3's hint never leaked in
     expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
   });
 });
@@ -1074,13 +1213,6 @@ describe("workspace wide mode", () => {
     );
   }
 
-  it("preview pane autoloads the selected issue's body", async () => {
-    const { client } = makeClient({ "acme/api": [rawIssue] });
-    const r = renderWide(client, wl6());
-    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
-    await until(() => (r.lastFrame() ?? "").includes("the body")); // debounce 300ms < until budget
-  });
-
   // Wide terminals get the FULL header pulse (record, last task, tokens) —
   // the same fixture that medium mode drops down to essentials.
   it("wide mode renders the full header pulse", async () => {
@@ -1100,59 +1232,244 @@ describe("workspace wide mode", () => {
     expect(birdLine).toContain("daemon ●");
   });
 
-  it("renders the PrPreview card in pane 3 for the selected PR", async () => {
+  // Pane 3 is narrow (capped by layout.previewWidth) and its rows carry a
+  // badge + checks + age alongside the title, so titles get tight on room —
+  // the PR NUMBER cell is fixed-width (flexShrink 0) and never truncates,
+  // making it the robust way to identify a row here.
+  it("wide main view: pane 3 lists ONLY the selected repo's PRs; switching repos re-filters it", async () => {
+    const apiPr = makePr({ nwo: "acme/api", number: 10, title: "PR" });
+    const coralPr = makePr({
+      nwo: "alx/coral",
+      number: 20,
+      title: "PR",
+      url: "https://github.com/alx/coral/pull/20",
+      headRefName: "junco/coral-slug",
+    });
+    const { client } = makeClient(
+      { "acme/api": [], "alx/coral": [] },
+      { prsByRepo: { "acme/api": [apiPr], "alx/coral": [coralPr] } },
+    );
+    const file = wl6();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderWide(client, file);
+    await until(() => (r.lastFrame() ?? "").includes("#10"));
+    expect(r.lastFrame()).not.toContain("#20");
+    r.stdin.write("j"); // pane 1 defaults focused — select alx/coral
+    await until(() => (r.lastFrame() ?? "").includes("#20"));
+    expect(r.lastFrame()).not.toContain("#10");
+  });
+
+  // Pane 3's title identifies the scoped repo per the approved mockup
+  // ("3 PRs · acme/reef") and must track the rail's selection, same as the
+  // row content does above.
+  it("pane 3 title identifies the scoped repo; switching repos updates the title", async () => {
+    const apiPr = makePr({ nwo: "acme/api", number: 10, title: "PR" });
+    const coralPr = makePr({
+      nwo: "alx/coral",
+      number: 20,
+      title: "PR",
+      url: "https://github.com/alx/coral/pull/20",
+      headRefName: "junco/coral-slug",
+    });
+    const { client } = makeClient(
+      { "acme/api": [], "alx/coral": [] },
+      { prsByRepo: { "acme/api": [apiPr], "alx/coral": [coralPr] } },
+    );
+    const file = wl6();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderWide(client, file);
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api"));
+    r.stdin.write("j"); // pane 1 defaults focused — select alx/coral
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · alx/coral"));
+    expect(r.lastFrame()).not.toContain("3 PRs · acme/api");
+  });
+
+  // A nwo too long to fit the narrow wide-mode preview pane must truncate
+  // from the START (tail kept — the discriminating repo-name part) rather
+  // than wrap the title onto a second line, which would corrupt PrList's
+  // height/windowing math (CHROME one-line pane-title discipline).
+  it("a very long nwo truncates from the start so the pane-3 title stays on one line", async () => {
+    const longNwo = "organization-with-a-long-name/very-long-repository-name-that-keeps-going";
+    const pr = makePr({ nwo: longNwo, number: 10, title: "PR" });
+    const { client } = makeClient({ [longNwo]: [] }, { prsByRepo: { [longNwo]: [pr] } });
+    const r = render(
+      <App
+        client={client}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[{ nwo: longNwo, path: "/c/long" }]}
+        watchlistFile={wl6()}
+        configPath="/x/config.toml"
+        clonesDir={CLONES_DIR}
+        issuePollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => QUEUE_SNAP}
+        sizeOverride={{ columns: 130, rows: 30 }}
+        onExit={() => {}}
+      />,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("#10"));
+    const tail = longNwo.slice(longNwo.length - (NWO_MAX_WIDTH - 1));
+    const frame = r.lastFrame() ?? "";
+    // Found as one contiguous substring — proves it rendered on a single
+    // physical line (a wrap would split it across two "\n"-joined lines).
+    expect(frame).toContain(`3 PRs · …${tail}`);
+    // Scoped to pane 3's own title line — the header's bird line legitimately
+    // shows the full untruncated nwo elsewhere in the frame.
+    const titleLine = frame.split("\n").find((l) => l.includes("3 PRs ·"))!;
+    expect(titleLine).not.toContain(longNwo);
+  });
+
+  it("pane-3 PR rows omit the nwo cell", async () => {
+    const pr = makePr({ nwo: "acme/api", number: 10, title: "PR" });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("#10"));
+    const rowLine = r
+      .lastFrame()!
+      .split("\n")
+      .find((l) => l.includes("#10"))!;
+    // Slice past the number cell so Rail's OWN "acme/api" text (a different,
+    // earlier column on the same terminal row) can't produce a false negative.
+    const afterNumber = rowLine.slice(rowLine.indexOf("#10") + "#10".length);
+    expect(afterNumber).not.toContain("acme/api"); // showNwo={false} — row omits the repo cell
+  });
+
+  it("pane 3 focused: ↑/↓ moves selection; o opens the selected PR in the browser", async () => {
+    const a = makePr({
+      nwo: "acme/api",
+      number: 10,
+      title: "PR",
+      updatedAt: "2026-07-06T12:00:00Z",
+    });
+    const b = makePr({
+      nwo: "acme/api",
+      number: 11,
+      title: "PR",
+      headRefName: "junco/eleven",
+      updatedAt: "2026-07-06T10:00:00Z",
+    });
+    const { client, prCalls } = makeClient(
+      { "acme/api": [] },
+      { prsByRepo: { "acme/api": [a, b] } },
+    );
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("#10")); // #10 sorts first (newer)
+    r.stdin.write("3"); // focus pane 3
+    await until(() => (r.lastFrame() ?? "").includes("o open"));
+    r.stdin.write("j"); // move down to #11
+    await tick();
+    r.stdin.write("o");
+    await until(() => prCalls.length > 0);
+    expect(prCalls).toEqual([["acme/api", 11]]);
+  });
+
+  it("enter in pane 3 opens the prDetail overlay; esc returns with pane 3 still focused", async () => {
+    const pr = makePr({
+      nwo: "acme/api",
+      number: 10,
+      title: "PR",
+      headRefName: "junco/ten-slug",
+    });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("#10"));
+    r.stdin.write("3");
+    await until(() => (r.lastFrame() ?? "").includes("o open"));
+    r.stdin.write("\r"); // enter -> prDetail
+    await until(() => (r.lastFrame() ?? "").includes("checks:"));
+    expect(r.lastFrame()).toContain("branch:");
+    // The fullscreen overlay reuses PrPreview, but "3" names a pane that
+    // doesn't exist here — the pane-3-flavored title must not leak in.
+    expect(r.lastFrame()).not.toContain("3 pr");
+    expect(r.lastFrame()).toContain("pr · #10");
+    r.stdin.write(ESC);
+    await until(() => (r.lastFrame() ?? "").includes("o open")); // back to pane-3 footer
+    expect(r.lastFrame()).toContain("#10"); // selection/list intact
+  });
+
+  // This used to focus pane 3 (setPane(3)); the assertion below fails against
+  // that old behavior — no key.return there ever calls openDetail, so the
+  // detail view's distinctive footer never appears.
+  it("enter on pane 2 (wide mode) opens the fullscreen issue detail, not pane-3 focus", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
+    r.stdin.write("2"); // focus issues pane
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write("\r");
+    // The detail view's exact two-item footer — pane 3's hint set never
+    // produces this combo (no "esc" key there).
+    await until(() => (r.lastFrame() ?? "").includes("↑/↓ scroll · esc back"));
+    expect(r.lastFrame()).toContain("#7 Fix uploads");
+    r.stdin.write(ESC);
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+  });
+
+  // Proves the autoload machinery is gone, not just unused: on the OLD code a
+  // 300ms-debounced issueDetail fetch fires on every selection change while
+  // wide + main; waiting 400ms here would have let a lingering autoload land.
+  it("moving the issue selection in wide main view never calls the issue-detail fetch", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue, readyIssue] });
+    let detailCalls = 0;
+    const client: DashboardClient = {
+      ...base,
+      issueDetail: async (nwo, num) => {
+        detailCalls++;
+        return base.issueDetail(nwo, num);
+      },
+    };
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
+    r.stdin.write("2");
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write("j");
+    await tick();
+    r.stdin.write("k");
+    await wait(400); // longer than the old 300ms debounce
+    expect(detailCalls).toBe(0);
+  });
+
+  // Pane 3's empty state is scoped to the one repo (not the cross-repo copy
+  // the standalone `p` view uses) — the mockup titles the pane per-repo, so
+  // the empty state must read that way too.
+  it("pane 3 shows the scoped empty state when the selected repo has zero junco PRs", async () => {
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [] } });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("no junco PRs for this repo"));
+    expect(r.lastFrame()).not.toContain("no junco PRs found across watched repos");
+  });
+
+  it("renders the PrPreview card in pane 3 for the selected PR, in the p view", async () => {
     const pr = makePr({ nwo: "acme/api", number: 42, title: "Wide PR" });
     const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
     const r = renderWide(client, wl6());
     await tick();
     r.stdin.write("p"); // open PRs view
-    // `3 pr · #42` is the PrPreview pane title — unambiguous vs the issue "3 preview".
+    // `3 pr · #42` is the PrPreview pane title — unambiguous vs pane 3's own
+    // "3 PRs · <nwo>" title in the main view.
     await until(() => (r.lastFrame() ?? "").includes("3 pr · #42"));
     expect(r.lastFrame()).toContain("Wide PR");
   });
 
-  it("enter focuses the preview pane (footer shows scroll + browser hints)", async () => {
-    const { client } = makeClient({ "acme/api": [rawIssue] });
+  // The standalone `p` view's call site passes neither `title` nor
+  // `emptyText` — it must keep rendering PrList's stock cross-repo title,
+  // completely unaffected by pane 3's repo-scoped override (a distinct call
+  // site with its own props).
+  it("the standalone p view keeps PrList's stock title, unaffected by pane 3's scoped title", async () => {
+    const pr = makePr({ nwo: "acme/api", number: 42, title: "Wide PR" });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
     const r = renderWide(client, wl6());
-    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
-    r.stdin.write("2"); // focus issues pane
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
-    r.stdin.write("\r"); // enter → focus pane 3 (preview), NOT the detail view
-    await until(() => (r.lastFrame() ?? "").includes("o browser"));
-    expect(r.lastFrame()).toContain("scroll");
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3, wide main view
+    r.stdin.write("p"); // open the standalone PRs view
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests · 1"));
+    expect(r.lastFrame()).not.toContain("3 PRs · acme/api"); // pane 3's slot is gone in this view
   });
 
-  // Regression: `scroll` is shared across views — a queue-view offset must not
-  // bleed into the pane-3 preview on the way back (it rendered from "line N",
-  // blanking short bodies entirely).
-  it("returning from the queue view does not bleed its scroll into the preview", async () => {
-    const { client } = makeClient({ "acme/api": [rawIssue] });
-    const r = renderWide(client, wl6());
-    await until(() => (r.lastFrame() ?? "").includes("the body")); // preview autoloaded
-    r.stdin.write("t");
-    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    r.stdin.write("]");
-    r.stdin.write("]");
-    r.stdin.write("]");
-    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)")); // queue scrolled
-    r.stdin.write(ESC); // back to main — the offset must reset with it
-    // The preview shows the body's FIRST line again (fake body is one line, so
-    // any residual offset would leave the pane without it).
-    await until(() => (r.lastFrame() ?? "").includes("the body"));
-    // Pane-3 scrolling itself still works: focus it, then [ / ] move the window.
-    r.stdin.write("2");
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
-    r.stdin.write("\r"); // focus pane 3
-    await until(() => (r.lastFrame() ?? "").includes("o browser"));
-    r.stdin.write("]"); // scroll 1 → the single-line body slides off
-    await until(() => !(r.lastFrame() ?? "").includes("the body"));
-    expect(r.lastFrame()).toContain("── plan ──"); // pane not blank — just scrolled
-    r.stdin.write("[");
-    await until(() => (r.lastFrame() ?? "").includes("the body")); // back to the top
-  });
-
-  // Regression: a wide terminal shrinking below 110 cols while pane 3 (preview)
-  // is focused must not strand focus on a pane that no longer renders.
+  // Regression: a wide terminal shrinking below 110 cols while pane 3 (the
+  // repo-scoped PR monitor) is focused must not strand focus on a pane that
+  // no longer renders.
   it("shrinking below wide while pane 3 is focused clamps focus back to pane 2", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const file = wl6();
@@ -1174,27 +1491,28 @@ describe("workspace wide mode", () => {
       />
     );
     const r = render(appEl({ columns: 130, rows: 30 }));
-    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write("3"); // focus pane 3 directly
-    await until(() => (r.lastFrame() ?? "").includes("o browser")); // pane-3 footer hints
+    await until(() => (r.lastFrame() ?? "").includes("o open")); // pane-3 footer hints
     r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
-    // Pane 2's footer hint set is back: enter→detail (medium mode) and d dispatch.
-    await until(() => (r.lastFrame() ?? "").includes("enter detail"));
-    expect(r.lastFrame()).toContain("d dispatch");
+    // Pane 2's footer hint set is back — d dispatch is the reliable marker
+    // regardless of the enter-key wording.
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    expect(r.lastFrame()).not.toContain("o open"); // pane-3's hint is gone
   });
 
   // → is the advertised primary pane-movement key (l is now the quiet alias) —
   // from pane 2 in wide mode it must reach pane 3 exactly like l/enter do, and
   // ← must walk it back one pane at a time to pane 1.
-  it("→ from pane 2 focuses the preview; ← twice returns to pane 1", async () => {
+  it("→ from pane 2 focuses pane 3; ← twice returns to pane 1", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderWide(client, wl6());
-    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write("2"); // focus issues pane
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
-    r.stdin.write(ESC + "[C"); // → focuses pane 3 (preview)
-    await until(() => (r.lastFrame() ?? "").includes("o browser"));
-    expect(r.lastFrame()).toContain("← issues"); // pane 3 footer now leads with ←
+    r.stdin.write(ESC + "[C"); // → focuses pane 3
+    await until(() => (r.lastFrame() ?? "").includes("o open"));
+    expect(r.lastFrame()).toContain("← issues"); // pane 3 footer still carries ←
     r.stdin.write(ESC + "[D"); // ← back to pane 2
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1

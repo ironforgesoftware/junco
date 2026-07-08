@@ -93,3 +93,12 @@ log_level = "info"                    # debug | info | warn | error
 # state_dir = "~/.local/state/junco"  # worker.log + transcripts/ live here
 # log_to_file = true
 # transcripts = true            # per-ticket event JSONL under <state_dir>/transcripts/
+
+# junco assess audits a repo and files one GitHub issue per finding — see
+# docs/assess.md. Pairs with [github] (docs/github-mode.md): --auto-plan
+# labels each filed issue with [github].trigger_label so a watched repo's
+# next bridge sweep plans it.
+# [assess]
+# max_issues_per_run = 20       # cap on issues filed per run
+# min_severity = "low"          # critical | high | medium | low — findings below this are dropped
+# npm_bin = "npm"               # binary for the dependency scan (`<npm_bin> audit --json`)

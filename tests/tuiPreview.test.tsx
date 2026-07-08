@@ -12,6 +12,7 @@ const ISSUE: DashIssue = {
   url: "https://github.com/a/b/issues/52",
 };
 const base = {
+  issue: ISSUE,
   trigger: "junco",
   body: null as string | null,
   planComment: null as string | null,
@@ -23,21 +24,15 @@ const base = {
 };
 
 describe("Preview", () => {
-  it("empty state explains itself", () => {
-    const f = render(<Preview {...base} issue={null} paneNumber />).lastFrame()!;
-    expect(f).toContain("3 preview");
-    expect(f).toContain("select an issue");
-  });
   it("renders title, badge, body, and plan divider", () => {
     const f = render(
       <Preview
         {...base}
-        issue={ISSUE}
         body={"line one\nline two"}
         planComment={"<!-- junco:plan -->\nthe plan"}
-        paneNumber
       />,
     ).lastFrame()!;
+    expect(f).toContain("preview · #52");
     expect(f).toContain("#52 Fix reef colors");
     expect(f).toContain("plan-ready");
     expect(f).toContain("line one");
@@ -45,24 +40,18 @@ describe("Preview", () => {
     expect(f).toContain("the plan");
   });
   it("loading and error states", () => {
-    expect(render(<Preview {...base} issue={ISSUE} loading paneNumber />).lastFrame()).toContain(
-      "loading",
-    );
-    expect(
-      render(<Preview {...base} issue={ISSUE} error="gh exploded" paneNumber />).lastFrame(),
-    ).toContain("gh exploded");
+    expect(render(<Preview {...base} loading />).lastFrame()).toContain("loading");
+    expect(render(<Preview {...base} error="gh exploded" />).lastFrame()).toContain("gh exploded");
   });
   it("windows long bodies by scroll with a position footer", () => {
     const body = Array.from({ length: 60 }, (_, i) => `L${i + 1}`).join("\n");
-    const top = render(<Preview {...base} issue={ISSUE} body={body} paneNumber />).lastFrame()!;
-    const scrolled = render(
-      <Preview {...base} issue={ISSUE} body={body} scroll={30} paneNumber />,
-    ).lastFrame()!;
+    const top = render(<Preview {...base} body={body} />).lastFrame()!;
+    const scrolled = render(<Preview {...base} body={body} scroll={30} />).lastFrame()!;
     expect(top).toContain("L1");
     expect(scrolled).not.toContain("L1\n");
     expect(scrolled).toContain("L31");
     expect(top).toContain("↑/↓ scroll");
-    expect(top).toContain("3 preview");
-    expect(scrolled).toContain("3 preview");
+    expect(top).toContain("preview · #52");
+    expect(scrolled).toContain("preview · #52");
   });
 });
