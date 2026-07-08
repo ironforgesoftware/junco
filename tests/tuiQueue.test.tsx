@@ -2,7 +2,14 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { QueueView } from "../src/tui/components/QueueView.js";
-import { queueLabel, fmtElapsed, fmtAge, fmtTokens, fmtClock } from "../src/tui/queueFmt.js";
+import {
+  queueLabel,
+  fmtElapsed,
+  fmtAge,
+  fmtTokens,
+  fmtClock,
+  fmtCompact,
+} from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 
 const NOW = new Date("2026-07-07T10:05:00Z");
@@ -95,6 +102,22 @@ describe("queueFmt", () => {
     expect(fmtTokens(12345)).toBe("12.3k tok");
     expect(fmtTokens(null)).toBeNull();
     expect(fmtClock("2026-07-07T11:00:00Z")).toMatch(/^\d{2}:\d{2}$/);
+  });
+
+  it("fmtCompact: one decimal, trailing .0 stripped", () => {
+    expect(fmtCompact(0)).toBe("0");
+    expect(fmtCompact(740)).toBe("740");
+    expect(fmtCompact(999)).toBe("999");
+    expect(fmtCompact(1200)).toBe("1.2k");
+    expect(fmtCompact(1000)).toBe("1k"); // trailing .0 stripped
+    expect(fmtCompact(3_400_000)).toBe("3.4M");
+    expect(fmtCompact(1_000_000)).toBe("1M");
+  });
+
+  it("fmtCompact boundary: values that would round to 1000k roll into the M bucket", () => {
+    expect(fmtCompact(999_949)).toBe("999.9k"); // still rounds below 1000k
+    expect(fmtCompact(999_950)).toBe("1M"); // would render "1000.0k" — rolled
+    expect(fmtCompact(999_999)).toBe("1M"); // never "1000k"
   });
 });
 

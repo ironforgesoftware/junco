@@ -33,6 +33,17 @@ export function fmtTokens(n: number | null): string | null {
   return n < 1000 ? `${n} tok` : `${(n / 1000).toFixed(1)}k tok`;
 }
 
+/** Compact magnitude: `740`, `1.2k`, `3.4M` — one decimal, trailing `.0`
+ * stripped. Bucket is picked AFTER rounding: a value whose k-form would round
+ * to "1000.0k" (≈999_950 and up) rolls into the M bucket instead. */
+export function fmtCompact(n: number): string {
+  if (n < 1000) return `${n}`;
+  const useM = n >= 1_000_000 || Number((n / 1_000).toFixed(1)) >= 1000;
+  const [divisor, suffix] = useM ? [1_000_000, "M"] : [1_000, "k"];
+  const v = (n / divisor).toFixed(1).replace(/\.0$/, "");
+  return `${v}${suffix}`;
+}
+
 /** Local wall-clock HH:MM (not_before display). */
 export function fmtClock(iso: string): string {
   return new Date(iso).toTimeString().slice(0, 5);

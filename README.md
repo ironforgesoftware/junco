@@ -541,6 +541,8 @@ The dashboard runs fullscreen in the terminal's alternate buffer (like vim or ht
 junco dashboard
 ```
 
+Above the panes, the header's right side is a live pulse of the daemon: issues awaiting review (`●N review`), the processed record (`✓succeeded ✗failed`), the most recent task's outcome and age (`last ✓/✗ <age>`), cumulative output tokens (`tok <compact>`), daemon up/down with uptime, the local queue (`◐running ⏳waiting`), and unpushed GitHub outbox ops (`⇡N unpushed`) — every chip but daemon status is hidden when its count is zero or the daemon is down. Below 110 columns the header keeps only the essentials (review, daemon, queue, unpushed); the full record lives in `junco status`.
+
 The screen has three zones:
 
 - **Repos pane** (left, pane 1) — every watched repo, with a per-state issue-count badge (plan-ready / working / failed) and a `(cfg)` marker on entries that came from `config.toml` rather than the watchlist. The queue card lives here at the top, showing running/waiting work at a glance; press `t` to see the full queue view.

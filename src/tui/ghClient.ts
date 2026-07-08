@@ -77,6 +77,13 @@ export interface HealthInfo {
   uptimeSeconds: number | null;
   lastBridgeSweepAt: string | null;
   ticketsBridged: number | null;
+  tasksProcessed: number | null;
+  tasksSucceeded: number | null;
+  tasksFailed: number | null;
+  lastTaskStatus: string | null;
+  lastTaskAt: string | null;
+  totalTokensOut: number | null;
+  bridgeErrors: number | null;
 }
 
 export interface DashboardClient {
@@ -347,6 +354,13 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         uptimeSeconds: null,
         lastBridgeSweepAt: null,
         ticketsBridged: null,
+        tasksProcessed: null,
+        tasksSucceeded: null,
+        tasksFailed: null,
+        lastTaskStatus: null,
+        lastTaskAt: null,
+        totalTokensOut: null,
+        bridgeErrors: null,
       };
       if (!cfg.healthEnabled) return down;
       try {
@@ -357,6 +371,13 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
             uptimeSeconds?: number;
             lastBridgeSweepAt?: string | null;
             ticketsBridged?: number;
+            tasksProcessed?: number;
+            tasksSucceeded?: number;
+            tasksFailed?: number;
+            lastTaskStatus?: string | null;
+            lastTaskAt?: string | null;
+            totalTokensOut?: number;
+            bridgeErrors?: number;
           };
         };
         return {
@@ -364,6 +385,13 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
           uptimeSeconds: j.metrics?.uptimeSeconds ?? null,
           lastBridgeSweepAt: j.metrics?.lastBridgeSweepAt ?? null,
           ticketsBridged: j.metrics?.ticketsBridged ?? null,
+          tasksProcessed: j.metrics?.tasksProcessed ?? null,
+          tasksSucceeded: j.metrics?.tasksSucceeded ?? null,
+          tasksFailed: j.metrics?.tasksFailed ?? null,
+          lastTaskStatus: j.metrics?.lastTaskStatus ?? null,
+          lastTaskAt: j.metrics?.lastTaskAt ?? null,
+          totalTokensOut: j.metrics?.totalTokensOut ?? null,
+          bridgeErrors: j.metrics?.bridgeErrors ?? null,
         };
       } catch {
         return down;

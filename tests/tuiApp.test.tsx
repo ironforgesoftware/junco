@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { App } from "../src/tui/App.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
-import type { DashboardClient, Result } from "../src/tui/ghClient.js";
+import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
@@ -14,6 +14,21 @@ import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
 const CLONES_DIR = "/x/state/repos";
 const ESC = String.fromCharCode(27);
+
+/** Every pulse field populated — the header-pulse wiring tests share this. */
+const RICH_HEALTH: HealthInfo = {
+  up: true,
+  uptimeSeconds: 3600,
+  lastBridgeSweepAt: null,
+  ticketsBridged: 0,
+  tasksProcessed: 10,
+  tasksSucceeded: 8,
+  tasksFailed: 2,
+  lastTaskStatus: "completed",
+  lastTaskAt: new Date().toISOString(),
+  totalTokensOut: 45_000,
+  bridgeErrors: 0,
+};
 
 const QUEUE_SNAP: QueueSnapshot = {
   daemonUp: true,
@@ -73,6 +88,13 @@ function makeClient(
       uptimeSeconds: 60,
       lastBridgeSweepAt: null,
       ticketsBridged: 0,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
     }),
   };
   return { client, actions, validatePaths, cloned };
@@ -102,6 +124,13 @@ function makeSeqClient(sequence: DashIssue[][]) {
       uptimeSeconds: 60,
       lastBridgeSweepAt: null,
       ticketsBridged: 0,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
     }),
   };
   return { client, actions };
@@ -301,6 +330,13 @@ describe("App", () => {
         uptimeSeconds: 60,
         lastBridgeSweepAt: null,
         ticketsBridged: 0,
+        tasksProcessed: null,
+        tasksSucceeded: null,
+        tasksFailed: null,
+        lastTaskStatus: null,
+        lastTaskAt: null,
+        totalTokensOut: null,
+        bridgeErrors: null,
       }),
     };
     const r = renderApp(client, wl(), 60);
@@ -354,6 +390,45 @@ describe("App", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].path.startsWith(homedir())).toBe(true);
     expect(validatePaths[0].startsWith(homedir())).toBe(true);
+  });
+
+  // Header pulse wiring at the DEFAULT 100-col (medium) size: the row must
+  // stay on exactly one line (layout.ts budgets CHROME_ROWS), the brand mark
+  // must survive width pressure, and the wide-only chips (record/last/tok)
+  // must be dropped by design — they live in `junco status` instead.
+  it("keeps the header on one line at 100 cols; medium drops the wide-only chips", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue, readyIssue] });
+    const client: DashboardClient = { ...base, health: async () => RICH_HEALTH };
+    const r = renderApp(client, wl());
+    await until(
+      () =>
+        (r.lastFrame() ?? "").includes("●1 review") && (r.lastFrame() ?? "").includes("daemon ●"),
+    );
+    const birdLines = r
+      .lastFrame()!
+      .split("\n")
+      .filter((l) => l.includes("🐦"));
+    expect(birdLines).toHaveLength(1); // header did not wrap...
+    expect(birdLines[0]).toContain("daemon"); // ...and the row runs brand → daemon intact
+    expect(birdLines[0]).toContain("●1 review"); // essential chip present in medium
+    expect(birdLines[0]).not.toContain("✓8"); // wide-only chips absent by design
+    expect(birdLines[0]).not.toContain("last ");
+    expect(birdLines[0]).not.toContain("tok ");
+  });
+
+  // Unwatching a repo must clear its cached issues from the pulse — the review
+  // chip reflects only currently watched repos, never ghost data.
+  it("unwatching a repo clears its contribution to the review chip", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [readyIssue] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("j"); // select alx/coral (pane 1) — its issues load
+    await until(() => (r.lastFrame() ?? "").includes("●1 review"));
+    r.stdin.write("x"); // unwatch — the issues/staleAt entries drop with the mapping
+    await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
+    expect(readWatchlist(file).entries).toEqual([]);
   });
 });
 
@@ -789,6 +864,25 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("3 preview"));
     await until(() => (r.lastFrame() ?? "").includes("the body")); // debounce 300ms < until budget
+  });
+
+  // Wide terminals get the FULL header pulse (record, last task, tokens) —
+  // the same fixture that medium mode drops down to essentials.
+  it("wide mode renders the full header pulse", async () => {
+    const { client: base } = makeClient({ "acme/api": [rawIssue, readyIssue] });
+    const client: DashboardClient = { ...base, health: async () => RICH_HEALTH };
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("✓8"));
+    const birdLine = r
+      .lastFrame()!
+      .split("\n")
+      .find((l) => l.includes("🐦"))!;
+    expect(birdLine).toContain("●1 review");
+    expect(birdLine).toContain("✓8");
+    expect(birdLine).toContain("✗2");
+    expect(birdLine).toContain("last ✓");
+    expect(birdLine).toContain("tok 45k");
+    expect(birdLine).toContain("daemon ●");
   });
 
   it("enter focuses the preview pane (footer shows scroll + browser hints)", async () => {

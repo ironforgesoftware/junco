@@ -2,6 +2,10 @@ import React from "react";
 import { Box, Text } from "ink";
 import { theme, toastColor, type ToastKind } from "../theme.js";
 import type { LayoutMode } from "../layout.js";
+import type { HealthInfo } from "../ghClient.js";
+import { fmtCompact } from "../queueFmt.js";
+import { relTime } from "./IssueList.js";
+import { TERMINAL_DONE_STATUSES } from "../../types.js";
 
 export type HintView = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput" | "queue";
 
@@ -11,64 +15,99 @@ function fmtUp(s: number | null): string {
   return ` up ${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }
 
-/** The junco mark: three block-element cells, five sub-cell "pixels" —
- * slate tail (▖), slate hood over snow belly in one half-block cell (▀ on
- * a snow background), rose bill (▘). Universal glyphs; chalk downsamples
- * the colors on 256/16-color terminals; NO_COLOR leaves a monochrome mark. */
-export function BirdMark(): React.JSX.Element {
-  return (
-    <Text>
-      <Text color={theme.slate}>▖</Text>
-      <Text color={theme.slate} backgroundColor={theme.snow}>
-        ▀
-      </Text>
-      <Text color={theme.accent}>▘</Text>
-    </Text>
-  );
-}
-
-/** Row 1: brand mark · active repo · (right) watchlist warn, daemon, queue. */
+/** Row 1: brand mark · active repo · (right) the pulse — review count, task
+ * record, last task, tokens, bridge errors, daemon, queue, unpushed.
+ *
+ * One-line invariant (layout.ts budgets exactly CHROME_ROWS): the root Box is
+ * height 1, the brand and chip group are flexShrink 0, and the repo name is
+ * the ONLY flexible element — it truncates to absorb all width pressure. The
+ * chip set is also responsive: below the wide breakpoint the record/last/tok/
+ * bridge chips drop (they live in `junco status` for narrow terminals). */
 export function Header({
   repoNwo,
-  daemonUp,
-  uptimeSeconds,
+  health,
+  reviewCount,
+  now,
+  mode,
   queueRunning,
   queueWaiting,
   watchlistError,
   outboxDepth,
 }: {
   repoNwo: string | null;
-  daemonUp: boolean | null;
-  uptimeSeconds: number | null;
+  /** Extended /health snapshot, null before the first poll resolves. */
+  health: HealthInfo | null;
+  /** Issues (across the repos loaded so far) in plan-ready or approved state. */
+  reviewCount: number;
+  /** Wall clock for relative-age chips (last task) — polled, not a live clock. */
+  now: Date;
+  /** Layout mode — non-wide terminals render only the essential chips. */
+  mode: LayoutMode;
   queueRunning: number;
   queueWaiting: number;
   watchlistError: string | null;
   /** Ops parked in the GitHub outbox — hidden at 0. */
   outboxDepth: number;
 }): React.JSX.Element {
+  const wide = mode === "wide";
+  const daemonUp = health === null ? null : health.up;
   const daemon =
-    daemonUp === null ? "daemon …" : daemonUp ? `daemon ●${fmtUp(uptimeSeconds)}` : "daemon ○";
+    daemonUp === null
+      ? "daemon …"
+      : daemonUp
+        ? `daemon ●${fmtUp(health?.uptimeSeconds ?? null)}`
+        : "daemon ○";
+  const lastStatus = health?.lastTaskStatus ?? null;
+  const lastGood = lastStatus !== null && TERMINAL_DONE_STATUSES.has(lastStatus);
+  const lastTaskAt = health?.lastTaskAt ?? null;
+  const totalTokensOut = health?.totalTokensOut ?? null;
+  const bridgeErrors = health?.bridgeErrors ?? null;
   return (
-    <Box paddingX={1} gap={2}>
-      <Box>
-        <BirdMark />
+    <Box paddingX={1} gap={2} height={1}>
+      <Box flexShrink={0}>
+        <Text>🐦</Text>
         <Text> </Text>
         <Text bold color={theme.accent}>
           junco
         </Text>
       </Box>
-      <Text bold wrap="truncate">
-        {repoNwo ?? "no repo"}
-      </Text>
-      <Box flexGrow={1} />
-      {watchlistError !== null && <Text color={theme.warn}>watchlist!</Text>}
-      {outboxDepth > 0 && <Text color={theme.warn}>⇡{outboxDepth} unpushed</Text>}
-      <Text color={daemonUp ? theme.success : theme.warn}>{daemon}</Text>
-      {queueRunning + queueWaiting > 0 && (
-        <Text color={theme.info}>
-          ◐{queueRunning} ⏳{queueWaiting}
+      <Box flexShrink={1} minWidth={0}>
+        <Text bold wrap="truncate">
+          {repoNwo ?? "no repo"}
         </Text>
-      )}
+      </Box>
+      <Box flexGrow={1} />
+      <Box flexShrink={0} gap={2}>
+        {watchlistError !== null && <Text color={theme.warn}>watchlist!</Text>}
+        {reviewCount > 0 && <Text color={theme.warn}>●{reviewCount} review</Text>}
+        {wide && health?.up && (
+          <Text>
+            <Text color={theme.success}>✓{health.tasksSucceeded ?? 0}</Text>
+            {(health.tasksFailed ?? 0) > 0 && (
+              <Text color={theme.error}> ✗{health.tasksFailed}</Text>
+            )}
+          </Text>
+        )}
+        {wide && lastTaskAt !== null && (
+          <Text>
+            last <Text color={lastGood ? theme.success : theme.error}>{lastGood ? "✓" : "✗"}</Text>{" "}
+            {relTime(lastTaskAt, now)}
+          </Text>
+        )}
+        {wide && totalTokensOut !== null && totalTokensOut > 0 && (
+          <Text dimColor>tok {fmtCompact(totalTokensOut)}</Text>
+        )}
+        {wide && bridgeErrors !== null && bridgeErrors > 0 && (
+          <Text color={theme.warn}>bridge ✗{bridgeErrors}</Text>
+        )}
+        <Text color={daemonUp ? theme.success : theme.warn}>{daemon}</Text>
+        {queueRunning + queueWaiting > 0 && (
+          <Text color={theme.info}>
+            ◐{queueRunning} ⏳{queueWaiting}
+          </Text>
+        )}
+        {outboxDepth > 0 && <Text color={theme.warn}>⇡{outboxDepth} unpushed</Text>}
+      </Box>
     </Box>
   );
 }

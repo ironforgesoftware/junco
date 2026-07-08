@@ -290,6 +290,13 @@ describe("health", () => {
           uptimeSeconds: 120,
           lastBridgeSweepAt: "2026-07-06T10:00:00Z",
           ticketsBridged: 2,
+          tasksProcessed: 9,
+          tasksSucceeded: 7,
+          tasksFailed: 2,
+          lastTaskStatus: "completed",
+          lastTaskAt: "2026-07-06T09:55:00Z",
+          totalTokensOut: 45000,
+          bridgeErrors: 1,
         },
       }),
     })) as unknown as typeof fetch;
@@ -299,12 +306,33 @@ describe("health", () => {
       uptimeSeconds: 120,
       lastBridgeSweepAt: "2026-07-06T10:00:00Z",
       ticketsBridged: 2,
+      tasksProcessed: 9,
+      tasksSucceeded: 7,
+      tasksFailed: 2,
+      lastTaskStatus: "completed",
+      lastTaskAt: "2026-07-06T09:55:00Z",
+      totalTokensOut: 45000,
+      bridgeErrors: 1,
     });
     const fetchBad = (async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     const c2 = makeGhDashboardClient(cfg, { ...fakes(), fetchFn: fetchBad });
-    expect((await c2.health()).up).toBe(false);
+    const down = await c2.health();
+    expect(down.up).toBe(false);
+    expect(down).toEqual({
+      up: false,
+      uptimeSeconds: null,
+      lastBridgeSweepAt: null,
+      ticketsBridged: null,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
+    });
   });
 });
 

@@ -225,6 +225,25 @@ export function App(props: AppProps): React.JSX.Element {
     return { nwo: r.nwo, fromConfig: r.fromConfig, counts };
   });
 
+  // Header pulse: issues needing operator review (plan-ready or approved)
+  // across the currently watched repos whose issues have loaded so far —
+  // issues are fetched lazily per selection, so unvisited repos contribute 0.
+  // Scoped to repoMappings (not the raw issues map) so an unwatched repo's
+  // leftover entries can never inflate the count.
+  const reviewCount = useMemo(
+    () =>
+      repoMappings.reduce(
+        (sum, r) =>
+          sum +
+          (issues[r.nwo] ?? []).reduce((n, iss) => {
+            const st = deriveState(iss.labels, trigger);
+            return st === "plan-ready" || st === "approved" ? n + 1 : n;
+          }, 0),
+        0,
+      ),
+    [repoMappings, issues, trigger],
+  );
+
   const loadIssues = useCallback(
     (nwo: string): Promise<void> => {
       return client.listIssues(nwo).then((res) => {
@@ -493,6 +512,21 @@ export function App(props: AppProps): React.JSX.Element {
     const next = cur.filter((e) => e.nwo.toLowerCase() !== currentRepo.nwo.toLowerCase());
     writeWatchlist(watchlistFile, next);
     setWatchlistEntries(next);
+    // Drop the repo's cached issue state too — the rail badges and the header
+    // pulse must never read ghost data for a repo that is no longer watched.
+    const gone = currentRepo.nwo;
+    setIssues((prev) => {
+      if (!(gone in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[gone];
+      return rest;
+    });
+    setStaleAt((prev) => {
+      if (!(gone in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[gone];
+      return rest;
+    });
     showToast("success", `unwatched ${currentRepo.nwo}`);
   }, [currentRepo, watchlistFile, watchlistError, showToast]);
 
@@ -805,8 +839,10 @@ export function App(props: AppProps): React.JSX.Element {
       header={
         <Header
           repoNwo={currentNwo ?? null}
-          daemonUp={health === null ? null : health.up}
-          uptimeSeconds={health?.uptimeSeconds ?? null}
+          health={health}
+          reviewCount={reviewCount}
+          now={queueNow}
+          mode={layout.mode}
           queueRunning={queueSnap?.running.length ?? 0}
           queueWaiting={queueSnap?.waiting.length ?? 0}
           watchlistError={watchlistError}
