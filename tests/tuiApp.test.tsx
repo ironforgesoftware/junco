@@ -8,6 +8,7 @@ import { App } from "../src/tui/App.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
 import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
+import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 
@@ -62,14 +63,15 @@ const QUEUE_SNAP: QueueSnapshot = {
 
 function makeClient(
   issuesByRepo: Record<string, DashIssue[]>,
-  opts: { failActions?: boolean } = {},
+  opts: { failActions?: boolean; prsByRepo?: Record<string, DashPr[]> } = {},
 ) {
   const actions: unknown[][] = [];
   const validatePaths: string[] = [];
   const cloned: string[] = [];
+  const prCalls: [string, number][] = [];
   const client: DashboardClient = {
     listIssues: async (nwo) => okv({ issues: issuesByRepo[nwo] ?? [], staleAt: null }),
-    listPrs: async () => okv({ prs: [], staleAt: null }),
+    listPrs: async (nwo) => okv({ prs: opts.prsByRepo?.[nwo] ?? [], staleAt: null }),
     cloneRepo: async (_n, dest) => {
       cloned.push(dest);
       return okv(undefined);
@@ -84,7 +86,10 @@ function makeClient(
       return path === "/bad" ? { ok: false, error: "clone origin is other/thing" } : okv(undefined);
     },
     openInBrowser: async () => okv(undefined),
-    openPrInBrowser: async () => okv(undefined),
+    openPrInBrowser: async (nwo, num) => {
+      prCalls.push([nwo, num]);
+      return okv(undefined);
+    },
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -99,7 +104,7 @@ function makeClient(
       bridgeErrors: null,
     }),
   };
-  return { client, actions, validatePaths, cloned };
+  return { client, actions, validatePaths, cloned, prCalls };
 }
 
 /** A client whose listIssues walks a fixed sequence of responses (call N →
@@ -140,6 +145,71 @@ function makeSeqClient(sequence: DashIssue[][]) {
   return { client, actions };
 }
 
+/** A client whose listPrs walks a fixed sequence of responses (call N →
+ * sequence[min(N, len-1)]) so a test can deliver a re-sorted PR poll. Records
+ * openPrInBrowser calls so the anchored selection can be asserted. */
+function makePrSeqClient(sequence: DashPr[][]) {
+  const prCalls: [string, number][] = [];
+  let call = 0;
+  const client: DashboardClient = {
+    listIssues: async () => okv({ issues: [], staleAt: null }),
+    listPrs: async () => {
+      const r = okv({ prs: sequence[Math.min(call, sequence.length - 1)], staleAt: null });
+      call++;
+      return r;
+    },
+    cloneRepo: async () => okv(undefined),
+    issueDetail: async () => okv({ body: "the body", planComment: null }),
+    applyAction: async () => okv({ queued: false }),
+    validateAndPrepareRepo: async () => okv(undefined),
+    openInBrowser: async () => okv(undefined),
+    openPrInBrowser: async (nwo, num) => {
+      prCalls.push([nwo, num]);
+      return okv(undefined);
+    },
+    health: async () => ({
+      up: true,
+      uptimeSeconds: 60,
+      lastBridgeSweepAt: null,
+      ticketsBridged: 0,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
+    }),
+  };
+  return { client, prCalls };
+}
+
+/** DashPr fixture — junco-branch head so it survives the branch-prefix filter;
+ * override the fields a test cares about. */
+const makePr = (over: Partial<DashPr> = {}): DashPr => ({
+  number: 100,
+  title: "Some PR",
+  url: "https://github.com/acme/api/pull/100",
+  headRefName: "junco/some-slug",
+  baseRefName: "main",
+  isDraft: false,
+  state: "OPEN",
+  reviewDecision: null,
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
+  checks: { pass: 1, fail: 0, pending: 0, total: 1 },
+  additions: 10,
+  deletions: 2,
+  changedFiles: 3,
+  createdAt: "2026-07-05T10:00:00Z",
+  updatedAt: "2026-07-06T10:00:00Z",
+  mergedAt: null,
+  author: "junco-bot",
+  labels: [],
+  nwo: "acme/api",
+  ...over,
+});
+
 const rawIssue: DashIssue = {
   number: 7,
   title: "Fix uploads",
@@ -155,11 +225,13 @@ function renderApp(
   issuePollMs = 999999,
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
   queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
+  prPollMs = 999999,
 ) {
   return render(
     <App
       client={client}
       trigger="junco"
+      branchPrefix="junco/"
       configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
       watchlistFile={watchlistFile}
       configPath="/x/config.toml"
@@ -167,6 +239,7 @@ function renderApp(
       issuePollMs={issuePollMs}
       healthPollMs={999999}
       queuePollMs={999999}
+      prPollMs={prPollMs}
       queueFn={queueFn}
       runCliFn={runCliFn}
       // Medium layout: single body pane, so enter still opens the detail view
@@ -436,6 +509,103 @@ describe("App", () => {
     r.stdin.write("x"); // unwatch — the issues/staleAt entries drop with the mapping
     await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
     expect(readWatchlist(file).entries).toEqual([]);
+  });
+});
+
+describe("PRs view", () => {
+  const wlp = () => join(mkdtempSync(join(tmpdir(), "junco-prs-")), "wl.json");
+
+  it("p opens the PRs view, esc returns; p toggles too", async () => {
+    const pr = makePr({ number: 42, title: "My PR" });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderApp(client, wlp());
+    await tick();
+    r.stdin.write("p"); // open PRs view
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests ·"));
+    expect(r.lastFrame()).toContain("My PR");
+    r.stdin.write(ESC); // back to main
+    await until(() => !(r.lastFrame() ?? "").includes("p pull requests ·"));
+    r.stdin.write("p"); // re-open
+    await until(() => (r.lastFrame() ?? "").includes("p pull requests ·"));
+    r.stdin.write("p"); // p toggles closed too
+    await until(() => !(r.lastFrame() ?? "").includes("p pull requests ·"));
+  });
+
+  it("aggregates junco PRs across every watched repo, attention-first", async () => {
+    // acme/api (config) contributes a failing PR; alx/coral (watchlist) a merged
+    // one. Both must render, and the failing PR sorts above the merged one.
+    const failing = makePr({
+      nwo: "acme/api",
+      number: 10,
+      title: "Failing PR",
+      checks: { pass: 0, fail: 1, pending: 0, total: 1 },
+      updatedAt: "2026-07-06T10:00:00Z",
+    });
+    const merged = makePr({
+      nwo: "alx/coral",
+      number: 20,
+      title: "Merged PR",
+      url: "https://github.com/alx/coral/pull/20",
+      headRefName: "junco/merged-slug",
+      state: "MERGED",
+      mergedAt: "2026-07-06T09:00:00Z",
+      updatedAt: "2026-07-06T09:00:00Z",
+    });
+    const { client } = makeClient(
+      { "acme/api": [], "alx/coral": [] },
+      { prsByRepo: { "acme/api": [failing], "alx/coral": [merged] } },
+    );
+    const file = wlp();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("Failing PR"));
+    const f = r.lastFrame()!;
+    expect(f).toContain("Merged PR"); // both repos aggregated into one flat list
+    expect(f.indexOf("Failing PR")).toBeLessThan(f.indexOf("Merged PR")); // attention first
+  });
+
+  it("o opens the selected PR in the browser with its {nwo, number}", async () => {
+    const pr = makePr({ nwo: "acme/api", number: 42, title: "My PR" });
+    const { client, prCalls } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderApp(client, wlp());
+    await tick();
+    r.stdin.write("p");
+    await until(() => (r.lastFrame() ?? "").includes("My PR"));
+    r.stdin.write("o");
+    await until(() => prCalls.length > 0);
+    expect(prCalls).toEqual([["acme/api", 42]]);
+  });
+
+  it("keeps selection on the same PR number when a poll re-sorts the list", async () => {
+    // Both PRs share a group (checks-pending); #10 is newer → top → anchored.
+    const a = makePr({
+      nwo: "acme/api",
+      number: 10,
+      title: "PR ten",
+      checks: { pass: 0, fail: 0, pending: 1, total: 1 },
+      updatedAt: "2026-07-06T12:00:00Z",
+    });
+    const b = makePr({
+      nwo: "acme/api",
+      number: 11,
+      title: "PR eleven",
+      headRefName: "junco/eleven",
+      checks: { pass: 0, fail: 0, pending: 1, total: 1 },
+      updatedAt: "2026-07-06T10:00:00Z",
+    });
+    const first = [a, b];
+    const second = [a, { ...b, updatedAt: "2026-07-06T14:00:00Z" }]; // #11 now newest → top
+    const { client, prCalls } = makePrSeqClient([first, second]);
+    const r = renderApp(client, wlp(), 999999, undefined, undefined, 60); // prPollMs=60
+    await tick();
+    r.stdin.write("p"); // open PRs view; selection anchored to #10
+    await until(() => (r.lastFrame() ?? "").includes("PR ten"));
+    await wait(140); // let the interval poll deliver the re-sorted `second`
+    r.stdin.write("o"); // open the ANCHORED pr
+    await until(() => prCalls.length > 0);
+    expect(prCalls).toEqual([["acme/api", 10]]); // anchor held despite the re-sort
   });
 });
 
@@ -850,6 +1020,7 @@ describe("workspace wide mode", () => {
       <App
         client={client}
         trigger="junco"
+        branchPrefix="junco/"
         configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
         watchlistFile={watchlistFile}
         configPath="/x/config.toml"
@@ -888,6 +1059,17 @@ describe("workspace wide mode", () => {
     expect(birdLine).toContain("last ✓");
     expect(birdLine).toContain("tok 45k");
     expect(birdLine).toContain("daemon ●");
+  });
+
+  it("renders the PrPreview card in pane 3 for the selected PR", async () => {
+    const pr = makePr({ nwo: "acme/api", number: 42, title: "Wide PR" });
+    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const r = renderWide(client, wl6());
+    await tick();
+    r.stdin.write("p"); // open PRs view
+    // `3 pr · #42` is the PrPreview pane title — unambiguous vs the issue "3 preview".
+    await until(() => (r.lastFrame() ?? "").includes("3 pr · #42"));
+    expect(r.lastFrame()).toContain("Wide PR");
   });
 
   it("enter focuses the preview pane (footer shows scroll + browser hints)", async () => {
@@ -939,6 +1121,7 @@ describe("workspace wide mode", () => {
       <App
         client={client}
         trigger="junco"
+        branchPrefix="junco/"
         configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
         watchlistFile={file}
         configPath="/x/config.toml"

@@ -66,6 +66,7 @@ export async function runDashboard(
     react.createElement(App, {
       client,
       trigger: cfg.github.triggerLabel,
+      branchPrefix: cfg.branchPrefix,
       configRepos: cfg.github.repos,
       watchlistFile: watchlistPath(cfg),
       // The palette spawns CLI subcommands against this same config.

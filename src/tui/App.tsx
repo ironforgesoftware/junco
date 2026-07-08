@@ -24,6 +24,9 @@ import { Header, hintsFor, type HintView } from "./components/Chrome.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
+import { PrList } from "./components/PrList.js";
+import { PrPreview } from "./components/PrPreview.js";
+import { sortPrs, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
 import { HelpModal } from "./components/HelpModal.js";
 import { AddRepoForm } from "./components/AddRepoForm.js";
@@ -37,6 +40,8 @@ import type { ToastKind } from "./theme.js";
 export interface AppProps {
   client: DashboardClient;
   trigger: string;
+  /** `cfg.branchPrefix` — recovers a PR's ticket slug from its head branch. */
+  branchPrefix: string;
   configRepos: GithubRepoMapping[]; // read-only entries
   watchlistFile: string; // read/write via watchlist.ts
   /** Resolved config path — spawned palette commands target the same config. */
@@ -45,6 +50,7 @@ export interface AppProps {
   clonesDir: string;
   issuePollMs?: number; // default 30_000; tests pass large values
   healthPollMs?: number; // default 5_000
+  prPollMs?: number; // default 60_000 — statusCheckRollup is a heavier call
   /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
   queueFn: () => Promise<QueueSnapshot>;
   queuePollMs?: number; // default 2_000
@@ -57,7 +63,7 @@ export interface AppProps {
 
 // Panes: 1 repos (rail), 2 issues (list), 3 preview (wide terminals only).
 type Pane = 1 | 2 | 3;
-type View = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput" | "queue";
+type View = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput" | "queue" | "prs";
 
 interface CmdState {
   title: string;
@@ -110,11 +116,21 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
 }
 
 export function App(props: AppProps): React.JSX.Element {
-  const { client, trigger, configRepos, watchlistFile, configPath, clonesDir, queueFn, onExit } =
-    props;
+  const {
+    client,
+    trigger,
+    branchPrefix,
+    configRepos,
+    watchlistFile,
+    configPath,
+    clonesDir,
+    queueFn,
+    onExit,
+  } = props;
   const issuePollMs = props.issuePollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
   const queuePollMs = props.queuePollMs ?? 2_000;
+  const prPollMs = props.prPollMs ?? 60_000;
   const runCliFn =
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
@@ -135,6 +151,14 @@ export function App(props: AppProps): React.JSX.Element {
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
   const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
+  // Cross-repo PR aggregate — one flat, already-sorted list (attention-first).
+  const [prs, setPrs] = useState<DashPr[]>([]);
+  // Oldest non-null per-repo staleAt across the aggregate (any offline repo → a
+  // stale marker); null when every repo served fresh.
+  const [prStaleAt, setPrStaleAt] = useState<string | null>(null);
+  // PR selection anchor: {nwo, number} because PR numbers collide across repos —
+  // a bare-number anchor would jump on re-sort.
+  const [prSel, setPrSel] = useState<{ nwo: string; number: number } | null>(null);
   const [pane, setPane] = useState<Pane>(1);
   const [view, setView] = useState<View>("main");
   const [detail, setDetail] = useState<DetailState | null>(null);
@@ -166,6 +190,9 @@ export function App(props: AppProps): React.JSX.Element {
   // Last resolved positional index — the fallback when the selected issue number
   // vanishes from the list (closed/filtered), so the cursor stays near its slot.
   const lastIdxRef = useRef(0);
+  // Same fallback, for the PR list: the slot the cursor returns to when the
+  // anchored {nwo, number} vanishes (merged/closed and rolled off the limit).
+  const lastPrIdxRef = useRef(0);
 
   const showToast = useCallback((kind: ToastKind, text: string) => {
     setToast({ kind, text });
@@ -215,6 +242,21 @@ export function App(props: AppProps): React.JSX.Element {
   lastIdxRef.current = issueIdxSafe;
   const currentIssue = filteredIssues[issueIdxSafe];
 
+  // Resolve the anchored PR to a live index in the sorted aggregate; fall back
+  // to the clamped last slot only when that PR is gone (mirrors the issue
+  // anchor above — the anchor survives a re-sorting poll).
+  const prByAnchor = prSel
+    ? prs.findIndex((p) => p.nwo === prSel.nwo && p.number === prSel.number)
+    : -1;
+  const prIdxSafe =
+    prs.length === 0
+      ? 0
+      : prByAnchor >= 0
+        ? prByAnchor
+        : Math.min(lastPrIdxRef.current, prs.length - 1);
+  lastPrIdxRef.current = prIdxSafe;
+  const selectedPr = prs[prIdxSafe] ?? null;
+
   // Per-repo issue counts for the rail badges, derived from loaded issues.
   const repoRows: RailRepo[] = repoMappings.map((r) => {
     const counts: RailRepo["counts"] = {};
@@ -258,6 +300,32 @@ export function App(props: AppProps): React.JSX.Element {
     [client, trigger, showToast],
   );
 
+  // Cross-repo PR aggregate: fetch every watched repo independently (a failed
+  // repo contributes nothing and never blocks the others — and is NOT toasted
+  // on the poll path), flatten, sort attention-first, and surface the OLDEST
+  // non-null staleAt so the list shows a stale marker when any repo is offline.
+  const loadPrs = useCallback(
+    (isAlive: () => boolean = () => true): Promise<void> => {
+      const targets = repoMappings.map((r) => r.nwo);
+      return Promise.all(targets.map((nwo) => client.listPrs(nwo))).then((results) => {
+        if (!isAlive()) return;
+        const all: DashPr[] = [];
+        let oldestStale: string | null = null;
+        for (const res of results) {
+          if (!res.ok) continue; // one repo down: skip it, never block the rest
+          all.push(...res.value.prs);
+          const s = res.value.staleAt;
+          if (s !== null && (oldestStale === null || Date.parse(s) < Date.parse(oldestStale))) {
+            oldestStale = s;
+          }
+        }
+        setPrs(sortPrs(all));
+        setPrStaleAt(oldestStale);
+      });
+    },
+    [client, repoMappings],
+  );
+
   // Load issues for the selected repo (initial mount + every selection change).
   useEffect(() => {
     if (!currentNwo) return;
@@ -285,6 +353,18 @@ export function App(props: AppProps): React.JSX.Element {
       return { ...m, [currentNwo]: arr[idx].number };
     });
   }, [currentNwo, issues]);
+
+  // Keep the PR anchor valid: top row on first load, and the same slot when the
+  // anchored PR disappears. A still-present anchor is left untouched so a
+  // re-sorting poll never slides a different PR under the cursor.
+  useEffect(() => {
+    if (prs.length === 0) return;
+    setPrSel((cur) => {
+      if (cur && prs.some((p) => p.nwo === cur.nwo && p.number === cur.number)) return cur;
+      const idx = Math.max(0, Math.min(lastPrIdxRef.current, prs.length - 1));
+      return { nwo: prs[idx].nwo, number: prs[idx].number };
+    });
+  }, [prs]);
 
   // Issue polling — reads the live selection from a ref so the interval never
   // goes stale as the operator navigates.
@@ -330,6 +410,20 @@ export function App(props: AppProps): React.JSX.Element {
     };
   }, [queueFn, queuePollMs]);
 
+  // Cross-repo PR polling (fires once on mount, then on the interval). Re-runs
+  // when repoMappings changes (a watch/unwatch) so a newly-watched repo's PRs
+  // appear on the next tick. The alive guard threads through loadPrs so a poll
+  // in flight when the app unmounts never sets state.
+  useEffect(() => {
+    let alive = true;
+    void loadPrs(() => alive);
+    const id = setInterval(() => void loadPrs(() => alive), prPollMs);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [loadPrs, prPollMs]);
+
   // Pane-3 preview autoload (wide only): debounced issueDetail keyed on the
   // selected issue, memoized in previewCache so re-selection is instant.
   const previewIssue = filteredIssues[issueIdxSafe] ?? null;
@@ -342,7 +436,10 @@ export function App(props: AppProps): React.JSX.Element {
     if (view === "main" && layout.mode === "wide") setScroll(0);
   }, [previewKey, view, layout.mode]);
   useEffect(() => {
-    if (layout.mode !== "wide" || previewKey === null || !currentNwo || !previewIssue) return;
+    // Gated to the live wide-mode issue preview: in the prs view pane 3 renders
+    // PrPreview (zero-fetch), so this issueDetail autoload must NOT fire there.
+    if (view !== "main" || layout.mode !== "wide" || previewKey === null) return;
+    if (!currentNwo || !previewIssue) return;
     const cached = previewCache.current.get(previewKey);
     if (cached) {
       setPreview({ ...cached, loading: false, error: null });
@@ -365,10 +462,11 @@ export function App(props: AppProps): React.JSX.Element {
       alive = false;
       clearTimeout(t);
     };
-    // Deps are intentionally the reload key + layout mode only (currentNwo and
-    // previewIssue are derived from previewKey); a broader list would re-fire on
-    // every unrelated render.
-  }, [previewKey, layout.mode]);
+    // Deps are the reload key + layout mode + view (currentNwo and previewIssue
+    // are derived from previewKey; view gates the prs-view suppression). `view`
+    // changes only on view transitions, so this never re-fires on unrelated
+    // renders. Coming back to main re-fires it — the previewCache serves instantly.
+  }, [previewKey, layout.mode, view]);
 
   const setIssueLabels = useCallback((nwo: string, num: number, labels: string[]) => {
     setIssues((prev) => {
@@ -628,6 +726,40 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
+    if (view === "prs") {
+      if (key.escape || input === "p") {
+        setScroll(0); // shared offset — don't bleed it into the pane-3 preview
+        return void setView("main");
+      }
+      // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
+      // must keep the cursor on the same PR.
+      const movePr = (delta: number): void => {
+        if (prs.length === 0) return;
+        const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
+        setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
+      };
+      const movePrTo = (idx: number): void => {
+        if (prs.length === 0) return;
+        const clamped = Math.max(0, Math.min(idx, prs.length - 1));
+        setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
+      };
+      if (input === "j" || key.downArrow) return void movePr(1);
+      if (input === "k" || key.upArrow) return void movePr(-1);
+      if (input === "g") return void movePrTo(0);
+      if (input === "G") return void movePrTo(prs.length - 1);
+      if (input === "o" || key.return) {
+        if (selectedPr) {
+          const { nwo, number } = selectedPr;
+          void client.openPrInBrowser(nwo, number).then((res) => {
+            if (!res.ok) showToast("error", res.error);
+          });
+        }
+        return;
+      }
+      if (input === "r") return void loadPrs();
+      return;
+    }
+
     if (view === "palette") {
       // Chars/backspace go to the palette's TextFields; the App routes only
       // navigation keys here, so typing 'j' filters instead of moving.
@@ -695,6 +827,11 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "t") {
       setScroll(0);
       setView("queue");
+      return;
+    }
+    if (input === "p") {
+      setScroll(0);
+      setView("prs");
       return;
     }
     if (input === ":") {
@@ -887,6 +1024,15 @@ export function App(props: AppProps): React.JSX.Element {
           focused
           height={listHeight}
         />
+      ) : view === "prs" ? (
+        <PrList
+          prs={prs}
+          selected={prIdxSafe}
+          focused
+          height={listHeight}
+          now={queueNow}
+          staleAt={prStaleAt}
+        />
       ) : (
         <IssueList
           issues={filteredIssues}
@@ -901,21 +1047,31 @@ export function App(props: AppProps): React.JSX.Element {
           staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
         />
       )}
-      {layout.mode === "wide" && view === "main" && (
-        <Preview
-          issue={previewIssue}
-          trigger={trigger}
-          body={preview.body}
-          planComment={preview.planComment}
-          loading={preview.loading}
-          error={preview.error}
-          scroll={scroll}
-          focused={pane === 3}
-          height={listHeight}
-          width={layout.previewWidth}
-          paneNumber
-        />
-      )}
+      {layout.mode === "wide" &&
+        (view === "prs" ? (
+          <PrPreview
+            pr={selectedPr}
+            branchPrefix={branchPrefix}
+            now={queueNow}
+            height={listHeight}
+            width={layout.previewWidth}
+            focused={false}
+          />
+        ) : view === "main" ? (
+          <Preview
+            issue={previewIssue}
+            trigger={trigger}
+            body={preview.body}
+            planComment={preview.planComment}
+            loading={preview.loading}
+            error={preview.error}
+            scroll={scroll}
+            focused={pane === 3}
+            height={listHeight}
+            width={layout.previewWidth}
+            paneNumber
+          />
+        ) : null)}
     </Workspace>
   );
 }

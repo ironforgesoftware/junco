@@ -7,7 +7,15 @@ import { fmtCompact } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
 
-export type HintView = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput" | "queue";
+export type HintView =
+  | "main"
+  | "detail"
+  | "help"
+  | "addRepo"
+  | "palette"
+  | "cmdOutput"
+  | "queue"
+  | "prs";
 
 function fmtUp(s: number | null): string {
   if (s === null) return "";
@@ -172,6 +180,12 @@ export function hintsFor(
       return [
         ["↑/↓", "scroll"],
         ["esc/t", "back"],
+      ];
+    case "prs":
+      return [
+        ["↑/↓", "move"],
+        ["o/enter", "open"],
+        ["esc/p", "back"],
       ];
     case "palette":
       return [
