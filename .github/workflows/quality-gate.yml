@@ -18,69 +18,37 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+  # One full quality gate per supported environment, grouped in the run graph
+  # under each caller node. Timeouts live inside env-gate.yml (GitHub rejects
+  # timeout-minutes on `uses:` caller jobs).
+  env_gate:
+    name: quality gate (${{ matrix.os }}, node ${{ matrix.node }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         node: ["22.19.0", "24"] # engines floor (exact) + current LTS
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false # no job here pushes; don't leave a token in .git/config
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run format:check
-      - run: npm run typecheck
-      # repo/pr/worktree tests create real commits in temp repos
-      - run: |
-          git config --global user.email "ci@example.invalid"
-          git config --global user.name "junco-ci"
-      - run: npm run build
-      - run: npm test
-
-  smoke:
-    name: package smoke (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false # no job here pushes; don't leave a token in .git/config
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          # engines floor: the shipped tarball must install and run on the
-          # minimum supported node
-          node-version: "22.19.0"
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: bash scripts/package-smoke.sh
+    uses: ./.github/workflows/env-gate.yml
+    with:
+      os: ${{ matrix.os }}
+      node: ${{ matrix.node }}
+      # the shipped tarball must install and run on the minimum supported
+      # node; node-24 legs skip the smoke to avoid redundant coverage
+      smoke: ${{ matrix.node == '22.19.0' }}
 
   # The single status check that ties every environment leg together. Branch
   # protection requires exactly this context: "quality-gate".
   gate:
     name: quality-gate
-    needs: [test, smoke]
+    needs: [env_gate]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Fail unless every leg succeeded
+      - name: Fail unless every environment gate succeeded
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
         run: |
-          echo "::error::A quality-gate leg did not succeed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
+          echo "::error::An environment quality gate did not succeed — env_gate=${{ needs.env_gate.result }}"
           exit 1
-      - name: All legs green
-        run: echo "quality gate passed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
+      - name: All environments green
+        run: echo "quality gate passed — env_gate=${{ needs.env_gate.result }}"
