@@ -90,28 +90,30 @@ model is explicit about who can approve what.
 
 ## Documentation
 
-| Guide                                  | What's inside                                                                        |
-| -------------------------------------- | ------------------------------------------------------------------------------------ |
-| [Tickets](docs/tickets.md)             | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle   |
-| [Configuration](docs/configuration.md) | The annotated `config.toml` reference and the knobs worth knowing                    |
-| [GitHub mode](docs/github-mode.md)     | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model |
-| [Dashboard](docs/dashboard.md)         | Every pane, key, and the command palette                                             |
-| [Operations](docs/operations.md)       | Health endpoint, running as a service, security model, troubleshooting               |
-| [ARCHITECTURE.md](ARCHITECTURE.md)     | The runtime, module by module — accurate and maintained                              |
+| Guide                                      | What's inside                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [Tickets](docs/tickets.md)                 | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle   |
+| [Configuration](docs/configuration.md)     | The annotated `config.toml` reference and the knobs worth knowing                    |
+| [GitHub mode](docs/github-mode.md)         | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model |
+| [Vulnerability assessment](docs/assess.md) | `junco assess` — audit a repo, file GitHub issues, dedup semantics, `--auto-plan`    |
+| [Dashboard](docs/dashboard.md)             | Every pane, key, and the command palette                                             |
+| [Operations](docs/operations.md)           | Health endpoint, running as a service, security model, troubleshooting               |
+| [ARCHITECTURE.md](ARCHITECTURE.md)         | The runtime, module by module — accurate and maintained                              |
 
 ## CLI at a glance
 
-|                                                 |                                                        |
-| ----------------------------------------------- | ------------------------------------------------------ |
-| `junco start` / `junco restart`                 | run the daemon / restart the installed service         |
-| `junco submit <file>`                           | queue a ticket (also reads stdin)                      |
-| `junco dashboard`                               | the fullscreen TUI                                     |
-| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                      |
-| `junco prs`                                     | list junco-authored pull requests across watched repos |
-| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                  |
-| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog             |
-| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model         |
-| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                 |
+|                                                 |                                                         |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| `junco start` / `junco restart`                 | run the daemon / restart the installed service          |
+| `junco submit <file>`                           | queue a ticket (also reads stdin)                       |
+| `junco dashboard`                               | the fullscreen TUI                                      |
+| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                       |
+| `junco prs`                                     | list junco-authored pull requests across watched repos  |
+| `junco assess <path\|owner/repo> [--auto-plan]` | audit a repo for vulnerabilities and file GitHub issues |
+| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                   |
+| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog              |
+| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model          |
+| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                  |
 
 ## Contributing
 
