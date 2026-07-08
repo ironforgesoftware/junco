@@ -10,6 +10,12 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
+// NOTE: assessFlow.ts imports READ_ONLY_TOOLS from this module, so this
+// import creates a module cycle. Runtime-safe: both bindings are only
+// dereferenced inside function bodies (executeClaimed / runAssessFlow),
+// never during module evaluation — see assess-task-7-report.md for the
+// full evaluation-order rationale.
+import { runAssessFlow } from "./assessFlow.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
 import {
   NOOP_REPORTER,
@@ -31,6 +37,9 @@ export interface RunDeps {
   sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
   // Critic session factory, threaded into the PR-flow (tests control its verdict).
   criticSessionFactory?: () => Promise<AgentSessionLike>;
+  // Assess-flow factory (peer of criticSessionFactory): tests inject a fake;
+  // production defaults to the real runAssessFlow.
+  assessFlowFn?: typeof runAssessFlow;
   /** Probe before claiming: false → leave the inbox untouched this poll. The
    * daemon wires this to endpointReachable so an endpoint outage queues work
    * instead of burning tickets into failed/. */
@@ -172,6 +181,26 @@ export async function executeClaimed(
     try {
       log.info("claimed", { src: next.path, dst: claimed });
       await reporter.onStart(next).catch(() => undefined);
+
+      // Assessment ticket (frontmatter has `assess:`): audit the repo and file
+      // issues per finding. Must precede the hasRepo branch below — assess
+      // tickets also carry `repo:` (the audit target), which would otherwise
+      // trigger the PR flow.
+      if (next.assess) {
+        const assessFlow = deps.assessFlowFn ?? runAssessFlow;
+        const flow = await assessFlow(cfg, next, claimed, {
+          sessionFactoryFor: deps.sessionFactoryFor,
+          abortSignal: deps.abortSignal,
+          onProgress: (p) => metrics.setTaskProgress(next.id, p),
+        });
+        if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
+        else
+          await reporter
+            .onFinal(next, outcomeFromQa(flow.status, flow.result))
+            .catch(() => undefined);
+        log.info("finalized (assess)", { dst: flow.dst, status: flow.status });
+        return;
+      }
 
       // PR-flow ticket (frontmatter has `repo:`): derive the repo context and hand
       // off to the PR orchestrator. A repo-less ctx (null) falls through to Q&A.
