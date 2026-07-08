@@ -401,4 +401,72 @@ describe("flushOutbox", () => {
     const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(r.sent).toBe(1);
   });
+
+  it("replays a push op against its remote", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-remote1-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "prflow", {
+      kind: "push",
+      repoPath: "/repo",
+      branch: "junco/x",
+      remote: "fork",
+    });
+    const f = fakes(() => undefined);
+    await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    const gitCalls = f.calls.filter((c) => c.tool === "git");
+    expect(gitCalls[0].args).toEqual(["-C", "/repo", "push", "--set-upstream", "fork", "junco/x"]);
+  });
+
+  it("pr op pushes to op.remote and creates with --head op.head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-remote2-"));
+    const cfg = { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
+    enqueueOp(cfg, "prflow", {
+      kind: "pr",
+      repoPath: "/repo",
+      branch: "junco/x",
+      remote: "fork",
+      head: "me:junco/x",
+      nwo: "up/stream",
+      issue: null,
+      base: "main",
+      title: "t",
+      bodyText: "b",
+      draft: true,
+      labels: [],
+      reviewers: [],
+      finalize: null,
+      pushed: false,
+      prUrl: null,
+    });
+    const f = fakes((_tool, args) => {
+      if (args[0] === "pr" && args[1] === "create") {
+        return { stdout: "https://github.com/up/stream/pull/1\n" };
+      }
+      return undefined;
+    });
+    await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    const gitCalls = f.calls.filter((c) => c.tool === "git");
+    expect(gitCalls[0].args).toEqual(["-C", "/repo", "push", "--set-upstream", "fork", "junco/x"]);
+    const ghCalls = f.calls.filter((c) => c.tool === "gh");
+    const create = ghCalls.find((c) => c.args[0] === "pr" && c.args[1] === "create")!;
+    expect(create.args).toContain("--head");
+    expect(create.args[create.args.indexOf("--head") + 1]).toBe("me:junco/x");
+  });
+
+  it("ops without remote/head replay exactly as before (origin, bare branch)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-remote3-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "prflow", { kind: "push", repoPath: "/repo", branch: "junco/x" });
+    const f = fakes(() => undefined);
+    await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    const gitCalls = f.calls.filter((c) => c.tool === "git");
+    expect(gitCalls[0].args).toEqual([
+      "-C",
+      "/repo",
+      "push",
+      "--set-upstream",
+      "origin",
+      "junco/x",
+    ]);
+  });
 });
