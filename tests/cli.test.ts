@@ -24,10 +24,10 @@ function stubConfig(): Config {
 }
 
 /** A fake SingletonLock with a spy on release(). */
-function makeFakeLock(): SingletonLock & { release: ReturnType<typeof vi.fn> } {
+function makeFakeLock(): SingletonLock & { release: ReturnType<typeof vi.fn<() => void>> } {
   return {
     path: "/tmp/worker.lock",
-    release: vi.fn(),
+    release: vi.fn<() => void>(),
   };
 }
 
