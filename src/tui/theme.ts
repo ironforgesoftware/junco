@@ -5,7 +5,8 @@
 export const theme = {
   accent: "#eb6f92",
   selectionBg: "#2a2e3a",
-  brandInk: "#191724", // chip text on the accent background
+  slate: "#6e6a86", // the junco's hood/back (brand mark)
+  snow: "#e0def4", // the junco's belly (brand mark)
   border: "gray",
   success: "green",
   warn: "yellow",

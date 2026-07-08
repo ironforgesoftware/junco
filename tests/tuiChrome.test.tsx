@@ -3,10 +3,8 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { Header, Toast, Footer, hintsFor } from "../src/tui/components/Chrome.js";
 
-const NOW = new Date("2026-07-07T14:05:00");
-
 describe("Header", () => {
-  it("brand chip, repo, daemon up, queue chip, clock", () => {
+  it("bird mark, wordmark, repo, daemon up, queue chip", () => {
     const f = render(
       <Header
         repoNwo="acme/api"
@@ -16,15 +14,15 @@ describe("Header", () => {
         queueWaiting={2}
         watchlistError={null}
         outboxDepth={0}
-        now={NOW}
       />,
     ).lastFrame()!;
+    expect(f).toContain("▖▀▘");
     expect(f).toContain("junco");
     expect(f).toContain("acme/api");
     expect(f).toContain("daemon ●");
     expect(f).toContain("3h4m");
     expect(f).toContain("◐1 ⏳2");
-    expect(f).toMatch(/\d{2}:\d{2}/);
+    expect(f).not.toMatch(/\d{2}:\d{2}/);
   });
   it("daemon down and watchlist warn chip", () => {
     const f = render(
@@ -36,7 +34,6 @@ describe("Header", () => {
         queueWaiting={0}
         watchlistError="corrupt json"
         outboxDepth={0}
-        now={NOW}
       />,
     ).lastFrame()!;
     expect(f).toContain("daemon ○");
@@ -53,7 +50,6 @@ describe("Header", () => {
         queueWaiting={0}
         watchlistError={null}
         outboxDepth={3}
-        now={NOW}
       />,
     ).lastFrame()!;
     expect(withDepth).toContain("⇡3 unpushed");
@@ -67,7 +63,6 @@ describe("Header", () => {
         queueWaiting={0}
         watchlistError={null}
         outboxDepth={0}
-        now={NOW}
       />,
     ).lastFrame()!;
     expect(noDepth).not.toContain("unpushed");

@@ -11,7 +11,23 @@ function fmtUp(s: number | null): string {
   return ` up ${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }
 
-/** Row 1: brand chip · active repo · (right) watchlist warn, daemon, queue, clock. */
+/** The junco mark: three block-element cells, five sub-cell "pixels" —
+ * slate tail (▖), slate hood over snow belly in one half-block cell (▀ on
+ * a snow background), rose bill (▘). Universal glyphs; chalk downsamples
+ * the colors on 256/16-color terminals; NO_COLOR leaves a monochrome mark. */
+export function BirdMark(): React.JSX.Element {
+  return (
+    <Text>
+      <Text color={theme.slate}>▖</Text>
+      <Text color={theme.slate} backgroundColor={theme.snow}>
+        ▀
+      </Text>
+      <Text color={theme.accent}>▘</Text>
+    </Text>
+  );
+}
+
+/** Row 1: brand mark · active repo · (right) watchlist warn, daemon, queue. */
 export function Header({
   repoNwo,
   daemonUp,
@@ -20,7 +36,6 @@ export function Header({
   queueWaiting,
   watchlistError,
   outboxDepth,
-  now,
 }: {
   repoNwo: string | null;
   daemonUp: boolean | null;
@@ -30,16 +45,18 @@ export function Header({
   watchlistError: string | null;
   /** Ops parked in the GitHub outbox — hidden at 0. */
   outboxDepth: number;
-  now: Date;
 }): React.JSX.Element {
   const daemon =
     daemonUp === null ? "daemon …" : daemonUp ? `daemon ●${fmtUp(uptimeSeconds)}` : "daemon ○";
-  const hhmm = now.toTimeString().slice(0, 5);
   return (
     <Box paddingX={1} gap={2}>
-      <Text backgroundColor={theme.accent} color={theme.brandInk} bold>
-        {" junco "}
-      </Text>
+      <Box>
+        <BirdMark />
+        <Text> </Text>
+        <Text bold color={theme.accent}>
+          junco
+        </Text>
+      </Box>
       <Text bold wrap="truncate">
         {repoNwo ?? "no repo"}
       </Text>
@@ -52,7 +69,6 @@ export function Header({
           ◐{queueRunning} ⏳{queueWaiting}
         </Text>
       )}
-      <Text dimColor>{hhmm}</Text>
     </Box>
   );
 }

@@ -811,7 +811,6 @@ export function App(props: AppProps): React.JSX.Element {
           queueWaiting={queueSnap?.waiting.length ?? 0}
           watchlistError={watchlistError}
           outboxDepth={queueSnap?.outboxDepth ?? 0}
-          now={queueNow}
         />
       }
       toast={toast}
