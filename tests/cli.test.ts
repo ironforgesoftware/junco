@@ -679,6 +679,22 @@ describe("run(['outbox'])", () => {
   });
 });
 
+describe("run(['prs'])", () => {
+  it("returns 0 and prints the no-watched-repos guidance when none are configured", async () => {
+    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    const code = await run(["prs", "--config", configPath], {
+      loadConfigFn: () => cfgWithState,
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(0);
+    expect(captured.join("")).toBe(
+      "no watched repositories — add [[github.repos]] to config.toml or watch one from the dashboard\n",
+    );
+  });
+});
+
 describe("run(['restart']) — routing", () => {
   it("routes `restart` to runRestartFn with the RESOLVED config path (config validated first)", async () => {
     const { cfg } = freshDispatchVault();

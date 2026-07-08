@@ -12,7 +12,8 @@ import { gh, git } from "../git.js";
 import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
 import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
 import type { DashIssue, DashAction } from "./state.js";
-import { reduceChecks, ticketSlugFromBranch, type DashPr } from "./prState.js";
+import type { DashPr } from "./prState.js";
+import { fetchJuncoPrs } from "../githubPrs.js";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -40,50 +41,6 @@ export function cachePathFor(cfg: Config, nwo: string): string {
  * to address the PR cache directly. */
 function prCachePathFor(cfg: Config, nwo: string): string {
   return join(cfg.stateDir, "github-cache", `prs-${nwo.replace(/\//g, "__")}.json`);
-}
-
-const PR_LIST_JSON_FIELDS = [
-  "number",
-  "title",
-  "url",
-  "headRefName",
-  "baseRefName",
-  "isDraft",
-  "state",
-  "reviewDecision",
-  "statusCheckRollup",
-  "mergeable",
-  "mergeStateStatus",
-  "additions",
-  "deletions",
-  "changedFiles",
-  "createdAt",
-  "updatedAt",
-  "mergedAt",
-  "labels",
-  "author",
-].join(",");
-
-interface RawPr {
-  number: number;
-  title: string;
-  url: string;
-  headRefName: string;
-  baseRefName: string;
-  isDraft: boolean;
-  state: string;
-  reviewDecision: string | null;
-  statusCheckRollup: unknown;
-  mergeable: string | null;
-  mergeStateStatus: string | null;
-  additions: number;
-  deletions: number;
-  changedFiles: number;
-  createdAt: string;
-  updatedAt: string;
-  mergedAt: string | null;
-  labels: { name: string }[];
-  author: { login: string };
 }
 
 /** Mirrors the applyAction switch's add/remove lists EXACTLY — including the
@@ -317,51 +274,10 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
     listPrs(nwo) {
       return attempt(async () => {
         try {
-          const r = await ghFn(
-            cfg,
-            [
-              "pr",
-              "list",
-              "--repo",
-              nwo,
-              "--state",
-              "all",
-              "--limit",
-              "50",
-              "--json",
-              PR_LIST_JSON_FIELDS,
-            ],
-            { timeoutMs: GH_TIMEOUT, retryNetwork: true },
-          );
-          const raw = JSON.parse(r.stdout) as RawPr[];
-          const prs = raw
-            .map(
-              (p): DashPr => ({
-                number: p.number,
-                title: p.title,
-                url: p.url,
-                headRefName: p.headRefName,
-                baseRefName: p.baseRefName,
-                isDraft: p.isDraft,
-                state: p.state,
-                reviewDecision: p.reviewDecision,
-                mergeable: p.mergeable,
-                mergeStateStatus: p.mergeStateStatus,
-                checks: reduceChecks(p.statusCheckRollup),
-                additions: p.additions,
-                deletions: p.deletions,
-                changedFiles: p.changedFiles,
-                createdAt: p.createdAt,
-                updatedAt: p.updatedAt,
-                mergedAt: p.mergedAt,
-                author: p.author.login,
-                labels: p.labels.map((l) => l.name),
-                nwo,
-              }),
-            )
-            // Junco-authored PRs only — the branch-prefix filter recovers the
-            // ticket linkage (ticketSlugFromBranch) and keeps the cache compact.
-            .filter((p) => ticketSlugFromBranch(p.headRefName, cfg.branchPrefix) !== null);
+          // Fetch+map+filter is shared with `junco prs` via src/githubPrs.ts
+          // (the ONLY definition of the gh argv + DashPr mapping) — this
+          // method contributes only the disk-cache/offline-serve wrapper.
+          const prs = await fetchJuncoPrs(cfg, nwo, { ghFn });
           writePrCache(nwo, prs);
           return { prs, staleAt: null };
         } catch (e) {
