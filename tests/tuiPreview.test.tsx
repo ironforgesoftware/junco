@@ -76,4 +76,9 @@ describe("Preview", () => {
     const f = render(<Preview {...base} issue={null} />).lastFrame()!;
     expect(f).not.toContain("↗");
   });
+  it("keeps the ↗ link line pinned to row 3 while loading (body not yet fetched)", () => {
+    const f = render(<Preview {...base} issue={ISSUE} loading paneNumber />).lastFrame()!;
+    const rows = f.split("\n");
+    expect(rows[3]).toContain("↗");
+  });
 });

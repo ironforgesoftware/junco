@@ -11,6 +11,6 @@ export function hyperlink(text: string, url: string): string {
 /** `owner/repo#123` from a GitHub issue/PR url — compact display text that
  * survives narrow previews. Non-GitHub-shaped urls fall back scheme-less. */
 export function shortResourceRef(url: string): string {
-  const m = /github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/(\d+)/.exec(url);
+  const m = /^https?:\/\/github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/(\d+)/.exec(url);
   return m ? `${m[1]}#${m[2]}` : url.replace(/^https?:\/\//, "");
 }

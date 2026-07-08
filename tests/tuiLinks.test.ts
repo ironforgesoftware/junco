@@ -19,4 +19,9 @@ describe("shortResourceRef", () => {
       "github.example/acme/api/issues/7",
     );
   });
+  it("falls back for a github.com path embedded after the real host (unanchored match)", () => {
+    expect(shortResourceRef("https://evil.example/github.com/acme/api/issues/7")).toBe(
+      "evil.example/github.com/acme/api/issues/7",
+    );
+  });
 });
