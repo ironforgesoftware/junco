@@ -102,4 +102,40 @@ describe("parseTicket", () => {
     );
     expect(t.github?.kind).toBe("plan");
   });
+
+  it("parses assess: {} with autoPlan defaulting to false", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nassess: {}\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: false });
+  });
+
+  it("parses assess with auto_plan: true", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nassess:\n  auto_plan: true\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: true });
+  });
+
+  it("defaults assess to null when bare assess: (YAML null)", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nassess:\n---\nbody`);
+    expect(t.assess).toBeNull();
+  });
+
+  it("rejects assess as scalar or array (only object counts)", () => {
+    expect(parseTicket("/q/a.md", `---\nid: x\nassess: "yes"\n---\nbody`).assess).toBeNull();
+    expect(parseTicket("/q/a.md", `---\nid: x\nassess: [1]\n---\nbody`).assess).toBeNull();
+  });
+
+  it("requires auto_plan to be strictly boolean (string 'true' → false)", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nassess:\n  auto_plan: "true"\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: false });
+  });
+
+  it("parses ticket with both assess and repo", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nrepo: /some/path\nassess: {}\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: false });
+    expect(t.hasRepo).toBe(true);
+  });
+
+  it("defaults assess to null when absent", () => {
+    const t = parseTicket("/q/a.md", "---\nid: x\n---\nbody");
+    expect(t.assess).toBeNull();
+  });
 });

@@ -28,7 +28,7 @@ export interface QueueRunning {
 export interface QueueWaiting {
   id: string;
   github: TicketGithub | null;
-  kind: "pr" | "ask" | "plan";
+  kind: "pr" | "ask" | "plan" | "assess";
   priority: "low" | "normal" | "high";
   retryCount: number;
   /** ISO stamp when deferred (future not_before), else null. */
@@ -142,7 +142,11 @@ export function makeQueueSnapshotFn(
           return {
             id: displayId(t),
             github: t.github,
-            kind: t.github?.kind ?? (t.hasRepo ? "pr" : "ask"),
+            // Assess tickets also carry `repo:` (the audit target), which would
+            // otherwise trigger the pr branch below — check first, mirroring
+            // runOnce's branch ordering (src/runOnce.ts, the `next.assess` guard
+            // precedes `next.hasRepo`).
+            kind: t.assess ? "assess" : (t.github?.kind ?? (t.hasRepo ? "pr" : "ask")),
             priority: t.priority,
             retryCount: t.retryCount,
             notBefore: deferred ? t.notBefore : null,

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runOutboxCommand } from "../src/outboxCmd.js";
-import { outboxPaths, enqueueOp, MAX_OP_ATTEMPTS } from "../src/githubOutbox.js";
+import { outboxPaths, enqueueOp, MAX_OP_ATTEMPTS, type OutboxOp } from "../src/githubOutbox.js";
 import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
 
@@ -11,13 +11,13 @@ function cfgAt(root: string): Config {
   return { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
 }
 
-const LABELS = {
+const LABELS: Extract<OutboxOp, { kind: "labels" }> = {
   kind: "labels",
   nwo: "a/b",
   issue: 7,
   add: ["junco:approved"],
   remove: [],
-} as const;
+};
 
 /** Write a StoredOp file directly (bypassing enqueueOp) so attempts/lastError
  * can be pinned without burning real flush cycles. */
@@ -26,7 +26,7 @@ function writeOp(
   id: string,
   fields: {
     createdAt: string;
-    origin: "dashboard" | "reporter" | "prflow";
+    origin: "dashboard" | "reporter" | "prflow" | "assess";
     issueKey: string | null;
     attempts: number;
     lastError: string | null;
@@ -129,6 +129,33 @@ describe("runOutboxCommand — list", () => {
     const code = await runOutboxCommand(cfg, [], { printFn: (s) => out.push(s) });
     expect(code).toBe(0);
     expect(out.join("")).toMatch(/<malformed>/);
+  });
+
+  it("issue-create op renders a line with the nwo and the fingerprint (no live issue/branch to key by)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obxcmd-issuecreate-"));
+    const cfg = cfgAt(root);
+    writeOp(cfg, "1-0000-aaaa-issue-create", {
+      createdAt: "2026-07-07T10:00:00Z",
+      origin: "assess",
+      issueKey: null,
+      attempts: 0,
+      lastError: null,
+      op: {
+        kind: "issue-create",
+        nwo: "a/b",
+        title: "[high] Vulnerable lodash (GHSA-xxxx-yyyy-zzzz)",
+        bodyText: "body text\n\n<!-- junco:finding:deadbeefcafebabe -->",
+        labels: ["junco:finding", "severity/high"],
+        fingerprint: "deadbeefcafebabe",
+      },
+    });
+    const out: string[] = [];
+    const code = await runOutboxCommand(cfg, [], {
+      printFn: (s) => out.push(s),
+      nowFn: () => new Date("2026-07-07T10:00:30Z"),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/issue-create a\/b deadbeefcafebabe attempts=0/);
   });
 
   it("op lines + dead footer when both present", async () => {

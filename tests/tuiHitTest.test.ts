@@ -11,6 +11,8 @@ const medium = (over: Partial<HitContext> = {}): HitContext => ({
   listCount: 3,
   railStart: 0,
   listStart: 0,
+  pane3Count: 2,
+  pane3Start: 0,
   hasPreviewTarget: false,
   ...over,
 });
@@ -48,10 +50,19 @@ describe("hitTest — main view", () => {
     expect(hitTest(medium(), 30, 6)).toEqual({ type: "pane", pane: 2 }); // below the 3 rows
     expect(hitTest(medium({ listCount: 0 }), 30, 3)).toEqual({ type: "pane", pane: 2 });
   });
-  it("wide: preview band, link line at LINK_LINE_ROW when a card is shown", () => {
-    expect(hitTest(wide(), 80, 4)).toEqual({ type: "linkLine" }); // y = 1 + 3
-    expect(hitTest(wide(), 80, 6)).toEqual({ type: "pane", pane: 3 });
-    expect(hitTest(wide({ hasPreviewTarget: false }), 80, 4)).toEqual({ type: "pane", pane: 3 });
+  it("wide: pane 3 is the repo-scoped PR monitor — rows resolve with the window offset", () => {
+    // Rows start at y = 1 + PANE_CONTENT_ROW = 3, same as the other lists.
+    expect(hitTest(wide(), 80, 3)).toEqual({ type: "pane3Row", index: 0 });
+    expect(hitTest(wide(), 80, 4)).toEqual({ type: "pane3Row", index: 1 });
+    expect(hitTest(wide({ pane3Count: 8, pane3Start: 4 }), 80, 4)).toEqual({
+      type: "pane3Row",
+      index: 5,
+    });
+  });
+  it("wide: pane-3 off-row (title, below last PR, empty monitor) focuses pane 3", () => {
+    expect(hitTest(wide(), 80, 2)).toEqual({ type: "pane", pane: 3 }); // title row
+    expect(hitTest(wide(), 80, 6)).toEqual({ type: "pane", pane: 3 }); // below 2 rows, inside budget
+    expect(hitTest(wide({ pane3Count: 0 }), 80, 3)).toEqual({ type: "pane", pane: 3 });
   });
   it("medium: no preview band — x up to the right edge is the middle pane", () => {
     expect(hitTest(medium(), 99, 3)).toEqual({ type: "issueRow", index: 0 });

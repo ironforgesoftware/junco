@@ -107,6 +107,9 @@ function makeConfig(work: string, wtsRoot: string): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -118,6 +121,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
     branchPrefix: "junco/",
     worktreeRoot: wtsRoot,
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -134,6 +138,9 @@ function makeConfig(work: string, wtsRoot: string): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: "/tmp/vault/state",
+    logToFile: false,
+    transcriptsEnabled: false,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -143,6 +150,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
   };
 }
 

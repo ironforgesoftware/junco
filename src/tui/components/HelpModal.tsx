@@ -46,8 +46,8 @@ export function HelpModal({
           ["←/→ · h/l · tab", "switch panes"],
           ["[ / ]", "scroll (alias of ↑/↓ in views)"],
           ["g/G", "first / last"],
-          ["1/2/3", "jump pane directly (3 = preview, wide)"],
-          ["enter", mode === "wide" ? "focus the preview pane" : "open issue detail"],
+          ["1/2/3", "jump pane directly (3 = PRs for the selected repo, wide)"],
+          ["enter", "open detail — issue (pane 2) or PR (pane 3 / PRs view)"],
         ]}
       />
       <Section
@@ -67,6 +67,8 @@ export function HelpModal({
           ["w", "add repo to watchlist"],
           ["x", "unwatch repo"],
           ["r", "refresh now"],
+          ["s", "assess the selected repo (audit for vulnerabilities, file issues)"],
+          ["S", "assess with --auto-plan (findings carry the trigger label)"],
           ["t", "queue view"],
           ["p", "PR tracking — junco-authored PRs across watched repos"],
           [":", "command palette"],
@@ -76,7 +78,7 @@ export function HelpModal({
         title="mouse"
         rows={[
           ["click", "focus pane / select row"],
-          ["click selected", "open — enter for issues, browser for PRs"],
+          ["click selected", "open it — same as enter"],
           ["wheel", "move selection / scroll, under the cursor"],
           ["↗ line", "open on GitHub (cmd+click works too)"],
         ]}

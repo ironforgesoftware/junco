@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "../src/types.js";
 import type { ClaimedWork } from "../src/runOnce.js";
-import type { HealthServerHandle } from "../src/healthServer.js";
+import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import {
@@ -61,6 +61,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -72,6 +75,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     branchPrefix: "junco/",
     worktreeRoot: "/tmp/worktrees",
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -88,6 +92,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 0,
     logLevel: "info",
+    stateDir: "/tmp/vault/state",
+    logToFile: false,
+    transcriptsEnabled: false,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -97,6 +104,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     ...overrides,
   };
 }
@@ -112,6 +120,8 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
 } {
   const deps: Required<MainLoopDeps> = {
     runOnceFn: vi.fn(async () => false),
+    claimFn: vi.fn(async () => null),
+    executeFn: vi.fn(async () => {}),
     recoverOrphansFn: vi.fn(() => {}),
     pruneFn: vi.fn(() => {}),
     waitForEndpointFn: vi.fn(async () => {}),
@@ -120,6 +130,8 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
     startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
+    bridgeSweepFn: vi.fn(async () => 0),
+    outboxDrainFn: vi.fn(async () => ({ sent: 0, dead: 0, remaining: 0, offline: false })),
     ...overrides,
   };
   return { deps };
@@ -474,7 +486,7 @@ describe("mainLoop — observability", () => {
     const cfg = makeConfig({ healthEnabled: true });
     const stop = new StopFlag();
     const handle = makeFakeHealthHandle();
-    const startHealthServerFn = vi.fn(async () => handle);
+    const startHealthServerFn = vi.fn(async (_opts: HealthServerOpts) => handle);
     const { deps } = makeDeps({
       startHealthServerFn,
       runOnceFn: vi.fn(async () => false),
@@ -487,7 +499,7 @@ describe("mainLoop — observability", () => {
 
     expect(startHealthServerFn).toHaveBeenCalledTimes(1);
     // It receives the configured host/port + the metrics singleton + a probe.
-    const arg = startHealthServerFn.mock.calls[0][0];
+    const arg = startHealthServerFn.mock.calls[0]![0]!;
     expect(arg.host).toBe(cfg.healthHost);
     expect(arg.port).toBe(cfg.healthPort);
     expect(arg.metrics).toBe(metrics);

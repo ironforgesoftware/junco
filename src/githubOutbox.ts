@@ -25,6 +25,7 @@ import { TERMINAL_DONE_STATUSES, type Config } from "./types.js";
 import { log } from "./logging.js";
 import { gh, git, GitOpError, isNetworkError } from "./git.js";
 import { lifecycleLabels } from "./githubInbox.js";
+import { FINDING_LABEL, FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
 
 export type OutboxOp =
   | { kind: "labels"; nwo: string; issue: number; add: string[]; remove: string[] }
@@ -45,13 +46,21 @@ export type OutboxOp =
       finalize: { ticketId: string; status: string; finalText: string } | null;
       pushed: boolean;
       prUrl: string | null;
+    }
+  | {
+      kind: "issue-create";
+      nwo: string;
+      title: string;
+      bodyText: string; // already ends with the finding marker
+      labels: string[];
+      fingerprint: string;
     };
 
 export interface StoredOp {
   id: string; // filename stem
   path: string;
   createdAt: string; // ISO
-  origin: "dashboard" | "reporter" | "prflow";
+  origin: "dashboard" | "reporter" | "prflow" | "assess";
   issueKey: string | null; // "<nwo>#<n>"
   attempts: number;
   lastError: string | null;
@@ -257,6 +266,77 @@ function prFlushComment(finalize: { finalText: string }, prUrl: string): string 
   return `Opened ${prUrl}\n\n${cap(finalize.finalText)}`;
 }
 
+const FINDING_LABEL_DEFAULT = { color: "ededed", description: "" };
+
+// Fingerprints already filed on <nwo>: scan the bodies of every issue
+// carrying the finding label (state all, most recent 500). Bodies can be
+// null (githubInbox.ts GhIssue precedent) — treated as empty.
+export async function fetchFindingMarkers(
+  cfg: Config,
+  nwo: string,
+  ghFn: typeof gh,
+): Promise<Set<string>> {
+  const listed = await ghFn(
+    cfg,
+    [
+      "issue",
+      "list",
+      "--repo",
+      nwo,
+      "--label",
+      FINDING_LABEL,
+      "--state",
+      "all",
+      "--limit",
+      "500",
+      "--json",
+      "body",
+    ],
+    { timeoutMs: GH_TIMEOUT },
+  );
+  const bodies = (JSON.parse(listed.stdout) as { body: string | null }[]).map((b) =>
+    typeof b.body === "string" ? b.body : "",
+  );
+  return extractFindingMarkers(bodies);
+}
+
+/** Idempotently create the labels an issue-create op needs (`gh label create
+ * --force` is create-or-update — same precedent as ensureLabels in
+ * githubInbox.ts:320-348). Known finding labels take their color/description
+ * from FINDING_LABEL_SPECS; anything else (e.g. the configured trigger label
+ * under --auto-plan) gets a neutral default. No per-process memoization: a
+ * replayed op may run weeks later against a repo this process never touched
+ * live, so the op must be fully self-contained. */
+export async function ensureFindingLabels(
+  cfg: Config,
+  nwo: string,
+  labels: string[],
+  ghFn: typeof gh,
+): Promise<void> {
+  const specs = new Map(
+    FINDING_LABEL_SPECS.map(([name, color, description]) => [name, { color, description }]),
+  );
+  for (const label of labels) {
+    const spec = specs.get(label) ?? FINDING_LABEL_DEFAULT;
+    await ghFn(
+      cfg,
+      [
+        "label",
+        "create",
+        label,
+        "--repo",
+        nwo,
+        "--color",
+        spec.color,
+        "--description",
+        spec.description,
+        "--force",
+      ],
+      { timeoutMs: GH_TIMEOUT },
+    );
+  }
+}
+
 export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<FlushResult> {
   const ghFn = deps.ghFn ?? gh;
   const gitFn = deps.gitFn ?? git;
@@ -402,6 +482,41 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
             ],
             { timeoutMs: GH_TIMEOUT },
           );
+        }
+        return;
+      }
+      case "issue-create": {
+        // Labels FIRST: `gh issue create --label X` hard-fails on a missing
+        // label, and the dedup list-scan below filters by FINDING_LABEL,
+        // which must exist too.
+        await ensureFindingLabels(cfg, op.nwo, op.labels, ghFn);
+        // FRESH scan every time — never cache across ops within a flush.
+        // Two offline assess runs can enqueue duplicate fingerprints; FIFO
+        // convergence depends on op N+1's list seeing the issue op N just
+        // created.
+        const markers = await fetchFindingMarkers(cfg, op.nwo, ghFn);
+        if (markers.has(op.fingerprint)) return; // already filed
+        const dir = mkdtempSync(join(tmpdir(), "junco-obxi-"));
+        const file = join(dir, "issue.md");
+        writeFileSync(file, op.bodyText, "utf8");
+        try {
+          await ghFn(
+            cfg,
+            [
+              "issue",
+              "create",
+              "--repo",
+              op.nwo,
+              "--title",
+              op.title,
+              "--body-file",
+              file,
+              ...op.labels.flatMap((l) => ["--label", l]),
+            ],
+            { timeoutMs: GH_TIMEOUT },
+          );
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
         }
         return;
       }

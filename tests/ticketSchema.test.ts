@@ -81,6 +81,7 @@ describe("describeTicketSchema()", () => {
       "tools",
       "github",
       "workdir",
+      "assess",
     ];
     for (const field of expected) {
       expect(s).toContain(`"${field}"`);
@@ -109,5 +110,14 @@ describe("describeTicketSchema()", () => {
       properties: Record<string, { properties?: Record<string, { enum?: string[] }> }>;
     };
     expect(s.properties.github.properties?.kind.enum).toEqual(["pr", "ask", "plan"]);
+  });
+
+  it("documents assess with the right shape (object with auto_plan boolean)", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.assess.type).toBe("object");
+    const assessProps = s.properties.assess.properties as Record<string, Record<string, unknown>>;
+    expect(assessProps.auto_plan.type).toBe("boolean");
   });
 });

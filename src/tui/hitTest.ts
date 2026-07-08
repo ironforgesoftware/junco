@@ -15,6 +15,7 @@ export type HitTarget =
   | { type: "repoRow"; index: number }
   | { type: "issueRow"; index: number }
   | { type: "prRow"; index: number }
+  | { type: "pane3Row"; index: number }
   | { type: "linkLine" }
   | { type: "none" };
 
@@ -29,7 +30,12 @@ export interface HitContext {
   /** Window starts — the App's lifted windowSlice offsets. */
   railStart: number;
   listStart: number;
-  /** Preview pane is showing a card, so its ↗ line exists and is clickable. */
+  /** Main view: rows in pane 3's repo-scoped PR monitor (a windowed PrList).
+   * Unused in the prs view, whose right band is the PrPreview card. */
+  pane3Count: number;
+  pane3Start: number;
+  /** prs view: the PrPreview card is showing, so its ↗ line is clickable.
+   * Unused in the main view (pane 3 renders rows there, not a card). */
   hasPreviewTarget: boolean;
 }
 
@@ -48,8 +54,16 @@ export function hitTest(ctx: HitContext, x: number, y: number): HitTarget {
   }
 
   if (layout.mode === "wide" && x >= columns - layout.previewWidth) {
-    if (r === LINK_LINE_ROW && ctx.hasPreviewTarget) return { type: "linkLine" };
-    return view === "main" ? { type: "pane", pane: 3 } : { type: "none" };
+    if (view === "prs") {
+      // The prs view's right band is the PrPreview card — only its ↗ line acts.
+      if (r === LINK_LINE_ROW && ctx.hasPreviewTarget) return { type: "linkLine" };
+      return { type: "none" };
+    }
+    // Main view: pane 3 is the repo-scoped PR monitor, a windowed PrList.
+    const i = r - PANE_CONTENT_ROW;
+    const visible = Math.min(ctx.pane3Count - ctx.pane3Start, listRowsHeight(layout.bodyRows));
+    if (i >= 0 && i < visible) return { type: "pane3Row", index: ctx.pane3Start + i };
+    return { type: "pane", pane: 3 };
   }
 
   const i = r - PANE_CONTENT_ROW;

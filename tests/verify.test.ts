@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { extractVerificationBlocks, runSpecVerification } from "../src/verify.js";
-import type { Config } from "../src/types.js";
+import type { Config, Ticket } from "../src/types.js";
 
 // ---------------------------------------------------------------------------
 // Config helper
@@ -32,6 +32,9 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -43,6 +46,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     branchPrefix: "junco/",
     worktreeRoot: "/tmp/worktrees",
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -59,6 +63,9 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: "/tmp/vault/state",
+    logToFile: false,
+    transcriptsEnabled: false,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -68,11 +75,12 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     ...overrides,
   };
 }
 
-function makeTicket(body: string) {
+function makeTicket(body: string): Ticket {
   return {
     path: "/tmp/ticket.md",
     id: "T01",
@@ -81,6 +89,12 @@ function makeTicket(body: string) {
     body,
     frontmatter: {},
     hasRepo: false,
+    notBefore: null,
+    retryCount: 0,
+    tools: null,
+    github: null,
+    assess: null,
+    workdir: null,
   };
 }
 
