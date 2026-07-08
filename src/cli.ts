@@ -63,6 +63,8 @@ export interface CliDeps {
   /** The restart command (takes the RESOLVED config path — it matches service
    * units and the worker.lock by path, not by parsed config). */
   runRestartFn?: (configPath: string) => Promise<number>;
+  /** Injected by tests: the dispatch core (default lazily used from externalDispatch.js). */
+  dispatchIssueFn?: typeof import("./externalDispatch.js").dispatchIssue;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +90,8 @@ Subcommands:
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
   restart      Restart the supervised daemon (picks up config + code changes)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
+  dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
+                  for it — forks & clones unowned repos automatically
   schema       Print the ticket frontmatter JSON Schema and exit
 
   (no subcommand) → runs the setup wizard on first run (no config yet),
@@ -468,6 +472,33 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     printFn(`submitted: ${dst}\n`);
     return 0;
+  }
+
+  // ------------------------------------------------------------
+  // dispatch <owner/repo#N | issue-url>: fetch a GitHub issue and queue a
+  // ticket for it, forking + cloning unowned repos automatically. Lazy import
+  // keeps this (and its gh/git dependency graph) off every other subcommand.
+  // ------------------------------------------------------------
+  if (subcommand === "dispatch") {
+    const ref = positionals[1];
+    if (!ref) {
+      process.stderr.write(`Usage: junco dispatch <owner/repo#N | issue-url> [--config <path>]\n`);
+      return 2;
+    }
+    const cfg = loadConfigFn(configPath);
+    const dispatchFn =
+      deps.dispatchIssueFn ?? (await import("./externalDispatch.js")).dispatchIssue;
+    try {
+      const r = await dispatchFn(cfg, ref);
+      printFn(`dispatched: ${r.destPath}\n`);
+      if (r.external) {
+        printFn(`external repo — fork: ${r.forkNwo} · clone: ${r.clonePath}\n`);
+      }
+      return 0;
+    } catch (e) {
+      process.stderr.write(`junco dispatch: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
   }
 
   // ------------------------------------------------------------
