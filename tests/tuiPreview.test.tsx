@@ -54,4 +54,16 @@ describe("Preview", () => {
     expect(top).toContain("preview · #52");
     expect(scrolled).toContain("preview · #52");
   });
+  it("renders the ↗ link line directly under the heading", () => {
+    const f = render(<Preview {...base} />).lastFrame()!;
+    expect(f).toContain("↗ a/b#52");
+    // Fixed geometry row: border(0), title(1), heading(2), link(3) = LINK_LINE_ROW.
+    const rows = f.split("\n");
+    expect(rows[3]).toContain("↗");
+  });
+  it("keeps the ↗ link line pinned to row 3 while loading (body not yet fetched)", () => {
+    const f = render(<Preview {...base} loading />).lastFrame()!;
+    const rows = f.split("\n");
+    expect(rows[3]).toContain("↗");
+  });
 });

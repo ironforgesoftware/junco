@@ -57,7 +57,7 @@ export function HelpModal({
           ["D", "dispatch as ask (read-only Q&A)"],
           ["a", "approve the posted plan"],
           ["R", "re-plan / re-cycle (by state)"],
-          ["o", "open in browser"],
+          ["o", "open in browser (repo page from pane 1)"],
         ]}
       />
       <Section
@@ -72,6 +72,15 @@ export function HelpModal({
           ["t", "queue view"],
           ["p", "PR tracking — junco-authored PRs across watched repos"],
           [":", "command palette"],
+        ]}
+      />
+      <Section
+        title="mouse"
+        rows={[
+          ["click", "focus pane / select row"],
+          ["click selected", "open it — same as enter"],
+          ["wheel", "move selection / scroll, under the cursor"],
+          ["↗ line", "open on GitHub (cmd+click works too)"],
         ]}
       />
       <Section

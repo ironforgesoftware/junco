@@ -1,7 +1,8 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, Transform } from "ink";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, ticketSlugFromBranch, type DashPr } from "../prState.js";
+import { hyperlink } from "../links.js";
 import { relTime } from "./IssueList.js";
 
 export interface PrPreviewProps {
@@ -73,6 +74,11 @@ export function PrPreview({
       <Text key="heading" bold wrap="truncate">
         #{pr.number} {pr.title} <Text color={meta.color}>[{meta.badge}]</Text>
       </Text>,
+      <Transform key="link" transform={(s) => hyperlink(s, pr.url)}>
+        <Text dimColor wrap="truncate">
+          ↗ {pr.nwo}#{pr.number}
+        </Text>
+      </Transform>,
       <Text key="checks" wrap="truncate-end" color={checksColor(pr.checks)}>
         checks: {checksToString(pr.checks)}
       </Text>,

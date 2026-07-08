@@ -1,7 +1,8 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, Transform } from "ink";
 import { theme } from "../theme.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
+import { hyperlink, shortResourceRef } from "../links.js";
 import { Spinner } from "./Spinner.js";
 
 export interface PreviewProps {
@@ -32,8 +33,9 @@ export function Preview({
   height,
   width,
 }: PreviewProps): React.JSX.Element {
-  // Reserved rows: borders ×2, pane title, issue heading, footer line.
-  const viewHeight = Math.max(1, height - 5);
+  // Reserved rows: borders ×2, pane title, issue heading, the ↗ link line
+  // (LINK_LINE_ROW in geometry.ts), footer line.
+  const viewHeight = Math.max(1, height - 6);
   const lines: string[] = [];
   if (body !== null) lines.push(...body.split("\n"));
   if (planComment !== null) lines.push("", "── plan ──", ...planComment.split("\n"));
@@ -57,6 +59,11 @@ export function Preview({
         #{issue.number} {issue.title}{" "}
         <Text color={stateMeta(st).color}>[{stateMeta(st).badge}]</Text>
       </Text>
+      <Transform transform={(s) => hyperlink(s, issue.url)}>
+        <Text dimColor wrap="truncate">
+          ↗ {shortResourceRef(issue.url)}
+        </Text>
+      </Transform>
       {loading && (
         <Text dimColor>
           <Spinner /> loading issue details…

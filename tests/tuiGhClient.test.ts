@@ -336,6 +336,20 @@ describe("openPrInBrowser", () => {
   });
 });
 
+describe("openRepoInBrowser", () => {
+  it("calls gh repo view --web", async () => {
+    const f = fakes();
+    const r = await makeGhDashboardClient(cfg, f).openRepoInBrowser("acme/api");
+    expect(r.ok).toBe(true);
+    expect(f.calls).toContainEqual(["repo", "view", "acme/api", "--web"]);
+  });
+  it("gh failure → ok:false, never throws", async () => {
+    const f = fakes({ failArgs: "repo view" });
+    const r = await makeGhDashboardClient(cfg, f).openRepoInBrowser("acme/api");
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe("issueDetail", () => {
   it("returns body + latest SELF-authored plan comment", async () => {
     const plan = "<!-- junco:plan -->\n````junco-ticket\n# P\n````\n";

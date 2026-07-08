@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { IssueList, relTime } from "../src/tui/components/IssueList.js";
+import { IssueList, relTime, relTimeShort } from "../src/tui/components/IssueList.js";
 import { filterIssues, type DashIssue } from "../src/tui/state.js";
+import { windowSlice } from "../src/tui/window.js";
+import { listRowsHeight } from "../src/tui/geometry.js";
 
 const NOW = new Date("2026-07-07T14:00:00Z");
 const iss = (number: number, title: string, labels: string[] = ["junco"]): DashIssue => ({
@@ -37,6 +39,20 @@ describe("relTime", () => {
   });
 });
 
+describe("relTimeShort", () => {
+  const now = new Date("2026-07-08T12:00:00Z");
+  it("seconds tier below one minute, then defers to relTime tiers", () => {
+    expect(relTimeShort("2026-07-08T11:59:48Z", now)).toBe("12s");
+    expect(relTimeShort("2026-07-08T11:59:01Z", now)).toBe("59s");
+    expect(relTimeShort("2026-07-08T11:59:00Z", now)).toBe("1m");
+    expect(relTimeShort("2026-07-08T09:00:00Z", now)).toBe("3h"); // relTime's hour tier
+    expect(relTimeShort("2026-07-06T12:00:00Z", now)).toBe("2d"); // 48h → relTime's day tier
+  });
+  it("clamps future timestamps to 0s (poll clock races fetch clock)", () => {
+    expect(relTimeShort("2026-07-08T12:00:05Z", now)).toBe("0s");
+  });
+});
+
 describe("IssueList", () => {
   const three = [
     iss(52, "Fix reef colors", ["junco", "junco:plan-ready"]),
@@ -56,6 +72,8 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
+        window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
     expect(f).toContain("2 issues · 3");
@@ -78,6 +96,8 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt="2026-07-07T14:00:00Z"
+        fetchedAt={null}
+        window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
     expect(f).toContain("offline ·");
@@ -96,6 +116,8 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
+        window={{ start: 0, end: 1 }}
       />,
     ).lastFrame()!;
     expect(f).toContain("/reef");
@@ -113,6 +135,8 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
+        window={{ start: 0, end: 0 }}
       />,
     ).lastFrame()!;
     expect(f).toContain("no issues match /zzz");
@@ -132,10 +156,57 @@ describe("IssueList", () => {
         height={12}
         now={NOW}
         staleAt={null}
+        fetchedAt={null}
+        window={windowSlice(many.length, listRowsHeight(12), 39, 0)}
       />,
     ).lastFrame()!;
     expect(f).toContain("Issue number 40");
     expect(f).not.toContain("Issue number 1 "); // note trailing space — #1's row, not #10+
     expect(f).toContain("40/40");
+  });
+});
+
+describe("IssueList freshness stamp", () => {
+  const one = [iss(1, "Some issue")];
+  it("renders ↻ age from fetchedAt", () => {
+    const now = new Date("2026-07-08T12:00:00Z");
+    const { lastFrame } = render(
+      <IssueList
+        issues={one}
+        trigger="junco"
+        selected={0}
+        focused
+        refreshing={false}
+        filter=""
+        filtering={false}
+        height={20}
+        now={now}
+        staleAt={null}
+        fetchedAt="2026-07-08T11:59:48Z"
+        window={{ start: 0, end: 1 }}
+      />,
+    );
+    expect(lastFrame()).toContain("↻ 12s");
+  });
+  it("offline: stamp shows the CACHE's age (staleAt wins over fetchedAt)", () => {
+    const now = new Date("2026-07-08T12:00:00Z");
+    const { lastFrame } = render(
+      <IssueList
+        issues={one}
+        trigger="junco"
+        selected={0}
+        focused
+        refreshing={false}
+        filter=""
+        filtering={false}
+        height={20}
+        now={now}
+        staleAt="2026-07-08T11:55:00Z"
+        fetchedAt="2026-07-08T11:59:48Z"
+        window={{ start: 0, end: 1 }}
+      />,
+    );
+    expect(lastFrame()).toContain("↻ 5m");
+    expect(lastFrame()).toContain("offline");
   });
 });
