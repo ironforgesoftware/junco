@@ -112,13 +112,15 @@ function makeClient(
  * sequence[min(N, len-1)]) so a test can deliver a re-sorted poll. */
 function makeSeqClient(sequence: DashIssue[][]) {
   const actions: unknown[][] = [];
-  let call = 0;
+  // Test-controlled latch (see makePrSeqClient): polls return sequence[idx]
+  // until the test calls advance(), so a re-sorted delivery can never race
+  // the initial render's selection anchor on slow CI runners.
+  let idx = 0;
+  const advance = () => {
+    idx = Math.min(idx + 1, sequence.length - 1);
+  };
   const client: DashboardClient = {
-    listIssues: async () => {
-      const r = okv({ issues: sequence[Math.min(call, sequence.length - 1)], staleAt: null });
-      call++;
-      return r;
-    },
+    listIssues: async () => okv({ issues: sequence[idx], staleAt: null }),
     listPrs: async () => okv({ prs: [], staleAt: null }),
     cloneRepo: async () => okv(undefined),
     issueDetail: async () => okv({ body: "the body", planComment: null }),
@@ -143,22 +145,26 @@ function makeSeqClient(sequence: DashIssue[][]) {
       bridgeErrors: null,
     }),
   };
-  return { client, actions };
+  return { client, actions, advance };
 }
 
-/** A client whose listPrs walks a fixed sequence of responses (call N →
- * sequence[min(N, len-1)]) so a test can deliver a re-sorted PR poll. Records
+/** A client whose listPrs serves sequence[idx], where idx only moves when the
+ * test calls advance() — so a re-sorted PR poll is delivered exactly when the
+ * test is ready for it, never racing the view's mount. Records
  * openPrInBrowser calls so the anchored selection can be asserted. */
 function makePrSeqClient(sequence: DashPr[][]) {
   const prCalls: [string, number][] = [];
-  let call = 0;
+  // Test-controlled latch: polls keep returning sequence[idx] until the test
+  // calls advance(). Poll-count-driven advancement raced the view opening on
+  // slow CI runners (the re-sorted list could arrive before the selection
+  // anchor existed), which flaked the required quality gate.
+  let idx = 0;
+  const advance = () => {
+    idx = Math.min(idx + 1, sequence.length - 1);
+  };
   const client: DashboardClient = {
     listIssues: async () => okv({ issues: [], staleAt: null }),
-    listPrs: async () => {
-      const r = okv({ prs: sequence[Math.min(call, sequence.length - 1)], staleAt: null });
-      call++;
-      return r;
-    },
+    listPrs: async () => okv({ prs: sequence[idx], staleAt: null }),
     cloneRepo: async () => okv(undefined),
     issueDetail: async () => okv({ body: "the body", planComment: null }),
     applyAction: async () => okv({ queued: false }),
@@ -182,7 +188,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
       bridgeErrors: null,
     }),
   };
-  return { client, prCalls };
+  return { client, prCalls, advance };
 }
 
 /** DashPr fixture — junco-branch head so it survives the branch-prefix filter;
@@ -381,11 +387,17 @@ describe("App", () => {
     // First load: #7 newer → top (selected). Poll flips it: #8 newer → #7 slides down.
     const first = [a7, b8];
     const second = [a7, { ...b8, updatedAt: "2026-07-06T14:00:00Z" }];
-    const { client, actions } = makeSeqClient([first, second]);
+    const { client, actions, advance } = makeSeqClient([first, second]);
     const r = renderApp(client, wl(), 60);
     await until(() => (r.lastFrame() ?? "").includes("#7")); // first load anchored
     r.stdin.write("\t"); // focus issues pane; selection anchored to #7
-    await wait(140); // let the interval poll deliver the re-sorted `second`
+    advance(); // only now may polls deliver the re-sorted `second`
+    await until(() => {
+      const f = r.lastFrame() ?? "";
+      const seven = f.indexOf("Fix uploads");
+      const eight = f.indexOf("Other thing");
+      return eight !== -1 && seven !== -1 && eight < seven; // re-sort rendered: #8 above #7
+    });
     r.stdin.write("d"); // dispatch the SELECTED issue
     await tick();
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
@@ -397,8 +409,12 @@ describe("App", () => {
     const a7 = { ...rawIssue, number: 7, title: "Fix uploads", updatedAt: "2026-07-06T12:00:00Z" };
     const b8 = { ...rawIssue, number: 8, title: "Other thing", updatedAt: "2026-07-06T10:00:00Z" };
     let live: DashIssue[] = [a7, b8]; // #7 top → selected
+    let polls = 0; // counted so the test can wait for a post-mutation delivery
     const client: DashboardClient = {
-      listIssues: async () => okv({ issues: live, staleAt: null }),
+      listIssues: async () => {
+        polls++;
+        return okv({ issues: live, staleAt: null });
+      },
       listPrs: async () => okv({ prs: [], staleAt: null }),
       cloneRepo: async () => okv(undefined),
       issueDetail: async () => okv({ body: "the body", planComment: null }),
@@ -427,7 +443,9 @@ describe("App", () => {
     r.stdin.write("\r"); // open detail on #7 (snapshot frozen here)
     await tick();
     live = [b8]; // #7 closed; the next poll drops it from the live list
-    await wait(140);
+    const seen = polls;
+    await until(() => polls > seen); // a post-mutation poll definitely delivered
+    await tick(); // let React commit whatever that delivery caused
     const f = r.lastFrame()!;
     expect(f).toContain("#7 Fix uploads"); // snapshot header survives
     expect(f).not.toContain("#8 Other thing");
@@ -634,12 +652,18 @@ describe("PRs view", () => {
     });
     const first = [a, b];
     const second = [a, { ...b, updatedAt: "2026-07-06T14:00:00Z" }]; // #11 now newest → top
-    const { client, prCalls } = makePrSeqClient([first, second]);
+    const { client, prCalls, advance } = makePrSeqClient([first, second]);
     const r = renderApp(client, wlp(), 999999, undefined, undefined, 60); // prPollMs=60
     await tick();
-    r.stdin.write("p"); // open PRs view; selection anchored to #10
+    r.stdin.write("p"); // open PRs view; `first` is current → selection anchored to #10
     await until(() => (r.lastFrame() ?? "").includes("PR ten"));
-    await wait(140); // let the interval poll deliver the re-sorted `second`
+    advance(); // only now may polls deliver the re-sorted `second`
+    await until(() => {
+      const f = r.lastFrame() ?? "";
+      const ten = f.indexOf("PR ten");
+      const eleven = f.indexOf("PR eleven");
+      return eleven !== -1 && ten !== -1 && eleven < ten; // re-sort rendered: #11 above #10
+    });
     r.stdin.write("o"); // open the ANCHORED pr
     await until(() => prCalls.length > 0);
     expect(prCalls).toEqual([["acme/api", 10]]); // anchor held despite the re-sort
