@@ -73,6 +73,15 @@ export function HelpModal({
         ]}
       />
       <Section
+        title="mouse"
+        rows={[
+          ["click", "focus pane / select row"],
+          ["click selected", "open — enter for issues, browser for PRs"],
+          ["wheel", "move selection / scroll, under the cursor"],
+          ["↗ line", "open on GitHub (cmd+click works too)"],
+        ]}
+      />
+      <Section
         title="system"
         rows={[
           ["?", "this help"],

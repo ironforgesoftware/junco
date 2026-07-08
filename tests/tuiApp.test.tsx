@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
-import { render } from "ink-testing-library";
+import { render, cleanup } from "ink-testing-library";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
@@ -11,6 +11,11 @@ import type { DashIssue } from "../src/tui/state.js";
 import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+
+// Every App mount registers a `process.on("exit")` listener via useMouse; this
+// file's ~57 renders never unmount on their own, which trips Node's
+// MaxListenersExceededWarning. Unmount after each test so listeners are freed.
+afterEach(cleanup);
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
 const CLONES_DIR = "/x/state/repos";
