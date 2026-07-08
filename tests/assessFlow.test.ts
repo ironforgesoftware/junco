@@ -119,7 +119,7 @@ function ticketContent(repo: string, extra = ""): string {
 /** A scriptable AgentSessionLike that emits `finalText` as one text delta. */
 function fakeSession(finalText: string) {
   return async () => ({
-    subscribe(l: (e: unknown) => void) {
+    subscribe(l: (e: any) => void) {
       queueMicrotask(() => {
         l({
           type: "message_update",
