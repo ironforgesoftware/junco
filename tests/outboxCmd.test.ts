@@ -118,6 +118,19 @@ describe("runOutboxCommand — list", () => {
     expect(out.join("")).toMatch(/attempts=2 lastError=HTTP 404: Not Found/);
   });
 
+  it("malformed op (no op field) renders as <malformed>, list exits 0 (no crash)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obxcmd-malformed-"));
+    const cfg = cfgAt(root);
+    const { dir } = outboxPaths(cfg);
+    mkdirSync(dir, { recursive: true });
+    // Hand-written op file missing the `op` field entirely.
+    writeFileSync(join(dir, "1-0000-bogus.json"), JSON.stringify({ id: "x" }), "utf8");
+    const out: string[] = [];
+    const code = await runOutboxCommand(cfg, [], { printFn: (s) => out.push(s) });
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/<malformed>/);
+  });
+
   it("op lines + dead footer when both present", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obxcmd-both-"));
     const cfg = cfgAt(root);

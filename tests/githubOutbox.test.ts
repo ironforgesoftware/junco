@@ -340,6 +340,38 @@ describe("flushOutbox", () => {
     expect(labelCall!.args).toContain("junco:working");
   });
 
+  it("unknown op kind dead-letters instead of vanishing (version-skew / hand-edited op)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-unknown-"));
+    const cfg = cfgAt(root);
+    const { dir } = outboxPaths(cfg);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "1-0000-aaaa-bogus.json"),
+      JSON.stringify({
+        id: "1-0000-aaaa-bogus",
+        createdAt: new Date().toISOString(),
+        origin: "dashboard",
+        issueKey: null,
+        attempts: 0,
+        lastError: null,
+        op: { kind: "bogus" },
+      }),
+      "utf8",
+    );
+    const f = fakes(() => undefined);
+    for (let i = 1; i < MAX_OP_ATTEMPTS; i++) {
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 0, dead: 0, remaining: 1, offline: false });
+      expect(listOps(cfg)[0].attempts).toBe(i);
+      expect(listOps(cfg)[0].lastError).toMatch(/unknown outbox op kind: bogus/);
+    }
+    const last = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(last).toMatchObject({ sent: 0, dead: 1, remaining: 0 });
+    expect(outboxDepth(cfg)).toBe(0); // never counted sent — it dead-lettered
+    expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1);
+    expect(f.calls).toHaveLength(0); // never touched gh/git — rejected before any call
+  });
+
   it("pr create 'already exists' resolves the URL via pr view", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f6-"));
     const cfg = { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;

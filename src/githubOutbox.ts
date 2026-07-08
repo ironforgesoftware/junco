@@ -405,6 +405,16 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
         }
         return;
       }
+      default: {
+        // Unreachable for any kind this build knows about (OutboxOp is a
+        // closed union) — reached only via version-skew (an op enqueued by a
+        // newer/older daemon build) or a hand-edited op file. Throwing routes
+        // it through the permanent-failure path below (attempts++, eventual
+        // dead-letter) instead of the op silently falling through the switch
+        // and getting rm'd by the success path as if it had actually sent.
+        const kind = (op as { kind?: unknown }).kind;
+        throw new Error(`unknown outbox op kind: ${String(kind)}`);
+      }
     }
   };
 

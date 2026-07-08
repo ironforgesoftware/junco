@@ -31,7 +31,7 @@ import {
 import { pollGithubInbox, newBridgeState } from "./githubInbox.js";
 import { makeGithubReporter } from "./githubReport.js";
 import type { TicketReporter } from "./reporter.js";
-import { outboxDepth } from "./githubOutbox.js";
+import { outboxDepth, flushOutbox, type FlushResult } from "./githubOutbox.js";
 
 // ---------------------------------------------------------------------------
 // StopFlag
@@ -162,6 +162,12 @@ export interface MainLoopDeps {
   startHealthServerFn?: (opts: HealthServerOpts) => Promise<HealthServerHandle>;
   /** Bridge sweep override (tests). Only consulted when cfg.github.enabled. */
   bridgeSweepFn?: (cfg: Config) => Promise<number>;
+  /** Standalone outbox drain override (tests). Only consulted when
+   * cfg.github.enabled is FALSE — when the bridge is enabled, its sweep
+   * already flushes the outbox first (pollGithubInbox's flush-first
+   * behavior), so a second flusher here would be redundant. Defaults to the
+   * real flushOutbox. */
+  outboxDrainFn?: (cfg: Config) => Promise<FlushResult>;
 }
 
 function defaultMkdirs(cfg: Config): void {
@@ -298,6 +304,32 @@ export async function mainLoop(
     }
   };
 
+  // Local-mode outbox auto-drain: when the bridge is disabled, pollGithubInbox
+  // (the only automatic flusher — see its flush-first behavior) never runs,
+  // so an offline PR flow's queued push/PR/comment ops would otherwise sit
+  // parked until an operator remembers `junco outbox flush`. This mirrors
+  // maybeBridgeSweep's throttle (same cfg.github.pollIntervalSeconds cadence
+  // — sane even with github disabled, since it's just the default) but is
+  // mutually exclusive with the bridge sweep: enabled github already flushes
+  // the outbox first every sweep, so a second flusher here would be
+  // redundant (and could race it pointlessly).
+  const outboxDrainFn = cfg.github.enabled ? null : (deps.outboxDrainFn ?? flushOutbox);
+  let lastDrainMs = -Infinity;
+  const maybeOutboxDrain = async (): Promise<void> => {
+    if (!outboxDrainFn) return;
+    if (monoMs() - lastDrainMs < cfg.github.pollIntervalSeconds * 1000) return;
+    lastDrainMs = monoMs();
+    if (outboxDepth(cfg) <= 0) return;
+    try {
+      const result = await outboxDrainFn(cfg);
+      metrics.recordOutboxFlush(result, outboxDepth(cfg));
+    } catch (e) {
+      log.warn("outbox drain failed; queue unaffected", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
   // The daemon's default runOnce probes endpoint readiness before claiming,
   // so an endpoint outage queues work instead of burning tickets into failed/.
   const runOnceFn =
@@ -359,7 +391,10 @@ export async function mainLoop(
         executeFn: deps.executeFn,
         sleep: deps.sleep,
         readyFn: () => endpointReachable(cfg),
-        maybeBridgeSweepFn: maybeBridgeSweep,
+        maybeBridgeSweepFn: async () => {
+          await maybeBridgeSweep();
+          await maybeOutboxDrain();
+        },
         reporter,
       });
     } else {
@@ -367,6 +402,7 @@ export async function mainLoop(
       while (!stopFlag.requested) {
         metrics.recordPoll();
         await maybeBridgeSweep();
+        await maybeOutboxDrain();
         const handled = await runOnceFn(cfg);
         if (handled) {
           idleAnnounced = false;

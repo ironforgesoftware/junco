@@ -155,7 +155,16 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
 
   const readCache = (nwo: string): IssueCache | null => {
     try {
-      return JSON.parse(readFileFn(cachePathFor(cfg, nwo))) as IssueCache;
+      const parsed: unknown = JSON.parse(readFileFn(cachePathFor(cfg, nwo)));
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Array.isArray((parsed as Partial<IssueCache>).issues) ||
+        typeof (parsed as Partial<IssueCache>).fetchedAt !== "string"
+      ) {
+        return null; // wrong shape (e.g. hand-edited or from a future format) — treated as absent
+      }
+      return parsed as IssueCache;
     } catch {
       return null; // no cache yet, or unreadable/corrupt — treated as absent
     }

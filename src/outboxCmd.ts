@@ -26,10 +26,19 @@ function branchOf(op: OutboxOp): string | null {
   return "branch" in op ? op.branch : null;
 }
 
+/** A hand-edited or version-skewed op file can have `op` missing entirely, or
+ * present but not an object (JSON.parse succeeds — `readCache`-style shape
+ * validation is what stands between that and a crash on `"branch" in op`). */
+function isOutboxOp(op: unknown): op is OutboxOp {
+  return typeof op === "object" && op !== null && "kind" in op;
+}
+
 function opLine(s: StoredOp, now: Date): string {
-  const key = s.issueKey ?? branchOf(s.op) ?? "?";
   const err = s.lastError ? ` lastError=${s.lastError}` : "";
-  return `${fmtAge(s.createdAt, now)} ${s.op.kind} ${key} attempts=${s.attempts}${err}\n`;
+  const target = isOutboxOp(s.op)
+    ? `${s.op.kind} ${s.issueKey ?? branchOf(s.op) ?? "?"}`
+    : "<malformed>";
+  return `${fmtAge(s.createdAt, now)} ${target} attempts=${s.attempts}${err}\n`;
 }
 
 export async function runOutboxCommand(

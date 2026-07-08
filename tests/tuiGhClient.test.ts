@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { makeGhDashboardClient, cachePathFor } from "../src/tui/ghClient.js";
 import { listOps } from "../src/githubOutbox.js";
@@ -134,6 +134,22 @@ describe("listIssues", () => {
       ok: true,
       value: { issues: first.ok ? first.value.issues : [], staleAt: cachedFetchedAt },
     });
+  });
+
+  it("listIssues offline with a wrong-shape cache treats it as absent → ok:false, no crash", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-badcache-"));
+    const c2 = { ...cfg, stateDir } as Config;
+    const path = cachePathFor(c2, "acme/api");
+    mkdirSync(dirname(path), { recursive: true });
+    // Valid JSON, wrong shape: `issues` is not an array.
+    writeFileSync(
+      path,
+      JSON.stringify({ fetchedAt: "2026-07-06T10:00:00Z", issues: "nope" }),
+      "utf8",
+    );
+    const f = fakes({ failArgs: "issue list", failErr: NET });
+    const r = await makeGhDashboardClient(c2, f).listIssues("acme/api");
+    expect(r.ok).toBe(false);
   });
 
   it("listIssues offline with no cache is an error (today's behavior)", async () => {

@@ -8,10 +8,14 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Config } from "../src/types.js";
 import type { ClaimedWork } from "../src/runOnce.js";
 import type { HealthServerHandle } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
+import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -752,5 +756,145 @@ describe("github bridge wiring", () => {
     });
     await mainLoop(cfg, stop, {}, deps as never);
     expect(sweeps).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Local-mode outbox auto-drain (I-1): when the bridge is disabled,
+// pollGithubInbox's flush-first sweep never runs, so prFlow's offline
+// endgame (which enqueues push/PR/comment ops and promises an automatic
+// push in the finalize note) needs its own throttled flusher.
+// ---------------------------------------------------------------------------
+
+describe("outbox drain (local mode)", () => {
+  const disabledGithub = (pollSeconds: number) => ({
+    enabled: false,
+    triggerLabel: "junco",
+    askLabel: "junco:ask",
+    pollIntervalSeconds: pollSeconds,
+    repos: [],
+    requireApproval: true,
+    plannerModelId: null,
+  });
+  const enabledGithub = (pollSeconds: number) => ({
+    ...disabledGithub(pollSeconds),
+    enabled: true,
+  });
+
+  /** Real fs: enqueueOp/outboxDepth are not injected through MainLoopDeps
+   * (they're cheap direct fs calls, mirrored on the bridge sweep's own
+   * throttle), so these tests use a real tmp stateDir rather than a fake. */
+  const tmpStateDir = (): string => mkdtempSync(join(tmpdir(), "junco-daemon-obx-"));
+
+  it("github disabled + depth > 0: drain fn is called on the throttle cadence", async () => {
+    const cfg = makeConfig({ stateDir: tmpStateDir(), github: disabledGithub(3600) });
+    enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
+    expect(outboxDepth(cfg)).toBe(1);
+
+    let drains = 0;
+    let polls = 0;
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: async () => {
+        polls++;
+        if (polls >= 3) stop.requestStop();
+        return true; // handled → loop continues without sleeping
+      },
+      outboxDrainFn: async () => {
+        drains++;
+        return { sent: 1, dead: 0, remaining: 0, offline: false };
+      },
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(polls).toBe(3);
+    expect(drains).toBe(1); // 3600s interval → only the first iteration drains
+  });
+
+  it("github disabled + depth 0: drain fn is never called (nothing to flush)", async () => {
+    const cfg = makeConfig({ github: disabledGithub(3600) }); // no stateDir → depth 0
+    let drains = 0;
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: async () => {
+        stop.requestStop();
+        return false;
+      },
+      outboxDrainFn: async () => {
+        drains++;
+        return { sent: 0, dead: 0, remaining: 0, offline: false };
+      },
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(drains).toBe(0);
+  });
+
+  it("github enabled: the standalone drain is never used (the bridge sweep already flushes first)", async () => {
+    const cfg = makeConfig({ stateDir: tmpStateDir(), github: enabledGithub(3600) });
+    enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
+
+    let drains = 0;
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: async () => {
+        stop.requestStop();
+        return false;
+      },
+      bridgeSweepFn: async () => 0,
+      outboxDrainFn: async () => {
+        drains++;
+        return { sent: 1, dead: 0, remaining: 0, offline: false };
+      },
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(drains).toBe(0);
+  });
+
+  it("a drain error does not crash the loop", async () => {
+    const cfg = makeConfig({ stateDir: tmpStateDir(), github: disabledGithub(60) });
+    enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
+
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      runOnceFn: async () => {
+        stop.requestStop();
+        return false;
+      },
+      outboxDrainFn: async () => {
+        throw new Error("disk full");
+      },
+    });
+
+    await expect(mainLoop(cfg, stop, {}, deps)).resolves.toBeUndefined();
+  });
+
+  it("scheduler mode (max_concurrent > 1) also drains when github is disabled", async () => {
+    const cfg = makeConfig({
+      stateDir: tmpStateDir(),
+      github: disabledGithub(3600),
+      maxConcurrent: 2,
+    });
+    enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
+
+    let drains = 0;
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      claimFn: async () => {
+        stop.requestStop();
+        return null;
+      },
+      outboxDrainFn: async () => {
+        drains++;
+        return { sent: 1, dead: 0, remaining: 0, offline: false };
+      },
+    });
+
+    await mainLoop(cfg, stop, {}, deps as never);
+    expect(drains).toBe(1);
   });
 });
