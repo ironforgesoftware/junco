@@ -14,6 +14,7 @@ import {
   findingsFromNpmAudit,
   buildIssueTitle,
   buildIssueBody,
+  FINDING_LABEL,
   FINDING_LABEL_SPECS,
   findingLabels,
   type Finding,
@@ -785,6 +786,15 @@ describe("buildIssueBody", () => {
 // ---------------------------------------------------------------------------
 // FINDING_LABEL_SPECS / findingLabels
 // ---------------------------------------------------------------------------
+
+describe("FINDING_LABEL", () => {
+  it("is the label every junco-filed finding issue carries, referenced by FINDING_LABEL_SPECS and findingLabels", () => {
+    expect(FINDING_LABEL).toBe("junco:finding");
+    expect(FINDING_LABEL_SPECS[0][0]).toBe(FINDING_LABEL);
+    const f = makeFinding({ severity: "high" });
+    expect(findingLabels(f, { autoPlan: false, triggerLabel: "junco" })[0]).toBe(FINDING_LABEL);
+  });
+});
 
 describe("FINDING_LABEL_SPECS", () => {
   it("has the junco:finding label plus one severity/<level> label per level", () => {

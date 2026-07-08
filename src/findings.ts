@@ -479,25 +479,30 @@ export function buildIssueBody(f: Finding): string {
   return renderIssueBody(reduced, true);
 }
 
+// The label every junco-filed finding issue carries — also the dedup filter
+// the outbox flush executor's `gh issue list --label` scan uses (see
+// ensureFindingLabels/execute's "issue-create" case in src/githubOutbox.ts).
+export const FINDING_LABEL = "junco:finding";
+
 // [name, color, description] specs for the labels junco creates when filing
 // findings — mirrors LABEL_SPECS in src/githubInbox.ts (that module owns the
 // lifecycle labels, this one owns the finding labels).
 export const FINDING_LABEL_SPECS: ReadonlyArray<readonly [string, string, string]> = [
-  ["junco:finding", "1D76DB", "Filed by junco assess"],
+  [FINDING_LABEL, "1D76DB", "Filed by junco assess"],
   ["severity/critical", "B60205", "Finding severity: critical"],
   ["severity/high", "D93F0B", "Finding severity: high"],
   ["severity/medium", "FBCA04", "Finding severity: medium"],
   ["severity/low", "0E8A16", "Finding severity: low"],
 ];
 
-// ["junco:finding", "severity/<level>"] plus the trigger label appended when
+// [FINDING_LABEL, "severity/<level>"] plus the trigger label appended when
 // opts.autoPlan is set — the created issue then enters the bridge's existing
 // plan-comment loop the same as any manually-triggered issue.
 export function findingLabels(
   f: Finding,
   opts: { autoPlan: boolean; triggerLabel: string },
 ): string[] {
-  const labels = ["junco:finding", `severity/${f.severity}`];
+  const labels = [FINDING_LABEL, `severity/${f.severity}`];
   if (opts.autoPlan) labels.push(opts.triggerLabel);
   return labels;
 }
