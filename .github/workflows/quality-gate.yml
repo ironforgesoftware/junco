@@ -9,10 +9,12 @@ on:
 permissions:
   contents: read
 
-# One run per ref; force-pushes to a PR cancel the superseded run. Pushes to
-# main are never cancelled (keep an unbroken history of main results).
+# PRs group per ref so a force-push cancels the superseded run. Pushes group
+# per SHA: a concurrency group also cancels PENDING runs when a newer one
+# queues, so grouping main by ref would let rapid merges leave commits with a
+# cancelled gate — per-SHA keeps main's result history unbroken.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

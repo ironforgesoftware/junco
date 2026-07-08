@@ -5,6 +5,8 @@
 # Requires a prior `npm run build` (npm pack ships dist/ as-built).
 set -euo pipefail
 
+cd "$(dirname "$0")/.." # npm pack packs the cwd — anchor to the repo root
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
