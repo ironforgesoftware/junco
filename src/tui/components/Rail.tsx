@@ -5,6 +5,7 @@ import { windowSlice } from "../window.js";
 import { stateMeta, type IssueLifecycle } from "../state.js";
 import type { QueueSnapshot } from "../queueSnapshot.js";
 import { queueLabel } from "../queueFmt.js";
+import { QUEUE_CARD_ROWS } from "../geometry.js";
 
 export interface RailRepo {
   nwo: string;
@@ -22,7 +23,6 @@ export interface RailProps {
 }
 
 const COUNT_ORDER: IssueLifecycle[] = ["plan-ready", "working", "failed"];
-const QUEUE_CARD_ROWS = 6; // worst case: separator + title + running + more-running + waiting + daemon-down
 
 /** Pane 1: watched repos on top, a compact queue card pinned below.
  * Absorbs the old RepoList and QueueStrip. */
