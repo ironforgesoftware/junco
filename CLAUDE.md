@@ -54,7 +54,9 @@ SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
 Parallel dev sessions: `claude -w <topic>` from the repo root, or a manual worktree under the
 gitignored `worktrees-manual/` — **never under `worktrees/`** (daemon-owned; junco force-removes
 paths there). The main checkout is the daemon's build home — park it on `main`, do feature work in
-worktrees. Details: `docs/parallel-sessions.md`.
+worktrees. Survey open PRs/branches before designing, and merge `origin/main` into multi-task
+branches between tasks — a collision found mid-plan is a course correction; found at PR time it is
+a semantic merge. Details: `docs/parallel-sessions.md`.
 
 ## Debugging & visibility
 
