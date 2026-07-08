@@ -1,10 +1,9 @@
-import React, { useRef } from "react";
+import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { windowSlice } from "../window.js";
 import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
 import { fmtClock } from "../queueFmt.js";
-import { relTime } from "./IssueList.js";
+import { relTime, relTimeShort } from "./IssueList.js";
 
 function checksToString(checks: {
   pass: number;
@@ -20,8 +19,10 @@ function checksToString(checks: {
 }
 
 /** Widest the dim repo cell may grow; longer nwos truncate from the start so
- * the repo-name tail (the discriminating part) stays visible. */
-const NWO_MAX_WIDTH = 24;
+ * the repo-name tail (the discriminating part) stays visible. Exported so
+ * callers composing their own title (pane 3's repo-scoped monitor) can mirror
+ * this same clamp instead of inventing a second budget. */
+export const NWO_MAX_WIDTH = 24;
 
 export interface PrListProps {
   prs: DashPr[]; // already sorted by the App
@@ -30,6 +31,12 @@ export interface PrListProps {
   height: number;
   now: Date;
   staleAt: string | null; // any repo served from cache → oldest fetchedAt
+  /** Last fresh listPrs completion — the ↻ stamp; staleAt (cache age) wins when offline. */
+  fetchedAt: string | null;
+  window: { start: number; end: number };
+  showNwo?: boolean; // show nwo cell; default true for multi-repo view
+  title?: string; // pane title; default "p pull requests · N"
+  emptyText?: string; // empty-state message; default the cross-repo copy below
 }
 
 /** Pane 2: windowed PR rows with full-row selection bars and aligned
@@ -41,12 +48,12 @@ export function PrList({
   height,
   now,
   staleAt,
+  fetchedAt,
+  window,
+  showNwo = true,
+  title,
+  emptyText,
 }: PrListProps): React.JSX.Element {
-  const listHeight = Math.max(1, height - 4); // borders + title + position line
-  const prev = useRef(0);
-  const { start, end } = windowSlice(prs.length, listHeight, selected, prev.current);
-  prev.current = start;
-
   return (
     <Box
       flexDirection="column"
@@ -56,17 +63,21 @@ export function PrList({
       flexGrow={1}
       height={height}
     >
-      <Text bold color={focused ? theme.accent : undefined}>
-        p pull requests · {prs.length}
+      <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
+        {title ?? `p pull requests · ${prs.length}`}
+        {(staleAt ?? fetchedAt) !== null && (
+          <Text dimColor> ↻ {relTimeShort((staleAt ?? fetchedAt) as string, now)}</Text>
+        )}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
       {prs.length === 0 && (
         <Text dimColor>
-          no junco PRs found across watched repos — junco opens PRs from dispatched tickets
+          {emptyText ??
+            "no junco PRs found across watched repos — junco opens PRs from dispatched tickets"}
         </Text>
       )}
-      {prs.slice(start, end).map((prItem, i) => {
-        const idx = start + i;
+      {prs.slice(window.start, window.end).map((prItem, i) => {
+        const idx = window.start + i;
         const sel = idx === selected;
         const st = derivePrState(prItem);
         const meta = prStateMeta(st);
@@ -100,11 +111,13 @@ export function PrList({
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{prItem.title}</Text>
             </Box>
-            <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
-              <Text dimColor wrap="truncate-start">
-                {prItem.nwo}
-              </Text>
-            </Box>
+            {showNwo && (
+              <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
+                <Text dimColor wrap="truncate-start">
+                  {prItem.nwo}
+                </Text>
+              </Box>
+            )}
             {checksStr !== "" && (
               <Box flexShrink={0}>
                 <Text color={checksColor}>{checksStr}</Text>
@@ -120,7 +133,7 @@ export function PrList({
         );
       })}
       <Box flexGrow={1} />
-      {prs.length > listHeight && (
+      {prs.length > window.end - window.start && (
         <Text dimColor>
           {Math.min(selected + 1, prs.length)}/{prs.length}
         </Text>

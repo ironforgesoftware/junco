@@ -1,7 +1,6 @@
-import React, { useRef } from "react";
+import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { windowSlice } from "../window.js";
 import { stateMeta, type IssueLifecycle } from "../state.js";
 import type { QueueSnapshot } from "../queueSnapshot.js";
 import { queueLabel } from "../queueFmt.js";
@@ -19,10 +18,10 @@ export interface RailProps {
   queue: QueueSnapshot | null;
   width: number;
   height: number;
+  window: { start: number; end: number };
 }
 
 const COUNT_ORDER: IssueLifecycle[] = ["plan-ready", "working", "failed"];
-const QUEUE_CARD_ROWS = 6; // worst case: separator + title + running + more-running + waiting + daemon-down
 
 /** Pane 1: watched repos on top, a compact queue card pinned below.
  * Absorbs the old RepoList and QueueStrip. */
@@ -33,12 +32,8 @@ export function Rail({
   queue,
   width,
   height,
+  window,
 }: RailProps): React.JSX.Element {
-  // height budget: 2 border rows + title + optional position line + queue card
-  const listHeight = Math.max(1, height - 2 - 1 - 1 - QUEUE_CARD_ROWS);
-  const prev = useRef(0);
-  const { start, end } = windowSlice(repos.length, listHeight, selected, prev.current);
-  prev.current = start;
   const running = queue?.running ?? [];
   return (
     <Box
@@ -53,8 +48,8 @@ export function Rail({
         1 repos
       </Text>
       {repos.length === 0 && <Text dimColor>none — press w to add</Text>}
-      {repos.slice(start, end).map((r, i) => {
-        const idx = start + i;
+      {repos.slice(window.start, window.end).map((r, i) => {
+        const idx = window.start + i;
         const sel = idx === selected;
         const badges = COUNT_ORDER.filter((s) => (r.counts[s] ?? 0) > 0)
           .map((s) => `${r.counts[s]}${stateMeta(s).glyph}`)
@@ -70,7 +65,7 @@ export function Rail({
           </Box>
         );
       })}
-      {repos.length > listHeight && (
+      {repos.length > window.end - window.start && (
         <Text dimColor>
           {selected + 1}/{repos.length}
         </Text>

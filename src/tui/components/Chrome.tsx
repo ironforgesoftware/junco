@@ -15,7 +15,8 @@ export type HintView =
   | "palette"
   | "cmdOutput"
   | "queue"
-  | "prs";
+  | "prs"
+  | "prDetail";
 
 function fmtUp(s: number | null): string {
   if (s === null) return "";
@@ -184,6 +185,7 @@ export function hintsFor(
     case "detail":
       return [
         ["↑/↓", "scroll"],
+        ["o", "browser"],
         ["esc", "back"],
       ];
     case "queue":
@@ -194,8 +196,14 @@ export function hintsFor(
     case "prs":
       return [
         ["↑/↓", "move"],
-        ["o/enter", "open"],
+        ["enter", "detail"],
+        ["o", "open"],
         ["esc/p", "back"],
+      ];
+    case "prDetail":
+      return [
+        ["esc", "back"],
+        ["o", "open"],
       ];
     case "palette":
       return [
@@ -226,7 +234,9 @@ export function hintsFor(
       ["→", "issues"],
       ["w", "add repo"],
       ["x", "unwatch"],
+      ["o", "repo"],
       ["r", "refresh"],
+      ["s", "assess"],
       [":", "commands"],
       ["?", "help"],
       ["q", "quit"],
@@ -234,9 +244,10 @@ export function hintsFor(
   }
   if (pane === 3) {
     return [
-      ["↑/↓", "scroll"],
+      ["↑/↓", "move"],
+      ["enter", "detail"],
       ["←", "issues"],
-      ["o", "browser"],
+      ["o", "open"],
       ["?", "help"],
       ["q", "quit"],
     ];
@@ -245,7 +256,7 @@ export function hintsFor(
   return [
     ["↑/↓", "move"],
     panesHint,
-    ["enter", mode === "wide" ? "preview" : "detail"],
+    ["enter", "preview"],
     ["d", "dispatch"],
     ["a", "approve"],
     ["/", "filter"],

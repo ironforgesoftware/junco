@@ -111,6 +111,18 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
         },
       },
     },
+    assess: {
+      type: "object",
+      description:
+        "Presence of this mapping selects the assessment flavor: junco audits the repository named in `repo:` (read-only agent session plus a dependency scan) and files one GitHub issue per vulnerability finding, instead of opening a pull request. Authored by `junco assess`.",
+      properties: {
+        auto_plan: {
+          type: "boolean",
+          description:
+            "Also apply the configured GitHub trigger label to each created issue, so the bridge plans it on its next sweep.",
+        },
+      },
+    },
   },
   required: [],
 };

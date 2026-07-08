@@ -85,6 +85,7 @@ Subcommands:
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
+  assess <path|owner/repo> [--auto-plan]  audit a repo for vulnerabilities and file GitHub issues
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
@@ -167,6 +168,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       lines: { type: "string", short: "n" },
       json: { type: "boolean", default: false },
       human: { type: "boolean", default: false },
+      "auto-plan": { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -352,6 +354,21 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const cfg = loadConfigFn(configPath);
     const { runPrsCommand } = await import("./prsCmd.js");
     return runPrsCommand(cfg, { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // assess: compose + submit a machine-owned vulnerability-assessment ticket
+  // (src/assessCmd.ts) — the daemon's assessFlow.ts runs the actual audit.
+  // ------------------------------------------------------------
+  if (subcommand === "assess") {
+    const cfg = loadConfigFn(configPath);
+    const { runAssessCommand } = await import("./assessCmd.js");
+    return runAssessCommand(
+      cfg,
+      positionals[1],
+      { autoPlan: values["auto-plan"] === true },
+      { printFn },
+    );
   }
 
   // ------------------------------------------------------------

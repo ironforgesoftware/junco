@@ -3,6 +3,8 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { Rail } from "../src/tui/components/Rail.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import { windowSlice } from "../src/tui/window.js";
+import { railListHeight } from "../src/tui/geometry.js";
 
 const QUEUE: QueueSnapshot = {
   daemonUp: true,
@@ -51,7 +53,15 @@ const repos = [
 describe("Rail", () => {
   it("numbered title, selection bar, config marker, badges, queue card", () => {
     const f = render(
-      <Rail repos={repos} selected={0} focused={true} queue={QUEUE} width={26} height={20} />,
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={QUEUE}
+        width={26}
+        height={20}
+        window={{ start: 0, end: repos.length }}
+      />,
     ).lastFrame()!;
     expect(f).toContain("1 repos");
     expect(f).toContain("▌");
@@ -66,7 +76,15 @@ describe("Rail", () => {
   it("empty repos state and daemon-down warning", () => {
     const down: QueueSnapshot = { ...QUEUE, daemonUp: false, running: [] };
     const f = render(
-      <Rail repos={[]} selected={0} focused={false} queue={down} width={26} height={20} />,
+      <Rail
+        repos={[]}
+        selected={0}
+        focused={false}
+        queue={down}
+        width={26}
+        height={20}
+        window={{ start: 0, end: 0 }}
+      />,
     ).lastFrame()!;
     expect(f).toContain("none — press w to add");
     expect(f).toContain("daemon ○ down");
@@ -105,7 +123,15 @@ describe("Rail", () => {
       ],
     };
     const f = render(
-      <Rail repos={many} selected={29} focused={true} queue={busy} width={26} height={16} />,
+      <Rail
+        repos={many}
+        selected={29}
+        focused={true}
+        queue={busy}
+        width={26}
+        height={16}
+        window={windowSlice(many.length, railListHeight(16), 29, 0)}
+      />,
     ).lastFrame()!;
     expect(f.split("\n").length).toBeLessThanOrEqual(16);
     expect(f).toContain("▌o/r29"); // the selected row must survive the squeeze
@@ -118,7 +144,15 @@ describe("Rail", () => {
     // width 30: "unavailable: clock boom" (23 chars) needs more than the
     // 22-char content width a 26-wide pane leaves after borders + padding.
     const f = render(
-      <Rail repos={repos} selected={0} focused={true} queue={errored} width={30} height={20} />,
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={errored}
+        width={30}
+        height={20}
+        window={{ start: 0, end: repos.length }}
+      />,
     ).lastFrame()!;
     expect(f).toContain("unavailable: clock boom");
   });
@@ -129,7 +163,15 @@ describe("Rail", () => {
       counts: {},
     }));
     const f = render(
-      <Rail repos={many} selected={29} focused={true} queue={null} width={26} height={16} />,
+      <Rail
+        repos={many}
+        selected={29}
+        focused={true}
+        queue={null}
+        width={26}
+        height={16}
+        window={windowSlice(many.length, railListHeight(16), 29, 0)}
+      />,
     ).lastFrame()!;
     expect(f).toContain("o/r29"); // cursor stays visible
     expect(f).not.toContain("o/r0"); // top scrolled out

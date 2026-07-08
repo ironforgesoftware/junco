@@ -1,11 +1,12 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, Transform } from "ink";
 import { theme } from "../theme.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
+import { hyperlink, shortResourceRef } from "../links.js";
 import { Spinner } from "./Spinner.js";
 
 export interface PreviewProps {
-  issue: DashIssue | null;
+  issue: DashIssue;
   trigger: string;
   body: string | null;
   planComment: string | null;
@@ -15,10 +16,11 @@ export interface PreviewProps {
   focused: boolean;
   height: number;
   width?: number;
-  paneNumber?: boolean;
 }
 
-/** Pane 3 (wide) and the medium-mode full-body detail. Replaces IssueDetail. */
+/** The fullscreen issue-detail view's body — issue heading, body text, and any
+ * posted plan comment. Renders at any layout width; not scoped to a pane.
+ * Replaces IssueDetail. */
 export function Preview({
   issue,
   trigger,
@@ -30,16 +32,16 @@ export function Preview({
   focused,
   height,
   width,
-  paneNumber = false,
 }: PreviewProps): React.JSX.Element {
-  // Reserved rows: borders ×2, pane title, issue heading (when an issue is shown), footer line.
-  const viewHeight = Math.max(1, height - (issue !== null ? 5 : 4));
+  // Reserved rows: borders ×2, pane title, issue heading, the ↗ link line
+  // (LINK_LINE_ROW in geometry.ts), footer line.
+  const viewHeight = Math.max(1, height - 6);
   const lines: string[] = [];
   if (body !== null) lines.push(...body.split("\n"));
   if (planComment !== null) lines.push("", "── plan ──", ...planComment.split("\n"));
-  else if (issue !== null && body !== null && !loading) lines.push("", "(no plan posted yet)");
+  else if (body !== null && !loading) lines.push("", "(no plan posted yet)");
   const visible = lines.slice(scroll, scroll + viewHeight);
-  const st = issue ? deriveState(issue.labels, trigger) : null;
+  const st = deriveState(issue.labels, trigger);
   return (
     <Box
       flexDirection="column"
@@ -51,16 +53,17 @@ export function Preview({
       flexGrow={width === undefined ? 1 : undefined}
     >
       <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
-        {paneNumber ? "3 preview" : "preview"}
-        {issue ? ` · #${issue.number}` : ""}
+        preview · #{issue.number}
       </Text>
-      {issue === null && <Text dimColor>select an issue — its body and plan render here</Text>}
-      {issue !== null && (
-        <Text bold wrap="truncate">
-          #{issue.number} {issue.title}{" "}
-          {st !== null && <Text color={stateMeta(st).color}>[{stateMeta(st).badge}]</Text>}
+      <Text bold wrap="truncate">
+        #{issue.number} {issue.title}{" "}
+        <Text color={stateMeta(st).color}>[{stateMeta(st).badge}]</Text>
+      </Text>
+      <Transform transform={(s) => hyperlink(s, issue.url)}>
+        <Text dimColor wrap="truncate">
+          ↗ {shortResourceRef(issue.url)}
         </Text>
-      )}
+      </Transform>
       {loading && (
         <Text dimColor>
           <Spinner /> loading issue details…

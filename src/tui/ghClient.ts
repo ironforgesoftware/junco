@@ -131,6 +131,8 @@ export interface DashboardClient {
   validateAndPrepareRepo(nwo: string, path: string): Promise<Result<void>>;
   openInBrowser(nwo: string, num: number): Promise<Result<void>>;
   openPrInBrowser(nwo: string, num: number): Promise<Result<void>>;
+  /** Repository home page — the rail's o. */
+  openRepoInBrowser(nwo: string): Promise<Result<void>>;
   /** ADMIN/MAINTAIN/WRITE → `canPush: true`; everything else (READ/TRIAGE/null) → false. */
   repoPermission(nwo: string): Promise<Result<{ canPush: boolean }>>;
   /** Idempotently provision the managed clone (+fork +fork remote) for an unowned `nwo`. */
@@ -430,6 +432,12 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         await ghFn(cfg, ["pr", "view", String(num), "--repo", nwo, "--web"], {
           timeoutMs: GH_TIMEOUT,
         });
+      });
+    },
+
+    openRepoInBrowser(nwo) {
+      return attempt(async () => {
+        await ghFn(cfg, ["repo", "view", nwo, "--web"], { timeoutMs: GH_TIMEOUT });
       });
     },
 

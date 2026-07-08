@@ -3,7 +3,7 @@
 _A local-first worker that turns tickets into pull requests._
 
 [![npm](https://img.shields.io/npm/v/%40ironforgesoftware%2Fjunco)](https://www.npmjs.com/package/@ironforgesoftware/junco)
-[![CI](https://github.com/ironforgesoftware/junco/actions/workflows/test.yml/badge.svg)](https://github.com/ironforgesoftware/junco/actions/workflows/test.yml)
+[![CI](https://github.com/ironforgesoftware/junco/actions/workflows/quality-gate.yml/badge.svg)](https://github.com/ironforgesoftware/junco/actions/workflows/quality-gate.yml)
 [![node](https://img.shields.io/node/v/%40ironforgesoftware%2Fjunco)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/%40ironforgesoftware%2Fjunco)](LICENSE)
 
@@ -17,13 +17,13 @@ the dispatch side.
 
 ```text
  🐦 junco  acme/reef-api      ●2 review · ✓14 · last ✓ 4m · daemon ● up 6h · ◐1 ⏳2
-╭ 1 repos ───────────╮╭ 2 issues · 14 ─────────────────────╮╭ 3 preview ───────────────╮
-│▌acme/reef-api  2●  ││▌● #52 Fix reef color…   plan-ready ││ #52 Fix reef color       │
-│ acme/tide-cli      ││ ◐ #46 Bleaching alert      working ││ grading [plan-ready]     │
-│────────────────────││ ○ #61 Add tide tables          3h  ││                          │
-│ queue              ││ ✓ #44 Coral survey       done  2d  ││ The grading LUT clips    │
-│ ◐ #46 · turn 14    ││                                    ││ at shallow-water bands…  │
-│ 2 waiting          ││                             2/14   ││ ── plan ──               │
+╭ 1 repos ───────────╮╭ 2 issues · 14 ─────────────────────╮╭ 3 PRs · acme/reef-api ───╮
+│▌acme/reef-api  2●  ││▌● #52 Fix reef color…   plan-ready ││▌✗ #52 fix-color-lut    ✗2│
+│ acme/tide-cli      ││ ◐ #46 Bleaching alert      working ││ ◐ #48 tide-table-cache ◍1│
+│────────────────────││ ○ #61 Add tide tables          3h  ││ ● #41 alert-copy-tweak ✓4│
+│ queue              ││ ✓ #44 Coral survey       done  2d  ││                          │
+│ ◐ #46 · turn 14    ││                                    ││                          │
+│ 2 waiting          ││                             2/14   ││                          │
 ╰────────────────────╯╰────────────────────────────────────╯╰──────────────────────────╯
  ↑/↓ move · ←/→ panes · enter preview · d dispatch · a approve · / filter · ? help
 ```
@@ -90,28 +90,30 @@ model is explicit about who can approve what.
 
 ## Documentation
 
-| Guide                                  | What's inside                                                                        |
-| -------------------------------------- | ------------------------------------------------------------------------------------ |
-| [Tickets](docs/tickets.md)             | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle   |
-| [Configuration](docs/configuration.md) | The annotated `config.toml` reference and the knobs worth knowing                    |
-| [GitHub mode](docs/github-mode.md)     | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model |
-| [Dashboard](docs/dashboard.md)         | Every pane, key, and the command palette                                             |
-| [Operations](docs/operations.md)       | Health endpoint, running as a service, security model, troubleshooting               |
-| [ARCHITECTURE.md](ARCHITECTURE.md)     | The runtime, module by module — accurate and maintained                              |
+| Guide                                      | What's inside                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| [Tickets](docs/tickets.md)                 | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle   |
+| [Configuration](docs/configuration.md)     | The annotated `config.toml` reference and the knobs worth knowing                    |
+| [GitHub mode](docs/github-mode.md)         | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model |
+| [Vulnerability assessment](docs/assess.md) | `junco assess` — audit a repo, file GitHub issues, dedup semantics, `--auto-plan`    |
+| [Dashboard](docs/dashboard.md)             | Every pane, key, and the command palette                                             |
+| [Operations](docs/operations.md)           | Health endpoint, running as a service, security model, troubleshooting               |
+| [ARCHITECTURE.md](ARCHITECTURE.md)         | The runtime, module by module — accurate and maintained                              |
 
 ## CLI at a glance
 
-|                                                 |                                                        |
-| ----------------------------------------------- | ------------------------------------------------------ |
-| `junco start` / `junco restart`                 | run the daemon / restart the installed service         |
-| `junco submit <file>`                           | queue a ticket (also reads stdin)                      |
-| `junco dashboard`                               | the fullscreen TUI                                     |
-| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                      |
-| `junco prs`                                     | list junco-authored pull requests across watched repos |
-| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                  |
-| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog             |
-| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model         |
-| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                 |
+|                                                 |                                                         |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| `junco start` / `junco restart`                 | run the daemon / restart the installed service          |
+| `junco submit <file>`                           | queue a ticket (also reads stdin)                       |
+| `junco dashboard`                               | the fullscreen TUI                                      |
+| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                       |
+| `junco prs`                                     | list junco-authored pull requests across watched repos  |
+| `junco assess <path\|owner/repo> [--auto-plan]` | audit a repo for vulnerabilities and file GitHub issues |
+| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                   |
+| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog              |
+| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model          |
+| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                  |
 
 ## Contributing
 

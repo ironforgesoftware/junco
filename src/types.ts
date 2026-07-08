@@ -50,6 +50,12 @@ export interface GithubConfig {
   plannerModelId: string | null; // planning-session model id override (same endpoint)
   externalReposRoot: string; // managed clones of unowned repos (fork-PR flow)
 }
+/** [assess] — knobs for `junco assess` runs (vulnerability audit → GitHub issues). */
+export interface AssessConfig {
+  maxIssuesPerRun: number; // cap on issues filed per assessment run
+  minSeverity: "critical" | "high" | "medium" | "low"; // findings below this are dropped
+  npmBin: string; // binary for the dependency scan (`npm audit --json`)
+}
 export interface Config {
   vaultRoot: string;
   juncoSubdir: string;
@@ -108,6 +114,8 @@ export interface Config {
   transcriptsEnabled: boolean;
   // GitHub-integrated inbox mode (issues → tickets bridge). See githubInbox.ts.
   github: GithubConfig;
+  // Vulnerability assessment knobs (junco assess flow).
+  assess: AssessConfig;
 }
 export interface Paths {
   inbox: string;
@@ -153,6 +161,8 @@ export interface Ticket {
   tools: string[] | null;
   /** GitHub issue this ticket was bridged from (null = local dispatch). */
   github: TicketGithub | null;
+  /** Assessment flavor options (null = regular PR/Q&A flow). */
+  assess: { autoPlan: boolean } | null;
   /** Q&A only: directory the session runs in (read-only tools). Null = default. */
   workdir: string | null;
 }

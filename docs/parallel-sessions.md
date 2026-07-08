@@ -54,11 +54,25 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
 - **Sandbox smoke tests exactly as CLAUDE.md prescribes.** A worktree has no `./config.toml`, so
   config resolution falls back to the user-level default — which is the maintainer's *live*
   config. Never run `junco start` or submit test tickets from a worktree either.
-- **Full gate per branch** before PR: `npm run lint && npm run format:check && npm run build &&
-  npm test`.
+- **Full gate per branch** before PR: `npm run lint && npm run format:check && npm run typecheck
+  && npm run build && npm test`.
 - **Keep sessions off each other's subsystems.** Two sessions editing the same module trade the
   serialization you removed for rebase conflicts. Split work by module boundaries
   (see ARCHITECTURE.md's module map).
+- **Survey what's in flight before designing, not just before merging.** At session start — and
+  again before writing a spec or plan — check open PRs and unmerged branches
+  (`gh pr list`, `git fetch && git branch -r`). Branch names double as the claims board: if
+  another `feat/*` or `fix/*` branch names your subsystem, design against what it's about to
+  land, or sequence behind it. A collision spotted at design time costs a paragraph; the same
+  collision at merge time costs a semantic conflict resolution.
+- **Merge `origin/main` into long-running branches between tasks, not at the end.** When main
+  moves under a multi-task branch, fetch and merge at the next task boundary and re-run the
+  gate. Conflicts then arrive one commit at a time, while both sides are fresh — and a design
+  collision surfaces while the design is still cheap to adapt. A branch that runs many tasks
+  without syncing discovers every conflict at once, at PR time, in its most expensive form.
+- **Land small; don't let branches age.** Conflict exposure is roughly surface area × hours
+  unmerged. Independent tickets ship as independent PRs even when one session produced them;
+  bundling is only worth it when the pieces genuinely share plumbing.
 - **Clean up:** `git worktree remove <path>` after the branch merges; `git worktree prune`
   occasionally. Pattern-A worktrees are cleaned up by the harness.
 

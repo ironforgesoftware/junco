@@ -1,7 +1,8 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, Transform } from "ink";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, ticketSlugFromBranch, type DashPr } from "../prState.js";
+import { hyperlink } from "../links.js";
 import { relTime } from "./IssueList.js";
 
 export interface PrPreviewProps {
@@ -11,6 +12,7 @@ export interface PrPreviewProps {
   height: number;
   width?: number; // set → fixed width; undefined → flexGrow 1
   focused: boolean;
+  titleLabel?: string; // pane title prefix; default "3 pr" for the p-view's pane-3 slot
 }
 
 function reviewDecisionToString(reviewDecision: string | null): string {
@@ -56,6 +58,7 @@ export function PrPreview({
   height,
   width,
   focused,
+  titleLabel = "3 pr",
 }: PrPreviewProps): React.JSX.Element {
   // Height budget (mirrors Preview.tsx): borders ×2 + pane title. Content rows
   // are built most-important-first so that slicing drops the least important
@@ -71,6 +74,11 @@ export function PrPreview({
       <Text key="heading" bold wrap="truncate">
         #{pr.number} {pr.title} <Text color={meta.color}>[{meta.badge}]</Text>
       </Text>,
+      <Transform key="link" transform={(s) => hyperlink(s, pr.url)}>
+        <Text dimColor wrap="truncate">
+          ↗ {pr.nwo}#{pr.number}
+        </Text>
+      </Transform>,
       <Text key="checks" wrap="truncate-end" color={checksColor(pr.checks)}>
         checks: {checksToString(pr.checks)}
       </Text>,
@@ -141,7 +149,8 @@ export function PrPreview({
       flexGrow={width === undefined ? 1 : undefined}
     >
       <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
-        3 pr{pr ? ` · #${pr.number}` : ""}
+        {titleLabel}
+        {pr ? ` · #${pr.number}` : ""}
       </Text>
 
       {pr === null && <Text dimColor>select a pull request — its status renders here</Text>}

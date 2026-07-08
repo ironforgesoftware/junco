@@ -52,6 +52,8 @@ function basePrOutcome(): PrOutcome {
     verification: null,
     critic: null,
     criticRetriesUsed: 0,
+    prQueued: false,
+    staleBase: false,
   };
 }
 

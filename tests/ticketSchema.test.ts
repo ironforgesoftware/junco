@@ -81,6 +81,7 @@ describe("describeTicketSchema()", () => {
       "tools",
       "github",
       "workdir",
+      "assess",
     ];
     for (const field of expected) {
       expect(s).toContain(`"${field}"`);
@@ -115,5 +116,14 @@ describe("describeTicketSchema()", () => {
     const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<string, any>;
     expect(props.push_remote).toMatchObject({ type: "string", pattern: "^[A-Za-z0-9_-]+$" });
     expect(props.github.properties.external).toMatchObject({ type: "boolean" });
+  });
+
+  it("documents assess with the right shape (object with auto_plan boolean)", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.assess.type).toBe("object");
+    const assessProps = s.properties.assess.properties as Record<string, Record<string, unknown>>;
+    expect(assessProps.auto_plan.type).toBe("boolean");
   });
 });

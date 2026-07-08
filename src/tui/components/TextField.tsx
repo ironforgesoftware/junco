@@ -1,5 +1,6 @@
 import React from "react";
 import { Text, useInput } from "ink";
+import { isMouseInput } from "../mouse.js";
 
 /** Minimal single-line input: printable chars append, backspace deletes,
  * enter submits. Only listens while `focus` is true. */
@@ -18,6 +19,7 @@ export function TextField({
 }): React.JSX.Element {
   useInput(
     (input, key) => {
+      if (isMouseInput(input)) return;
       if (key.return) return onSubmit();
       if (key.backspace || key.delete) return onChange(value.slice(0, -1));
       if (input && !key.ctrl && !key.meta && !key.escape) onChange(value + input);

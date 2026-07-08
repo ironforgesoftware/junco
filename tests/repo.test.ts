@@ -157,6 +157,7 @@ function makeConfig(work: string, ghBin: string): Config {
       plannerModelId: null,
       externalReposRoot: "/tmp/junco-test-external",
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: "/tmp/junco-repo-test-state",
     logToFile: false,
     transcriptsEnabled: false,

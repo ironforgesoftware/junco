@@ -79,6 +79,8 @@ describe("computePrStatus (timeout salvage)", () => {
     verification: null,
     critic: null,
     criticRetriesUsed: 0,
+    prQueued: false,
+    staleBase: false,
     ...over,
   });
 

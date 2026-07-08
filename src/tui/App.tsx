@@ -7,7 +7,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useApp, useInput } from "ink";
+import { Box, useApp, useInput } from "ink";
 import type { DashboardClient, HealthInfo } from "./ghClient.js";
 import type { DashAction, DashIssue } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
@@ -19,12 +19,14 @@ import { join } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
 import { computeLayout } from "./layout.js";
+import { windowSlice } from "./window.js";
+import { listRowsHeight, railListHeight } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
 import { Header, hintsFor, type HintView } from "./components/Chrome.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
-import { PrList } from "./components/PrList.js";
+import { PrList, NWO_MAX_WIDTH } from "./components/PrList.js";
 import { PrPreview } from "./components/PrPreview.js";
 import { derivePrState, sortPrs, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
@@ -36,6 +38,9 @@ import { QueueView } from "./components/QueueView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import type { ToastKind } from "./theme.js";
+import { useMouse } from "./useMouse.js";
+import { hitTest, type HitContext } from "./hitTest.js";
+import { isMouseInput, type MouseEvent as TuiMouseEvent } from "./mouse.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -61,9 +66,19 @@ export interface AppProps {
   onExit: () => void;
 }
 
-// Panes: 1 repos (rail), 2 issues (list), 3 preview (wide terminals only).
+// Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
+// terminals only).
 type Pane = 1 | 2 | 3;
-type View = "main" | "detail" | "help" | "addRepo" | "palette" | "cmdOutput" | "queue" | "prs";
+type View =
+  | "main"
+  | "detail"
+  | "help"
+  | "addRepo"
+  | "palette"
+  | "cmdOutput"
+  | "queue"
+  | "prs"
+  | "prDetail";
 
 interface CmdState {
   title: string;
@@ -83,6 +98,34 @@ interface DetailState {
   body: string | null;
   planComment: string | null;
   loading: boolean;
+}
+/** The fullscreen PR detail overlay — reached from pane 3 (`enter`) or the p
+ * view (`enter`); `from` is where `esc`/`q` returns focus/selection to. No
+ * fetch: PrPreview renders straight off the already-loaded `DashPr`. */
+interface PrDetailState {
+  pr: DashPr;
+  from: "main" | "prs";
+}
+
+/** Pane 3's title composes "3 PRs · <nwo>" from a nwo of unbounded length —
+ * mirrors PrList's own truncate-start nwo cell (NWO_MAX_WIDTH) so the title
+ * clamps to the same budget rather than wrapping the pane onto a second line,
+ * which would corrupt PrList's height/windowing math (CHROME one-line
+ * discipline: every pane title is exactly one row). */
+function truncateNwoStart(nwo: string): string {
+  if (nwo.length <= NWO_MAX_WIDTH) return nwo;
+  return `…${nwo.slice(nwo.length - (NWO_MAX_WIDTH - 1))}`;
+}
+
+/** First non-empty, trimmed line of a captured CLI output — where assessCmd's
+ * queued / "not watched" / "already queued" messages live (src/assessCmd.ts
+ * prints exactly one line per outcome, sometimes followed by blank padding). */
+function firstNonEmptyLine(s: string): string | null {
+  for (const raw of s.split("\n")) {
+    const line = raw.trim();
+    if (line) return line;
+  }
+  return null;
 }
 
 /** Compute the optimistic label set for an action — the operator sees motion
@@ -148,6 +191,11 @@ export function App(props: AppProps): React.JSX.Element {
   const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
   // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
   const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
+  // Freshness stamps: when each pane's data last came back fresh from GitHub.
+  // Cache-served (offline) loads do NOT update these — the stamp then shows the
+  // cache's own age via staleAt, which outranks fetchedAt in the panes.
+  const [issuesFetchedAt, setIssuesFetchedAt] = useState<Record<string, string>>({});
+  const [prsFetchedAt, setPrsFetchedAt] = useState<string | null>(null);
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
   const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
@@ -159,9 +207,14 @@ export function App(props: AppProps): React.JSX.Element {
   // PR selection anchor: {nwo, number} because PR numbers collide across repos —
   // a bare-number anchor would jump on re-sort.
   const [prSel, setPrSel] = useState<{ nwo: string; number: number } | null>(null);
+  // Pane-3 selection anchor: a bare PR NUMBER, because every candidate here is
+  // already scoped to ONE repo (no {nwo, number} collision risk). Unlike the
+  // anchors above, a repo swap resets this explicitly — see the effect below.
+  const [pane3SelNum, setPane3SelNum] = useState<number | null>(null);
   const [pane, setPane] = useState<Pane>(1);
   const [view, setView] = useState<View>("main");
   const [detail, setDetail] = useState<DetailState | null>(null);
+  const [prDetail, setPrDetail] = useState<PrDetailState | null>(null);
   const [scroll, setScroll] = useState(0);
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
@@ -179,20 +232,14 @@ export function App(props: AppProps): React.JSX.Element {
   const [cmd, setCmd] = useState<CmdState | null>(null);
   const [cmdElapsed, setCmdElapsed] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  // Pane-3 preview body/plan, autoloaded (debounced) as the selection moves.
-  const [preview, setPreview] = useState<{
-    body: string | null;
-    planComment: string | null;
-    loading: boolean;
-    error: string | null;
-  }>({ body: null, planComment: null, loading: false, error: null });
-  const previewCache = useRef(new Map<string, { body: string; planComment: string | null }>());
   // Last resolved positional index — the fallback when the selected issue number
   // vanishes from the list (closed/filtered), so the cursor stays near its slot.
   const lastIdxRef = useRef(0);
   // Same fallback, for the PR list: the slot the cursor returns to when the
   // anchored {nwo, number} vanishes (merged/closed and rolled off the limit).
   const lastPrIdxRef = useRef(0);
+  // Same fallback, for pane 3's repo-scoped PR list.
+  const lastPane3IdxRef = useRef(0);
 
   const showToast = useCallback((kind: ToastKind, text: string) => {
     setToast({ kind, text });
@@ -263,6 +310,65 @@ export function App(props: AppProps): React.JSX.Element {
   lastPrIdxRef.current = prIdxSafe;
   const selectedPr = prs[prIdxSafe] ?? null;
 
+  // Pane-3 data: the cross-repo PR aggregate, scoped to the rail's selected
+  // repo and re-sorted the same way the aggregate itself is (attention-first).
+  const repoPrs = useMemo(
+    () => sortPrs(prs.filter((p) => p.nwo === currentNwo)),
+    [prs, currentNwo],
+  );
+  // Resolve the anchored PR number to a live index in `repoPrs`; fall back to
+  // the clamped last slot only when the anchor is gone (mirrors the prSel
+  // resolution above, scoped to one repo).
+  const pane3ByNum = pane3SelNum !== null ? repoPrs.findIndex((p) => p.number === pane3SelNum) : -1;
+  const pane3IdxSafe =
+    repoPrs.length === 0
+      ? 0
+      : pane3ByNum >= 0
+        ? pane3ByNum
+        : Math.min(lastPane3IdxRef.current, repoPrs.length - 1);
+  lastPane3IdxRef.current = pane3IdxSafe;
+  const selectedPane3Pr = repoPrs[pane3IdxSafe] ?? null;
+  // Pane 3's title identifies the scoped repo (mockup: "3 PRs · acme/reef");
+  // no repo selected (empty rail) falls back to the bare pane label.
+  const pane3Title = currentNwo ? `3 PRs · ${truncateNwoStart(currentNwo)}` : "3 PRs";
+
+  // Window slices live HERE (not inside the list components) so that rendering
+  // and mouse hit-testing share one offset — the sticky prevStart refs move up
+  // with them. Geometry helpers keep the budgets in lockstep with the panes.
+  const railPrev = useRef(0);
+  const railWindow = windowSlice(
+    repoMappings.length,
+    railListHeight(layout.bodyRows),
+    repoIdxSafe,
+    railPrev.current,
+  );
+  railPrev.current = railWindow.start;
+  const issuePrev = useRef(0);
+  const issueWindow = windowSlice(
+    filteredIssues.length,
+    listRowsHeight(layout.bodyRows),
+    issueIdxSafe,
+    issuePrev.current,
+  );
+  issuePrev.current = issueWindow.start;
+  const prPrev = useRef(0);
+  const prWindow = windowSlice(
+    prs.length,
+    listRowsHeight(layout.bodyRows),
+    prIdxSafe,
+    prPrev.current,
+  );
+  prPrev.current = prWindow.start;
+  // Pane 3's repo-scoped monitor is a windowed PrList too — same lifted-offset rule.
+  const pane3Prev = useRef(0);
+  const pane3Window = windowSlice(
+    repoPrs.length,
+    listRowsHeight(layout.bodyRows),
+    pane3IdxSafe,
+    pane3Prev.current,
+  );
+  pane3Prev.current = pane3Window.start;
+
   // Per-repo issue counts for the rail badges, derived from loaded issues.
   const repoRows: RailRepo[] = repoMappings.map((r) => {
     const counts: RailRepo["counts"] = {};
@@ -318,6 +424,9 @@ export function App(props: AppProps): React.JSX.Element {
         if (res.ok) {
           setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
           setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
+          if (res.value.staleAt === null) {
+            setIssuesFetchedAt((prev) => ({ ...prev, [nwo]: new Date().toISOString() }));
+          }
         } else {
           showToast("error", res.error);
         }
@@ -347,6 +456,12 @@ export function App(props: AppProps): React.JSX.Element {
         }
         setPrs(sortPrs(all));
         setPrStaleAt(oldestStale);
+        // Stamp only on a fresh (non-cache-served) result — an all-repos-down
+        // poll, or one served entirely from the on-disk cache while offline,
+        // must not claim the aggregate is fresh.
+        if (results.some((r) => r.ok && r.value.staleAt === null)) {
+          setPrsFetchedAt(new Date().toISOString());
+        }
       });
     },
     [client, repoMappings],
@@ -391,6 +506,26 @@ export function App(props: AppProps): React.JSX.Element {
       return { nwo: prs[idx].nwo, number: prs[idx].number };
     });
   }, [prs]);
+
+  // Keep pane 3's anchor valid: same rules as the PR anchor above EXCEPT a
+  // repo swap (detected via the ref) resets it to the top explicitly — pane 3
+  // has no reason to remember a slot from a different repo's list, so it must
+  // not fall through to the lastPane3IdxRef clamp on a repo change.
+  const pane3RepoRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const repoChanged = pane3RepoRef.current !== currentNwo;
+    pane3RepoRef.current = currentNwo;
+    if (repoChanged) lastPane3IdxRef.current = 0;
+    if (repoPrs.length === 0) {
+      if (repoChanged) setPane3SelNum(null);
+      return;
+    }
+    setPane3SelNum((cur) => {
+      if (!repoChanged && cur !== null && repoPrs.some((p) => p.number === cur)) return cur;
+      const idx = Math.max(0, Math.min(lastPane3IdxRef.current, repoPrs.length - 1));
+      return repoPrs[idx].number;
+    });
+  }, [currentNwo, repoPrs]);
 
   // Issue polling — reads the live selection from a ref so the interval never
   // goes stale as the operator navigates.
@@ -449,50 +584,6 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [loadPrs, prPollMs]);
-
-  // Pane-3 preview autoload (wide only): debounced issueDetail keyed on the
-  // selected issue, memoized in previewCache so re-selection is instant.
-  const previewIssue = filteredIssues[issueIdxSafe] ?? null;
-  const previewKey = currentNwo && previewIssue ? `${currentNwo}#${previewIssue.number}` : null;
-  // A new preview target starts at the top — a leftover offset (from a longer
-  // previous body) must not blank the freshly-selected issue's pane. Gated to
-  // the live wide-mode preview only: other views (detail, queue, cmdOutput)
-  // own and reset `scroll` themselves on exit, so this must not fire for them.
-  useEffect(() => {
-    if (view === "main" && layout.mode === "wide") setScroll(0);
-  }, [previewKey, view, layout.mode]);
-  useEffect(() => {
-    // Gated to the live wide-mode issue preview: in the prs view pane 3 renders
-    // PrPreview (zero-fetch), so this issueDetail autoload must NOT fire there.
-    if (view !== "main" || layout.mode !== "wide" || previewKey === null) return;
-    if (!currentNwo || !previewIssue) return;
-    const cached = previewCache.current.get(previewKey);
-    if (cached) {
-      setPreview({ ...cached, loading: false, error: null });
-      return;
-    }
-    setPreview({ body: null, planComment: null, loading: true, error: null });
-    let alive = true;
-    const t = setTimeout(() => {
-      void client.issueDetail(currentNwo, previewIssue.number).then((r) => {
-        if (!alive) return;
-        if (r.ok) {
-          previewCache.current.set(previewKey, r.value);
-          setPreview({ ...r.value, loading: false, error: null });
-        } else {
-          setPreview({ body: null, planComment: null, loading: false, error: r.error });
-        }
-      });
-    }, 300);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-    // Deps are the reload key + layout mode + view (currentNwo and previewIssue
-    // are derived from previewKey; view gates the prs-view suppression). `view`
-    // changes only on view transitions, so this never re-fires on unrelated
-    // renders. Coming back to main re-fires it — the previewCache serves instantly.
-  }, [previewKey, layout.mode, view]);
 
   const setIssueLabels = useCallback((nwo: string, num: number, labels: string[]) => {
     setIssues((prev) => {
@@ -562,6 +653,68 @@ export function App(props: AppProps): React.JSX.Element {
       if (!res.ok) showToast("error", res.error);
     });
   }, [client, currentNwo, currentIssue, showToast]);
+
+  const openRepoBrowser = useCallback(() => {
+    if (!currentRepo) return;
+    void client.openRepoInBrowser(currentRepo.nwo).then((res) => {
+      if (!res.ok) showToast("error", res.error);
+    });
+  }, [client, currentRepo, showToast]);
+
+  // Repos currently mid-`assess` — guards a second `s`/`S` press on the same
+  // repo from double-spawning the CLI while the first run is still going.
+  const assessInFlightRef = useRef<Set<string>>(new Set());
+  // Flips false on unmount. `assess` spawns a real subprocess (cliRunner's
+  // default timeout is 120s) — the `.then` below must not setState after the
+  // dashboard has already exited.
+  const aliveRef = useRef(true);
+  useEffect(
+    () => () => {
+      aliveRef.current = false;
+    },
+    [],
+  );
+
+  // Fire-and-toast, mirroring `d`/`a`: no view switch, the selected repo's nwo
+  // is captured at press time, and the result surfaces as a toast whenever it
+  // lands (Toast renders at the Workspace level regardless of the current view).
+  const runAssess = useCallback(
+    (autoPlan: boolean) => {
+      if (!currentNwo) {
+        showToast("error", "no repo selected");
+        return;
+      }
+      // External (fork-PR) repos: assess files finding ISSUES on the target
+      // repo — an upstream write the etiquette invariant forbids. assessCmd
+      // already fails closed (external entries are not "watched"), but gate
+      // here so the toast explains instead of suggesting a config change.
+      if (currentRepo?.external === true) {
+        showToast("error", "assess is not available for external repos — it files issues upstream");
+        return;
+      }
+      const nwo = currentNwo;
+      if (assessInFlightRef.current.has(nwo)) {
+        showToast("info", "assess already running");
+        return;
+      }
+      assessInFlightRef.current.add(nwo);
+      showToast("info", `assessing ${nwo}…`);
+      const args = autoPlan ? [nwo, "--auto-plan"] : [nwo];
+      void runCliFn("assess", args).then((r) => {
+        assessInFlightRef.current.delete(nwo);
+        if (!aliveRef.current) return;
+        const line = firstNonEmptyLine(r.output);
+        if (r.code === 0) {
+          showToast("success", line ? `${nwo}: ${line}` : `assessed ${nwo}`);
+        } else {
+          // Nonzero exit: assessCmd's first line carries the reason ("not
+          // watched", "already queued", etc.) — relay it as-is.
+          showToast("error", line ?? `assess failed for ${nwo}`);
+        }
+      });
+    },
+    [currentNwo, currentRepo, runCliFn, showToast],
+  );
 
   // Elapsed ticker for a running palette command (1s resolution).
   useEffect(() => {
@@ -646,6 +799,12 @@ export function App(props: AppProps): React.JSX.Element {
       return rest;
     });
     setStaleAt((prev) => {
+      if (!(gone in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[gone];
+      return rest;
+    });
+    setIssuesFetchedAt((prev) => {
       if (!(gone in prev)) return prev;
       const rest = { ...prev };
       delete rest[gone];
@@ -742,25 +901,90 @@ export function App(props: AppProps): React.JSX.Element {
     [client, watchlistFile, watchlistError, clonesDir, showToast],
   );
 
-  // A wide terminal that shrinks below 110 cols while pane 3 (preview) is
-  // focused would otherwise leave focus on a pane that no longer renders —
-  // pull it back onto the issues pane instead of stranding it.
+  // A wide terminal that shrinks below 110 cols while pane 3 (the repo-scoped
+  // PR monitor) is focused would otherwise leave focus on a pane that no
+  // longer renders — pull it back onto the issues pane instead of stranding it.
   useEffect(() => {
     if (layout.mode !== "wide" && pane === 3) setPane(2);
   }, [layout.mode, pane]);
 
+  // Move the anchored NUMBER, not a bare index — a re-sorting poll must keep
+  // the cursor on the same issue. Hoisted (was inline in useInput) so both
+  // keyboard and mouse (wheel/click) drive the same selection logic.
+  const moveIssue = (delta: number): void => {
+    if (!currentNwo || filteredIssues.length === 0) return;
+    const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
+    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
+  };
+  const moveIssueTo = (idx: number): void => {
+    if (!currentNwo || filteredIssues.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
+    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
+  };
+
+  // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
+  // must keep the cursor on the same PR. Hoisted for the same reason as above.
+  const movePr = (delta: number): void => {
+    if (prs.length === 0) return;
+    const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
+    setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
+  };
+  const movePrTo = (idx: number): void => {
+    if (prs.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, prs.length - 1));
+    setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
+  };
+
+  const openSelectedPr = useCallback(() => {
+    if (!selectedPr) return;
+    const { nwo, number } = selectedPr;
+    void client.openPrInBrowser(nwo, number).then((res) => {
+      if (!res.ok) showToast("error", res.error);
+    });
+  }, [client, selectedPr, showToast]);
+
+  // Fullscreen PR overlay opener — shared by keyboard enter (pane 3, prs view)
+  // and the mouse's click-on-selected-row path; `from` is where esc/q returns.
+  const openPrDetail = (pr: DashPr | null, from: "main" | "prs"): void => {
+    if (!pr) return;
+    setPrDetail({ pr, from });
+    setView("prDetail");
+  };
+
+  // Pane-3 movers, hoisted (like moveIssue/movePr) so the mouse handler and
+  // the keyboard branch share one anchored-NUMBER implementation.
+  const movePane3 = (delta: number): void => {
+    if (repoPrs.length === 0) return;
+    const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
+    setPane3SelNum(repoPrs[next].number);
+  };
+  const movePane3To = (idx: number): void => {
+    if (repoPrs.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
+    setPane3SelNum(repoPrs[clamped].number);
+  };
+
+  // Dismiss an active toast on the next input (keyboard keystroke or mouse
+  // press) — shared so both useInput and onMouseEvent apply the same rule.
+  const dismissToast = (): void => {
+    if (!toast) return;
+    setToast(null);
+    if (toastTimer.current) {
+      clearTimeout(toastTimer.current);
+      toastTimer.current = null;
+    }
+  };
+
   useInput((input, key) => {
+    // Mouse reporting leaks SGR sequences into useInput as keypresses (ink
+    // strips the ESC) — drop them; onMouseEvent owns the real events via stdin.
+    if (isMouseInput(input)) return;
+
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return;
 
     // Toast is dismissed by the next keystroke, before it is acted on.
-    if (toast) {
-      setToast(null);
-      if (toastTimer.current) {
-        clearTimeout(toastTimer.current);
-        toastTimer.current = null;
-      }
-    }
+    dismissToast();
 
     if (view === "help") {
       setView("main"); // any key closes
@@ -769,17 +993,46 @@ export function App(props: AppProps): React.JSX.Element {
 
     if (view === "detail") {
       if (key.escape) {
-        setScroll(0); // shared offset — don't bleed it into the pane-3 preview
+        setScroll(0); // shared offset — don't bleed it into the next view that reads it
         return void setView("main");
+      }
+      if (input === "o") {
+        if (currentNwo && detail) {
+          void client.openInBrowser(currentNwo, detail.issue.number).then((res) => {
+            if (!res.ok) showToast("error", res.error);
+          });
+        }
+        return;
       }
       if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
       if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
       return;
     }
 
+    if (view === "prDetail") {
+      // esc AND q both return — unlike the issue detail view, the overlay has
+      // no dedicated re-open key to double as its close key, so q (otherwise
+      // the global quit key, unreachable from any sub-view) fills that slot.
+      if (key.escape || input === "q") {
+        // `from`'s pane/selection state was never touched while the overlay
+        // was open, so returning here restores it for free.
+        return void setView(prDetail?.from ?? "main");
+      }
+      if (input === "o") {
+        if (prDetail) {
+          const { nwo, number } = prDetail.pr;
+          void client.openPrInBrowser(nwo, number).then((res) => {
+            if (!res.ok) showToast("error", res.error);
+          });
+        }
+        return;
+      }
+      return;
+    }
+
     if (view === "queue") {
       if (key.escape || input === "t") {
-        setScroll(0); // shared offset — don't bleed it into the pane-3 preview
+        setScroll(0); // shared offset — don't bleed it into the next view that reads it
         return void setView("main");
       }
       if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
@@ -789,34 +1042,15 @@ export function App(props: AppProps): React.JSX.Element {
 
     if (view === "prs") {
       if (key.escape || input === "p") {
-        setScroll(0); // shared offset — don't bleed it into the pane-3 preview
+        setScroll(0); // shared offset — don't bleed it into the next view that reads it
         return void setView("main");
       }
-      // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
-      // must keep the cursor on the same PR.
-      const movePr = (delta: number): void => {
-        if (prs.length === 0) return;
-        const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
-        setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
-      };
-      const movePrTo = (idx: number): void => {
-        if (prs.length === 0) return;
-        const clamped = Math.max(0, Math.min(idx, prs.length - 1));
-        setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
-      };
       if (input === "j" || key.downArrow) return void movePr(1);
       if (input === "k" || key.upArrow) return void movePr(-1);
       if (input === "g") return void movePrTo(0);
       if (input === "G") return void movePrTo(prs.length - 1);
-      if (input === "o" || key.return) {
-        if (selectedPr) {
-          const { nwo, number } = selectedPr;
-          void client.openPrInBrowser(nwo, number).then((res) => {
-            if (!res.ok) showToast("error", res.error);
-          });
-        }
-        return;
-      }
+      if (input === "o") return void openSelectedPr();
+      if (key.return) return void openPrDetail(selectedPr, "prs");
       if (input === "r") return void loadPrs();
       return;
     }
@@ -938,12 +1172,16 @@ export function App(props: AppProps): React.JSX.Element {
     }
     if (input === "r") {
       if (currentNwo) {
-        previewCache.current.clear();
         setRefreshing(true);
         void loadIssues(currentNwo).finally(() => setRefreshing(false));
       }
       return;
     }
+    // `s`/`S` assess the rail-selected repo — global to the main view (the
+    // selection is global state), unlike `d`/`D`/`a` below which are scoped
+    // to the issues pane because they act on the selected ISSUE.
+    if (input === "s") return void runAssess(false);
+    if (input === "S") return void runAssess(true);
 
     if (pane === 1) {
       if (input === "j" || key.downArrow) {
@@ -953,16 +1191,28 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "g") return void setRepoIdx(0);
       if (input === "G") return void setRepoIdx(repoMappings.length - 1);
       if (input === "x") return void unwatch();
+      if (input === "o") return void openRepoBrowser();
       return;
     }
 
     if (pane === 3) {
-      if (key.escape || key.return) return void setPane(2);
-      if (input === "j" || input === "]" || key.downArrow) return void setScroll((s) => s + 1);
-      if (input === "k" || input === "[" || key.upArrow) {
-        return void setScroll((s) => Math.max(0, s - 1));
+      if (key.escape) return void setPane(2);
+      // Move the anchored PR NUMBER, never a bare index — mirrors the prs-view
+      // anchor so a re-sorting poll keeps the cursor on the same PR.
+      if (input === "j" || key.downArrow) return void movePane3(1);
+      if (input === "k" || key.upArrow) return void movePane3(-1);
+      if (input === "g") return void movePane3To(0);
+      if (input === "G") return void movePane3To(repoPrs.length - 1);
+      if (input === "o") {
+        if (selectedPane3Pr) {
+          const { nwo, number } = selectedPane3Pr;
+          void client.openPrInBrowser(nwo, number).then((res) => {
+            if (!res.ok) showToast("error", res.error);
+          });
+        }
+        return;
       }
-      if (input === "o") return void openBrowser();
+      if (key.return) return void openPrDetail(selectedPane3Pr, "main");
       return;
     }
 
@@ -971,21 +1221,11 @@ export function App(props: AppProps): React.JSX.Element {
       if (filter !== "") setFilter("");
       return;
     }
-    const moveIssue = (delta: number): void => {
-      if (!currentNwo || filteredIssues.length === 0) return;
-      const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
-      setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
-    };
-    const moveIssueTo = (idx: number): void => {
-      if (!currentNwo || filteredIssues.length === 0) return;
-      const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
-      setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
-    };
     if (input === "j" || key.downArrow) return void moveIssue(1);
     if (input === "k" || key.upArrow) return void moveIssue(-1);
     if (input === "g") return void moveIssueTo(0);
     if (input === "G") return void moveIssueTo(filteredIssues.length - 1);
-    if (key.return) return void (layout.mode === "wide" ? setPane(3) : openDetail());
+    if (key.return) return void openDetail();
     // External (fork-PR) repos have no upstream label lifecycle: `d` queues a
     // ticket via the dispatch core; the label-driven keys explain instead of
     // acting. Owned repos keep the existing optimistic label flow untouched.
@@ -1015,6 +1255,84 @@ export function App(props: AppProps): React.JSX.Element {
     }
     if (input === "o") return void openBrowser();
   });
+
+  const onMouseEvent = (ev: TuiMouseEvent): void => {
+    // Modal-ish views own the screen; the mouse is keyboard-only territory
+    // (v1). prDetail is in this set: the overlay has no scroll and no click
+    // targets — esc/q/o drive it.
+    if (view === "help" || view === "palette" || view === "addRepo" || view === "prDetail") return;
+    if (ev.kind === "release") return; // presses act on press, not release
+    if (ev.kind === "press") dismissToast();
+
+    // Full-body scroll views: wheel scrolls, clicks have no targets (v1).
+    if (view === "detail" || view === "queue" || view === "cmdOutput") {
+      if (ev.kind === "wheelDown") setScroll((s) => s + 1);
+      if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
+      return;
+    }
+
+    const ctx: HitContext = {
+      layout,
+      columns: size.columns,
+      view: view === "prs" ? "prs" : "main",
+      repoCount: repoMappings.length,
+      listCount: view === "prs" ? prs.length : filteredIssues.length,
+      railStart: railWindow.start,
+      listStart: view === "prs" ? prWindow.start : issueWindow.start,
+      pane3Count: repoPrs.length,
+      pane3Start: pane3Window.start,
+      hasPreviewTarget: layout.mode === "wide" && view === "prs" && selectedPr !== null,
+    };
+    const hit = hitTest(ctx, ev.x, ev.y);
+
+    if (ev.kind === "wheelUp" || ev.kind === "wheelDown") {
+      const d = ev.kind === "wheelDown" ? 1 : -1;
+      if (hit.type === "repoRow" || (hit.type === "pane" && hit.pane === 1)) {
+        setRepoIdx((i) => Math.max(0, Math.min(i + d, repoMappings.length - 1)));
+      } else if (hit.type === "issueRow" || (hit.type === "pane" && hit.pane === 2)) {
+        moveIssue(d);
+      } else if (hit.type === "prRow") {
+        movePr(d);
+      } else if (hit.type === "pane3Row" || (hit.type === "pane" && hit.pane === 3)) {
+        movePane3(d); // pane 3 is the repo-scoped PR monitor — wheel moves its selection
+      }
+      return;
+    }
+
+    // ev.kind === "press"
+    switch (hit.type) {
+      case "repoRow":
+        setPane(1);
+        setRepoIdx(hit.index);
+        return;
+      case "issueRow":
+        if (pane === 2 && hit.index === issueIdxSafe) return void openDetail();
+        setPane(2);
+        moveIssueTo(hit.index);
+        return;
+      case "prRow":
+        // Click-again = enter, matching the keyboard: the fullscreen PR overlay.
+        if (hit.index === prIdxSafe) return void openPrDetail(selectedPr, "prs");
+        movePrTo(hit.index);
+        return;
+      case "pane3Row":
+        if (pane === 3 && hit.index === pane3IdxSafe) {
+          return void openPrDetail(selectedPane3Pr, "main");
+        }
+        setPane(3);
+        movePane3To(hit.index);
+        return;
+      case "linkLine":
+        // Only the prs view renders a preview card (PrPreview) with a ↗ line.
+        return void openSelectedPr();
+      case "pane":
+        setPane(hit.pane);
+        return;
+      case "none":
+        return;
+    }
+  };
+  useMouse(onMouseEvent);
 
   const hints = hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
@@ -1081,6 +1399,7 @@ export function App(props: AppProps): React.JSX.Element {
         queue={queueSnap}
         width={layout.railWidth}
         height={listHeight}
+        window={railWindow}
       />
       {view === "queue" ? (
         <QueueView snap={queueSnap} scroll={scroll} now={queueNow} height={listHeight} focused />
@@ -1107,6 +1426,15 @@ export function App(props: AppProps): React.JSX.Element {
           focused
           height={listHeight}
         />
+      ) : view === "prDetail" && prDetail ? (
+        <PrPreview
+          pr={prDetail.pr}
+          branchPrefix={branchPrefix}
+          now={queueNow}
+          height={listHeight}
+          focused
+          titleLabel="pr"
+        />
       ) : view === "prs" ? (
         <PrList
           prs={prs}
@@ -1115,6 +1443,8 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={prStaleAt}
+          fetchedAt={prsFetchedAt}
+          window={prWindow}
         />
       ) : (
         <IssueList
@@ -1128,6 +1458,8 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
+          fetchedAt={currentNwo ? (issuesFetchedAt[currentNwo] ?? null) : null}
+          window={issueWindow}
         />
       )}
       {layout.mode === "wide" &&
@@ -1141,19 +1473,21 @@ export function App(props: AppProps): React.JSX.Element {
             focused={false}
           />
         ) : view === "main" ? (
-          <Preview
-            issue={previewIssue}
-            trigger={trigger}
-            body={preview.body}
-            planComment={preview.planComment}
-            loading={preview.loading}
-            error={preview.error}
-            scroll={scroll}
-            focused={pane === 3}
-            height={listHeight}
-            width={layout.previewWidth}
-            paneNumber
-          />
+          <Box width={layout.previewWidth} height={listHeight}>
+            <PrList
+              prs={repoPrs}
+              selected={pane3IdxSafe}
+              showNwo={false}
+              focused={pane === 3}
+              height={listHeight}
+              now={queueNow}
+              staleAt={prStaleAt}
+              fetchedAt={prsFetchedAt}
+              window={pane3Window}
+              title={pane3Title}
+              emptyText="no junco PRs for this repo"
+            />
+          </Box>
         ) : null)}
     </Workspace>
   );

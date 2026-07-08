@@ -164,6 +164,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       plannerModelId: null,
       externalReposRoot: "/tmp/junco-test-external",
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: join(h.root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
@@ -361,9 +362,9 @@ Stay put.
 
     let agentCalled = false;
     const { dst } = await runPrFlow(cfg, task, path, ctx, {
-      sessionFactoryFor: () => {
+      sessionFactoryFor: (cfg2, cwd) => () => {
         agentCalled = true;
-        return commitFactory({ commit: true })(cfg, h.wtsRoot)();
+        return commitFactory({ commit: true })(cfg2, cwd)();
       },
       dirs: { done: h.done, failed: h.failed },
     });

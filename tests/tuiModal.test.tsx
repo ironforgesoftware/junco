@@ -29,6 +29,8 @@ describe("HelpModal", () => {
     expect(nav).toBeGreaterThan(ctx); // context section renders first
     expect(f).toContain("act on issue");
     expect(f).toContain("dispatch (adds `junco`)");
+    expect(f).toContain("mouse"); // new mouse section
+    expect(f).toContain("↗ line"); // link-line row documented
     expect(f).toContain("1/2/3");
     expect(f).toContain("/"); // filter key documented
     expect(f).toContain("press any key to close");

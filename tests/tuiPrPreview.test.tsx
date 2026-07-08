@@ -6,6 +6,15 @@ import { type DashPr } from "../src/tui/prState.js";
 
 const NOW = new Date("2026-07-07T14:00:00Z");
 
+// Strips OSC 8 hyperlink escapes (added by the ↗ link line's <Transform>) so
+// raw string length reflects visible terminal width, not the invisible bytes
+// wrapping the link row. Ink's own layout already excludes them from width
+// math (verified via ink/build/sanitize-ansi.js) — this mirrors that for tests.
+const OSC_RE = new RegExp("\u001b\\][^\u0007\u001b]*(?:\u0007|\u001b\\\\)", "g");
+function visibleWidth(line: string): number {
+  return line.replace(OSC_RE, "").length;
+}
+
 const pr = (number: number, overrides: Partial<DashPr> = {}): DashPr => ({
   number,
   title: `Test PR #${number}`,
@@ -152,7 +161,7 @@ describe("PrPreview", () => {
       headRefName: "junco/task-123-fix-widget",
     });
     const f = render(
-      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} />,
+      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />,
     ).lastFrame()!;
 
     expect(f).toContain("ticket: task-123-fix-widget");
@@ -163,7 +172,7 @@ describe("PrPreview", () => {
       headRefName: "feature/hand-authored",
     });
     const f = render(
-      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} />,
+      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />,
     ).lastFrame()!;
 
     expect(f).toContain("ticket: —");
@@ -208,7 +217,7 @@ describe("PrPreview", () => {
       headRefName: longBranch,
     });
     const f = render(
-      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} />,
+      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />,
     ).lastFrame()!;
 
     // Should contain slug-tail at the end (might lose 1-2 chars due to rendering width constraints)
@@ -220,7 +229,7 @@ describe("PrPreview", () => {
     const f = render(<PrPreview pr={testPr} {...base} width={48} />).lastFrame()!;
 
     const lines = f.split("\n");
-    const maxWidth = Math.max(...lines.map((l) => l.length));
+    const maxWidth = Math.max(...lines.map((l) => visibleWidth(l)));
     expect(maxWidth).toBeLessThanOrEqual(48);
   });
 
@@ -298,7 +307,7 @@ describe("PrPreview", () => {
     const lines = f.split("\n");
     // Each line should be at most 48 chars and contain no wrapping artifacts
     for (const line of lines) {
-      expect(line.length).toBeLessThanOrEqual(48);
+      expect(visibleWidth(line)).toBeLessThanOrEqual(48);
     }
     // Should still render all the key info
     expect(f).toContain("#42");
@@ -323,5 +332,12 @@ describe("PrPreview", () => {
     const f = render(<PrPreview pr={testPr} {...base} />).lastFrame()!;
 
     expect(f).toContain("draft");
+  });
+
+  it("renders the ↗ link line as the row after the heading", () => {
+    const testPr = pr(100);
+    const f = render(<PrPreview pr={testPr} {...base} />).lastFrame()!;
+    expect(f).toContain(`↗ ${testPr.nwo}#${testPr.number}`);
+    expect(f.split("\n")[3]).toContain("↗");
   });
 });

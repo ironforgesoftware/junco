@@ -334,10 +334,49 @@ describe("Footer / hintsFor", () => {
     expect(tIdx).toBeGreaterThanOrEqual(0);
     expect(Math.abs(pIdx - tIdx)).toBe(1);
   });
-  it("medium mode enter says detail and the pane hint drops to ←/repos", () => {
+  it("medium mode: enter says preview (same word as wide) and the pane hint drops to ←/repos", () => {
     const pairs = hintsFor("main", 2, "medium", false);
-    expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
+    expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("preview");
     expect(pairs.find(([k]) => k === "←")?.[1]).toBe("repos");
+  });
+  it("pane 1 hints: s assess, placed after refresh and before the command palette key", () => {
+    const pairs = hintsFor("main", 1, "wide", false);
+    const sIdx = pairs.findIndex(([k]) => k === "s");
+    const rIdx = pairs.findIndex(([k]) => k === "r");
+    const colonIdx = pairs.findIndex(([k]) => k === ":");
+    expect(pairs.find(([k]) => k === "s")?.[1]).toBe("assess");
+    expect(sIdx).toBeGreaterThan(rIdx);
+    expect(sIdx).toBeLessThan(colonIdx);
+  });
+  it("pane 1 footer row (with the s hint added) still renders as exactly one line", () => {
+    // ink-testing-library's stdout is hardcoded to 100 cols (narrower than the
+    // 110-col wide breakpoint this pane targets), so this is the tighter of
+    // the two cases; Footer's wrap="truncate-end" makes wrapping structurally
+    // impossible regardless of hint count — this proves the new hint didn't
+    // somehow defeat that.
+    const hints = hintsFor("main", 1, "wide", false);
+    const f = render(<Footer hints={hints} />).lastFrame()!;
+    const lines = f.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("s assess"); // present in full, not truncated away
+  });
+  it("pane 3 hints: ↑/↓ move, enter detail, o open", () => {
+    const pairs = hintsFor("main", 3, "wide", false);
+    expect(pairs.find(([k]) => k === "↑/↓")?.[1]).toBe("move");
+    expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
+    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("open");
+  });
+  it("prs view: enter detail, o open (no more combined enter-opens-browser)", () => {
+    const pairs = hintsFor("prs", 2, "wide", false);
+    expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
+    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("open");
+    expect(pairs.find(([k]) => k === "o/enter")).toBeUndefined();
+  });
+  it("prDetail hints: esc back, o open", () => {
+    expect(hintsFor("prDetail", 2, "wide", false)).toEqual([
+      ["esc", "back"],
+      ["o", "open"],
+    ]);
   });
   it("filtering mode replaces everything with the filter contract", () => {
     expect(hintsFor("main", 2, "wide", true)).toEqual([

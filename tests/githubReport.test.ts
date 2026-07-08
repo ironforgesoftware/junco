@@ -20,6 +20,7 @@ const ticket = (github: Ticket["github"]): Ticket => ({
   retryCount: 0,
   tools: null,
   github,
+  assess: null,
   workdir: null,
 });
 const gt = { nwo: "acme/api", issue: 42, kind: "pr" as const, external: false };

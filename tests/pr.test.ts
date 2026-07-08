@@ -95,6 +95,9 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -106,6 +109,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
     branchPrefix: "junco/",
     worktreeRoot: join(tmpRoot, "wts"),
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -122,6 +126,9 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: "/tmp/vault/state",
+    logToFile: false,
+    transcriptsEnabled: false,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -132,6 +139,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
       plannerModelId: null,
       externalReposRoot: "/tmp/junco-test-external",
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
   };
 }
 

@@ -93,7 +93,7 @@ describe("waiting list", () => {
     expect(snap.waiting[1].notBefore).toBeNull();
   });
 
-  it("derives kind: github kind wins; manual repo → pr; manual bare → ask", async () => {
+  it("derives kind: github kind wins; manual repo → pr; manual bare → ask; assess → assess", async () => {
     const d = setupDirs();
     writeTicket(
       d.inbox,
@@ -102,11 +102,13 @@ describe("waiting list", () => {
     );
     writeTicket(d.inbox, "b-repo.md", "id: b-repo\nrepo: ~/src/thing");
     writeTicket(d.inbox, "c-bare.md", "id: c-bare");
+    writeTicket(d.inbox, "d-assess.md", "id: d-assess\nrepo: ~/src/thing\nassess: {}");
     const snap = await makeQueueSnapshotFn(makeQueueCfg(d.root), { fetchFn: downFetch })();
     expect(snap.waiting.map((w) => [w.id, w.kind])).toEqual([
       ["a-plan", "plan"],
       ["b-repo", "pr"],
       ["c-bare", "ask"],
+      ["d-assess", "assess"],
     ]);
     expect(snap.waiting[0].github).toEqual({
       nwo: "acme/api",

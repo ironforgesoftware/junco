@@ -33,6 +33,9 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
   pollIntervalSeconds: 15,
   startupPollSeconds: 30,
   startupWait: true,
+  maxTransientRetries: 2,
+  retryBackoffSeconds: 60,
+  maxConcurrent: 1,
   supervisorEnabled: false,
   supervisorBudgetPerKind: 1,
   supervisorEscalationWindow: 3,
@@ -44,6 +47,7 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
   branchPrefix: "junco/",
   worktreeRoot: "/tmp/worktrees",
   removeWorktreeOnSuccess: true,
+  allowedRepoRoots: [],
   draftByDefault: true,
   defaultLabels: [],
   verifyEnabled: false,
@@ -60,6 +64,9 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   logLevel: "info",
+  stateDir: "/tmp/vault/state",
+  logToFile: false,
+  transcriptsEnabled: false,
   github: {
     enabled: false,
     triggerLabel: "junco",
@@ -70,6 +77,7 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
+  assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
 };
 
 function makeConfig(vaultRoot: string): Config {

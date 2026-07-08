@@ -63,6 +63,9 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -74,6 +77,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     branchPrefix: "junco/",
     worktreeRoot: "/tmp/wts",
     removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
     verifyEnabled: true,
@@ -90,6 +94,9 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     logLevel: "info",
+    stateDir: "/tmp/vault/state",
+    logToFile: false,
+    transcriptsEnabled: false,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -100,6 +107,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
       plannerModelId: null,
       externalReposRoot: "/tmp/junco-test-external",
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     ...overrides,
   };
 }
@@ -113,6 +121,12 @@ function makeTicket(body: string): Ticket {
     body,
     frontmatter: {},
     hasRepo: true,
+    notBefore: null,
+    retryCount: 0,
+    tools: null,
+    github: null,
+    assess: null,
+    workdir: null,
   };
 }
 

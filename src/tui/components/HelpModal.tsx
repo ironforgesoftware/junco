@@ -46,8 +46,8 @@ export function HelpModal({
           ["←/→ · h/l · tab", "switch panes"],
           ["[ / ]", "scroll (alias of ↑/↓ in views)"],
           ["g/G", "first / last"],
-          ["1/2/3", "jump pane directly (3 = preview, wide)"],
-          ["enter", mode === "wide" ? "focus the preview pane" : "open issue detail"],
+          ["1/2/3", "jump pane directly (3 = PRs for the selected repo, wide)"],
+          ["enter", "open detail — issue (pane 2) or PR (pane 3 / PRs view)"],
         ]}
       />
       <Section
@@ -57,7 +57,7 @@ export function HelpModal({
           ["D", "dispatch as ask (read-only Q&A)"],
           ["a", "approve the posted plan"],
           ["R", "re-plan / re-cycle (by state)"],
-          ["o", "open in browser"],
+          ["o", "open in browser (repo page from pane 1)"],
         ]}
       />
       <Section
@@ -67,9 +67,20 @@ export function HelpModal({
           ["w", "add repo to watchlist"],
           ["x", "unwatch repo"],
           ["r", "refresh now"],
+          ["s", "assess the selected repo (audit for vulnerabilities, file issues)"],
+          ["S", "assess with --auto-plan (findings carry the trigger label)"],
           ["t", "queue view"],
           ["p", "PR tracking — junco-authored PRs across watched repos"],
           [":", "command palette"],
+        ]}
+      />
+      <Section
+        title="mouse"
+        rows={[
+          ["click", "focus pane / select row"],
+          ["click selected", "open it — same as enter"],
+          ["wheel", "move selection / scroll, under the cursor"],
+          ["↗ line", "open on GitHub (cmd+click works too)"],
         ]}
       />
       <Section

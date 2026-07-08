@@ -227,6 +227,13 @@ const TomlSchema = z.object({
         .default([]),
     })
     .default({}),
+  assess: z
+    .object({
+      max_issues_per_run: z.number().int().min(1).default(20),
+      min_severity: z.enum(["critical", "high", "medium", "low"]).default("low"),
+      npm_bin: z.string().min(1).default("npm"),
+    })
+    .default({}),
 });
 
 export function loadConfig(path: string): Config {
@@ -309,6 +316,11 @@ export function loadConfig(path: string): Config {
         d.github.external_repos_root ?? join(d.observability.state_dir, "external"),
       ),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
+    },
+    assess: {
+      maxIssuesPerRun: d.assess.max_issues_per_run,
+      minSeverity: d.assess.min_severity,
+      npmBin: d.assess.npm_bin,
     },
   };
 }

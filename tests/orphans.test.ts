@@ -73,6 +73,7 @@ function makeConfig(): { cfg: Config; root: string } {
       plannerModelId: null,
       externalReposRoot: "/tmp/junco-test-external",
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
