@@ -213,3 +213,273 @@ export function extractFindingMarkers(bodies: string[]): Set<string> {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// npm audit -> findings
+// ---------------------------------------------------------------------------
+
+interface NpmAuditAdvisory {
+  source?: number;
+  name?: string;
+  dependency?: string;
+  title?: string;
+  url?: string;
+  severity?: string;
+  cwe?: string[];
+  range?: string;
+}
+
+interface NpmAuditFixAvailable {
+  name: string;
+  version: string;
+  isSemVerMajor?: boolean;
+}
+
+interface NpmAuditVulnEntry {
+  name?: string;
+  severity?: string;
+  isDirect?: boolean;
+  via?: (string | NpmAuditAdvisory)[];
+  range?: string;
+  fixAvailable?: boolean | NpmAuditFixAvailable;
+}
+
+const NPM_SEVERITY_TO_OURS: Record<string, Severity> = {
+  critical: "critical",
+  high: "high",
+  moderate: "medium",
+  low: "low",
+  info: "low",
+};
+
+function mapNpmSeverity(s: string | undefined): Severity {
+  if (s === undefined) return "low";
+  return NPM_SEVERITY_TO_OURS[s] ?? "low";
+}
+
+// https://github.com/advisories/GHSA-xxxx-yyyy-zzzz -> GHSA-xxxx-yyyy-zzzz
+const GHSA_ID_RE = /GHSA-[0-9A-Za-z]+-[0-9A-Za-z]+-[0-9A-Za-z]+/;
+
+/**
+ * Map `npm audit --json` (npm >= 7 shape) output to Findings. Pure — the
+ * caller owns running `npm audit` and passing its stdout in. Emits one
+ * finding per (package, via-object) pair; a package whose `via` array is
+ * entirely strings is transitive-only and is skipped (the parent advisory
+ * that pulled it in already covers the root cause). npm's error shape
+ * (`{ error: { code, summary, detail } }`) and malformed JSON both yield an
+ * empty findings list plus a human-readable warning.
+ */
+export function findingsFromNpmAudit(stdoutJson: string): {
+  findings: Finding[];
+  warning: string | null;
+} {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdoutJson);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { findings: [], warning: `could not parse npm audit output: ${msg}` };
+  }
+
+  if (parsed !== null && typeof parsed === "object" && "error" in parsed) {
+    const err = (parsed as { error?: { summary?: string } }).error;
+    return { findings: [], warning: err?.summary ?? "npm audit reported an error" };
+  }
+
+  const vulnerabilities =
+    parsed !== null && typeof parsed === "object"
+      ? (parsed as { vulnerabilities?: unknown }).vulnerabilities
+      : undefined;
+  if (
+    vulnerabilities === undefined ||
+    typeof vulnerabilities !== "object" ||
+    vulnerabilities === null
+  ) {
+    return { findings: [], warning: null };
+  }
+
+  const findings: Finding[] = [];
+  for (const [pkgName, rawEntry] of Object.entries(
+    vulnerabilities as Record<string, NpmAuditVulnEntry>,
+  )) {
+    const entry = rawEntry ?? {};
+    const via = entry.via ?? [];
+    const advisories = via.filter(
+      (v): v is NpmAuditAdvisory => typeof v === "object" && v !== null,
+    );
+    if (advisories.length === 0) continue; // transitive-only package
+
+    for (const advisory of advisories) {
+      const rawTitle = advisory.title ?? "(untitled advisory)";
+      const title = sanitizeFindingText(rawTitle, MAX_TITLE);
+      const ghsaMatch = advisory.url ? GHSA_ID_RE.exec(advisory.url) : null;
+      const ruleId = ghsaMatch ? ghsaMatch[0] : sanitizeFindingText(rawTitle, MAX_RULE_ID);
+      const severity = mapNpmSeverity(advisory.severity);
+      const range = advisory.range ?? entry.range ?? "";
+      const description = sanitizeFindingText(
+        `${pkgName} ${range} is vulnerable: ${title}`,
+        MAX_DESCRIPTION,
+      );
+
+      const fixAvailable = entry.fixAvailable;
+      let fixedIn: string | null = null;
+      let remediation: string;
+      if (fixAvailable !== null && typeof fixAvailable === "object") {
+        fixedIn = fixAvailable.version;
+        remediation = `Upgrade ${fixAvailable.name} to ${fixAvailable.version}${
+          fixAvailable.isSemVerMajor ? " (semver-major)" : ""
+        }.`;
+      } else if (fixAvailable === true) {
+        remediation = "Fix available via `npm audit fix`.";
+      } else {
+        remediation = "No fix available yet.";
+      }
+
+      const rest: Omit<Finding, "fingerprint"> = {
+        kind: "dependency",
+        severity,
+        ruleId,
+        title,
+        description,
+        remediation,
+        references: advisory.url ? [advisory.url] : [],
+        package: { name: pkgName, range, fixedIn },
+      };
+      findings.push({ fingerprint: fingerprintFinding(rest), ...rest });
+    }
+  }
+
+  return { findings, warning: null };
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue rendering
+// ---------------------------------------------------------------------------
+
+const MAX_ISSUE_TITLE_TEXT = 120;
+
+// "[<severity>] <title> (<ruleId>)" — the title portion is flattened to one
+// line (each newline becomes a single space) and capped at 120 chars with a
+// trailing ellipsis when cut, mirroring sanitizeFindingText's cap style.
+export function buildIssueTitle(f: Finding): string {
+  const flat = f.title.replace(/\n/g, " ");
+  const capped =
+    flat.length > MAX_ISSUE_TITLE_TEXT ? flat.slice(0, MAX_ISSUE_TITLE_TEXT) + "…" : flat;
+  return `[${f.severity}] ${capped} (${f.ruleId})`;
+}
+
+// GitHub's true issue-body cap is 65,536 chars; stay under 60,000 for
+// headroom (mirrors COMMENT_LIMIT in src/githubInbox.ts — kept as its own
+// local constant rather than importing across modules for one shared
+// number).
+const ISSUE_BODY_LIMIT = 60_000;
+const TRUNCATED_DESCRIPTION_CAP = 2_000;
+
+// Longest run of consecutive backticks at the START of any line in `text`.
+// Local copy of the identically-named helper in src/githubInbox.ts:172
+// (buildPlanComment's dynamic-fence precedent) — mirrored rather than
+// imported to keep this module import-cycle-free and I/O-free, same
+// rationale as extractLastFencedBlock above.
+function longestBacktickRun(text: string): number {
+  let max = 0;
+  for (const line of text.split("\n")) {
+    const m = /^(`+)/.exec(line);
+    if (m && m[1].length > max) max = m[1].length;
+  }
+  return max;
+}
+
+function renderIssueBody(f: Finding, truncated: boolean): string {
+  const sections: string[] = [];
+
+  if (f.description) {
+    sections.push(`## Summary\n\n${f.description}`);
+  }
+
+  if (f.kind === "dependency" && f.package) {
+    const fixedIn = f.package.fixedIn ?? "no fix available yet";
+    sections.push(
+      `## Package\n\n**Name:** ${f.package.name}\n**Vulnerable range:** ${f.package.range}\n**Fixed in:** ${fixedIn}`,
+    );
+  }
+
+  if (f.kind === "code" && f.location) {
+    const loc =
+      f.location.line !== undefined ? `${f.location.path}:${f.location.line}` : f.location.path;
+    sections.push(`## Location\n\n\`${loc}\``);
+  }
+
+  if (f.evidence) {
+    sections.push(`## Evidence\n\n${f.evidence}`);
+  }
+
+  if (f.remediation) {
+    sections.push(`## Remediation\n\n${f.remediation}`);
+  }
+
+  if (f.references.length > 0) {
+    sections.push(`## References\n\n${f.references.map((r) => `- ${r}`).join("\n")}`);
+  }
+
+  // Dynamic fence: JSON.stringify does not escape backticks, so a description
+  // containing ``` could close a fixed 3-backtick fence early (the
+  // buildPlanComment lesson, src/githubInbox.ts:227).
+  const json = JSON.stringify(f, null, 2);
+  const fence = "`".repeat(Math.max(4, longestBacktickRun(json) + 1));
+  sections.push(
+    `<details><summary>machine-readable</summary>\n\n${fence}json\n${json}\n${fence}\n\n</details>`,
+  );
+
+  if (truncated) {
+    sections.push("_(sections truncated to fit)_");
+  }
+
+  // The marker MUST be the literal last line, outside every fence.
+  sections.push(findingMarker(f.fingerprint));
+
+  return sections.join("\n\n");
+}
+
+// Human sections + machine-readable JSON block + finding marker (see
+// findingMarker). Round-trips via extractLastFencedBlock(body, "json") +
+// JSON.parse. When the full render would exceed GitHub's practical cap, it
+// is re-rendered once with a reduced finding (description re-capped to
+// 2_000 chars, evidence omitted) in both the human sections and the
+// embedded JSON, with a truncation notice appended before the marker.
+export function buildIssueBody(f: Finding): string {
+  const full = renderIssueBody(f, false);
+  if (full.length <= ISSUE_BODY_LIMIT) return full;
+
+  const reduced: Finding = {
+    ...f,
+    description:
+      f.description.length > TRUNCATED_DESCRIPTION_CAP
+        ? f.description.slice(0, TRUNCATED_DESCRIPTION_CAP) + "…"
+        : f.description,
+    evidence: undefined,
+  };
+  return renderIssueBody(reduced, true);
+}
+
+// [name, color, description] specs for the labels junco creates when filing
+// findings — mirrors LABEL_SPECS in src/githubInbox.ts (that module owns the
+// lifecycle labels, this one owns the finding labels).
+export const FINDING_LABEL_SPECS: ReadonlyArray<readonly [string, string, string]> = [
+  ["junco:finding", "1D76DB", "Filed by junco assess"],
+  ["severity/critical", "B60205", "Finding severity: critical"],
+  ["severity/high", "D93F0B", "Finding severity: high"],
+  ["severity/medium", "FBCA04", "Finding severity: medium"],
+  ["severity/low", "0E8A16", "Finding severity: low"],
+];
+
+// ["junco:finding", "severity/<level>"] plus the trigger label appended when
+// opts.autoPlan is set — the created issue then enters the bridge's existing
+// plan-comment loop the same as any manually-triggered issue.
+export function findingLabels(
+  f: Finding,
+  opts: { autoPlan: boolean; triggerLabel: string },
+): string[] {
+  const labels = ["junco:finding", `severity/${f.severity}`];
+  if (opts.autoPlan) labels.push(opts.triggerLabel);
+  return labels;
+}
