@@ -6,3 +6,20 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore(ci)"
+  # npm is security-only: open-pull-requests-limit: 0 disables version-update
+  # PRs (deps are exact-pinned and updated manually), while security updates
+  # still open — grouped, so one advisory wave arrives as ONE PR instead of
+  # overlapping per-alert PRs (e.g. "bump esbuild and vitest" + "bump vite
+  # and vitest" for the same vitest bump).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps)"
