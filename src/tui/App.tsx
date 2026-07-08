@@ -688,8 +688,10 @@ export function App(props: AppProps): React.JSX.Element {
     if (key.tab) {
       return void setPane((p) => (p >= maxPane ? 1 : ((p + 1) as Pane)));
     }
-    if (input === "h") return void setPane((p) => (p > 1 ? ((p - 1) as Pane) : p));
-    if (input === "l") return void setPane((p) => (p < maxPane ? ((p + 1) as Pane) : p));
+    if (input === "h" || key.leftArrow) return void setPane((p) => (p > 1 ? ((p - 1) as Pane) : p));
+    if (input === "l" || key.rightArrow) {
+      return void setPane((p) => (p < maxPane ? ((p + 1) as Pane) : p));
+    }
     if (input === "i") return void setPane(2);
 
     // `w` is the watchlist key (opens add-repo).

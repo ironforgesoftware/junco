@@ -88,12 +88,12 @@ describe("Footer / hintsFor", () => {
     const f = render(
       <Footer
         hints={[
-          ["j/k", "move"],
+          ["↑/↓", "move"],
           ["q", "quit"],
         ]}
       />,
     ).lastFrame()!;
-    expect(f).toContain("j/k");
+    expect(f).toContain("↑/↓");
     expect(f).toContain("move");
     expect(f).toContain("q");
   });
@@ -101,13 +101,13 @@ describe("Footer / hintsFor", () => {
     const keys = hintsFor("main", 2, "wide", false).map(([k]) => k);
     expect(keys).toContain("enter");
     expect(keys).toContain("/");
-    expect(keys).toContain("1/2/3");
+    expect(keys).toContain("←/→");
     expect(keys).toContain("q");
   });
-  it("medium mode enter says detail and 3rd pane hint drops to 1/2", () => {
+  it("medium mode enter says detail and the pane hint drops to ←/repos", () => {
     const pairs = hintsFor("main", 2, "medium", false);
     expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
-    expect(pairs.map(([k]) => k)).toContain("1/2");
+    expect(pairs.find(([k]) => k === "←")?.[1]).toBe("repos");
   });
   it("filtering mode replaces everything with the filter contract", () => {
     expect(hintsFor("main", 2, "wide", true)).toEqual([
@@ -116,9 +116,9 @@ describe("Footer / hintsFor", () => {
       ["esc", "clear"],
     ]);
   });
-  it("queue view keeps [ / ] scroll and esc/t back", () => {
+  it("queue view keeps ↑/↓ scroll and esc/t back", () => {
     const keys = hintsFor("queue", 2, "wide", false).map(([k]) => k);
-    expect(keys).toContain("[ / ]");
+    expect(keys).toContain("↑/↓");
     expect(keys).toContain("esc/t");
   });
 });

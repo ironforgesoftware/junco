@@ -42,11 +42,11 @@ export function HelpModal({
       <Section
         title="navigate"
         rows={[
-          ["j/k", "move selection"],
+          ["↑/↓ · j/k", "move selection / scroll"],
+          ["←/→ · h/l · tab", "switch panes"],
+          ["[ / ]", "scroll (alias of ↑/↓ in views)"],
           ["g/G", "first / last"],
-          ["1/2/3", "jump pane (3 = preview, wide terminals)"],
-          ["tab · h/l", "cycle panes"],
-          ["[ / ]", "scroll preview / queue / output"],
+          ["1/2/3", "jump pane directly (3 = preview, wide)"],
           ["enter", mode === "wide" ? "focus the preview pane" : "open issue detail"],
         ]}
       />

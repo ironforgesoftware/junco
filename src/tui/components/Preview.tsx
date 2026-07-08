@@ -75,7 +75,7 @@ export function Preview({
       <Box flexGrow={1} />
       {lines.length > viewHeight && (
         <Text dimColor>
-          [ / ] scroll · {scroll + 1}-{Math.min(scroll + viewHeight, lines.length)}/{lines.length}
+          ↑/↓ scroll · {scroll + 1}-{Math.min(scroll + viewHeight, lines.length)}/{lines.length}
         </Text>
       )}
     </Box>

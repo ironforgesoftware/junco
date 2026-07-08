@@ -50,7 +50,7 @@ export function CommandOutput({
       ))}
       {lines.length > visibleLines && (
         <Text dimColor>
-          j/k scroll · {scroll + 1}-{Math.min(scroll + visibleLines, lines.length)}/{lines.length}
+          ↑/↓ scroll · {scroll + 1}-{Math.min(scroll + visibleLines, lines.length)}/{lines.length}
         </Text>
       )}
       <Text dimColor>esc back · r re-run</Text>

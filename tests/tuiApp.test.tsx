@@ -748,6 +748,19 @@ describe("workspace filter + pane navigation (medium)", () => {
     expect(r.lastFrame()).not.toContain("browser"); // no pane 3 to focus onto
     expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
   });
+
+  // → mirrors `3`/`l` at medium width: there is no pane 3 to reach, so it's inert.
+  it("→ is inert at medium width, same as 3 (no preview pane to reach)", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wl5());
+    await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
+    r.stdin.write("2");
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write(ESC + "[C"); // →
+    await tick();
+    expect(r.lastFrame()).not.toContain("browser"); // no pane 3 to focus onto
+    expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
+  });
 });
 
 describe("workspace wide mode", () => {
@@ -847,5 +860,23 @@ describe("workspace wide mode", () => {
     // Pane 2's footer hint set is back: enter→detail (medium mode) and d dispatch.
     await until(() => (r.lastFrame() ?? "").includes("enter detail"));
     expect(r.lastFrame()).toContain("d dispatch");
+  });
+
+  // → is the advertised primary pane-movement key (l is now the quiet alias) —
+  // from pane 2 in wide mode it must reach pane 3 exactly like l/enter do, and
+  // ← must walk it back one pane at a time to pane 1.
+  it("→ from pane 2 focuses the preview; ← twice returns to pane 1", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderWide(client, wl6());
+    await until(() => (r.lastFrame() ?? "").includes("3 preview"));
+    r.stdin.write("2"); // focus issues pane
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write(ESC + "[C"); // → focuses pane 3 (preview)
+    await until(() => (r.lastFrame() ?? "").includes("o browser"));
+    expect(r.lastFrame()).toContain("← issues"); // pane 3 footer now leads with ←
+    r.stdin.write(ESC + "[D"); // ← back to pane 2
+    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    r.stdin.write(ESC + "[D"); // ← back to pane 1
+    await until(() => (r.lastFrame() ?? "").includes("x unwatch"));
   });
 });

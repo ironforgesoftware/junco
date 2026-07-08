@@ -61,7 +61,7 @@ describe("Preview", () => {
     expect(top).toContain("L1");
     expect(scrolled).not.toContain("L1\n");
     expect(scrolled).toContain("L31");
-    expect(top).toContain("[ / ] scroll");
+    expect(top).toContain("↑/↓ scroll");
     expect(top).toContain("3 preview");
     expect(scrolled).toContain("3 preview");
   });

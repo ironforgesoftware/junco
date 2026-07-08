@@ -110,12 +110,12 @@ export function hintsFor(
   switch (view) {
     case "detail":
       return [
-        ["[ / ]", "scroll"],
+        ["↑/↓", "scroll"],
         ["esc", "back"],
       ];
     case "queue":
       return [
-        ["[ / ]", "scroll"],
+        ["↑/↓", "scroll"],
         ["esc/t", "back"],
       ];
     case "palette":
@@ -127,7 +127,7 @@ export function hintsFor(
       ];
     case "cmdOutput":
       return [
-        ["[ / ]", "scroll"],
+        ["↑/↓", "scroll"],
         ["r", "re-run"],
         ["esc", "back"],
       ];
@@ -141,11 +141,10 @@ export function hintsFor(
     case "main":
       break;
   }
-  const panesHint: [string, string] = mode === "wide" ? ["1/2/3", "panes"] : ["1/2", "panes"];
   if (pane === 1) {
     return [
-      ["j/k", "move"],
-      panesHint,
+      ["↑/↓", "move"],
+      ["→", "issues"],
       ["w", "add repo"],
       ["x", "unwatch"],
       ["r", "refresh"],
@@ -155,15 +154,22 @@ export function hintsFor(
     ];
   }
   if (pane === 3) {
-    return [["j/k · [ / ]", "scroll"], panesHint, ["o", "browser"], ["?", "help"], ["q", "quit"]];
+    return [
+      ["↑/↓", "scroll"],
+      ["←", "issues"],
+      ["o", "browser"],
+      ["?", "help"],
+      ["q", "quit"],
+    ];
   }
+  const panesHint: [string, string] = mode === "wide" ? ["←/→", "panes"] : ["←", "repos"];
   return [
-    ["j/k", "move"],
+    ["↑/↓", "move"],
+    panesHint,
     ["enter", mode === "wide" ? "preview" : "detail"],
     ["d", "dispatch"],
     ["a", "approve"],
     ["/", "filter"],
-    panesHint,
     ["t", "queue"],
     ["?", "help"],
     ["q", "quit"],
