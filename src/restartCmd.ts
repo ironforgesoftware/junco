@@ -134,7 +134,7 @@ export async function runRestartCommand(
   if (!svc) {
     print(
       "no service unit references this config — nothing to restart.\n" +
-        "Render one with `junco service` (see README → Running as a service);\n" +
+        "Render one with `junco service` (see docs/operations.md → Running as a service);\n" +
         "an unsupervised daemon can only be stopped, not restarted.\n",
     );
     return 1;

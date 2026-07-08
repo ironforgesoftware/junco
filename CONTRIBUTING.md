@@ -9,7 +9,7 @@
 ```bash
 npm install          # install dependencies
 npm run build        # tsc -p tsconfig.json → dist/
-npm test             # run the full vitest suite (~551 tests)
+npm test             # run the full vitest suite (~1,100 tests)
 npm run test:watch   # re-run on file changes
 ```
 
