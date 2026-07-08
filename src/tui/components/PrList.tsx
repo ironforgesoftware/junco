@@ -4,16 +4,7 @@ import { theme } from "../theme.js";
 import { windowSlice } from "../window.js";
 import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
 import { fmtClock } from "../queueFmt.js";
-
-export function relTime(iso: string, now: Date): string {
-  const ms = now.getTime() - (Date.parse(iso) || now.getTime());
-  const m = Math.floor(ms / 60_000);
-  if (m < 1) return "now";
-  if (m <= 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-}
+import { relTime } from "./IssueList.js";
 
 function checksToString(checks: {
   pass: number;

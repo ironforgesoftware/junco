@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, ticketSlugFromBranch, type DashPr } from "../prState.js";
-import { relTime } from "./PrList.js";
+import { relTime } from "./IssueList.js";
 
 export interface PrPreviewProps {
   pr: DashPr | null;
