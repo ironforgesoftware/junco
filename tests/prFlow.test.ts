@@ -947,16 +947,19 @@ esac
     );
   }, 30000);
 
-  it("non-network gh pr create failure requeues (branch pushed, resumable) instead of failing", async () => {
+  it("deterministic gh pr create failure fails terminally (branch pushed, open manually), never requeues (issue #73)", async () => {
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-502.sh", {
-        '"pr create "*': 'echo "HTTP 502: Bad Gateway (https://api.github.com)" >&2; exit 1',
+      ghBin: ghCases("gh-nogo.sh", {
+        // A deterministic create failure (not network, not "already exists") —
+        // it would fail identically on every retry.
+        '"pr create "*':
+          'echo "pull request create failed: No commits between main and junco/nogo" >&2; exit 1',
       }),
     });
     const { task, path } = makeTicket(
       h,
-      "gw.md",
-      `---\nid: gw\nrepo: ${h.work}\n---\n# Gateway\n\nDo it.\n`,
+      "nogo.md",
+      `---\nid: nogo\nrepo: ${h.work}\n---\n# No-go\n\nDo it.\n`,
     );
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true }),
@@ -964,37 +967,43 @@ esac
       retryBaseDelayMs: 5,
     });
 
-    expect(flow.requeued).toBe(true);
-    expect(flow.status).toBe("requeued");
-    expect(flow.dst).toContain(join("Junco", "inbox"));
+    // Terminal fail — NOT requeued (a fresh ticket with retry budget available).
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
     const text = readFileSync(flow.dst, "utf8");
-    expect(text).toMatch(/retry_count: 1/);
-    expect(text).not.toMatch(/junco-result/);
-    // The branch really did push before gh failed — the resumable state.
-    expect(run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/gw"])).toContain(
-      "junco/gw",
+    expect(text).toContain("status: failed");
+    expect(text).toContain("gh pr create failed (branch pushed, open manually)");
+    expect(readdirSync(h.done)).toHaveLength(0);
+    // The branch really did push before gh failed — the resumable state is
+    // preserved on the remote for a manual open.
+    expect(run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/nogo"])).toContain(
+      "junco/nogo",
     );
-    expect(readdirSync(h.failed)).toHaveLength(0);
   }, 30000);
 
-  it("non-network create failure with budget exhausted still fails terminally", async () => {
+  it("a network gh pr create failure whose text lands only in the offline branch queues the endgame", async () => {
+    // A network create failure is caught by the offline branch and parked in the
+    // outbox — it neither requeues nor fails terminally (issue #73 leaves this
+    // untouched: transient create failures are still handled durably).
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-502b.sh", {
-        '"pr create "*': 'echo "HTTP 502: Bad Gateway" >&2; exit 1',
+      ghBin: ghCases("gh-net.sh", {
+        '"pr create "*': 'echo "error connecting to api.github.com" >&2; exit 1',
       }),
     });
     const { task, path } = makeTicket(
       h,
-      "gw2.md",
-      `---\nid: gw2\nrepo: ${h.work}\nretry_count: 2\n---\n# Gateway\n\nDo it.\n`,
+      "netpr.md",
+      `---\nid: netpr\nrepo: ${h.work}\n---\n# Net\n\nDo it.\n`,
     );
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true }),
       dirs: { done: h.done, failed: h.failed },
       retryBaseDelayMs: 5,
     });
-    expect(flow.dst.startsWith(h.failed)).toBe(true);
-    expect(readFileSync(flow.dst, "utf8")).toContain("gh pr create failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.prQueued).toBe(true);
+    expect(TERMINAL_DONE_STATUSES.has(flow.status)).toBe(true);
+    expect(listOps(cfg)).toHaveLength(1);
   }, 30000);
 
   // -------------------------------------------------------------------------

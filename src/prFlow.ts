@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import type { Config, Ticket, RunResult } from "./types.js";
 import type { RepoContext } from "./repoContext.js";
 import { isAmend } from "./repoContext.js";
-import { GitOpError, git, gh } from "./git.js";
+import { GitOpError, git, gh, isNetworkError } from "./git.js";
 import { validateRepoContext, resolveAmendTarget, type AmendTarget } from "./repo.js";
 import { prepareWorktree, cleanupWorktree, currentHeadSha } from "./worktree.js";
 import {
@@ -794,14 +794,22 @@ export async function runPrFlow(
         }
       }
       if (prOutcome.prUrl === null) {
-        // A non-network create failure with the branch already pushed is now a
-        // RESUMABLE state (issue #29): a retry re-runs the fresh flow, which
-        // detects the pushed-but-PR-less branch and force-pushes + recreates.
-        // Requeue (budget permitting) instead of terminally stranding the work.
-        const rq = requeueTicket(cfg, claimedPath, task, `gh pr create failed: ${e.message}`);
-        if (rq.requeued) {
-          await cleanupWorktree(cfg, ctx, wtPath);
-          return requeuedResult(rq.dst!, result);
+        // Only a NETWORK/transient create failure is worth requeuing: the branch
+        // is already pushed, so a retry re-runs the fresh flow, which resumes the
+        // pushed-but-PR-less branch and re-creates the PR. A DETERMINISTIC
+        // failure — "No commits between base and head", a title-too-long
+        // validation error, a permission denial — fails identically on every
+        // retry while re-running the whole expensive agent session, so it keeps
+        // the terminal "branch pushed, open manually" path (issue #73). Network
+        // create failures are normally caught by the offline branch above; this
+        // classifier is the belt-and-suspenders guard for a network error whose
+        // text landed only in e.message.
+        if (isNetworkError(e.stderr || e.message)) {
+          const rq = requeueTicket(cfg, claimedPath, task, `gh pr create failed: ${e.message}`);
+          if (rq.requeued) {
+            await cleanupWorktree(cfg, ctx, wtPath);
+            return requeuedResult(rq.dst!, result);
+          }
         }
         const phaseError = `gh pr create failed (branch pushed, open manually): ${e.message}`;
         log.error(phaseError);
