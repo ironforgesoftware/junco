@@ -148,6 +148,112 @@ function guardFakeSession(events: any[]) {
   return self;
 }
 
+// A sync-emit fake: prompt() delivers events synchronously so a listener throw
+// rejects the prompt deterministically (no microtask escape to muddy the test).
+// Tracks whether abort() was called.
+function syncGuardSession(events: any[]) {
+  const listeners: ((e: any) => void)[] = [];
+  const self = {
+    aborted: false,
+    subscribe(l: (e: any) => void) {
+      listeners.push(l);
+      return () => {};
+    },
+    async prompt(_text: string) {
+      for (const e of events) {
+        if (self.aborted) break;
+        listeners.forEach((l) => l(e));
+      }
+    },
+    dispose() {},
+    async abort() {
+      self.aborted = true;
+    },
+  };
+  return self;
+}
+
+// #78: the guard-decision hook, log.warn, transcript.write, and onProgress run
+// synchronously inside the SDK subscribe callback during prompt(). A throw from
+// any of them must degrade to a warning, NOT unwind into the SDK's emit and
+// reject/wedge the run — and a guard KILL must still fire even if its own
+// observability throws first.
+describe("runAgent (observability hooks are best-effort — #78)", () => {
+  it("an onProgress hook that throws does not wedge the run", async () => {
+    const events = [
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } },
+      {
+        type: "turn_end",
+        message: { stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 } },
+      },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      onProgress: () => {
+        throw new Error("progress boom");
+      },
+    });
+    // The throw degraded to a warning; the run still completed cleanly.
+    expect(result.errorMessage).toBeNull();
+    expect(result.finalText).toBe("ok");
+  });
+
+  it("a transcript.write that throws synchronously degrades to a warning", async () => {
+    const throwing = {
+      on() {},
+      write() {
+        throw new Error("write boom");
+      },
+      end() {},
+    };
+    createWriteStreamOverride.current = () => throwing as any;
+    try {
+      const events = [
+        { type: "tool_execution_start", toolName: "read", args: {} },
+        { type: "agent_end", messages: [], willRetry: false },
+      ];
+      const session = fakeSession(events);
+      const result = await runAgent({
+        body: "x",
+        cwd: "/tmp",
+        timeoutMs: 1000,
+        createSession: async () => session as any,
+        transcriptPath: join(tmpdir(), "junco-throw-tx", "t.jsonl"),
+      });
+      expect(result.errorMessage).toBeNull();
+    } finally {
+      createWriteStreamOverride.current = null;
+    }
+  });
+
+  it("an onGuardDecision hook that throws still kills the run and does not wedge it", async () => {
+    const events = [
+      { type: "turn_end", message: { usage: { output: 99999, input: 0, totalTokens: 99999 } } },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = syncGuardSession(events);
+    const result = await runAgent({
+      body: "do work",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      guardManager: new GuardManager({ outputBudgetPerTurn: 12000 }),
+      onGuardDecision: () => {
+        throw new Error("metrics hook boom");
+      },
+    });
+    // The hook threw, but the kill ACTION still fired and the run wasn't wedged.
+    expect(session.aborted).toBe(true);
+    expect(result.errorMessage).toContain("supervisor kill");
+    expect(result.errorMessage).toContain("output_budget");
+  });
+});
+
 describe("runAgent (guard manager)", () => {
   it("injects a nudge (steer) when a guard trips", async () => {
     // 3 identical bash calls → tool_call_loop nudge on the 3rd.

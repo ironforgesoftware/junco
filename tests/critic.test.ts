@@ -164,6 +164,41 @@ function fakeCriticSession(finalDelta: string) {
   };
 }
 
+/**
+ * A fake critic session that emits each of `messages` as its OWN assistant
+ * message (message_start + delta), so the verdict marker can land in a message
+ * that is not the last one — reproducing #36's finalText = last-message-only.
+ */
+function fakeMultiMessageCriticSession(messages: string[]) {
+  const listeners: ((e: any) => void)[] = [];
+  return {
+    subscribe(l: (e: any) => void) {
+      listeners.push(l);
+      return () => {};
+    },
+    async prompt(_text: string) {
+      for (const m of messages) {
+        listeners.forEach((l) => l({ type: "message_start", message: { role: "assistant" } }));
+        listeners.forEach((l) =>
+          l({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: m } }),
+        );
+      }
+      listeners.forEach((l) =>
+        l({
+          type: "turn_end",
+          message: {
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+          },
+        }),
+      );
+      listeners.forEach((l) => l({ type: "agent_end", messages: [], willRetry: false }));
+    },
+    dispose() {},
+    abort: async () => {},
+  };
+}
+
 /** Bare remote + working clone with a base commit. Returns {remote, work}. */
 function setupGitHarness(tmpRoot: string): { remote: string; work: string } {
   const remote = join(tmpRoot, "remote.git");
@@ -318,6 +353,22 @@ describe("runCriticPass", () => {
     });
     expect(result.status).toBe("missing");
     expect(result.findings).toBe("error handling, tests");
+  });
+
+  it("finds the verdict marker when it precedes a trailing message (#67)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    writeFileSync(join(work, "feature.ts"), "export const x = 1;\n");
+    run(["git", "-C", work, "add", "feature.ts"]);
+    run(["git", "-C", work, "commit", "-m", "feat"]);
+
+    // The critic emits its verdict, THEN a trailing note. finalText (#36) is
+    // only the trailing note; reading allText recovers the marker.
+    const result = await runCriticPass(makeCfg(), makeTicket("do the thing"), work, "origin/main", {
+      criticSessionFactory: async () =>
+        fakeMultiMessageCriticSession(["JUNCO_VERIFY: PASS", "That completes the review."]) as any,
+    });
+    expect(result.status).toBe("pass");
+    expect(result.findings).toBe("");
   });
 
   it("criticEnabled=false → skipped (matches Python wording)", async () => {

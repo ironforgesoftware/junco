@@ -338,7 +338,11 @@ export async function runAssessFlow(
   // A timeout or guard-abort does NOT abort the flow: we proceed and file
   // whatever findings exist. The final status still reflects it via finalize's
   // statusFor (ticket → failed/), and the summary records what was filed.
-  const parsed = parseAgentFindings(agentResult.finalText);
+  // Parse from the WHOLE run, not just the last message: #36 redefined
+  // finalText as the last assistant message only, so a findings fence emitted
+  // before any trailing message would be dropped and the audit would silently
+  // report all-clear (#67). allText is the whole-run concatenation.
+  const parsed = parseAgentFindings(agentResult.allText ?? agentResult.finalText);
   counts.dropped += parsed.dropped;
 
   // Hallucination filter: drop any CODE finding whose location.path resolves

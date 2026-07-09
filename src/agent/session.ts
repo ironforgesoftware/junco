@@ -191,10 +191,20 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     // but inside the try so the session is still disposed if subscribe throws.
     unsubscribe = session.subscribe((e) => {
       acc.observe(e);
-      // Skip per-token deltas — the transcript records turns/tools/results.
-      if (transcript && e?.type !== "message_update") transcript.write(JSON.stringify(e) + "\n");
-      if (opts.onProgress && (e?.type === "turn_end" || e?.type === "tool_execution_start")) {
-        opts.onProgress(acc.progress());
+      // Observability is best-effort (#78): transcript.write (a broken stream)
+      // or a buggy onProgress hook must NOT throw up through the SDK's
+      // synchronous emit and reject/wedge the in-flight prompt() — degrade to a
+      // warning instead. (acc.observe stays outside: it is the run's result.)
+      try {
+        // Skip per-token deltas — the transcript records turns/tools/results.
+        if (transcript && e?.type !== "message_update") transcript.write(JSON.stringify(e) + "\n");
+        if (opts.onProgress && (e?.type === "turn_end" || e?.type === "tool_execution_start")) {
+          opts.onProgress(acc.progress());
+        }
+      } catch (err) {
+        log.warn("observability hook threw; ignoring", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
       if (!gm) return;
       // A kill is terminal — once decided, stop feeding the guard (further
@@ -211,27 +221,37 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         decision.action === "nudge"
           ? { nudgeMessage: decision.message }
           : { reason: decision.reason };
-      log.warn("guard decision", {
-        kind: decision.kind,
-        action: decision.action,
-        detail: decision.detail,
-        turnIndex: decision.turnIndex,
-        ...reasonOrMessage,
-      });
-      if (transcript) {
-        transcript.write(
-          JSON.stringify({
-            type: "junco_guard_decision",
-            kind: decision.kind,
-            action: decision.action,
-            detail: decision.detail,
-            turnIndex: decision.turnIndex,
-            ...reasonOrMessage,
-            ts: new Date().toISOString(),
-          }) + "\n",
-        );
+      // Same best-effort discipline (#78): the log line, the synthetic
+      // transcript record, and the metrics hook must not prevent the nudge/kill
+      // ACTION below — the already-going-wrong moment the hook is exercised —
+      // from firing when one of them throws.
+      try {
+        log.warn("guard decision", {
+          kind: decision.kind,
+          action: decision.action,
+          detail: decision.detail,
+          turnIndex: decision.turnIndex,
+          ...reasonOrMessage,
+        });
+        if (transcript) {
+          transcript.write(
+            JSON.stringify({
+              type: "junco_guard_decision",
+              kind: decision.kind,
+              action: decision.action,
+              detail: decision.detail,
+              turnIndex: decision.turnIndex,
+              ...reasonOrMessage,
+              ts: new Date().toISOString(),
+            }) + "\n",
+          );
+        }
+        opts.onGuardDecision?.(decision);
+      } catch (err) {
+        log.warn("guard-decision observability threw; ignoring", {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-      opts.onGuardDecision?.(decision);
       if (decision.action === "nudge") {
         // Inject a corrective steering prompt mid-run. "steer" redirects the
         // CURRENT run (delivered after the current assistant turn finishes its

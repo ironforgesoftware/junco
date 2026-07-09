@@ -145,6 +145,36 @@ function fakeSession(finalText: string) {
   });
 }
 
+/** A scriptable AgentSessionLike that emits each of `messages` as its own
+ * assistant message (message_start + text_delta), reproducing #36's
+ * finalText = last-message-only. */
+function fakeMultiMessageSession(messages: string[]) {
+  return async () => ({
+    subscribe(l: (e: any) => void) {
+      queueMicrotask(() => {
+        for (const m of messages) {
+          l({ type: "message_start", message: { role: "assistant" } });
+          l({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: m } });
+        }
+        l({
+          type: "turn_end",
+          message: {
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+          },
+        });
+        l({ type: "agent_end", messages: [], willRetry: false });
+      });
+      return () => {};
+    },
+    async prompt() {
+      await new Promise((r) => setTimeout(r, 1));
+    },
+    dispose() {},
+    abort: async () => {},
+  });
+}
+
 /** A session whose prompt() throws — the Q&A transient-failure signature. */
 function throwingSession() {
   return async () => ({
@@ -265,6 +295,40 @@ describe("runAssessFlow", () => {
     expect(body).toContain("https://github.com/o/r/issues/1");
     expect(body).toContain("https://github.com/o/r/issues/2");
     expect(body).toContain("Findings (after filter + dedupe): 2");
+  });
+
+  it("files findings when the fence precedes a trailing assistant message (#67)", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    let created = 0;
+    const gh = fakeGh((args) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
+      if (args[0] === "issue" && args[1] === "create") {
+        created++;
+        return { stdout: `https://github.com/o/r/issues/${created}\n` };
+      }
+      return undefined;
+    });
+    // The agent banks its findings fence, THEN emits a closing verification
+    // message. Under #36 (finalText = last message only) the fence is dropped;
+    // parsing from allText recovers it.
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd("{}"), // no npm findings — the agent finding is the only one
+      sessionFactoryFor: () =>
+        fakeMultiMessageSession([
+          findingsFence([codeFinding("XSS-1", "src/index.ts")]),
+          "Confirmed the citations resolve on disk.",
+        ]),
+    });
+
+    expect(r.found).toBe(1);
+    expect(r.created).toBe(1);
+    expect(r.status).toBe("completed");
   });
 
   it("npm exit 1 with vulns still parses the dependency finding", async () => {
