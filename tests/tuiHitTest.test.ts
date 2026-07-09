@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeLayout } from "../src/tui/layout.js";
 import { hitTest, type HitContext } from "../src/tui/hitTest.js";
+import { headerTabBands } from "../src/tui/geometry.js";
 
 // Medium: 100×30 → bodyRows 27, rail [0,26), middle [26,100), no preview.
 const medium = (over: Partial<HitContext> = {}): HitContext => ({
@@ -14,6 +15,7 @@ const medium = (over: Partial<HitContext> = {}): HitContext => ({
   pane3Count: 2,
   pane3Start: 0,
   hasPreviewTarget: false,
+  uiMode: "github",
   ...over,
 });
 // Wide: 130×30 → previewWidth min(60, 52) = 52 → preview [78, 130).
@@ -81,6 +83,23 @@ describe("hitTest — prs view", () => {
   it("wide: PrPreview link line resolves; elsewhere in the band is none", () => {
     expect(hitTest(wide({ view: "prs" }), 80, 4)).toEqual({ type: "linkLine" });
     expect(hitTest(wide({ view: "prs" }), 80, 6)).toEqual({ type: "none" });
+  });
+});
+
+describe("hitTest — header mode band", () => {
+  it("no uiMode field: header row stays dead (legacy contract)", () => {
+    const ctx = { ...medium() };
+    delete (ctx as { uiMode?: unknown }).uiMode;
+    expect(hitTest(ctx, headerTabBands(100).githubStart, 0)).toEqual({ type: "none" });
+  });
+  it("uiMode present: y=0 resolves the tab under x to a modeTab target", () => {
+    const bands = headerTabBands(100);
+    expect(hitTest(medium(), bands.githubStart, 0)).toEqual({ type: "modeTab", mode: "github" });
+    expect(hitTest(medium(), bands.localStart, 0)).toEqual({ type: "modeTab", mode: "local" });
+    expect(hitTest(medium(), 0, 0)).toEqual({ type: "none" }); // brand region
+  });
+  it("body rows are unaffected by the new field", () => {
+    expect(hitTest(medium(), 5, 3)).toEqual({ type: "repoRow", index: 0 });
   });
 });
 
