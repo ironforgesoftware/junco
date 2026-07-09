@@ -261,6 +261,38 @@ describe("submitTicket — clobber protection", () => {
     }).not.toThrow();
   });
 
+  it("no-hardlink filesystem: falls back to rename, still lands the ticket (issue #81)", () => {
+    const { cfg, vaultRoot } = freshVault();
+    const eperm = () => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    };
+    const dst = submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: eperm });
+    expect(dst).toBe(join(vaultRoot, "Junco", "inbox", "my-cool-task.md"));
+    expect(readFileSync(dst, "utf8")).toBe(TICKET_WITH_ID);
+    // No leftover temp hardlink.
+    const inbox = join(vaultRoot, "Junco", "inbox");
+    expect(readdirSync(inbox).filter((n) => n.endsWith(".tmp"))).toHaveLength(0);
+  });
+
+  it("no-hardlink fallback still reports 'already queued' for a duplicate id (issue #81)", () => {
+    const { cfg } = freshVault();
+    const enosys = () => {
+      throw Object.assign(new Error("ENOSYS"), { code: "ENOSYS" });
+    };
+    submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: enosys });
+    expect(() => submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: enosys })).toThrow(
+      /already queued/,
+    );
+  });
+
+  it("an unrelated link error (EACCES) is rethrown, not treated as no-hardlink (issue #81)", () => {
+    const { cfg } = freshVault();
+    const eacces = () => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    };
+    expect(() => submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: eacces })).toThrow(/EACCES/);
+  });
+
   it("atomic placement: does not clobber an occupied slot the existence check can't see (issue #49)", () => {
     const { cfg, vaultRoot } = freshVault();
     const inbox = join(vaultRoot, "Junco", "inbox");

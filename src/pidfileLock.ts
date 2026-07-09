@@ -13,10 +13,25 @@
  * live lock (the ABA the naive unlink-in-place steal reintroduces).
  */
 
-import { mkdirSync, writeFileSync, linkSync, renameSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  writeFileSync,
+  linkSync,
+  renameSync,
+  readFileSync,
+  unlinkSync,
+  openSync,
+  writeSync,
+  closeSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
+
+/** linkSync error codes that mean "this filesystem has no hard-link support"
+ * (exFAT/FAT, several CIFS/SMB mounts) — the signal to fall back to an O_EXCL
+ * create, which is universally supported (issue #81). */
+const NO_HARDLINK_CODES = new Set(["EPERM", "ENOSYS", "EOPNOTSUPP", "EMLINK", "ENOTSUP"]);
 
 export interface PidfileLock {
   /** The lock file path. */
@@ -32,6 +47,9 @@ export interface PidfileLockDeps {
   /** Liveness probe for the recorded owner pid. Default: signal 0 (ESRCH →
    * dead; EPERM/other → alive). Injectable so tests can pin alive/dead. */
   pidAliveFn?: (pid: number) => boolean;
+  /** Hard-link primitive (default: fs.linkSync). Injectable so tests can
+   * simulate a filesystem without hard-link support (EPERM/ENOSYS/...). */
+  linkFn?: (existingPath: string, newPath: string) => void;
 }
 
 /**
@@ -140,8 +158,11 @@ export function acquirePidfileLock(
     asideRaw = null;
   }
   if (asideRaw === null || !checkStaleContent(asideRaw, deps)) {
-    // atomic restore; a re-claim by another starter loses the name to us harmlessly
-    claimName(lockPath, asideRaw ?? "", deps);
+    // The aside was a live winner's lock (or unreadable) — restore it and lose.
+    // Only re-create when we actually have the content: never fabricate an
+    // empty pidfile. A re-claim by another starter loses the name to us
+    // harmlessly (claimName returns "EEXIST", which we ignore).
+    if (asideRaw !== null) claimName(lockPath, asideRaw, deps);
     bestEffortUnlink(asidePath);
     return null;
   }
@@ -177,26 +198,56 @@ function tryCreate(lockPath: string, deps: PidfileLockDeps): PidfileLock | "EEXI
  * Claim `lockPath` atomically with the given content: write a unique temp file
  * then hard-link it into place (EEXIST if the name is taken). Returns a
  * PidfileLock on success, "EEXIST" if already held, or rethrows.
+ *
+ * On a filesystem without hard-link support the link fails with a NO_HARDLINK
+ * code and we fall back to an O_EXCL create (universally supported). That
+ * fallback has a WEAKER guarantee — the lock name momentarily exists empty
+ * before its content is written, so a concurrent reader could observe an empty
+ * pidfile — but the atomic-content guarantee is preserved on every filesystem
+ * that DOES support hard links (issue #81).
  */
 function claimName(
   lockPath: string,
   content: string,
-  _deps: PidfileLockDeps,
+  deps: PidfileLockDeps,
 ): PidfileLock | "EEXIST" {
   const ownPid = process.pid;
+  const linkFn = deps.linkFn ?? linkSync;
   const tmpPath = `${lockPath}.${ownPid}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(tmpPath, content);
   try {
-    linkSync(tmpPath, lockPath); // atomic claim: fails with EEXIST if taken
+    linkFn(tmpPath, lockPath); // atomic claim (content complete): EEXIST if taken
   } catch (e: any) {
     bestEffortUnlink(tmpPath);
     if (e.code === "EEXIST") {
       return "EEXIST";
     }
+    if (typeof e.code === "string" && NO_HARDLINK_CODES.has(e.code)) {
+      return claimNameExcl(lockPath, content);
+    }
     throw e;
   }
   bestEffortUnlink(tmpPath);
   return buildLock(lockPath, ownPid);
+}
+
+/** No-hard-link fallback for claimName: O_CREAT|O_EXCL open then write. */
+function claimNameExcl(lockPath: string, content: string): PidfileLock | "EEXIST" {
+  let fd: number;
+  try {
+    fd = openSync(lockPath, "wx"); // wx = O_CREAT|O_EXCL: EEXIST if taken
+  } catch (e: any) {
+    if (e.code === "EEXIST") {
+      return "EEXIST";
+    }
+    throw e;
+  }
+  try {
+    writeSync(fd, content);
+  } finally {
+    closeSync(fd);
+  }
+  return buildLock(lockPath, process.pid);
 }
 
 function bestEffortUnlink(path: string): void {

@@ -247,6 +247,40 @@ describe("upgrade transition — legacy locale-formatted discriminator (#69)", (
   });
 });
 
+describe("no hard-link support fallback (#81)", () => {
+  const throwCode = (code: string) => () => {
+    throw Object.assign(new Error(code), { code });
+  };
+
+  it("falls back to an O_EXCL create when linkSync reports no hard-link support", () => {
+    for (const code of ["EPERM", "ENOSYS", "EOPNOTSUPP", "EMLINK"]) {
+      const lockPath = join(makeTmpDir(), "x.lock");
+      const lock = acquirePidfileLock(lockPath, { linkFn: throwCode(code) });
+      expect(lock, code).not.toBeNull();
+      expect(existsSync(lockPath)).toBe(true);
+      const lines = readFileSync(lockPath, "utf-8").split("\n");
+      expect(parseInt(lines[0]!, 10)).toBe(process.pid);
+      // Content is still complete on the fallback path.
+      expect(lines[1]).toBe(getProcessStartTime(process.pid) ?? "");
+      lock!.release();
+      expect(existsSync(lockPath)).toBe(false);
+    }
+  });
+
+  it("still surfaces EEXIST as held on the fallback path", () => {
+    const lockPath = join(makeTmpDir(), "x.lock");
+    writeFileSync(lockPath, `${process.pid}\n${getProcessStartTime(process.pid)}\n`);
+    // O_EXCL open of the already-present lock returns EEXIST → live holder → null.
+    const lock = acquirePidfileLock(lockPath, { linkFn: throwCode("ENOSYS") });
+    expect(lock).toBeNull();
+  });
+
+  it("does NOT swallow an unrelated link error class (e.g. EACCES rethrows)", () => {
+    const lockPath = join(makeTmpDir(), "x.lock");
+    expect(() => acquirePidfileLock(lockPath, { linkFn: throwCode("EACCES") })).toThrow(/EACCES/);
+  });
+});
+
 describe("getProcessStartTime", () => {
   it("stable, non-empty for a live pid; null for a dead pid", () => {
     const first = getProcessStartTime(process.pid);

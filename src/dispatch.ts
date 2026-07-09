@@ -5,11 +5,23 @@
  * they only know where the inbox lives and how to write a file safely.
  */
 
-import { mkdirSync, writeFileSync, linkSync, unlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, linkSync, renameSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
 import { parseTicket } from "./ticket.js";
+
+/** linkSync error codes that mean the inbox filesystem has no hard-link
+ * support (exFAT/FAT, several CIFS/SMB mounts). On these we fall back to the
+ * pre-#49 rename primitive, which is universally supported (issue #81). */
+const NO_HARDLINK_CODES = new Set(["EPERM", "ENOSYS", "EOPNOTSUPP", "EMLINK", "ENOTSUP"]);
+
+/** Injectable side effects (tests only; production callers omit this). */
+export interface SubmitTicketDeps {
+  /** Hard-link primitive (default: fs.linkSync). Injectable so tests can
+   * simulate a filesystem without hard-link support (EPERM/ENOSYS/...). */
+  linkFn?: (existingPath: string, newPath: string) => void;
+}
 
 /** Return the inbox directory path for the given config. */
 export function inboxPath(cfg: Config): string {
@@ -32,8 +44,10 @@ export function submitTicket(
   cfg: Config,
   sourceContent: string,
   opts: { idHint?: string } = {},
+  deps: SubmitTicketDeps = {},
 ): string {
   const inbox = inboxPath(cfg);
+  const linkFn = deps.linkFn ?? linkSync;
 
   // Derive ticket id from frontmatter, falling back to idHint or placeholder.
   const parsed = parseTicket("submitted.md", sourceContent);
@@ -59,17 +73,30 @@ export function submitTicket(
   const tmpPath = join(inbox, `.${slug}.md.tmp`);
   writeFileSync(tmpPath, sourceContent, "utf8");
   try {
-    linkSync(tmpPath, destPath);
+    linkFn(tmpPath, destPath);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
       throw new Error(`ticket already queued: ${destPath}`);
     }
-    throw e;
+    if (code && NO_HARDLINK_CODES.has(code)) {
+      // No hard-link support on this filesystem — fall back to the pre-#49
+      // primitive, a check-then-act rename. Weaker guarantee: the existence
+      // check races a concurrent submit for the same id, so a clobber is
+      // possible where linkSync would have failed EEXIST. Universally
+      // supported where the hard link is not (issue #81).
+      if (existsSync(destPath)) {
+        throw new Error(`ticket already queued: ${destPath}`);
+      }
+      renameSync(tmpPath, destPath);
+    } else {
+      throw e;
+    }
   } finally {
     try {
       unlinkSync(tmpPath);
     } catch {
-      /* temp already gone — nothing to clean up */
+      /* temp already gone (renamed into place, or never created) */
     }
   }
 
