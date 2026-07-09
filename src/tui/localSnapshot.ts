@@ -420,6 +420,40 @@ export async function buildDaemonDetail(
   }
 }
 
+export interface LocalHeavy {
+  repos: LocalRepo[];
+  worktrees: LocalWorktree[];
+  error: string | null;
+}
+
+/**
+ * Heavy tick: repos + worktrees, run concurrently (each enumerator bounds its
+ * own git fan-out via mapPool). `signal` gives late-result drop — when a
+ * mode-switch/unmount aborts before or during the run, the resolved results are
+ * discarded (empty LocalHeavy) so a stale poll never clobbers fresh state.
+ * Never-throws.
+ */
+export function makeLocalHeavyFn(
+  cfg: Config,
+  deps: LocalSnapshotDeps = {},
+): (signal?: AbortSignal) => Promise<LocalHeavy> {
+  return async (signal?: AbortSignal): Promise<LocalHeavy> => {
+    const dropped: LocalHeavy = { repos: [], worktrees: [], error: null };
+    if (signal?.aborted) return dropped;
+    try {
+      const [repos, worktrees] = await Promise.all([
+        enumerateRepos(cfg, deps),
+        enumerateWorktrees(cfg, deps),
+      ]);
+      if (signal?.aborted) return dropped; // late-result drop
+      return { repos, worktrees, error: null };
+    } catch (e) {
+      if (signal?.aborted) return dropped;
+      return { repos: [], worktrees: [], error: e instanceof Error ? e.message : String(e) };
+    }
+  };
+}
+
 export type LocalSection = "queue" | "outbox" | "repos" | "worktrees" | "daemon";
 
 export interface LocalCheap {
