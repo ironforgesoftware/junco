@@ -1277,6 +1277,14 @@ export function App(props: AppProps): React.JSX.Element {
     input: string,
     key: Parameters<Parameters<typeof useInput>[0]>[1],
   ): void => {
+    // The help modal owns the screen while open — any key closes it, mirroring
+    // the github cascade's "any key closes help" rule (view === "help" there).
+    // Without this branch keys fell through to rail/body handling underneath
+    // the modal, leaving local help unclosable except by swapping to github.
+    if (view === "help") {
+      setView("main");
+      return;
+    }
     // The confirm modal owns input while open (LOCAL-only gate).
     if (confirm) {
       if (key.escape || input === "n") {
@@ -1839,7 +1847,14 @@ export function App(props: AppProps): React.JSX.Element {
       </Box>
     </Modal>
   ) : view === "help" ? (
-    <HelpModal view="main" pane={pane} mode={layout.mode} trigger={trigger} />
+    <HelpModal
+      view="main"
+      pane={pane}
+      mode={layout.mode}
+      trigger={trigger}
+      uiMode={uiMode}
+      localSection={localSection}
+    />
   ) : view === "palette" ? (
     <Modal title="run a junco command" minWidth={64}>
       <CommandPalette {...paletteProps} />

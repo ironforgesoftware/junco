@@ -114,6 +114,18 @@ describe("github disabled", () => {
   });
 });
 
+describe("local help modal", () => {
+  it("? opens local help and any key closes it, staying in local mode", async () => {
+    const r = renderApp({ initialUiMode: "local" });
+    await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes("local mode"));
+    r.stdin.write("j"); // any key — must close help, not move the section rail
+    await until(() => !(r.lastFrame() ?? "").includes("local mode"));
+    expect(r.lastFrame()).toContain("[LOCAL]"); // still in local mode
+  });
+});
+
 describe("header-band click coordinate", () => {
   it("headerTabBands(100).localStart toggles to local from github", () => {
     // (mouse routing is covered in tuiMouse; this pins the band math the App consumes)

@@ -1,16 +1,25 @@
 # Dashboard
 
-The fullscreen terminal UI for GitHub-integrated mode — panes, keys, and the command palette.
+The fullscreen terminal UI — two modes, GITHUB and LOCAL — panes, keys, and the command palette.
 
 [← back to the README](../README.md)
 
-The dashboard runs fullscreen in the terminal's alternate buffer (like vim or htop): it uses your whole window, adapts its layout to the terminal size (a third, wide-mode pane appears at ≥110 columns), and restores your terminal exactly on exit. It is an interactive terminal UI over the same [GitHub-integrated mode](./github-mode.md) — a faster loop than watching labels change on the web. Run it from a real TTY, not piped or backgrounded:
+The dashboard runs fullscreen in the terminal's alternate buffer (like vim or htop): it uses your whole window, adapts its layout to the terminal size (a third, wide-mode pane appears at ≥110 columns), and restores your terminal exactly on exit. Run it from a real TTY, not piped or backgrounded:
 
 ```bash
 junco dashboard
 ```
 
-Above the panes, the header's right side is a live pulse of the daemon: issues awaiting review (`●N review`), junco-authored PRs needing attention (`⚑N PR` — checks-failing or changes-requested, red when any are checks-failing, yellow otherwise), the processed record (`✓succeeded ✗failed`), the most recent task's outcome and age (`last ✓/✗ <age>`), cumulative output tokens (`tok <compact>`), daemon up/down with uptime, the local queue (`◐running ⏳waiting`), and unpushed GitHub outbox ops (`⇡N unpushed`) — every chip but daemon status is hidden when its count is zero or the daemon is down. Below 110 columns the header keeps only the essentials (review, PR attention, daemon, queue, unpushed); the full record lives in `junco status`.
+It has two modes, swapped any time with `m` / Shift+Tab, or by clicking the header's tab pair (`[GITHUB] local` ↔ `github [LOCAL]`):
+
+- **GITHUB** — an interactive terminal UI over the same [GitHub-integrated mode](./github-mode.md): watched repos, their trigger-labeled issues, and junco-authored PRs — a faster loop than watching labels change on the web.
+- **LOCAL** — the machine-local runtime underneath either mode: the local queue, the GitHub outbox backlog, watched repos on disk, ticket worktrees, and the daemon itself.
+
+The dashboard opens into LOCAL when `[github] enabled = false` in `config.toml` — with GitHub integration off there is nothing for GITHUB mode to show, so LOCAL is the whole story.
+
+Above the panes, the header's right side is a live pulse of the daemon: issues awaiting review (`●N review`), junco-authored PRs needing attention (`⚑N PR` — checks-failing or changes-requested, red when any are checks-failing, yellow otherwise), the processed record (`✓succeeded ✗failed`), the most recent task's outcome and age (`last ✓/✗ <age>`), cumulative output tokens (`tok <compact>`), daemon up/down with uptime, the local queue (`◐running ⏳waiting`), and unpushed GitHub outbox ops (`⇡N unpushed`) — every chip but daemon status is hidden when its count is zero or the daemon is down. Below 110 columns the header keeps only the essentials (review, PR attention, daemon, queue, unpushed); the full record lives in `junco status`. This header, and its mode tab pair, are shared by both modes.
+
+## GitHub mode
 
 The screen has three zones:
 
@@ -48,7 +57,7 @@ A persistent shortcut bar at the bottom of the screen shows the keys relevant to
 | `?`                             | show/hide the full key list                                                                                                                                                                                                                                                  |
 | `q`                             | quit                                                                                                                                                                                                                                                                         |
 
-**Mouse** works throughout: clicking a row focuses its pane and selects that row; clicking the already-selected row opens it — the issue detail for issues, the fullscreen PR overlay for PRs, exactly like `enter`. Clicking blank pane space (no row under the cursor) just focuses the pane, leaving the selection where it was. The wheel moves the selection or scrolls, always acting on whatever pane is under the cursor. The issue detail, the PR overlay, and the PRs-view preview card all carry an `↗ owner/repo#n` line — click it — on the PRs-view card, the issue detail, or the PR overlay (or cmd+click in terminals that support OSC 8 hyperlinks, or press `o`) to open the issue or PR on GitHub. To select terminal text instead of clicking through the dashboard, hold shift while you drag, same as any other full-screen terminal app.
+In GitHub mode, mouse works throughout: clicking a row focuses its pane and selects that row; clicking the already-selected row opens it — the issue detail for issues, the fullscreen PR overlay for PRs, exactly like `enter`. Clicking blank pane space (no row under the cursor) just focuses the pane, leaving the selection where it was. The wheel moves the selection or scrolls, always acting on whatever pane is under the cursor. The issue detail, the PR overlay, and the PRs-view preview card all carry an `↗ owner/repo#n` line — click it — on the PRs-view card, the issue detail, or the PR overlay (or cmd+click in terminals that support OSC 8 hyperlinks, or press `o`) to open the issue or PR on GitHub. To select terminal text instead of clicking through the dashboard, hold shift while you drag, same as any other full-screen terminal app. In LOCAL mode only the header tab is clickable; local rows are keyboard-first in v1.
 
 Every action is an ordinary label mutation made through your own `gh` auth — the same trust model as labeling an issue by hand on GitHub. Dispatch/approve/re-plan don't run anything themselves; they just move labels that the daemon's sweep acts on.
 
@@ -57,3 +66,31 @@ Every action is an ordinary label mutation made through your own `gh` auth — t
 Repos added with `w` (and removed with `x`) live in a small JSON watchlist file at `<state_dir>/github-watchlist.json`, separate from `config.toml`. The daemon's bridge sweep re-reads this file every sweep, so watchlist changes take effect without a restart. Where a repo appears in both, the `config.toml` `[[github.repos]]` entry wins — that's also why config-sourced repos aren't removable from the dashboard.
 
 The **queue card** at the bottom of the left rail shows the daemon's local queue at all times: the running ticket (with live turn progress from the daemon's health endpoint) and how many tickets are waiting. The dashboard header shows `⇡N unpushed` alongside when there are queued GitHub ops waiting to be flushed (see [Offline / flaky network](./github-mode.md#offline--flaky-network)). Press `t` for the full queue view — waiting positions match the order the daemon will actually claim (priority first, then filename), deferred tickets show their retry backoff (`not before HH:MM`), and RECENT lists the last few finished tickets. The card covers the _whole_ local queue, including tickets submitted with `junco submit` — not just GitHub-dispatched ones. When the daemon is down the card says so rather than implying queued work will run.
+
+## Local mode
+
+LOCAL is the machine-local runtime — the same daemon and on-disk state the GitHub-mode queue card and header pulse already summarize, given its own fullscreen home. In place of the three GitHub panes it has a **section rail** on the left (Queue, Outbox, Repos, Worktrees, Daemon) and a **section body** on the right showing the selected section's rows or detail panel.
+
+There are two focus levels: the rail moves between **sections** (`↑`/`↓` or `j`/`k`), while the body drives the **in-section cursor** once you've entered it (`→` / `l` / `enter`; `←` / `h` / `esc` returns to the rail). Live badges on the rail (`▸N` running, `⇡N` outbox depth, `⚑N` stale worktrees, `●`/`○` daemon up/down) summarize each section without opening it.
+
+- **Queue** — the same local queue the GitHub-mode queue card and `t` view show: running, waiting, and recent tickets. `R` requeues a failed ticket; a done ticket is shown but can't be requeued.
+- **Outbox** — the GitHub outbox backlog: live and dead ops, with `f` flushing it.
+- **Repos** — every watched repo's on-disk state: path, origin/fork links, branch@sha, dirty flag, and how it was added (config / watchlist / external / clone).
+- **Worktrees** — every ticket worktree junco knows about: mapped repo, slug, live/stale/backup class, HEAD, and age. `x` prunes a stale or backup worktree; a live worktree is shown but never prunable — the daemon owns it.
+- **Daemon** — a scrollable detail panel: pid, uptime, inference endpoint reachability, health host:port, live per-ticket turn progress, token counts, guard nudge/kill counts, and the task-status tally. `[`/`]` scroll it; `X` restarts the daemon.
+
+| Key                 | Action                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `m` / Shift+Tab     | swap GITHUB ↔ LOCAL (or click the header tab)                                                                            |
+| `↑`/`↓` · `j`/`k`   | move the section (rail) or the cursor (body)                                                                             |
+| `→` / `l` / `enter` | enter the section body; `←` / `h` / `esc` returns to the rail                                                            |
+| `g` / `G`           | first / last                                                                                                             |
+| `[` / `]`           | scroll the daemon panel                                                                                                  |
+| `R`                 | requeue a failed ticket                                                                                                  |
+| `x`                 | remove under the cursor — delete a queued ticket, prune a stale worktree, or unwatch a repo (confirmed when destructive) |
+| `f`                 | flush the GitHub outbox                                                                                                  |
+| `o`                 | open a repo's origin/fork in the browser                                                                                 |
+| `X`                 | restart the daemon (confirmed; in-flight tickets soft-abort, committed work salvaged)                                    |
+| `r`                 | full local refresh                                                                                                       |
+
+Rows the daemon itself owns are never selectable: running/processing queue rows and live worktrees render — so you can see them — but the cursor skips past them, the same rule that keeps the GitHub-mode queue card honest about in-flight work. Pruning a worktree runs under the daemon's own shared worktree lock with an in-lock liveness gate, so it can never race a ticket that just started using that worktree. Every mutating action — requeue, delete, flush, restart, prune — spawns the real `junco` CLI against the dashboard's own config, the same no-reimplementation, no-drift model the command palette uses; LOCAL mode has no separate implementation of any of it.
