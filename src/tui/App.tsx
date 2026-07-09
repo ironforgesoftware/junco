@@ -765,14 +765,6 @@ export function App(props: AppProps): React.JSX.Element {
         showToast("error", "no repo selected");
         return;
       }
-      // External (fork-PR) repos: assess files finding ISSUES on the target
-      // repo — an upstream write the etiquette invariant forbids. assessCmd
-      // already fails closed (external entries are not "watched"), but gate
-      // here so the toast explains instead of suggesting a config change.
-      if (currentRepo?.external === true) {
-        showToast("error", "assess is not available for external repos — it files issues upstream");
-        return;
-      }
       const nwo = currentNwo;
       if (assessInFlightRef.current.has(nwo)) {
         showToast("info", "assess already running");
@@ -786,7 +778,10 @@ export function App(props: AppProps): React.JSX.Element {
         if (!aliveRef.current) return;
         const line = firstNonEmptyLine(r.output);
         if (r.code === 0) {
-          showToast("success", line ? `${nwo}: ${line}` : `assessed ${nwo}`);
+          showToast(
+            "success",
+            line ? `${nwo}: ${line} · v to review` : `assessed ${nwo} · v to review`,
+          );
         } else {
           // Nonzero exit: assessCmd's first line carries the reason ("not
           // watched", "already queued", etc.) — relay it as-is.
@@ -794,7 +789,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
       });
     },
-    [currentNwo, currentRepo, runCliFn, showToast],
+    [currentNwo, runCliFn, showToast],
   );
 
   // Elapsed ticker for a running palette command (1s resolution).

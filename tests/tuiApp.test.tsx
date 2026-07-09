@@ -1323,6 +1323,23 @@ describe("assess hotkey (s/S)", () => {
     await until(() => (r.lastFrame() ?? "").includes("/s")); // landed in the filter chip
     expect(runs).toHaveLength(0);
   });
+
+  it("s submits an assess audit for an external repo (no refusal) and hints the review view", async () => {
+    const { client } = makeClient({ "acme/api": [], "up/stream": [] });
+    const { runs, runCliFn } = makeAssessRunner({ output: "queued: /x/inbox/assess-up-stream.md" });
+    const file = wl7();
+    writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
+    r.stdin.write("j"); // select up/stream (pane 1, index 1)
+    await tick();
+    r.stdin.write("s");
+    await until(() => runs.length === 1);
+    expect(runs).toEqual([["assess", ["up/stream"]]]);
+    await until(() => (r.lastFrame() ?? "").includes("up/stream: queued:"));
+    expect(r.lastFrame()).toContain("v to review");
+    expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
+  });
 });
 
 describe("auto-clone add-repo", () => {
