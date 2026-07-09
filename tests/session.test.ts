@@ -78,12 +78,15 @@ describe("runAgent", () => {
 });
 
 // A fake session for guard-driven tests: emits `events` to listeners when the
-// INITIAL prompt arrives. Records every prompt (text + options). Once aborted,
-// stops emitting and resolves the in-flight initial prompt (mirroring the real
-// SDK, whose abort() halts the run and resolves prompt()).
+// INITIAL prompt arrives. Records every prompt (text + options). An abort with
+// a run in flight stops emitting and resolves the in-flight initial prompt.
+// SDK-faithful: abort() is NOT latched — the real SDK's abort() is
+// `this.activeRun?.abortController.abort()` (a no-op with no active run), and
+// each prompt() creates a fresh AbortController.
 function guardFakeSession(events: any[]) {
   const listeners: ((e: any) => void)[] = [];
   let aborted = false;
+  let running = false;
   let resolveInitial: (() => void) | undefined;
   const self = {
     prompts: [] as { text: string; options?: any }[],
@@ -97,6 +100,8 @@ function guardFakeSession(events: any[]) {
       // Only the INITIAL prompt drives the event stream; steered nudge prompts
       // are fire-and-forget injections that don't re-emit the script.
       if (self.prompts.length > 1) return Promise.resolve();
+      running = true;
+      aborted = false; // fresh AbortController per prompt, like the real SDK
       return new Promise<void>((resolve) => {
         resolveInitial = resolve;
         // Emit synchronously after returning to the caller is unnecessary here;
@@ -106,6 +111,7 @@ function guardFakeSession(events: any[]) {
             if (aborted) break;
             listeners.forEach((l) => l(e));
           }
+          running = false;
           // Initial run finishes naturally if not aborted mid-stream.
           if (!aborted) resolve();
         });
@@ -113,6 +119,8 @@ function guardFakeSession(events: any[]) {
     },
     dispose() {},
     abort(): Promise<void> {
+      // No active run → no-op (the real SDK does not latch aborts).
+      if (!running) return Promise.resolve();
       aborted = true;
       self.aborted = true;
       resolveInitial?.();
@@ -287,33 +295,77 @@ describe("runAgent (external force-stop)", () => {
     expect(result.errorMessage).toMatch(/force-stop requested by operator/);
   });
 
-  it("an already-aborted signal kills the run immediately", async () => {
+  it("an already-aborted signal skips the run entirely (SDK abort is not latched)", async () => {
+    // The real SDK's abort() is `this.activeRun?.abortController.abort()` — a
+    // no-op with no active run. So a pre-aborted signal must NOT be handled by
+    // calling abort(): the prompt would run the whole session to completion
+    // with every guard decision suppressed. runAgent must skip the run.
     const ac = new AbortController();
     ac.abort();
-    let resolvePrompt: (() => void) | undefined;
+    let created = false;
+    let prompted = 0;
     const session = {
       subscribe(_l: (e: any) => void) {
         return () => {};
       },
       prompt(_text: string): Promise<void> {
-        return new Promise<void>((resolve) => {
-          resolvePrompt = resolve;
-        });
+        prompted++;
+        // SDK-faithful: nothing was latched, so a prompt would just run to
+        // completion as if no abort had ever been requested.
+        return Promise.resolve();
       },
       dispose() {},
       abort: async () => {
-        // abort is requested before prompt() is even called; resolve as soon
-        // as the hang is installed.
-        queueMicrotask(() => resolvePrompt?.());
+        // no active run → no-op (real SDK behavior)
       },
     };
     const result = await runAgent({
       body: "ping",
       cwd: "/tmp",
       timeoutMs: 5000,
-      createSession: async () => session as any,
+      createSession: async () => {
+        created = true;
+        return session as any;
+      },
       abortSignal: ac.signal,
     });
+    expect(created).toBe(false); // checked BEFORE createSession()
+    expect(prompted).toBe(0); // the run never starts
+    expect(result.abortedByGuard).toBe(true);
+    expect(result.errorMessage).toMatch(/force-stop/);
+  });
+
+  it("a signal aborted during createSession() skips the prompt and disposes", async () => {
+    const ac = new AbortController();
+    let prompted = 0;
+    let disposed = false;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        prompted++;
+        return Promise.resolve();
+      },
+      dispose() {
+        disposed = true;
+      },
+      abort: async () => {},
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => {
+        // The force-stop lands while the session is being built — before the
+        // abort listener is attached and before any run is in flight.
+        ac.abort();
+        return session as any;
+      },
+      abortSignal: ac.signal,
+    });
+    expect(prompted).toBe(0); // re-checked before prompt()
+    expect(disposed).toBe(true);
     expect(result.abortedByGuard).toBe(true);
     expect(result.errorMessage).toMatch(/force-stop/);
   });

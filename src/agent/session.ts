@@ -72,10 +72,36 @@ export interface RunAgentOptions {
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const acc = new RunAccumulator();
   const gm = opts.guardManager;
-  const session = await opts.createSession();
   const start = Date.now();
   let timedOut = false;
   let killReason: string | null = null;
+
+  // Result for a run that was force-stopped before any prompt was in flight —
+  // same shape as a mid-run kill (soft abort → PR-flow salvage semantics).
+  const preAbortedResult = (): RunResult => {
+    killReason = "force-stop requested by operator";
+    const summary = gm ? gm.supervisorSummary : "no nudges issued";
+    acc.setError(`supervisor kill: ${killReason} (${summary})`);
+    return acc.result(Date.now() - start, timedOut, true);
+  };
+
+  // A pre-aborted signal means "do not run": the SDK does NOT latch aborts —
+  // abort() is `this.activeRun?.abortController.abort()` (pi-agent-core
+  // dist/agent.js), a no-op with no active run, and each prompt() creates a
+  // fresh AbortController. Calling abort() here would let the prompt run the
+  // whole session to completion with every guard decision suppressed by the
+  // `killReason !== null` gate below. Skip the run entirely instead.
+  if (opts.abortSignal?.aborted) return preAbortedResult();
+
+  const session = await opts.createSession();
+
+  // Re-check: the signal may have fired while createSession() was awaited —
+  // still before any run is in flight, so abort() would be the same no-op.
+  if (opts.abortSignal?.aborted) {
+    session.dispose();
+    return preAbortedResult();
+  }
+
   let unsubscribe: (() => void) | undefined;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -84,15 +110,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     void session.abort().catch(() => {});
   }, opts.timeoutMs);
   // Operator force-stop: soft-abort exactly like a guard kill so the PR-flow
-  // salvages any commits already made.
+  // salvages any commits already made. (A run is in flight by the time this
+  // can fire — the pre-aborted cases returned above.)
   const onExternalAbort = (): void => {
     if (killReason === null) killReason = "force-stop requested by operator";
     void session.abort().catch(() => {});
   };
-  if (opts.abortSignal) {
-    if (opts.abortSignal.aborted) onExternalAbort();
-    else opts.abortSignal.addEventListener("abort", onExternalAbort, { once: true });
-  }
+  opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
   let transcript: WriteStream | null = null;
   if (opts.transcriptPath) {
     try {
