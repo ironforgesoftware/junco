@@ -17,6 +17,7 @@ import { runPrFlow } from "./prFlow.js";
 // full evaluation-order rationale.
 import { runAssessFlow } from "./assessFlow.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
+import { slugifyId } from "./slug.js";
 import {
   NOOP_REPORTER,
   outcomeFromPrFlow,
@@ -263,7 +264,7 @@ export async function executeClaimed(
         abortSignal: deps.abortSignal,
         onProgress: (p) => metrics.setTaskProgress(next.id, p),
         transcriptPath: cfg.transcriptsEnabled
-          ? join(cfg.stateDir, "transcripts", `${next.id}.jsonl`)
+          ? join(cfg.stateDir, "transcripts", `${slugifyId(next.id)}.jsonl`)
           : undefined,
       });
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
