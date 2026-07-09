@@ -539,11 +539,14 @@ export function App(props: AppProps): React.JSX.Element {
           setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
           return { delivered: true, staleAt: res.value.staleAt };
         }
-        showToast("error", res.error);
+        // Only surface the error toast when GITHUB actually owns the screen —
+        // this same loader fires on the background poll regardless of mode, and
+        // a failing github probe must never flash a red toast over LOCAL.
+        if (uiModeRef.current === "github" && props.githubEnabled) showToast("error", res.error);
         return { delivered: false, staleAt: null };
       });
     },
-    [client, trigger, showToast],
+    [client, trigger, showToast, props.githubEnabled],
   );
 
   // Derived list-level stale marker (see prStaleByRepo above).
@@ -605,6 +608,12 @@ export function App(props: AppProps): React.JSX.Element {
   nwoRef.current = currentNwo;
   const viewRef = useRef(view);
   viewRef.current = view;
+  // Live uiMode for the poll callbacks: a background issues poll must not flash
+  // a github error toast while LOCAL owns the screen (the poll fires on its own
+  // interval regardless of mode). Read via a ref so loadIssues' identity — and
+  // the intervals keyed on it — don't churn on every mode toggle.
+  const uiModeRef = useRef(uiMode);
+  uiModeRef.current = uiMode;
 
   // The ONE refresh cycle. Scope follows the view unless overridden (the `p`
   // handler must sweep before the "prs" view state has committed): main →

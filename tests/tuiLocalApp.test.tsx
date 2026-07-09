@@ -5,9 +5,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
+import type { DashboardClient } from "../src/tui/ghClient.js";
 import { headerTabBands } from "../src/tui/geometry.js";
 import { until } from "./helpers/until.js";
-import { renderApp, CHEAP, ESC } from "./helpers/localFixtures.js";
+import { renderApp, CHEAP, ESC, stubClient } from "./helpers/localFixtures.js";
 
 afterEach(cleanup);
 
@@ -111,6 +112,26 @@ describe("github disabled", () => {
     r.stdin.write("m");
     await until(() => (r.lastFrame() ?? "").toLowerCase().includes("github mode is off"));
     expect(r.lastFrame()).toContain("[LOCAL]"); // did NOT cross to github
+  });
+
+  it("a failing background issues poll does NOT flash a github error toast over LOCAL", async () => {
+    let resolved = 0;
+    const failing: DashboardClient = {
+      ...stubClient,
+      // The background poll (scoped cycle on mount) hits this even in LOCAL mode.
+      listIssues: async () => {
+        resolved++;
+        return { ok: false, error: "gh boom" };
+      },
+    };
+    const r = renderApp({ initialUiMode: "local", githubEnabled: false, client: failing });
+    await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
+    await until(() => resolved > 0); // the issues poll ran + resolved
+    // Give any resulting toast time to commit (bounded spin — a single fixed
+    // tick would race React; the loop lets a buggy toast surface if it will).
+    for (let i = 0; i < 20; i++) await new Promise((res) => setTimeout(res, 1));
+    expect(r.lastFrame()).not.toContain("gh boom");
+    expect(r.lastFrame()).toContain("[LOCAL]");
   });
 });
 

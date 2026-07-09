@@ -6,9 +6,11 @@
  *   1. Path containment: the path must resolve under cfg.worktreeRoot.
  *   2. Shared lock: acquire the SAME worktrees.lock the daemon takes around its
  *      worktree mutations (prepareWorktree/cleanupWorktree/pruneStaleWorktrees,
- *      wired daemon-side in Stage B), so prune and daemon provisioning are
- *      mutually exclusive — they can no longer race .git/worktrees/<id> metadata
- *      or index.lock.
+ *      wired daemon-side in Stage B). This is ONE-DIRECTIONAL, not mutual
+ *      exclusion: the daemon proceeds even when it can't acquire the lock, so
+ *      prune YIELDS to the daemon (returns rather than racing .git/worktrees/<id>
+ *      metadata or index.lock). The lock is a courtesy, NOT the liveness
+ *      guarantee — that is the slug gate in step 3.
  *   3. Liveness gate, UNDER the lock: refuse if the worktree's slug segment
  *      matches worktreeSlug(id) for any ticket in processing/ OR any /health
  *      currentTickets entry. Because the check runs under the lock it observes
@@ -27,12 +29,10 @@ import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync } from "node:f
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Config } from "./types.js";
 import { git } from "./git.js";
-import { queuePaths } from "./config.js";
+import { queuePaths, HEALTH_TIMEOUT_MS } from "./config.js";
 import { parseTicket } from "./ticket.js";
 import { worktreeSlug, worktreesLockPath } from "./worktree.js";
 import { acquirePidfileLock, type PidfileLock } from "./pidfileLock.js";
-
-const HEALTH_TIMEOUT_MS = 1500;
 
 /** `.old-<unix-ts>` worktree-backup suffix — worktree.ts renames an unprunable
  * worktree to `<wtPath>.old-<ts>` (worktree.ts:182; same shape as
@@ -101,7 +101,9 @@ export async function runWorktreePruneCommand(
     return 2;
   }
 
-  // 2. Shared lock — mutual exclusion with the daemon's worktree mutations.
+  // 2. Shared lock — one-directional: prune yields to the daemon here (the
+  //    daemon never yields). The slug gate in step 3 is the real liveness
+  //    guarantee; this lock only keeps prune off the daemon's worktree mutations.
   const lock = acquireLockFn();
   if (lock === null) {
     print("junco worktree prune: another worktree operation is in progress — try again\n");

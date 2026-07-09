@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { QueueView } from "../src/tui/components/QueueView.js";
-import type { QueueRowRef } from "../src/tui/components/QueueView.js";
 import {
   queueLabel,
   fmtElapsed,
@@ -12,14 +11,6 @@ import {
   fmtCompact,
 } from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
-
-async function until(pred: () => boolean, tries = 60): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    if (pred()) return;
-    await new Promise((r) => setTimeout(r, 1));
-  }
-  throw new Error("condition not met within bound");
-}
 
 const NOW = new Date("2026-07-07T10:05:00Z");
 
@@ -253,9 +244,8 @@ describe("QueueView", () => {
     expect(recLine).toContain("▌");
   });
 
-  it("onRows reports the actionable rows (waiting then recent, running excluded)", async () => {
-    const seen: QueueRowRef[] = [];
-    render(
+  it("counts render the full done/failed totals (LOCAL only; absent = no line)", () => {
+    const withCounts = render(
       <QueueView
         snap={FULL}
         scroll={0}
@@ -264,15 +254,49 @@ describe("QueueView", () => {
         focused={false}
         selectable
         selectedRow={0}
-        onRows={(rows) => {
-          seen.length = 0;
-          seen.push(...rows);
-        }}
+        counts={{ done: 12, failed: 3 }}
       />,
-    );
-    await until(() => seen.length === 6); // 4 waiting + 2 recent
-    expect(seen[0]).toEqual({ kind: "waiting", id: "gh-acme-api-51-plan" });
-    expect(seen[5]).toEqual({ kind: "recent", id: "gh-acme-api-40", status: "failed" });
-    expect(seen.some((r) => r.kind === "running")).toBe(false);
+    ).lastFrame()!;
+    expect(withCounts).toContain("DONE 12");
+    expect(withCounts).toContain("FAILED 3");
+    // Absent (GitHub `t`) → no totals line.
+    const noCounts = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={30} focused={false} />,
+    ).lastFrame()!;
+    expect(noCounts).not.toContain("DONE 12");
+  });
+
+  it("cursor-following window keeps a selected row past the fold visible", () => {
+    // A WAITING list far larger than fits: with no scroll-follow the cursor
+    // would drop below the fold and highlight an off-screen row.
+    const many: QueueSnapshot = {
+      ...IDLE,
+      waiting: Array.from({ length: 20 }, (_, i) => ({
+        id: `wait-${i}`,
+        github: null,
+        kind: "pr" as const,
+        priority: "normal" as const,
+        retryCount: 0,
+        notBefore: null,
+        deferred: false,
+      })),
+    };
+    const frame = render(
+      <QueueView
+        snap={many}
+        scroll={0}
+        now={NOW}
+        height={10} // ~7 visible rows — the last waiting row is well past the fold
+        focused={false}
+        selectable
+        selectedRow={19} // last waiting row
+      />,
+    ).lastFrame()!;
+    // The highlighted row is inside the rendered window, carrying the cursor…
+    const selLine = frame.split("\n").find((l) => l.includes("wait-19"));
+    expect(selLine).toBeDefined();
+    expect(selLine!).toContain("▌");
+    // …and the window actually moved (a top row scrolled off).
+    expect(frame).not.toContain("wait-0 ");
   });
 });

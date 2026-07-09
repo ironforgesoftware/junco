@@ -4,15 +4,6 @@ import type { QueueSnapshot, QueueWaiting } from "../queueSnapshot.js";
 import { queueLabel, progressLine, fmtAge, fmtClock } from "../queueFmt.js";
 import { theme } from "../theme.js";
 
-/** A selectable actionable row surfaced to the LOCAL Queue section: WAITING
- * (inbox) and RECENT (done/failed) rows. RUNNING rows are never included —
- * the daemon owns processing/. */
-export interface QueueRowRef {
-  kind: "running" | "waiting" | "recent";
-  id: string;
-  status?: "done" | "failed";
-}
-
 function waitingNote(w: QueueWaiting): string {
   const parts: string[] = [];
   if (w.priority !== "normal") parts.push(w.priority);
@@ -26,8 +17,10 @@ function waitingNote(w: QueueWaiting): string {
  * RECENT built as flat rows so App's scroll offset can slice them. In LOCAL
  * mode `selectable` turns on a `▌` accent cursor over the actionable rows
  * (WAITING then RECENT, `selectedRow` indexing that concatenation); RUNNING
- * rows render but are never selectable. Absent props → byte-identical to the
- * GitHub `t` view. */
+ * rows render but are never selectable, and the window follows the cursor so a
+ * selected row past the fold stays visible. `counts` (LOCAL only) surfaces the
+ * full done/failed totals the capped RECENT list can't show. Absent props →
+ * byte-identical to the GitHub `t` view. */
 export function QueueView({
   snap,
   scroll,
@@ -36,7 +29,7 @@ export function QueueView({
   focused,
   selectable,
   selectedRow,
-  onRows,
+  counts,
 }: {
   snap: QueueSnapshot | null;
   scroll: number;
@@ -45,20 +38,10 @@ export function QueueView({
   focused: boolean;
   selectable?: boolean;
   selectedRow?: number;
-  onRows?: (rows: QueueRowRef[]) => void;
+  /** Full done/failed totals (LOCAL queue section only); absent for the GitHub
+   * `t` view, which then renders byte-identically. */
+  counts?: { done: number; failed: number } | null;
 }): React.JSX.Element {
-  React.useEffect(() => {
-    if (!onRows) return;
-    if (snap === null) {
-      onRows([]);
-      return;
-    }
-    onRows([
-      ...snap.waiting.map((w) => ({ kind: "waiting" as const, id: w.id })),
-      ...snap.recent.map((r) => ({ kind: "recent" as const, id: r.id, status: r.status })),
-    ]);
-  }, [snap, onRows]);
-
   if (snap === null) {
     return (
       <Box
@@ -86,6 +69,10 @@ export function QueueView({
     );
 
   const rows: React.JSX.Element[] = [];
+  // Row-array index of the selected actionable row, recorded as it is pushed —
+  // headers/RUNNING rows shift it, so only this build knows the true position.
+  // Drives the cursor-following window below (null on the non-selectable path).
+  let selRowIndex: number | null = null;
   const dash = (key: string): void => {
     rows.push(
       <Text key={key} dimColor>
@@ -137,6 +124,7 @@ export function QueueView({
   snap.waiting.forEach((w, i) => {
     const note = waitingNote(w);
     const sel = selectable === true && selectedRow === i;
+    if (sel) selRowIndex = rows.length;
     rows.push(
       <Text key={`w-${w.id}`} wrap="truncate-end">
         {gutter(sel)}
@@ -157,9 +145,21 @@ export function QueueView({
       RECENT
     </Text>,
   );
+  // LOCAL only: RECENT caps at 5, so surface the full done/failed totals here.
+  if (counts) {
+    rows.push(
+      <Text key="rec-counts" wrap="truncate-end">
+        {"  "}
+        <Text color="green">DONE {counts.done}</Text>
+        <Text dimColor> · </Text>
+        <Text color="red">FAILED {counts.failed}</Text>
+      </Text>,
+    );
+  }
   if (snap.recent.length === 0) dash("rec-none");
   snap.recent.forEach((r, j) => {
     const sel = selectable === true && selectedRow === snap.waiting.length + j;
+    if (sel) selRowIndex = rows.length;
     rows.push(
       <Text key={`f-${r.id}-${r.finishedAt}`} wrap="truncate-end">
         {gutter(sel)}
@@ -172,6 +172,17 @@ export function QueueView({
     );
   });
 
+  // Cursor-following window: base at `scroll` (the GitHub `t` path's only input,
+  // and 0 for the LOCAL queue), then nudge so a selected row past the fold stays
+  // visible — mirrors windowSlice's clamp. The slice caps at `visible` rows, so
+  // the frame never exceeds `height` (Ink duplicate-redraw hazard). Non-
+  // selectable → selRowIndex null → start === scroll (byte-identical).
+  const visible = Math.max(1, height - 3);
+  let start = scroll;
+  if (selRowIndex !== null) {
+    if (selRowIndex < start) start = selRowIndex;
+    else if (selRowIndex >= start + visible) start = selRowIndex - visible + 1;
+  }
   return (
     <Box
       flexDirection="column"
@@ -181,7 +192,7 @@ export function QueueView({
       flexGrow={1}
       height={height}
     >
-      {rows.slice(scroll, scroll + Math.max(1, height - 3))}
+      {rows.slice(start, start + visible)}
     </Box>
   );
 }

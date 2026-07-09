@@ -19,7 +19,7 @@ import { nwoFromRemoteUrl } from "../githubInbox.js";
 import { repoDiscriminator } from "../worktree.js";
 import type { MetricsSnapshot } from "../metrics.js";
 import { endpointReachable } from "../health.js";
-import { queuePaths } from "../config.js";
+import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
 import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
 
@@ -308,8 +308,6 @@ export async function enumerateWorktrees(
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
 }
-
-const HEALTH_TIMEOUT_MS = 1500;
 
 export interface HealthBody {
   status: string;

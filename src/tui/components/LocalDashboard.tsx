@@ -511,6 +511,7 @@ export default function LocalDashboard({
         focused={bodyFocused}
         selectable
         selectedRow={cursor}
+        counts={cheap?.counts ?? null}
       />
     ) : section === "outbox" ? (
       <OutboxSection

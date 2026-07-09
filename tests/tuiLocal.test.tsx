@@ -400,6 +400,24 @@ describe("LocalDashboard", () => {
     expect(line).toContain("▌");
   });
 
+  it("queue section surfaces the full done/failed counts (uncapped by RECENT)", () => {
+    // CHEAP.counts is { done: 5, failed: 1 }; threaded App→LocalDashboard→QueueView.
+    const f = render(
+      <LocalDashboard
+        cheap={CHEAP}
+        heavy={HEAVY}
+        section="queue"
+        focus="body"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("DONE 5");
+    expect(f).toContain("FAILED 1");
+  });
+
   it("cheap === null → body sections show loading", () => {
     const f = render(
       <LocalDashboard

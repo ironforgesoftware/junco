@@ -10,7 +10,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Config, TicketGithub, Ticket } from "../types.js";
 import { PRIORITY_RANK } from "../types.js";
-import { queuePaths } from "../config.js";
+import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { parseTicket } from "../ticket.js";
 import { outboxDepth as computeOutboxDepth } from "../githubOutbox.js";
 import type { HealthBody } from "./localSnapshot.js";
@@ -68,7 +68,6 @@ export interface QueueSnapshotDeps {
   healthOverride?: { body: HealthBody | null };
 }
 
-const HEALTH_TIMEOUT_MS = 1500;
 const RECENT_CAP = 5;
 
 /** Claimed/finalized basenames carry a `<UTC-stamp>__` prefix (queue.ts

@@ -33,13 +33,17 @@ import { acquirePidfileLock } from "./pidfileLock.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Path of the daemon-side worktrees lock — the cross-process mutex that
- * serializes every mutation of `worktreeRoot` (prepare/cleanup/prune here, and
- * the `junco worktree prune` CLI). Same hardened primitive as the outbox flush
- * lock (src/pidfileLock.ts). A singleton daemon is already the sole writer, so
- * acquiring it here is behavior-preserving: it exists so an out-of-process
- * prune can detect the daemon mid-mutation and skip rather than race
- * `git worktree add/remove` on shared `.git/worktrees/<id>` metadata.
+ * Path of the daemon-side worktrees advisory lock over `worktreeRoot` mutations
+ * (prepare/cleanup/prune here, and the `junco worktree prune` CLI). Same hardened
+ * primitive as the outbox flush lock (src/pidfileLock.ts), but this is NOT a true
+ * mutex — the lock is ONE-DIRECTIONAL. The daemon acquires it yet proceeds even
+ * when acquisition fails (it ignores the null return, being the singleton
+ * writer); only `junco worktree prune` yields when it can't acquire, backing off
+ * rather than racing `git worktree add/remove` on shared `.git/worktrees/<id>`
+ * metadata. So the lock is a courtesy that makes prune yield to the daemon — it
+ * is NOT the liveness guarantee. That guarantee is the SLUG GATE (prune refuses
+ * any worktree whose slug matches a processing/ or /health currentTickets
+ * ticket); do not lean on this lock for correctness.
  */
 export function worktreesLockPath(cfg: Pick<Config, "worktreeRoot">): string {
   return join(cfg.worktreeRoot, ".worktrees.lock");

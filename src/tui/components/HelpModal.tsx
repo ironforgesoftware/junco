@@ -59,8 +59,8 @@ export function HelpModal({
             ["→ · l · enter", "enter the section body"],
             ["← · h · esc", "back to the section rail"],
             ["g / G", "first / last"],
-            ["[ / ]", "scroll the daemon panel"],
-            ["r", "full local refresh"],
+            ["[ / ]", "scroll the daemon body (that section only)"],
+            ["r", "full local refresh (from the section rail)"],
           ]}
         />
         <Section
