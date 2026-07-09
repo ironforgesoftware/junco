@@ -382,6 +382,67 @@ describe("validateRepoContext — pushed branch with no PR (issues #29, #70)", (
 });
 
 // ---------------------------------------------------------------------------
+// validateRepoContext — ls-remote exact-ref match (issue #72)
+// ---------------------------------------------------------------------------
+
+describe("validateRepoContext — ls-remote exact-ref match (issue #72)", () => {
+  it("a sibling ref refs/heads/<x>/<branch> alone is NOT a collision (exact-match only)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, ghScript);
+    const ctx = makeContext(work, { branchName: "junco/foo" });
+
+    // Only a sibling exists on origin; the EXACT branch does not. `git ls-remote
+    // --heads origin junco/foo` tail-matches refs/heads/aaa/junco/foo, so the
+    // pre-fix code read it as a collision.
+    run(["git", "-C", work, "checkout", "-b", "aaa/junco/foo"]);
+    writeFileSync(join(work, "sib.txt"), "sibling\n");
+    run(["git", "-C", work, "add", "sib.txt"]);
+    run(["git", "-C", work, "commit", "-m", "sibling commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "aaa/junco/foo"]);
+    run(["git", "-C", work, "checkout", "main"]);
+
+    // No exact branch → no collision, no resume signal (fresh ticket resolves).
+    const signals = { resumeRemoteSha: null as string | null };
+    await expect(validateRepoContext(cfg, ctx, { signals })).resolves.toBe("owner/repo");
+    expect(signals.resumeRemoteSha).toBeNull();
+  }, 15000);
+
+  it("with BOTH the exact branch and a sibling present, resume uses the EXACT branch's sha", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, ghScript);
+    const ctx = makeContext(work, { branchName: "junco/foo" });
+
+    // Sibling (a DIFFERENT commit) that sorts BEFORE the exact ref in
+    // ls-remote's output — the pre-fix `split[0]` would grab its sha.
+    run(["git", "-C", work, "checkout", "-b", "aaa/junco/foo"]);
+    writeFileSync(join(work, "sib.txt"), "sibling\n");
+    run(["git", "-C", work, "add", "sib.txt"]);
+    run(["git", "-C", work, "commit", "-m", "sibling commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "aaa/junco/foo"]);
+    run(["git", "-C", work, "checkout", "main"]);
+
+    run(["git", "-C", work, "checkout", "-b", "junco/foo"]);
+    writeFileSync(join(work, "exact.txt"), "exact branch\n");
+    run(["git", "-C", work, "add", "exact.txt"]);
+    run(["git", "-C", work, "commit", "-m", "exact-branch commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "junco/foo"]);
+    run(["git", "-C", work, "checkout", "main"]);
+    const exactSha = run(["git", "-C", work, "rev-parse", "junco/foo"]).trim();
+    const siblingSha = run(["git", "-C", work, "rev-parse", "aaa/junco/foo"]).trim();
+    expect(exactSha).not.toBe(siblingSha);
+
+    // Requeued ticket (retry_count>0), no PR → resume; the force-with-lease sha
+    // must be the EXACT branch's tip, never the sibling's.
+    const signals = { resumeRemoteSha: null as string | null };
+    await expect(validateRepoContext(cfg, ctx, { signals, retryCount: 1 })).resolves.toBe(
+      "owner/repo",
+    );
+    expect(signals.resumeRemoteSha).toBe(exactSha);
+    expect(signals.resumeRemoteSha).not.toBe(siblingSha);
+  }, 15000);
+});
+
+// ---------------------------------------------------------------------------
 // validateRepoContext — amend mode (ctx mutation)
 // ---------------------------------------------------------------------------
 

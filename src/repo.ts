@@ -202,6 +202,27 @@ async function listOpenPrsForHead(
 }
 
 /**
+ * Select the sha of the ref that is EXACTLY `refs/heads/<branchName>` from
+ * `git ls-remote --heads` output, or null when no line's ref matches exactly.
+ *
+ * `git ls-remote --heads <remote> <branch>` matches against the ref TAIL, so a
+ * sibling ref like `refs/heads/sub/<branch>` also appears in the output. Taking
+ * the first whitespace token of the whole output (the pre-#72 code) could grab
+ * a sibling's sha — a wrong `--force-with-lease` lease — or read a sibling-only
+ * result as a collision. Parse line-by-line and keep only the exact ref.
+ */
+function exactRefSha(lsRemoteStdout: string, branchName: string): string | null {
+  const wanted = `refs/heads/${branchName}`;
+  for (const line of lsRemoteStdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [sha, ref] = trimmed.split(/\s+/);
+    if (ref === wanted) return sha;
+  }
+  return null;
+}
+
+/**
  * Port of worker.py `validate_repo_context` (lines 1815-1874).
  *
  * Verifies repo, remote, and base branch. Returns the repo's nameWithOwner.
@@ -362,15 +383,17 @@ export async function validateRepoContext(
     );
   }
 
-  // The branch's state on the push remote decides collision vs. resume.
+  // The branch's state on the push remote decides collision vs. resume. Match
+  // the ref EXACTLY (issue #72): `--heads <branch>` tail-matches, so a sibling
+  // ref like refs/heads/sub/<branch> also shows up — only refs/heads/<branch>
+  // itself counts as this branch existing, and its sha is the lease target.
   const bls = await git(cfg, ["ls-remote", "--heads", ctx.pushRemote, ctx.branchName], {
     cwd: ctx.repo,
     check: false,
     retryNetwork: true,
   });
-  if (bls.code === 0 && bls.stdout.trim()) {
-    const remoteSha = bls.stdout.trim().split(/\s+/)[0];
-
+  const remoteSha = bls.code === 0 ? exactRefSha(bls.stdout, ctx.branchName) : null;
+  if (remoteSha !== null) {
     // Does an OPEN PR of OURS already track this branch? For a fork push the
     // head owner must be our fork's owner (a stranger's same-named branch PR
     // is not ours); for origin it is the repo owner. A null/failed query is
