@@ -11,6 +11,7 @@ import {
   formatHumanLine,
   rotateLogIfLarge,
   openRotatingLogSink,
+  openAppendLogSink,
 } from "../src/logging.js";
 
 function capture(fn: () => void): any[] {
@@ -227,5 +228,30 @@ describe("openRotatingLogSink", () => {
     sink.close();
     await until(() => statSync(p).size === 2);
     expect(readFileSync(p + ".1", "utf8")).toBe("z".repeat(200));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openAppendLogSink (#76) — non-daemon commands must NEVER rotate worker.log
+// ---------------------------------------------------------------------------
+
+describe("openAppendLogSink", () => {
+  let dir: string;
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("appends without ever rotating, preserving the live daemon's log", async () => {
+    // A second (non-lock-holding) sink on the daemon's worker.log must not
+    // rename it aside — that clobbers the daemon's file and loses lines (#76).
+    dir = mkdtempSync(join(tmpdir(), "junco-appendsink-"));
+    const p = join(dir, "worker.log");
+    writeFileSync(p, "y".repeat(200), "utf8"); // already over any rotation cap
+    const sink = openAppendLogSink(p);
+    sink.write("x".repeat(19)); // 19 + newline = 20 bytes
+    sink.close();
+    await until(() => statSync(p).size === 220);
+    // No sibling generation was ever created — nothing was rotated away.
+    expect(existsSync(p + ".1")).toBe(false);
+    // The pre-existing content survives intact, with the new line appended.
+    expect(readFileSync(p, "utf8")).toBe("y".repeat(200) + "x".repeat(19) + "\n");
   });
 });

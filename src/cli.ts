@@ -29,7 +29,14 @@ import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./con
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
 import { makeGithubReporter } from "./githubReport.js";
-import { log, setLogLevel, setLogFormat, setLogSink, openRotatingLogSink } from "./logging.js";
+import {
+  log,
+  setLogLevel,
+  setLogFormat,
+  setLogSink,
+  openRotatingLogSink,
+  openAppendLogSink,
+} from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
@@ -114,17 +121,23 @@ Options:
 
 /**
  * Human format on a TTY (JUNCO_LOG_JSON=1 forces JSON), plus a JSON tee to the
- * state-dir worker.log (10MB single-generation rotation, enforced at open AND
- * mid-run — see openRotatingLogSink). Returns a cleanup that detaches the
- * sink and closes the stream.
+ * state-dir worker.log. Returns a cleanup that detaches the sink and closes the
+ * stream.
+ *
+ * `rotate` gates worker.log rotation, which is a SINGLE-WRITER concern (#76):
+ * only the lock-holding daemon (`start`) rotates (10MB single-generation, at
+ * open AND mid-run — see openRotatingLogSink). Non-daemon commands (`run-once`)
+ * take no lock and may run against a live daemon's worker.log, so they append
+ * WITHOUT rotating — a second rotating sink would rename the daemon's file aside
+ * and lose lines.
  */
-function setupLogOutputs(cfg: Config): () => void {
+function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
   if (process.stdout.isTTY && process.env.JUNCO_LOG_JSON !== "1") setLogFormat("human");
   if (!cfg.logToFile) return () => {};
   try {
     const logPath = join(cfg.stateDir, "worker.log");
     mkdirSync(cfg.stateDir, { recursive: true });
-    const sink = openRotatingLogSink(logPath);
+    const sink = opts.rotate ? openRotatingLogSink(logPath) : openAppendLogSink(logPath);
     setLogSink((l) => sink.write(l));
     return () => {
       setLogSink(null);
@@ -254,7 +267,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "run-once") {
     const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
-    const teardownLogs = setupLogOutputs(cfg);
+    // No singleton lock here (see the banner above), so never rotate worker.log
+    // — a live daemon may own it; append only (#76).
+    const teardownLogs = setupLogOutputs(cfg, { rotate: false });
     try {
       const handled = await runOnceFn(cfg);
       log.info("run-once complete", { handled });
@@ -270,18 +285,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "start") {
     const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
-    const teardownLogs = setupLogOutputs(cfg);
-
-    // Loud warning when /health binds a non-loopback address (#44): the metrics
-    // body is unauthenticated and leaks in-flight ticket ids + operational
-    // metadata to the whole network. `junco doctor` mirrors this warning.
-    if (cfg.healthEnabled && cfg.healthHost && !isLoopbackHost(cfg.healthHost)) {
-      log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
-        healthHost: cfg.healthHost,
-        healthPort: cfg.healthPort,
-        advice: "bind health_host to 127.0.0.1 unless it is firewalled",
-      });
-    }
 
     // Derive lock path: mirror Python args.config.resolve().parent / "worker.lock"
     const lockPath = join(dirname(resolve(configPath)), "worker.lock");
@@ -289,8 +292,28 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const lock = acquireLockFn(lockPath);
     if (lock === null) {
       log.warn("another instance holds the lock; exiting", { lockPath });
-      // Exit 0 — process supervisor must NOT respawn-loop on a "lock held" situation
+      // Exit 0 — process supervisor must NOT respawn-loop on a "lock held" situation.
+      // We never touched worker.log (the rotating sink is set up below, only once
+      // we hold the lock), so a lock-losing start can't rotate a live daemon's log.
       return 0;
+    }
+
+    // Set up the rotating worker.log sink now that we own the daemon slot —
+    // rotation is the lock holder's exclusive job (#76).
+    const teardownLogs = setupLogOutputs(cfg, { rotate: true });
+
+    // Loud warning when /health binds a non-loopback address (#44): the metrics
+    // body is unauthenticated and leaks in-flight ticket ids + operational
+    // metadata to the whole network. `junco doctor` mirrors this warning.
+    // No truthy `&& cfg.healthHost` guard: an empty/unparseable host is
+    // non-loopback (isLoopbackHost("") → false), so a value that bypassed the
+    // config normalization still triggers the warning instead of evading it (#71).
+    if (cfg.healthEnabled && !isLoopbackHost(cfg.healthHost)) {
+      log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
+        healthHost: cfg.healthHost,
+        healthPort: cfg.healthPort,
+        advice: "bind health_host to 127.0.0.1 unless it is firewalled",
+      });
     }
 
     const stopFlag = new StopFlag();
