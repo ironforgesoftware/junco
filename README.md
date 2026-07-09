@@ -7,6 +7,8 @@ _A local-first worker that turns tickets into pull requests._
 [![node](https://img.shields.io/node/v/%40ironforgesoftware%2Fjunco)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/%40ironforgesoftware%2Fjunco)](LICENSE)
 
+**[junco.ironforgesoftware.com](https://junco.ironforgesoftware.com)** — the one-page tour.
+
 Junco is a daemon that runs on your machine, picks up Markdown tickets from a
 folder — or GitHub issues you label — plans the work, waits for your approval,
 then executes it with a supervised coding agent and opens the pull request.
