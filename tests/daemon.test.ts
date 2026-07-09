@@ -766,6 +766,23 @@ describe("github bridge wiring", () => {
     expect(sweeps).toBe(1); // 3600s interval → only the first iteration sweeps
   });
 
+  it("serial loop: a stop landing during the bridge sweep prevents a brand-new claim", async () => {
+    // A SIGTERM during the sweep (multi-repo gh calls, seconds) must not be
+    // followed by a fresh claim + up to timeout_minutes of NEW work — mirror
+    // the scheduler's per-claim stopFlag check.
+    const cfg = makeConfig({ github: bridgeGithub(60) });
+    const stop = new StopFlag();
+    const { deps } = makeDeps({
+      bridgeSweepFn: async () => {
+        stop.requestStop(); // operator stop arrives mid-sweep
+        return 0;
+      },
+      runOnceFn: vi.fn(async () => true),
+    });
+    await mainLoop(cfg, stop, {}, deps);
+    expect(deps.runOnceFn).not.toHaveBeenCalled();
+  });
+
   it("a sweep error does not crash the loop", async () => {
     const cfg = makeConfig({ github: bridgeGithub(60) });
     const stop = new StopFlag();
