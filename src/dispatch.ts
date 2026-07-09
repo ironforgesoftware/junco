@@ -5,7 +5,7 @@
  * they only know where the inbox lives and how to write a file safely.
  */
 
-import { mkdirSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, linkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
@@ -21,9 +21,12 @@ export function inboxPath(cfg: Config): string {
  *
  * - Derives the ticket id from the frontmatter (falling back to filename/idHint).
  * - Slugifies the id for safe use as a filename.
- * - Writes to a hidden `.tmp` file first, then renames — so the daemon's
- *   `*.md` glob never sees a half-written file.
- * - Throws if a ticket with the same id is already queued in the inbox.
+ * - Writes to a hidden `.tmp` file first, then hardlinks it into place — so
+ *   the daemon's `*.md` glob never sees a half-written file.
+ * - Throws "ticket already queued" if a ticket with the same id is already
+ *   present. The placement is ATOMIC: linkSync fails EEXIST rather than
+ *   overwriting, so a concurrent submit racing for the same id loses cleanly
+ *   (its ticket is never silently clobbered) instead of check-then-act.
  */
 export function submitTicket(
   cfg: Config,
@@ -46,14 +49,29 @@ export function submitTicket(
   mkdirSync(inbox, { recursive: true });
 
   const destPath = join(inbox, `${slug}.md`);
-  if (existsSync(destPath)) {
-    throw new Error(`ticket already queued: ${destPath}`);
-  }
 
-  // Atomic write: hidden dotfile → rename.
+  // Atomic placement: write a hidden dotfile, then hardlink it to destPath.
+  // linkSync fails EEXIST if destPath already exists (the "already queued"
+  // signal) instead of overwriting it — closing the check-then-act race where
+  // a concurrent submit could silently clobber the other's ticket. The temp
+  // hardlink is always dropped: on success destPath keeps the inode; on
+  // failure it must not linger.
   const tmpPath = join(inbox, `.${slug}.md.tmp`);
   writeFileSync(tmpPath, sourceContent, "utf8");
-  renameSync(tmpPath, destPath);
+  try {
+    linkSync(tmpPath, destPath);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`ticket already queued: ${destPath}`);
+    }
+    throw e;
+  } finally {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      /* temp already gone — nothing to clean up */
+    }
+  }
 
   return destPath;
 }
