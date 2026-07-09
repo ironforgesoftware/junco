@@ -135,6 +135,35 @@ export function openRotatingLogSink(path: string, maxBytes = 10 * 1024 * 1024): 
   };
 }
 
+/**
+ * Plain append sink with NO rotation — for non-daemon commands (`junco run-once`
+ * and friends) that may run while the daemon holds worker.log open (#76).
+ * Rotation is a single-writer concern owned by the lock-holding daemon: a second
+ * rotating sink would rename the daemon's live worker.log aside (worker.log.1)
+ * and, on its own later rotation, clobber the daemon's fresh file — losing lines
+ * from both. This sink only ever appends, so a manual run-once interleaves
+ * harmlessly instead. Failing writes drop the line rather than crash the process.
+ */
+export function openAppendLogSink(path: string): RotatingLogSink {
+  const fd = openSync(path, "a");
+  return {
+    write(jsonLine: string): void {
+      try {
+        writeSync(fd, Buffer.from(jsonLine + "\n"));
+      } catch {
+        /* never let the log sink take down the process — drop the line */
+      }
+    },
+    close(): void {
+      try {
+        closeSync(fd);
+      } catch {
+        /* already closed */
+      }
+    },
+  };
+}
+
 function emit(level: Level, msg: string, fields: Record<string, unknown> = {}): void {
   // Drop messages below the active threshold (debug < info < warn < error).
   if (LEVEL_ORDER[level] < LEVEL_ORDER[currentLevel]) return;
