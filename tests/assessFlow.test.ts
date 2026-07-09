@@ -400,6 +400,52 @@ describe("runAssessFlow", () => {
     expect(body).toContain("Finding Three");
   });
 
+  it("cap keeps the highest-severity findings: a critical agent finding survives a cap filled by lows", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+    const c = { ...cfg(root), assess: { ...cfg(root).assess, maxIssuesPerRun: 2 } };
+    let created = 0;
+    const gh = fakeGh((args) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
+      if (args[0] === "issue" && args[1] === "create") {
+        created++;
+        return { stdout: `https://github.com/o/r/issues/${created}\n` };
+      }
+      return undefined;
+    });
+    // Merge order is [npm findings, agent findings]: the low npm advisory and
+    // a low agent finding come BEFORE the critical agent finding, so an
+    // unsorted slice(0, 2) would file the two lows and cap the critical.
+    const finalText = findingsFence([
+      codeFinding("LOW-2", "src/a.ts", "Low Two", { severity: "low" }),
+      codeFinding("CRIT-1", "src/index.ts", "Critical One", { severity: "critical" }),
+    ]);
+    const r = await runAssessFlow(c, ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd(auditJson("low")),
+      sessionFactoryFor: () => fakeSession(finalText),
+    });
+    expect(r.found).toBe(3);
+    expect(r.created).toBe(2);
+    expect(r.capped).toBe(1);
+    const createTitles = gh.calls
+      .filter((a) => a[0] === "issue" && a[1] === "create")
+      .map((a) => a[a.indexOf("--title") + 1]);
+    // The critical finding is filed FIRST (severity-desc order)…
+    expect(createTitles[0]).toContain("Critical One");
+    // …and the sort is stable: among the two lows, the npm advisory (earlier
+    // in merge order) wins the remaining slot.
+    expect(createTitles[1]).toContain("Prototype Pollution");
+    expect(createTitles.some((t) => t.includes("Low Two"))).toBe(false);
+    // The capped low is named in the summary for a re-run.
+    const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
+    expect(body).toContain("Capped — re-run to file");
+    expect(body).toContain("Low Two");
+  });
+
   it("github dedup: a finding already filed upstream is skipped", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
