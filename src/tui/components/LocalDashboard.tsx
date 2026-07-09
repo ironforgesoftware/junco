@@ -2,6 +2,10 @@ import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
+import { QueueView } from "./QueueView.js";
+import { windowSlice } from "../window.js";
+import { listRowsHeight } from "../geometry.js";
+import { RAIL_WIDTH, type Layout } from "../layout.js";
 import type {
   LocalCheap,
   LocalHeavy,
@@ -446,4 +450,113 @@ export function DaemonSection({
     );
   }
   return React.cloneElement(border, {}, lines.slice(scroll, scroll + Math.max(1, height - 3)));
+}
+
+/** LOCAL dashboard: the section rail + the selected section body. Windowing
+ * memory (minimal-movement prevStart) lives here in a per-section ref so the
+ * near-pure section components stay testable with an explicit window; the
+ * daemon panel scrolls via the `scroll` prop instead. */
+export default function LocalDashboard({
+  cheap,
+  heavy,
+  section,
+  focus,
+  cursor,
+  scroll,
+  layout,
+  now,
+}: {
+  cheap: LocalCheap | null;
+  heavy: LocalHeavy | null;
+  section: LocalSection;
+  focus: "rail" | "body";
+  cursor: number;
+  scroll: number;
+  layout: Layout;
+  now: Date;
+}): React.JSX.Element {
+  const bodyFocused = focus === "body";
+  const h = layout.bodyRows;
+  const listH = listRowsHeight(h);
+  const prevStart = React.useRef<Record<LocalSection, number>>({
+    queue: 0,
+    outbox: 0,
+    repos: 0,
+    worktrees: 0,
+    daemon: 0,
+  });
+  const total =
+    section === "outbox"
+      ? (cheap?.outbox.ops.length ?? 0)
+      : section === "repos"
+        ? (heavy?.repos.length ?? 0)
+        : section === "worktrees"
+          ? (heavy?.worktrees.length ?? 0)
+          : 0;
+  const win = windowSlice(total, listH, cursor, prevStart.current[section]);
+  if (section === "outbox" || section === "repos" || section === "worktrees") {
+    prevStart.current[section] = win.start;
+  }
+
+  const body =
+    section === "queue" ? (
+      <QueueView
+        snap={cheap?.queue ?? null}
+        scroll={scroll}
+        now={now}
+        height={h}
+        focused={bodyFocused}
+        selectable
+        selectedRow={cursor}
+      />
+    ) : section === "outbox" ? (
+      <OutboxSection
+        outbox={cheap?.outbox ?? null}
+        cursor={cursor}
+        window={win}
+        height={h}
+        focused={bodyFocused}
+        now={now}
+      />
+    ) : section === "repos" ? (
+      <ReposSection
+        repos={heavy?.repos ?? null}
+        error={heavy?.error ?? null}
+        cursor={cursor}
+        window={win}
+        height={h}
+        focused={bodyFocused}
+      />
+    ) : section === "worktrees" ? (
+      <WorktreesSection
+        worktrees={heavy?.worktrees ?? null}
+        error={heavy?.error ?? null}
+        cursor={cursor}
+        window={win}
+        height={h}
+        focused={bodyFocused}
+      />
+    ) : (
+      <DaemonSection
+        daemon={cheap?.daemon ?? null}
+        scroll={scroll}
+        height={h}
+        focused={bodyFocused}
+      />
+    );
+
+  return (
+    <Box flexDirection="row">
+      <SectionRail
+        section={section}
+        focus={focus}
+        cheap={cheap}
+        heavy={heavy}
+        width={layout.railWidth > 0 ? layout.railWidth : RAIL_WIDTH}
+        height={h}
+        now={now}
+      />
+      <Box flexGrow={1}>{body}</Box>
+    </Box>
+  );
 }

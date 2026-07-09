@@ -8,6 +8,8 @@ import {
   WorktreesSection,
   DaemonSection,
 } from "../src/tui/components/LocalDashboard.js";
+import LocalDashboard from "../src/tui/components/LocalDashboard.js";
+import { computeLayout } from "../src/tui/layout.js";
 import type { LocalCheap, LocalHeavy, DaemonDetail } from "../src/tui/localSnapshot.js";
 import type { StoredOp } from "../src/githubOutbox.js";
 
@@ -341,5 +343,108 @@ describe("DaemonSection", () => {
       <DaemonSection daemon={{ ...DAEMON, up: false }} scroll={0} height={20} focused={false} />,
     ).lastFrame()!;
     expect(f).toContain("○ not running");
+  });
+});
+
+describe("LocalDashboard", () => {
+  const LAYOUT = computeLayout(120, 30);
+
+  it("renders the section rail beside the selected section body", () => {
+    const f = render(
+      <LocalDashboard
+        cheap={CHEAP}
+        heavy={HEAVY}
+        section="repos"
+        focus="body"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("sections"); // the rail
+    expect(f).toContain("main@abcdef1"); // the repos body
+  });
+
+  it("queue section renders selectable QueueView (cursor on an actionable row)", () => {
+    const cheapQ: LocalCheap = {
+      ...CHEAP,
+      queue: {
+        ...CHEAP.queue,
+        waiting: [
+          {
+            id: "manual-x",
+            github: null,
+            kind: "pr",
+            priority: "normal",
+            retryCount: 0,
+            notBefore: null,
+            deferred: false,
+          },
+        ],
+      },
+    };
+    const f = render(
+      <LocalDashboard
+        cheap={cheapQ}
+        heavy={HEAVY}
+        section="queue"
+        focus="body"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    const line = f.split("\n").find((l) => l.includes("manual-x"))!;
+    expect(line).toContain("▌");
+  });
+
+  it("cheap === null → body sections show loading", () => {
+    const f = render(
+      <LocalDashboard
+        cheap={null}
+        heavy={null}
+        section="daemon"
+        focus="rail"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("loading…");
+  });
+
+  it("daemon-down frame", () => {
+    const f = render(
+      <LocalDashboard
+        cheap={{ ...CHEAP, daemon: { ...DAEMON, up: false } }}
+        heavy={HEAVY}
+        section="daemon"
+        focus="body"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("○ not running");
+  });
+
+  it("heavy error frame renders unavailable without collapsing", () => {
+    const f = render(
+      <LocalDashboard
+        cheap={CHEAP}
+        heavy={{ repos: [], worktrees: [], error: "git spawn failed" }}
+        section="worktrees"
+        focus="body"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("unavailable: git spawn failed");
   });
 });
