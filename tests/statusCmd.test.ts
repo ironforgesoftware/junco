@@ -131,6 +131,63 @@ describe("runStatusCommand", () => {
     expect(out.join("")).not.toMatch(/bridge:/);
   });
 
+  it("shows a guards line with nudges/kills/requeues when any fired (#37)", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 150,
+          currentTickets: [],
+          tasksProcessed: 4,
+          tasksSucceeded: 3,
+          tasksFailed: 1,
+          totalTokensIn: 0,
+          totalTokensOut: 0,
+          lastTaskStatus: null,
+          lastTaskAt: null,
+          guardNudges: 2,
+          guardKills: 1,
+          requeues: 3,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    const code = await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/guards: {4}2 nudges · 1 kills · 3 requeues/);
+  });
+
+  it("omits the guards line when no nudges, kills, or requeues have happened (#37)", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 1,
+          currentTickets: [],
+          tasksProcessed: 0,
+          tasksSucceeded: 0,
+          tasksFailed: 0,
+          totalTokensIn: 0,
+          totalTokensOut: 0,
+          lastTaskStatus: null,
+          lastTaskAt: null,
+          guardNudges: 0,
+          guardKills: 0,
+          requeues: 0,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).not.toMatch(/guards:/);
+  });
+
   it("daemon down: says not running and still prints queue counts", async () => {
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");

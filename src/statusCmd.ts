@@ -70,6 +70,13 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
         `bridge:    ${m.bridgeSweeps} sweeps · ${m.ticketsBridged} bridged · ${m.bridgeErrors} errors`,
       );
     }
+    // Guard/requeue line (#37) — daemon interventions; shown only when any fired.
+    const nudges = Number(m.guardNudges ?? 0);
+    const kills = Number(m.guardKills ?? 0);
+    const requeues = Number(m.requeues ?? 0);
+    if (nudges + kills + requeues > 0) {
+      detailLines.push(`guards:    ${nudges} nudges · ${kills} kills · ${requeues} requeues`);
+    }
   } catch {
     const holder = deps.lockPath ? lockHolderFn(deps.lockPath) : null;
     daemonLine = holder

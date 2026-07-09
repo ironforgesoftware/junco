@@ -137,6 +137,8 @@ When a guard fires it signals `agent/supervisor.ts`, which decides:
 - **Nudge** — inject a mid-run steering prompt (from `agent/nudges.ts`) to redirect the agent without aborting.
 - **Kill** — call `session.abort()` (a soft abort; any commits already made are preserved and the flow continues from phase 6).
 
+Every realized decision leaves a trace (`session.ts`): a `log.warn` with `kind`/`detail`/`turnIndex`/`action`, a synthetic `{"type":"junco_guard_decision",…}` line in the per-ticket transcript, and a `guardNudges`/`guardKills` metrics increment — so even a _successful_ nudge (the agent recovers) is visible.
+
 ---
 
 ## Observability
@@ -153,7 +155,7 @@ The health server binds to loopback by default.
 
 ### Metrics (`metrics.ts`)
 
-`RunMetrics` (process singleton) tracks: uptime, polls executed, the current ticket in flight, tasks processed / succeeded / failed, per-status bucket counts, and cumulative token + duration totals.
+`RunMetrics` (process singleton) tracks: uptime, polls executed, the current ticket in flight, tasks processed / succeeded / failed, per-status bucket counts, cumulative token + duration totals, and — for the requeue/guard blind spots (#37) — `requeues` (counted at the single `requeueTicket` chokepoint, since the requeue path returns before `recordTask`), `guardNudges`, and `guardKills`. `junco status` prints a `guards:` line when any have fired.
 
 ### Logging (`logging.ts`)
 
