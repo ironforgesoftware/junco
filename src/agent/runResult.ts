@@ -5,6 +5,9 @@ export class RunAccumulator {
   private text = "";
   /** Last COMPLETED non-empty assistant message (see message_start below). */
   private lastText = "";
+  /** Every COMPLETED non-empty assistant message, in order — joined into
+   * `allText` so a fence banked before the closing message survives (#67). */
+  private completedTexts: string[] = [];
   private toolCalls: ToolCall[] = [];
   private usage: Usage = { input: 0, output: 0, cacheRead: 0, total: 0 };
   private stopReason: string | null = null;
@@ -25,7 +28,10 @@ export class RunAccumulator {
         // (issue #36). message_start also fires for user and toolResult
         // messages (SDK MessageStartEvent); those must not reset.
         if (e.message?.role === "assistant") {
-          if (this.text.trim() !== "") this.lastText = this.text;
+          if (this.text.trim() !== "") {
+            this.lastText = this.text;
+            this.completedTexts.push(this.text);
+          }
           this.text = "";
         }
         break;
@@ -72,10 +78,17 @@ export class RunAccumulator {
   }
 
   result(durationMs: number, timedOut = false, abortedByGuard = false): RunResult {
+    // Whole-run text: every completed message plus the in-flight one (never
+    // banked at a message_start), newline-joined. Undefined when empty so the
+    // `allText ?? finalText` fallback at the parse sites degrades cleanly (#67).
+    const parts = [...this.completedTexts];
+    if (this.text.trim() !== "") parts.push(this.text);
+    const allText = parts.join("\n");
     return {
       // The in-flight (last) message when it has text; otherwise the last
       // completed non-empty message (a run often ends on a tool-only message).
       finalText: this.text.trim() || this.lastText.trim(),
+      allText: allText.trim() !== "" ? allText : undefined,
       toolCalls: this.toolCalls,
       usage: this.usage,
       stopReason: this.stopReason,

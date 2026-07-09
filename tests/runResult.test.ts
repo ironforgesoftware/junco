@@ -140,6 +140,54 @@ describe("finalText — last assistant message (#36)", () => {
   });
 });
 
+describe("allText — whole-run concatenation (#67)", () => {
+  const msgStart = (role: string) => ({ type: "message_start", message: { role } }) as any;
+  const delta = (t: string) =>
+    ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: t } }) as any;
+
+  it("concatenates every assistant message while finalText stays the LAST one", () => {
+    const acc = new RunAccumulator();
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("first message"));
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("second message"));
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("third and final"));
+    const r = acc.result(0);
+    expect(r.finalText).toBe("third and final");
+    expect(r.allText).toBe("first message\nsecond message\nthird and final");
+  });
+
+  it("retains a fence emitted BEFORE the last message (the #67 assess bug)", () => {
+    const acc = new RunAccumulator();
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("```junco-findings\n[]\n```"));
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("Confirmed the citations."));
+    const r = acc.result(0);
+    // finalText (#36) is only the trailing message — the fence is gone.
+    expect(r.finalText).toBe("Confirmed the citations.");
+    // allText keeps the whole run so findings parsing can still see the fence.
+    expect(r.allText).toContain("junco-findings");
+    expect(r.allText).toContain("Confirmed the citations.");
+  });
+
+  it("equals finalText for a single-message run", () => {
+    const acc = new RunAccumulator();
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("only message"));
+    const r = acc.result(0);
+    expect(r.allText).toBe("only message");
+    expect(r.finalText).toBe("only message");
+  });
+
+  it("is undefined when the run produced no assistant text", () => {
+    const acc = new RunAccumulator();
+    acc.observe({ type: "tool_execution_start", toolName: "read", args: {} } as any);
+    expect(acc.result(0).allText).toBeUndefined();
+  });
+});
+
 describe("progress tracking", () => {
   it("tracks turns and lastTool as progress", () => {
     const acc = new RunAccumulator();

@@ -181,7 +181,12 @@ export async function runCriticPass(
     timeoutMs: 300_000,
     createSession: factory,
   });
-  const text = result.finalText;
+  // Scan the WHOLE run for the verdict marker, not just the last message: #36
+  // redefined finalText as the last assistant message only, so a verdict
+  // emitted before any trailing prose would be lost and read as an error (#67).
+  // scanCriticMarker already takes the LAST marker, so the whole-run text is
+  // safe. allText is the whole-run concatenation; fall back for empty runs.
+  const text = result.allText ?? result.finalText;
   const scan = scanCriticMarker(text);
   return { status: scan.status, findings: scan.findings, rawOutput: text };
 }

@@ -183,6 +183,12 @@ export interface Usage {
 }
 export interface RunResult {
   finalText: string;
+  // The whole run's assistant text, all messages concatenated (newline-joined),
+  // vs finalText's LAST-message-only (#36). Optional and additive: consumers
+  // that only want the summary keep reading finalText; a fenced block emitted
+  // BEFORE the closing message (findings/critic-verdict/plan) is recoverable
+  // only from here (#67). Undefined when the run produced no assistant text.
+  allText?: string;
   toolCalls: ToolCall[];
   usage: Usage;
   stopReason: string | null;
