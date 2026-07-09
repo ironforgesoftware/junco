@@ -335,6 +335,61 @@ describe("pushBranch", () => {
     // ...and must NOT land on upstream.
     expect(() => run(["git", "-C", h.upstream, "rev-parse", "refs/heads/junco/fp"])).toThrow();
   }, 30000);
+
+  // Resume mode (issue #29): a crashed run left the branch on the remote with
+  // no PR — the retry rebuilds from the base and must overwrite the stale
+  // remote tip, but only if it still points where validation saw it.
+  it("overwrites a stale remote branch when forceWithLeaseSha matches the remote tip", async () => {
+    const { remote, work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, tmpRoot);
+
+    // The crashed run's push: a stale commit on the remote branch.
+    run(["git", "-C", work, "checkout", "-b", "junco/lease"]);
+    writeFileSync(join(work, "stale.txt"), "stale\n");
+    run(["git", "-C", work, "add", "stale.txt"]);
+    run(["git", "-C", work, "commit", "-m", "stale crashed-run commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "junco/lease"]);
+    const staleSha = run(["git", "-C", work, "rev-parse", "junco/lease"]).trim();
+
+    // The retry: branch reset to base, fresh commit (diverged from staleSha).
+    run(["git", "-C", work, "reset", "--hard", "origin/main"]);
+    writeFileSync(join(work, "fresh.txt"), "fresh\n");
+    run(["git", "-C", work, "add", "fresh.txt"]);
+    run(["git", "-C", work, "commit", "-m", "fresh retry commit"]);
+
+    await pushBranch(cfg, work, "junco/lease", undefined, "origin", staleSha);
+
+    expect(run(["git", "-C", remote, "log", "-1", "--format=%s", "junco/lease"]).trim()).toBe(
+      "fresh retry commit",
+    );
+  }, 30000);
+
+  it("rejects the forced push when the remote tip no longer matches the lease sha", async () => {
+    const { remote, work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, tmpRoot);
+
+    run(["git", "-C", work, "checkout", "-b", "junco/lease2"]);
+    writeFileSync(join(work, "stale.txt"), "stale\n");
+    run(["git", "-C", work, "add", "stale.txt"]);
+    run(["git", "-C", work, "commit", "-m", "someone else's commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "junco/lease2"]);
+
+    run(["git", "-C", work, "reset", "--hard", "origin/main"]);
+    writeFileSync(join(work, "fresh.txt"), "fresh\n");
+    run(["git", "-C", work, "add", "fresh.txt"]);
+    run(["git", "-C", work, "commit", "-m", "fresh retry commit"]);
+
+    // Lease pinned to a sha the remote branch does NOT point at (main's tip).
+    const wrongSha = run(["git", "-C", work, "rev-parse", "origin/main"]).trim();
+    await expect(
+      pushBranch(cfg, work, "junco/lease2", undefined, "origin", wrongSha),
+    ).rejects.toThrow(GitOpError);
+
+    // The remote tip was protected.
+    expect(run(["git", "-C", remote, "log", "-1", "--format=%s", "junco/lease2"]).trim()).toBe(
+      "someone else's commit",
+    );
+  }, 30000);
 });
 
 // ---------------------------------------------------------------------------

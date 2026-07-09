@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import type { Config, Ticket, RunResult } from "./types.js";
 import type { RepoContext } from "./repoContext.js";
 import { isAmend } from "./repoContext.js";
-import { GitOpError, git } from "./git.js";
+import { GitOpError, git, gh } from "./git.js";
 import { validateRepoContext, resolveAmendTarget, type AmendTarget } from "./repo.js";
 import { prepareWorktree, cleanupWorktree, currentHeadSha } from "./worktree.js";
 import {
@@ -312,11 +312,17 @@ export async function runPrFlow(
   const dirs: TerminalDirs = deps.dirs ?? defaultDirs(cfg);
   const prOutcome = emptyPrOutcome(ctx);
   let amendTarget: AmendTarget | null = null;
+  // Issue #29: set when the branch is already on the push remote with no open
+  // PR of ours — the push must force-with-lease against this sha to overwrite
+  // the crashed run's stale tip.
+  let resumeRemoteSha: string | null = null;
 
   // --- Phase 1: Validate (no worktree yet — lint can reject before setup). ---
   let nwo: string;
   try {
-    nwo = await validateRepoContext(cfg, ctx); // mutates ctx in amend mode
+    const valSignals = { resumeRemoteSha: null as string | null };
+    nwo = await validateRepoContext(cfg, ctx, { signals: valSignals }); // mutates ctx in amend mode
+    resumeRemoteSha = valSignals.resumeRemoteSha;
     prOutcome.nwo = nwo;
     if (isAmend(ctx)) {
       amendTarget = await resolveAmendTarget(cfg, ctx, nwo);
@@ -662,7 +668,15 @@ export async function runPrFlow(
     }
 
     // Phase 11: push (to ctx.pushRemote — the ticket's fork in fork-PR mode).
-    await pushBranch(cfg, wtPath, ctx.branchName, deps.retryBaseDelayMs, ctx.pushRemote);
+    // In resume mode (issue #29) force-with-lease over the crashed run's tip.
+    await pushBranch(
+      cfg,
+      wtPath,
+      ctx.branchName,
+      deps.retryBaseDelayMs,
+      ctx.pushRemote,
+      resumeRemoteSha ?? undefined,
+    );
     prOutcome.pushed = true;
     log.info(`pushed ${ctx.branchName} (${newCommits} new commit${newCommits === 1 ? "" : "s"})`);
   } catch (e) {
@@ -745,15 +759,40 @@ export async function runPrFlow(
         log.info(`github unreachable — PR queued to outbox (${opId})`);
         return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
       }
-      const phaseError = `gh pr create failed (branch pushed, open manually): ${e.message}`;
-      log.error(phaseError);
-      if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
-      return flowResult(
-        finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
-        prOutcome,
-        result,
-        phaseError,
-      );
+      // Idempotent create (issue #29): the branch is already pushed, so a PR may
+      // already exist for this head (a prior attempt opened it, or a race).
+      // Recover the URL instead of failing — mirrors the outbox create→view
+      // recovery in githubOutbox.ts. Only then does control fall through to the
+      // success finalize below.
+      if (/already exists/i.test(e.stderr)) {
+        const recovered = await recoverExistingPrUrl(cfg, ctx, nwo, deps.retryBaseDelayMs).catch(
+          () => null,
+        );
+        if (recovered !== null) {
+          prOutcome.prUrl = recovered;
+          log.info(`gh pr create: PR already exists — recovered ${recovered} for ${claimedPath}`);
+        }
+      }
+      if (prOutcome.prUrl === null) {
+        // A non-network create failure with the branch already pushed is now a
+        // RESUMABLE state (issue #29): a retry re-runs the fresh flow, which
+        // detects the pushed-but-PR-less branch and force-pushes + recreates.
+        // Requeue (budget permitting) instead of terminally stranding the work.
+        const rq = requeueTicket(cfg, claimedPath, task, `gh pr create failed: ${e.message}`);
+        if (rq.requeued) {
+          await cleanupWorktree(cfg, ctx, wtPath);
+          return requeuedResult(rq.dst!, result);
+        }
+        const phaseError = `gh pr create failed (branch pushed, open manually): ${e.message}`;
+        log.error(phaseError);
+        if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
+        return flowResult(
+          finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+          prOutcome,
+          result,
+          phaseError,
+        );
+      }
     }
   }
 
@@ -771,6 +810,29 @@ export async function runPrFlow(
 // ---------------------------------------------------------------------------
 // Small local helpers
 // ---------------------------------------------------------------------------
+
+/** Recover the URL of an already-open PR for this ticket's head branch
+ * (issue #29 idempotent create). The head form matches openPullRequest /
+ * the outbox: `<fork-owner>:<branch>` in fork mode, else the bare branch. */
+async function recoverExistingPrUrl(
+  cfg: Config,
+  ctx: RepoContext,
+  nwo: string,
+  retryBaseDelayMs?: number,
+): Promise<string> {
+  const head =
+    ctx.forkNwo !== null ? `${ctx.forkNwo.split("/")[0]}:${ctx.branchName}` : ctx.branchName;
+  const r = await gh(cfg, ["pr", "view", head, "--repo", nwo, "--json", "url", "--jq", ".url"], {
+    cwd: ctx.repo,
+    retryNetwork: true,
+    retryBaseDelayMs,
+  });
+  const url = r.stdout.trim();
+  if (!url.startsWith("https://")) {
+    throw new GitOpError(`gh pr view returned no URL for head ${JSON.stringify(head)}`);
+  }
+  return url;
+}
 
 function writePrBodyTempfile(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "junco-pr-"));

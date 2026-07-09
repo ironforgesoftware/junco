@@ -63,6 +63,7 @@ function setupGitHarness(tmpRoot: string): {
  * The script inspects its arguments:
  *   - "repo view"  → prints nwo (from env FAKE_GH_NWO or "owner/repo")
  *   - "pr view"    → prints PR JSON (from env FAKE_GH_PR_JSON)
+ *   - "pr list"    → prints PR array JSON (from env FAKE_GH_PR_LIST_JSON, default [])
  *   - anything else → exits 1
  */
 function writeFakeGh(scriptPath: string): void {
@@ -82,6 +83,10 @@ case "$args" in
       echo '{"state":"OPEN","headRefName":"feature/branch","baseRefName":"main","isDraft":false,"url":"https://github.com/owner/repo/pull/42","isCrossRepository":false}'
       exit 0
     fi
+    ;;
+  "pr list "*)
+    printf '%s\\n' "\${FAKE_GH_PR_LIST_JSON:-[]}"
+    exit 0
     ;;
   *)
     echo "fake-gh: unhandled args: $args" >&2
@@ -289,7 +294,7 @@ describe("validateRepoContext — fresh mode", () => {
     );
   }, 15000);
 
-  it("throws on branch collision (feature branch already exists on origin)", async () => {
+  it("throws on branch collision when the existing branch has an OPEN PR, hinting amends_pr", async () => {
     const { work } = setupGitHarness(tmpRoot);
     const cfg = makeConfig(work, ghScript);
     const ctx = makeContext(work, { branchName: "junco/collision" });
@@ -299,7 +304,55 @@ describe("validateRepoContext — fresh mode", () => {
     run(["git", "-C", work, "push", "-u", "origin", "junco/collision"]);
     run(["git", "-C", work, "checkout", "main"]);
 
-    await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/already exists on origin/i);
+    process.env.FAKE_GH_PR_LIST_JSON = JSON.stringify([
+      {
+        number: 7,
+        url: "https://github.com/owner/repo/pull/7",
+        headRepositoryOwner: { login: "owner" },
+      },
+    ]);
+    try {
+      await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/already exists on origin/i);
+      await expect(validateRepoContext(cfg, ctx)).rejects.toThrow(/amends_pr: 7/);
+    } finally {
+      delete process.env.FAKE_GH_PR_LIST_JSON;
+    }
+  }, 15000);
+});
+
+// ---------------------------------------------------------------------------
+// validateRepoContext — pushed branch with no PR resumes (issue #29)
+// ---------------------------------------------------------------------------
+
+describe("validateRepoContext — pushed branch with no PR (issue #29)", () => {
+  it("resumes when the existing remote branch has NO open PR: resolves + signals the remote sha", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, ghScript);
+    const ctx = makeContext(work, { branchName: "junco/crashed" });
+
+    // A crashed run pushed the branch but never opened a PR.
+    run(["git", "-C", work, "checkout", "-b", "junco/crashed"]);
+    writeFileSync(join(work, "crashed.txt"), "pushed then crashed\n");
+    run(["git", "-C", work, "add", "crashed.txt"]);
+    run(["git", "-C", work, "commit", "-m", "crashed-run commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "junco/crashed"]);
+    run(["git", "-C", work, "checkout", "main"]);
+    const remoteSha = run(["git", "-C", work, "rev-parse", "junco/crashed"]).trim();
+
+    // fake gh pr list defaults to [] — no open PR for that head.
+    const signals = { resumeRemoteSha: null as string | null };
+    await expect(validateRepoContext(cfg, ctx, { signals })).resolves.toBe("owner/repo");
+    expect(signals.resumeRemoteSha).toBe(remoteSha);
+  }, 15000);
+
+  it("leaves the resume signal null when the branch does not exist on the remote", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, ghScript);
+    const ctx = makeContext(work);
+
+    const signals = { resumeRemoteSha: null as string | null };
+    await expect(validateRepoContext(cfg, ctx, { signals })).resolves.toBe("owner/repo");
+    expect(signals.resumeRemoteSha).toBeNull();
   }, 15000);
 });
 
@@ -534,15 +587,47 @@ describe("validateRepoContext — push_remote (fork mode)", () => {
   }, 15000);
 
   it("checks branch collision against the FORK, not origin", async () => {
-    // Plant junco/x on the fork bare only.
+    // Plant junco/x on the fork bare only — with an open PR from OUR fork.
     run(["git", "-C", h.work, "push", "fork", "HEAD:refs/heads/junco/x"]);
-    await expect(validateRepoContext(cfg, forkCtx())).rejects.toThrow(/already exists/);
-    // Fork-mode collisions point the operator at the amend iteration path.
-    await expect(validateRepoContext(cfg, forkCtx())).rejects.toThrow(/amends_pr/);
+    process.env.FAKE_GH_PR_LIST_JSON = JSON.stringify([
+      {
+        number: 12,
+        url: "https://github.com/up/stream/pull/12",
+        headRepositoryOwner: { login: "me" },
+      },
+    ]);
+    try {
+      await expect(validateRepoContext(cfg, forkCtx())).rejects.toThrow(/already exists/);
+      // Fork-mode collisions point the operator at the amend iteration path.
+      await expect(validateRepoContext(cfg, forkCtx())).rejects.toThrow(/amends_pr/);
+    } finally {
+      delete process.env.FAKE_GH_PR_LIST_JSON;
+    }
     // …and a branch existing on ORIGIN must NOT collide in fork mode.
     run(["git", "-C", h.work, "push", "origin", "HEAD:refs/heads/junco/y"]);
     const ok = forkCtx({ branchName: "junco/y" });
     await expect(validateRepoContext(cfg, ok)).resolves.toBeTruthy();
+  }, 15000);
+
+  it("fork mode: a same-named branch PR from SOMEONE ELSE'S fork does not block the resume (issue #29)", async () => {
+    run(["git", "-C", h.work, "push", "fork", "HEAD:refs/heads/junco/x"]);
+    const remoteSha = run(["git", "-C", h.work, "rev-parse", "HEAD"]).trim();
+    // gh pr list --head matches on headRefName only — a stranger's fork with
+    // the same branch name must not read as "our PR is already open".
+    process.env.FAKE_GH_PR_LIST_JSON = JSON.stringify([
+      {
+        number: 13,
+        url: "https://github.com/up/stream/pull/13",
+        headRepositoryOwner: { login: "stranger" },
+      },
+    ]);
+    try {
+      const signals = { resumeRemoteSha: null as string | null };
+      await expect(validateRepoContext(cfg, forkCtx(), { signals })).resolves.toBeTruthy();
+      expect(signals.resumeRemoteSha).toBe(remoteSha);
+    } finally {
+      delete process.env.FAKE_GH_PR_LIST_JSON;
+    }
   }, 15000);
 
   it("appends externalReposRoot to allowed_repo_roots containment", async () => {

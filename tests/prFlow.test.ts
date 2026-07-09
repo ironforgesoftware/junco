@@ -815,6 +815,148 @@ esac
     expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/123");
     expect(readFileSync(capture, "utf8")).toContain("Built offline from a possibly stale base");
   });
+
+  // -------------------------------------------------------------------------
+  // Pushed-branch-with-no-PR recovery (issue #29)
+  // -------------------------------------------------------------------------
+
+  /** A fake gh built from a case-map: keys are argv-prefix globs, values are
+   * `sh` bodies. Always answers `repo view`. Unhandled args exit 1. */
+  function ghCases(name: string, cases: Record<string, string>): string {
+    const branches = Object.entries(cases)
+      .map(([glob, body]) => `  ${glob})\n    ${body} ;;`)
+      .join("\n");
+    const p = join(h.root, name);
+    writeFileSync(
+      p,
+      `#!/bin/sh
+args="$*"
+case "$args" in
+  "repo view --json nameWithOwner -q .nameWithOwner"*)
+    echo "owner/repo"; exit 0 ;;
+${branches}
+  *)
+    echo "fake-gh: unhandled: $args" >&2; exit 1 ;;
+esac
+`,
+      "utf8",
+    );
+    chmodSync(p, 0o755);
+    return p;
+  }
+
+  it("resume: a pushed branch with no PR force-pushes over the stale tip and opens a PR", async () => {
+    const cfg = makeConfig(h, {
+      ghBin: ghCases("gh-resume.sh", {
+        '"pr list "*': 'echo "[]"; exit 0',
+        '"pr create "*': 'echo "https://github.com/owner/repo/pull/123"; exit 0',
+      }),
+    });
+
+    // Simulate a crashed run: branch pushed to origin carrying a stale commit,
+    // NO PR, local branch deleted (the orphan re-runs the fresh flow).
+    run(["git", "-C", h.work, "checkout", "-b", "junco/resume-me"]);
+    writeFileSync(join(h.work, "stale.txt"), "stale\n");
+    run(["git", "-C", h.work, "add", "stale.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "crashed-run commit"]);
+    run(["git", "-C", h.work, "push", "-u", "origin", "junco/resume-me"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+    run(["git", "-C", h.work, "branch", "-D", "junco/resume-me"]);
+
+    const { task, path } = makeTicket(
+      h,
+      "resume-me.md",
+      `---\nid: resume-me\nrepo: ${h.work}\n---\n# Resume\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true, file: "fresh.txt" }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/123");
+    // The remote branch was force-overwritten: the fresh commit is the tip and
+    // the crashed run's stale commit is no longer reachable.
+    const remoteLog = run(["git", "-C", h.remote, "log", "--format=%s", "junco/resume-me"]);
+    expect(remoteLog).toContain("feat: fresh.txt");
+    expect(remoteLog).not.toContain("crashed-run commit");
+  }, 30000);
+
+  it("idempotent create: gh pr create 'already exists' recovers the URL via pr view → completed", async () => {
+    const cfg = makeConfig(h, {
+      ghBin: ghCases("gh-exists.sh", {
+        '"pr create "*': 'echo "a pull request for branch junco/idem already exists" >&2; exit 1',
+        '"pr view "*': 'echo "https://github.com/owner/repo/pull/456"; exit 0',
+      }),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "idem.md",
+      `---\nid: idem\nrepo: ${h.work}\n---\n# Idempotent\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+    expect(flow.status).toBe("completed");
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/456");
+    expect(flow.dst.startsWith(h.done)).toBe(true);
+    expect(readFileSync(flow.dst, "utf8")).toContain(
+      "pr_url: https://github.com/owner/repo/pull/456",
+    );
+  }, 30000);
+
+  it("non-network gh pr create failure requeues (branch pushed, resumable) instead of failing", async () => {
+    const cfg = makeConfig(h, {
+      ghBin: ghCases("gh-502.sh", {
+        '"pr create "*': 'echo "HTTP 502: Bad Gateway (https://api.github.com)" >&2; exit 1',
+      }),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "gw.md",
+      `---\nid: gw\nrepo: ${h.work}\n---\n# Gateway\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.requeued).toBe(true);
+    expect(flow.status).toBe("requeued");
+    expect(flow.dst).toContain(join("Junco", "inbox"));
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toMatch(/retry_count: 1/);
+    expect(text).not.toMatch(/junco-result/);
+    // The branch really did push before gh failed — the resumable state.
+    expect(run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/gw"])).toContain(
+      "junco/gw",
+    );
+    expect(readdirSync(h.failed)).toHaveLength(0);
+  }, 30000);
+
+  it("non-network create failure with budget exhausted still fails terminally", async () => {
+    const cfg = makeConfig(h, {
+      ghBin: ghCases("gh-502b.sh", {
+        '"pr create "*': 'echo "HTTP 502: Bad Gateway" >&2; exit 1',
+      }),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "gw2.md",
+      `---\nid: gw2\nrepo: ${h.work}\nretry_count: 2\n---\n# Gateway\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(readFileSync(flow.dst, "utf8")).toContain("gh pr create failed");
+  }, 30000);
 });
 
 // ---------------------------------------------------------------------------
