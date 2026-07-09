@@ -54,6 +54,8 @@ export interface AssessDeps {
   sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
   abortSignal?: AbortSignal;
   onProgress?: Parameters<typeof runAgent>[0]["onProgress"] extends infer T ? T : never;
+  /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
+  onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   nowFn?: () => Date;
 }
 
@@ -298,6 +300,7 @@ export async function runAssessFlow(
     guardManager,
     abortSignal: deps.abortSignal,
     onProgress: deps.onProgress,
+    onGuardDecision: deps.onGuardDecision,
     transcriptPath: cfg.transcriptsEnabled
       ? join(cfg.stateDir, "transcripts", `${slugifyId(ticket.id)}.jsonl`)
       : undefined,

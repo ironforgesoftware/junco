@@ -194,6 +194,7 @@ export async function executeClaimed(
           sessionFactoryFor: deps.sessionFactoryFor,
           abortSignal: deps.abortSignal,
           onProgress: (p) => metrics.setTaskProgress(next.id, p),
+          onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
         });
         if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
         else
@@ -219,6 +220,7 @@ export async function executeClaimed(
             criticSessionFactory: deps.criticSessionFactory,
             abortSignal: deps.abortSignal,
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
+            onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
           });
           if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
@@ -263,6 +265,7 @@ export async function executeClaimed(
         guardManager,
         abortSignal: deps.abortSignal,
         onProgress: (p) => metrics.setTaskProgress(next.id, p),
+        onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
         transcriptPath: cfg.transcriptsEnabled
           ? join(cfg.stateDir, "transcripts", `${slugifyId(next.id)}.jsonl`)
           : undefined,
