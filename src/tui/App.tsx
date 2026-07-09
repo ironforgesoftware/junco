@@ -1162,7 +1162,8 @@ export function App(props: AppProps): React.JSX.Element {
     if (view === "review") {
       const rs = reviewState;
       if (rs.open) {
-        const batch = rs.batches[rs.open.batchIdx];
+        const open = rs.open; // stable narrowed binding — survives closures below
+        const batch = rs.batches[open.batchIdx];
         if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
         if (input === "k" || key.upArrow) {
           return void setReviewState((s) =>
@@ -1184,7 +1185,62 @@ export function App(props: AppProps): React.JSX.Element {
               : s,
           );
         }
-        // toggle / file → Task 5
+        if (input === " ") {
+          return void setReviewState((s) => {
+            if (!s.open || !batch) return s;
+            const checked = new Set(s.open.checked);
+            const fp = batch.findings[s.open.findingCursor]?.fingerprint;
+            if (fp) {
+              if (checked.has(fp)) checked.delete(fp);
+              else checked.add(fp);
+            }
+            return { ...s, open: { ...s.open, checked } };
+          });
+        }
+        if (input === "a") {
+          return void setReviewState((s) =>
+            s.open && batch
+              ? {
+                  ...s,
+                  open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) },
+                }
+              : s,
+          );
+        }
+        if (input === "n") {
+          return void setReviewState((s) =>
+            s.open ? { ...s, open: { ...s.open, checked: new Set() } } : s,
+          );
+        }
+        if (input === "f" || key.return) {
+          if (!batch) return;
+          const fps = batch.findings.map((f) => f.fingerprint).filter((fp) => open.checked.has(fp));
+          if (fps.length === 0) return void showToast("info", "nothing selected");
+          const id = batch.id;
+          showToast("info", `filing ${fps.length} on ${batch.nwo}…`);
+          void client.fileReview(id, fps).then((res) => {
+            if (!aliveRef.current) return;
+            if (res.ok) {
+              const v = res.value;
+              showToast(
+                "success",
+                `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`,
+              );
+              setReviewState((s) => {
+                const batches = s.batches.filter((b) => b.id !== id); // optimistic removal
+                return {
+                  ...s,
+                  batches,
+                  open: null,
+                  cursor: Math.min(s.cursor, Math.max(0, batches.length - 1)),
+                };
+              });
+            } else {
+              showToast("error", res.error);
+            }
+          });
+          return;
+        }
         return;
       }
       if (key.escape || input === "v") return void setView("main");

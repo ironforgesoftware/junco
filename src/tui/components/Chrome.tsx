@@ -218,6 +218,7 @@ export function hintsFor(
         ["enter", "open/file"],
         ["space", "toggle"],
         ["a/n", "all/none"],
+        ["f", "file"],
         ["esc", "back"],
       ];
     case "palette":
