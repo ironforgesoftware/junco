@@ -99,6 +99,7 @@ Subcommands:
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
   restart      Restart the supervised daemon (picks up config + code changes)
+  worktree prune <path>  Prune a stale/backup worktree (lock-guarded; refuses live)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
@@ -475,6 +476,20 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       deps.runRestartFn ??
       (async (p: string) => (await import("./restartCmd.js")).runRestartCommand(p));
     return runRestartFn(configPath);
+  }
+
+  // ------------------------------------------------------------
+  // worktree prune <path>: lock-guarded, liveness-gated removal of a per-ticket
+  // worktree (src/worktreePruneCmd.ts) — the shared CLI/TUI safety chokepoint.
+  // ------------------------------------------------------------
+  if (subcommand === "worktree") {
+    const cfg = loadConfigFn(configPath);
+    if (positionals[1] === "prune") {
+      const { runWorktreePruneCommand } = await import("./worktreePruneCmd.js");
+      return runWorktreePruneCommand(cfg, positionals.slice(2), { printFn });
+    }
+    process.stderr.write(`Usage: junco worktree prune <path>\n`);
+    return 2;
   }
 
   // ------------------------------------------------------------

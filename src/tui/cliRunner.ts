@@ -46,6 +46,7 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200", "--human"]),
   cmd("run-once", null, "Process one task and exit (no lock)"),
   cmd("restart", null, "Restart the supervised daemon"),
+  cmd("worktree", "prune <path>", "Prune a stale/backup worktree (lock-guarded)"),
   cmd("service", "[--platform launchd|systemd]", "Render a service file"),
   cmd("inbox-path", null, "Print the inbox directory path"),
   cmd("schema", null, "Print the ticket frontmatter JSON Schema"),
