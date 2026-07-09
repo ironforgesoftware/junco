@@ -360,22 +360,22 @@ describe("Footer / hintsFor", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("s assess"); // present in full, not truncated away
   });
-  it("pane 3 hints: ↑/↓ move, enter detail, o open", () => {
+  it("pane 3 hints: ↑/↓ move, enter detail, o browser", () => {
     const pairs = hintsFor("main", 3, "wide", false);
     expect(pairs.find(([k]) => k === "↑/↓")?.[1]).toBe("move");
     expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
-    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("open");
+    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("browser");
   });
-  it("prs view: enter detail, o open (no more combined enter-opens-browser)", () => {
+  it("prs view: enter detail, o browser (no more combined enter-opens-browser)", () => {
     const pairs = hintsFor("prs", 2, "wide", false);
     expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
-    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("open");
+    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("browser");
     expect(pairs.find(([k]) => k === "o/enter")).toBeUndefined();
   });
-  it("prDetail hints: esc back, o open", () => {
+  it("prDetail hints: esc back, o browser", () => {
     expect(hintsFor("prDetail", 2, "wide", false)).toEqual([
       ["esc", "back"],
-      ["o", "open"],
+      ["o", "browser"],
     ]);
   });
   it("filtering mode replaces everything with the filter contract", () => {

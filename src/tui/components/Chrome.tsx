@@ -197,13 +197,13 @@ export function hintsFor(
       return [
         ["↑/↓", "move"],
         ["enter", "detail"],
-        ["o", "open"],
+        ["o", "browser"],
         ["esc/p", "back"],
       ];
     case "prDetail":
       return [
         ["esc", "back"],
-        ["o", "open"],
+        ["o", "browser"],
       ];
     case "palette":
       return [
@@ -234,7 +234,7 @@ export function hintsFor(
       ["→", "issues"],
       ["w", "add repo"],
       ["x", "unwatch"],
-      ["o", "repo"],
+      ["o", "browser"],
       ["r", "refresh"],
       ["s", "assess"],
       [":", "commands"],
@@ -247,7 +247,7 @@ export function hintsFor(
       ["↑/↓", "move"],
       ["enter", "detail"],
       ["←", "issues"],
-      ["o", "open"],
+      ["o", "browser"],
       ["?", "help"],
       ["q", "quit"],
     ];
