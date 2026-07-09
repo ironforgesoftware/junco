@@ -145,7 +145,9 @@ describe("renderLaunchdPlist", () => {
 describe("renderSystemdUnit", () => {
   it("contains ExecStart with nodeBin cliEntry start --config configPath", () => {
     const out = renderSystemdUnit(BASE_OPTS);
-    expect(out).toContain("ExecStart=/usr/bin/node /x/dist/cli.js start --config /x/config.toml");
+    expect(out).toContain(
+      'ExecStart="/usr/bin/node" "/x/dist/cli.js" start --config "/x/config.toml"',
+    );
   });
 
   it("contains Restart=on-failure", () => {
@@ -196,6 +198,28 @@ describe("renderSystemdUnit", () => {
   it("contains Description=Junco task-queue worker", () => {
     const out = renderSystemdUnit(BASE_OPTS);
     expect(out).toContain("Description=Junco task-queue worker");
+  });
+
+  it("double-quotes each ExecStart value so paths with spaces survive (#43)", () => {
+    const out = renderSystemdUnit({
+      ...BASE_OPTS,
+      nodeBin: "/opt/node runtime/bin/node",
+      cliEntry: "/opt/junco app/dist/cli.js",
+      configPath: "/home/john doe/config.toml",
+    });
+    expect(out).toContain(
+      'ExecStart="/opt/node runtime/bin/node" "/opt/junco app/dist/cli.js" start --config "/home/john doe/config.toml"',
+    );
+  });
+
+  it("double-quotes Environment HOME/PATH values (#43)", () => {
+    const out = renderSystemdUnit({
+      ...BASE_OPTS,
+      home: "/home/john doe",
+      pathEnv: "/opt/my bin:/usr/bin",
+    });
+    expect(out).toContain('Environment=HOME="/home/john doe"');
+    expect(out).toContain('Environment=PATH="/opt/my bin:/usr/bin"');
   });
 });
 

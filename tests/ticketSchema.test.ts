@@ -126,4 +126,17 @@ describe("describeTicketSchema()", () => {
     const assessProps = s.properties.assess.properties as Record<string, Record<string, unknown>>;
     expect(assessProps.auto_plan.type).toBe("boolean");
   });
+
+  it("bounds timeout_minutes and amends_pr to the runtime-valid ranges (#52)", () => {
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    // timeout_minutes must be strictly positive (0/negative falls back to the default).
+    expect(props.timeout_minutes.type).toBe("number");
+    expect(props.timeout_minutes.exclusiveMinimum).toBe(0);
+    // amends_pr is a PR number → at least 1.
+    expect(props.amends_pr.type).toBe("number");
+    expect(props.amends_pr.minimum).toBe(1);
+  });
 });

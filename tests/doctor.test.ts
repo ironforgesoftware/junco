@@ -131,6 +131,34 @@ describe("runDoctor", () => {
     );
     expect(lines.join("")).toMatch(/✓ daemon — running \(pid 4242\)/);
   });
+
+  it("warns on a non-loopback health_host, does not fail doctor (#44)", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () =>
+          ({ ...okConfig, healthEnabled: true, healthHost: "0.0.0.0" }) as unknown as Config,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/⚠ health bind/);
+    expect(lines.join("")).toMatch(/0\.0\.0\.0/);
+  });
+
+  it("no health-bind warning for a loopback health_host (#44)", async () => {
+    const lines: string[] = [];
+    await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () =>
+          ({ ...okConfig, healthEnabled: true, healthHost: "127.0.0.1" }) as unknown as Config,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(lines.join("")).not.toMatch(/health bind/);
+  });
 });
 
 describe("runDoctor github checks", () => {

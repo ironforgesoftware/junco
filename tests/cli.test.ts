@@ -93,6 +93,49 @@ describe("run(['start']) — happy path", () => {
 });
 
 // ---------------------------------------------------------------------------
+// start — non-loopback health_host warning (#44)
+// ---------------------------------------------------------------------------
+
+describe("run(['start']) — health bind warning", () => {
+  function captureStdout(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    return { lines, restore: () => spy.mockRestore() };
+  }
+
+  it("warns loudly when health is enabled on a non-loopback host", async () => {
+    const deps = makeDeps({
+      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "0.0.0.0" }) as Config),
+    });
+    const cap = captureStdout();
+    try {
+      await run(["start"], deps);
+    } finally {
+      cap.restore();
+    }
+    const out = cap.lines.join("");
+    expect(out).toMatch(/health/i);
+    expect(out).toContain("0.0.0.0");
+  });
+
+  it("does not warn for a loopback health_host", async () => {
+    const deps = makeDeps({
+      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "127.0.0.1" }) as Config),
+    });
+    const cap = captureStdout();
+    try {
+      await run(["start"], deps);
+    } finally {
+      cap.restore();
+    }
+    expect(cap.lines.join("")).not.toMatch(/health bind/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // start --once
 // ---------------------------------------------------------------------------
 

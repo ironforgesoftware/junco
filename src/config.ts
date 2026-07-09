@@ -12,6 +12,28 @@ export function expandHome(p: string): string {
   return p;
 }
 
+/**
+ * True when `host` is a loopback bind address — 127.0.0.0/8, ::1 (optionally
+ * bracketed), or the literal "localhost". A non-loopback health_host (e.g.
+ * "0.0.0.0" or a LAN IP) exposes the unauthenticated /health metrics to the
+ * network, so daemon startup and `junco doctor` warn on it (#44). Empty/unknown
+ * strings are treated as non-loopback (fail safe → warn).
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  if (h === "localhost") return true;
+  // Strip IPv6 brackets: [::1] → ::1
+  const bare = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (bare === "::1") return true;
+  // IPv4 127.0.0.0/8 — any address whose first octet is 127.
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(bare);
+  if (m) {
+    const octets = m.slice(1, 5).map(Number);
+    if (octets.every((o) => o <= 255) && octets[0] === 127) return true;
+  }
+  return false;
+}
+
 /** The user-level default config location (XDG_CONFIG_HOME or ~/.config). */
 export function defaultUserConfigPath(
   env: Record<string, string | undefined> = process.env,
@@ -131,9 +153,9 @@ const TomlSchema = z.object({
     .default({}),
   worker: z
     .object({
-      default_timeout_minutes: z.number().default(30),
-      poll_interval_seconds: z.number().default(15),
-      startup_poll_seconds: z.number().default(30),
+      default_timeout_minutes: z.number().min(1).default(30),
+      poll_interval_seconds: z.number().min(1).default(15),
+      startup_poll_seconds: z.number().min(1).default(30),
       startup_wait: z.boolean().default(true),
       // Resilience: transient failures (endpoint errors with no commits) are
       // requeued with a not_before backoff up to this many times.
@@ -178,7 +200,7 @@ const TomlSchema = z.object({
   verify: z
     .object({
       enabled: z.boolean().default(true),
-      command_timeout: z.number().default(60),
+      command_timeout: z.number().min(1).default(60),
       block_on_fail: z.boolean().default(false),
     })
     .default({}),
@@ -200,7 +222,7 @@ const TomlSchema = z.object({
     .object({
       health_enabled: z.boolean().default(true),
       health_host: z.string().default("127.0.0.1"),
-      health_port: z.number().default(8787),
+      health_port: z.number().int().min(1).max(65535).default(8787),
       log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
       // Daemon-owned state (worker.log, per-ticket transcripts) lives here.
       state_dir: z.string().default("~/.local/state/junco"),

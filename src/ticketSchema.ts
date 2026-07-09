@@ -28,8 +28,9 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
     },
     timeout_minutes: {
       type: "number",
+      exclusiveMinimum: 0,
       description:
-        "Maximum execution time in minutes. Defaults to the daemon's configured default_timeout_minutes.",
+        "Maximum execution time in minutes. Defaults to the daemon's configured default_timeout_minutes. Must be strictly positive; non-positive values fall back to the default.",
     },
     base_branch: {
       type: "string",
@@ -64,6 +65,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
     },
     amends_pr: {
       type: "number",
+      minimum: 1,
       description:
         "Pull request number to amend (push additional commits to) instead of opening a new PR.",
     },

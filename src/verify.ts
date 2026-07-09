@@ -6,6 +6,15 @@ import type { Config, Ticket } from "./types.js";
 //
 // Runs the ticket's `## Verification` fenced bash blocks inside the worktree
 // after the agent session completes. Result is informational only.
+//
+// Hardening rails (#35) — verification bash is ticket-authored and runs
+// OUTSIDE the ticket's timeoutSeconds (which bounds only the agent session):
+//  - at most MAX_VERIFICATION_BLOCKS blocks execute; the rest are reported
+//    as skipped failures,
+//  - the whole run is bounded by an aggregate wall-clock deadline
+//    (command_timeout × executed blocks, capped at VERIFICATION_MAX_TOTAL_MS),
+//  - blocks receive a minimal env allowlist, never the worker's full
+//    process.env (which holds GH_TOKEN / inference-endpoint API keys).
 // ---------------------------------------------------------------------------
 
 export interface VerificationResult {
@@ -13,6 +22,53 @@ export interface VerificationResult {
   blocksPassed: number;
   failedOutputs: Array<{ preview: string; exitCode: number; output: string }>;
   skippedReason: string | null;
+}
+
+/** Injectable seams for runSpecVerification (tests fake the block runner + clock). */
+export interface VerifyDeps {
+  runBlockFn?: (
+    block: string,
+    wtPath: string,
+    timeoutMs: number,
+  ) => Promise<{ exitCode: number; output: string }>;
+  nowFn?: () => number;
+}
+
+/** Cap on executed verification blocks per ticket; blocks beyond it are
+ * reported as skipped failures (exitCode -3), never spawned. */
+export const MAX_VERIFICATION_BLOCKS = 10;
+
+/** Hard cap on the aggregate verification wall clock. The effective deadline
+ * is min(command_timeout × executed blocks, this cap) — with the default 60s
+ * command_timeout and the 10-block cap they coincide at 10 minutes. */
+export const VERIFICATION_MAX_TOTAL_MS = 10 * 60_000;
+
+// Minimal env allowlist for verification blocks: shell/locale/tmp basics plus
+// PATH+HOME (git resolves binaries and ~/.gitconfig through them). Everything
+// else — GH_TOKEN, GITHUB_TOKEN, API-key-shaped vars — is dropped by
+// construction because this is an allowlist, not a denylist.
+const ENV_ALLOWLIST = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "LANGUAGE",
+  "TMPDIR",
+  "TERM",
+  "TZ",
+]);
+
+/** Build the scrubbed child env: allowlisted names + every LC_* locale var. */
+export function verificationEnv(
+  source: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (v !== undefined && (ENV_ALLOWLIST.has(k) || k.startsWith("LC_"))) env[k] = v;
+  }
+  return env;
 }
 
 // Mirrors Python's:
@@ -60,6 +116,8 @@ function runBlock(
     const proc = spawn("/bin/bash", ["-c", block], {
       cwd: wtPath,
       stdio: ["ignore", "pipe", "pipe"],
+      // Never the worker's full process.env — see verificationEnv (#35).
+      env: verificationEnv(),
     });
 
     let stdout = "";
@@ -100,11 +158,16 @@ function runBlock(
 /**
  * Port of Python's `run_spec_verification`. Runs each ```bash block in the
  * ticket's `## Verification` section in the given worktree directory.
+ *
+ * `blocksRun` counts every block found in the section; blocks skipped by the
+ * block cap or the aggregate deadline land in `failedOutputs` with
+ * exitCode -3 so the PR comment / verify gate treat them as failures.
  */
 export async function runSpecVerification(
   cfg: Config,
   task: Ticket,
   wtPath: string,
+  deps: VerifyDeps = {},
 ): Promise<VerificationResult> {
   if (!cfg.verifyEnabled) {
     return {
@@ -125,14 +188,38 @@ export async function runSpecVerification(
     };
   }
 
+  const runBlockFn = deps.runBlockFn ?? runBlock;
+  const now = deps.nowFn ?? Date.now;
+
   let passed = 0;
   const failedOutputs: VerificationResult["failedOutputs"] = [];
-  const timeoutMs = cfg.verifyCommandTimeout * 1000;
+  const perBlockMs = cfg.verifyCommandTimeout * 1000;
 
-  for (const block of blocks) {
-    const preview = block ? block.split("\n")[0].slice(0, 80) : "(empty)";
+  const toRun = blocks.slice(0, MAX_VERIFICATION_BLOCKS);
+  const overCap = blocks.slice(MAX_VERIFICATION_BLOCKS);
+  const totalMs = Math.min(perBlockMs * toRun.length, VERIFICATION_MAX_TOTAL_MS);
+  const deadline = now() + totalMs;
+
+  const previewOf = (block: string): string =>
+    block ? block.split("\n")[0].slice(0, 80) : "(empty)";
+
+  for (const block of toRun) {
+    const preview = previewOf(block);
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      failedOutputs.push({
+        preview,
+        exitCode: -3,
+        output: `skipped: aggregate verification deadline (${totalMs / 1000}s) exceeded`,
+      });
+      continue;
+    }
     try {
-      const { exitCode, output } = await runBlock(block, wtPath, timeoutMs);
+      const { exitCode, output } = await runBlockFn(
+        block,
+        wtPath,
+        Math.min(perBlockMs, remainingMs),
+      );
       if (exitCode === 0) {
         passed++;
       } else {
@@ -145,6 +232,14 @@ export async function runSpecVerification(
         output: `verification harness error: ${e}`,
       });
     }
+  }
+
+  for (const block of overCap) {
+    failedOutputs.push({
+      preview: previewOf(block),
+      exitCode: -3,
+      output: `skipped: verification block cap (${MAX_VERIFICATION_BLOCKS}) reached`,
+    });
   }
 
   return {

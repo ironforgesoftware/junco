@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { extractVerificationBlocks, runSpecVerification } from "../src/verify.js";
+import {
+  extractVerificationBlocks,
+  runSpecVerification,
+  MAX_VERIFICATION_BLOCKS,
+  VERIFICATION_MAX_TOTAL_MS,
+} from "../src/verify.js";
 import type { Config, Ticket } from "../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -326,5 +331,128 @@ exit 1
     expect(result.blocksPassed).toBe(0);
     const output = result.failedOutputs[0].output;
     expect(output.length).toBeLessThanOrEqual(1500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hardening rails (#35): block cap, aggregate deadline, env allowlist
+// ---------------------------------------------------------------------------
+
+/** Ticket with `n` verification blocks, each one line of `body` (default `true`). */
+function makeTicketWithBlocks(n: number, blockBody = "true"): Ticket {
+  const fences = Array.from({ length: n }, () => `\`\`\`bash\n${blockBody}\n\`\`\``).join("\n\n");
+  return makeTicket(`## Verification\n\n${fences}\n`);
+}
+
+describe("runSpecVerification — block cap", () => {
+  it("executes at most MAX_VERIFICATION_BLOCKS and reports the rest as skipped failures", async () => {
+    const cfg = makeCfg();
+    const total = MAX_VERIFICATION_BLOCKS + 2;
+    const runBlockFn = vi.fn(async () => ({ exitCode: 0, output: "" }));
+    const result = await runSpecVerification(cfg, makeTicketWithBlocks(total), wtPath, {
+      runBlockFn,
+    });
+    expect(runBlockFn).toHaveBeenCalledTimes(MAX_VERIFICATION_BLOCKS);
+    expect(result.blocksRun).toBe(total);
+    expect(result.blocksPassed).toBe(MAX_VERIFICATION_BLOCKS);
+    expect(result.failedOutputs).toHaveLength(2);
+    for (const f of result.failedOutputs) {
+      expect(f.exitCode).toBe(-3);
+      expect(f.output).toContain("block cap");
+    }
+  });
+});
+
+describe("runSpecVerification — aggregate deadline", () => {
+  it("skips remaining blocks once the aggregate wall-clock deadline is exhausted", async () => {
+    // 3 blocks × 700s per-block would be 2100s; the hard cap bounds the
+    // aggregate at VERIFICATION_MAX_TOTAL_MS. The fake block burns past it.
+    const cfg = makeCfg({ verifyCommandTimeout: 700 });
+    let fakeNow = 0;
+    const runBlockFn = vi.fn(async () => {
+      fakeNow += VERIFICATION_MAX_TOTAL_MS + 1;
+      return { exitCode: 0, output: "" };
+    });
+    const result = await runSpecVerification(cfg, makeTicketWithBlocks(3), wtPath, {
+      runBlockFn,
+      nowFn: () => fakeNow,
+    });
+    expect(runBlockFn).toHaveBeenCalledTimes(1);
+    expect(result.blocksRun).toBe(3);
+    expect(result.blocksPassed).toBe(1);
+    expect(result.failedOutputs).toHaveLength(2);
+    for (const f of result.failedOutputs) {
+      expect(f.exitCode).toBe(-3);
+      expect(f.output).toContain("deadline");
+    }
+  });
+
+  it("caps each block's timeout at the remaining aggregate budget", async () => {
+    // 2 blocks × 100s → aggregate 200s. Block 1 burns 150s, so block 2 must
+    // get only the remaining 50s, not the full per-block 100s.
+    const cfg = makeCfg({ verifyCommandTimeout: 100 });
+    let fakeNow = 0;
+    const timeouts: number[] = [];
+    const runBlockFn = vi.fn(async (_b: string, _w: string, timeoutMs: number) => {
+      timeouts.push(timeoutMs);
+      fakeNow += 150_000;
+      return { exitCode: 0, output: "" };
+    });
+    await runSpecVerification(cfg, makeTicketWithBlocks(2), wtPath, {
+      runBlockFn,
+      nowFn: () => fakeNow,
+    });
+    expect(timeouts).toEqual([100_000, 50_000]);
+  });
+});
+
+describe("runSpecVerification — environment allowlist", () => {
+  const SAVED: Record<string, string | undefined> = {};
+  const KEYS = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "LC_ALL"] as const;
+
+  beforeEach(() => {
+    for (const k of KEYS) SAVED[k] = process.env[k];
+    process.env.GH_TOKEN = "gho_secret-gh-token";
+    process.env.GITHUB_TOKEN = "ghp_secret-github-token";
+    process.env.OPENAI_API_KEY = "sk-secret-api-key";
+    process.env.LC_ALL = "C";
+  });
+
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (SAVED[k] === undefined) delete process.env[k];
+      else process.env[k] = SAVED[k];
+    }
+  });
+
+  it("does not expose GH_TOKEN/GITHUB_TOKEN/API keys to verification blocks", async () => {
+    const cfg = makeCfg();
+    const ticket = makeTicket(`
+## Verification
+\`\`\`bash
+echo "gh=\${GH_TOKEN:-ABSENT} github=\${GITHUB_TOKEN:-ABSENT} api=\${OPENAI_API_KEY:-ABSENT}"
+exit 1
+\`\`\`
+`);
+    const result = await runSpecVerification(cfg, ticket, wtPath);
+    expect(result.failedOutputs).toHaveLength(1);
+    const out = result.failedOutputs[0].output;
+    expect(out).toContain("gh=ABSENT");
+    expect(out).toContain("github=ABSENT");
+    expect(out).toContain("api=ABSENT");
+    expect(out).not.toContain("secret");
+  });
+
+  it("keeps PATH/HOME/LC_* available to verification blocks", async () => {
+    const cfg = makeCfg();
+    const ticket = makeTicket(`
+## Verification
+\`\`\`bash
+test -n "$PATH" && test -n "$HOME" && test "$LC_ALL" = "C"
+\`\`\`
+`);
+    const result = await runSpecVerification(cfg, ticket, wtPath);
+    expect(result.blocksPassed).toBe(1);
+    expect(result.failedOutputs).toHaveLength(0);
   });
 });

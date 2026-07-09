@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, queuePaths, resolveConfigPath, defaultUserConfigPath } from "../src/config.js";
+import {
+  loadConfig,
+  queuePaths,
+  resolveConfigPath,
+  defaultUserConfigPath,
+  isLoopbackHost,
+} from "../src/config.js";
 
 function writeToml(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "junco-cfg-"));
@@ -232,6 +238,39 @@ describe("loadConfig", () => {
       loadConfig(writeToml(`vault_root = "/v"\n[worker]\nmax_transient_retries = -1\n`)),
     ).toThrow();
   });
+
+  it("rejects non-positive timeouts and poll intervals (#30)", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\ndefault_timeout_minutes = 0\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\ndefault_timeout_minutes = -5\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\npoll_interval_seconds = 0\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\nstartup_poll_seconds = -1\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[verify]\ncommand_timeout = 0\n`)),
+    ).toThrow();
+  });
+
+  it("constrains health_port to an integer TCP port (1-65535) (#30)", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 0\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 65536\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 8080.5\n`)),
+    ).toThrow();
+    expect(
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 65535\n`)).healthPort,
+    ).toBe(65535);
+  });
 });
 
 describe("[github] config section", () => {
@@ -344,6 +383,27 @@ describe("[assess] config section", () => {
     expect(() =>
       loadConfig(writeToml(`vault_root = "/tmp/v"\n[assess]\nmin_severity = "extreme"\n`)),
     ).toThrow();
+  });
+});
+
+describe("isLoopbackHost (#44)", () => {
+  it("treats localhost / 127.0.0.0-8 / ::1 as loopback", () => {
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("127.1.2.3")).toBe(true);
+    expect(isLoopbackHost("::1")).toBe(true);
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("  127.0.0.1  ")).toBe(true);
+    expect(isLoopbackHost("LOCALHOST")).toBe(true);
+  });
+
+  it("treats 0.0.0.0 / LAN IPs / :: as non-loopback", () => {
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+    expect(isLoopbackHost("192.168.1.10")).toBe(false);
+    expect(isLoopbackHost("10.0.0.5")).toBe(false);
+    expect(isLoopbackHost("::")).toBe(false);
+    expect(isLoopbackHost("128.0.0.1")).toBe(false);
+    expect(isLoopbackHost("")).toBe(false);
   });
 });
 

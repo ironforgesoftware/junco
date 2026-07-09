@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -10,6 +10,7 @@ import {
   setLogFormat,
   formatHumanLine,
   rotateLogIfLarge,
+  openRotatingLogSink,
 } from "../src/logging.js";
 
 function capture(fn: () => void): any[] {
@@ -166,5 +167,65 @@ describe("log sink + human format", () => {
     expect(existsSync(p)).toBe(true);
     rotateLogIfLarge(join(dir, "missing.log"), 10); // no throw on missing
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openRotatingLogSink (#42) — mid-run rotation, not just at startup
+// ---------------------------------------------------------------------------
+
+/** Stream flushes are async — loop-until-condition with a bounded retry. */
+async function until(cond: () => boolean, ms = 3000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > ms) throw new Error("condition not met in time");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+describe("openRotatingLogSink", () => {
+  let dir: string;
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("rotates mid-run when writes cross maxBytes", async () => {
+    dir = mkdtempSync(join(tmpdir(), "junco-rotsink-"));
+    const p = join(dir, "worker.log");
+    const sink = openRotatingLogSink(p, 100);
+    // Each write is 19 chars + newline = 20 bytes; the 6th crosses 100.
+    for (let i = 0; i < 6; i++) sink.write("x".repeat(19));
+    sink.close();
+    await until(
+      () => existsSync(p + ".1") && statSync(p + ".1").size === 100 && statSync(p).size === 20,
+    );
+    expect(
+      readFileSync(p + ".1", "utf8")
+        .trimEnd()
+        .split("\n"),
+    ).toHaveLength(5);
+    expect(readFileSync(p, "utf8").trimEnd().split("\n")).toHaveLength(1);
+  });
+
+  it("initializes the byte counter from the file's existing size", async () => {
+    dir = mkdtempSync(join(tmpdir(), "junco-rotsink-"));
+    const p = join(dir, "worker.log");
+    // 90 bytes already on disk — under maxBytes, so startup rotation skips it,
+    // but the very first 20-byte write must trigger a mid-run rotation.
+    writeFileSync(p, "y".repeat(90), "utf8");
+    const sink = openRotatingLogSink(p, 100);
+    sink.write("x".repeat(19));
+    sink.close();
+    await until(() => existsSync(p + ".1") && statSync(p).size === 20);
+    expect(readFileSync(p + ".1", "utf8")).toBe("y".repeat(90));
+  });
+
+  it("still rotates an oversized file at open (startup behavior preserved)", async () => {
+    dir = mkdtempSync(join(tmpdir(), "junco-rotsink-"));
+    const p = join(dir, "worker.log");
+    writeFileSync(p, "z".repeat(200), "utf8");
+    const sink = openRotatingLogSink(p, 100);
+    sink.write("a");
+    sink.close();
+    await until(() => statSync(p).size === 2);
+    expect(readFileSync(p + ".1", "utf8")).toBe("z".repeat(200));
   });
 });
