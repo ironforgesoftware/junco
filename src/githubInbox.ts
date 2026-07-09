@@ -490,17 +490,20 @@ async function findOwnPlanComment(
   return found;
 }
 
-/** Is an execution ticket with this id currently IN FLIGHT in the local queue?
- * Scans ONLY inbox/ and processing/ for `${id}.md` or a claim-prefixed
- * `*__${id}.md`; a missing dir (ENOENT) counts as absent. This guards exactly
- * the crash window between submit and label swap — during that window the
- * ticket can only be in those two dirs. done/ and failed/ are deliberately NOT
- * scanned: a finalized ticket there belongs to a PREVIOUS execution cycle, and
- * counting it would wedge the documented re-cycle gesture (remove junco:failed
- * → fresh plan → fresh approval) by skipping the new submit while still
- * flipping labels to queued. Already-dispatched-this-cycle issues are handled
- * earlier by the lifecycle-label bail. */
-function executionTicketExists(cfg: Config, id: string): boolean {
+/** Is a ticket with this id currently IN FLIGHT in the local queue? Shared by
+ * all three dispatch paths (ask, planning, execution): each submits BEFORE
+ * marking the issue, so a crash — or a swallowed label-add failure — between
+ * the two leaves the issue eligible while the ticket lives on. Scans ONLY
+ * inbox/ and processing/ for `${id}.md` or a claim-prefixed `*__${id}.md`; a
+ * missing dir (ENOENT) counts as absent. Both dirs matter: once the worker
+ * CLAIMS the ticket into processing/, submitTicket's inbox-filename collision
+ * no longer fires, and the whole run duration is a duplicate-submit window.
+ * done/ and failed/ are deliberately NOT scanned: a finalized ticket there
+ * belongs to a PREVIOUS cycle, and counting it would wedge the documented
+ * re-cycle gesture (remove junco:failed → fresh plan → fresh approval) by
+ * skipping the new submit while still flipping labels. Already-dispatched
+ * issues are normally short-circuited earlier by the lifecycle-label bail. */
+function ticketInFlight(cfg: Config, id: string): boolean {
   const paths = queuePaths(cfg);
   const exact = `${id}.md`;
   const claimed = `__${id}.md`;
@@ -687,7 +690,7 @@ export async function pollGithubInbox(
               // A prior sweep may have queued this ticket then crashed before the
               // label swap. Detect the existing file and skip re-submit, going
               // straight to the (idempotent) label swap.
-              if (executionTicketExists(cfg, t.id)) {
+              if (ticketInFlight(cfg, t.id)) {
                 log.info("github bridge: execution ticket already in local queue; re-marking", {
                   id: t.id,
                 });
@@ -750,11 +753,21 @@ export async function pollGithubInbox(
             ? issueToTicket(issue, repo, cfg, null)
             : buildPlanningTicket(issue, repo, parent);
           const stateLabel = isAsk ? ll.queued : ll.planning;
-          try {
-            submitFn(cfg, t.content, { idHint: t.id });
-          } catch (e) {
-            if (!errMsg(e).includes("already queued")) throw e;
-            log.info("github bridge: ticket already queued; re-marking", { id: t.id });
+          // Same in-flight guard as the execution path: a prior sweep may have
+          // submitted this ticket and then lost the label add (crash, or a
+          // non-network gh failure swallowed by the per-issue catch). Once the
+          // worker claims it into processing/, submitTicket's inbox collision
+          // no longer fires — detect the file and skip straight to the
+          // (idempotent) label marking instead of double-running the ticket.
+          if (ticketInFlight(cfg, t.id)) {
+            log.info("github bridge: ticket already in local queue; re-marking", { id: t.id });
+          } else {
+            try {
+              submitFn(cfg, t.content, { idHint: t.id });
+            } catch (e) {
+              if (!errMsg(e).includes("already queued")) throw e;
+              log.info("github bridge: ticket already queued; re-marking", { id: t.id });
+            }
           }
           await ghFn(
             cfg,
