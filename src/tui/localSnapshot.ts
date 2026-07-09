@@ -16,6 +16,7 @@ import type { Config } from "../types.js";
 import { git } from "../git.js";
 import { readWatchlist, watchlistPath } from "../watchlist.js";
 import { nwoFromRemoteUrl } from "../githubInbox.js";
+import { repoDiscriminator } from "../worktree.js";
 
 export interface LocalSnapshotDeps {
   readdirFn?: (dir: string) => string[];
@@ -186,4 +187,119 @@ export async function enumerateRepos(
   const gitFn = deps.gitFn ?? defaultGitFn(cfg);
   const candidates = collectRepoCandidates(cfg, deps);
   return mapPool(candidates, REPO_POOL, (c) => buildRepo(c, gitFn));
+}
+
+export interface LocalWorktree {
+  path: string;
+  repoPath: string | null;
+  repoNwo: string | null;
+  slug: string;
+  kind: "live" | "stale" | "backup";
+  headSha: string | null;
+  ageSeconds: number | null;
+  error: string | null;
+}
+
+const OLD_TS_RE = /\.old-(\d+)$/;
+
+/**
+ * Walk cfg.worktreeRoot (layout worktreeRoot/<repoDiscriminator>/<slug> +
+ * `.old-<ts>` backups, worktree.ts:148-162). Display class only: a `.old-<ts>`
+ * dir → backup; a dir whose listing contains `.git` → live; else → stale (the
+ * FS class is display-only, NOT the prune safety signal). Reverse-maps the
+ * discriminator by precomputing repoDiscriminator() over the same candidate
+ * union enumerateRepos uses — no git needed for the map; unmatched → repoNwo
+ * null (⟨unmapped⟩). HEAD via a lock-free rev-parse through gitFn (mirrors
+ * currentHeadSha, worktree.ts:71, but seam-injectable + --no-optional-locks).
+ */
+export async function enumerateWorktrees(
+  cfg: Config,
+  deps: LocalSnapshotDeps = {},
+): Promise<LocalWorktree[]> {
+  const readdirFn = deps.readdirFn ?? readdirSync;
+  const nowFn = deps.nowFn ?? ((): Date => new Date());
+  const gitFn = deps.gitFn ?? defaultGitFn(cfg);
+
+  const discMap = new Map<string, { path: string; nwo: string | null }>();
+  for (const c of collectRepoCandidates(cfg, deps)) {
+    discMap.set(repoDiscriminator(c.path), { path: c.path, nwo: c.nwoHint });
+  }
+
+  const nowSeconds = Math.floor(nowFn().getTime() / 1000);
+  const hasDotGit = (dir: string): boolean => {
+    try {
+      return readdirFn(dir).includes(".git");
+    } catch {
+      return false;
+    }
+  };
+
+  let discDirs: string[];
+  try {
+    discDirs = readdirFn(cfg.worktreeRoot);
+  } catch {
+    return []; // worktreeRoot missing (fresh install) — empty, never error
+  }
+
+  const out: LocalWorktree[] = [];
+  for (const disc of discDirs) {
+    const discPath = join(cfg.worktreeRoot, disc);
+    // Legacy flat backup directly under worktreeRoot (pre-issue-#33 layout).
+    const flat = OLD_TS_RE.exec(disc);
+    if (flat) {
+      out.push({
+        path: discPath,
+        repoPath: null,
+        repoNwo: null,
+        slug: disc.slice(0, flat.index),
+        kind: "backup",
+        headSha: null,
+        ageSeconds: nowSeconds - parseInt(flat[1], 10),
+        error: null,
+      });
+      continue;
+    }
+    const mapped = discMap.get(disc) ?? null;
+    let children: string[];
+    try {
+      children = readdirFn(discPath);
+    } catch {
+      continue; // vanished between the two listings
+    }
+    for (const name of children) {
+      const wtPath = join(discPath, name);
+      const backup = OLD_TS_RE.exec(name);
+      const slug = backup ? name.slice(0, backup.index) : name;
+      let kind: LocalWorktree["kind"];
+      let ageSeconds: number | null = null;
+      if (backup) {
+        kind = "backup";
+        ageSeconds = nowSeconds - parseInt(backup[1], 10);
+      } else {
+        kind = hasDotGit(wtPath) ? "live" : "stale";
+      }
+      let headSha: string | null = null;
+      let error: string | null = null;
+      if (kind !== "backup") {
+        try {
+          const r = await gitFn(["--no-optional-locks", "-C", wtPath, "rev-parse", "HEAD"], wtPath);
+          headSha = r.code === 0 ? r.stdout.trim() : null;
+        } catch (e) {
+          error = e instanceof Error ? e.message : String(e);
+        }
+      }
+      out.push({
+        path: wtPath,
+        repoPath: mapped?.path ?? null,
+        repoNwo: mapped?.nwo ?? null,
+        slug,
+        kind,
+        headSha,
+        ageSeconds,
+        error,
+      });
+    }
+  }
+  out.sort((a, b) => a.path.localeCompare(b.path));
+  return out;
 }
