@@ -20,6 +20,7 @@ import {
   tryOrEnqueue,
   isOffline,
   ensureFindingLabels,
+  fetchFindingMarkers,
   MAX_OP_ATTEMPTS,
   OUTBOX_MARKER_PREFIX,
   FLUSH_LOCK_FILENAME,
@@ -834,6 +835,24 @@ describe("flushOutbox — flush lock", () => {
     expect(r).toMatchObject({ sent: 0, remaining: 1, skipped: true });
     expect(f.calls).toHaveLength(0); // never flushed — the winner is running
     expect(readFileSync(lockPath, "utf8")).toBe(freshLiveContent); // winner preserved
+  });
+});
+
+describe("fetchFindingMarkers", () => {
+  it("lists by author, not by label, and scans bodies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-ffm-"));
+    const cfg = cfgAt(root);
+    const f = fakes((_tool, args) => {
+      if (args[0] === "issue" && args[1] === "list") {
+        return { stdout: JSON.stringify([{ body: `x ${findingMarker("deadbeef")} y` }]) };
+      }
+      return undefined;
+    });
+    const markers = await fetchFindingMarkers(cfg, "o/r", f.ghFn);
+    expect(markers.has("deadbeef")).toBe(true);
+    expect(f.calls[0].args).toContain("--author");
+    expect(f.calls[0].args).toContain("@me");
+    expect(f.calls[0].args).not.toContain("--label");
   });
 });
 
