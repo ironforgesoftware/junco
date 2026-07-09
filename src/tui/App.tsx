@@ -95,6 +95,7 @@ interface CmdState {
 }
 interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
+  nwo: string; // frozen with the issue snapshot — the open target never depends on live rail state
   body: string | null;
   planComment: string | null;
   loading: boolean;
@@ -630,18 +631,19 @@ export function App(props: AppProps): React.JSX.Element {
     const snapshot = currentIssue; // frozen at open — the header never swaps mid-read
     const num = snapshot.number;
     setScroll(0);
-    setDetail({ issue: snapshot, body: null, planComment: null, loading: true });
+    setDetail({ issue: snapshot, nwo, body: null, planComment: null, loading: true });
     setView("detail");
     void client.issueDetail(nwo, num).then((res) => {
       if (res.ok) {
         setDetail({
           issue: snapshot,
+          nwo,
           body: res.value.body,
           planComment: res.value.planComment,
           loading: false,
         });
       } else {
-        setDetail({ issue: snapshot, body: null, planComment: null, loading: false });
+        setDetail({ issue: snapshot, nwo, body: null, planComment: null, loading: false });
         showToast("error", res.error);
       }
     });
@@ -665,11 +667,11 @@ export function App(props: AppProps): React.JSX.Element {
   // keyboard `o` and the ↗ line's mouse click, so the two can never diverge
   // on WHICH resource they open (always the one frozen on screen).
   const openDetailIssueInBrowser = useCallback(() => {
-    if (!currentNwo || !detail) return;
-    void client.openInBrowser(currentNwo, detail.issue.number).then((res) => {
+    if (!detail) return;
+    void client.openInBrowser(detail.nwo, detail.issue.number).then((res) => {
       if (!res.ok) showToast("error", res.error);
     });
-  }, [client, currentNwo, detail, showToast]);
+  }, [client, detail, showToast]);
   const openPrDetailInBrowser = useCallback(() => {
     if (!prDetail) return;
     const { nwo, number } = prDetail.pr;
