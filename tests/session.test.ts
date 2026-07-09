@@ -281,6 +281,76 @@ describe("runAgent (timeout)", () => {
   });
 });
 
+describe("runAgent (wedged abort — grace deadline)", () => {
+  // #51: abort() only settles the in-flight prompt() when the SDK run settles.
+  // A wedged run (surviving tool child, dead transport) whose abort() never
+  // resolves would otherwise hang runAgent — and the whole worker — forever.
+  // A bounded grace timer must let runAgent return the accumulated result.
+
+  it("returns after the grace deadline when a timeout abort() never settles the prompt", async () => {
+    let aborted = false;
+    let disposed = false;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        // Never resolves — and abort() below is a no-op that does NOT resolve
+        // it (a wedged run the SDK abort can't reach).
+        return new Promise<void>(() => {});
+      },
+      dispose() {
+        disposed = true;
+      },
+      abort: async () => {
+        aborted = true; // initiated, but the run stays wedged
+      },
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5,
+      createSession: async () => session as any,
+      abortGraceMs: 5,
+    });
+    expect(aborted).toBe(true); // abort was still initiated
+    expect(result.timedOut).toBe(true);
+    expect(disposed).toBe(true); // best-effort dispose still runs
+  }, 2000);
+
+  it("returns after the grace deadline when a force-stop abort() never settles the prompt", async () => {
+    const ac = new AbortController();
+    let disposed = false;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        queueMicrotask(() => ac.abort());
+        return new Promise<void>(() => {}); // wedged: abort() can't reach it
+      },
+      dispose() {
+        disposed = true;
+      },
+      abort: async () => {
+        // no-op — the run never notices the abort
+      },
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      abortSignal: ac.signal,
+      abortGraceMs: 5,
+    });
+    // Salvage semantics preserved: soft abort, force-stop reason recorded.
+    expect(result.abortedByGuard).toBe(true);
+    expect(result.errorMessage).toMatch(/force-stop requested by operator/);
+    expect(disposed).toBe(true);
+  }, 2000);
+});
+
 describe("runAgent (external force-stop)", () => {
   it("an abort signal kills the run with guard-kill (salvage) semantics", async () => {
     const ac = new AbortController();
