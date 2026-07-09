@@ -14,6 +14,11 @@ export interface TicketOutcome {
   status: string;
   prUrl: string | null;
   finalText: string;
+  /** Whole-run assistant text (all messages), vs finalText's LAST-message-only
+   * (#36). Optional and additive so no Outcome literal breaks. The plan path
+   * reads this first (githubReport) — a `junco-ticket` fence banked before a
+   * trailing message survives only here (#86, same class as #67). */
+  allText?: string;
   failureReason: string | null;
   /** PR endgame parked in the outbox; the composite op owns the finalize
    * comment + label flip. */
@@ -41,6 +46,7 @@ export function outcomeFromPrFlow(flow: PrFlowResult): TicketOutcome {
     status: flow.status,
     prUrl: flow.prUrl,
     finalText: flow.finalText,
+    allText: flow.allText,
     failureReason: flow.phaseError,
     prQueued: flow.prQueued ?? false,
   };
@@ -52,6 +58,7 @@ export function outcomeFromQa(status: string, result: RunResult): TicketOutcome 
     status,
     prUrl: null,
     finalText: result.finalText,
+    allText: result.allText,
     failureReason: result.errorMessage,
   };
 }

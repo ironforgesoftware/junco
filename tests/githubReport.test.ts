@@ -232,6 +232,32 @@ describe("plan-kind reporting", () => {
     );
   });
 
+  it("onFinal recovers the plan from allText when finalText (last message) lacks the fence (#86)", async () => {
+    const f = fakeGh();
+    // The agent emitted its plan fence and then a trailing message; #36 narrowed
+    // finalText to that trailing line, so the fence survives only in allText.
+    await makeGithubReporter(cfg, f as never).onFinal(
+      planTicket,
+      out({
+        kind: "qa",
+        status: "completed",
+        prUrl: null,
+        allText:
+          "````junco-ticket\n# The plan\n\n## Verification\n\n```bash\nnpm test\n```\n````\n\nLet me know if you'd like adjustments.",
+        finalText: "Let me know if you'd like adjustments.",
+      }),
+    );
+    expect(f.calls[0][1]).toBe("comment");
+    expect(f.calls[1]).toEqual(
+      expect.arrayContaining([
+        "--add-label",
+        "junco:plan-ready",
+        "--remove-label",
+        "junco:planning",
+      ]),
+    );
+  });
+
   it("onFinal with an oversized plan: failure comment + planning→failed", async () => {
     const f = fakeGh();
     const bigPlan = "# Big\n\n" + "x".repeat(70_000);

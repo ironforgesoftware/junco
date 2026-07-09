@@ -47,6 +47,21 @@ describe("outcome mapping", () => {
     });
   });
 
+  it("threads allText through both mapping sites (#86)", () => {
+    // Q&A/result path (the one planning tickets run through): the whole-run
+    // text must reach the reporter so a fence banked before the closing
+    // message survives.
+    expect(
+      outcomeFromQa("completed", { ...qaResult, allText: "fence\n\nThe answer." }).allText,
+    ).toBe("fence\n\nThe answer.");
+    // PR/flow path.
+    expect(outcomeFromPrFlow({ ...flow, allText: "all the text" }).allText).toBe("all the text");
+    // Absent on the source RunResult/PrFlowResult → undefined (the `?? finalText`
+    // fallback at the read site keeps behavior unchanged).
+    expect(outcomeFromQa("completed", qaResult).allText).toBeUndefined();
+    expect(outcomeFromPrFlow(flow).allText).toBeUndefined();
+  });
+
   it("noop reporter resolves without effect", async () => {
     await expect(NOOP_REPORTER.onStart({} as never)).resolves.toBeUndefined();
     await expect(NOOP_REPORTER.onRequeue({} as never)).resolves.toBeUndefined();

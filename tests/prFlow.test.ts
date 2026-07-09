@@ -310,6 +310,63 @@ describe("runPrFlow", () => {
     expect(remoteBranches).toContain("junco/happy");
   });
 
+  it("threads allText through PrFlowResult when the run has messages before the last (#86)", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "multi.md",
+      `---\nid: multi\nrepo: ${h.work}\n---\n# Add a feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    // A session that emits a first message, banks it with a message_start
+    // (assistant), then a trailing message — so finalText is the last message
+    // only while allText is the whole run.
+    const twoMessageFactory =
+      (_cfg: Config, cwd: string) => async (): Promise<AgentSessionLike> => {
+        let listener: ((e: any) => void) | null = null;
+        return {
+          subscribe(l: (e: any) => void) {
+            listener = l;
+            return () => {};
+          },
+          async prompt() {
+            writeFileSync(join(cwd, "feature.txt"), `work ${Date.now()}\n`, "utf8");
+            run(["git", "-C", cwd, "add", "-A"]);
+            run(["git", "-C", cwd, "commit", "-m", "feat: feature.txt"]);
+            listener?.({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "PREFACE-LINE" },
+            });
+            listener?.({ type: "message_start", message: { role: "assistant" } });
+            listener?.({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "done." },
+            });
+            listener?.({
+              type: "turn_end",
+              message: {
+                stopReason: "stop",
+                usage: { input: 5, output: 5, cacheRead: 0, totalTokens: 10 },
+              },
+            });
+            listener?.({ type: "agent_end", messages: [], willRetry: false });
+          },
+          dispose() {},
+          abort: async () => {},
+        };
+      };
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: twoMessageFactory,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.finalText).toBe("done.");
+    expect(flow.allText).toContain("PREFACE-LINE");
+    expect(flow.allText).toContain("done.");
+  });
+
   it("no-changes: agent makes no commit → completed_no_changes → done/, no push", async () => {
     const cfg = makeConfig(h);
     const { task, path } = makeTicket(
