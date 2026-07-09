@@ -30,7 +30,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 
 - **`src/ticketSchema.ts` is the stable public contract.** External dispatchers generate tickets against it — additive changes only. Q&A tickets default to read-only tools; never widen that default (per-ticket `tools:` frontmatter is the explicit opt-in).
 - **Never import the Pi SDK at module top level in `src/`** (type-only imports are fine). The runtime `await import(...)` lives only inside `makePiSessionFactory` — everything else stays pure and unit-testable against the minimal `AgentSessionLike` seam.
-- **Every side effect goes behind an injectable `deps` seam** (see any module's `*Deps` interface). Tests never touch the network or a real model: fake `gh` is a shell-script fixture, fake sessions implement `AgentSessionLike`.
+- **Every side effect goes behind an injectable `deps` seam** (see any module's `*Deps` interface). Tests never touch the network or a real model: fake `gh` is an inline-generated shell script, fake sessions implement `AgentSessionLike`.
 - Dependencies are **exact-pinned** (no `^`): add with `npm install --save-exact <pkg>`.
 - Many comments cite `worker.py` line numbers (Python-port provenance) or SDK `.d.ts` locations — they are verification evidence, not noise. Keep them true or delete them with the code they describe; never let them drift.
 
