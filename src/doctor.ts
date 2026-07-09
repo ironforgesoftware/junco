@@ -144,7 +144,10 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // unauthenticated /health metrics (in-flight ticket ids, PID, tokens) to
     // the network. Warn, never fail (the operator may have deliberately opened
     // it behind a firewall/proxy).
-    if (cfg.healthEnabled && cfg.healthHost && !isLoopbackHost(cfg.healthHost)) {
+    // No truthy `&& cfg.healthHost` guard: an empty host is non-loopback
+    // (isLoopbackHost("") → false), so a value that bypassed config
+    // normalization still surfaces here rather than evading the warning (#71).
+    if (cfg.healthEnabled && !isLoopbackHost(cfg.healthHost)) {
       report(
         "warn",
         "health bind",

@@ -221,7 +221,14 @@ const TomlSchema = z.object({
   observability: z
     .object({
       health_enabled: z.boolean().default(true),
-      health_host: z.string().default("127.0.0.1"),
+      // An empty (or whitespace-only) health_host passes z.string() but makes
+      // `server.listen(port, "")` bind ALL interfaces — exposing the
+      // unauthenticated /health metrics network-wide (#71). Normalize it back
+      // to loopback so the most-exposed value can never be the silent default.
+      health_host: z
+        .string()
+        .default("127.0.0.1")
+        .transform((h) => (h.trim() === "" ? "127.0.0.1" : h)),
       health_port: z.number().int().min(1).max(65535).default(8787),
       log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
       // Daemon-owned state (worker.log, per-ticket transcripts) lives here.

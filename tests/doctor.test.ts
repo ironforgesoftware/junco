@@ -147,6 +147,21 @@ describe("runDoctor", () => {
     expect(lines.join("")).toMatch(/0\.0\.0\.0/);
   });
 
+  it("warns on an empty health_host that bypassed normalization (#71)", async () => {
+    // "" binds all interfaces; the old `&& cfg.healthHost` guard evaded the warn.
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () =>
+          ({ ...okConfig, healthEnabled: true, healthHost: "" }) as unknown as Config,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/⚠ health bind/);
+  });
+
   it("no health-bind warning for a loopback health_host (#44)", async () => {
     const lines: string[] = [];
     await runDoctor(

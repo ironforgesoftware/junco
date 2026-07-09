@@ -275,7 +275,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // Loud warning when /health binds a non-loopback address (#44): the metrics
     // body is unauthenticated and leaks in-flight ticket ids + operational
     // metadata to the whole network. `junco doctor` mirrors this warning.
-    if (cfg.healthEnabled && cfg.healthHost && !isLoopbackHost(cfg.healthHost)) {
+    // No truthy `&& cfg.healthHost` guard: an empty/unparseable host is
+    // non-loopback (isLoopbackHost("") → false), so a value that bypassed the
+    // config normalization still triggers the warning instead of evading it (#71).
+    if (cfg.healthEnabled && !isLoopbackHost(cfg.healthHost)) {
       log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
         healthHost: cfg.healthHost,
         healthPort: cfg.healthPort,

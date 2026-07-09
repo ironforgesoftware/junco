@@ -133,6 +133,21 @@ describe("run(['start']) — health bind warning", () => {
     }
     expect(cap.lines.join("")).not.toMatch(/health bind/i);
   });
+
+  it("still warns when health_host is empty (binds all interfaces) — #71 belt-and-suspenders", async () => {
+    // An empty host that bypassed config normalization must NOT evade the
+    // warning: the old `&& cfg.healthHost` guard short-circuited on "".
+    const deps = makeDeps({
+      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "" }) as Config),
+    });
+    const cap = captureStdout();
+    try {
+      await run(["start"], deps);
+    } finally {
+      cap.restore();
+    }
+    expect(cap.lines.join("")).toMatch(/health bind is not loopback/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

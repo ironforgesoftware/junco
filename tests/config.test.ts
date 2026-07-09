@@ -196,6 +196,25 @@ describe("loadConfig", () => {
     expect(cfg.logLevel).toBe("warn");
   });
 
+  it("normalizes an empty health_host to loopback (#71)", () => {
+    // "" passes zod's z.string() but server.listen(port, "") binds ALL
+    // interfaces — the most-exposed config. Normalize it to loopback.
+    const cfg = loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_host = ""\n`));
+    expect(cfg.healthHost).toBe("127.0.0.1");
+  });
+
+  it("normalizes a whitespace-only health_host to loopback (#71)", () => {
+    const cfg = loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_host = "   "\n`));
+    expect(cfg.healthHost).toBe("127.0.0.1");
+  });
+
+  it("keeps a real non-loopback health_host verbatim (#71)", () => {
+    const cfg = loadConfig(
+      writeToml(`vault_root = "/v"\n[observability]\nhealth_host = "0.0.0.0"\n`),
+    );
+    expect(cfg.healthHost).toBe("0.0.0.0");
+  });
+
   it("rejects an out-of-range [observability].log_level", () => {
     const p = writeToml(`vault_root = "/v"\n[observability]\nlog_level = "verbose"\n`);
     expect(() => loadConfig(p)).toThrow();
