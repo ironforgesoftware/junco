@@ -13,6 +13,7 @@ import { submitTicket } from "./dispatch.js";
 import { readWatchlist, watchlistPath } from "./watchlist.js";
 import { buildAssessPrompt } from "./assessPrompt.js";
 import { listPending, readPending } from "./assessReview.js";
+import { fileFindings, type FileFindingsDeps } from "./assessFiling.js";
 
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
 
@@ -182,4 +183,60 @@ export async function runAssessReviewCommand(
       .join(",")}\n`,
   );
   return 0;
+}
+
+export interface AssessFileDeps {
+  printFn?: (s: string) => void;
+  fileDeps?: FileFindingsDeps;
+  fileFindingsFn?: typeof fileFindings;
+}
+
+/**
+ * `junco assess file <id> --all | --only <fp,...>` — the human confirm step:
+ * files a SELECTION of the findings parked by `junco assess` (assessReview.ts)
+ * as GitHub issues via assessFiling.ts, then archives the batch. Requires an
+ * explicit selection (no bare default) — these writes land on someone else's
+ * tracker.
+ */
+export async function runAssessFileCommand(
+  cfg: Config,
+  id: string | undefined,
+  opts: { all: boolean; only: string | undefined },
+  deps: AssessFileDeps = {},
+): Promise<number> {
+  const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+  const fileFn = deps.fileFindingsFn ?? fileFindings;
+  if (!id) {
+    print("Usage: junco assess file <id> --all | --only <fp,fp,...>\n");
+    return 2;
+  }
+  if (!opts.all && !opts.only) {
+    print("junco assess file: choose findings with --all or --only <fp,...>\n");
+    return 2;
+  }
+  const { batch, error } = readPending(cfg, id);
+  if (error) {
+    print(`junco assess file: ${error}\n`);
+    return 1;
+  }
+  if (!batch) {
+    print(`junco assess file: no pending batch '${id}'\n`);
+    return 2;
+  }
+  const selected = opts.all
+    ? new Set(batch.findings.map((f) => f.fingerprint))
+    : new Set(
+        (opts.only ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+
+  const res = await fileFn(cfg, batch, selected, deps.fileDeps ?? {});
+  print(
+    `filed ${res.created} · queued ${res.queuedOffline} · already-filed ${res.deduped} · failed ${res.failed}\n`,
+  );
+  for (const u of res.urls) print(`  ${u}\n`);
+  for (const w of res.warnings) print(`  ! ${w}\n`);
+  return res.failed > 0 ? 1 : 0;
 }

@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildAssessTicket, runAssessCommand, runAssessReviewCommand } from "../src/assessCmd.js";
+import {
+  buildAssessTicket,
+  runAssessCommand,
+  runAssessReviewCommand,
+  runAssessFileCommand,
+} from "../src/assessCmd.js";
 import { parseTicket } from "../src/ticket.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { writePending } from "../src/assessReview.js";
@@ -288,5 +293,204 @@ describe("runAssessReviewCommand", () => {
     });
     expect(code).toBe(2);
     expect(out).toContain("assess-ghost");
+  });
+});
+
+describe("runAssessFileCommand", () => {
+  it("assess file requires a selection and files the chosen findings", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-1",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "One",
+          description: "",
+          references: [],
+        },
+        {
+          fingerprint: "f2",
+          kind: "code",
+          severity: "low",
+          ruleId: "R",
+          title: "Two",
+          description: "",
+          references: [],
+        },
+      ],
+    });
+    let out = "";
+    const print = (s: string) => {
+      out += s;
+    };
+
+    // no selection -> usage error, files nothing
+    expect(
+      await runAssessFileCommand(
+        c,
+        "assess-x-1",
+        { all: false, only: undefined },
+        { printFn: print },
+      ),
+    ).toBe(2);
+
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[1] === "create")
+        return { stdout: "https://github.com/o/r/issues/1\n", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as never;
+
+    out = "";
+    const code = await runAssessFileCommand(
+      c,
+      "assess-x-1",
+      { all: false, only: "f1" },
+      { printFn: print, fileDeps: { ghFn } },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("filed 1");
+  });
+
+  it("no id -> usage line, exit 2", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-noid-"));
+    const c = cfg([], dir);
+    let out = "";
+    const code = await runAssessFileCommand(
+      c,
+      undefined,
+      { all: true, only: undefined },
+      {
+        printFn: (s) => {
+          out += s;
+        },
+      },
+    );
+    expect(code).toBe(2);
+    expect(out).toMatch(/usage/i);
+  });
+
+  it("unknown id -> exit 2, message names the id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-missing-"));
+    const c = cfg([], dir);
+    let out = "";
+    const code = await runAssessFileCommand(
+      c,
+      "assess-ghost",
+      { all: true, only: undefined },
+      {
+        printFn: (s) => {
+          out += s;
+        },
+      },
+    );
+    expect(code).toBe(2);
+    expect(out).toContain("assess-ghost");
+  });
+
+  it("--all files every finding in the batch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-all-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-2",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "One",
+          description: "",
+          references: [],
+        },
+        {
+          fingerprint: "f2",
+          kind: "code",
+          severity: "low",
+          ruleId: "R",
+          title: "Two",
+          description: "",
+          references: [],
+        },
+      ],
+    });
+    let out = "";
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[1] === "create")
+        return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as never;
+
+    const code = await runAssessFileCommand(
+      c,
+      "assess-x-2",
+      { all: true, only: undefined },
+      {
+        printFn: (s) => {
+          out += s;
+        },
+        fileDeps: { ghFn },
+      },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("filed 2");
+  });
+
+  it("failed findings surface a nonzero exit code", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-fail-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-3",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "One",
+          description: "",
+          references: [],
+        },
+      ],
+    });
+    let out = "";
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      throw new Error("boom");
+    }) as never;
+
+    const code = await runAssessFileCommand(
+      c,
+      "assess-x-3",
+      { all: true, only: undefined },
+      {
+        printFn: (s) => {
+          out += s;
+        },
+        fileDeps: { ghFn },
+      },
+    );
+    expect(code).toBe(1);
+    expect(out).toContain("failed 1");
   });
 });
