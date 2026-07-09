@@ -136,7 +136,19 @@ export function renderSystemdUnit(opts: ServiceOpts): string {
   // single argument instead of two. systemd also honors "..." quoting in
   // Environment= values. Backslashes and embedded double-quotes are escaped so
   // the quoting can't be broken out of. (#43)
-  const q = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  //
+  // Escaping $ and % differs by field because systemd's expansion rules do (#79):
+  //  - ExecStart words undergo BOTH environment-variable ($VAR/${VAR}) AND
+  //    specifier (%X) expansion — even inside double quotes; only $$ and %% are
+  //    literals. So a path with $ or % must double both or it is mangled/emptied
+  //    at unit load.
+  //  - Environment= values undergo specifier (%) expansion but NOT variable
+  //    expansion ("the $ character has no special meaning" — systemd.exec(5)).
+  //    So % must be doubled there, but $ must be left single — doubling it would
+  //    corrupt the value into a literal "$$".
+  const escBase = (s: string): string => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const qExec = (s: string): string => `"${escBase(s).replace(/\$/g, "$$$$").replace(/%/g, "%%")}"`;
+  const qEnv = (s: string): string => `"${escBase(s).replace(/%/g, "%%")}"`;
   return `\
 [Unit]
 Description=Junco task-queue worker
@@ -145,12 +157,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${q(o.nodeBin)} ${q(o.cliEntry)} start --config ${q(o.configPath)}
+ExecStart=${qExec(o.nodeBin)} ${qExec(o.cliEntry)} start --config ${qExec(o.configPath)}
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=${o.stopTimeoutSeconds}
-Environment=HOME=${q(o.home)}
-Environment=PATH=${q(o.pathEnv)}
+Environment=HOME=${qEnv(o.home)}
+Environment=PATH=${qEnv(o.pathEnv)}
 
 [Install]
 WantedBy=default.target

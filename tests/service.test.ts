@@ -221,6 +221,34 @@ describe("renderSystemdUnit", () => {
     expect(out).toContain('Environment=HOME="/home/john doe"');
     expect(out).toContain('Environment=PATH="/opt/my bin:/usr/bin"');
   });
+
+  it("escapes $ -> $$ and % -> %% in ExecStart words so systemd does not expand them (#79)", () => {
+    // systemd applies BOTH environment-variable ($VAR/${VAR}) and specifier (%X)
+    // expansion to ExecStart words even inside double quotes; only $$/%% are
+    // literals. A path with $ or % must be doubled or it is mangled at load.
+    const out = renderSystemdUnit({
+      ...BASE_OPTS,
+      nodeBin: "/opt/$REL/bin/node",
+      cliEntry: "/opt/app%2f/dist/cli.js",
+      configPath: "/home/u/cfg$1%.toml",
+    });
+    expect(out).toContain(
+      'ExecStart="/opt/$$REL/bin/node" "/opt/app%%2f/dist/cli.js" start --config "/home/u/cfg$$1%%.toml"',
+    );
+  });
+
+  it("escapes % but NOT $ in Environment values (systemd: $ literal, % is a specifier) (#79)", () => {
+    // In Environment=, systemd does NOT expand $ ("the $ character has no
+    // special meaning") — doubling it would corrupt the value. But specifier
+    // (%) expansion IS applied there, so % must be doubled.
+    const out = renderSystemdUnit({
+      ...BASE_OPTS,
+      home: "/home/$USER",
+      pathEnv: "/opt/50%bin:/usr/bin",
+    });
+    expect(out).toContain('Environment=HOME="/home/$USER"');
+    expect(out).toContain('Environment=PATH="/opt/50%%bin:/usr/bin"');
+  });
 });
 
 // ---------------------------------------------------------------------------
