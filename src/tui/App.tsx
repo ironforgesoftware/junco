@@ -661,6 +661,23 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, [client, currentRepo, showToast]);
 
+  // Snapshot-anchored browser opens for the two detail views — shared by the
+  // keyboard `o` and the ↗ line's mouse click, so the two can never diverge
+  // on WHICH resource they open (always the one frozen on screen).
+  const openDetailIssueInBrowser = useCallback(() => {
+    if (!currentNwo || !detail) return;
+    void client.openInBrowser(currentNwo, detail.issue.number).then((res) => {
+      if (!res.ok) showToast("error", res.error);
+    });
+  }, [client, currentNwo, detail, showToast]);
+  const openPrDetailInBrowser = useCallback(() => {
+    if (!prDetail) return;
+    const { nwo, number } = prDetail.pr;
+    void client.openPrInBrowser(nwo, number).then((res) => {
+      if (!res.ok) showToast("error", res.error);
+    });
+  }, [client, prDetail, showToast]);
+
   // Repos currently mid-`assess` — guards a second `s`/`S` press on the same
   // repo from double-spawning the CLI while the first run is still going.
   const assessInFlightRef = useRef<Set<string>>(new Set());
@@ -996,14 +1013,7 @@ export function App(props: AppProps): React.JSX.Element {
         setScroll(0); // shared offset — don't bleed it into the next view that reads it
         return void setView("main");
       }
-      if (input === "o") {
-        if (currentNwo && detail) {
-          void client.openInBrowser(currentNwo, detail.issue.number).then((res) => {
-            if (!res.ok) showToast("error", res.error);
-          });
-        }
-        return;
-      }
+      if (input === "o") return void openDetailIssueInBrowser();
       if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
       if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
       return;
@@ -1018,15 +1028,7 @@ export function App(props: AppProps): React.JSX.Element {
         // was open, so returning here restores it for free.
         return void setView(prDetail?.from ?? "main");
       }
-      if (input === "o") {
-        if (prDetail) {
-          const { nwo, number } = prDetail.pr;
-          void client.openPrInBrowser(nwo, number).then((res) => {
-            if (!res.ok) showToast("error", res.error);
-          });
-        }
-        return;
-      }
+      if (input === "o") return void openPrDetailInBrowser();
       return;
     }
 
@@ -1257,17 +1259,47 @@ export function App(props: AppProps): React.JSX.Element {
   });
 
   const onMouseEvent = (ev: TuiMouseEvent): void => {
-    // Modal-ish views own the screen; the mouse is keyboard-only territory
-    // (v1). prDetail is in this set: the overlay has no scroll and no click
-    // targets — esc/q/o drive it.
-    if (view === "help" || view === "palette" || view === "addRepo" || view === "prDetail") return;
+    // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
+    if (view === "help" || view === "palette" || view === "addRepo") return;
     if (ev.kind === "release") return; // presses act on press, not release
     if (ev.kind === "press") dismissToast();
 
-    // Full-body scroll views: wheel scrolls, clicks have no targets (v1).
-    if (view === "detail" || view === "queue" || view === "cmdOutput") {
+    // Full-body scroll views with no click targets: wheel scrolls only.
+    if (view === "queue" || view === "cmdOutput") {
       if (ev.kind === "wheelDown") setScroll((s) => s + 1);
       if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
+      return;
+    }
+
+    // The two detail views: wheel scrolls the issue detail (the PR overlay has
+    // nothing to scroll); a press on the ↗ metadata line opens the browser.
+    if (view === "detail" || view === "prDetail") {
+      if (view === "detail") {
+        if (ev.kind === "wheelDown") setScroll((s) => s + 1);
+        if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
+      }
+      if (ev.kind === "press") {
+        const hit = hitTest(
+          {
+            layout,
+            columns: size.columns,
+            view,
+            repoCount: repoMappings.length,
+            listCount: 0,
+            railStart: 0,
+            listStart: 0,
+            pane3Count: 0,
+            pane3Start: 0,
+            hasPreviewTarget: false,
+          },
+          ev.x,
+          ev.y,
+        );
+        if (hit.type === "linkLine") {
+          if (view === "detail") openDetailIssueInBrowser();
+          else openPrDetailInBrowser();
+        }
+      }
       return;
     }
 

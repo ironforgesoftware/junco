@@ -793,6 +793,39 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("/up"));
       expect(r.lastFrame() ?? "").not.toContain("/[<"); // no garbage prefix in the filter
     });
+
+    it("clicking the ↗ metadata line in the issue detail opens the browser (snapshot number)", async () => {
+      const { client } = makeClient({ "acme/api": [rawIssue] });
+      const issueOpens: number[] = [];
+      client.openInBrowser = async (_nwo, num) => {
+        issueOpens.push(num);
+        return okv(undefined);
+      };
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      r.stdin.write("2");
+      await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+      r.stdin.write("\r"); // open the issue detail
+      await until(() => (r.lastFrame() ?? "").includes("the body"));
+      r.stdin.write(click(30, 5)); // ↗ metadata row: 1-based y=5, middle band
+      await until(() => issueOpens.length === 1);
+      expect(issueOpens).toEqual([7]);
+    });
+
+    it("clicking the ↗ metadata line in the PR overlay opens the browser", async () => {
+      const { client, prCalls } = makeClient(
+        { "acme/api": [] },
+        { prsByRepo: { "acme/api": [makePr()] } },
+      );
+      const r = renderApp(client, wl());
+      r.stdin.write("p");
+      await until(() => (r.lastFrame() ?? "").includes("Some PR"));
+      r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
+      await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
+      r.stdin.write(click(30, 5)); // ↗ metadata row of the overlay card
+      await until(() => prCalls.length === 1);
+      expect(prCalls[0]).toEqual(["acme/api", 100]);
+    });
   });
 });
 
