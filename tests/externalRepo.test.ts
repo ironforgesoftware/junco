@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { externalClonePath, ensureFork, ensureExternalClone } from "../src/externalRepo.js";
+import {
+  externalClonePath,
+  ensureFork,
+  ensureExternalClone,
+  syncExternalClone,
+} from "../src/externalRepo.js";
 import type { Config } from "../src/types.js";
 
 // Minimal cfg: only ghBin/gitBin/github.externalReposRoot are read.
@@ -164,5 +169,21 @@ describe("ensureExternalClone", () => {
     await expect(
       ensureExternalClone(cfg, "up/stream", { ...f, existsFn: () => true }),
     ).rejects.toThrow(/origin/);
+  });
+});
+
+describe("syncExternalClone", () => {
+  it("fetches origin and hard-resets to the default branch", async () => {
+    const f = fakes((c) => {
+      if (c.bin === "git" && c.args.includes("symbolic-ref"))
+        return { stdout: "refs/remotes/origin/main\n" };
+      return {};
+    });
+    await syncExternalClone(cfg, "/clones/o/r", f);
+    expect(f.calls.some((c) => c.args.includes("fetch") && c.args.includes("origin"))).toBe(true);
+    const reset = f.calls.find((c) => c.args.includes("reset"));
+    expect(reset).toBeDefined();
+    expect(reset?.args).toContain("--hard");
+    expect(reset?.args).toContain("origin/main");
   });
 });
