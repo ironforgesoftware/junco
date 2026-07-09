@@ -4,6 +4,7 @@ import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
 import { parseTicket } from "./ticket.js";
 import { requeueTicket } from "./requeue.js";
+import { uniqueDestPath } from "./uniqueDest.js";
 import { log } from "./logging.js";
 
 export interface OrphanDeps {
@@ -89,8 +90,9 @@ export function recoverOrphans(cfg: Config, deps: OrphanDeps = {}): string[] {
       // Fall through — still attempt the move per Python behaviour.
     }
 
-    // Move to failed/ — non-fatal on error (log and continue).
-    const dst = join(failed, name);
+    // Move to failed/ — non-fatal on error (log and continue). Uniquify on
+    // collision so a same-named prior terminal record isn't clobbered (#48).
+    const dst = uniqueDestPath(failed, name);
     try {
       renameSync(orphanPath, dst);
       moved.push(dst);

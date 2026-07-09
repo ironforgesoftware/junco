@@ -3,7 +3,16 @@
  */
 
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  lstatSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
@@ -250,5 +259,25 @@ describe("submitTicket — clobber protection", () => {
       submitTicket(cfg, a, {});
       submitTicket(cfg, b, {});
     }).not.toThrow();
+  });
+
+  it("atomic placement: does not clobber an occupied slot the existence check can't see (issue #49)", () => {
+    const { cfg, vaultRoot } = freshVault();
+    const inbox = join(vaultRoot, "Junco", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    // A dangling symlink is the check-then-act blind spot made deterministic:
+    // existsSync(destPath) === false (its target is missing), yet the path is
+    // occupied. A bare rename would silently replace it; the atomic linkSync
+    // must fail EEXIST and surface the duplicate error instead.
+    const destPath = join(inbox, "raced.md");
+    symlinkSync(join(inbox, "nonexistent-target"), destPath);
+    expect(existsSync(destPath)).toBe(false); // the stale check would say "free"
+
+    expect(() => submitTicket(cfg, `---\nid: raced\n---\nLOSER\n`, {})).toThrow(/already queued/);
+    // The occupied slot is untouched — still the original dangling symlink,
+    // not clobbered into a regular file.
+    expect(lstatSync(destPath).isSymbolicLink()).toBe(true);
+    // No leftover temp hardlink.
+    expect(readdirSync(inbox).filter((n) => n.endsWith(".tmp"))).toHaveLength(0);
   });
 });

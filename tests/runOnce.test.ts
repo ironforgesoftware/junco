@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   chmodSync,
+  existsSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -322,6 +323,104 @@ describe("runOnce", () => {
     expect(handled).toBe(true);
     expect(readdirSync(join(j, "inbox"))).toHaveLength(0);
     expect(readdirSync(join(j, "failed"))).toHaveLength(1);
+  });
+});
+
+describe("executeClaimed crash containment", () => {
+  // The gap this guards: runAgent awaits the session factory OUTSIDE its
+  // try/catch (src/agent/session.ts), so a factory rejection (e.g. model id
+  // unresolvable at session-create time) propagates out of executeClaimed.
+  // Without containment that strands the claimed ticket in processing/
+  // (scheduler mode) or kills the daemon (serial mode).
+  const rejectingFactory = () => async (): Promise<never> => {
+    throw new Error("model unresolved at session create");
+  };
+
+  it("a rejecting session factory requeues the ticket instead of throwing (budget permitting)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+
+    await expect(runOnce(cfg(root), { sessionFactoryFor: rejectingFactory })).resolves.toBe(true);
+    expect(readdirSync(join(j, "processing"))).toHaveLength(0); // not stranded
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 1/);
+    expect(content).toMatch(/not_before:/);
+  });
+
+  it("exhausted budget finalizes to failed/ with the error as the reason", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\nretry_count: 2\n---\nq\n", "utf8");
+
+    await expect(runOnce(cfg(root), { sessionFactoryFor: rejectingFactory })).resolves.toBe(true);
+    expect(readdirSync(join(j, "inbox"))).toHaveLength(0);
+    expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+    const failed = readdirSync(join(j, "failed"));
+    expect(failed).toHaveLength(1);
+    const content = readFileSync(join(j, "failed", failed[0]), "utf8");
+    expect(content).toContain("status: failed");
+    expect(content).toContain("model unresolved at session create");
+  });
+
+  it("fires onRequeue (contained crash, budget left) and onFinal (budget exhausted)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    const calls: string[] = [];
+    const reporter = {
+      onStart: async () => void calls.push("start"),
+      onRequeue: async () => void calls.push("requeue"),
+      onFinal: async (_t: unknown, o: { status: string }) => void calls.push(`final:${o.status}`),
+    };
+
+    writeFileSync(join(j, "inbox", "a.md"), "---\nid: a\n---\nq\n", "utf8");
+    await runOnce(cfg(root), { sessionFactoryFor: rejectingFactory, reporter });
+    expect(calls).toEqual(["start", "requeue"]);
+
+    calls.length = 0;
+    writeFileSync(join(j, "inbox", "b.md"), "---\nid: b\nretry_count: 2\n---\nq\n", "utf8");
+    await runOnce(cfg(root), { sessionFactoryFor: rejectingFactory, reporter });
+    expect(calls).toEqual(["start", "final:failed"]);
+  });
+});
+
+describe("transcript path sanitization (issue #32)", () => {
+  it("slugifies a path-traversal frontmatter id before building the transcript path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    // A hostile id that would escape stateDir/transcripts/ if used verbatim.
+    writeFileSync(
+      join(j, "inbox", "evil.md"),
+      "---\nid: ../../../../pwned\n---\n# Q\nask\n",
+      "utf8",
+    );
+    const stateDir = join(root, "state");
+    const c: Config = { ...cfg(root), stateDir, transcriptsEnabled: true };
+
+    await runOnce(c, { sessionFactoryFor: () => fakeFactory() });
+
+    // The transcript must live inside stateDir/transcripts/ as a single inert
+    // filename — never at the traversal target.
+    const transcriptsDir = join(stateDir, "transcripts");
+    const written = readdirSync(transcriptsDir);
+    expect(written).toContain("..-..-..-..-pwned.jsonl");
+    // The traversal target (root/pwned.jsonl) must NOT exist.
+    expect(existsSync(join(root, "pwned.jsonl"))).toBe(false);
   });
 });
 

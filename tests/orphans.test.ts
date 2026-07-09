@@ -177,6 +177,33 @@ describe("recoverOrphans", () => {
     }
   });
 
+  it("exhausted-budget orphan does not clobber a same-named failed/ record (issue #48)", () => {
+    const { cfg, root } = makeConfig();
+    const processing = join(root, "Junco", "processing");
+    const failed = join(root, "Junco", "failed");
+    mkdirSync(processing, { recursive: true });
+    mkdirSync(failed, { recursive: true });
+
+    const name = "2026-01-01T0000Z__task-dup.md";
+    // A prior terminal record already sits at the destination name.
+    writeFileSync(join(failed, name), "ATTEMPT ONE — must survive", "utf8");
+    writeFileSync(
+      join(processing, name),
+      "---\nid: task-dup\nretry_count: 2\n---\n# Dup\nbody\n",
+      "utf8",
+    );
+
+    const result = recoverOrphans(cfg);
+
+    expect(result).toHaveLength(1);
+    // The pre-existing record is untouched.
+    expect(readFileSync(join(failed, name), "utf8")).toBe("ATTEMPT ONE — must survive");
+    // The recovered orphan landed at a uniquified name.
+    expect(result[0]).not.toBe(join(failed, name));
+    expect(readFileSync(result[0], "utf8")).toContain("## Orphan recovery");
+    expect(existsSync(join(processing, name))).toBe(false);
+  });
+
   it("non-.md files are ignored and left untouched", () => {
     const { cfg, root } = makeConfig();
     const processing = join(root, "Junco", "processing");

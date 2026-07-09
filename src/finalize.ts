@@ -1,8 +1,9 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { basename } from "node:path";
 import { TERMINAL_DONE_STATUSES, type RunResult } from "./types.js";
 import type { PrOutcome } from "./prFlow.js";
 import { metrics } from "./metrics.js";
+import { uniqueDestPath } from "./uniqueDest.js";
 
 export interface TerminalDirs {
   done: string;
@@ -47,7 +48,9 @@ export function finalize(
 
   const dstDir = status === "completed" ? dirs.done : dirs.failed;
   mkdirSync(dstDir, { recursive: true });
-  const dst = join(dstDir, basename(ticketPath));
+  // Uniquify on collision — never overwrite a same-named terminal record
+  // (minute-resolution claim stamps can repeat; issue #48).
+  const dst = uniqueDestPath(dstDir, basename(ticketPath));
   renameSync(ticketPath, dst); // atomic move, same filesystem
 
   // Single metrics instrumentation point for the Q&A path — after the terminal
@@ -199,7 +202,8 @@ export function finalizePr(
 
   const dstDir = TERMINAL_DONE_STATUSES.has(status) ? opts.dirs.done : opts.dirs.failed;
   mkdirSync(dstDir, { recursive: true });
-  const dst = join(dstDir, basename(ticketPath));
+  // Uniquify on collision — never overwrite a same-named terminal record (#48).
+  const dst = uniqueDestPath(dstDir, basename(ticketPath));
   renameSync(ticketPath, dst);
 
   // Single metrics instrumentation point for the PR path — after the terminal

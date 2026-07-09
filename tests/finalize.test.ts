@@ -64,6 +64,56 @@ describe("finalize", () => {
   });
 });
 
+describe("finalize — collision safety (issue #48)", () => {
+  it("does not overwrite a same-named terminal record; uniquifies the new one", () => {
+    const { ticket, done, failed } = sandbox();
+    // A prior failure record already occupies the destination name.
+    writeFileSync(join(done, "2026__q1.md"), "ATTEMPT ONE — must survive", "utf8");
+
+    const { dst, status } = finalize(ticket, ok, { done, failed });
+    expect(status).toBe("completed");
+    // The pre-existing audit trail is intact.
+    expect(readFileSync(join(done, "2026__q1.md"), "utf8")).toBe("ATTEMPT ONE — must survive");
+    // The new record landed at a uniquified name, not on top of the old one.
+    expect(dst).not.toBe(join(done, "2026__q1.md"));
+    expect(dst.startsWith(done)).toBe(true);
+    expect(readFileSync(dst, "utf8")).toContain("the answer");
+    expect(readdirSync(done).filter((n) => n.endsWith(".md"))).toHaveLength(2);
+  });
+});
+
+describe("finalizePr — collision safety (issue #48)", () => {
+  const outcome: PrOutcome = {
+    statusOverride: null,
+    nwo: null,
+    branch: null,
+    baseBranch: null,
+    prUrl: null,
+    commits: [],
+    pushed: false,
+    worktreePath: null,
+    worktreePreserved: false,
+    amendedPrNumber: null,
+    verification: null,
+    critic: null,
+    criticRetriesUsed: 0,
+    prQueued: false,
+    staleBase: false,
+  };
+
+  it("uniquifies rather than clobbering an existing failed/ record", () => {
+    const { ticket, done, failed } = sandbox();
+    writeFileSync(join(failed, "2026__q1.md"), "ATTEMPT ONE", "utf8");
+    const { dst, status } = finalizePr(ticket, { ...ok, errorMessage: "boom" }, outcome, {
+      dirs: { done, failed },
+    });
+    expect(status).toBe("failed");
+    expect(readFileSync(join(failed, "2026__q1.md"), "utf8")).toBe("ATTEMPT ONE");
+    expect(dst).not.toBe(join(failed, "2026__q1.md"));
+    expect(readdirSync(failed).filter((n) => n.endsWith(".md"))).toHaveLength(2);
+  });
+});
+
 describe("computePrStatus (timeout salvage)", () => {
   const emptyOutcome = (over: Partial<PrOutcome> = {}): PrOutcome => ({
     statusOverride: null,

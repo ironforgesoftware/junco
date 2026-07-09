@@ -25,6 +25,7 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { READ_ONLY_TOOLS } from "./runOnce.js";
+import { slugifyId } from "./slug.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import {
   tryOrEnqueue,
@@ -298,7 +299,7 @@ export async function runAssessFlow(
     abortSignal: deps.abortSignal,
     onProgress: deps.onProgress,
     transcriptPath: cfg.transcriptsEnabled
-      ? join(cfg.stateDir, "transcripts", `${ticket.id}.jsonl`)
+      ? join(cfg.stateDir, "transcripts", `${slugifyId(ticket.id)}.jsonl`)
       : undefined,
   });
 
