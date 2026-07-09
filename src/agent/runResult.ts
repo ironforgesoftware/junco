@@ -3,6 +3,8 @@ import type { AgentEvent } from "./session.js";
 
 export class RunAccumulator {
   private text = "";
+  /** Last COMPLETED non-empty assistant message (see message_start below). */
+  private lastText = "";
   private toolCalls: ToolCall[] = [];
   private usage: Usage = { input: 0, output: 0, cacheRead: 0, total: 0 };
   private stopReason: string | null = null;
@@ -16,6 +18,17 @@ export class RunAccumulator {
     // shapes (test fakes, older servers), so access goes through one local cast.
     const e = event as any;
     switch (e?.type) {
+      case "message_start":
+        // A new ASSISTANT message begins: bank the previous message's text and
+        // reset the accumulator, so finalText is the agent's LAST message —
+        // not the whole run's narration concatenated with no separator
+        // (issue #36). message_start also fires for user and toolResult
+        // messages (SDK MessageStartEvent); those must not reset.
+        if (e.message?.role === "assistant") {
+          if (this.text.trim() !== "") this.lastText = this.text;
+          this.text = "";
+        }
+        break;
       case "message_update":
         if (e.assistantMessageEvent?.type === "text_delta")
           this.text += e.assistantMessageEvent.delta ?? "";
@@ -60,7 +73,9 @@ export class RunAccumulator {
 
   result(durationMs: number, timedOut = false, abortedByGuard = false): RunResult {
     return {
-      finalText: this.text.trim(),
+      // The in-flight (last) message when it has text; otherwise the last
+      // completed non-empty message (a run often ends on a tool-only message).
+      finalText: this.text.trim() || this.lastText.trim(),
       toolCalls: this.toolCalls,
       usage: this.usage,
       stopReason: this.stopReason,
