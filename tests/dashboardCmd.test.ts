@@ -52,9 +52,10 @@ describe("runDashboard", () => {
     expect(rendered).toBe(true);
   });
 
-  // Fix 4: the bridge never sweeps when github.enabled=false, so dispatches from
-  // the UI would sit forever. Refuse to launch a live-looking dashboard.
-  it("github.enabled=false exits 1 with guidance and never renders", async () => {
+  // LOCAL mode: with the GitHub bridge off, the dashboard now launches straight
+  // into the local surface instead of refusing — Task 18 relaxes the old
+  // Fix-4 refusal now that there's a non-GitHub UI to land on.
+  it("github.enabled=false launches into LOCAL mode (renders) rather than refusing", async () => {
     const disabled = {
       ...cfg,
       github: { ...cfg.github, enabled: false },
@@ -69,9 +70,26 @@ describe("runDashboard", () => {
       },
       printErr: (s) => errs.push(s),
     });
+    expect(code).toBe(0);
+    expect(rendered).toBe(true);
+    expect(errs.join("")).not.toContain("enabled = false");
+  });
+
+  it("still refuses when there is no TTY, regardless of github.enabled", async () => {
+    const disabled = {
+      ...cfg,
+      github: { ...cfg.github, enabled: false },
+    } as unknown as Config;
+    let rendered = false;
+    const code = await runDashboard(disabled, "/x/config.toml", {
+      isTTY: false,
+      renderFn: () => {
+        rendered = true;
+        return { waitUntilExit: async () => {} };
+      },
+    });
     expect(code).toBe(1);
     expect(rendered).toBe(false);
-    expect(errs.join("")).toContain("enabled = false");
   });
 });
 
@@ -88,5 +106,13 @@ describe("lazy loading discipline", () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../src/dashboardCmd.ts", import.meta.url), "utf8");
     expect(src).toContain("alternateScreen: true");
+  });
+
+  it("localSnapshot factories are pulled through the same lazy Promise.all", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/dashboardCmd.ts", import.meta.url), "utf8");
+    expect(src).toContain('import("./tui/localSnapshot.js")');
+    expect(src).toContain("makeLocalCheapFn");
+    expect(src).toContain("makeLocalHeavyFn");
   });
 });

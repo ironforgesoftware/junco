@@ -29,17 +29,6 @@ export async function runDashboard(
     return 1;
   }
 
-  // The daemon only sweeps GitHub when the bridge is enabled; with it off, a
-  // dispatch from the UI would sit forever while the dashboard looks live. Refuse
-  // rather than mislead. (Checked before the Ink import so the guard stays cheap.)
-  if (!cfg.github.enabled) {
-    printErr(
-      "GitHub mode is disabled ([github] enabled = false); the daemon will not act on dispatches. " +
-        "Enable it in config.toml.\n",
-    );
-    return 1;
-  }
-
   const [
     { App },
     { makeGhDashboardClient },
@@ -79,8 +68,8 @@ export async function runDashboard(
       // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
       localCheapFn: makeLocalCheapFn(cfg),
       localHeavyFn: makeLocalHeavyFn(cfg),
-      // The github.enabled guard above still refuses launch when disabled, so
-      // this path always opens on github; Task 18 relaxes the guard to LOCAL.
+      // GitHub disabled -> land on LOCAL; the daemon still won't sweep GitHub,
+      // but there's a live local surface to show instead of refusing to launch.
       initialUiMode: cfg.github.enabled ? "github" : "local",
       githubEnabled: cfg.github.enabled,
       // App drives useApp().exit() itself; this stays a no-op hook point.
