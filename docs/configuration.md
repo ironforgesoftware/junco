@@ -103,7 +103,7 @@ transcripts = true                # Per-ticket event JSONL under <state_dir>/tra
 
 # ── Vulnerability assessment (junco assess) ──────────────────────────────────
 [assess]
-max_issues_per_run = 20           # Cap on issues filed per assessment run. See docs/assess.md.
+max_issues_per_run = 20           # No longer enforced — parking is uncapped. Kept for compat. See docs/assess.md.
 min_severity = "low"              # Findings ranked below this are dropped. critical | high | medium | low
 npm_bin = "npm"                   # Binary for the dependency scan (`<npm_bin> audit --json`).
 ```

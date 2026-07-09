@@ -167,7 +167,7 @@ assess:
 ---
 ```
 
-Presence of the `assess:` mapping is what selects this flavor (see the flavor table in [docs/tickets.md](./tickets.md)) — the daemon audits the `repo:` path and parks issues for review instead of running Q&A or PR flow. Unlike every other ticket carrying `repo:`, an assess ticket **never opens a pull request**: the daemon checks for `assess:` before it checks for `repo:`, so an assess ticket always short-circuits into the audit flow above.
+Presence of the `assess:` mapping is what selects this flavor (see the flavor table in [docs/tickets.md](./tickets.md)) — the daemon audits the `repo:` path and parks findings for review instead of running Q&A or PR flow. Unlike every other ticket carrying `repo:`, an assess ticket **never opens a pull request**: the daemon checks for `assess:` before it checks for `repo:`, so an assess ticket always short-circuits into the audit flow above.
 
 The pending review batch is keyed by this ticket's `id`, so a transient requeue (crash, transient agent failure) that re-runs the same ticket **overwrites** the same batch rather than creating a duplicate — `junco assess review <id>` always reflects the latest audit for that ticket.
 
