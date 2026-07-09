@@ -17,6 +17,8 @@ import { git } from "../git.js";
 import { readWatchlist, watchlistPath } from "../watchlist.js";
 import { nwoFromRemoteUrl } from "../githubInbox.js";
 import { repoDiscriminator } from "../worktree.js";
+import type { MetricsSnapshot } from "../metrics.js";
+import { endpointReachable } from "../health.js";
 
 export interface LocalSnapshotDeps {
   readdirFn?: (dir: string) => string[];
@@ -302,4 +304,115 @@ export async function enumerateWorktrees(
   }
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
+}
+
+const HEALTH_TIMEOUT_MS = 1500;
+
+export interface HealthBody {
+  status: string;
+  ready: boolean;
+  metrics: MetricsSnapshot;
+}
+
+export interface DaemonDetail {
+  up: boolean;
+  pid: number | null;
+  uptimeSeconds: number | null;
+  endpointReachable: boolean;
+  healthHost: string;
+  healthPort: number;
+  guardNudges: number | null;
+  guardKills: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  tasksByStatus: Record<string, number>;
+  currentTickets: string[];
+  progress: Record<
+    string,
+    { turns: number; lastTool: string | null; outputTokens: number; startedAt: string }
+  >;
+  error: string | null;
+}
+
+function emptyDaemon(cfg: Config): DaemonDetail {
+  return {
+    up: false,
+    pid: null,
+    uptimeSeconds: null,
+    endpointReachable: false,
+    healthHost: cfg.healthHost,
+    healthPort: cfg.healthPort,
+    guardNudges: null,
+    guardKills: null,
+    tokensIn: null,
+    tokensOut: null,
+    tasksByStatus: {},
+    currentTickets: [],
+    progress: {},
+    error: null,
+  };
+}
+
+/** Single AbortController-timed GET /health (mirrors queueSnapshot.ts:169-199).
+ * null when health is disabled, the response is not ok, or the fetch errors —
+ * the daemon-down signal the callers thread everywhere. */
+export async function fetchHealthBody(
+  cfg: Config,
+  deps: LocalSnapshotDeps = {},
+): Promise<HealthBody | null> {
+  if (!cfg.healthEnabled) return null;
+  const fetchFn = deps.fetchFn ?? fetch;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
+  try {
+    const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`, {
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) return null;
+    return (await resp.json()) as HealthBody;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Compose DaemonDetail from an ALREADY-fetched /health body (no second
+ * request) plus an independent inference-endpoint probe (endpointReachable
+ * hits /models, health.ts:40 — reachability is independent of the daemon). */
+export async function buildDaemonDetail(
+  cfg: Config,
+  healthBody: HealthBody | null,
+  deps: LocalSnapshotDeps = {},
+): Promise<DaemonDetail> {
+  const base = emptyDaemon(cfg);
+  try {
+    base.endpointReachable = await endpointReachable(cfg, { fetchFn: deps.fetchFn });
+    if (healthBody === null) return base; // daemon down
+    const m = healthBody.metrics;
+    const progress: DaemonDetail["progress"] = {};
+    for (const [id, v] of Object.entries(m.currentProgress ?? {})) {
+      progress[id] = {
+        turns: v.turns,
+        lastTool: v.lastTool,
+        outputTokens: v.outputTokens,
+        startedAt: v.startedAt,
+      };
+    }
+    return {
+      ...base,
+      up: true,
+      pid: m.pid ?? null,
+      uptimeSeconds: m.uptimeSeconds ?? null,
+      guardNudges: m.guardNudges ?? null,
+      guardKills: m.guardKills ?? null,
+      tokensIn: m.totalTokensIn ?? null,
+      tokensOut: m.totalTokensOut ?? null,
+      tasksByStatus: { ...(m.tasksByStatus ?? {}) },
+      currentTickets: [...(m.currentTickets ?? [])],
+      progress,
+    };
+  } catch (e) {
+    return { ...base, error: e instanceof Error ? e.message : String(e) };
+  }
 }
