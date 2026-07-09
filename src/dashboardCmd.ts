@@ -45,6 +45,7 @@ export async function runDashboard(
     { makeGhDashboardClient },
     { watchlistPath },
     { makeQueueSnapshotFn },
+    { makeLocalCheapFn, makeLocalHeavyFn },
     react,
     ink,
   ] = await Promise.all([
@@ -52,6 +53,7 @@ export async function runDashboard(
     import("./tui/ghClient.js"),
     import("./watchlist.js"),
     import("./tui/queueSnapshot.js"),
+    import("./tui/localSnapshot.js"),
     import("react"),
     import("ink"),
   ]);
@@ -74,6 +76,13 @@ export async function runDashboard(
       // Managed clones for the add-repo "empty path = clone for me" flow.
       clonesDir: join(cfg.stateDir, "repos"),
       queueFn: makeQueueSnapshotFn(cfg),
+      // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
+      localCheapFn: makeLocalCheapFn(cfg),
+      localHeavyFn: makeLocalHeavyFn(cfg),
+      // The github.enabled guard above still refuses launch when disabled, so
+      // this path always opens on github; Task 18 relaxes the guard to LOCAL.
+      initialUiMode: cfg.github.enabled ? "github" : "local",
+      githubEnabled: cfg.github.enabled,
       // App drives useApp().exit() itself; this stays a no-op hook point.
       onExit: () => {},
     }),

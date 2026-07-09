@@ -465,6 +465,7 @@ export default function LocalDashboard({
   scroll,
   layout,
   now,
+  refreshedAt,
 }: {
   cheap: LocalCheap | null;
   heavy: LocalHeavy | null;
@@ -474,6 +475,8 @@ export default function LocalDashboard({
   scroll: number;
   layout: Layout;
   now: Date;
+  /** Cheap-poll completion stamp — pinned as the `↻ <age>` line in the rail. */
+  refreshedAt?: string | null;
 }): React.JSX.Element {
   const bodyFocused = focus === "body";
   const h = layout.bodyRows;
@@ -555,6 +558,7 @@ export default function LocalDashboard({
         width={layout.railWidth > 0 ? layout.railWidth : RAIL_WIDTH}
         height={h}
         now={now}
+        refreshedAt={refreshedAt}
       />
       <Box flexGrow={1}>{body}</Box>
     </Box>

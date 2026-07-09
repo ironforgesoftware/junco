@@ -447,4 +447,35 @@ describe("LocalDashboard", () => {
     ).lastFrame()!;
     expect(f).toContain("unavailable: git spawn failed");
   });
+
+  it("threads refreshedAt into the rail as a ↻ stamp (absent when null)", () => {
+    const withStamp = render(
+      <LocalDashboard
+        cheap={CHEAP}
+        heavy={HEAVY}
+        section="queue"
+        focus="rail"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+        refreshedAt="2026-07-09T11:59:48Z" // 12s before NOW
+      />,
+    ).lastFrame()!;
+    expect(withStamp).toContain("↻ 12s");
+
+    const noStamp = render(
+      <LocalDashboard
+        cheap={CHEAP}
+        heavy={HEAVY}
+        section="queue"
+        focus="rail"
+        cursor={0}
+        scroll={0}
+        layout={LAYOUT}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(noStamp).not.toContain("↻");
+  });
 });
