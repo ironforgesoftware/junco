@@ -69,10 +69,10 @@ export const AgentFindingSchema = z.object({
     .optional(),
 }) as z.ZodType<Omit<Finding, "fingerprint">>;
 
-// Case-folded, punctuation-free, whitespace-collapsed title — the stable
-// discriminator folded into a code finding's locus. Titles are the only
-// required per-finding field (evidence and location.line are optional), and
-// this normalization survives the casing/punctuation/backtick drift a model
+// Case-folded, punctuation-free, whitespace-collapsed title — the FALLBACK
+// discriminator for a code finding whose location carries no line (issue #80
+// keys line-bearing findings by a coarse line bucket instead). This
+// normalization survives the casing/punctuation/backtick drift a model
 // exhibits between runs while still separating genuinely distinct findings.
 function normalizeTitle(title: string): string {
   return title
@@ -81,21 +81,37 @@ function normalizeTitle(title: string): string {
     .trim();
 }
 
+// Coarse line bucket for a code finding's locus: distinct enough to separate
+// two sites in one file (issue #41) yet tolerant of small line drift between
+// runs (issue #80). 20 lines per bucket; crossing a boundary is an accepted
+// one-time refile.
+const LINE_BUCKET = 20;
+
 // sha256 hex of `${kind}|${ruleId}|${locus}`, sliced to 16 chars. locus:
-// package.name for package findings (exactly that — advisory identity is
-// package x rule); `${location.path}#${normalizeTitle(title)}` for findings
-// with a location (bare path collapsed two distinct findings in one file
-// under one rule, and the state-all GitHub dedup then suppressed the
-// survivor forever — issue #41); title otherwise. location.line is
-// deliberately EXCLUDED so fingerprints survive line drift.
+//   - package.name for package findings (advisory identity is package x rule);
+//   - for a CODE finding WITH a line, `${path}#L${line / LINE_BUCKET | 0}` — a
+//     STABLE discriminator that separates two distinct sites in one file under
+//     one rule (issue #41) while tolerating small line drift. The free-text
+//     title is deliberately NOT folded in here: models embed volatile tokens
+//     (counts, offsets) that drift run-to-run and would refile the same finding
+//     every assess run (issue #80);
+//   - for a location WITHOUT a line, fall back to
+//     `${path}#${normalizeTitle(title)}` (title is the only stable signal left);
+//   - the bare title otherwise.
 export function fingerprintFinding(
   f: Pick<Finding, "kind" | "ruleId" | "package" | "location" | "title">,
 ): string {
-  const locus = f.package
-    ? f.package.name
-    : f.location
-      ? `${f.location.path}#${normalizeTitle(f.title)}`
-      : f.title;
+  let locus: string;
+  if (f.package) {
+    locus = f.package.name;
+  } else if (f.location) {
+    locus =
+      f.location.line !== undefined
+        ? `${f.location.path}#L${Math.floor(f.location.line / LINE_BUCKET)}`
+        : `${f.location.path}#${normalizeTitle(f.title)}`;
+  } else {
+    locus = f.title;
+  }
   return createHash("sha256").update(`${f.kind}|${f.ruleId}|${locus}`).digest("hex").slice(0, 16);
 }
 

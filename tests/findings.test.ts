@@ -117,8 +117,23 @@ describe("fingerprintFinding", () => {
     expect(fp).toMatch(/^[0-9a-f]{16}$/);
   });
 
-  // Item 8: line drift must not change the fingerprint.
-  it("is stable across differing location.line", () => {
+  // #80: a code finding with a location.line is keyed by a COARSE line bucket
+  // (line // 20) — small line drift within a bucket must not refile.
+  it("is stable across small location.line drift within a bucket", () => {
+    const a = fingerprintFinding({
+      ...codeFinding,
+      location: { path: "src/db.ts", line: 41 },
+    } as never);
+    const b = fingerprintFinding({
+      ...codeFinding,
+      location: { path: "src/db.ts", line: 59 },
+    } as never);
+    expect(a).toBe(b); // floor(41/20) === floor(59/20) === 2
+  });
+
+  // #80: large line drift that crosses a bucket boundary DOES change the
+  // fingerprint — the accepted one-time refile when a site moves substantially.
+  it("changes when location.line crosses a bucket boundary", () => {
     const a = fingerprintFinding({
       ...codeFinding,
       location: { path: "src/db.ts", line: 1 },
@@ -127,7 +142,26 @@ describe("fingerprintFinding", () => {
       ...codeFinding,
       location: { path: "src/db.ts", line: 999 },
     } as never);
-    expect(a).toBe(b);
+    expect(a).not.toBe(b);
+  });
+
+  // #80 core: with a location.line present, the fingerprint no longer folds in
+  // the free-text title, so run-to-run title drift (embedded counts, line
+  // numbers) does NOT refile the same finding.
+  it("is stable across title drift when a location.line is present", () => {
+    const a = fingerprintFinding({
+      kind: "code",
+      ruleId: "alloc",
+      title: "Unbounded allocation of 12 buffers",
+      location: { path: "src/a.ts", line: 40 },
+    } as never);
+    const b = fingerprintFinding({
+      kind: "code",
+      ruleId: "alloc",
+      title: "Unbounded allocation of 15 buffers",
+      location: { path: "src/a.ts", line: 44 },
+    } as never);
+    expect(a).toBe(b); // same rule + path + bucket, title ignored
   });
 
   it("differs when only kind differs (same ruleId + path)", () => {
@@ -173,24 +207,28 @@ describe("fingerprintFinding", () => {
 
   // Issue #41: kind|ruleId|path collapsed two distinct findings in one file
   // under one rule into a single fingerprint — and the --state all GitHub-side
-  // dedup then suppressed the survivor forever.
-  it("distinguishes two distinct findings sharing file and rule by their titles", () => {
+  // dedup then suppressed the survivor forever. #80 keeps them distinct via the
+  // LINE BUCKET rather than the drift-prone title, so even IDENTICAL titles at
+  // two far-apart sites stay distinct.
+  it("distinguishes two distinct sites sharing file+rule+title by their line bucket", () => {
     const a = fingerprintFinding({
       kind: "code",
       ruleId: "sql-injection",
-      title: "Unsanitized query in getUser",
+      title: "Unsanitized query",
       location: { path: "src/db.ts", line: 10 },
     } as never);
     const b = fingerprintFinding({
       kind: "code",
       ruleId: "sql-injection",
-      title: "Unsanitized query in listOrders",
+      title: "Unsanitized query",
       location: { path: "src/db.ts", line: 90 },
     } as never);
-    expect(a).not.toBe(b);
+    expect(a).not.toBe(b); // bucket 0 vs bucket 4
   });
 
-  it("is drift-resistant: title case/punctuation/whitespace variations keep the fingerprint stable", () => {
+  // The no-line FALLBACK still keys on the normalized title, so title
+  // case/punctuation/whitespace variations keep the fingerprint stable there.
+  it("is drift-resistant: title variations keep the fingerprint stable when no line is present", () => {
     const mk = (title: string) =>
       fingerprintFinding({
         kind: "code",
