@@ -1342,6 +1342,57 @@ describe("assess hotkey (s/S)", () => {
   });
 });
 
+describe("review view (v)", () => {
+  const wl8 = () => join(mkdtempSync(join(tmpdir(), "junco-review-")), "wl.json");
+
+  const reviewBatch = {
+    id: "assess-x-1",
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    findings: [
+      {
+        fingerprint: "f1",
+        kind: "code" as const,
+        severity: "high" as const,
+        ruleId: "R",
+        title: "SQL injection",
+        description: "",
+        references: [],
+      },
+    ],
+  };
+
+  it("v opens the review view and enter drills into a batch's findings", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
+    r.stdin.write("\r"); // enter → checklist
+    await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
+    r.stdin.write(ESC); // esc → back to batch list
+    await until(
+      () =>
+        (r.lastFrame() ?? "").includes("o/r") && !(r.lastFrame() ?? "").includes("SQL injection"),
+    );
+  });
+
+  it("no pending batches: v shows the empty state; esc returns to main", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+    r.stdin.write(ESC);
+    await until(() => !(r.lastFrame() ?? "").includes("no pending assess reviews"));
+    expect(r.lastFrame()).toContain("acme/api");
+  });
+});
+
 describe("auto-clone add-repo", () => {
   const wl3 = () => join(mkdtempSync(join(tmpdir(), "junco-ac-")), "wl.json");
 
