@@ -1,9 +1,27 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
+
+// Overridable createWriteStream so the transcript stream can be stubbed
+// (issue #26: fs.createWriteStream opens ASYNCHRONOUSLY — open/write failures
+// arrive as 'error' events, never throws). Default passes through to real fs.
+const createWriteStreamOverride = vi.hoisted(() => ({
+  current: null as null | ((...args: any[]) => any),
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    createWriteStream: (...args: any[]) =>
+      createWriteStreamOverride.current
+        ? createWriteStreamOverride.current(...args)
+        : (actual.createWriteStream as any)(...args),
+  };
+});
 
 // A fake AgentSession: records prompts, emits scripted events to all listeners
 // when prompted, and resolves prompt() afterward (mirroring the real SDK, whose
@@ -78,12 +96,15 @@ describe("runAgent", () => {
 });
 
 // A fake session for guard-driven tests: emits `events` to listeners when the
-// INITIAL prompt arrives. Records every prompt (text + options). Once aborted,
-// stops emitting and resolves the in-flight initial prompt (mirroring the real
-// SDK, whose abort() halts the run and resolves prompt()).
+// INITIAL prompt arrives. Records every prompt (text + options). An abort with
+// a run in flight stops emitting and resolves the in-flight initial prompt.
+// SDK-faithful: abort() is NOT latched — the real SDK's abort() is
+// `this.activeRun?.abortController.abort()` (a no-op with no active run), and
+// each prompt() creates a fresh AbortController.
 function guardFakeSession(events: any[]) {
   const listeners: ((e: any) => void)[] = [];
   let aborted = false;
+  let running = false;
   let resolveInitial: (() => void) | undefined;
   const self = {
     prompts: [] as { text: string; options?: any }[],
@@ -97,6 +118,8 @@ function guardFakeSession(events: any[]) {
       // Only the INITIAL prompt drives the event stream; steered nudge prompts
       // are fire-and-forget injections that don't re-emit the script.
       if (self.prompts.length > 1) return Promise.resolve();
+      running = true;
+      aborted = false; // fresh AbortController per prompt, like the real SDK
       return new Promise<void>((resolve) => {
         resolveInitial = resolve;
         // Emit synchronously after returning to the caller is unnecessary here;
@@ -106,6 +129,7 @@ function guardFakeSession(events: any[]) {
             if (aborted) break;
             listeners.forEach((l) => l(e));
           }
+          running = false;
           // Initial run finishes naturally if not aborted mid-stream.
           if (!aborted) resolve();
         });
@@ -113,6 +137,8 @@ function guardFakeSession(events: any[]) {
     },
     dispose() {},
     abort(): Promise<void> {
+      // No active run → no-op (the real SDK does not latch aborts).
+      if (!running) return Promise.resolve();
       aborted = true;
       self.aborted = true;
       resolveInitial?.();
@@ -255,6 +281,76 @@ describe("runAgent (timeout)", () => {
   });
 });
 
+describe("runAgent (wedged abort — grace deadline)", () => {
+  // #51: abort() only settles the in-flight prompt() when the SDK run settles.
+  // A wedged run (surviving tool child, dead transport) whose abort() never
+  // resolves would otherwise hang runAgent — and the whole worker — forever.
+  // A bounded grace timer must let runAgent return the accumulated result.
+
+  it("returns after the grace deadline when a timeout abort() never settles the prompt", async () => {
+    let aborted = false;
+    let disposed = false;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        // Never resolves — and abort() below is a no-op that does NOT resolve
+        // it (a wedged run the SDK abort can't reach).
+        return new Promise<void>(() => {});
+      },
+      dispose() {
+        disposed = true;
+      },
+      abort: async () => {
+        aborted = true; // initiated, but the run stays wedged
+      },
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5,
+      createSession: async () => session as any,
+      abortGraceMs: 5,
+    });
+    expect(aborted).toBe(true); // abort was still initiated
+    expect(result.timedOut).toBe(true);
+    expect(disposed).toBe(true); // best-effort dispose still runs
+  }, 2000);
+
+  it("returns after the grace deadline when a force-stop abort() never settles the prompt", async () => {
+    const ac = new AbortController();
+    let disposed = false;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        queueMicrotask(() => ac.abort());
+        return new Promise<void>(() => {}); // wedged: abort() can't reach it
+      },
+      dispose() {
+        disposed = true;
+      },
+      abort: async () => {
+        // no-op — the run never notices the abort
+      },
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      abortSignal: ac.signal,
+      abortGraceMs: 5,
+    });
+    // Salvage semantics preserved: soft abort, force-stop reason recorded.
+    expect(result.abortedByGuard).toBe(true);
+    expect(result.errorMessage).toMatch(/force-stop requested by operator/);
+    expect(disposed).toBe(true);
+  }, 2000);
+});
+
 describe("runAgent (external force-stop)", () => {
   it("an abort signal kills the run with guard-kill (salvage) semantics", async () => {
     const ac = new AbortController();
@@ -287,33 +383,77 @@ describe("runAgent (external force-stop)", () => {
     expect(result.errorMessage).toMatch(/force-stop requested by operator/);
   });
 
-  it("an already-aborted signal kills the run immediately", async () => {
+  it("an already-aborted signal skips the run entirely (SDK abort is not latched)", async () => {
+    // The real SDK's abort() is `this.activeRun?.abortController.abort()` — a
+    // no-op with no active run. So a pre-aborted signal must NOT be handled by
+    // calling abort(): the prompt would run the whole session to completion
+    // with every guard decision suppressed. runAgent must skip the run.
     const ac = new AbortController();
     ac.abort();
-    let resolvePrompt: (() => void) | undefined;
+    let created = false;
+    let prompted = 0;
     const session = {
       subscribe(_l: (e: any) => void) {
         return () => {};
       },
       prompt(_text: string): Promise<void> {
-        return new Promise<void>((resolve) => {
-          resolvePrompt = resolve;
-        });
+        prompted++;
+        // SDK-faithful: nothing was latched, so a prompt would just run to
+        // completion as if no abort had ever been requested.
+        return Promise.resolve();
       },
       dispose() {},
       abort: async () => {
-        // abort is requested before prompt() is even called; resolve as soon
-        // as the hang is installed.
-        queueMicrotask(() => resolvePrompt?.());
+        // no active run → no-op (real SDK behavior)
       },
     };
     const result = await runAgent({
       body: "ping",
       cwd: "/tmp",
       timeoutMs: 5000,
-      createSession: async () => session as any,
+      createSession: async () => {
+        created = true;
+        return session as any;
+      },
       abortSignal: ac.signal,
     });
+    expect(created).toBe(false); // checked BEFORE createSession()
+    expect(prompted).toBe(0); // the run never starts
+    expect(result.abortedByGuard).toBe(true);
+    expect(result.errorMessage).toMatch(/force-stop/);
+  });
+
+  it("a signal aborted during createSession() skips the prompt and disposes", async () => {
+    const ac = new AbortController();
+    let prompted = 0;
+    let disposed = false;
+    const session = {
+      subscribe(_l: (e: any) => void) {
+        return () => {};
+      },
+      prompt(_text: string): Promise<void> {
+        prompted++;
+        return Promise.resolve();
+      },
+      dispose() {
+        disposed = true;
+      },
+      abort: async () => {},
+    };
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 5000,
+      createSession: async () => {
+        // The force-stop lands while the session is being built — before the
+        // abort listener is attached and before any run is in flight.
+        ac.abort();
+        return session as any;
+      },
+      abortSignal: ac.signal,
+    });
+    expect(prompted).toBe(0); // re-checked before prompt()
+    expect(disposed).toBe(true);
     expect(result.abortedByGuard).toBe(true);
     expect(result.errorMessage).toMatch(/force-stop/);
   });
@@ -438,5 +578,93 @@ describe("runAgent (transcript sidecar)", () => {
       transcriptPath: "/dev/null/impossible/t.jsonl",
     });
     expect(result.errorMessage).toBeNull();
+  });
+
+  // Fake WriteStream for the ASYNC failure paths: a plain EventEmitter with
+  // write/end. Emitting 'error' with no listener attached throws (crashing the
+  // daemon) — exactly what a real stream does.
+  class FakeTranscriptStream extends EventEmitter {
+    written: string[] = [];
+    ended = false;
+    constructor(private readonly failOnFirstWrite = false) {
+      super();
+    }
+    write(chunk: string): boolean {
+      this.written.push(chunk);
+      if (this.failOnFirstWrite && this.written.length === 1) {
+        this.emit("error", new Error("ENOSPC: no space left on device, write"));
+        return false;
+      }
+      return true;
+    }
+    end(): void {
+      this.ended = true;
+    }
+  }
+
+  it("an async open failure ('error' event) degrades to a warning — no writes, no crash", async () => {
+    const fake = new FakeTranscriptStream();
+    createWriteStreamOverride.current = () => {
+      // fs.createWriteStream opens the file asynchronously; EACCES/ENOTDIR
+      // surface as a later 'error' event, never a synchronous throw.
+      queueMicrotask(() =>
+        fake.emit("error", new Error("EACCES: permission denied, open '/ro/t.jsonl'")),
+      );
+      return fake;
+    };
+    try {
+      // Deliver events on a macrotask so the async open failure lands first.
+      const listeners: ((e: any) => void)[] = [];
+      const session = {
+        subscribe(l: (e: any) => void) {
+          listeners.push(l);
+          return () => {};
+        },
+        async prompt() {
+          await new Promise((r) => setTimeout(r, 5));
+          listeners.forEach((l) => l({ type: "tool_execution_start", toolName: "read", args: {} }));
+        },
+        dispose() {},
+        abort: async () => {},
+      };
+      const result = await runAgent({
+        body: "x",
+        cwd: "/tmp",
+        timeoutMs: 5000,
+        createSession: async () => session as any,
+        transcriptPath: join(tmpdir(), "junco-fake-tx", "t.jsonl"),
+      });
+      expect(result.errorMessage).toBeNull();
+      // The transcript was dropped before any event was written.
+      expect(fake.written).toHaveLength(0);
+    } finally {
+      createWriteStreamOverride.current = null;
+    }
+  });
+
+  it("a mid-run write 'error' (ENOSPC) disables the transcript and the run completes", async () => {
+    const fake = new FakeTranscriptStream(true);
+    createWriteStreamOverride.current = () => fake;
+    try {
+      const events = [
+        { type: "tool_execution_start", toolName: "read", args: { path: "/a" } },
+        { type: "tool_execution_start", toolName: "bash", args: { command: "ls" } },
+        { type: "agent_end", messages: [], willRetry: false },
+      ];
+      const session = fakeSession(events);
+      const result = await runAgent({
+        body: "x",
+        cwd: "/tmp",
+        timeoutMs: 5000,
+        createSession: async () => session as any,
+        transcriptPath: join(tmpdir(), "junco-fake-tx", "t.jsonl"),
+      });
+      expect(result.errorMessage).toBeNull();
+      // The first write errored; the transcript was nulled — later events are
+      // NOT written to the dead stream.
+      expect(fake.written).toHaveLength(1);
+    } finally {
+      createWriteStreamOverride.current = null;
+    }
   });
 });

@@ -61,7 +61,24 @@ export interface RunAgentOptions {
    * failed runs. Parent dir is created; write failures only warn.
    */
   transcriptPath?: string;
+  /**
+   * Grace period (ms) to wait for the in-flight prompt() to actually settle
+   * AFTER an abort is initiated, before treating the run as wedged and
+   * returning the accumulated result anyway. Defaults to ABORT_GRACE_MS (60s).
+   * Injectable so tests can short-circuit it.
+   */
+  abortGraceMs?: number;
 }
+
+/**
+ * How long runAgent waits for a soft-aborted prompt() to actually settle
+ * before treating the run as wedged and returning anyway (issue #51). abort()
+ * only resolves once the SDK run promise settles; a run that never notices the
+ * abort (a surviving tool child, a wedged transport) would otherwise hang
+ * runAgent — and, at max_concurrent=1, the whole worker — indefinitely, since
+ * the ticket timeout has already fired and does nothing further.
+ */
+const ABORT_GRACE_MS = 60_000;
 
 /**
  * Run a single prompt against an injected session and reduce its event stream
@@ -72,32 +89,88 @@ export interface RunAgentOptions {
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const acc = new RunAccumulator();
   const gm = opts.guardManager;
-  const session = await opts.createSession();
   const start = Date.now();
   let timedOut = false;
   let killReason: string | null = null;
+
+  // Result for a run that was force-stopped before any prompt was in flight —
+  // same shape as a mid-run kill (soft abort → PR-flow salvage semantics).
+  const preAbortedResult = (): RunResult => {
+    killReason = "force-stop requested by operator";
+    const summary = gm ? gm.supervisorSummary : "no nudges issued";
+    acc.setError(`supervisor kill: ${killReason} (${summary})`);
+    return acc.result(Date.now() - start, timedOut, true);
+  };
+
+  // A pre-aborted signal means "do not run": the SDK does NOT latch aborts —
+  // abort() is `this.activeRun?.abortController.abort()` (pi-agent-core
+  // dist/agent.js), a no-op with no active run, and each prompt() creates a
+  // fresh AbortController. Calling abort() here would let the prompt run the
+  // whole session to completion with every guard decision suppressed by the
+  // `killReason !== null` gate below. Skip the run entirely instead.
+  if (opts.abortSignal?.aborted) return preAbortedResult();
+
+  const session = await opts.createSession();
+
+  // Re-check: the signal may have fired while createSession() was awaited —
+  // still before any run is in flight, so abort() would be the same no-op.
+  if (opts.abortSignal?.aborted) {
+    session.dispose();
+    return preAbortedResult();
+  }
+
   let unsubscribe: (() => void) | undefined;
+
+  // Fallback deadline for a wedged abort (#51). abort() only settles the
+  // in-flight prompt() when the SDK run settles; if it never does, this timer
+  // resolves the race below so runAgent returns the accumulated result instead
+  // of hanging forever. Armed once, by whichever abort path fires first.
+  let wedged = false;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  let resolveWedge: (() => void) | undefined;
+  const wedgePromise = new Promise<void>((resolve) => {
+    resolveWedge = resolve;
+  });
+  const armAbortGrace = (): void => {
+    if (graceTimer !== undefined) return; // first abort wins; don't re-arm
+    graceTimer = setTimeout(() => {
+      wedged = true;
+      resolveWedge?.();
+    }, opts.abortGraceMs ?? ABORT_GRACE_MS);
+  };
+
   const timer = setTimeout(() => {
     timedOut = true;
     // abort() resolves the in-flight prompt() so runAgent can return. Guard the
     // rejection so a failed abort can't surface as an unhandled rejection.
     void session.abort().catch(() => {});
+    armAbortGrace();
   }, opts.timeoutMs);
   // Operator force-stop: soft-abort exactly like a guard kill so the PR-flow
-  // salvages any commits already made.
+  // salvages any commits already made. (A run is in flight by the time this
+  // can fire — the pre-aborted cases returned above.)
   const onExternalAbort = (): void => {
     if (killReason === null) killReason = "force-stop requested by operator";
     void session.abort().catch(() => {});
+    armAbortGrace();
   };
-  if (opts.abortSignal) {
-    if (opts.abortSignal.aborted) onExternalAbort();
-    else opts.abortSignal.addEventListener("abort", onExternalAbort, { once: true });
-  }
+  opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
   let transcript: WriteStream | null = null;
   if (opts.transcriptPath) {
     try {
       mkdirSync(dirname(opts.transcriptPath), { recursive: true });
       transcript = createWriteStream(opts.transcriptPath, { flags: "a" });
+      // createWriteStream opens the file ASYNCHRONOUSLY: open and write
+      // failures (EACCES, ENOSPC, ...) arrive as an 'error' event, never a
+      // throw — without a listener that event crashes the process mid-ticket.
+      // Degrade to a warning and drop the transcript, as promised above.
+      transcript.on("error", (e: Error) => {
+        log.warn("transcript disabled (stream error)", {
+          path: opts.transcriptPath,
+          error: e.message,
+        });
+        transcript = null;
+      });
     } catch (e) {
       log.warn("transcript disabled (path not writable)", {
         path: opts.transcriptPath,
@@ -134,17 +207,38 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         // in-flight prompt() so runAgent returns. Guard the rejection.
         killReason = decision.reason;
         void session.abort().catch(() => {});
+        armAbortGrace();
       }
     });
-    await session.prompt(opts.body);
+    const runPromise = session.prompt(opts.body);
+    // If the wedge deadline wins the race, the prompt may still reject later
+    // with nobody awaiting it — swallow that so it can't surface as an
+    // unhandled rejection. (The original runPromise still rejects into the
+    // race below when it loses to a real error, so this doesn't hide errors.)
+    runPromise.catch(() => {});
+    await Promise.race([runPromise, wedgePromise]);
+    if (wedged) {
+      log.warn("agent session wedged after abort — returning salvaged result", {
+        graceMs: opts.abortGraceMs ?? ABORT_GRACE_MS,
+        timedOut,
+        killReason,
+      });
+    }
   } catch (e) {
     acc.setError(e instanceof Error ? e.message : String(e));
   } finally {
     clearTimeout(timer);
+    if (graceTimer !== undefined) clearTimeout(graceTimer);
     opts.abortSignal?.removeEventListener("abort", onExternalAbort);
     unsubscribe?.();
     transcript?.end();
-    session.dispose();
+    // Best-effort: a wedged session's dispose may throw; don't let it mask the
+    // salvaged result.
+    try {
+      session.dispose();
+    } catch {
+      /* ignore */
+    }
   }
   // Surface a guard kill into errorMessage (so finalize() routes the ticket to
   // failed/) with the supervisor summary, mirroring the Python banner.

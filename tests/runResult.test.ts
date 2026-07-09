@@ -93,6 +93,53 @@ describe("RunAccumulator", () => {
   });
 });
 
+describe("finalText — last assistant message (#36)", () => {
+  const msgStart = (role: string) => ({ type: "message_start", message: { role } }) as any;
+  const delta = (t: string) =>
+    ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: t } }) as any;
+
+  it("keeps only the LAST assistant message as finalText, not the whole run", () => {
+    const acc = new RunAccumulator();
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("I'll start by reading the code."));
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("Now I'll run the tests."));
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("All done — fixed the bug and the suite is green."));
+    expect(acc.result(0).finalText).toBe("All done — fixed the bug and the suite is green.");
+  });
+
+  it("falls back to the last NON-empty message when the final message has no text", () => {
+    const acc = new RunAccumulator();
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("the real summary"));
+    // Tool-call-only assistant message: starts but produces no text deltas.
+    acc.observe(msgStart("assistant"));
+    expect(acc.result(0).finalText).toBe("the real summary");
+  });
+
+  it("does not reset on user or toolResult message boundaries", () => {
+    // message_start fires for user, assistant, AND toolResult messages (SDK
+    // MessageStartEvent) — only an assistant boundary starts a new message.
+    const acc = new RunAccumulator();
+    acc.observe(msgStart("assistant"));
+    acc.observe(delta("part one. "));
+    acc.observe(msgStart("toolResult"));
+    acc.observe(msgStart("user"));
+    acc.observe(delta("part two."));
+    expect(acc.result(0).finalText).toBe("part one. part two.");
+  });
+
+  it("still accumulates the whole stream when no message_start events arrive", () => {
+    // Back-compat with partial event shapes: without boundaries, behavior is
+    // the pre-#36 concatenation.
+    const acc = new RunAccumulator();
+    acc.observe(delta("a"));
+    acc.observe(delta("b"));
+    expect(acc.result(0).finalText).toBe("ab");
+  });
+});
+
 describe("progress tracking", () => {
   it("tracks turns and lastTool as progress", () => {
     const acc = new RunAccumulator();

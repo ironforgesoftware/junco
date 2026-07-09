@@ -155,11 +155,18 @@ export class GuardManager {
     };
     const action = this.supervisor.decide(evt);
     if (action.kind === "nudge" && action.nudgeMessage) {
-      // Re-instantiate BOTH rep guards so we don't immediately re-trip on the
-      // same buffered text (mirrors Python). Buffers persist until the next
-      // message/turn boundary.
+      // Re-instantiate BOTH rep guards AND clear the cumulative buffers.
+      // RepetitionGuard.update() statelessly re-evaluates the full buffer on
+      // every delta, so a fresh guard alone is not enough: with the buffer
+      // kept, the very next delta would re-trip at the same turnIndex and the
+      // supervisor would kill with "nudge ignored" before the steering prompt
+      // (delivered only after the current turn) could reach the model. With
+      // the buffers cleared, a re-trip requires ≥ minChars of fresh post-nudge
+      // repetition — so "nudge ignored" means what it says (issue #27).
       this.textRepGuard = new RepetitionGuard();
       this.thinkingRepGuard = new RepetitionGuard();
+      this.textBuf = "";
+      this.thinkingBuf = "";
       return { action: "nudge", message: action.nudgeMessage, kind };
     }
     if (action.kind === "kill") {
