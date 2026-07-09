@@ -19,6 +19,9 @@ import { nwoFromRemoteUrl } from "../githubInbox.js";
 import { repoDiscriminator } from "../worktree.js";
 import type { MetricsSnapshot } from "../metrics.js";
 import { endpointReachable } from "../health.js";
+import { queuePaths } from "../config.js";
+import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
+import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
 
 export interface LocalSnapshotDeps {
   readdirFn?: (dir: string) => string[];
@@ -415,4 +418,102 @@ export async function buildDaemonDetail(
   } catch (e) {
     return { ...base, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+export type LocalSection = "queue" | "outbox" | "repos" | "worktrees" | "daemon";
+
+export interface LocalCheap {
+  queue: QueueSnapshot;
+  counts: { done: number; failed: number } | null;
+  outbox: {
+    depth: number;
+    dead: number;
+    ops: StoredOp[];
+    deadOps: StoredOp[];
+    error: string | null;
+  };
+  daemon: DaemonDetail;
+  error: string | null;
+}
+
+function emptyQueue(cfg: Config): QueueSnapshot {
+  return {
+    daemonUp: false,
+    maxConcurrent: cfg.maxConcurrent,
+    running: [],
+    waiting: [],
+    recent: [],
+    error: null,
+    outboxDepth: 0,
+  };
+}
+
+/** Deps-injectable `.md` count (mirrors statusCmd.ts:28 countMd). */
+function countMd(dir: string, deps: LocalSnapshotDeps): number {
+  const readdirFn = deps.readdirFn ?? readdirSync;
+  try {
+    return readdirFn(dir).filter((n) => n.endsWith(".md")).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Cheap tick: queue (via makeQueueSnapshotFn), gated done/failed counts,
+ * outbox live/dead split, daemon detail. ONE /health fetch total — fetched
+ * here and threaded into both the queue layer (healthOverride) and
+ * buildDaemonDetail. Never-throws (top-level try/catch + per-section fields).
+ */
+export function makeLocalCheapFn(
+  cfg: Config,
+  deps: LocalSnapshotDeps = {},
+): (opts?: { section?: LocalSection }) => Promise<LocalCheap> {
+  return async (opts: { section?: LocalSection } = {}): Promise<LocalCheap> => {
+    const base: LocalCheap = {
+      queue: emptyQueue(cfg),
+      counts: null,
+      outbox: { depth: 0, dead: 0, ops: [], deadOps: [], error: null },
+      daemon: emptyDaemon(cfg),
+      error: null,
+    };
+    try {
+      const healthBody = await fetchHealthBody(cfg, deps);
+
+      const queue = await makeQueueSnapshotFn(cfg, {
+        readdirFn: deps.readdirFn,
+        readFileFn: deps.readFileFn,
+        statFn: deps.statFn,
+        nowFn: deps.nowFn,
+        healthOverride: { body: healthBody },
+      })();
+
+      let counts: LocalCheap["counts"] = null;
+      if (opts.section === "queue") {
+        const paths = queuePaths(cfg);
+        counts = { done: countMd(paths.done, deps), failed: countMd(paths.failed, deps) };
+      }
+
+      let outbox = base.outbox;
+      try {
+        const outDeps = { readdirFn: deps.readdirFn, readFileFn: deps.readFileFn };
+        const ops = listOpsFrom(outboxPaths(cfg).dir, outDeps);
+        const deadOps = listOpsFrom(outboxPaths(cfg).dead, outDeps);
+        outbox = { depth: ops.length, dead: deadOps.length, ops, deadOps, error: null };
+      } catch (e) {
+        outbox = {
+          depth: 0,
+          dead: 0,
+          ops: [],
+          deadOps: [],
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+
+      const daemon = await buildDaemonDetail(cfg, healthBody, deps);
+
+      return { queue, counts, outbox, daemon, error: null };
+    } catch (e) {
+      return { ...base, error: e instanceof Error ? e.message : String(e) };
+    }
+  };
 }
