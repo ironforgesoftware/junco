@@ -15,6 +15,7 @@ import {
   tryOrEnqueue,
   fetchFindingMarkers,
   ensureFindingLabels,
+  isOffline,
   type OutboxOp,
 } from "./githubOutbox.js";
 import { buildIssueTitle, buildIssueBody, findingLabels, type Finding } from "./findings.js";
@@ -102,7 +103,10 @@ export async function fileFindings(
   };
   const toFile = batch.findings.filter((f) => selected.has(f.fingerprint));
   if (toFile.length === 0) {
-    removePending(cfg, batch.id);
+    // Nothing selected → nothing to file. Do NOT archive here: archiving only
+    // happens after an actual (non-empty) filing pass, so an empty selection
+    // (e.g. an unknown --only fingerprint that slipped past the CLI guard) can
+    // never silently discard the parked batch.
     return result;
   }
 
@@ -137,8 +141,15 @@ export async function fileFindings(
       try {
         await ensureFindingLabels(cfg, batch.nwo, [...union], ghFn);
       } catch (e) {
-        labelFree = true;
-        result.warnings.push(`could not ensure labels — filing label-free: ${describeError(e)}`);
+        // Offline: KEEP the labels (do not drop to label-free, do not warn) so
+        // the enqueued issue-create op carries them — the flush's executor will
+        // create the labels when the network returns. Only a real
+        // permission/other error means the labels can't be created at all, so
+        // that path files label-free and warns.
+        if (!isOffline(e)) {
+          labelFree = true;
+          result.warnings.push(`could not ensure labels — filing label-free: ${describeError(e)}`);
+        }
       }
     }
   }

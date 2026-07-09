@@ -10,7 +10,7 @@ import {
 } from "../src/assessCmd.js";
 import { parseTicket } from "../src/ticket.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
-import { writePending } from "../src/assessReview.js";
+import { writePending, readPending } from "../src/assessReview.js";
 import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
 
@@ -359,6 +359,58 @@ describe("runAssessFileCommand", () => {
     );
     expect(code).toBe(0);
     expect(out).toContain("filed 1");
+  });
+
+  it("--only with an unknown fingerprint -> exit 2, files nothing, preserves the batch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-badfp-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-9",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "One",
+          description: "",
+          references: [],
+        },
+      ],
+    });
+    let out = "";
+    const calls: string[][] = [];
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      if (args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[1] === "create")
+        return { stdout: "https://github.com/o/r/issues/1\n", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as never;
+
+    const code = await runAssessFileCommand(
+      c,
+      "assess-x-9",
+      { all: false, only: "nosuchfp" },
+      {
+        printFn: (s) => {
+          out += s;
+        },
+        fileDeps: { ghFn },
+      },
+    );
+    expect(code).toBe(2);
+    expect(out).toMatch(/unknown fingerprint/i);
+    expect(out).toContain("nosuchfp");
+    // nothing was filed
+    expect(calls.some((a) => a[1] === "create")).toBe(false);
+    // and the batch survives — a typo must not discard the review
+    expect(readPending(c, "assess-x-9").batch).not.toBeNull();
   });
 
   it("no id -> usage line, exit 2", async () => {

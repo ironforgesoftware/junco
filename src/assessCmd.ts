@@ -13,7 +13,7 @@ import { submitTicket } from "./dispatch.js";
 import { readWatchlist, watchlistPath } from "./watchlist.js";
 import { buildAssessPrompt } from "./assessPrompt.js";
 import { listPending, readPending } from "./assessReview.js";
-import { fileFindings, type FileFindingsDeps } from "./assessFiling.js";
+import { fileFindings, type FileFindingsDeps, type FileResult } from "./assessFiling.js";
 
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
 
@@ -96,7 +96,10 @@ export async function runAssessCommand(
     // does not own, so external clones are valid targets (unlike the bridge poll,
     // which still excludes them via resolveWatchedRepos).
     const fromConfig = cfg.github.repos.find((r) => r.nwo.toLowerCase() === target.toLowerCase());
-    const { entries } = readWatchlist(watchlistPath(cfg));
+    const { entries, error: watchErr } = readWatchlist(watchlistPath(cfg));
+    if (watchErr) {
+      print(`junco assess: watchlist unreadable (${watchErr}); using config repos only\n`);
+    }
     const fromWatch = entries.find((e) => e.nwo.toLowerCase() === target.toLowerCase());
     const match = fromConfig ?? fromWatch;
     if (!match) {
@@ -226,8 +229,9 @@ export async function runAssessFileCommand(
     print(`junco assess file: no pending batch '${id}'\n`);
     return 2;
   }
+  const known = new Set(batch.findings.map((f) => f.fingerprint));
   const selected = opts.all
-    ? new Set(batch.findings.map((f) => f.fingerprint))
+    ? known
     : new Set(
         (opts.only ?? "")
           .split(",")
@@ -235,7 +239,27 @@ export async function runAssessFileCommand(
           .filter(Boolean),
       );
 
-  const res = await fileFn(cfg, batch, selected, deps.fileDeps ?? {});
+  // All-or-nothing on --only: a single unknown fingerprint (a typo) rejects the
+  // whole command WITHOUT filing or archiving anything. Without this guard an
+  // unknown fingerprint would build an empty selection, file nothing, and (pre
+  // the assessFiling defense-in-depth) silently archive the batch at exit 0.
+  if (opts.only) {
+    const unknown = [...selected].filter((fp) => !known.has(fp));
+    if (unknown.length > 0) {
+      print(`junco assess file: unknown fingerprint(s): ${unknown.join(", ")}\n`);
+      return 2;
+    }
+  }
+
+  let res: FileResult;
+  try {
+    res = await fileFn(cfg, batch, selected, deps.fileDeps ?? {});
+  } catch (e) {
+    // fileFindings rethrows before archiving on the fatal-dedup path, so the
+    // batch is preserved — surface the reason cleanly, don't swallow it.
+    print(`junco assess file: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
   print(
     `filed ${res.created} · queued ${res.queuedOffline} · already-filed ${res.deduped} · failed ${res.failed}\n`,
   );
