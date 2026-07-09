@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { QueueView } from "../src/tui/components/QueueView.js";
+import type { QueueRowRef } from "../src/tui/components/QueueView.js";
 import {
   queueLabel,
   fmtElapsed,
@@ -11,6 +12,14 @@ import {
   fmtCompact,
 } from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+
+async function until(pred: () => boolean, tries = 60): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (pred()) return;
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  throw new Error("condition not met within bound");
+}
 
 const NOW = new Date("2026-07-07T10:05:00Z");
 
@@ -195,5 +204,75 @@ describe("QueueView", () => {
         <QueueView snap={null} scroll={0} now={NOW} height={20} focused={false} />,
       ).lastFrame(),
     ).toContain("loading…");
+  });
+
+  it("default-absent props render byte-identical (no cursor glyph)", () => {
+    const base = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} />,
+    ).lastFrame()!;
+    const withFalse = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} selectable={false} />,
+    ).lastFrame()!;
+    expect(withFalse).toBe(base);
+    expect(base).not.toContain("▌");
+  });
+
+  it("selectable path: cursor marks the first WAITING row, never RUNNING", () => {
+    const frame = render(
+      <QueueView
+        snap={FULL}
+        scroll={0}
+        now={NOW}
+        height={30}
+        focused={false}
+        selectable
+        selectedRow={0}
+      />,
+    ).lastFrame()!;
+    expect(frame).toContain("▌"); // cursor present
+    expect(frame).toContain("1. #51 plan"); // still the first waiting row
+    // RUNNING row (◐ + label) carries no cursor glyph on its line.
+    const runLine = frame.split("\n").find((l) => l.includes("#46 exec"))!;
+    expect(runLine).not.toContain("▌");
+  });
+
+  it("selectable path: selectedRow past WAITING lands on a RECENT row", () => {
+    // waiting.length === 4, so index 4 is the first RECENT row (#44).
+    const frame = render(
+      <QueueView
+        snap={FULL}
+        scroll={0}
+        now={NOW}
+        height={30}
+        focused={false}
+        selectable
+        selectedRow={4}
+      />,
+    ).lastFrame()!;
+    const recLine = frame.split("\n").find((l) => l.includes("#44 exec"))!;
+    expect(recLine).toContain("▌");
+  });
+
+  it("onRows reports the actionable rows (waiting then recent, running excluded)", async () => {
+    const seen: QueueRowRef[] = [];
+    render(
+      <QueueView
+        snap={FULL}
+        scroll={0}
+        now={NOW}
+        height={30}
+        focused={false}
+        selectable
+        selectedRow={0}
+        onRows={(rows) => {
+          seen.length = 0;
+          seen.push(...rows);
+        }}
+      />,
+    );
+    await until(() => seen.length === 6); // 4 waiting + 2 recent
+    expect(seen[0]).toEqual({ kind: "waiting", id: "gh-acme-api-51-plan" });
+    expect(seen[5]).toEqual({ kind: "recent", id: "gh-acme-api-40", status: "failed" });
+    expect(seen.some((r) => r.kind === "running")).toBe(false);
   });
 });

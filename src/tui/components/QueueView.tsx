@@ -4,6 +4,15 @@ import type { QueueSnapshot, QueueWaiting } from "../queueSnapshot.js";
 import { queueLabel, progressLine, fmtAge, fmtClock } from "../queueFmt.js";
 import { theme } from "../theme.js";
 
+/** A selectable actionable row surfaced to the LOCAL Queue section: WAITING
+ * (inbox) and RECENT (done/failed) rows. RUNNING rows are never included —
+ * the daemon owns processing/. */
+export interface QueueRowRef {
+  kind: "running" | "waiting" | "recent";
+  id: string;
+  status?: "done" | "failed";
+}
+
 function waitingNote(w: QueueWaiting): string {
   const parts: string[] = [];
   if (w.priority !== "normal") parts.push(w.priority);
@@ -14,20 +23,42 @@ function waitingNote(w: QueueWaiting): string {
 }
 
 /** Full queue view (main-area slot, opened with `t`): RUNNING / WAITING /
- * RECENT built as flat rows so App's scroll offset can slice them. */
+ * RECENT built as flat rows so App's scroll offset can slice them. In LOCAL
+ * mode `selectable` turns on a `▌` accent cursor over the actionable rows
+ * (WAITING then RECENT, `selectedRow` indexing that concatenation); RUNNING
+ * rows render but are never selectable. Absent props → byte-identical to the
+ * GitHub `t` view. */
 export function QueueView({
   snap,
   scroll,
   now,
   height,
   focused,
+  selectable,
+  selectedRow,
+  onRows,
 }: {
   snap: QueueSnapshot | null;
   scroll: number;
   now: Date;
   height: number;
   focused: boolean;
+  selectable?: boolean;
+  selectedRow?: number;
+  onRows?: (rows: QueueRowRef[]) => void;
 }): React.JSX.Element {
+  React.useEffect(() => {
+    if (!onRows) return;
+    if (snap === null) {
+      onRows([]);
+      return;
+    }
+    onRows([
+      ...snap.waiting.map((w) => ({ kind: "waiting" as const, id: w.id })),
+      ...snap.recent.map((r) => ({ kind: "recent" as const, id: r.id, status: r.status })),
+    ]);
+  }, [snap, onRows]);
+
   if (snap === null) {
     return (
       <Box
@@ -41,6 +72,18 @@ export function QueueView({
       </Box>
     );
   }
+
+  // Leading 2-col gutter. With `selectable` the first col becomes the `▌`
+  // accent cursor on the selected actionable row; otherwise it is the exact
+  // two-space indent the GitHub `t` view has always rendered (byte-identical).
+  const gutter = (sel: boolean): React.JSX.Element | string =>
+    selectable ? (
+      <>
+        <Text color={theme.accent}>{sel ? "▌" : " "}</Text>{" "}
+      </>
+    ) : (
+      "  "
+    );
 
   const rows: React.JSX.Element[] = [];
   const dash = (key: string): void => {
@@ -66,7 +109,7 @@ export function QueueView({
   for (const r of snap.running) {
     rows.push(
       <Text key={`r-${r.id}`} wrap="truncate-end">
-        {"  "}
+        {gutter(false)}
         <Text color="cyan">◐ </Text>
         <Text bold>{queueLabel(r.github, r.id)}</Text>
         <Text dimColor> {r.id}</Text>
@@ -93,9 +136,10 @@ export function QueueView({
   if (snap.waiting.length === 0) dash("wait-none");
   snap.waiting.forEach((w, i) => {
     const note = waitingNote(w);
+    const sel = selectable === true && selectedRow === i;
     rows.push(
       <Text key={`w-${w.id}`} wrap="truncate-end">
-        {"  "}
+        {gutter(sel)}
         {i + 1}. <Text bold>{queueLabel(w.github, w.id)}</Text>
         <Text dimColor> {w.github ? w.id : w.kind}</Text>
         {note !== "" ? <Text color="yellow"> {note}</Text> : null}
@@ -114,10 +158,11 @@ export function QueueView({
     </Text>,
   );
   if (snap.recent.length === 0) dash("rec-none");
-  for (const r of snap.recent) {
+  snap.recent.forEach((r, j) => {
+    const sel = selectable === true && selectedRow === snap.waiting.length + j;
     rows.push(
       <Text key={`f-${r.id}-${r.finishedAt}`} wrap="truncate-end">
-        {"  "}
+        {gutter(sel)}
         <Text color={r.status === "done" ? "green" : "red"}>
           {r.status === "done" ? "✓" : "✗"}{" "}
         </Text>
@@ -125,7 +170,7 @@ export function QueueView({
         <Text dimColor> {fmtAge(r.finishedAt, now)}</Text>
       </Text>,
     );
-  }
+  });
 
   return (
     <Box
