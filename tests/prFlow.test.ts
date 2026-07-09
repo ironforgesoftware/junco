@@ -922,11 +922,12 @@ esac
     expect(remoteLog).not.toContain("fresh.txt");
   }, 30000);
 
-  it("idempotent create: gh pr create 'already exists' recovers the URL via pr view → completed", async () => {
+  it("idempotent create: gh pr create 'already exists' recovers the URL via pr list → completed", async () => {
     const cfg = makeConfig(h, {
       ghBin: ghCases("gh-exists.sh", {
         '"pr create "*': 'echo "a pull request for branch junco/idem already exists" >&2; exit 1',
-        '"pr view "*': 'echo "https://github.com/owner/repo/pull/456"; exit 0',
+        '"pr list "*':
+          'echo \'[{"number":456,"url":"https://github.com/owner/repo/pull/456"}]\'; exit 0',
       }),
     });
     const { task, path } = makeTicket(
@@ -1214,6 +1215,49 @@ exec ${JSON.stringify(realGit)} "$@"
     expect(pr.head).toBe(`${FORK_NWO.split("/")[0]}:junco/gh-up-stream-7`);
     expect(pr.labels).toEqual([]); // fork PRs are label-free (upstream namespace not ours)
     expect(pr.finalize).toBeNull(); // external — no upstream comment/label replay
+  }, 30000);
+
+  it("fork PR recovery: 'already exists' resolves the URL via gh pr list --head owner:branch (issue #75)", async () => {
+    // gh pr create reports the fork PR already exists; recovery must resolve its
+    // URL. `gh pr view <owner>:<branch>` cannot resolve a cross-repo selector, so
+    // the recovery uses `gh pr list --head <owner>:<branch>` instead (#75).
+    const listArgs = join(h.root, "gh-list-args.log");
+    const ghBin = join(h.root, "fake-gh-fork-exists.sh");
+    writeFileSync(
+      ghBin,
+      `#!/bin/sh
+args="$*"
+case "$args" in
+  "repo view --json nameWithOwner -q .nameWithOwner"*)
+    echo "up/stream"; exit 0 ;;
+  "pr create "*)
+    echo "a pull request for branch me:junco/gh-up-stream-7 already exists" >&2; exit 1 ;;
+  "pr list "*)
+    printf '%s\\n' "$*" >> ${JSON.stringify(listArgs)}
+    echo '[{"number":7,"url":"https://github.com/up/stream/pull/7"}]'; exit 0 ;;
+  *)
+    echo "fake-gh: unhandled: $args" >&2; exit 1 ;;
+esac
+`,
+      "utf8",
+    );
+    chmodSync(ghBin, 0o755);
+
+    const cfg = makeConfig(h, { ghBin });
+    const { task, path } = makeTicket(h, "gh-up-stream-7.md", forkTicketContent(h.work));
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.prUrl).toBe("https://github.com/up/stream/pull/7");
+    expect(flow.dst.startsWith(h.done)).toBe(true);
+    // Recovery used the cross-repo head qualifier that gh pr list supports.
+    const listArgv = readFileSync(listArgs, "utf8");
+    expect(listArgv).toContain("--head me:junco/gh-up-stream-7");
+    expect(listArgv).toContain("--state open");
   }, 30000);
 });
 

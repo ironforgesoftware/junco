@@ -841,7 +841,13 @@ export async function runPrFlow(
 
 /** Recover the URL of an already-open PR for this ticket's head branch
  * (issue #29 idempotent create). The head form matches openPullRequest /
- * the outbox: `<fork-owner>:<branch>` in fork mode, else the bare branch. */
+ * the outbox: `<fork-owner>:<branch>` in fork mode, else the bare branch.
+ *
+ * Uses `gh pr list --head <head> --state open` rather than `gh pr view <head>`:
+ * `gh pr view`'s positional selector resolves branch names WITHIN the repo and
+ * does not accept the cross-repo `<owner>:<branch>` form, so for a fork PR it
+ * returns "no pull requests found" and the recovery never recovers (issue #75).
+ * `gh pr list --head` supports the `<owner>:<branch>` head qualifier. */
 async function recoverExistingPrUrl(
   cfg: Config,
   ctx: RepoContext,
@@ -850,14 +856,22 @@ async function recoverExistingPrUrl(
 ): Promise<string> {
   const head =
     ctx.forkNwo !== null ? `${ctx.forkNwo.split("/")[0]}:${ctx.branchName}` : ctx.branchName;
-  const r = await gh(cfg, ["pr", "view", head, "--repo", nwo, "--json", "url", "--jq", ".url"], {
-    cwd: ctx.repo,
-    retryNetwork: true,
-    retryBaseDelayMs,
-  });
-  const url = r.stdout.trim();
-  if (!url.startsWith("https://")) {
-    throw new GitOpError(`gh pr view returned no URL for head ${JSON.stringify(head)}`);
+  const r = await gh(
+    cfg,
+    ["pr", "list", "--repo", nwo, "--head", head, "--state", "open", "--json", "url,number"],
+    { cwd: ctx.repo, retryNetwork: true, retryBaseDelayMs },
+  );
+  let arr: Array<{ url?: unknown }>;
+  try {
+    arr = JSON.parse(r.stdout || "[]") as Array<{ url?: unknown }>;
+  } catch {
+    throw new GitOpError(
+      `gh pr list returned non-JSON for head ${JSON.stringify(head)}: ${r.stdout.slice(0, 200)}`,
+    );
+  }
+  const url = arr.map((p) => String(p.url ?? "")).find((u) => u.startsWith("https://"));
+  if (!url) {
+    throw new GitOpError(`gh pr list returned no open PR for head ${JSON.stringify(head)}`);
   }
   return url;
 }
