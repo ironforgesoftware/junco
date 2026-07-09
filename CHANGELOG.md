@@ -4,11 +4,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-09
 
 ### Added
 
 - **`junco-dispatch` skill now recognizes repo-audit requests.** Phrases like "assess this repo" or "have junco audit this repo" route to a new Assess mode that runs `junco assess` (a read-only audit that files one GitHub issue per finding) instead of authoring a plan ticket.
+- **Guard & requeue observability.** Guard decisions (nudges, escalations, kills) are logged, recorded in the per-ticket transcript, and counted in run metrics; `junco status` and `/health` surface the requeue and guard counters.
+
+### Changed
+
+- **README restructured GitHub-first.** New tagline (_Issues in. Pull requests out._), a "The loop" walkthrough (label → plan → approve → PR, with the lifecycle labels and a real `junco logs -f` transcript), an assess section, fork-PR mode in the CLI table, and the dashboard mock up front. `package.json#homepage` and the README now point at the project's one-page site, [junco.ironforgesoftware.com](https://junco.ironforgesoftware.com).
+
+### Fixed
+
+- **Bridge:** the plan is recovered from the whole planning-session text when the junco-ticket fence isn't the last message (#86).
+- **PR flow:** fork PRs are recovered via `gh pr list --head owner:branch` (#75); only network/transient `gh pr create` failures requeue (#73); a pushed branch with no PR is recovered instead of stranded; an offline amend's push reports as queued, not unqualified success; `ls-remote` selects the exact ref sha, never a sibling ref (#72); fresh-mode resume is gated on crash-recovery provenance (#70); the fresh-mode fallback branch force-resets to `origin/<base>`.
+- **Locking:** one shared, hardened pidfile-lock helper — atomic stale-steal via rename-aside with post-move verify, ABA-steal and pid-reuse protection, a locale-stable `ps` start-time discriminator, and a fallback for filesystems without hard-link support.
+- **Outbox:** the finalize tail survives when a created-PR op dead-letters, and the flush lock is hardened against ABA steal and pid reuse.
+- **Assess:** code findings are fingerprinted by line bucket with a normalized title — dedup survives code drift and retitles — and findings parse from the whole run's text, not just the last message.
+- **Agent sessions:** a fallback grace deadline aborts wedged sessions; repetition-guard buffers clear after a nudge; `RunResult.finalText` is the last assistant message, not the whole run; transcript paths slugify the frontmatter id; subscribe-callback observability is guarded against throws.
+- **Queue & dispatch:** ticket placement is atomic (`linkSync` EEXIST, not check-then-act), and same-named terminal records uniquify instead of overwriting.
+- **Service & config:** systemd units escape `$` and `%` per field-expansion rules and double-quote `ExecStart`/`Environment` values; an empty `health_host` normalizes to loopback, and non-loopback binds warn at startup and in `junco doctor`.
+- **Logging & verification:** `worker.log` rotates mid-run as a single-writer, lock-holder concern; verification blocks are capped in count, bounded in aggregate wall clock, and run with a scrubbed child environment.
+- **Daemon & schema:** the stop flag is re-checked before claiming in the serial poll loop; the ticket contract bounds `timeout_minutes` (> 0) and `amends_pr` (≥ 1).
 
 ## [0.4.0] - 2026-07-06
 
