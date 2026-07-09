@@ -53,9 +53,10 @@ export interface AppProps {
   configPath: string;
   /** Managed clones root (<state_dir>/repos) — auto-clone destination. */
   clonesDir: string;
-  issuePollMs?: number; // default 30_000; tests pass large values
+  /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
+   * tests pass large values. */
+  refreshPollMs?: number;
   healthPollMs?: number; // default 5_000
-  prPollMs?: number; // default 60_000 — statusCheckRollup is a heavier call
   /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
   queueFn: () => Promise<QueueSnapshot>;
   queuePollMs?: number; // default 2_000
@@ -69,6 +70,10 @@ export interface AppProps {
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
 // terminals only).
 type Pane = 1 | 2 | 3;
+
+/** What a loader actually delivered — the unified cycle aggregates these to
+ * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
+type Delivery = { delivered: boolean; staleAt: string | null };
 type View =
   | "main"
   | "detail"
@@ -170,10 +175,9 @@ export function App(props: AppProps): React.JSX.Element {
     queueFn,
     onExit,
   } = props;
-  const issuePollMs = props.issuePollMs ?? 30_000;
+  const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
   const queuePollMs = props.queuePollMs ?? 2_000;
-  const prPollMs = props.prPollMs ?? 60_000;
   const runCliFn =
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
@@ -191,19 +195,19 @@ export function App(props: AppProps): React.JSX.Element {
   const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
   // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
   const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
-  // Freshness stamps: when each pane's data last came back fresh from GitHub.
-  // Cache-served (offline) loads do NOT update these — the stamp then shows the
-  // cache's own age via staleAt, which outranks fetchedAt in the panes.
-  const [issuesFetchedAt, setIssuesFetchedAt] = useState<Record<string, string>>({});
-  const [prsFetchedAt, setPrsFetchedAt] = useState<string | null>(null);
+  // The top bar's single ↻ stamp: when the last unified refresh cycle
+  // completed. Cache-served (offline) sources pull it back to the oldest
+  // cache staleAt, so data that arrived stale never reads as fresh.
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
   const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
   // Cross-repo PR aggregate — one flat, already-sorted list (attention-first).
   const [prs, setPrs] = useState<DashPr[]>([]);
-  // Oldest non-null per-repo staleAt across the aggregate (any offline repo → a
-  // stale marker); null when every repo served fresh.
-  const [prStaleAt, setPrStaleAt] = useState<string | null>(null);
+  // Per-repo listPrs staleAt so a SCOPED refresh clears only its own repo's
+  // marker; the list-level prStaleAt derives as the oldest non-null entry
+  // among watched repos (any offline repo → a stale marker).
+  const [prStaleByRepo, setPrStaleByRepo] = useState<Record<string, string | null>>({});
   // PR selection anchor: {nwo, number} because PR numbers collide across repos —
   // a bare-number anchor would jump on re-sort.
   const [prSel, setPrSel] = useState<{ nwo: string; number: number } | null>(null);
@@ -419,59 +423,120 @@ export function App(props: AppProps): React.JSX.Element {
   }, [prs, repoMappings]);
 
   const loadIssues = useCallback(
-    (nwo: string): Promise<void> => {
+    (nwo: string): Promise<Delivery> => {
       return client.listIssues(nwo).then((res) => {
         if (res.ok) {
           setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
           setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
-          if (res.value.staleAt === null) {
-            setIssuesFetchedAt((prev) => ({ ...prev, [nwo]: new Date().toISOString() }));
-          }
-        } else {
-          showToast("error", res.error);
+          return { delivered: true, staleAt: res.value.staleAt };
         }
+        showToast("error", res.error);
+        return { delivered: false, staleAt: null };
       });
     },
     [client, trigger, showToast],
   );
 
-  // Cross-repo PR aggregate: fetch every watched repo independently (a failed
-  // repo contributes nothing and never blocks the others — and is NOT toasted
-  // on the poll path), flatten, sort attention-first, and surface the OLDEST
-  // non-null staleAt so the list shows a stale marker when any repo is offline.
+  // Derived list-level stale marker (see prStaleByRepo above).
+  const prStaleAt = useMemo(() => {
+    const watched = new Set(repoMappings.map((r) => r.nwo));
+    let oldest: string | null = null;
+    for (const [nwo, s] of Object.entries(prStaleByRepo)) {
+      if (!watched.has(nwo) || s === null) continue;
+      if (oldest === null || Date.parse(s) < Date.parse(oldest)) oldest = s;
+    }
+    return oldest;
+  }, [prStaleByRepo, repoMappings]);
+
+  // Cross-repo PR aggregate sweep: fetch every watched repo independently (a
+  // failed repo contributes nothing and never blocks the others — and is NOT
+  // toasted on the poll path), flatten, sort attention-first.
   const loadPrs = useCallback(
-    (isAlive: () => boolean = () => true): Promise<void> => {
+    (isAlive: () => boolean = () => true): Promise<Delivery> => {
       const targets = repoMappings.map((r) => r.nwo);
       return Promise.all(targets.map((nwo) => client.listPrs(nwo))).then((results) => {
-        if (!isAlive()) return;
+        if (!isAlive()) return { delivered: false, staleAt: null };
         const all: DashPr[] = [];
-        let oldestStale: string | null = null;
-        for (const res of results) {
-          if (!res.ok) continue; // one repo down: skip it, never block the rest
+        const staleMap: Record<string, string | null> = {};
+        let oldest: string | null = null;
+        let delivered = false;
+        results.forEach((res, i) => {
+          if (!res.ok) return; // one repo down: skip it, never block the rest
+          delivered = true;
           all.push(...res.value.prs);
+          staleMap[targets[i]] = res.value.staleAt;
           const s = res.value.staleAt;
-          if (s !== null && (oldestStale === null || Date.parse(s) < Date.parse(oldestStale))) {
-            oldestStale = s;
-          }
-        }
+          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
+        });
         setPrs(sortPrs(all));
-        setPrStaleAt(oldestStale);
-        // Stamp only on a fresh (non-cache-served) result — an all-repos-down
-        // poll, or one served entirely from the on-disk cache while offline,
-        // must not claim the aggregate is fresh.
-        if (results.some((r) => r.ok && r.value.staleAt === null)) {
-          setPrsFetchedAt(new Date().toISOString());
-        }
+        setPrStaleByRepo(staleMap);
+        return { delivered, staleAt: oldest };
       });
     },
     [client, repoMappings],
   );
 
-  // Load issues for the selected repo (initial mount + every selection change).
+  // Scoped sibling of loadPrs: refresh ONE repo's slice of the cross-repo
+  // aggregate — main-view cycles poll only the selected repo.
+  const loadPrsFor = useCallback(
+    (nwo: string, isAlive: () => boolean = () => true): Promise<Delivery> => {
+      return client.listPrs(nwo).then((res) => {
+        if (!isAlive() || !res.ok) return { delivered: false, staleAt: null };
+        setPrs((prev) => sortPrs([...prev.filter((p) => p.nwo !== nwo), ...res.value.prs]));
+        setPrStaleByRepo((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
+        return { delivered: true, staleAt: res.value.staleAt };
+      });
+    },
+    [client],
+  );
+
+  // Live refs so the unified cycle and its interval never go stale as the
+  // operator navigates repos or switches views.
+  const nwoRef = useRef<string | undefined>(currentNwo);
+  nwoRef.current = currentNwo;
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  // The ONE refresh cycle. Scope follows the view unless overridden (the `p`
+  // handler must sweep before the "prs" view state has committed): main →
+  // selected repo's issues + PRs; monitor → every watched repo's PRs. Stamps
+  // refreshedAt on completion — oldest cache staleAt wins, and a cycle where
+  // nothing delivered never advances the stamp.
+  const refreshAll = useCallback(
+    (opts: { isAlive?: () => boolean; scope?: "main" | "monitor" } = {}): Promise<void> => {
+      const isAlive = opts.isAlive ?? ((): boolean => true);
+      const inMonitor =
+        opts.scope !== undefined
+          ? opts.scope === "monitor"
+          : viewRef.current === "prs" || viewRef.current === "prDetail";
+      const nwo = nwoRef.current;
+      const jobs: Promise<Delivery>[] = inMonitor
+        ? [loadPrs(isAlive)]
+        : nwo
+          ? [loadIssues(nwo), loadPrsFor(nwo, isAlive)]
+          : [];
+      if (jobs.length === 0) return Promise.resolve();
+      return Promise.all(jobs).then((outcomes) => {
+        if (!isAlive()) return;
+        const delivered = outcomes.filter((o) => o.delivered);
+        if (delivered.length === 0) return; // nothing arrived: never advance
+        let oldest: string | null = null;
+        for (const o of delivered) {
+          const s = o.staleAt;
+          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
+        }
+        setRefreshedAt(oldest ?? new Date().toISOString());
+      });
+    },
+    [loadIssues, loadPrs, loadPrsFor],
+  );
+
+  // Scoped cycle for the selected repo (initial mount + every selection
+  // change): the data under the operator's eyes refreshes immediately.
   useEffect(() => {
     if (!currentNwo) return;
-    void loadIssues(currentNwo);
-  }, [currentNwo, loadIssues]);
+    void refreshAll();
+  }, [currentNwo, refreshAll]);
 
   // Clear the live filter when the selected repo changes — a stale query would
   // hide the newly-selected repo's issues (also fires harmlessly on mount).
@@ -527,17 +592,16 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, [currentNwo, repoPrs]);
 
-  // Issue polling — reads the live selection from a ref so the interval never
-  // goes stale as the operator navigates.
-  const nwoRef = useRef<string | undefined>(currentNwo);
-  nwoRef.current = currentNwo;
+  // The unified poll — one interval, view-scoped via the refs. Immediate
+  // cycles fire from the selection effect, the `p` handler, and `r`.
   useEffect(() => {
-    const id = setInterval(() => {
-      const nwo = nwoRef.current;
-      if (nwo) void loadIssues(nwo);
-    }, issuePollMs);
-    return () => clearInterval(id);
-  }, [issuePollMs, loadIssues]);
+    let alive = true;
+    const id = setInterval(() => void refreshAll({ isAlive: () => alive }), refreshPollMs);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [refreshAll, refreshPollMs]);
 
   // Health polling (also fires once on mount).
   useEffect(() => {
@@ -571,19 +635,17 @@ export function App(props: AppProps): React.JSX.Element {
     };
   }, [queueFn, queuePollMs]);
 
-  // Cross-repo PR polling (fires once on mount, then on the interval). Re-runs
-  // when repoMappings changes (a watch/unwatch) so a newly-watched repo's PRs
-  // appear on the next tick. The alive guard threads through loadPrs so a poll
-  // in flight when the app unmounts never sets state.
+  // Full sweep on mount and whenever the watchlist changes (refreshAll's
+  // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
+  // and the monitor aggregate, so a newly-watched repo's PRs appear without
+  // waiting for a monitor visit. Scoped cycles take over in between.
   useEffect(() => {
     let alive = true;
-    void loadPrs(() => alive);
-    const id = setInterval(() => void loadPrs(() => alive), prPollMs);
+    void refreshAll({ isAlive: () => alive, scope: "monitor" });
     return () => {
       alive = false;
-      clearInterval(id);
     };
-  }, [loadPrs, prPollMs]);
+  }, [refreshAll]);
 
   const setIssueLabels = useCallback((nwo: string, num: number, labels: string[]) => {
     setIssues((prev) => {
@@ -804,7 +866,7 @@ export function App(props: AppProps): React.JSX.Element {
       delete rest[gone];
       return rest;
     });
-    setIssuesFetchedAt((prev) => {
+    setPrStaleByRepo((prev) => {
       if (!(gone in prev)) return prev;
       const rest = { ...prev };
       delete rest[gone];
@@ -1051,7 +1113,7 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "G") return void movePrTo(prs.length - 1);
       if (input === "o") return void openSelectedPr();
       if (key.return) return void openPrDetail(selectedPr, "prs");
-      if (input === "r") return void loadPrs();
+      if (input === "r") return void refreshAll();
       return;
     }
 
@@ -1127,6 +1189,9 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "p") {
       setScroll(0);
       setView("prs");
+      // Entering the monitor: immediate full sweep (scope override — viewRef
+      // still reads "main" until this render commits).
+      void refreshAll({ scope: "monitor" });
       return;
     }
     if (input === ":") {
@@ -1171,10 +1236,8 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (input === "r") {
-      if (currentNwo) {
-        setRefreshing(true);
-        void loadIssues(currentNwo).finally(() => setRefreshing(false));
-      }
+      setRefreshing(true);
+      void refreshAll().finally(() => setRefreshing(false));
       return;
     }
     // `s`/`S` assess the rail-selected repo — global to the main view (the
@@ -1385,6 +1448,7 @@ export function App(props: AppProps): React.JSX.Element {
           outboxDepth={queueSnap?.outboxDepth ?? 0}
           prAttention={prAttention}
           prFailing={prFailing}
+          refreshedAt={refreshedAt}
         />
       }
       toast={toast}
@@ -1443,7 +1507,6 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={prStaleAt}
-          fetchedAt={prsFetchedAt}
           window={prWindow}
         />
       ) : (
@@ -1458,7 +1521,6 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           now={queueNow}
           staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
-          fetchedAt={currentNwo ? (issuesFetchedAt[currentNwo] ?? null) : null}
           window={issueWindow}
         />
       )}
@@ -1482,7 +1544,6 @@ export function App(props: AppProps): React.JSX.Element {
               height={listHeight}
               now={queueNow}
               staleAt={prStaleAt}
-              fetchedAt={prsFetchedAt}
               window={pane3Window}
               title={pane3Title}
               emptyText="no junco PRs for this repo"

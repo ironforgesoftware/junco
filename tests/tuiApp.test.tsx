@@ -253,10 +253,9 @@ const readyIssue: DashIssue = { ...rawIssue, number: 9, labels: ["junco", "junco
 function renderApp(
   client: DashboardClient,
   watchlistFile: string,
-  issuePollMs = 999999,
+  refreshPollMs = 999999,
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
   queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
-  prPollMs = 999999,
 ) {
   return render(
     <App
@@ -267,10 +266,9 @@ function renderApp(
       watchlistFile={watchlistFile}
       configPath="/x/config.toml"
       clonesDir={CLONES_DIR}
-      issuePollMs={issuePollMs}
+      refreshPollMs={refreshPollMs}
       healthPollMs={999999}
       queuePollMs={999999}
-      prPollMs={prPollMs}
       queueFn={queueFn}
       runCliFn={runCliFn}
       // Medium layout: single body pane, so enter still opens the detail view
@@ -342,53 +340,6 @@ describe("App", () => {
     r.stdin.write("p");
     await until(() => (r.lastFrame() ?? "").includes("pull requests"));
     await until(() => (r.lastFrame() ?? "").includes("↻ 0s"));
-  });
-
-  it("all-repos-down PR poll does not advance the freshness stamp", async () => {
-    const { client: base } = makeClient({ "acme/api": [rawIssue] });
-    const client: DashboardClient = {
-      ...base,
-      listPrs: async () => ({ ok: false, error: "network down" }),
-    };
-    const r = renderApp(client, wl());
-    await until(() => (r.lastFrame() ?? "").includes("#7"));
-    r.stdin.write("p");
-    await until(() => (r.lastFrame() ?? "").includes("pull requests"));
-    // Every watched repo's listPrs failed — the aggregate stamp must not
-    // claim freshness. If the guard in loadPrs were removed/inverted,
-    // prsFetchedAt would be set at mount and "↻ 0s" would render here.
-    expect(r.lastFrame() ?? "").not.toContain("↻");
-  });
-
-  it("cache-served (offline) PR poll does not advance the freshness stamp either", async () => {
-    const { client: base } = makeClient({ "acme/api": [rawIssue] });
-    const staleIso = new Date(Date.now() - 5 * 60_000).toISOString();
-    let call = 0;
-    const client: DashboardClient = {
-      ...base,
-      listPrs: async () => {
-        const res =
-          call === 0
-            ? okv({ prs: [makePr()], staleAt: staleIso })
-            : ({ ok: false, error: "network down" } as const);
-        call++;
-        return res;
-      },
-    };
-    const r = renderApp(client, wl(), 999999, undefined, undefined, 150); // prPollMs=150
-    await until(() => (r.lastFrame() ?? "").includes("#7"));
-    r.stdin.write("p");
-    await until(() => (r.lastFrame() ?? "").includes("pull requests"));
-    // Poll 1 is cache-served (staleAt set on an ok:true result) — the offline
-    // marker renders while it's the freshest data we have.
-    await until(() => (r.lastFrame() ?? "").includes("offline"));
-    // Poll 2 (all repos down) clears prStaleAt to null — wait for it to land
-    // before asserting, so this can't race the interval.
-    await until(() => !(r.lastFrame() ?? "").includes("offline"));
-    // Cache-served poll 1 must NOT have stamped prsFetchedAt — if it had (the
-    // pre-fix guard only checked `res.ok`), the title would fall back to it
-    // once staleAt clears and render "↻ 0s" here.
-    expect(r.lastFrame() ?? "").not.toContain("↻");
   });
 
   it("dispatch on a raw issue applies the action optimistically", async () => {
@@ -708,10 +659,9 @@ describe("App", () => {
           watchlistFile={wl()}
           configPath="/x/config.toml"
           clonesDir={CLONES_DIR}
-          issuePollMs={999999}
+          refreshPollMs={999999}
           healthPollMs={999999}
           queuePollMs={999999}
-          prPollMs={999999}
           queueFn={async () => QUEUE_SNAP}
           sizeOverride={{ columns: 130, rows: 30 }}
           onExit={() => {}}
@@ -751,10 +701,9 @@ describe("App", () => {
           watchlistFile={wl()}
           configPath="/x/config.toml"
           clonesDir={CLONES_DIR}
-          issuePollMs={999999}
+          refreshPollMs={999999}
           healthPollMs={999999}
           queuePollMs={999999}
-          prPollMs={999999}
           queueFn={async () => QUEUE_SNAP}
           sizeOverride={{ columns: 130, rows: 30 }}
           onExit={() => {}}
@@ -1030,7 +979,7 @@ describe("PRs view", () => {
     const first = [a, b];
     const second = [a, { ...b, updatedAt: "2026-07-06T14:00:00Z" }]; // #11 now newest → top
     const { client, prCalls, advance } = makePrSeqClient([first, second]);
-    const r = renderApp(client, wlp(), 999999, undefined, undefined, 60); // prPollMs=60
+    const r = renderApp(client, wlp(), 60); // refreshPollMs=60
     await tick();
     r.stdin.write("p"); // open PRs view; `first` is current → selection anchored to #10
     await until(() => (r.lastFrame() ?? "").includes("PR ten"));
@@ -1048,9 +997,11 @@ describe("PRs view", () => {
 
   // Unwatching a repo must clear its PRs from the aggregate synchronously —
   // the ⚑ attention chip reflects only currently watched repos, never ghost
-  // data lingering until the next poll (the reviewCount rule). listPrs here
-  // never resolves a second time, so a passing test proves the synchronous
-  // prune in unwatch(), not a refetch.
+  // data lingering until the next poll (the reviewCount rule). Mount
+  // legitimately fetches the selected repo twice (scoped cycle + startup
+  // sweep) and coral once; every later call — including the sweep unwatch
+  // itself triggers — hangs forever, so a passing test still proves the
+  // SYNCHRONOUS prune in unwatch(), not a refetch.
   it("unwatching a repo clears its contribution to the ⚑ PR attention chip", async () => {
     const failing = makePr({
       nwo: "alx/coral",
@@ -1061,13 +1012,12 @@ describe("PRs view", () => {
       checks: { pass: 0, fail: 1, pending: 0, total: 1 },
     });
     const { client: base } = makeClient({ "acme/api": [], "alx/coral": [] });
-    const served = new Set<string>();
+    const budget: Record<string, number> = { "acme/api": 2, "alx/coral": 1 };
     const client: DashboardClient = {
       ...base,
-      // Serve each repo's PR list exactly once; every later call hangs forever.
       listPrs: (nwo: string) => {
-        if (served.has(nwo)) return new Promise<never>(() => {});
-        served.add(nwo);
+        if ((budget[nwo] ?? 0) <= 0) return new Promise<never>(() => {});
+        budget[nwo] = (budget[nwo] ?? 0) - 1;
         return Promise.resolve(okv({ prs: nwo === "alx/coral" ? [failing] : [], staleAt: null }));
       },
     };
@@ -1289,7 +1239,7 @@ describe("assess hotkey (s/S)", () => {
         watchlistFile={file}
         configPath="/x/config.toml"
         clonesDir={CLONES_DIR}
-        issuePollMs={999999}
+        refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
@@ -1604,7 +1554,7 @@ describe("workspace wide mode", () => {
         watchlistFile={watchlistFile}
         configPath="/x/config.toml"
         clonesDir={CLONES_DIR}
-        issuePollMs={999999}
+        refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
@@ -1702,7 +1652,7 @@ describe("workspace wide mode", () => {
         watchlistFile={wl6()}
         configPath="/x/config.toml"
         clonesDir={CLONES_DIR}
-        issuePollMs={999999}
+        refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
@@ -1883,7 +1833,7 @@ describe("workspace wide mode", () => {
         watchlistFile={file}
         configPath="/x/config.toml"
         clonesDir={CLONES_DIR}
-        issuePollMs={999999}
+        refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
@@ -1918,5 +1868,97 @@ describe("workspace wide mode", () => {
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1
     await until(() => (r.lastFrame() ?? "").includes("x unwatch"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unified view-scoped refresh (the top bar's single ↻ stamp)
+// ---------------------------------------------------------------------------
+
+describe("unified refresh", () => {
+  const wl = () => join(mkdtempSync(join(tmpdir(), "junco-uref1-")), "wl.json");
+  const twoRepoWl = () => {
+    const file = join(mkdtempSync(join(tmpdir(), "junco-uref-")), "wl.json");
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    return file; // watched = acme/api (config) + alx/coral (watchlist)
+  };
+  /** A client that records every listIssues/listPrs call's nwo. */
+  function makeScopeClient() {
+    const issueCalls: string[] = [];
+    const listPrCalls: string[] = [];
+    const base = makeClient({ "acme/api": [rawIssue], "alx/coral": [] }).client;
+    const client: DashboardClient = {
+      ...base,
+      listIssues: async (nwo) => {
+        issueCalls.push(nwo);
+        return okv({ issues: nwo === "acme/api" ? [rawIssue] : [], staleAt: null });
+      },
+      listPrs: async (nwo) => {
+        listPrCalls.push(nwo);
+        return okv({ prs: [makePr({ nwo })], staleAt: null });
+      },
+    };
+    return { client, issueCalls, listPrCalls };
+  }
+
+  it("r in the main view refreshes ONLY the selected repo (issues + PRs)", async () => {
+    const { client, issueCalls, listPrCalls } = makeScopeClient();
+    const r = renderApp(client, twoRepoWl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    const i0 = issueCalls.length;
+    const p0 = listPrCalls.length;
+    r.stdin.write("r");
+    await until(() => issueCalls.length > i0 && listPrCalls.length > p0);
+    await tick();
+    expect(issueCalls.slice(i0)).toEqual(["acme/api"]);
+    expect(listPrCalls.slice(p0)).toEqual(["acme/api"]); // NOT alx/coral
+  });
+
+  it("entering the PR monitor sweeps every watched repo", async () => {
+    const { client, listPrCalls } = makeScopeClient();
+    const r = renderApp(client, twoRepoWl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    const p0 = listPrCalls.length;
+    r.stdin.write("p");
+    await until(() => listPrCalls.length >= p0 + 2);
+    expect(listPrCalls.slice(p0, p0 + 2).sort()).toEqual(["acme/api", "alx/coral"]);
+  });
+
+  it("stamps ↻ in the header after a cycle completes", async () => {
+    const { client } = makeScopeClient();
+    const r = renderApp(client, twoRepoWl());
+    await until(() => (r.lastFrame() ?? "").includes("↻ 0s"));
+  });
+
+  it("offline: the stamp shows the OLDEST cache age, not the cycle time", async () => {
+    const staleIso = new Date(Date.now() - 5 * 60_000).toISOString();
+    const base = makeClient({ "acme/api": [rawIssue] }).client;
+    const client: DashboardClient = {
+      ...base,
+      listIssues: async () => okv({ issues: [rawIssue], staleAt: null }),
+      listPrs: async () => okv({ prs: [], staleAt: staleIso }), // cache-served
+    };
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("↻ 5m"));
+  });
+
+  it("a cycle where nothing delivered never advances the stamp", async () => {
+    const base = makeClient({ "acme/api": [rawIssue] }).client;
+    let fail = false;
+    const client: DashboardClient = {
+      ...base,
+      listIssues: async () =>
+        fail
+          ? ({ ok: false, error: "net down" } as const)
+          : okv({ issues: [rawIssue], staleAt: null }),
+      listPrs: async () =>
+        fail ? ({ ok: false, error: "net down" } as const) : okv({ prs: [], staleAt: null }),
+    };
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("↻ 0s"));
+    fail = true;
+    r.stdin.write("r");
+    await until(() => (r.lastFrame() ?? "").includes("net down")); // failure surfaced
+    expect(r.lastFrame()).toContain("↻ 0s"); // stamp survives unchanged
   });
 });

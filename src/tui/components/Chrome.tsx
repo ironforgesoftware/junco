@@ -4,7 +4,7 @@ import { theme, toastColor, type ToastKind } from "../theme.js";
 import type { LayoutMode } from "../layout.js";
 import type { HealthInfo } from "../ghClient.js";
 import { fmtCompact } from "../queueFmt.js";
-import { relTime } from "./IssueList.js";
+import { relTime, relTimeShort } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
 
 export type HintView =
@@ -44,6 +44,7 @@ export function Header({
   outboxDepth,
   prAttention,
   prFailing,
+  refreshedAt,
 }: {
   repoNwo: string | null;
   /** Extended /health snapshot, null before the first poll resolves. */
@@ -64,6 +65,10 @@ export function Header({
   prAttention: number;
   /** True when any of those PRs is checks-failing — picks the chip's color. */
   prFailing: boolean;
+  /** Last completed unified refresh cycle (oldest cache age when any source
+   * was served offline) — the top bar's single ↻ stamp. Null until the first
+   * cycle completes. */
+  refreshedAt: string | null;
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -120,6 +125,7 @@ export function Header({
           <Text color={theme.warn}>bridge ✗{bridgeErrors}</Text>
         )}
         <Text color={daemonUp ? theme.success : theme.warn}>{daemon}</Text>
+        {refreshedAt !== null && <Text dimColor>↻ {relTimeShort(refreshedAt, now)}</Text>}
         {queueRunning + queueWaiting > 0 && (
           <Text color={theme.info}>
             ◐{queueRunning} ⏳{queueWaiting}
