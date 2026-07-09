@@ -49,8 +49,13 @@ jobs:
           package-manager-cache: false
       # Trusted publishing needs npm >= 11.5.1; node's bundled npm may lag.
       # Exact-pinned (repo policy — same reason the actions above are SHA-pinned):
-      # this client holds the OIDC publish capability. Bump deliberately.
-      - run: npm install -g npm@12.0.0
+      # this client holds the OIDC publish capability. Bump deliberately — and
+      # verify the candidate can actually publish with provenance first:
+      # npm@12.0.0 ships without the unscoped `sigstore` package its own
+      # libnpmpublish/lib/provenance.js requires, so every
+      # `npm publish --provenance` dies with MODULE_NOT_FOUND (broke v0.5.0's
+      # first release run; nothing reached npm).
+      - run: npm install -g npm@11.18.0
       - name: Verify release tag matches package.json version
         run: |
           pkg="v$(node -p "require('./package.json').version")"
