@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { Header, Toast, Footer, hintsFor } from "../src/tui/components/Chrome.js";
+import { Header, Toast, Footer, hintsFor, localHintsFor } from "../src/tui/components/Chrome.js";
+import { headerTabBands } from "../src/tui/geometry.js";
 import type { HealthInfo } from "../src/tui/ghClient.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
@@ -429,5 +430,102 @@ describe("Header unified refresh stamp", () => {
       <Header {...base} mode="medium" refreshedAt="2026-07-07T09:59:48Z" />,
     ).lastFrame()!;
     expect(f).toContain("↻ 12s");
+  });
+});
+
+describe("Header mode tabs", () => {
+  const base = {
+    repoNwo: "acme/api",
+    health: UP_BARE,
+    reviewCount: 0,
+    now: NOW,
+    queueRunning: 0,
+    queueWaiting: 0,
+    watchlistError: null,
+    outboxDepth: 0,
+    prAttention: 0,
+    prFailing: false,
+    refreshedAt: null,
+  } as const;
+
+  it("absent uiMode renders no tab (byte-for-byte legacy header)", () => {
+    const f = render(<Header {...base} mode="wide" />).lastFrame()!;
+    expect(f).not.toContain("[GITHUB]");
+    expect(f).not.toContain("[LOCAL]");
+  });
+
+  it("github active: [GITHUB] bracketed, local plain — survives NO_COLOR", () => {
+    const f = render(<Header {...base} mode="wide" uiMode="github" githubEnabled />).lastFrame()!;
+    expect(f).toContain("[GITHUB]");
+    expect(f).toContain("local");
+    expect(f).not.toContain("[LOCAL]");
+  });
+
+  it("local active: github plain, [LOCAL] bracketed", () => {
+    const f = render(<Header {...base} mode="wide" uiMode="local" githubEnabled />).lastFrame()!;
+    expect(f).toContain("[LOCAL]");
+    expect(f).toContain("github");
+    expect(f).not.toContain("[GITHUB]");
+  });
+
+  it("compact form below the wide breakpoint: single-letter tabs", () => {
+    const f = render(<Header {...base} mode="medium" uiMode="github" githubEnabled />).lastFrame()!;
+    expect(f).toContain("[G]");
+    expect(f).toContain("l");
+    expect(f).not.toContain("[GITHUB]");
+  });
+
+  it("columns=60 (medium, narrowest) with a full chip set stays one row (no wrap)", () => {
+    const f = render(
+      <Header
+        {...base}
+        mode="medium"
+        uiMode="local"
+        githubEnabled
+        reviewCount={2}
+        queueRunning={1}
+        queueWaiting={1}
+        outboxDepth={4}
+        prAttention={3}
+      />,
+    ).lastFrame()!;
+    const lines = f.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(1);
+  });
+
+  it("tab labels align with headerTabBands click bands", () => {
+    const bands = headerTabBands(100);
+    // Both bands land inside the printed header width and are ordered g < l.
+    expect(bands.githubStart).toBeLessThan(bands.localStart);
+    expect(bands.hit(bands.githubStart)).toBe("github");
+    expect(bands.hit(bands.localStart)).toBe("local");
+    expect(bands.hit(0)).toBe(null); // brand region is dead
+  });
+});
+
+describe("localHintsFor", () => {
+  it("rail focus advertises the global mode + section keys", () => {
+    const keys = localHintsFor("queue", "rail").map(([k]) => k);
+    expect(keys).toContain("↑/↓");
+    expect(keys).toContain("m");
+    expect(keys).toContain("q");
+  });
+  it("queue body advertises R requeue and x delete", () => {
+    const pairs = localHintsFor("queue", "body");
+    expect(pairs.find(([k]) => k === "R")?.[1]).toBe("requeue");
+    expect(pairs.find(([k]) => k === "x")?.[1]).toBe("delete");
+  });
+  it("worktrees body advertises x prune; daemon advertises X restart and [/] scroll", () => {
+    expect(localHintsFor("worktrees", "body").find(([k]) => k === "x")?.[1]).toBe("prune");
+    const daemon = localHintsFor("daemon", "body").map(([k]) => k);
+    expect(daemon).toContain("X");
+    expect(daemon).toContain("[/]");
+  });
+});
+
+describe("hintsFor github main still discovers the mode key", () => {
+  it("main pane 2 wide includes m local", () => {
+    const pairs = hintsFor("main", 2, "wide", false);
+    expect(pairs.find(([k]) => k === "m")?.[1]).toBe("local");
   });
 });
