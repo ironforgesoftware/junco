@@ -1,0 +1,189 @@
+/**
+ * Local runtime snapshot for the dashboard LOCAL mode: the repos/clones/forks
+ * junco knows about (and where they live on disk), the per-ticket worktrees,
+ * the GitHub outbox op-log, and daemon/health detail. Split cheap vs heavy so
+ * the 2s GitHub-path QueueSnapshot never pays for per-repo/per-worktree git.
+ *
+ * Every enumerator git call passes `--no-optional-locks` (lock-free observation
+ * of a live daemon-owned base repo) and goes through the injectable `gitFn`
+ * seam. Never-throws: a top-level try/catch sets `error`; per-item `error`
+ * fields carry individual failures (posture of makeQueueSnapshotFn).
+ */
+
+import { readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { Config } from "../types.js";
+import { git } from "../git.js";
+import { readWatchlist, watchlistPath } from "../watchlist.js";
+import { nwoFromRemoteUrl } from "../githubInbox.js";
+
+export interface LocalSnapshotDeps {
+  readdirFn?: (dir: string) => string[];
+  readFileFn?: (p: string) => string;
+  statFn?: (p: string) => { mtimeMs: number };
+  fetchFn?: typeof fetch;
+  nowFn?: () => Date;
+  gitFn?: (args: string[], cwd: string) => Promise<{ code: number; stdout: string }>;
+}
+
+type GitFn = NonNullable<LocalSnapshotDeps["gitFn"]>;
+
+export interface LocalRepo {
+  nwo: string | null;
+  path: string;
+  source: "config" | "watchlist" | "external" | "clone";
+  originUrl: string | null;
+  forkUrl: string | null;
+  githubUrl: string | null;
+  branch: string | null;
+  headSha: string | null;
+  dirty: boolean | null;
+  error: string | null;
+}
+
+export interface RepoCandidate {
+  path: string;
+  source: LocalRepo["source"];
+  nwoHint: string | null;
+}
+
+const REPO_POOL = 4;
+
+/** Default gitFn: cwd-scoped, check:false (a non-zero exit is data, not a
+ * throw — the caller reads `code`). */
+function defaultGitFn(cfg: Config): GitFn {
+  return async (args, cwd) => {
+    const r = await git(cfg, args, { cwd, check: false });
+    return { code: r.code, stdout: r.stdout };
+  };
+}
+
+/** Bounded-concurrency map: at most `limit` `fn` calls in flight. Order of
+ * `results` matches `items`. */
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) || 0 }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** One-level-of-owner walk: `<root>/<owner>/<name>` — matches both
+ * externalClonePath (externalRepo.ts) and the dashboard clone target
+ * (App.tsx clonesDir join owner/repo). Missing/undreadable dir → []. */
+function walkOwnerName(
+  root: string,
+  source: LocalRepo["source"],
+  readdirFn: (d: string) => string[],
+): RepoCandidate[] {
+  const out: RepoCandidate[] = [];
+  let owners: string[];
+  try {
+    owners = readdirFn(root);
+  } catch {
+    return out;
+  }
+  for (const owner of owners) {
+    const ownerPath = join(root, owner);
+    let names: string[];
+    try {
+      names = readdirFn(ownerPath);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      out.push({ path: join(ownerPath, name), source, nwoHint: `${owner}/${name}` });
+    }
+  }
+  return out;
+}
+
+/**
+ * Union of the repos junco knows about, deduped by resolve(path) (first source
+ * wins): (1) cfg.github.repos; (2) the RAW watchlist — readWatchlist, NOT
+ * resolveWatchedRepos, so external:true forks survive (watchlist.ts:92);
+ * (3) externalReposRoot walk; (4) <stateDir>/repos walk. Pure fs (no git), so
+ * enumerateWorktrees can reuse it for the discriminator reverse-map.
+ */
+export function collectRepoCandidates(cfg: Config, deps: LocalSnapshotDeps = {}): RepoCandidate[] {
+  const readdirFn = deps.readdirFn ?? readdirSync;
+  const out: RepoCandidate[] = [];
+  const seen = new Set<string>();
+  const add = (c: RepoCandidate): void => {
+    const key = resolve(c.path);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(c);
+  };
+  for (const r of cfg.github.repos) add({ path: r.path, source: "config", nwoHint: r.nwo });
+  for (const e of readWatchlist(watchlistPath(cfg)).entries) {
+    add({ path: e.path, source: "watchlist", nwoHint: e.nwo });
+  }
+  for (const c of walkOwnerName(cfg.github.externalReposRoot, "external", readdirFn)) add(c);
+  for (const c of walkOwnerName(join(cfg.stateDir, "repos"), "clone", readdirFn)) add(c);
+  return out;
+}
+
+/** Per-repo git enrichment, individually wrapped (never-throws → null fields +
+ * `error`). nwo from origin's URL (nwoFromRemoteUrl), falling back to the
+ * candidate's nwoHint; forkUrl from the `fork` remote (external/clone repos)
+ * else null. Dirty = non-empty `status --porcelain`. */
+async function buildRepo(c: RepoCandidate, gitFn: GitFn): Promise<LocalRepo> {
+  const base: LocalRepo = {
+    nwo: c.nwoHint,
+    path: c.path,
+    source: c.source,
+    originUrl: null,
+    forkUrl: null,
+    githubUrl: null,
+    branch: null,
+    headSha: null,
+    dirty: null,
+    error: null,
+  };
+  try {
+    const q = (args: string[]): Promise<{ code: number; stdout: string }> =>
+      gitFn(["--no-optional-locks", "-C", c.path, ...args], c.path);
+
+    const originR = await q(["remote", "get-url", "origin"]);
+    const originUrl = originR.code === 0 ? originR.stdout.trim() : null;
+    const forkR = await q(["remote", "get-url", "fork"]);
+    const forkUrl = forkR.code === 0 ? forkR.stdout.trim() : null;
+    const nwo = (originUrl ? nwoFromRemoteUrl(originUrl) : null) ?? c.nwoHint;
+
+    const branchR = await q(["rev-parse", "--abbrev-ref", "HEAD"]);
+    const branch = branchR.code === 0 ? branchR.stdout.trim() : null;
+    const headR = await q(["rev-parse", "HEAD"]);
+    const headSha = headR.code === 0 ? headR.stdout.trim() : null;
+    const statusR = await q(["status", "--porcelain"]);
+    const dirty = statusR.code === 0 ? statusR.stdout.trim() !== "" : null;
+
+    return {
+      ...base,
+      nwo,
+      originUrl,
+      forkUrl,
+      githubUrl: nwo ? `https://github.com/${nwo}` : null,
+      branch,
+      headSha,
+      dirty,
+    };
+  } catch (e) {
+    return { ...base, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function enumerateRepos(
+  cfg: Config,
+  deps: LocalSnapshotDeps = {},
+): Promise<LocalRepo[]> {
+  const gitFn = deps.gitFn ?? defaultGitFn(cfg);
+  const candidates = collectRepoCandidates(cfg, deps);
+  return mapPool(candidates, REPO_POOL, (c) => buildRepo(c, gitFn));
+}
