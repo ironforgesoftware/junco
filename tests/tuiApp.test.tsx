@@ -12,6 +12,7 @@ import type { DashIssue } from "../src/tui/state.js";
 import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import { until } from "./helpers/until.js";
 
 // Every App mount registers a `process.on("exit")` listener via useMouse; this
 // file's ~57 renders never unmount on their own, which trips Node's
@@ -282,14 +283,6 @@ function renderApp(
 const tick = () => new Promise((r) => setTimeout(r, 30));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function until(cond: () => boolean, tries = 50): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    if (cond()) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  expect(cond()).toBe(true); // final assert with a real failure message
-}
-
 describe("App", () => {
   const wl = () => join(mkdtempSync(join(tmpdir(), "junco-app-")), "wl.json");
 
@@ -349,9 +342,10 @@ describe("App", () => {
     r.stdin.write("\t"); // focus issues pane
     await tick();
     r.stdin.write("d");
-    await tick();
+    // Async applyAction + optimistic commit — bounded until-loop, never a fixed tick.
+    await until(() => actions.length === 1);
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
-    expect(r.lastFrame()).toContain("planning"); // optimistic label applied
+    await until(() => (r.lastFrame() ?? "").includes("planning")); // optimistic label applied
   });
 
   it("approve is refused on a raw issue with a reason toast (no client call)", async () => {
@@ -426,7 +420,8 @@ describe("App", () => {
     r.stdin.write("j"); // select alx/coral
     await tick();
     r.stdin.write("x");
-    await tick();
+    // The unwatch write is observable on disk — bounded until-loop, never a fixed tick.
+    await until(() => readWatchlist(file).entries.length === 0);
     expect(readWatchlist(file).entries).toEqual([]);
   });
 
@@ -462,7 +457,7 @@ describe("App", () => {
       return eight !== -1 && seven !== -1 && eight < seven; // re-sort rendered: #8 above #7
     });
     r.stdin.write("d"); // dispatch the SELECTED issue
-    await tick();
+    await until(() => actions.length === 1);
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
   });
 
@@ -505,11 +500,11 @@ describe("App", () => {
       }),
     };
     const r = renderApp(client, wl(), 60);
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // first load rendered
     r.stdin.write("\t"); // focus issues pane (selection = #7)
     await tick();
     r.stdin.write("\r"); // open detail on #7 (snapshot frozen here)
-    await tick();
+    await until(() => (r.lastFrame() ?? "").includes("the body")); // detail view is open
     live = [b8]; // #7 closed; the next poll drops it from the live list
     const seen = polls;
     await until(() => polls > seen); // a post-mutation poll definitely delivered
@@ -551,8 +546,9 @@ describe("App", () => {
     r.stdin.write("~/code/coral");
     await tick();
     r.stdin.write("\r");
-    await tick();
-    await tick();
+    // The submit kicks an async validate→write chain; fixed ticks race React's
+    // commit on slow runners — bounded until-loop on the observable write.
+    await until(() => readWatchlist(file).entries.length > 0);
     const entries = readWatchlist(file).entries;
     expect(entries).toHaveLength(1);
     expect(entries[0].path.startsWith(homedir())).toBe(true);
@@ -1086,12 +1082,13 @@ describe("command palette + focus keys", () => {
     const r = renderApp(client, wl2());
     await tick();
     r.stdin.write("w");
-    await tick();
-    expect(r.lastFrame()).toContain("Watch a repository");
+    await until(() => (r.lastFrame() ?? "").includes("Watch a repository"));
     r.stdin.write(ESC);
-    await tick();
+    // Wait for the form to actually close, or a late React commit could leave
+    // "Watch a repository" in the frame when the negative assert below runs.
+    await until(() => !(r.lastFrame() ?? "").includes("Watch a repository"));
     r.stdin.write("A");
-    await tick();
+    await tick(); // "A" must be a no-op — a beat, then assert the absence
     expect(r.lastFrame()).not.toContain("Watch a repository");
   });
 
@@ -1102,7 +1099,7 @@ describe("command palette + focus keys", () => {
     r.stdin.write("i"); // issues pane via direct jump — no tab needed
     await tick();
     r.stdin.write("d");
-    await tick();
+    await until(() => actions.length === 1);
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
   });
 
@@ -1112,8 +1109,7 @@ describe("command palette + focus keys", () => {
     const r = renderApp(client, wl2(), 999999, runCliFn);
     await tick();
     r.stdin.write(":");
-    await tick();
-    expect(r.lastFrame()).toContain("run a junco command"); // App-level Modal title
+    await until(() => (r.lastFrame() ?? "").includes("run a junco command")); // App-level Modal title
     expect(r.lastFrame()).toContain("Runs the junco CLI against this dashboard's config");
     r.stdin.write("doctor");
     await tick();
@@ -1137,12 +1133,11 @@ describe("command palette + focus keys", () => {
     r.stdin.write("list");
     await tick();
     r.stdin.write("\r"); // argsHint present -> args mode
-    await tick();
-    expect(r.lastFrame()).toContain("args:");
+    await until(() => (r.lastFrame() ?? "").includes("args:"));
     r.stdin.write("failed");
     await tick();
     r.stdin.write("\r");
-    await tick();
+    await until(() => runs.length === 1);
     expect(runs).toEqual([["list", ["failed"]]]);
   });
 
@@ -1158,7 +1153,7 @@ describe("command palette + focus keys", () => {
     r.stdin.write("\r"); // args mode
     await tick();
     r.stdin.write("\r"); // empty -> defaults
-    await tick();
+    await until(() => runs.length === 1);
     expect(runs).toEqual([["logs", ["-n", "200", "--human"]]]);
   });
 
@@ -1206,12 +1201,14 @@ describe("command palette + focus keys", () => {
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("captured output line")); // output view up
     r.stdin.write(ESC); // -> palette
-    await tick();
-    expect(r.lastFrame()).toContain("Runs the junco CLI against this dashboard's config");
+    await until(() =>
+      (r.lastFrame() ?? "").includes("Runs the junco CLI against this dashboard's config"),
+    );
     r.stdin.write(ESC); // -> main
-    await tick();
+    await until(
+      () => !(r.lastFrame() ?? "").includes("Runs the junco CLI against this dashboard's config"),
+    );
     expect(r.lastFrame()).toContain("issues");
-    expect(r.lastFrame()).not.toContain("Runs the junco CLI against this dashboard's config");
   });
 });
 
@@ -1311,8 +1308,7 @@ describe("assess hotkey (s/S)", () => {
     r.stdin.write("/"); // enter filter-typing mode
     await tick();
     r.stdin.write("s"); // captured as filter text, not the assess hotkey
-    await tick();
-    expect(r.lastFrame()).toContain("/s"); // landed in the filter chip
+    await until(() => (r.lastFrame() ?? "").includes("/s")); // landed in the filter chip
     expect(runs).toHaveLength(0);
   });
 });
@@ -1425,11 +1421,9 @@ describe("refresh animation", () => {
     const hasSpinner = () => SPINNER_FRAMES.some((g: string) => r.lastFrame()!.includes(g));
     // Eventually-consistent on both edges — single fixed ticks flaked on slow
     // CI runners (the assertion raced React's commit).
-    for (let i = 0; i < 30 && !hasSpinner(); i++) await tick();
-    expect(hasSpinner()).toBe(true);
+    await until(hasSpinner);
     resolveSecond!(okv({ issues: [rawIssue], staleAt: null }));
-    for (let i = 0; i < 30 && hasSpinner(); i++) await tick();
-    expect(hasSpinner()).toBe(false);
+    await until(() => !hasSpinner());
   });
 });
 

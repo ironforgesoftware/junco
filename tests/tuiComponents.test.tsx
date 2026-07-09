@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { CommandOutput } from "../src/tui/components/CommandOutput.js";
+import { until } from "./helpers/until.js";
 
 // The workspace switch deleted RepoList, IssueTable, StatusBar, ShortcutBar,
 // IssueDetail, HelpOverlay, and QueueStrip. Their coverage now lives in the
@@ -15,8 +16,9 @@ describe("cursor + spinner polish", () => {
     const r = render(<Spinner />);
     const first = r.lastFrame()!;
     expect(SPINNER_FRAMES.some((f: string) => first.includes(f))).toBe(true);
-    await new Promise((res) => setTimeout(res, 250));
-    expect(r.lastFrame()).not.toBe(first); // frame advanced
+    // Frame advance is interval-driven — bounded until-loop, never a fixed
+    // wait (a loaded CI runner can starve the timer past any fixed delay).
+    await until(() => r.lastFrame() !== first);
     r.unmount();
   });
 

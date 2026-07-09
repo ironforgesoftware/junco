@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { AddRepoForm } from "../src/tui/components/AddRepoForm.js";
+import { until } from "./helpers/until.js";
 
 // IssueDetail was deleted in the workspace switch; its body/plan/loading/no-plan
 // coverage now lives in tests/tuiPreview.test.tsx (the Preview component).
@@ -27,7 +28,9 @@ describe("AddRepoForm", () => {
     stdin.write("/c/api");
     await new Promise((r) => setTimeout(r, 20));
     stdin.write("\r"); // submit
-    await new Promise((r) => setTimeout(r, 20));
+    // The submit lands via ink's input pipeline — bounded until-loop, never a
+    // fixed tick (a loaded CI runner races React's commit past any fixed delay).
+    await until(() => submitted !== null);
     expect(submitted).toEqual(["acme/api", "/c/api"]);
     expect(lastFrame()).toContain("Watch a repository");
   });

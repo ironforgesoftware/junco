@@ -5,14 +5,7 @@ import { Text } from "ink";
 import { render } from "ink-testing-library";
 import { useMouse } from "../src/tui/useMouse.js";
 import type { MouseEvent } from "../src/tui/mouse.js";
-
-async function until(cond: () => boolean, tries = 50): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    if (cond()) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  expect(cond()).toBe(true);
-}
+import { until } from "./helpers/until.js";
 
 function Probe({ events }: { events: MouseEvent[] }): React.JSX.Element {
   useMouse((ev) => events.push(ev));
