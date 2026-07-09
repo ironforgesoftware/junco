@@ -39,6 +39,9 @@ function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot
     outboxFlushed: 0,
     outboxDead: 0,
     lastFlushAt: null,
+    requeues: 0,
+    guardNudges: 0,
+    guardKills: 0,
     currentProgress: {},
     ...overrides,
   };

@@ -38,6 +38,13 @@ export interface MetricsSnapshot {
   outboxFlushed: number;
   outboxDead: number;
   lastFlushAt: string | null;
+  // Requeue + loop-guard observability (issue #37). `requeues` counts every
+  // transient/crash requeue-to-inbox (recordTask never fires on that path, so
+  // a ticket that fails-and-retries N times was previously invisible).
+  // `guardNudges`/`guardKills` count supervisor decisions realized mid-run.
+  requeues: number;
+  guardNudges: number;
+  guardKills: number;
   /** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
   currentProgress: Record<
     string,
@@ -76,6 +83,9 @@ export class RunMetrics {
   private _outboxFlushed = 0;
   private _outboxDead = 0;
   private _lastFlushAt: Date | null = null;
+  private _requeues = 0;
+  private _guardNudges = 0;
+  private _guardKills = 0;
   private _progress: Record<
     string,
     {
@@ -134,6 +144,20 @@ export class RunMetrics {
     this._outboxDead += r.dead;
     this._outboxDepth = depth;
     this._lastFlushAt = this._now();
+  }
+
+  /** A ticket was requeued to inbox for another attempt (transient failure or
+   * crash containment). Counts every attempt, not distinct tickets. */
+  recordRequeue(): void {
+    this._requeues++;
+  }
+
+  /** A loop-guard supervisor decision was realized mid-run: a "nudge" injected
+   * a steering prompt (the agent may still recover) or a "kill" soft-aborted
+   * the run. Both were previously invisible outside the transcript. */
+  recordGuardDecision(action: "nudge" | "kill"): void {
+    if (action === "nudge") this._guardNudges++;
+    else this._guardKills++;
   }
 
   /** A task entered execution. Seeds its progress entry (startedAt = now). */
@@ -241,6 +265,9 @@ export class RunMetrics {
       outboxFlushed: this._outboxFlushed,
       outboxDead: this._outboxDead,
       lastFlushAt: this._lastFlushAt ? this._lastFlushAt.toISOString() : null,
+      requeues: this._requeues,
+      guardNudges: this._guardNudges,
+      guardKills: this._guardKills,
       currentProgress: { ...this._progress },
     };
   }
@@ -269,6 +296,9 @@ export class RunMetrics {
     this._outboxFlushed = 0;
     this._outboxDead = 0;
     this._lastFlushAt = null;
+    this._requeues = 0;
+    this._guardNudges = 0;
+    this._guardKills = 0;
     this._progress = {};
   }
 }
