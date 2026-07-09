@@ -9,6 +9,7 @@ import {
   CLAIM_PREFIX_RE,
 } from "../src/requeue.js";
 import { parseTicket } from "../src/ticket.js";
+import { metrics } from "../src/metrics.js";
 import type { Config, RunResult } from "../src/types.js";
 
 const res = (over: Partial<RunResult>): RunResult => ({
@@ -129,5 +130,17 @@ describe("requeueTicket", () => {
   it("CLAIM_PREFIX_RE matches the queue claim stamp", () => {
     expect(CLAIM_PREFIX_RE.test("2026-06-10T1200Z__x.md")).toBe(true);
     expect(CLAIM_PREFIX_RE.test("plain.md")).toBe(false);
+  });
+
+  it("counts a successful requeue in RunMetrics but not a declined one (#37)", () => {
+    const before = metrics.snapshot().requeues;
+    const ok = claimedFile("---\nid: t1\n---\nx");
+    requeueTicket(cfg, ok, parseTicket(ok, readFileSync(ok, "utf8")), "r");
+    expect(metrics.snapshot().requeues).toBe(before + 1);
+
+    // Budget exhausted → no move, no count.
+    const declined = claimedFile("---\nid: t2\nretry_count: 2\n---\nx", "2026-06-10T1200Z__t2.md");
+    requeueTicket(cfg, declined, parseTicket(declined, readFileSync(declined, "utf8")), "r");
+    expect(metrics.snapshot().requeues).toBe(before + 1);
   });
 });

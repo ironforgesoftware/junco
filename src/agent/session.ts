@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Config, RunResult } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
-import { GuardManager } from "./guardManager.js";
+import { GuardManager, type GuardDecision } from "./guardManager.js";
 import { log } from "../logging.js";
 import { buildInlineProviderConfig, splitModelId, apiBaseUrl } from "./modelSetup.js";
 
@@ -56,6 +56,14 @@ export interface RunAgentOptions {
    * wired to the metrics singleton so /health can show live progress.
    */
   onProgress?: (p: { turns: number; lastTool: string | null; outputTokens: number }) => void;
+  /**
+   * Called once per realized guard decision (nudge or kill), at the decision
+   * point — wired to the metrics singleton so /health and `junco status` can
+   * count nudges/kills (#37). runAgent also logs and transcribes the decision;
+   * this hook is purely the metrics seam (session.ts stays free of the
+   * metrics singleton, mirroring onProgress).
+   */
+  onGuardDecision?: (decision: GuardDecision) => void;
   /**
    * Append every non-delta event as a JSON line — the debugging record for
    * failed runs. Parent dir is created; write failures only warn.
@@ -194,6 +202,36 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       if (killReason !== null) return;
       const decision = gm.observe(e);
       if (!decision) return;
+      // Observability (#37): a guard decision — especially a *successful* nudge,
+      // which otherwise never surfaces — leaves a structured log line, a
+      // synthetic transcript record (reconstructible per ticket alongside the
+      // raw SDK events), and a metrics increment. The nudge message / kill
+      // reason travels under one key so log queries don't branch on action.
+      const reasonOrMessage =
+        decision.action === "nudge"
+          ? { nudgeMessage: decision.message }
+          : { reason: decision.reason };
+      log.warn("guard decision", {
+        kind: decision.kind,
+        action: decision.action,
+        detail: decision.detail,
+        turnIndex: decision.turnIndex,
+        ...reasonOrMessage,
+      });
+      if (transcript) {
+        transcript.write(
+          JSON.stringify({
+            type: "junco_guard_decision",
+            kind: decision.kind,
+            action: decision.action,
+            detail: decision.detail,
+            turnIndex: decision.turnIndex,
+            ...reasonOrMessage,
+            ts: new Date().toISOString(),
+          }) + "\n",
+        );
+      }
+      opts.onGuardDecision?.(decision);
       if (decision.action === "nudge") {
         // Inject a corrective steering prompt mid-run. "steer" redirects the
         // CURRENT run (delivered after the current assistant turn finishes its

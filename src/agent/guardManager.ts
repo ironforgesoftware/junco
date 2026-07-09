@@ -35,9 +35,12 @@ import {
   type GuardKind,
 } from "./supervisor.js";
 
+// `detail` and `turnIndex` mirror the underlying GuardEvent so the decision is
+// self-describing: session.ts logs and transcribes it verbatim (#37) without
+// reaching back into the (pure, SDK-free) guard internals.
 export type GuardDecision =
-  | { action: "nudge"; message: string; kind: GuardKind }
-  | { action: "kill"; reason: string; kind: GuardKind };
+  | { action: "nudge"; message: string; kind: GuardKind; detail: string; turnIndex: number }
+  | { action: "kill"; reason: string; kind: GuardKind; detail: string; turnIndex: number };
 
 export interface GuardManagerOptions {
   supervisorConfig?: Partial<SupervisorConfig>;
@@ -167,10 +170,22 @@ export class GuardManager {
       this.thinkingRepGuard = new RepetitionGuard();
       this.textBuf = "";
       this.thinkingBuf = "";
-      return { action: "nudge", message: action.nudgeMessage, kind };
+      return {
+        action: "nudge",
+        message: action.nudgeMessage,
+        kind,
+        detail: evt.detail,
+        turnIndex: evt.turnIndex,
+      };
     }
     if (action.kind === "kill") {
-      return { action: "kill", reason: action.reason, kind };
+      return {
+        action: "kill",
+        reason: action.reason,
+        kind,
+        detail: evt.detail,
+        turnIndex: evt.turnIndex,
+      };
     }
     return null;
   }
@@ -204,10 +219,22 @@ export class GuardManager {
       const action = this.supervisor.decide(evt);
       if (action.kind === "nudge" && action.nudgeMessage) {
         this.toolLoopGuard = new ToolCallLoopGuard();
-        return { action: "nudge", message: action.nudgeMessage, kind: "tool_call_loop" };
+        return {
+          action: "nudge",
+          message: action.nudgeMessage,
+          kind: "tool_call_loop",
+          detail: evt.detail,
+          turnIndex: evt.turnIndex,
+        };
       }
       if (action.kind === "kill") {
-        return { action: "kill", reason: action.reason, kind: "tool_call_loop" };
+        return {
+          action: "kill",
+          reason: action.reason,
+          kind: "tool_call_loop",
+          detail: evt.detail,
+          turnIndex: evt.turnIndex,
+        };
       }
     }
     return null;
@@ -231,10 +258,22 @@ export class GuardManager {
       const action = this.supervisor.decide(evt);
       if (action.kind === "nudge" && action.nudgeMessage) {
         this.toolErrorLoopGuard = new ToolErrorLoopGuard();
-        return { action: "nudge", message: action.nudgeMessage, kind: "tool_error_loop" };
+        return {
+          action: "nudge",
+          message: action.nudgeMessage,
+          kind: "tool_error_loop",
+          detail: evt.detail,
+          turnIndex: evt.turnIndex,
+        };
       }
       if (action.kind === "kill") {
-        return { action: "kill", reason: action.reason, kind: "tool_error_loop" };
+        return {
+          action: "kill",
+          reason: action.reason,
+          kind: "tool_error_loop",
+          detail: evt.detail,
+          turnIndex: evt.turnIndex,
+        };
       }
     }
     return null;
@@ -283,6 +322,8 @@ export class GuardManager {
             `${this.outputBudgetGuard.lastThreshold} tokens in turn ${this.turnIndex} ` +
             `(commits=${this.outputBudgetGuard.commitsMade})`,
           kind: "output_budget",
+          detail: evt.detail,
+          turnIndex: evt.turnIndex,
         };
       }
     }

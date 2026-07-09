@@ -15,6 +15,7 @@ import { join, basename } from "node:path";
 import type { Config, RunResult, Ticket } from "./types.js";
 import { queuePaths } from "./config.js";
 import { log } from "./logging.js";
+import { metrics } from "./metrics.js";
 
 /** Matches the UTC claim stamp queue.claim() prefixes onto processing/ names. */
 export const CLAIM_PREFIX_RE = /^\d{4}-\d{2}-\d{2}T\d{4}Z__/;
@@ -79,6 +80,10 @@ export function requeueTicket(
   if (existsSync(join(inbox, name))) name = name.replace(/\.md$/, `-r${attempt}.md`);
   const dst = join(inbox, name);
   renameSync(claimedPath, dst);
+  // The single chokepoint every requeue path funnels through (Q&A/PR/assess
+  // transient, #64 crash containment, orphan recovery) — count it here so a
+  // fails-and-retries ticket is visible in /health and `junco status` (#37).
+  metrics.recordRequeue();
   log.warn("transient failure — requeued for retry", {
     dst,
     attempt,

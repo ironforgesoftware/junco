@@ -39,6 +39,9 @@ function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot
     outboxFlushed: 0,
     outboxDead: 0,
     lastFlushAt: null,
+    requeues: 0,
+    guardNudges: 0,
+    guardKills: 0,
     currentProgress: {},
     ...overrides,
   };
@@ -195,6 +198,9 @@ describe("healthServer", () => {
         tasksFailed: 1,
         totalTokensIn: 1000,
         totalTokensOut: 2000,
+        requeues: 3,
+        guardNudges: 2,
+        guardKills: 1,
       });
 
       handle = await startHealthServer({
@@ -219,6 +225,10 @@ describe("healthServer", () => {
       expect(body.metrics.tasksFailed).toBe(1);
       expect(body.metrics.totalTokensIn).toBe(1000);
       expect(body.metrics.totalTokensOut).toBe(2000);
+      // #37: requeue + guard counters surface through the snapshot passthrough.
+      expect(body.metrics.requeues).toBe(3);
+      expect(body.metrics.guardNudges).toBe(2);
+      expect(body.metrics.guardKills).toBe(1);
     });
 
     it("returns 200 even when not ready (ready=false, status still ok)", async () => {

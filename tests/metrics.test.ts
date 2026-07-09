@@ -413,3 +413,45 @@ describe("outbox metrics", () => {
     expect(s.lastFlushAt).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// requeue + loop-guard observability (issue #37)
+// ---------------------------------------------------------------------------
+describe("requeue + guard metrics", () => {
+  it("all three counters start at zero", () => {
+    const s = new RunMetrics().snapshot();
+    expect(s.requeues).toBe(0);
+    expect(s.guardNudges).toBe(0);
+    expect(s.guardKills).toBe(0);
+  });
+
+  it("recordRequeue counts every requeue attempt", () => {
+    const m = new RunMetrics();
+    m.recordRequeue();
+    m.recordRequeue();
+    m.recordRequeue();
+    expect(m.snapshot().requeues).toBe(3);
+  });
+
+  it("recordGuardDecision routes nudge vs kill into the right counter", () => {
+    const m = new RunMetrics();
+    m.recordGuardDecision("nudge");
+    m.recordGuardDecision("nudge");
+    m.recordGuardDecision("kill");
+    const s = m.snapshot();
+    expect(s.guardNudges).toBe(2);
+    expect(s.guardKills).toBe(1);
+  });
+
+  it("reset clears requeue + guard counters", () => {
+    const m = new RunMetrics();
+    m.recordRequeue();
+    m.recordGuardDecision("nudge");
+    m.recordGuardDecision("kill");
+    m.reset();
+    const s = m.snapshot();
+    expect(s.requeues).toBe(0);
+    expect(s.guardNudges).toBe(0);
+    expect(s.guardKills).toBe(0);
+  });
+});

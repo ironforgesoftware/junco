@@ -220,6 +220,85 @@ describe("runAgent (guard manager)", () => {
     expect(session.aborted).toBe(false);
     expect(result.errorMessage).toBeNull();
   });
+
+  // #37: a guard decision — especially a *successful* nudge — must leave a
+  // trace. Assert the onGuardDecision hook fires and a synthetic
+  // junco_guard_decision line is interleaved into the per-ticket transcript.
+  it("reports a nudge through the hook + transcript (#37)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-guard-tx-"));
+    const txPath = join(dir, "transcripts", "g-1.jsonl");
+    const args = { command: "ls -la" };
+    const events = [
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "tool_execution_start", toolName: "bash", args },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = guardFakeSession(events);
+    const decisions: any[] = [];
+    const result = await runAgent({
+      body: "do work",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      guardManager: new GuardManager(),
+      onGuardDecision: (d) => decisions.push(d),
+      transcriptPath: txPath,
+    });
+    // The hook saw exactly one self-describing nudge decision.
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].action).toBe("nudge");
+    expect(decisions[0].kind).toBe("tool_call_loop");
+    expect(typeof decisions[0].detail).toBe("string");
+    expect(typeof decisions[0].turnIndex).toBe("number");
+    // A synthetic decision record sits alongside the raw SDK events.
+    await new Promise((r) => setTimeout(r, 50));
+    const lines = readFileSync(txPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const gd = lines.find((l) => l.type === "junco_guard_decision");
+    expect(gd).toBeDefined();
+    expect(gd.action).toBe("nudge");
+    expect(gd.kind).toBe("tool_call_loop");
+    expect(gd.nudgeMessage).toContain("JUNCO NOTICE");
+    // A single nudge is not a kill.
+    expect(result.errorMessage).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reports a guard kill through the hook + transcript (#37)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-guard-tx-"));
+    const txPath = join(dir, "transcripts", "g-2.jsonl");
+    const events = [
+      { type: "turn_end", message: { usage: { output: 99999, input: 0, totalTokens: 99999 } } },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = guardFakeSession(events);
+    const decisions: any[] = [];
+    const result = await runAgent({
+      body: "do work",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      guardManager: new GuardManager({ outputBudgetPerTurn: 12000 }),
+      onGuardDecision: (d) => decisions.push(d),
+      transcriptPath: txPath,
+    });
+    const kill = decisions.find((d) => d.action === "kill");
+    expect(kill).toBeDefined();
+    expect(kill.kind).toBe("output_budget");
+    await new Promise((r) => setTimeout(r, 50));
+    const lines = readFileSync(txPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const gd = lines.find((l) => l.type === "junco_guard_decision" && l.action === "kill");
+    expect(gd).toBeDefined();
+    expect(gd.reason).toContain("output_budget");
+    expect(result.errorMessage).toContain("supervisor kill");
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("apiBaseUrl", () => {

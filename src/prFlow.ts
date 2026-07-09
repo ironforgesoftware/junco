@@ -304,6 +304,8 @@ export interface PrFlowDeps {
   abortSignal?: AbortSignal;
   /** Live progress hook (turns, last tool, output tokens) for /health. */
   onProgress?: (p: { turns: number; lastTool: string | null; outputTokens: number }) => void;
+  /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
+  onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   /** Network-retry backoff base for fetch/push/PR-create (default 1000ms) —
    * tests that script offline failures pass ~5ms so the suite stays fast. */
   retryBaseDelayMs?: number;
@@ -435,6 +437,7 @@ export async function runPrFlow(
     guardManager,
     abortSignal: deps.abortSignal,
     onProgress: deps.onProgress,
+    onGuardDecision: deps.onGuardDecision,
     transcriptPath,
   });
 
@@ -629,6 +632,7 @@ export async function runPrFlow(
           createSession: correctiveFactory,
           abortSignal: deps.abortSignal,
           onProgress: deps.onProgress,
+          onGuardDecision: deps.onGuardDecision,
           transcriptPath, // corrective turn appends to the same chronological record
           guardManager: cfg.supervisorEnabled
             ? new GuardManager({
