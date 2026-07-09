@@ -1,4 +1,5 @@
-# Junco configuration. Copy to ~/junco/config.toml and edit.
+# Junco configuration. Copy to ~/.config/junco/config.toml — or ./config.toml
+# next to where you run junco — and edit. (`junco --config <path>` overrides both.)
 
 vault_root = "~/junco-vault"          # REQUIRED. Queue lives at <vault_root>/<junco_subdir>/{inbox,processing,done,failed}
 junco_subdir = "Junco"                # default "Junco"
@@ -12,11 +13,12 @@ commit_leftovers = false              # false = the agent must commit its own wo
 # (1) Point at a Pi-style models.json — the provider+model (api, compat,
 #     context_window, thinking_format, …) are loaded from that file:
 # [model]
-# id = "omlx/my-model"
+# id = "myprovider/my-model"
 # models_json = "~/.pi/agent/models.json"
 #
 # (2) Or describe it inline. Only `id` + the endpoint are usually needed; the
-#     other fields default to the values shown (tuned for a local oMLX server).
+#     other fields default to the values shown (tuned for a local
+#     OpenAI-compatible server).
 [model]
 id = "myprovider/my-model"            # provider-prefixed model id (provider = text before the first "/")
 api = "openai-completions"            # Pi API style: openai-completions | anthropic-messages | google-generative-ai | bedrock-converse-stream | …
