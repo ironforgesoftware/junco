@@ -291,26 +291,33 @@ export function App(props: AppProps): React.JSX.Element {
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
 
-  // Selectable rows for the current section — RUNNING/processing (queue) and
-  // live worktrees are deliberately omitted (daemon owns them, never actionable).
+  // Selectable rows for the current section. INVARIANT: this list is the EXACT
+  // rendered list each section component highlights, in the same order and
+  // 1:1 by index — so the `▌` cursor (localCursorSafe) and the x/R action
+  // target (localTarget) are always the SAME row. That means we do NOT pre-
+  // filter out non-actionable rows here (a done RECENT row, a live worktree):
+  // they stay in the list, exactly where the component draws them, and the
+  // x/R handlers guard them into a safe toast instead. RUNNING/processing rows
+  // are the one exception — QueueView never makes them selectable (the daemon
+  // owns processing/), and they are absent here too, so the mapping still holds.
   // Gives x/R/o/f an explicit LOCAL target instead of the github currentRepo.
   type LocalRow =
     | { kind: "waiting"; id: string }
     | { kind: "recent"; id: string; status: "done" | "failed" }
     | { kind: "outboxOp"; id: string }
     | { kind: "repo"; repo: LocalRepo }
-    | { kind: "worktree"; path: string; slug: string; klass: "stale" | "backup" };
+    | { kind: "worktree"; path: string; slug: string; klass: "live" | "stale" | "backup" };
 
   const localRowsFor = (section: LocalSection): LocalRow[] => {
     switch (section) {
       case "queue": {
         const q = localCheap?.queue;
         if (!q) return [];
+        // waiting THEN all recent (done+failed) — the identical index space
+        // QueueView highlights (`selectedRow === waiting.length + j`).
         return [
           ...q.waiting.map((w) => ({ kind: "waiting" as const, id: w.id })),
-          ...q.recent
-            .filter((rr) => rr.status === "failed")
-            .map((rr) => ({ kind: "recent" as const, id: rr.id, status: rr.status })),
+          ...q.recent.map((rr) => ({ kind: "recent" as const, id: rr.id, status: rr.status })),
         ];
       }
       case "outbox":
@@ -318,14 +325,15 @@ export function App(props: AppProps): React.JSX.Element {
       case "repos":
         return (localHeavy?.repos ?? []).map((repo) => ({ kind: "repo" as const, repo }));
       case "worktrees":
-        return (localHeavy?.worktrees ?? [])
-          .filter((w) => w.kind === "stale" || w.kind === "backup")
-          .map((w) => ({
-            kind: "worktree" as const,
-            path: w.path,
-            slug: w.slug,
-            klass: w.kind as "stale" | "backup",
-          }));
+        // ALL worktrees, in render order — the identical index space
+        // WorktreesSection highlights (`idx === cursor`). live rows are kept
+        // (and guarded in the x handler) so highlight and target never diverge.
+        return (localHeavy?.worktrees ?? []).map((w) => ({
+          kind: "worktree" as const,
+          path: w.path,
+          slug: w.slug,
+          klass: w.kind,
+        }));
       case "daemon":
         return [];
     }
@@ -1313,8 +1321,17 @@ export function App(props: AppProps): React.JSX.Element {
         }));
       const t = localTarget;
       if (localSection === "queue") {
-        if (input === "R" && t?.kind === "recent")
-          return void runLocalAction("retry", [t.id], { label: "requeue" });
+        if (input === "R") {
+          // R acts on exactly the highlighted row (localRows is index-aligned
+          // with QueueView's cursor). Only a FAILED recent row is requeuable;
+          // a done row is highlightable but guarded into a safe toast — never a
+          // retry of a different, non-highlighted target.
+          if (t?.kind === "recent" && t.status === "failed")
+            return void runLocalAction("retry", [t.id], { label: "requeue" });
+          if (t?.kind === "recent" && t.status === "done")
+            return void showToast("info", "done tickets can't be requeued");
+          return;
+        }
         if (input === "x" && t?.kind === "waiting")
           return void askConfirm({
             title: "delete queued ticket",
@@ -1330,13 +1347,19 @@ export function App(props: AppProps): React.JSX.Element {
         if (input === "x")
           return void (t.repo.nwo ? unwatch(t.repo.nwo) : showToast("info", "not in watchlist"));
       }
-      if (localSection === "worktrees" && input === "x" && t?.kind === "worktree")
+      if (localSection === "worktrees" && input === "x" && t?.kind === "worktree") {
+        // x acts on exactly the highlighted worktree (localRows is index-aligned
+        // with WorktreesSection's cursor). A live worktree is highlightable but
+        // guarded — the daemon may own it — so x on it is a safe toast, never a
+        // prune of a different, non-highlighted row.
+        if (t.klass === "live") return void showToast("info", "live worktree — not prunable");
         return void askConfirm({
           title: "prune worktree",
           danger: true,
           body: `Prune ${t.slug} (${t.klass})? git worktree remove --force under the daemon lock.`,
           onConfirm: () => runLocalAction("worktree", ["prune", t.path], { label: "prune" }),
         });
+      }
       return;
     }
     // rail focus

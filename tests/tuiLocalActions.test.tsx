@@ -8,8 +8,9 @@
 // footer ("back") for rail→body focus, and the ▌ selection glyph for the row.
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
+import type { LocalCheap, LocalHeavy } from "../src/tui/localSnapshot.js";
 import { until } from "./helpers/until.js";
-import { renderApp, stubClient, okv } from "./helpers/localFixtures.js";
+import { renderApp, stubClient, okv, CHEAP, HEAVY } from "./helpers/localFixtures.js";
 
 afterEach(cleanup);
 
@@ -190,5 +191,144 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
     // m still crosses from prs (the raw-SGR header click is covered in tuiMouse):
     r.stdin.write("m");
     await until(() => frame(r).includes("[LOCAL]"));
+  });
+});
+
+// Regression: the `▌` cursor highlight and the x/R action target must be the
+// SAME row for EVERY mix of done/failed recent rows and live/stale worktrees.
+// The bug was one cursor integer indexing two different lists (the rendered
+// list vs. a pre-filtered action list), so the cursor lit one row while the
+// action mutated another, non-highlighted, non-confirmed row.
+describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
+  it("queue: a done RECENT row precedes a failed one — highlight == R target, done never retries the failed row", async () => {
+    // recent[0] = done (newer), recent[1] = failed (older). With waiting=[],
+    // the done row is visual index 0 (where the cursor starts). Under the bug,
+    // R here retried the failed row (localRowsFor filtered to failed-only) even
+    // though the DONE row was highlighted — and the failed row was unreachable.
+    const cheap: LocalCheap = {
+      ...CHEAP,
+      queue: {
+        ...CHEAP.queue,
+        running: [],
+        waiting: [],
+        recent: [
+          {
+            id: "gh-acme-api-7",
+            github: { nwo: "acme/api", issue: 7, kind: "pr", external: false },
+            status: "done",
+            finishedAt: "2026-07-07T10:06:00Z",
+          },
+          {
+            id: "gh-acme-api-8",
+            github: { nwo: "acme/api", issue: 8, kind: "pr", external: false },
+            status: "failed",
+            finishedAt: "2026-07-07T10:04:00Z",
+          },
+        ],
+      },
+    };
+    const calls: [string, string[]][] = [];
+    const r = renderApp({
+      initialUiMode: "local",
+      localCheapFn: async () => cheap,
+      runCliFn: async (n, a) => {
+        calls.push([n, a]);
+        return { code: 0, output: "requeued gh-acme-api-8", timedOut: false };
+      },
+    });
+    await until(() => frame(r).includes("1/5")); // queue section
+    r.stdin.write("l"); // enter body
+    await until(() => frame(r).includes("back"));
+    // Cursor starts on the DONE row (#7, visual index 0) — highlight lands there.
+    await until(() => selOn(r, "#7"));
+    expect(selOn(r, "#8")).toBe(false); // the failed row is NOT highlighted yet
+    // R while the DONE row is highlighted is a guarded no-op: a toast, and NO
+    // spawn — crucially it must NOT retry the (non-highlighted) failed row.
+    r.stdin.write("R");
+    await until(() => frame(r).toLowerCase().includes("can't be requeued"));
+    expect(calls).toHaveLength(0);
+    // Move down onto the FAILED row: highlight follows, and now it IS reachable.
+    r.stdin.write("j");
+    await until(() => selOn(r, "#8"));
+    expect(selOn(r, "#7")).toBe(false);
+    // R now retries exactly the highlighted row (#8), never the done row.
+    r.stdin.write("R");
+    await until(() => calls.length === 1);
+    expect(calls[0]).toEqual(["retry", ["gh-acme-api-8"]]);
+  });
+
+  it("worktrees: a live row precedes stale ones — highlight == prune target, a live worktree is never the prune target", async () => {
+    // worktrees[0] = live (cursor starts here), [1] and [2] = stale. Under the
+    // bug, localRowsFor filtered live out, so the cursor lit the live row while
+    // x confirmed a prune of a different (stale) row.
+    const heavy: LocalHeavy = {
+      ...HEAVY,
+      worktrees: [
+        {
+          path: "/w/acme-api/live-one",
+          repoPath: "/c/api",
+          repoNwo: "acme/api",
+          slug: "live-one",
+          kind: "live",
+          headSha: "aaa1111",
+          ageSeconds: 60,
+          error: null,
+        },
+        {
+          path: "/w/acme-api/stale-a",
+          repoPath: "/c/api",
+          repoNwo: "acme/api",
+          slug: "stale-a",
+          kind: "stale",
+          headSha: "bbb2222",
+          ageSeconds: 3600,
+          error: null,
+        },
+        {
+          path: "/w/acme-api/stale-b",
+          repoPath: "/c/api",
+          repoNwo: "acme/api",
+          slug: "stale-b",
+          kind: "stale",
+          headSha: "ccc3333",
+          ageSeconds: 7200,
+          error: null,
+        },
+      ],
+    };
+    const calls: [string, string[]][] = [];
+    const r = renderApp({
+      initialUiMode: "local",
+      localHeavyFn: async () => heavy,
+      runCliFn: async (n, a) => {
+        calls.push([n, a]);
+        return { code: 0, output: "pruned", timedOut: false };
+      },
+    });
+    await until(() => frame(r).includes("1/5"));
+    r.stdin.write("j");
+    await until(() => frame(r).includes("2/5"));
+    r.stdin.write("j");
+    await until(() => frame(r).includes("3/5"));
+    r.stdin.write("j"); // → worktrees section
+    await until(() => frame(r).includes("4/5") && frame(r).includes("live-one"));
+    r.stdin.write("l"); // enter body
+    // Cursor starts on the LIVE worktree — highlight lands there.
+    await until(() => selOn(r, "live-one"));
+    // x while the live row is highlighted must NOT open a prune confirm for any
+    // other row — it's a guarded safe toast.
+    r.stdin.write("x");
+    await until(() => frame(r).toLowerCase().includes("not prunable"));
+    expect(frame(r)).not.toContain("prune worktree"); // no confirm modal opened
+    expect(calls).toHaveLength(0);
+    // Move down onto a STALE worktree: highlight follows.
+    r.stdin.write("j");
+    await until(() => selOn(r, "stale-a"));
+    // x now confirms a prune of exactly the highlighted worktree (stale-a).
+    r.stdin.write("x");
+    await until(() => frame(r).includes("prune worktree"));
+    r.stdin.write("y");
+    await until(() => calls.some(([n]) => n === "worktree"));
+    expect(calls.find(([n]) => n === "worktree")![1]).toEqual(["prune", "/w/acme-api/stale-a"]);
   });
 });
