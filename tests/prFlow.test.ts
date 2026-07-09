@@ -845,7 +845,7 @@ esac
     return p;
   }
 
-  it("resume: a pushed branch with no PR force-pushes over the stale tip and opens a PR", async () => {
+  it("resume (requeued ticket): a pushed branch with no PR force-pushes over the stale tip and opens a PR", async () => {
     const cfg = makeConfig(h, {
       ghBin: ghCases("gh-resume.sh", {
         '"pr list "*': 'echo "[]"; exit 0',
@@ -854,7 +854,9 @@ esac
     });
 
     // Simulate a crashed run: branch pushed to origin carrying a stale commit,
-    // NO PR, local branch deleted (the orphan re-runs the fresh flow).
+    // NO PR, local branch deleted (the orphan re-runs the fresh flow). Orphan
+    // recovery requeued the ticket, so retry_count > 0 — the crash-recovery
+    // provenance that arms the resume (#70).
     run(["git", "-C", h.work, "checkout", "-b", "junco/resume-me"]);
     writeFileSync(join(h.work, "stale.txt"), "stale\n");
     run(["git", "-C", h.work, "add", "stale.txt"]);
@@ -866,7 +868,7 @@ esac
     const { task, path } = makeTicket(
       h,
       "resume-me.md",
-      `---\nid: resume-me\nrepo: ${h.work}\n---\n# Resume\n\nDo it.\n`,
+      `---\nid: resume-me\nrepo: ${h.work}\nretry_count: 1\n---\n# Resume\n\nDo it.\n`,
     );
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true, file: "fresh.txt" }),
@@ -881,6 +883,43 @@ esac
     const remoteLog = run(["git", "-C", h.remote, "log", "--format=%s", "junco/resume-me"]);
     expect(remoteLog).toContain("feat: fresh.txt");
     expect(remoteLog).not.toContain("crashed-run commit");
+  }, 30000);
+
+  it("fresh ticket: a colliding PR-less remote branch is REFUSED, not force-pushed (issue #70)", async () => {
+    const cfg = makeConfig(h, {
+      ghBin: ghCases("gh-refuse.sh", {
+        '"pr list "*': 'echo "[]"; exit 0',
+        '"pr create "*': 'echo "https://github.com/owner/repo/pull/999"; exit 0',
+      }),
+    });
+
+    // A human's WIP branch collides on the ticket's branch_name, with no PR.
+    run(["git", "-C", h.work, "checkout", "-b", "junco/collide-fresh"]);
+    writeFileSync(join(h.work, "human.txt"), "human work in progress\n");
+    run(["git", "-C", h.work, "add", "human.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "human WIP commit"]);
+    run(["git", "-C", h.work, "push", "-u", "origin", "junco/collide-fresh"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+    run(["git", "-C", h.work, "branch", "-D", "junco/collide-fresh"]);
+
+    // Fresh ticket (no retry_count) — validate must REFUSE, never force-push.
+    const { task, path } = makeTicket(
+      h,
+      "collide-fresh.md",
+      `---\nid: collide-fresh\nrepo: ${h.work}\n---\n# Fresh collide\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true, file: "fresh.txt" }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(flow.phaseError).toMatch(/no open PR of ours|refusing to overwrite/i);
+    // The human's branch is untouched on the remote (never force-pushed).
+    const remoteLog = run(["git", "-C", h.remote, "log", "--format=%s", "junco/collide-fresh"]);
+    expect(remoteLog).toContain("human WIP commit");
+    expect(remoteLog).not.toContain("fresh.txt");
   }, 30000);
 
   it("idempotent create: gh pr create 'already exists' recovers the URL via pr view → completed", async () => {

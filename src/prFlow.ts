@@ -330,7 +330,13 @@ export async function runPrFlow(
   let nwo: string;
   try {
     const valSignals = { resumeRemoteSha: null as string | null };
-    nwo = await validateRepoContext(cfg, ctx, { signals: valSignals }); // mutates ctx in amend mode
+    // Thread the ticket's retry counter so validate only arms the fresh-mode
+    // resume (force-push over a PR-less colliding branch) when this ticket was
+    // requeued after a crash (retry_count > 0) — never for a fresh ticket (#70).
+    nwo = await validateRepoContext(cfg, ctx, {
+      signals: valSignals,
+      retryCount: task.retryCount,
+    }); // mutates ctx in amend mode
     resumeRemoteSha = valSignals.resumeRemoteSha;
     prOutcome.nwo = nwo;
     if (isAmend(ctx)) {

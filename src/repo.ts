@@ -139,6 +139,16 @@ export interface ValidateSignals {
 
 export interface ValidateOpts {
   signals?: ValidateSignals;
+  /** Issue #70: the ticket's transparent-retry counter (0 on first attempt).
+   * Fresh-mode resume — force-pushing over a branch that is already on the push
+   * remote but carries NO open PR of ours — is armed ONLY when this is > 0.
+   * That is positive provenance the branch is junco's OWN crashed run: a genuine
+   * crash between push and PR-create leaves the ticket in processing/, and orphan
+   * recovery requeues it with retry_count++ (see orphans.ts / requeue.ts). A
+   * FRESH ticket (retryCount 0) whose branch_name collides with a PR-less remote
+   * branch is REFUSED — that branch may be a human's WIP and must not be
+   * clobbered. */
+  retryCount?: number;
 }
 
 /** A minimal open-PR reference for the fresh-mode collision check. */
@@ -201,10 +211,13 @@ async function listOpenPrsForHead(
  * lookup and ctx.branchName / ctx.baseBranch are MUTATED to match the PR's
  * head / base refs.
  *
- * Fresh mode (issue #29): when the branch already exists on the push remote,
- * an open PR of ours keeps the terminal refusal (hinting `amends_pr`); with
- * NO such PR the run is treated as resumable and `opts.signals.resumeRemoteSha`
- * is set to the remote tip so the flow can force-push-with-lease + recreate.
+ * Fresh mode (issues #29, #70): when the branch already exists on the push
+ * remote, an open PR of ours keeps the terminal refusal (hinting `amends_pr`).
+ * With NO such PR the branch is only resumed — `opts.signals.resumeRemoteSha`
+ * set to the remote tip for a force-push-with-lease + recreate — when
+ * `opts.retryCount > 0` (crash-recovery provenance: orphan recovery requeued a
+ * genuine crash-between-push-and-create). A FRESH ticket (retryCount 0) with a
+ * PR-less colliding branch is REFUSED, never force-pushed over.
  */
 export async function validateRepoContext(
   cfg: Config,
@@ -371,30 +384,50 @@ export async function validateRepoContext(
         ? undefined
         : prs.find((p) => (p.headOwner ?? expectedOwner).toLowerCase() === expectedOwner);
 
-    // No open PR of ours + the caller opted into resume → the pushed branch is
-    // a crashed/interrupted run, not a collision. Signal the remote tip so the
-    // flow force-pushes with a lease on it and idempotently (re)creates the PR.
-    if (prs !== null && ours === undefined && opts.signals) {
-      opts.signals.resumeRemoteSha = remoteSha;
+    // No open PR of ours + crash-recovery provenance (retry_count > 0) → the
+    // pushed branch is junco's OWN crashed/interrupted run, not a collision.
+    // Signal the remote tip so the flow force-pushes with a lease on it and
+    // idempotently (re)creates the PR. A FRESH ticket (retryCount 0) is NOT
+    // resumed here: the branch may be human WIP — fall through to the refusal
+    // below (#70).
+    const resumeArmed = opts.signals !== undefined && (opts.retryCount ?? 0) > 0;
+    if (prs !== null && ours === undefined && resumeArmed) {
+      opts.signals!.resumeRemoteSha = remoteSha;
       log.warn(
-        `branch ${JSON.stringify(ctx.branchName)} already on ${ctx.pushRemote} but no open PR of ours — resuming (will push --force-with-lease)`,
+        `branch ${JSON.stringify(ctx.branchName)} already on ${ctx.pushRemote} but no open PR of ours ` +
+          `and ticket was requeued (retry_count>0) — resuming crashed run (will push --force-with-lease)`,
       );
       return nwo;
     }
 
-    // Otherwise refuse. Fork mode already pointed the operator at the amend
-    // iteration path; both messages now hint the actual PR number when known.
-    const prHint = ours ? String(ours.number) : "<PR#>";
-    if (ctx.pushRemote !== "origin") {
+    // Refuse. An open PR of ours points the operator at the amend iteration
+    // path (hinting the actual PR number); fork mode uses its own wording.
+    if (ours) {
+      const prHint = String(ours.number);
+      if (ctx.pushRemote !== "origin") {
+        throw new GitOpError(
+          `branch ${JSON.stringify(ctx.branchName)} already exists on fork; ` +
+            `to push feedback commits to the open PR, dispatch a ticket with ` +
+            `amends_pr: ${prHint} and push_remote: ${ctx.pushRemote} — or pick a different branch_name`,
+        );
+      }
       throw new GitOpError(
-        `branch ${JSON.stringify(ctx.branchName)} already exists on fork; ` +
-          `to push feedback commits to the open PR, dispatch a ticket with ` +
-          `amends_pr: ${prHint} and push_remote: ${ctx.pushRemote} — or pick a different branch_name`,
+        `branch ${JSON.stringify(ctx.branchName)} already exists on ${ctx.pushRemote} with an open PR; ` +
+          `iterate with amends_pr: ${prHint} (or pick a different branch_name or delete the remote branch)`,
       );
     }
+
+    // No open PR of ours (or the PR query could not be run) on a ticket that is
+    // NOT resuming a crash: a name-colliding remote branch we cannot attribute
+    // to a crashed run of ours. Refuse rather than force-push over what may be
+    // human work-in-progress (#70) — a genuine crashed junco run resumes
+    // automatically on a later retry, once orphan recovery has bumped
+    // retry_count above 0.
+    const where = ctx.pushRemote !== "origin" ? "fork" : ctx.pushRemote;
     throw new GitOpError(
-      `branch ${JSON.stringify(ctx.branchName)} already exists on ${ctx.pushRemote} with an open PR; ` +
-        `iterate with amends_pr: ${prHint} (or pick a different branch_name or delete the remote branch)`,
+      `branch ${JSON.stringify(ctx.branchName)} already exists on ${where} with no open PR of ours — ` +
+        `refusing to overwrite it (it may be work in progress). If this is a crashed junco run it will ` +
+        `resume automatically on a later retry; otherwise pick a different branch_name or delete the remote branch.`,
     );
   }
 
