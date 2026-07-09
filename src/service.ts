@@ -129,9 +129,14 @@ export function renderLaunchdPlist(opts: ServiceOpts): string {
 export function renderSystemdUnit(opts: ServiceOpts): string {
   const o = resolveOpts(opts);
 
-  // systemd unit lines must not be XML-escaped; values with spaces in ExecStart
-  // should be quoted, but our paths are absolute and shouldn't contain spaces.
-  // We intentionally do not XML-escape here — this is INI-style, not XML.
+  // systemd unit lines are INI-style, not XML — no XML escaping. systemd splits
+  // ExecStart on unquoted whitespace, so every interpolated value (the node
+  // binary, the CLI entry, and the config path — all user-controlled) is
+  // double-quoted; a path like "/home/john doe/config.toml" then survives as a
+  // single argument instead of two. systemd also honors "..." quoting in
+  // Environment= values. Backslashes and embedded double-quotes are escaped so
+  // the quoting can't be broken out of. (#43)
+  const q = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   return `\
 [Unit]
 Description=Junco task-queue worker
@@ -140,12 +145,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${o.nodeBin} ${o.cliEntry} start --config ${o.configPath}
+ExecStart=${q(o.nodeBin)} ${q(o.cliEntry)} start --config ${q(o.configPath)}
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=${o.stopTimeoutSeconds}
-Environment=HOME=${o.home}
-Environment=PATH=${o.pathEnv}
+Environment=HOME=${q(o.home)}
+Environment=PATH=${q(o.pathEnv)}
 
 [Install]
 WantedBy=default.target
