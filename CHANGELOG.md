@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`junco-dispatch` skill now recognizes repo-audit requests.** Phrases like "assess this repo" or "have junco audit this repo" route to a new Assess mode that runs `junco assess` (a read-only audit that files one GitHub issue per finding) instead of authoring a plan ticket.
+
 ## [0.4.0] - 2026-07-06
 
 ### Added
