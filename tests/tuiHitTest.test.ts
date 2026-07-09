@@ -83,3 +83,23 @@ describe("hitTest — prs view", () => {
     expect(hitTest(wide({ view: "prs" }), 80, 6)).toEqual({ type: "none" });
   });
 });
+
+describe("hitTest — detail and prDetail views", () => {
+  // Both views render in the middle slot at any width; the rail stays visible
+  // but is keyboard-dead while an overlay is open. Only the ↗ metadata line
+  // (absolute row 1 + LINK_LINE_ROW = 4) is a mouse target.
+  for (const view of ["detail", "prDetail"] as const) {
+    it(`${view}: the ↗ row in the middle band resolves linkLine; all else is none`, () => {
+      expect(hitTest(medium({ view }), 30, 4)).toEqual({ type: "linkLine" });
+      expect(hitTest(medium({ view }), 99, 4)).toEqual({ type: "linkLine" }); // band runs to the edge
+      expect(hitTest(medium({ view }), 5, 4)).toEqual({ type: "none" }); // rail band is dead
+      expect(hitTest(medium({ view }), 30, 3)).toEqual({ type: "none" }); // heading row
+      expect(hitTest(medium({ view }), 30, 5)).toEqual({ type: "none" }); // body row
+      expect(hitTest(medium({ view }), 30, 0)).toEqual({ type: "none" }); // header
+    });
+    it(`${view}: wide terminals — no preview band exists, the whole width is the card`, () => {
+      expect(hitTest(wide({ view }), 80, 4)).toEqual({ type: "linkLine" }); // x=80 would be pane-3 band in main
+      expect(hitTest(wide({ view }), 80, 6)).toEqual({ type: "none" });
+    });
+  }
+});

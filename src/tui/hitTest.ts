@@ -22,8 +22,9 @@ export type HitTarget =
 export interface HitContext {
   layout: Layout;
   columns: number;
-  /** Only the two row-bearing views resolve clicks; others never call this. */
-  view: "main" | "prs";
+  /** The row-bearing views resolve rows; the two detail views resolve only
+   * their ↗ metadata line. Other views never call this. */
+  view: "main" | "prs" | "detail" | "prDetail";
   repoCount: number;
   /** Rows in the middle list — filtered issues (main) or the PR aggregate (prs). */
   listCount: number;
@@ -44,6 +45,14 @@ export function hitTest(ctx: HitContext, x: number, y: number): HitTarget {
   if (layout.mode === "tooSmall") return { type: "none" };
   const r = y - 1; // pane-relative row: every pane spans the full body height
   if (r < 0 || r >= layout.bodyRows) return { type: "none" };
+
+  if (view === "detail" || view === "prDetail") {
+    // Keyboard-owned overlays: only the ↗ metadata line is a mouse target.
+    // The card fills the middle slot to the screen edge — no right pane
+    // renders in these views, at any width.
+    if (x >= layout.railWidth && r === LINK_LINE_ROW) return { type: "linkLine" };
+    return { type: "none" };
+  }
 
   if (x < layout.railWidth) {
     if (view === "prs") return { type: "none" }; // rail isn't interactive in the PRs view
