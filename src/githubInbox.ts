@@ -448,14 +448,18 @@ async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Pr
 }
 
 /** Latest plan comment AUTHORED BY the bridge's own login — a contributor's
- * forged marker comment is never recoverable. Null = nothing usable. */
+ * forged marker comment is never recoverable. Null = nothing usable.
+ * updatedAtMs (NaN when missing/unparseable — the approval gate fails closed
+ * on it) lets the caller bind an approval to the comment's CURRENT content:
+ * GitHub bumps updated_at on every edit while created_at stays fixed, so an
+ * edit after approval is only visible through updated_at. */
 async function findOwnPlanComment(
   cfg: Config,
   nwo: string,
   issueNumber: number,
   login: string,
   ghFn: typeof gh,
-): Promise<{ body: string; createdAtMs: number } | null> {
+): Promise<{ body: string; createdAtMs: number; updatedAtMs: number } | null> {
   const r = await ghFn(
     cfg,
     [
@@ -463,15 +467,24 @@ async function findOwnPlanComment(
       "--paginate",
       `repos/${nwo}/issues/${issueNumber}/comments`,
       "--jq",
-      ".[] | {author: .user.login, body: .body, created_at: .created_at}",
+      ".[] | {author: .user.login, body: .body, created_at: .created_at, updated_at: .updated_at}",
     ],
     { timeoutMs: GH_TIMEOUT, retryNetwork: true },
   );
-  let found: { body: string; createdAtMs: number } | null = null;
+  let found: { body: string; createdAtMs: number; updatedAtMs: number } | null = null;
   for (const line of r.stdout.trim().split("\n").filter(Boolean)) {
-    const c = JSON.parse(line) as { author: string; body: string; created_at: string };
+    const c = JSON.parse(line) as {
+      author: string;
+      body: string;
+      created_at: string;
+      updated_at?: string;
+    };
     if (c.author === login && c.body.includes(PLAN_COMMENT_MARKER)) {
-      found = { body: c.body, createdAtMs: Date.parse(c.created_at) }; // last wins
+      found = {
+        body: c.body,
+        createdAtMs: Date.parse(c.created_at),
+        updatedAtMs: c.updated_at === undefined ? NaN : Date.parse(c.updated_at),
+      }; // last wins
     }
   }
   return found;
@@ -638,19 +651,27 @@ export async function pollGithubInbox(
                   continue;
                 }
                 // Fail closed on an unparseable timestamp on EITHER side: an
-                // approval only counts if it is strictly newer than a plan
-                // comment whose own createdAtMs actually parsed.
+                // approval only counts if it is strictly newer than BOTH the
+                // plan comment's creation AND its last edit (updated_at). The
+                // body that executes is read fresh below, so an edit AFTER the
+                // approval label must invalidate it — otherwise an injected
+                // plan would run under the stale approval.
                 if (
                   !(
                     Number.isFinite(comment.createdAtMs) &&
+                    Number.isFinite(comment.updatedAtMs) &&
                     approval.atMs !== null &&
-                    approval.atMs > comment.createdAtMs
+                    approval.atMs > comment.createdAtMs &&
+                    approval.atMs > comment.updatedAtMs
                   )
                 ) {
-                  log.warn("github bridge: approval predates the plan comment; re-apply it", {
-                    nwo: repo.nwo,
-                    issue: issue.number,
-                  });
+                  log.warn(
+                    "github bridge: approval predates the plan comment or its latest edit; re-apply it",
+                    {
+                      nwo: repo.nwo,
+                      issue: issue.number,
+                    },
+                  );
                   continue;
                 }
               }
