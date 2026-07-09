@@ -47,15 +47,19 @@ jobs:
           # belt for the "no cache in a publishing job" rule above: setup-node
           # auto-caches if package.json ever grows a packageManager field
           package-manager-cache: false
-      # Trusted publishing needs npm >= 11.5.1; node's bundled npm may lag.
-      # Exact-pinned (repo policy — same reason the actions above are SHA-pinned):
-      # this client holds the OIDC publish capability. Bump deliberately — and
-      # verify the candidate can actually publish with provenance first:
-      # npm@12.0.0 ships without the unscoped `sigstore` package its own
-      # libnpmpublish/lib/provenance.js requires, so every
-      # `npm publish --provenance` dies with MODULE_NOT_FOUND (broke v0.5.0's
-      # first release run; nothing reached npm).
-      - run: npm install -g npm@11.18.0
+      # Publish with node's BUNDLED npm — no `npm install -g npm@X` here.
+      # Trusted publishing needs npm >= 11.5.1 (node 24.18 bundles 11.16.0,
+      # and the setup-node major is pinned above); v0.4.0 shipped exactly this
+      # way. Overlay-installing a different npm over the toolcache broke two
+      # v0.5.0 release runs in two different ways:
+      #   - npm@12.0.0 ships without the unscoped `sigstore` package its own
+      #     libnpmpublish/lib/provenance.js requires → MODULE_NOT_FOUND.
+      #   - npm@11.18.0 (delta-overlaid onto bundled 11.16.0) never attempted
+      #     the OIDC exchange → ENEEDAUTH, deterministic across a rerun.
+      # If a future npm floor forces an upgrade, verify a provenance publish
+      # end-to-end before pinning it.
+      - name: Record the publishing npm version
+        run: npm --version
       - name: Verify release tag matches package.json version
         run: |
           pkg="v$(node -p "require('./package.json').version")"
