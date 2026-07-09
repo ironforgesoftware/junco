@@ -51,6 +51,11 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
 - **The main checkout is the daemon's build home.** Park it on `main` once the current branch
   merges; rebuild there only to promote a release into the running daemon
   (`npm run build` → `junco restart`). Feature work happens in worktrees.
+- **Merged ≠ running.** After a PR lands, the daemon and `junco dashboard` keep executing the
+  old `dist/` until you promote: in the main checkout, `git pull --ff-only` → `npm ci` (if the
+  lockfile moved) → `npm run build` → `junco restart` — and check the queue is idle first
+  (`currentTickets` in the health JSON) so the restart never interrupts a running ticket.
+  Test live behavior only after this, or the missing feature reads as a bug.
 - **Sandbox smoke tests exactly as CLAUDE.md prescribes.** A worktree has no `./config.toml`, so
   config resolution falls back to the user-level default — which is the maintainer's *live*
   config. Never run `junco start` or submit test tickets from a worktree either.
