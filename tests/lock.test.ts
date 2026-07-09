@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { acquireSingletonLock, getProcessStartTime, readLockHolder } from "../src/lock.js";
@@ -184,6 +184,63 @@ describe("acquireSingletonLock", () => {
 
     const lock = acquireSingletonLock(lockPath);
     expect(lock).toBeNull();
+  });
+
+  it("never exposes the lock name before its content is complete (atomic create)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    // The identity lookup runs while the pidfile content is being assembled.
+    // If the lock name is already visible at that point, a concurrent reader
+    // could observe an empty/partial pidfile, parse it as stale, and steal a
+    // lock whose owner is alive (issue #24, vector 2).
+    let visibleDuringContentBuild: boolean | null = null;
+    const lock = acquireSingletonLock(lockPath, {
+      getProcessStartTimeFn: (pid) => {
+        visibleDuringContentBuild = existsSync(lockPath);
+        return getProcessStartTime(pid);
+      },
+    });
+
+    expect(lock).not.toBeNull();
+    expect(visibleDuringContentBuild).toBe(false);
+    lock!.release();
+  });
+
+  it("empty pidfile is treated as stale and stolen (creation is atomic, so empty = corrupt)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    writeFileSync(lockPath, "");
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).not.toBeNull();
+    const contents = readFileSync(lockPath, "utf-8").trim();
+    expect(parseInt(contents, 10)).toBe(process.pid);
+    lock!.release();
+  });
+
+  it("winning acquire leaves only the lock file — no temp residue", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).not.toBeNull();
+    expect(readdirSync(dir)).toEqual(["worker.lock"]);
+    lock!.release();
+  });
+
+  it("losing acquire (live holder) leaves only the holder's lock file — no temp residue", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    writeFileSync(lockPath, `${process.pid}\n${getProcessStartTime(process.pid)}\n`);
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).toBeNull();
+    expect(readdirSync(dir)).toEqual(["worker.lock"]);
+    // The holder's pidfile is untouched
+    expect(parseInt(readFileSync(lockPath, "utf-8"), 10)).toBe(process.pid);
   });
 
   it("parent directory is auto-created if it does not exist", () => {

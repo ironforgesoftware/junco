@@ -1,5 +1,6 @@
-import { mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 
 export interface SingletonLock {
@@ -83,28 +84,42 @@ export function acquireSingletonLock(lockPath: string, deps: LockDeps = {}): Sin
 }
 
 /**
- * Attempt to create the pidfile atomically.
+ * Attempt to create the pidfile atomically — content included.
+ *
+ * The full content is written to a unique temp file first, then the lock name
+ * is claimed with linkSync (hard link → EEXIST for the loser, like O_EXCL).
+ * The lock name therefore never exists with empty/partial content, so a
+ * concurrent reader can never misparse a mid-write pidfile as stale.
  *
  * Returns "EEXIST" if the file already exists, the SingletonLock on success,
  * or rethrows any other unexpected error.
  */
 function tryCreate(lockPath: string, deps: LockDeps): SingletonLock | "EEXIST" {
-  let fd: number;
+  const ownPid = process.pid;
+  const content = pidfileContent(ownPid, deps);
+
+  const tmpPath = `${lockPath}.${ownPid}.${randomBytes(6).toString("hex")}.tmp`;
+  writeFileSync(tmpPath, content);
   try {
-    fd = openSync(lockPath, "wx"); // O_CREAT | O_EXCL | O_WRONLY
+    linkSync(tmpPath, lockPath); // atomic claim: fails with EEXIST if taken
   } catch (e: any) {
+    bestEffortUnlink(tmpPath);
     if (e.code === "EEXIST") {
       return "EEXIST";
     }
     throw e;
   }
-
-  const ownPid = process.pid;
-  const content = pidfileContent(ownPid, deps);
-  writeSync(fd, content);
-  closeSync(fd);
+  bestEffortUnlink(tmpPath);
 
   return buildLock(lockPath, ownPid);
+}
+
+function bestEffortUnlink(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // best-effort
+  }
 }
 
 /** Pidfile format: `<pid>\n<start time>\n` ("" when our own start time is unknown). */
