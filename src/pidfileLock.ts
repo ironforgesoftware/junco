@@ -35,17 +35,39 @@ export interface PidfileLockDeps {
 }
 
 /**
+ * Format tag on the start-time discriminator we write. It is self-identifying
+ * so a reader can tell a value THIS code produced — `ps -o lstart=` captured
+ * under LC_ALL=C — from a legacy untagged one written by a pre-#69 daemon under
+ * an arbitrary locale. On an untagged (unrecognized) discriminator we fall back
+ * to pid-liveness alone rather than mis-judging a live daemon's
+ * differently-formatted string as a recycled pid (which would false-steal the
+ * lock and admit two daemons). `c1` = "ps lstart under LC_ALL=C, format v1".
+ */
+export const PIDFILE_DISCRIMINATOR_PREFIX = "c1:";
+
+/** Hard cap on the `ps` probe so a wedged `ps` can't block startup forever. */
+const PS_TIMEOUT_MS = 5000;
+
+/**
  * Opaque process-identity discriminator: the process start time as reported by
- * `ps -p <pid> -o lstart=` (supported on both macOS and Linux). Two reads for
- * the same live process compare equal; a recycled pid yields a different
- * string. Returns null when the pid is dead or the lookup fails (unknown).
+ * `ps -p <pid> -o lstart=` (supported on both macOS and Linux), captured under
+ * a pinned LC_ALL=C so writer and reader agree regardless of the caller's
+ * locale, and returned with the format tag prepended. Two reads for the same
+ * live process compare equal; a recycled pid yields a different string. Returns
+ * null when the pid is dead or the lookup fails/times out (unknown).
  */
 export function getProcessStartTime(pid: number): string | null {
   try {
-    const res = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf-8" });
+    // LC_ALL=C pins the lstart formatting; a hung ps is killed at PS_TIMEOUT_MS
+    // (res.error set → treated as unknown). Both close issue #69.
+    const res = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf-8",
+      env: { ...process.env, LC_ALL: "C" },
+      timeout: PS_TIMEOUT_MS,
+    });
     if (res.error || res.status !== 0) return null;
     const out = res.stdout.trim();
-    return out.length > 0 ? out : null;
+    return out.length > 0 ? `${PIDFILE_DISCRIMINATOR_PREFIX}${out}` : null;
   } catch {
     return null;
   }
@@ -224,9 +246,14 @@ function checkStaleContent(raw: string, deps: PidfileLockDeps): boolean {
     return true;
   }
 
-  if (startTime === "") {
-    // No discriminator recorded (legacy pidfile, or owner's ps lookup failed
-    // at write time) — fall back to pid liveness alone (safe choice: alive).
+  if (!startTime.startsWith(PIDFILE_DISCRIMINATOR_PREFIX)) {
+    // No recognized discriminator: none was recorded (legacy 1-line pidfile /
+    // ps lookup failed at write time → ""), OR the recorded string was written
+    // by a pre-#69 daemon under a different locale (untagged). We cannot safely
+    // compare it against the LC_ALL=C value we produce now, so we fall back to
+    // pid liveness alone (safe choice: alive) rather than mis-judging a live
+    // daemon's differently-formatted string as a recycled pid — which would
+    // false-steal the lock and admit two daemons (issue #69).
     return false;
   }
 
@@ -236,8 +263,8 @@ function checkStaleContent(raw: string, deps: PidfileLockDeps): boolean {
     // Identity unknown — safe choice: alive
     return false;
   }
-  // Same pid but a different start time: the recorded owner is dead and the
-  // pid was recycled by an unrelated process — stale.
+  // Same pid but a different (recognized) start time: the recorded owner is
+  // dead and the pid was recycled by an unrelated process — stale.
   return actual !== startTime;
 }
 
@@ -294,12 +321,15 @@ export function readPidfileHolder(lockPath: string, deps: PidfileLockDeps = {}):
     const { pid, startTime } = parsed;
     const pidAlive = deps.pidAliveFn ?? defaultPidAlive;
     if (!pidAlive(pid)) return null;
-    if (startTime !== "") {
+    if (startTime.startsWith(PIDFILE_DISCRIMINATOR_PREFIX)) {
       const getStartTime = deps.getProcessStartTimeFn ?? getProcessStartTime;
       const actual = getStartTime(pid);
       // Identity known and different → recycled pid, not the recorded holder
       if (actual !== null && actual !== startTime) return null;
     }
+    // Untagged/legacy discriminator (or none): a live pid resolves as the
+    // holder — never return null for a differently-formatted string, so
+    // `junco status`/`restart` keep finding a live pre-#69 daemon (issue #69).
     return pid;
   } catch {
     return null;

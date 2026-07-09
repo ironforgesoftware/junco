@@ -2,7 +2,17 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { acquirePidfileLock, readPidfileHolder, getProcessStartTime } from "../src/pidfileLock.js";
+import {
+  acquirePidfileLock,
+  readPidfileHolder,
+  getProcessStartTime,
+  PIDFILE_DISCRIMINATOR_PREFIX,
+} from "../src/pidfileLock.js";
+
+/** A recognized-but-mismatched discriminator: carries the format tag (so the
+ * reader treats it as ours and compares it) yet never matches a live process —
+ * i.e. a recycled pid. */
+const RECYCLED = `${PIDFILE_DISCRIMINATOR_PREFIX}not-the-real-start-time`;
 
 let tmpDirs: string[] = [];
 
@@ -59,7 +69,7 @@ describe("acquirePidfileLock", () => {
 
   it("recycled pid: live pid with a mismatched start time is stolen", () => {
     const lockPath = join(makeTmpDir(), "x.lock");
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
     const lock = acquirePidfileLock(lockPath);
     expect(lock).not.toBeNull();
     expect(parseInt(readFileSync(lockPath, "utf-8"), 10)).toBe(process.pid);
@@ -115,7 +125,7 @@ describe("acquirePidfileLock", () => {
   it("steal of a genuinely stale lock leaves no aside/temp residue", () => {
     const dir = makeTmpDir();
     const lockPath = join(dir, "x.lock");
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
     const lock = acquirePidfileLock(lockPath);
     expect(lock).not.toBeNull();
     expect(readdirSync(dir)).toEqual(["x.lock"]);
@@ -125,7 +135,7 @@ describe("acquirePidfileLock", () => {
   it("steal race: stale file vanishing mid-steal is settled by the atomic create", () => {
     const dir = makeTmpDir();
     const lockPath = join(dir, "x.lock");
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
     let calls = 0;
     const lock = acquirePidfileLock(lockPath, {
       getProcessStartTimeFn: (pid) => {
@@ -144,7 +154,7 @@ describe("acquirePidfileLock", () => {
     const dir = makeTmpDir();
     const lockPath = join(dir, "x.lock");
     // We judge this file stale (recycled pid) ...
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
     const freshLiveContent = `${process.pid}\n${getProcessStartTime(process.pid)}\n`;
     // ... but during the identity check (call 2 — between judging and stealing)
     // a racing starter completes its ENTIRE steal: the lock name now holds a
@@ -190,10 +200,50 @@ describe("readPidfileHolder", () => {
 
   it("recycled pid → null, matching identity → pid", () => {
     const p = join(makeTmpDir(), "x.lock");
-    writeFileSync(p, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(p, `${process.pid}\n${RECYCLED}\n`);
     expect(readPidfileHolder(p)).toBeNull();
     writeFileSync(p, `${process.pid}\n${getProcessStartTime(process.pid)}\n`);
     expect(readPidfileHolder(p)).toBe(process.pid);
+  });
+});
+
+describe("upgrade transition — legacy locale-formatted discriminator (#69)", () => {
+  // A pre-#69 daemon wrote the pidfile discriminator as a raw, locale-formatted
+  // `ps -o lstart=` string with no format tag. The upgraded reader now produces
+  // an LC_ALL=C, tagged string that differs — but the owner is still alive, so
+  // it must NOT be judged a recycled pid.
+  const LEGACY_UNTAGGED = "Mon Jul  7 10:00:00 2025";
+
+  it("acquire does NOT steal a live pre-#69 daemon's untagged discriminator", () => {
+    const lockPath = join(makeTmpDir(), "x.lock");
+    writeFileSync(lockPath, `${process.pid}\n${LEGACY_UNTAGGED}\n`);
+    // The current LC_ALL=C value differs from the recorded locale string, but
+    // the untagged format is unrecognized → fall back to pid liveness → held.
+    const lock = acquirePidfileLock(lockPath, {
+      getProcessStartTimeFn: () => `${PIDFILE_DISCRIMINATOR_PREFIX}Lun 7 juil. 10:00:00 2025`,
+    });
+    expect(lock).toBeNull();
+    // The live daemon's pidfile is untouched.
+    expect(readFileSync(lockPath, "utf-8")).toBe(`${process.pid}\n${LEGACY_UNTAGGED}\n`);
+  });
+
+  it("readPidfileHolder still resolves a live pre-#69 daemon's holder pid", () => {
+    const p = join(makeTmpDir(), "x.lock");
+    writeFileSync(p, `${process.pid}\n${LEGACY_UNTAGGED}\n`);
+    // status/restart must keep finding the pid — never null on a format mismatch.
+    expect(
+      readPidfileHolder(p, {
+        getProcessStartTimeFn: () => `${PIDFILE_DISCRIMINATOR_PREFIX}whatever-different`,
+      }),
+    ).toBe(process.pid);
+  });
+
+  it("a tagged discriminator whose identity is now unknown is treated as alive", () => {
+    const lockPath = join(makeTmpDir(), "x.lock");
+    writeFileSync(lockPath, `${process.pid}\n${PIDFILE_DISCRIMINATOR_PREFIX}recorded\n`);
+    // Recognized format, but ps can't confirm identity (null) → safe-choice alive.
+    const lock = acquirePidfileLock(lockPath, { getProcessStartTimeFn: () => null });
+    expect(lock).toBeNull();
   });
 });
 
@@ -204,5 +254,24 @@ describe("getProcessStartTime", () => {
     expect(first!.length).toBeGreaterThan(0);
     expect(getProcessStartTime(process.pid)).toBe(first);
     expect(getProcessStartTime(2147483646)).toBeNull();
+  });
+
+  it("carries the format tag so a reader can recognize its own output", () => {
+    expect(getProcessStartTime(process.pid)!.startsWith(PIDFILE_DISCRIMINATOR_PREFIX)).toBe(true);
+  });
+
+  it("is locale-stable — the caller's LC_TIME cannot shift it (LC_ALL=C pinned)", () => {
+    const saved = process.env.LC_TIME;
+    try {
+      process.env.LC_TIME = "C";
+      const a = getProcessStartTime(process.pid);
+      process.env.LC_TIME = "fr_FR.UTF-8";
+      const b = getProcessStartTime(process.pid);
+      expect(a).not.toBeNull();
+      expect(b).toBe(a);
+    } finally {
+      if (saved === undefined) delete process.env.LC_TIME;
+      else process.env.LC_TIME = saved;
+    }
   });
 });

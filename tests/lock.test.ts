@@ -11,6 +11,11 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { acquireSingletonLock, getProcessStartTime, readLockHolder } from "../src/lock.js";
+import { PIDFILE_DISCRIMINATOR_PREFIX } from "../src/pidfileLock.js";
+
+/** A recognized-but-mismatched discriminator: format-tagged (so the reader
+ * compares it) yet never matching a live process — i.e. a recycled pid. */
+const RECYCLED = `${PIDFILE_DISCRIMINATOR_PREFIX}not-the-real-start-time`;
 
 let tmpDirs: string[] = [];
 
@@ -151,7 +156,7 @@ describe("acquireSingletonLock", () => {
 
     // A recycled pid: the pid is alive (it's us) but the recorded start time
     // belongs to the dead previous owner.
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
 
     const lock = acquireSingletonLock(lockPath);
     expect(lock).not.toBeNull();
@@ -176,9 +181,10 @@ describe("acquireSingletonLock", () => {
     const dir = makeTmpDir();
     const lockPath = join(dir, "worker.lock");
 
-    writeFileSync(lockPath, `${process.pid}\nsome-recorded-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${PIDFILE_DISCRIMINATOR_PREFIX}some-recorded-time\n`);
 
-    // ps lookup fails → identity unknown → preserve the safe-choice bias: alive
+    // Recognized discriminator, but ps lookup fails → identity unknown →
+    // preserve the safe-choice bias: alive.
     const lock = acquireSingletonLock(lockPath, { getProcessStartTimeFn: () => null });
     expect(lock).toBeNull();
   });
@@ -192,6 +198,28 @@ describe("acquireSingletonLock", () => {
 
     const lock = acquireSingletonLock(lockPath);
     expect(lock).toBeNull();
+  });
+
+  it("legacy locale-formatted discriminator (live pid) is NOT stolen on upgrade (#69)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    // A pre-#69 daemon recorded a raw, locale-formatted lstart with no format
+    // tag. The upgraded reader's LC_ALL=C value differs, but the owner is alive
+    // — the untagged format is unrecognized, so we must fall back to liveness
+    // and NOT false-steal a live daemon's lock (two-daemon regression).
+    writeFileSync(lockPath, `${process.pid}\nMon Jul  7 10:00:00 2025\n`);
+
+    const lock = acquireSingletonLock(lockPath, {
+      getProcessStartTimeFn: () => `${PIDFILE_DISCRIMINATOR_PREFIX}Lun 7 juil. 10:00:00 2025`,
+    });
+    expect(lock).toBeNull();
+    // ...and status/restart still resolve the live daemon's pid.
+    expect(
+      readLockHolder(lockPath, {
+        getProcessStartTimeFn: () => `${PIDFILE_DISCRIMINATOR_PREFIX}different`,
+      }),
+    ).toBe(process.pid);
   });
 
   it("never exposes the lock name before its content is complete (atomic create)", () => {
@@ -256,7 +284,7 @@ describe("acquireSingletonLock", () => {
     const lockPath = join(dir, "worker.lock");
 
     // Recycled pid: alive, but not the recorded owner — stale
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
 
     const lock = acquireSingletonLock(lockPath);
     expect(lock).not.toBeNull();
@@ -268,7 +296,7 @@ describe("acquireSingletonLock", () => {
     const dir = makeTmpDir();
     const lockPath = join(dir, "worker.lock");
 
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
 
     // Choreography (see acquireSingletonLock): call 1 builds our own pidfile
     // content, call 2 is the staleness identity check. Unlinking during call 2
@@ -295,7 +323,7 @@ describe("acquireSingletonLock", () => {
     const lockPath = join(dir, "worker.lock");
 
     // We judge this file stale (recycled pid) ...
-    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    writeFileSync(lockPath, `${process.pid}\n${RECYCLED}\n`);
     const freshLiveContent = `${process.pid}\n${getProcessStartTime(process.pid)}\n`;
 
     // ... but during the identity check (call 2 — the window between judging
@@ -349,7 +377,7 @@ describe("readLockHolder", () => {
   it("checks the start-time discriminator: recycled pid → null, matching → pid", () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-lockread-"));
     const p = join(dir, "worker.lock");
-    writeFileSync(p, `${process.pid}\nnot-the-real-start-time\n`, "utf8");
+    writeFileSync(p, `${process.pid}\n${RECYCLED}\n`, "utf8");
     expect(readLockHolder(p)).toBeNull(); // pid recycled: not the recorded process
     writeFileSync(p, `${process.pid}\n${getProcessStartTime(process.pid)}\n`, "utf8");
     expect(readLockHolder(p)).toBe(process.pid); // same pid, same identity
