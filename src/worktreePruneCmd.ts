@@ -23,7 +23,7 @@
  *      rmdir the now-empty per-repo discriminator parent (mirrors cleanupWorktree).
  */
 
-import { readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Config } from "./types.js";
 import { git } from "./git.js";
@@ -33,6 +33,12 @@ import { worktreeSlug, worktreesLockPath } from "./worktree.js";
 import { acquirePidfileLock, type PidfileLock } from "./pidfileLock.js";
 
 const HEALTH_TIMEOUT_MS = 1500;
+
+/** `.old-<unix-ts>` worktree-backup suffix — worktree.ts renames an unprunable
+ * worktree to `<wtPath>.old-<ts>` (worktree.ts:182; same shape as
+ * pruneStaleWorktrees' OLD_TS_RE). A dir whose name matches is a legitimate
+ * backup the recursive fallback is allowed to delete. */
+const OLD_BACKUP_RE = /\.old-\d+$/;
 
 export interface PruneDeps {
   printFn?: (s: string) => void;
@@ -50,6 +56,10 @@ export interface PruneDeps {
   rmdirFn?: (p: string) => void;
   /** Recursive fallback removal for a broken/backup worktree. Default: fs.rmSync recursive+force. */
   rmRecursiveFn?: (p: string) => void;
+  /** Existence probe used ONLY to classify the target's FS shape before the
+   * recursive fallback (a `.git` entry marks a real worktree). Never a liveness
+   * signal — the slug gate remains authoritative for that. Default: fs.existsSync. */
+  existsFn?: (p: string) => boolean;
 }
 
 export async function runWorktreePruneCommand(
@@ -71,6 +81,7 @@ export async function runWorktreePruneCommand(
   const rmdirFn = deps.rmdirFn ?? ((p: string) => rmdirSync(p));
   const rmRecursiveFn =
     deps.rmRecursiveFn ?? ((p: string) => rmSync(p, { recursive: true, force: true }));
+  const existsFn = deps.existsFn ?? ((p: string) => existsSync(p));
 
   const rawArg = args[0];
   if (!rawArg) {
@@ -142,10 +153,30 @@ export async function runWorktreePruneCommand(
       const rm = await gitFn(["worktree", "remove", "--force", target], repoRoot);
       removed = rm.code === 0;
     }
-    if (!removed) rmRecursiveFn(target);
+    if (!removed) {
+      // Defense in depth: the recursive fallback deletes a whole subtree, so it
+      // must only ever hit a legitimate LEAF — a real worktree (has a `.git`
+      // entry, live or stale) or a `.old-<ts>` backup. A discriminator CONTAINER
+      // (worktreeRoot/<discriminator>) clears path containment AND the slug gate
+      // (its basename is the repo-hash, never a ticket slug) yet holds live child
+      // worktrees; recursively deleting it would erase every live worktree beneath
+      // it — the exact corruption this command exists to prevent. Classify the
+      // target by FS SHAPE only (this is NOT a liveness signal — the slug gate
+      // above remains authoritative) and refuse anything that is neither.
+      const isBackup = OLD_BACKUP_RE.test(basename(target));
+      const isWorktree = existsFn(join(target, ".git"));
+      if (!isBackup && !isWorktree) {
+        print(
+          `junco worktree prune: refusing to recursively remove '${target}' — ` +
+            `not a leaf worktree or .old-* backup (a container of live worktrees?)\n`,
+        );
+        return 2;
+      }
+      rmRecursiveFn(target);
+    }
 
     // rmdir the now-empty per-repo discriminator parent (mirrors cleanupWorktree,
-    // worktree.ts:293-300) — never the root, and only when empty.
+    // worktree.ts:329-336) — never the root, and only when empty.
     const parent = dirname(target);
     if (resolve(parent) !== root) {
       try {

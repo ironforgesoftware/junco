@@ -117,6 +117,7 @@ describe("runWorktreePruneCommand", () => {
     expect(code).toBe(1);
     expect(out.join("")).toMatch(/refusing to prune/);
     expect(existsSync(wt)).toBe(true);
+    expect(calls.some((a) => a[0] === "worktree")).toBe(false);
   });
 
   it("daemon down (fetch throws): processing/ scan is authoritative — empty → prunes", async () => {
@@ -130,6 +131,49 @@ describe("runWorktreePruneCommand", () => {
     });
     expect(code).toBe(0);
     expect(existsSync(wt)).toBe(false);
+  });
+
+  it("refuses a discriminator CONTAINER path → exit 2, live child worktree NOT deleted", async () => {
+    // `parent` (worktreeRoot/<discriminator>) holds the live child `wt`. It clears
+    // path containment and the slug gate (basename is the repo-hash, not a ticket
+    // slug). Make the child a genuine worktree (has a `.git` entry) and hand the
+    // command a git that CANNOT resolve/remove the container (rev-parse fails, git
+    // worktree remove fails) so control reaches the recursive-delete fallback —
+    // which must REFUSE rather than recursively erase the container + its child.
+    writeFileSync(join(wt, ".git"), "gitdir: /some/repo/.git/worktrees/my-ticket\n", "utf8");
+    const containerGit: NonNullable<PruneDeps["gitFn"]> = async (args) => {
+      calls.push(args);
+      if (args[0] === "rev-parse") return { code: 128, stdout: "" };
+      return { code: 1, stdout: "" }; // any worktree remove fails on a non-worktree
+    };
+    const code = await runWorktreePruneCommand(cfg, [parent], {
+      printFn: (s) => out.push(s),
+      gitFn: containerGit,
+    });
+    expect(code).toBe(2);
+    expect(out.join("")).toMatch(/not a leaf worktree/);
+    expect(existsSync(parent)).toBe(true); // container NOT recursively deleted
+    expect(existsSync(wt)).toBe(true); // live child NOT deleted
+  });
+
+  it("still prunes a .old-<ts> backup via the recursive fallback → exit 0", async () => {
+    // A backup dir git cannot `worktree remove` (not a registered worktree). The
+    // fallback IS the intended cleanup here — the .old-<ts> name whitelists it, so
+    // the container guard must NOT block it.
+    const backup = join(parent, "my-ticket.old-1700000000");
+    mkdirSync(backup, { recursive: true });
+    const backupGit: NonNullable<PruneDeps["gitFn"]> = async (args) => {
+      calls.push(args);
+      if (args[0] === "rev-parse") return { code: 128, stdout: "" };
+      return { code: 1, stdout: "" };
+    };
+    const code = await runWorktreePruneCommand(cfg, [backup], {
+      printFn: (s) => out.push(s),
+      gitFn: backupGit,
+    });
+    expect(code).toBe(0);
+    expect(existsSync(backup)).toBe(false); // recursive fallback removed it
+    expect(out.join("")).toMatch(/pruned:/);
   });
 
   it("SERIALIZATION: a held worktrees.lock blocks prune → exit 1, no git", async () => {
