@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { runOnce, claimNextTask } from "../src/runOnce.js";
 import type { Config, Ticket } from "../src/types.js";
 import type { AssessFlowResult } from "../src/assessFlow.js";
+import { listPending } from "../src/assessReview.js";
 
 function cfg(root: string): Config {
   return {
@@ -714,12 +715,8 @@ describe("assess routing", () => {
         result: fakeRunResult("assess done"),
         found: 0,
         deduped: 0,
-        created: 0,
-        queuedOffline: 0,
         dropped: 0,
-        capped: 0,
-        failed: 0,
-        urls: [],
+        parked: 0,
       };
     };
 
@@ -784,12 +781,8 @@ describe("assess routing", () => {
       result: fakeRunResult(""),
       found: 0,
       deduped: 0,
-      created: 0,
-      queuedOffline: 0,
       dropped: 0,
-      capped: 0,
-      failed: 0,
-      urls: [],
+      parked: 0,
     });
 
     const calls: string[] = [];
@@ -805,7 +798,7 @@ describe("assess routing", () => {
     expect(calls).toEqual(["start", "requeue"]);
   });
 
-  it("end-to-end through the real assess flow: files a live issue and lands the ticket in done/", async () => {
+  it("end-to-end through the real assess flow: parks the finding for review and lands the ticket in done/", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
     ["inbox", "processing", "done", "failed"].forEach((d) =>
@@ -834,9 +827,9 @@ describe("assess routing", () => {
     runGit(["commit", "-q", "-m", "seed"]);
     runGit(["remote", "add", "origin", "git@github.com:acme/demo.git"]);
 
-    // A fake gh script that logs every invocation and answers the three
-    // subcommands runAssessFlow issues: dedup list, label ensure, issue
-    // create.
+    // A fake gh script that logs every invocation. The audit only issues the
+    // author-scoped dedup `issue list` now (parking never files); the create
+    // arm stays scripted so a regression that re-files would surface loudly.
     const ghLog = join(root, "gh.log");
     const ghBin = join(root, "fake-gh.sh");
     writeFileSync(
@@ -882,9 +875,22 @@ esac
     expect(doneFiles).toHaveLength(1);
     const body = readFileSync(join(j, "done", doneFiles[0]), "utf8");
     expect(body).toContain("<!-- junco-result");
-    expect(body).toContain("https://github.com/acme/demo/issues/1");
+    // The audit PARKS the finding — the summary points at the file step, and
+    // no issue URL appears (nothing was filed).
+    expect(body).toContain("junco assess file assess-e2e");
+    expect(body).not.toContain("https://github.com/acme/demo/issues/1");
 
+    // The finding landed in the review store, keyed by ticket id, flagged owned.
+    const pend = listPending(c);
+    expect(pend).toHaveLength(1);
+    expect(pend[0].id).toBe("assess-e2e");
+    expect(pend[0].nwo).toBe("acme/demo");
+    expect(pend[0].external).toBe(false);
+    expect(pend[0].findings).toHaveLength(1);
+
+    // Only the dedup list ran against GitHub; nothing was created.
     const ghCalls = readFileSync(ghLog, "utf8").trim().split("\n");
-    expect(ghCalls.some((l) => l.startsWith("issue create"))).toBe(true);
+    expect(ghCalls.some((l) => l.startsWith("issue create"))).toBe(false);
+    expect(ghCalls.some((l) => l.startsWith("issue list"))).toBe(true);
   });
 });

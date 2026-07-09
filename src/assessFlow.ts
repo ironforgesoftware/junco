@@ -4,18 +4,19 @@
  * supervisor/guard wiring, the transcript, the transient requeue, and the
  * finalize, then layers on the assess-specific work: an `npm audit` dependency
  * scan, parsing the agent's findings, a hallucination filter, severity +
- * fingerprint dedup, GitHub-side dedup, capping, and idempotent issue filing
- * through the outbox seam (githubOutbox.ts).
+ * fingerprint dedup, GitHub-side dedup, and PARKING the surviving findings in
+ * the durable review store (assessReview.ts) for a separate, human-confirmed
+ * filing step (`junco assess file <id>` → assessFiling.ts).
  *
  * Design posture (ported from prFlow.ts): expected failures NEVER throw out of
  * runAssessFlow — a fatal phase error finalizes the ticket to failed/ with the
- * phase message carried in the RunResult errorMessage. Issues are only filed
- * AFTER all analysis, so a transient rerun converges through fingerprint dedup.
+ * phase message carried in the RunResult errorMessage. Nothing is filed here —
+ * findings are PARKED, keyed by ticket id, so a transient rerun simply
+ * overwrites the batch and converges (filing dedups author-scoped at file time).
  */
 
-import { mkdtempSync, writeFileSync, rmSync, statSync, existsSync } from "node:fs";
+import { statSync, existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { tmpdir } from "node:os";
 
 import type { Config, Ticket, RunResult } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
@@ -27,24 +28,17 @@ import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { READ_ONLY_TOOLS } from "./runOnce.js";
 import { slugifyId } from "./slug.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
-import {
-  tryOrEnqueue,
-  ensureFindingLabels,
-  fetchFindingMarkers,
-  type OutboxOp,
-} from "./githubOutbox.js";
+import { fetchFindingMarkers } from "./githubOutbox.js";
 import {
   parseAgentFindings,
   findingsFromNpmAudit,
-  buildIssueTitle,
-  buildIssueBody,
-  findingLabels,
   SEVERITY_RANK,
   type Finding,
 } from "./findings.js";
+import { writePending, type PendingAssess } from "./assessReview.js";
+import { syncExternalClone } from "./externalRepo.js";
 import { log } from "./logging.js";
 
-const GH_TIMEOUT = 60_000;
 const NPM_AUDIT_TIMEOUT = 180_000; // npm audit can be slow on a cold registry cache
 
 export interface AssessDeps {
@@ -66,12 +60,8 @@ export interface AssessFlowResult {
   result: RunResult; // what finalize consumed (finalText = the summary)
   found: number; // findings after merge+filter+within-run dedupe
   deduped: number; // dropped because already filed on GitHub
-  created: number; // issues created live
-  queuedOffline: number; // issue-create ops enqueued to the outbox
   dropped: number; // invalid/hallucinated agent findings dropped
-  capped: number; // findings beyond maxIssuesPerRun
-  failed: number; // per-finding non-network create failures
-  urls: string[]; // URLs of issues created live
+  parked: number; // findings written to the review store awaiting human-confirmed filing
 }
 
 /** Prefer the actionable stderr on a GitOpError, mirroring githubOutbox's
@@ -96,48 +86,6 @@ function emptyRunResult(errorMessage: string): RunResult {
   };
 }
 
-/** Create ONE finding issue live and return the URL gh prints, or null. Mirrors
- * the outbox executor's issue-create live path (githubOutbox.ts:499-520): the
- * body goes to a temp file, labels flatten into repeated --label flags. */
-async function createIssueLive(
-  cfg: Config,
-  nwo: string,
-  title: string,
-  bodyText: string,
-  labels: string[],
-  ghFn: typeof gh,
-): Promise<string | null> {
-  const dir = mkdtempSync(join(tmpdir(), "junco-assess-"));
-  const file = join(dir, "issue.md");
-  writeFileSync(file, bodyText, "utf8");
-  try {
-    const out = await ghFn(
-      cfg,
-      [
-        "issue",
-        "create",
-        "--repo",
-        nwo,
-        "--title",
-        title,
-        "--body-file",
-        file,
-        ...labels.flatMap((l) => ["--label", l]),
-      ],
-      { timeoutMs: GH_TIMEOUT },
-    );
-    return (
-      out.stdout
-        .trim()
-        .split("\n")
-        .reverse()
-        .find((l) => l.startsWith("https://")) ?? null
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 export async function runAssessFlow(
   cfg: Config,
   ticket: Ticket,
@@ -154,36 +102,27 @@ export async function runAssessFlow(
   const counts = {
     found: 0,
     deduped: 0,
-    created: 0,
-    queuedOffline: 0,
     dropped: 0,
-    capped: 0,
-    failed: 0,
+    parked: 0,
   };
-  const urls: string[] = [];
-  const cappedTitles: string[] = [];
   const warnings: string[] = [];
 
   const buildSummary = (phaseError: string | null): string => {
     const parts: string[] = ["## junco assess", `_Assessed ${nowFn().toISOString()}_`];
     if (phaseError) parts.push(`**Failed:** ${phaseError}`);
+    if (counts.parked > 0) {
+      parts.push(
+        `**${counts.parked} findings awaiting review — run \`junco assess file ${ticket.id}\`**`,
+      );
+    }
     parts.push(
       [
         `- Findings (after filter + dedupe): ${counts.found}`,
-        `- Filed live: ${counts.created}`,
-        `- Queued offline: ${counts.queuedOffline}`,
+        `- Parked for review: ${counts.parked}`,
         `- Already filed (skipped): ${counts.deduped}`,
         `- Dropped (invalid or hallucinated): ${counts.dropped}`,
-        `- Capped (beyond maxIssuesPerRun): ${counts.capped}`,
-        `- Failed to file: ${counts.failed}`,
       ].join("\n"),
     );
-    if (urls.length > 0) {
-      parts.push("### Issues created\n\n" + urls.map((u) => `- ${u}`).join("\n"));
-    }
-    if (cappedTitles.length > 0) {
-      parts.push("### Capped — re-run to file\n\n" + cappedTitles.map((t) => `- ${t}`).join("\n"));
-    }
     if (warnings.length > 0) {
       parts.push("### Warnings\n\n" + warnings.map((w) => `- ${w}`).join("\n"));
     }
@@ -213,7 +152,6 @@ export async function runAssessFlow(
       requeued: false,
       result,
       ...counts,
-      urls,
     };
   };
 
@@ -257,6 +195,26 @@ export async function runAssessFlow(
     nwo = parsed;
   } catch (e) {
     return finalizeAssess(null, `assess: could not read origin remote — ${describeError(e)}`);
+  }
+
+  // --- Phase 2b: External detection (path-based). A managed clone lives under
+  // cfg.github.externalReposRoot; the operator's OWNED checkouts never do. This
+  // single boolean gates both the freshness sync below and the parked batch's
+  // `external`/`autoPlan` flags. ---
+  const externalRoot = resolve(expandHome(cfg.github.externalReposRoot));
+  const external = repoPath === externalRoot || repoPath.startsWith(externalRoot + sep);
+
+  // --- Phase 2c: Freshness sync — EXTERNAL clones ONLY. Junco owns these
+  // clones, so a fetch + hard-reset to upstream's default branch is safe and
+  // makes the audit reflect live upstream, not the provisioned snapshot. NEVER
+  // run this on an owned checkout (it would blow away the operator's tree). A
+  // failure is a recorded warning, not fatal — we audit the current tree. ---
+  if (external) {
+    try {
+      await syncExternalClone(cfg, repoPath, { gitFn });
+    } catch (e) {
+      warnings.push(`could not sync external clone to upstream default: ${describeError(e)}`);
+    }
   }
 
   // --- Phase 3: Dependency scan (never fatal). npm audit exits NONZERO when
@@ -325,19 +283,15 @@ export async function runAssessFlow(
         result: agentResult,
         found: 0,
         deduped: 0,
-        created: 0,
-        queuedOffline: 0,
         dropped: 0,
-        capped: 0,
-        failed: 0,
-        urls: [],
+        parked: 0,
       };
     }
   }
 
-  // A timeout or guard-abort does NOT abort the flow: we proceed and file
+  // A timeout or guard-abort does NOT abort the flow: we proceed and park
   // whatever findings exist. The final status still reflects it via finalize's
-  // statusFor (ticket → failed/), and the summary records what was filed.
+  // statusFor (ticket → failed/), and the summary records what was parked.
   // Parse from the WHOLE run, not just the last message: #36 redefined
   // finalText as the last assistant message only, so a findings fence emitted
   // before any trailing message would be dropped and the audit would silently
@@ -393,72 +347,25 @@ export async function runAssessFlow(
     return true;
   });
 
-  // --- Phase 7: Cap. Stable-sort by severity (descending) FIRST so the cap
-  // always retains the highest-severity findings — merge order is
-  // [npm, agent], and without the sort a critical agent finding could be
-  // capped while low npm advisories get filed. toSorted keeps merge order
-  // among equal severities. Then keep the first maxIssuesPerRun; record the
-  // rest (with titles) so the operator can re-run to file them. ---
-  const bySeverity = afterDedup.toSorted(
-    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity],
-  );
-  const toFile = bySeverity.slice(0, cfg.assess.maxIssuesPerRun);
-  const overflow = bySeverity.slice(cfg.assess.maxIssuesPerRun);
-  counts.capped = overflow.length;
-  for (const f of overflow) cappedTitles.push(buildIssueTitle(f));
+  // --- Phase 7: Park all surviving findings for human review. There is NO cap
+  // here — the per-finding confirm at file time (`junco assess file <id>`) is
+  // the volume gate, not this audit. The batch is keyed by ticket id, so a
+  // requeued rerun overwrites (never duplicates) the pending batch. External
+  // batches force autoPlan false: junco does not queue PR work against a repo
+  // it does not own. Empty sets are not written (nothing to review). ---
+  const parked: PendingAssess = {
+    id: ticket.id,
+    nwo,
+    external,
+    autoPlan: external ? false : (ticket.assess?.autoPlan ?? false),
+    repoPath,
+    createdAt: nowFn().toISOString(),
+    findings: afterDedup,
+  };
+  if (afterDedup.length > 0) writePending(cfg, parked);
+  counts.parked = afterDedup.length;
 
-  const autoPlan = ticket.assess?.autoPlan ?? false;
-
-  // --- Phase 8: Labels, best effort. The outbox executor re-ensures labels on
-  // replay, and a live create against a missing label fails per-finding below
-  // and is counted — so a failure here is only a recorded warning. ---
-  if (toFile.length > 0) {
-    const labelUnion = new Set<string>();
-    for (const f of toFile) {
-      for (const l of findingLabels(f, { autoPlan, triggerLabel: cfg.github.triggerLabel })) {
-        labelUnion.add(l);
-      }
-    }
-    try {
-      await ensureFindingLabels(cfg, nwo, [...labelUnion], ghFn);
-    } catch (e) {
-      warnings.push(`could not ensure finding labels (best effort): ${describeError(e)}`);
-    }
-  }
-
-  // --- Phase 9: File issues. Each finding goes through tryOrEnqueue: a live
-  // create when GitHub is reachable, else a durable outbox op. A non-network
-  // create failure counts the finding as failed and CONTINUES with the rest. ---
-  for (const f of toFile) {
-    const title = buildIssueTitle(f);
-    const bodyText = buildIssueBody(f);
-    const labels = findingLabels(f, { autoPlan, triggerLabel: cfg.github.triggerLabel });
-    const op: OutboxOp = {
-      kind: "issue-create",
-      nwo,
-      title,
-      bodyText,
-      labels,
-      fingerprint: f.fingerprint,
-    };
-    let createdUrl: string | null = null;
-    try {
-      const outcome = await tryOrEnqueue(cfg, "assess", op, async () => {
-        createdUrl = await createIssueLive(cfg, nwo, title, bodyText, labels, ghFn);
-      });
-      if (outcome === "sent") {
-        counts.created++;
-        if (createdUrl) urls.push(createdUrl);
-      } else {
-        counts.queuedOffline++;
-      }
-    } catch (e) {
-      counts.failed++;
-      warnings.push(`could not file "${title}": ${describeError(e)}`);
-    }
-  }
-
-  // --- Phase 10: Finalize with the agent's usage/duration/stop metadata but
+  // --- Phase 8: Finalize with the agent's usage/duration/stop metadata but
   // the summary as finalText. ---
   return finalizeAssess(agentResult, null);
 }
