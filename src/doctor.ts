@@ -17,6 +17,7 @@ import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
 import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
+import { pendingCount } from "./assessReview.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -205,6 +206,13 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     const stuck = deadCount(cfg);
     if (stuck > 0) {
       report("warn", "outbox dead-letters", `${stuck} in ${outboxPaths(cfg).dead}`);
+    }
+
+    // 7d. assess review backlog — informational only (normal workflow state,
+    // not a health problem), independent of the github.enabled bridge gate.
+    const reviews = pendingCount(cfg);
+    if (reviews > 0) {
+      report("ok", "assess review", `${reviews} pending (junco assess review)`);
     }
 
     // 8. daemon (informational)
