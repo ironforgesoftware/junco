@@ -79,13 +79,13 @@ A target that looks like `owner/repo` (word characters either side of one slash)
 
 What gets printed:
 
-| Outcome                  | stdout                                                                                                                                                   | Exit |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| No target given          | `Usage: junco assess <path\|owner/repo> [--auto-plan]`                                                                                                   | 2    |
-| `owner/repo` not watched | `junco assess: '<target>' is not watched — add it under [[github.repos]] in config.toml, or watch it from the dashboard, then retry`                     | 2    |
-| Path is not a directory  | `junco assess: not a directory: <resolved-path>`                                                                                                         | 2    |
-| Ticket submission failed | `junco assess: <error>`                                                                                                                                  | 1    |
-| Queued                   | `queued: <ticket-path>`, then `queued — the worker will audit the repo and file issues on its next claim` (plus a third line when `--auto-plan` was set) | 0    |
+| Outcome                  | stdout                                                                                                                                                                                                                                      | Exit |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| No target given          | `Usage: junco assess <path\|owner/repo> [--auto-plan]`                                                                                                                                                                                      | 2    |
+| `owner/repo` not watched | `junco assess: '<target>' is not watched — add it under [[github.repos]] in config.toml, or watch it from the dashboard, then retry`                                                                                                        | 2    |
+| Path is not a directory  | `junco assess: not a directory: <resolved-path>`                                                                                                                                                                                            | 2    |
+| Ticket submission failed | `junco assess: <error>`                                                                                                                                                                                                                     | 1    |
+| Queued                   | `queued: <ticket-path>`, then `queued — the worker will audit the repo and park findings for review on its next claim; run 'junco assess review' then 'junco assess file <id>' to file them` (plus a third line when `--auto-plan` was set) | 0    |
 
 The command only composes and submits the ticket. The actual audit — `npm audit`, the agent session, dedup, and parking — runs later, whenever the daemon claims the ticket. Nothing files yet; that's Phase B, below.
 

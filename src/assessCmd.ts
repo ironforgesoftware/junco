@@ -126,10 +126,13 @@ export async function runAssessCommand(
   }
 
   print(`queued: ${dst}\n`);
-  print("queued — the worker will audit the repo and file issues on its next claim\n");
+  print(
+    "queued — the worker will audit the repo and park findings for review on its next claim; " +
+      "run `junco assess review` then `junco assess file <id>` to file them\n",
+  );
   if (opts.autoPlan) {
     print(
-      "--auto-plan requested — filed findings will carry the trigger label so the bridge plans them\n",
+      "--auto-plan requested — findings you file will carry the trigger label so the bridge plans them\n",
     );
   }
   return 0;
