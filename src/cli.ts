@@ -19,7 +19,7 @@
 
 import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
-import { readFileSync, mkdirSync, existsSync, realpathSync, createWriteStream } from "node:fs";
+import { readFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
@@ -29,7 +29,7 @@ import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
 import { makeGithubReporter } from "./githubReport.js";
-import { log, setLogLevel, setLogFormat, setLogSink, rotateLogIfLarge } from "./logging.js";
+import { log, setLogLevel, setLogFormat, setLogSink, openRotatingLogSink } from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
@@ -114,8 +114,9 @@ Options:
 
 /**
  * Human format on a TTY (JUNCO_LOG_JSON=1 forces JSON), plus a JSON tee to the
- * state-dir worker.log (10MB single-generation rotation). Returns a cleanup
- * that detaches the sink and closes the stream.
+ * state-dir worker.log (10MB single-generation rotation, enforced at open AND
+ * mid-run — see openRotatingLogSink). Returns a cleanup that detaches the
+ * sink and closes the stream.
  */
 function setupLogOutputs(cfg: Config): () => void {
   if (process.stdout.isTTY && process.env.JUNCO_LOG_JSON !== "1") setLogFormat("human");
@@ -123,12 +124,11 @@ function setupLogOutputs(cfg: Config): () => void {
   try {
     const logPath = join(cfg.stateDir, "worker.log");
     mkdirSync(cfg.stateDir, { recursive: true });
-    rotateLogIfLarge(logPath);
-    const stream = createWriteStream(logPath, { flags: "a" });
-    setLogSink((l) => stream.write(l + "\n"));
+    const sink = openRotatingLogSink(logPath);
+    setLogSink((l) => sink.write(l));
     return () => {
       setLogSink(null);
-      stream.end();
+      sink.close();
     };
   } catch (e) {
     log.warn("file logging disabled (state dir not writable)", {

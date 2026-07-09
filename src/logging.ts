@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync, renameSync } from "node:fs";
+import { statSync, renameSync, openSync, closeSync, writeSync } from "node:fs";
 
 type Level = "debug" | "info" | "warn" | "error";
 const store = new AsyncLocalStorage<{ ticket: string }>();
@@ -60,14 +60,79 @@ export function formatHumanLine(entry: Record<string, unknown>): string {
   return `${ts} ${color}${level.toUpperCase().padEnd(5)}${RESET} ${ticket}${String(entry.msg ?? "")}${fields}`;
 }
 
-/** Size-capped single-generation rotation: worker.log → worker.log.1. Called
- * once at daemon startup, before the append stream opens. */
+/** Size-capped single-generation rotation: worker.log → worker.log.1. Runs at
+ * sink open (daemon startup) and again mid-run whenever openRotatingLogSink's
+ * byte counter crosses maxBytes. */
 export function rotateLogIfLarge(path: string, maxBytes = 10 * 1024 * 1024): void {
   try {
     if (statSync(path).size > maxBytes) renameSync(path, path + ".1");
   } catch {
     /* missing file → nothing to rotate */
   }
+}
+
+function fileSize(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+export interface RotatingLogSink {
+  /** Append one JSON line (a newline is added). Rotates first when the write
+   * would push the file past maxBytes. */
+  write: (jsonLine: string) => void;
+  /** Close the underlying file descriptor. */
+  close: () => void;
+}
+
+/**
+ * Append sink for the state-dir worker.log with mid-run rotation (#42): the
+ * byte counter starts at the file's current size and each write that would
+ * cross maxBytes first renames worker.log → worker.log.1 and reopens the
+ * file. A long-lived daemon therefore honors the cap continuously, not just
+ * at the next restart. Writes are synchronous fd appends — crash-safe (no
+ * buffered lines to lose) and the rename can never race an unflushed stream.
+ * A failing write drops the line rather than crash the daemon (stdout still
+ * carries every entry).
+ */
+export function openRotatingLogSink(path: string, maxBytes = 10 * 1024 * 1024): RotatingLogSink {
+  rotateLogIfLarge(path, maxBytes);
+  let fd = openSync(path, "a");
+  let bytes = fileSize(path);
+  return {
+    write(jsonLine: string): void {
+      const chunk = Buffer.from(jsonLine + "\n");
+      if (bytes > 0 && bytes + chunk.length > maxBytes) {
+        try {
+          closeSync(fd);
+          renameSync(path, path + ".1");
+        } catch {
+          /* rotation failed (e.g. permissions) → keep appending to the live file */
+        }
+        try {
+          fd = openSync(path, "a");
+          bytes = fileSize(path); // 0 after a successful rotation; truthful otherwise
+        } catch {
+          fd = -1; // reopen failed → subsequent writes drop below
+        }
+      }
+      try {
+        writeSync(fd, chunk);
+        bytes += chunk.length;
+      } catch {
+        /* never let the log sink take down the daemon — drop the line */
+      }
+    },
+    close(): void {
+      try {
+        closeSync(fd);
+      } catch {
+        /* already closed */
+      }
+    },
+  };
 }
 
 function emit(level: Level, msg: string, fields: Record<string, unknown> = {}): void {
