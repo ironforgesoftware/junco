@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import type { Config, Ticket } from "./types.js";
+import type { Config, RunResult, Ticket } from "./types.js";
 import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
@@ -177,6 +177,7 @@ export async function executeClaimed(
     // the finally clears it for BOTH the PR-flow and Q&A paths so the daemon
     // reports idle once the task ends, however it ends.
     metrics.taskStarted(next.id);
+    const startedAt = Date.now();
     const reporter = deps.reporter ?? NOOP_REPORTER;
     try {
       log.info("claimed", { src: next.path, dst: claimed });
@@ -240,8 +241,6 @@ export async function executeClaimed(
           ? { ...cfg.model, id: cfg.github.plannerModelId }
           : cfg.model;
       const qaCfg: Config = { ...cfg, tools: qaTools, model: qaModel };
-      // NOTE: if the factory throws (e.g. model unresolved), this rejects and the
-      // claimed ticket is left in processing/ — orphan recovery lands in M4.
       const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
       // Construct the loop-guard supervisor when enabled (M2). It feeds off the
       // agent event stream inside runAgent: nudge → mid-run steer, kill → abort.
@@ -284,6 +283,57 @@ export async function executeClaimed(
       const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
       await reporter.onFinal(next, outcomeFromQa(fin.status, result)).catch(() => undefined);
       log.info("finalized", { dst: fin.dst, status: fin.status });
+    } catch (e) {
+      // Top-level containment: real throw paths exist (a rejecting session
+      // factory — runAgent awaits it outside its try/catch; runPrFlow
+      // deliberately rethrows non-GitOpError exceptions). Without this catch
+      // the claimed ticket is stranded in processing/ (scheduler mode) or the
+      // whole daemon dies (serial mode). A crash is infrastructure, not a
+      // verdict on the ticket (same stance as orphans.ts): requeue under the
+      // transient-retry budget, else finalize to failed/ with the error as
+      // the reason — serial and scheduler modes behave identically.
+      const reason = e instanceof Error ? e.message : String(e);
+      log.error("ticket execution crashed; containing", {
+        id: next.id,
+        error: e instanceof Error ? (e.stack ?? e.message) : String(e),
+      });
+      try {
+        const rq = requeueTicket(cfg, claimed, next, reason);
+        if (rq.requeued) {
+          await reporter.onRequeue(next).catch(() => undefined);
+          return;
+        }
+      } catch (rqErr) {
+        log.error("crash requeue failed; falling back to failed/", {
+          id: next.id,
+          error: rqErr instanceof Error ? rqErr.message : String(rqErr),
+        });
+      }
+      const crashResult: RunResult = {
+        // renderResult only surfaces finalText, so carry the reason there too
+        // (errorMessage drives the failed status + the reporter's failureReason).
+        finalText: `Execution crashed: ${reason}`,
+        toolCalls: [],
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+        stopReason: null,
+        errorMessage: reason,
+        timedOut: false,
+        durationMs: Date.now() - startedAt,
+        abortedByGuard: false,
+      };
+      try {
+        const fin = finalize(claimed, crashResult, { done: paths.done, failed: paths.failed });
+        await reporter.onFinal(next, outcomeFromQa(fin.status, crashResult)).catch(() => undefined);
+        log.info("finalized (crash containment)", { dst: fin.dst, status: fin.status });
+      } catch (finErr) {
+        // Both dispositions failed (e.g. the claimed file vanished). Never
+        // rethrow — leave whatever remains in processing/ for the startup
+        // orphan recovery rather than crash-looping the daemon.
+        log.error("crash containment could not finalize; leaving for orphan recovery", {
+          id: next.id,
+          error: finErr instanceof Error ? finErr.message : String(finErr),
+        });
+      }
     } finally {
       metrics.taskEnded(next.id); // also clears this ticket's progress
     }

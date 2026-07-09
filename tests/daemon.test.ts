@@ -8,11 +8,11 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "../src/types.js";
-import type { ClaimedWork } from "../src/runOnce.js";
+import { executeClaimed, type ClaimedWork } from "../src/runOnce.js";
 import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
@@ -681,6 +681,33 @@ describe("runScheduler", () => {
     };
     await runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep });
     expect(okRan).toBe(true);
+  });
+
+  it("a crashing executeClaimed never strands the claimed ticket in processing/", async () => {
+    // Real queue dirs + the default claimFn (claimNextTask), with the real
+    // executeClaimed whose session factory rejects — the ticket's DISPOSITION
+    // must be a requeue (budget permitting), not an indefinite processing/
+    // strand while the scheduler keeps looking healthy.
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-crash-"));
+    const j = join(root, "Junco");
+    for (const d of ["inbox", "processing", "done", "failed"]) {
+      mkdirSync(join(j, d), { recursive: true });
+    }
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const cfg = makeConfig({ vaultRoot: root, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    const executeFn = (c: Config, w: ClaimedWork): Promise<void> =>
+      executeClaimed(c, w, {
+        sessionFactoryFor: () => async () => {
+          throw new Error("model unresolved at session create");
+        },
+      });
+    await runScheduler(cfg, stop, { once: true }, { executeFn, sleep: tickSleep });
+    expect(readdirSync(join(j, "processing"))).toHaveLength(0); // not stranded
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    expect(readFileSync(join(j, "inbox", inbox[0]), "utf8")).toMatch(/retry_count: 1/);
   });
 });
 
