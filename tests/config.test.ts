@@ -232,6 +232,39 @@ describe("loadConfig", () => {
       loadConfig(writeToml(`vault_root = "/v"\n[worker]\nmax_transient_retries = -1\n`)),
     ).toThrow();
   });
+
+  it("rejects non-positive timeouts and poll intervals (#30)", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\ndefault_timeout_minutes = 0\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\ndefault_timeout_minutes = -5\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\npoll_interval_seconds = 0\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[worker]\nstartup_poll_seconds = -1\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[verify]\ncommand_timeout = 0\n`)),
+    ).toThrow();
+  });
+
+  it("constrains health_port to an integer TCP port (1-65535) (#30)", () => {
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 0\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 65536\n`)),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 8080.5\n`)),
+    ).toThrow();
+    expect(
+      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 65535\n`)).healthPort,
+    ).toBe(65535);
+  });
 });
 
 describe("[github] config section", () => {

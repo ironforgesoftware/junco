@@ -131,9 +131,9 @@ const TomlSchema = z.object({
     .default({}),
   worker: z
     .object({
-      default_timeout_minutes: z.number().default(30),
-      poll_interval_seconds: z.number().default(15),
-      startup_poll_seconds: z.number().default(30),
+      default_timeout_minutes: z.number().min(1).default(30),
+      poll_interval_seconds: z.number().min(1).default(15),
+      startup_poll_seconds: z.number().min(1).default(30),
       startup_wait: z.boolean().default(true),
       // Resilience: transient failures (endpoint errors with no commits) are
       // requeued with a not_before backoff up to this many times.
@@ -178,7 +178,7 @@ const TomlSchema = z.object({
   verify: z
     .object({
       enabled: z.boolean().default(true),
-      command_timeout: z.number().default(60),
+      command_timeout: z.number().min(1).default(60),
       block_on_fail: z.boolean().default(false),
     })
     .default({}),
@@ -200,7 +200,7 @@ const TomlSchema = z.object({
     .object({
       health_enabled: z.boolean().default(true),
       health_host: z.string().default("127.0.0.1"),
-      health_port: z.number().default(8787),
+      health_port: z.number().int().min(1).max(65535).default(8787),
       log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
       // Daemon-owned state (worker.log, per-ticket transcripts) lives here.
       state_dir: z.string().default("~/.local/state/junco"),
