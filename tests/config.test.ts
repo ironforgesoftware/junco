@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, queuePaths, resolveConfigPath, defaultUserConfigPath } from "../src/config.js";
+import {
+  loadConfig,
+  queuePaths,
+  resolveConfigPath,
+  defaultUserConfigPath,
+  isLoopbackHost,
+} from "../src/config.js";
 
 function writeToml(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "junco-cfg-"));
@@ -377,6 +383,27 @@ describe("[assess] config section", () => {
     expect(() =>
       loadConfig(writeToml(`vault_root = "/tmp/v"\n[assess]\nmin_severity = "extreme"\n`)),
     ).toThrow();
+  });
+});
+
+describe("isLoopbackHost (#44)", () => {
+  it("treats localhost / 127.0.0.0-8 / ::1 as loopback", () => {
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("127.1.2.3")).toBe(true);
+    expect(isLoopbackHost("::1")).toBe(true);
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("  127.0.0.1  ")).toBe(true);
+    expect(isLoopbackHost("LOCALHOST")).toBe(true);
+  });
+
+  it("treats 0.0.0.0 / LAN IPs / :: as non-loopback", () => {
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+    expect(isLoopbackHost("192.168.1.10")).toBe(false);
+    expect(isLoopbackHost("10.0.0.5")).toBe(false);
+    expect(isLoopbackHost("::")).toBe(false);
+    expect(isLoopbackHost("128.0.0.1")).toBe(false);
+    expect(isLoopbackHost("")).toBe(false);
   });
 });
 

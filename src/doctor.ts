@@ -8,7 +8,7 @@ import { execFile } from "node:child_process";
 import { accessSync, constants, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, queuePaths } from "./config.js";
+import { loadConfig, queuePaths, isLoopbackHost } from "./config.js";
 import { endpointReachable } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
@@ -138,6 +138,18 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       ["state dir", cfg.stateDir],
     ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
+    }
+
+    // 7a. health bind address — a non-loopback health_host exposes the
+    // unauthenticated /health metrics (in-flight ticket ids, PID, tokens) to
+    // the network. Warn, never fail (the operator may have deliberately opened
+    // it behind a firewall/proxy).
+    if (cfg.healthEnabled && cfg.healthHost && !isLoopbackHost(cfg.healthHost)) {
+      report(
+        "warn",
+        "health bind",
+        `${cfg.healthHost} is not loopback — /health is unauthenticated and exposes ticket ids + metrics to the network; bind 127.0.0.1 unless firewalled`,
+      );
     }
 
     // 7b. github bridge (only when enabled — disabled setups print nothing)

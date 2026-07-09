@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock } from "./lock.js";
-import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";
+import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./config.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
 import { makeGithubReporter } from "./githubReport.js";
@@ -271,6 +271,17 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
     const teardownLogs = setupLogOutputs(cfg);
+
+    // Loud warning when /health binds a non-loopback address (#44): the metrics
+    // body is unauthenticated and leaks in-flight ticket ids + operational
+    // metadata to the whole network. `junco doctor` mirrors this warning.
+    if (cfg.healthEnabled && cfg.healthHost && !isLoopbackHost(cfg.healthHost)) {
+      log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
+        healthHost: cfg.healthHost,
+        healthPort: cfg.healthPort,
+        advice: "bind health_host to 127.0.0.1 unless it is firewalled",
+      });
+    }
 
     // Derive lock path: mirror Python args.config.resolve().parent / "worker.lock"
     const lockPath = join(dirname(resolve(configPath)), "worker.lock");
