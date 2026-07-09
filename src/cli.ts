@@ -92,7 +92,8 @@ Subcommands:
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
-  assess <path|owner/repo> [--auto-plan]  audit a repo for vulnerabilities and file GitHub issues
+  assess <path|owner/repo> [--auto-plan]  audit a repo; findings await review (junco assess review)
+  assess review [<id>]                    list pending assess reviews, or show one
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
@@ -396,6 +397,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "assess") {
     const cfg = loadConfigFn(configPath);
+    const sub = positionals[1];
+    if (sub === "review") {
+      const { runAssessReviewCommand } = await import("./assessCmd.js");
+      return runAssessReviewCommand(cfg, positionals[2], { printFn });
+    }
+    // (file branch added in a follow-up task)
     const { runAssessCommand } = await import("./assessCmd.js");
     return runAssessCommand(
       cfg,

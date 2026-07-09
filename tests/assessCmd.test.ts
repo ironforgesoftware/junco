@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildAssessTicket, runAssessCommand } from "../src/assessCmd.js";
+import { buildAssessTicket, runAssessCommand, runAssessReviewCommand } from "../src/assessCmd.js";
 import { parseTicket } from "../src/ticket.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
+import { writePending } from "../src/assessReview.js";
 import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
 
@@ -223,5 +224,69 @@ describe("runAssessCommand", () => {
 
     expect(code).toBe(1);
     expect(out.join("")).toContain("ticket already queued");
+  });
+});
+
+describe("runAssessReviewCommand", () => {
+  it("assess review lists pending batches and shows one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-1",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "Bug",
+          description: "",
+          references: [],
+        },
+      ],
+    });
+    let out = "";
+    const print = (s: string) => {
+      out += s;
+    };
+    expect(await runAssessReviewCommand(c, undefined, { printFn: print })).toBe(0);
+    expect(out).toContain("assess-x-1");
+    expect(out).toContain("o/r");
+
+    out = "";
+    expect(await runAssessReviewCommand(c, "assess-x-1", { printFn: print })).toBe(0);
+    expect(out).toContain("f1");
+    expect(out).toContain("Bug");
+  });
+
+  it("no pending batches -> prints a friendly message, exit 0", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-empty-"));
+    const c = cfg([], dir);
+    let out = "";
+    const code = await runAssessReviewCommand(c, undefined, {
+      printFn: (s) => {
+        out += s;
+      },
+    });
+    expect(code).toBe(0);
+    expect(out).toMatch(/no pending/i);
+  });
+
+  it("unknown id -> exit 2, message names the id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-missing-"));
+    const c = cfg([], dir);
+    let out = "";
+    const code = await runAssessReviewCommand(c, "assess-ghost", {
+      printFn: (s) => {
+        out += s;
+      },
+    });
+    expect(code).toBe(2);
+    expect(out).toContain("assess-ghost");
   });
 });

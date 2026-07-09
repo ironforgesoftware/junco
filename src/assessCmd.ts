@@ -12,6 +12,7 @@ import { expandHome } from "./config.js";
 import { submitTicket } from "./dispatch.js";
 import { readWatchlist, watchlistPath } from "./watchlist.js";
 import { buildAssessPrompt } from "./assessPrompt.js";
+import { listPending, readPending } from "./assessReview.js";
 
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
 
@@ -130,5 +131,55 @@ export async function runAssessCommand(
       "--auto-plan requested — filed findings will carry the trigger label so the bridge plans them\n",
     );
   }
+  return 0;
+}
+
+/**
+ * `junco assess review [<id>]` — read side of the durable review queue
+ * (src/assessReview.ts). No id lists pending batches parked by the audit
+ * flow; an id prints each finding's fingerprint/severity/title so the
+ * operator can decide what to file (junco assess file — added next).
+ */
+export async function runAssessReviewCommand(
+  cfg: Config,
+  id: string | undefined,
+  deps: AssessCmdDeps = {},
+): Promise<number> {
+  const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+
+  if (id === undefined) {
+    const pending = listPending(cfg);
+    if (pending.length === 0) {
+      print("no pending assess reviews\n");
+      return 0;
+    }
+    for (const b of pending) {
+      const scope = b.external ? "external" : "owned";
+      print(`${b.id}  ${b.nwo} (${scope})  ${b.findings.length} findings  ${b.createdAt}\n`);
+    }
+    print(`\nreview one: junco assess review <id> · file: junco assess file <id> --all\n`);
+    return 0;
+  }
+
+  const { batch, error } = readPending(cfg, id);
+  if (error) {
+    print(`junco assess review: ${error}\n`);
+    return 1;
+  }
+  if (!batch) {
+    print(`junco assess review: no pending batch '${id}'\n`);
+    return 2;
+  }
+  print(`${batch.id}  ${batch.nwo} (${batch.external ? "external" : "owned"})\n`);
+  for (const f of batch.findings) {
+    print(`  ${f.fingerprint}  [${f.severity}]  ${f.title}\n`);
+  }
+  print(`\nfile all: junco assess file ${batch.id} --all\n`);
+  print(
+    `file some: junco assess file ${batch.id} --only ${batch.findings
+      .map((f) => f.fingerprint)
+      .slice(0, 2)
+      .join(",")}\n`,
+  );
   return 0;
 }
