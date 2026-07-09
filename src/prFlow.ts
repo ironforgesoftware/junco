@@ -62,6 +62,12 @@ export interface PrOutcome {
   /** PR endgame (push/create-PR/finalize comment+label) was parked in the
    * outbox because GitHub was unreachable — set in Task 4. */
   prQueued: boolean;
+  /** Offline AMEND (issue #50): the PR URL is already known so the reporter
+   * still comments (prQueued stays false), but the push carrying the new
+   * commits was parked in the outbox. The result block flags this so the run
+   * does not read as unqualified success while the commits are still queued.
+   * Optional — older/other PrOutcome builders omit it (treated as false). */
+  pushQueued?: boolean;
   /** The base branch could not be fetched (offline) so the worktree was cut
    * from a possibly-stale local `origin/<base>` — buildPrBody flags it. */
   staleBase: boolean;
@@ -83,6 +89,7 @@ function emptyPrOutcome(ctx: RepoContext): PrOutcome {
     critic: null,
     criticRetriesUsed: 0,
     prQueued: false,
+    pushQueued: false,
     staleBase: false,
   };
 }
@@ -702,6 +709,9 @@ export async function runPrFlow(
         remote: ctx.pushRemote,
       });
       prOutcome.prQueued = false; // URL known; reporter comment proceeds normally
+      // Issue #50: the commits are only QUEUED, not on the PR yet — surface
+      // that in the result block so the run is not reported as done-and-pushed.
+      prOutcome.pushQueued = true;
       prOutcome.pushed = false;
       prOutcome.worktreePreserved = true;
       prOutcome.prUrl = amendTarget?.prUrl ?? null;

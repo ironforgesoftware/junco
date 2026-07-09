@@ -143,6 +143,12 @@ function renderPrResult(
     lines.push(
       "PR queued for offline push — junco will open it automatically when GitHub is reachable.",
     );
+  } else if (prOutcome.pushQueued) {
+    // Offline AMEND (issue #50): the PR already exists but the commits are only
+    // queued. Be honest rather than reporting unqualified success.
+    lines.push(
+      "Amend push queued for offline delivery — junco will update the PR with these commits when GitHub is reachable.",
+    );
   }
 
   const err = phaseError || r.errorMessage;

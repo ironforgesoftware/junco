@@ -957,6 +957,56 @@ esac
     expect(flow.dst.startsWith(h.failed)).toBe(true);
     expect(readFileSync(flow.dst, "utf8")).toContain("gh pr create failed");
   }, 30000);
+
+  // -------------------------------------------------------------------------
+  // Offline amend honesty (issue #50)
+  // -------------------------------------------------------------------------
+
+  it("offline amend parks the push and the result block says the push is queued (not unqualified success)", async () => {
+    const NET = "connect: network is unreachable";
+    // gh answers repo view + the amend PR view; git shim fails only `push`.
+    const cfg = makeConfig(h, {
+      ghBin: ghCases("gh-amend.sh", {
+        '"pr view "*':
+          'echo \'{"state":"OPEN","headRefName":"junco/amend-me","baseRefName":"main","isDraft":true,"url":"https://github.com/owner/repo/pull/42","isCrossRepository":false}\'; exit 0',
+      }),
+      gitBin: gitFailShim("git-amendpush.sh", "push", NET),
+    });
+
+    // Seed an existing open-PR head branch on origin (validate + amend fetch).
+    run(["git", "-C", h.work, "checkout", "-b", "junco/amend-me"]);
+    writeFileSync(join(h.work, "existing.txt"), "prior PR work\n");
+    run(["git", "-C", h.work, "add", "existing.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "prior commit"]);
+    run(["git", "-C", h.work, "push", "-u", "origin", "junco/amend-me"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+
+    const { task, path } = makeTicket(
+      h,
+      "amend.md",
+      `---\nid: amend\nrepo: ${h.work}\namends_pr: 42\n---\n# Amend\n\nAdd more.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true, file: "more.txt" }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    // The commits are local + the PR URL is known, so it finalizes as it earned…
+    expect(TERMINAL_DONE_STATUSES.has(flow.status)).toBe(true);
+    expect(flow.status).toBe("completed");
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/42");
+    // …but the result block is HONEST that the push is only queued.
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("Amend push queued for offline delivery");
+    expect(text).toContain("pushed: false");
+    // The push really was parked in the outbox.
+    const pushOps = listOps(cfg).filter((o) => o.op.kind === "push");
+    expect(pushOps).toHaveLength(1);
+    // prQueued stays false — the reporter's own finalize comment still runs
+    // (it queues itself if still offline); only the composite fresh op sets it.
+    expect(flow.prQueued).toBe(false);
+  }, 30000);
 });
 
 // ---------------------------------------------------------------------------
