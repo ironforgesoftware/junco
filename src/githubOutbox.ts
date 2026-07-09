@@ -51,6 +51,12 @@ export type OutboxOp =
       finalize: { ticketId: string; status: string; finalText: string } | null;
       pushed: boolean;
       prUrl: string | null;
+      /** Set on the tail op re-enqueued when a created PR op dead-letters with
+       * its finalize step un-run (#77): push+create are already done, so the
+       * replay resumes at the finalize comment + label flip. Absent on ops from
+       * prFlow (falsy). Bounds re-enqueue to one — a finalizeOnly op that
+       * dead-letters is logged loudly but not re-enqueued again. */
+      finalizeOnly?: boolean;
     }
   | {
       kind: "issue-create";
@@ -283,6 +289,13 @@ function prFlushComment(finalize: { finalText: string }, prUrl: string): string 
   return `Opened ${prUrl}\n\n${cap(finalize.finalText)}`;
 }
 
+/** Idempotency key for a PR-op finalize comment, derived from the created PR
+ * URL rather than the op-file id so the original op and any re-enqueued
+ * finalize tail (#77) share one marker and can never double-post the comment. */
+function prCommentKey(prUrl: string): string {
+  return `pr:${prUrl}`;
+}
+
 const FINDING_LABEL_DEFAULT = { color: "ededed", description: "" };
 
 // Fingerprints already filed on <nwo>: scan the bodies of every issue
@@ -457,6 +470,35 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
       }
     };
 
+    // On dead-letter of a composite `pr` op that already pushed AND created the
+    // PR (prUrl checkpointed) but never ran its finalize tail, the PR is live
+    // on GitHub yet the linked issue was never closed out. Don't silently drop
+    // that tail: log loudly, and re-enqueue the un-run finalize (comment +
+    // done/failed label flip) as a fresh replayable op keyed by the PR URL, so
+    // a transient label/permission failure can't strand the issue (#77). Bounded
+    // to ONE re-enqueue via finalizeOnly — a tail that itself dead-letters is
+    // logged, not re-spawned.
+    const preserveFinalizeTail = (s: StoredOp): void => {
+      const op = s.op;
+      if (op.kind !== "pr" || op.prUrl === null || op.finalize === null || op.issue === null) {
+        return;
+      }
+      log.error("PR outbox op dead-lettered after the PR was created — issue finalize stranded", {
+        id: s.id,
+        prUrl: op.prUrl,
+        nwo: op.nwo,
+        issue: op.issue,
+        error: s.lastError,
+      });
+      if (op.finalizeOnly) return; // already a tail replay — do not loop
+      const tailId = enqueueOp(cfg, s.origin, { ...op, pushed: true, finalizeOnly: true }, deps);
+      log.warn("re-enqueued the finalize tail of a dead-lettered PR op", {
+        deadId: s.id,
+        tailId,
+        prUrl: op.prUrl,
+      });
+    };
+
     const execute = async (s: StoredOp): Promise<void> => {
       const op = s.op;
       switch (op.kind) {
@@ -546,7 +588,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           }
           if (op.finalize !== null && op.issue !== null) {
             const body = prFlushComment(op.finalize, op.prUrl!);
-            await postCommentIdempotent(op.nwo, op.issue, body, s.id);
+            await postCommentIdempotent(op.nwo, op.issue, body, prCommentKey(op.prUrl!));
             const ll = lifecycleLabels(cfg.github.triggerLabel);
             const doneLabel = TERMINAL_DONE_STATUSES.has(op.finalize.status) ? ll.done : ll.failed;
             await ghFn(
@@ -654,6 +696,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           }
           result.dead++;
           log.warn("outbox op dead-lettered", { id: s.id, error: s.lastError });
+          preserveFinalizeTail(s);
         } else {
           if (rewrite(s)) result.remaining++;
         }

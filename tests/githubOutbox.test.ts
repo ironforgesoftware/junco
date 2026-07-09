@@ -310,6 +310,73 @@ describe("flushOutbox", () => {
     expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1);
   });
 
+  it("a created PR op that dead-letters preserves its finalize tail as a replayable op (#77)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-77-"));
+    const cfg = { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
+    enqueueOp(cfg, "prflow", {
+      kind: "pr",
+      repoPath: "/repo",
+      branch: "junco/fix-7",
+      nwo: "a/b",
+      issue: 7,
+      base: "main",
+      title: "Fix things",
+      bodyText: "the body",
+      draft: false,
+      labels: [],
+      reviewers: [],
+      finalize: { ticketId: "gh-a-b-7", status: "completed", finalText: "did the thing" },
+      pushed: true, // push already landed
+      prUrl: "https://github.com/a/b/pull/9", // PR already created (checkpointed)
+    });
+
+    // Finalize comment posts fine; the done/failed LABEL flip fails permanently
+    // (e.g. a token that lost issues:write). Comments are tracked so the dedup
+    // across the original + replayed tail can be asserted.
+    let commentBody = "";
+    let commentPosts = 0;
+    const f = fakes((_tool, args) => {
+      if (args[0] === "api") return { stdout: commentBody };
+      if (args[0] === "issue" && args[1] === "comment") {
+        commentPosts++;
+        const idx = args.indexOf("--body-file");
+        commentBody = readFileSync(args[idx + 1], "utf8");
+        return undefined;
+      }
+      if (args[0] === "issue" && args[1] === "edit") throw PERM_ERR;
+      return undefined;
+    });
+
+    // Burn the original op to dead-letter.
+    let res: Awaited<ReturnType<typeof flushOutbox>> | undefined;
+    for (let i = 0; i < MAX_OP_ATTEMPTS; i++)
+      res = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(res!.dead).toBe(1);
+    expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1); // original parked in dead/
+    expect(commentPosts).toBe(1); // posted once, then deduped across attempts
+
+    // The finalize tail was re-enqueued (bounded, finalizeOnly, keyed by PR URL).
+    const live = listOps(cfg);
+    expect(live).toHaveLength(1);
+    const tail = live[0].op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(tail).toMatchObject({
+      finalizeOnly: true,
+      pushed: true,
+      prUrl: "https://github.com/a/b/pull/9",
+      issue: 7,
+    });
+    expect(tail.finalize).not.toBeNull();
+
+    // Replaying the tail does NOT re-post the finalize comment (dedup by PR
+    // URL), and — the label flip still failing — it dead-letters WITHOUT
+    // spawning yet another tail (re-enqueue is bounded to one).
+    for (let i = 0; i < MAX_OP_ATTEMPTS; i++)
+      await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(commentPosts).toBe(1); // no double comment
+    expect(outboxDepth(cfg)).toBe(0); // no new tail regenerated
+    expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(2); // original + tail
+  });
+
   it("pr composite: push → create → finalize comment → labels, with checkpoint resume", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f5-"));
     const cfg = {
