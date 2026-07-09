@@ -3,7 +3,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runOutboxCommand } from "../src/outboxCmd.js";
-import { outboxPaths, enqueueOp, MAX_OP_ATTEMPTS, type OutboxOp } from "../src/githubOutbox.js";
+import {
+  outboxPaths,
+  enqueueOp,
+  MAX_OP_ATTEMPTS,
+  FLUSH_LOCK_FILENAME,
+  type OutboxOp,
+} from "../src/githubOutbox.js";
 import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
 
@@ -267,6 +273,24 @@ describe("runOutboxCommand — flush", () => {
     const text = out.join("");
     expect(text).toMatch(/sent 0 · dead 1 · remaining 1/);
     expect(text).toMatch(/offline — will retry when GitHub is reachable/);
+  });
+
+  it("flush while another live flusher holds the lock → clean in-progress line, exit 0", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obxcmd-flush-lock-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    // Our own pid is definitionally alive — reads as a concurrent live flusher.
+    writeFileSync(join(outboxPaths(cfg).dir, FLUSH_LOCK_FILENAME), `${process.pid}\n`, "utf8");
+    const f = fakes(() => undefined);
+    const out: string[] = [];
+    const code = await runOutboxCommand(cfg, ["flush"], {
+      printFn: (s) => out.push(s),
+      ghFn: f.ghFn,
+      gitFn: f.gitFn,
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toBe("another flush is already in progress — skipped\n");
+    expect(f.calls).toHaveLength(0);
   });
 
   it("unexpected flushOutbox throw → one clean failure line + exit 1 (no raw fatal)", async () => {

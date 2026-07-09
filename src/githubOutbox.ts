@@ -18,6 +18,10 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  openSync,
+  writeSync,
+  closeSync,
+  unlinkSync,
 } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -232,12 +236,19 @@ export async function tryOrEnqueue(
 export interface FlushDeps extends OutboxDeps {
   ghFn?: typeof gh;
   gitFn?: typeof git;
+  /** Liveness probe for the flush-lock owner pid (default: signal 0, mirroring
+   * src/lock.ts checkStale). Injectable so tests can pin alive/dead. */
+  pidAliveFn?: (pid: number) => boolean;
 }
 export interface FlushResult {
   sent: number;
   dead: number;
   remaining: number;
   offline: boolean;
+  /** true when another live flusher held the flush lock — nothing was
+   * attempted, and `remaining` is the depth we walked away from. Absent
+   * (never false) on a flush that actually ran. */
+  skipped?: boolean;
 }
 
 function marker(id: string): string {
@@ -341,6 +352,86 @@ export async function ensureFindingLabels(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Flush lock — serializes concurrent flushers (the daemon sweep vs a manual
+// `junco outbox flush` in another process). The ENOENT tolerance below keeps
+// a lost rm/rename race harmless, but the issue-create op's scan→create
+// dedup is a TOCTOU: two flushers can both list (no marker yet) and both
+// `gh issue create` the same finding. Holding this lock for the whole flush
+// closes that window. Same pidfile pattern as src/lock.ts
+// acquireSingletonLock (O_EXCL create + stale-pid steal), kept local and
+// outbox-scoped: it must never contend with the daemon's worker.lock, and a
+// held lock here is a clean skip for the caller, not an exit.
+// ---------------------------------------------------------------------------
+
+export const FLUSH_LOCK_FILENAME = "flush.lock";
+
+/** Default owner-liveness probe: signal 0. ESRCH → dead (stale); EPERM or
+ * any other failure → treat as alive (safe choice, mirrors lock.ts). */
+function defaultPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/** O_CREAT|O_EXCL the lock file with our pid. false ⇔ EEXIST (held). The
+ * lock file deliberately uses the REAL fs even where op files go through
+ * injected deps — it is the cross-process mutual-exclusion primitive, and
+ * faking it would fake away the very guarantee it exists to provide. */
+function tryCreateFlushLock(lockPath: string): boolean {
+  let fd: number;
+  try {
+    fd = openSync(lockPath, "wx");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw e;
+  }
+  writeSync(fd, `${process.pid}\n`);
+  closeSync(fd);
+  return true;
+}
+
+/** Acquire the flush lock, stealing it when the recorded owner is stale
+ * (dead pid, or unreadable/unparseable content — e.g. a crash between open
+ * and write left it empty). Returns a release fn, or null when a live
+ * flusher holds it. Release only unlinks while the file still carries our
+ * pid, so a slow release can never delete a successor's lock. */
+function acquireFlushLock(dir: string, pidAlive: (pid: number) => boolean): (() => void) | null {
+  mkdirSync(dir, { recursive: true });
+  const lockPath = join(dir, FLUSH_LOCK_FILENAME);
+  const release = (): void => {
+    try {
+      const raw = readFileSync(lockPath, "utf8");
+      if (parseInt(raw.trim().split("\n")[0] ?? "", 10) !== process.pid) return;
+      unlinkSync(lockPath);
+    } catch {
+      // Best-effort: gone (ENOENT) or unreadable — nothing to release.
+    }
+  };
+  if (tryCreateFlushLock(lockPath)) return release;
+
+  // EEXIST: stale (owner dead / content unreadable) → steal; live → back off.
+  let raw: string;
+  try {
+    raw = readFileSync(lockPath, "utf8");
+  } catch {
+    raw = ""; // vanished between EEXIST and read — the retry below settles it
+  }
+  const pid = parseInt(raw.trim().split("\n")[0] ?? "", 10);
+  if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return null;
+  try {
+    unlinkSync(lockPath);
+  } catch (e) {
+    // ENOENT: another process already stole it — the retry settles who won.
+    // Anything else: bail out rather than fight over it.
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  }
+  return tryCreateFlushLock(lockPath) ? release : null;
+}
+
 export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<FlushResult> {
   const ghFn = deps.ghFn ?? gh;
   const gitFn = deps.gitFn ?? git;
@@ -348,252 +439,274 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
   const rmFn = deps.rmFn ?? ((p: string) => rmSync(p, { force: true }));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
-  const { dead } = outboxPaths(cfg);
+  const pidAliveFn = deps.pidAliveFn ?? defaultPidAlive;
+  const { dir, dead } = outboxPaths(cfg);
   const result: FlushResult = { sent: 0, dead: 0, remaining: 0, offline: false };
-  const ops = listOps(cfg, deps);
 
-  /** Persist updated bookkeeping (attempts/lastError/pr checkpoints) back to
-   * the op file. Returns false when a concurrent flusher stole the file
-   * (ENOENT) — callers must then stop counting the op as theirs. */
-  const rewrite = (s: StoredOp): boolean => {
-    const { path, ...rest } = s;
-    const tmp = `${path}.tmp`;
-    try {
-      writeFileFn(tmp, JSON.stringify(rest, null, 2));
-      renameFn(tmp, path);
-      return true;
-    } catch (e) {
-      if (!isEnoent(e)) throw e;
-      log.info("outbox op claimed by a concurrent flusher — skipping rewrite", { id: s.id });
-      return false;
-    }
-  };
+  // Empty outbox: return before touching the lock, so the daemon's periodic
+  // sweeps don't create the dir/lock file on installs that never queued an op.
+  const preOps = listOps(cfg, deps);
+  if (preOps.length === 0) return result;
 
-  const postCommentIdempotent = async (
-    nwo: string,
-    issue: number,
-    body: string,
-    id: string,
-  ): Promise<void> => {
-    const existing = await ghFn(
-      cfg,
-      ["api", "--paginate", `repos/${nwo}/issues/${issue}/comments`, "--jq", ".[].body"],
-      { timeoutMs: GH_TIMEOUT },
-    );
-    if (existing.stdout.includes(marker(id))) return; // crash-replay: already delivered
-    const dir = mkdtempSync(join(tmpdir(), "junco-obxc-"));
-    const file = join(dir, "comment.md");
-    writeFileSync(file, `${body.trimEnd()}\n\n${marker(id)}\n`, "utf8");
-    try {
-      await ghFn(cfg, ["issue", "comment", String(issue), "--repo", nwo, "--body-file", file], {
-        timeoutMs: GH_TIMEOUT,
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
+  const releaseLock = acquireFlushLock(dir, pidAliveFn);
+  if (releaseLock === null) {
+    log.info("outbox flush already in progress — skipping", { dir, depth: preOps.length });
+    return { ...result, remaining: preOps.length, skipped: true };
+  }
+  try {
+    return await flushLocked();
+  } finally {
+    releaseLock();
+  }
 
-  const execute = async (s: StoredOp): Promise<void> => {
-    const op = s.op;
-    switch (op.kind) {
-      case "labels": {
-        if (op.add.length + op.remove.length === 0) return;
-        const args = ["issue", "edit", String(op.issue), "--repo", op.nwo];
-        for (const l of op.add) args.push("--add-label", l);
-        for (const l of op.remove) args.push("--remove-label", l);
-        await ghFn(cfg, args, { timeoutMs: GH_TIMEOUT });
-        return;
+  async function flushLocked(): Promise<FlushResult> {
+    // Re-list UNDER the lock: the pre-lock snapshot may be stale (the previous
+    // holder can have sent or dead-lettered ops between our list and acquire).
+    const ops = listOps(cfg, deps);
+
+    /** Persist updated bookkeeping (attempts/lastError/pr checkpoints) back to
+     * the op file. Returns false when a concurrent flusher stole the file
+     * (ENOENT) — callers must then stop counting the op as theirs. */
+    const rewrite = (s: StoredOp): boolean => {
+      const { path, ...rest } = s;
+      const tmp = `${path}.tmp`;
+      try {
+        writeFileFn(tmp, JSON.stringify(rest, null, 2));
+        renameFn(tmp, path);
+        return true;
+      } catch (e) {
+        if (!isEnoent(e)) throw e;
+        log.info("outbox op claimed by a concurrent flusher — skipping rewrite", { id: s.id });
+        return false;
       }
-      case "comment":
-        await postCommentIdempotent(op.nwo, op.issue, op.body, s.id);
-        return;
-      case "push":
-        await gitFn(
-          cfg,
-          ["-C", op.repoPath, "push", "--set-upstream", op.remote ?? "origin", op.branch],
-          { timeoutMs: PUSH_TIMEOUT },
-        );
-        return;
-      case "pr": {
-        if (!op.pushed) {
+    };
+
+    const postCommentIdempotent = async (
+      nwo: string,
+      issue: number,
+      body: string,
+      id: string,
+    ): Promise<void> => {
+      const existing = await ghFn(
+        cfg,
+        ["api", "--paginate", `repos/${nwo}/issues/${issue}/comments`, "--jq", ".[].body"],
+        { timeoutMs: GH_TIMEOUT },
+      );
+      if (existing.stdout.includes(marker(id))) return; // crash-replay: already delivered
+      const dir = mkdtempSync(join(tmpdir(), "junco-obxc-"));
+      const file = join(dir, "comment.md");
+      writeFileSync(file, `${body.trimEnd()}\n\n${marker(id)}\n`, "utf8");
+      try {
+        await ghFn(cfg, ["issue", "comment", String(issue), "--repo", nwo, "--body-file", file], {
+          timeoutMs: GH_TIMEOUT,
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    const execute = async (s: StoredOp): Promise<void> => {
+      const op = s.op;
+      switch (op.kind) {
+        case "labels": {
+          if (op.add.length + op.remove.length === 0) return;
+          const args = ["issue", "edit", String(op.issue), "--repo", op.nwo];
+          for (const l of op.add) args.push("--add-label", l);
+          for (const l of op.remove) args.push("--remove-label", l);
+          await ghFn(cfg, args, { timeoutMs: GH_TIMEOUT });
+          return;
+        }
+        case "comment":
+          await postCommentIdempotent(op.nwo, op.issue, op.body, s.id);
+          return;
+        case "push":
           await gitFn(
             cfg,
             ["-C", op.repoPath, "push", "--set-upstream", op.remote ?? "origin", op.branch],
             { timeoutMs: PUSH_TIMEOUT },
           );
-          op.pushed = true;
-          rewrite(s);
-        }
-        if (op.prUrl === null) {
-          const dir = mkdtempSync(join(tmpdir(), "junco-obxb-"));
-          const bodyFile = join(dir, "body.md");
-          writeFileSync(bodyFile, op.bodyText, "utf8");
-          try {
-            const argv = [
-              "pr",
-              "create",
-              "--repo",
-              op.nwo,
-              "--base",
-              op.base,
-              "--head",
-              op.head ?? op.branch,
-              "--title",
-              op.title,
-              "--body-file",
-              bodyFile,
-            ];
-            if (op.draft) argv.push("--draft");
-            for (const l of op.labels) argv.push("--label", l);
-            for (const r of op.reviewers) argv.push("--reviewer", r);
-            const out = await ghFn(cfg, argv, { timeoutMs: GH_TIMEOUT });
-            const url = out.stdout
-              .trim()
-              .split("\n")
-              .reverse()
-              .find((l: string) => l.startsWith("https://"));
-            if (!url) throw new GitOpError("gh pr create returned no URL", out.stderr, 1);
-            op.prUrl = url;
-          } catch (e) {
-            if (e instanceof GitOpError && /already exists/i.test(e.stderr)) {
-              const v = await ghFn(
-                cfg,
-                [
-                  "pr",
-                  "view",
-                  op.head ?? op.branch,
-                  "--repo",
-                  op.nwo,
-                  "--json",
-                  "url",
-                  "--jq",
-                  ".url",
-                ],
-                { timeoutMs: GH_TIMEOUT },
-              );
-              op.prUrl = v.stdout.trim();
-            } else {
-              throw e;
-            }
-          } finally {
-            rmSync(dirname(bodyFile), { recursive: true, force: true });
+          return;
+        case "pr": {
+          if (!op.pushed) {
+            await gitFn(
+              cfg,
+              ["-C", op.repoPath, "push", "--set-upstream", op.remote ?? "origin", op.branch],
+              { timeoutMs: PUSH_TIMEOUT },
+            );
+            op.pushed = true;
+            rewrite(s);
           }
-          rewrite(s);
+          if (op.prUrl === null) {
+            const dir = mkdtempSync(join(tmpdir(), "junco-obxb-"));
+            const bodyFile = join(dir, "body.md");
+            writeFileSync(bodyFile, op.bodyText, "utf8");
+            try {
+              const argv = [
+                "pr",
+                "create",
+                "--repo",
+                op.nwo,
+                "--base",
+                op.base,
+                "--head",
+                op.head ?? op.branch,
+                "--title",
+                op.title,
+                "--body-file",
+                bodyFile,
+              ];
+              if (op.draft) argv.push("--draft");
+              for (const l of op.labels) argv.push("--label", l);
+              for (const r of op.reviewers) argv.push("--reviewer", r);
+              const out = await ghFn(cfg, argv, { timeoutMs: GH_TIMEOUT });
+              const url = out.stdout
+                .trim()
+                .split("\n")
+                .reverse()
+                .find((l: string) => l.startsWith("https://"));
+              if (!url) throw new GitOpError("gh pr create returned no URL", out.stderr, 1);
+              op.prUrl = url;
+            } catch (e) {
+              if (e instanceof GitOpError && /already exists/i.test(e.stderr)) {
+                const v = await ghFn(
+                  cfg,
+                  [
+                    "pr",
+                    "view",
+                    op.head ?? op.branch,
+                    "--repo",
+                    op.nwo,
+                    "--json",
+                    "url",
+                    "--jq",
+                    ".url",
+                  ],
+                  { timeoutMs: GH_TIMEOUT },
+                );
+                op.prUrl = v.stdout.trim();
+              } else {
+                throw e;
+              }
+            } finally {
+              rmSync(dirname(bodyFile), { recursive: true, force: true });
+            }
+            rewrite(s);
+          }
+          if (op.finalize !== null && op.issue !== null) {
+            const body = prFlushComment(op.finalize, op.prUrl!);
+            await postCommentIdempotent(op.nwo, op.issue, body, s.id);
+            const ll = lifecycleLabels(cfg.github.triggerLabel);
+            const doneLabel = TERMINAL_DONE_STATUSES.has(op.finalize.status) ? ll.done : ll.failed;
+            await ghFn(
+              cfg,
+              [
+                "issue",
+                "edit",
+                String(op.issue),
+                "--repo",
+                op.nwo,
+                "--add-label",
+                doneLabel,
+                "--remove-label",
+                ll.working,
+              ],
+              { timeoutMs: GH_TIMEOUT },
+            );
+          }
+          return;
         }
-        if (op.finalize !== null && op.issue !== null) {
-          const body = prFlushComment(op.finalize, op.prUrl!);
-          await postCommentIdempotent(op.nwo, op.issue, body, s.id);
-          const ll = lifecycleLabels(cfg.github.triggerLabel);
-          const doneLabel = TERMINAL_DONE_STATUSES.has(op.finalize.status) ? ll.done : ll.failed;
-          await ghFn(
-            cfg,
-            [
-              "issue",
-              "edit",
-              String(op.issue),
-              "--repo",
-              op.nwo,
-              "--add-label",
-              doneLabel,
-              "--remove-label",
-              ll.working,
-            ],
-            { timeoutMs: GH_TIMEOUT },
-          );
+        case "issue-create": {
+          // Labels FIRST: `gh issue create --label X` hard-fails on a missing
+          // label, and the dedup list-scan below filters by FINDING_LABEL,
+          // which must exist too.
+          await ensureFindingLabels(cfg, op.nwo, op.labels, ghFn);
+          // FRESH scan every time — never cache across ops within a flush.
+          // Two offline assess runs can enqueue duplicate fingerprints; FIFO
+          // convergence depends on op N+1's list seeing the issue op N just
+          // created.
+          const markers = await fetchFindingMarkers(cfg, op.nwo, ghFn);
+          if (markers.has(op.fingerprint)) return; // already filed
+          const dir = mkdtempSync(join(tmpdir(), "junco-obxi-"));
+          const file = join(dir, "issue.md");
+          writeFileSync(file, op.bodyText, "utf8");
+          try {
+            await ghFn(
+              cfg,
+              [
+                "issue",
+                "create",
+                "--repo",
+                op.nwo,
+                "--title",
+                op.title,
+                "--body-file",
+                file,
+                ...op.labels.flatMap((l) => ["--label", l]),
+              ],
+              { timeoutMs: GH_TIMEOUT },
+            );
+          } finally {
+            rmSync(dir, { recursive: true, force: true });
+          }
+          return;
         }
-        return;
-      }
-      case "issue-create": {
-        // Labels FIRST: `gh issue create --label X` hard-fails on a missing
-        // label, and the dedup list-scan below filters by FINDING_LABEL,
-        // which must exist too.
-        await ensureFindingLabels(cfg, op.nwo, op.labels, ghFn);
-        // FRESH scan every time — never cache across ops within a flush.
-        // Two offline assess runs can enqueue duplicate fingerprints; FIFO
-        // convergence depends on op N+1's list seeing the issue op N just
-        // created.
-        const markers = await fetchFindingMarkers(cfg, op.nwo, ghFn);
-        if (markers.has(op.fingerprint)) return; // already filed
-        const dir = mkdtempSync(join(tmpdir(), "junco-obxi-"));
-        const file = join(dir, "issue.md");
-        writeFileSync(file, op.bodyText, "utf8");
-        try {
-          await ghFn(
-            cfg,
-            [
-              "issue",
-              "create",
-              "--repo",
-              op.nwo,
-              "--title",
-              op.title,
-              "--body-file",
-              file,
-              ...op.labels.flatMap((l) => ["--label", l]),
-            ],
-            { timeoutMs: GH_TIMEOUT },
-          );
-        } finally {
-          rmSync(dir, { recursive: true, force: true });
+        default: {
+          // Unreachable for any kind this build knows about (OutboxOp is a
+          // closed union) — reached only via version-skew (an op enqueued by a
+          // newer/older daemon build) or a hand-edited op file. Throwing routes
+          // it through the permanent-failure path below (attempts++, eventual
+          // dead-letter) instead of the op silently falling through the switch
+          // and getting rm'd by the success path as if it had actually sent.
+          const kind = (op as { kind?: unknown }).kind;
+          throw new Error(`unknown outbox op kind: ${String(kind)}`);
         }
-        return;
       }
-      default: {
-        // Unreachable for any kind this build knows about (OutboxOp is a
-        // closed union) — reached only via version-skew (an op enqueued by a
-        // newer/older daemon build) or a hand-edited op file. Throwing routes
-        // it through the permanent-failure path below (attempts++, eventual
-        // dead-letter) instead of the op silently falling through the switch
-        // and getting rm'd by the success path as if it had actually sent.
-        const kind = (op as { kind?: unknown }).kind;
-        throw new Error(`unknown outbox op kind: ${String(kind)}`);
-      }
-    }
-  };
+    };
 
-  for (let i = 0; i < ops.length; i++) {
-    const s = ops[i];
-    if (result.offline) {
-      result.remaining++;
-      continue;
-    }
-    try {
-      await execute(s);
-      try {
-        rmFn(s.path);
-      } catch (e) {
-        if (!isEnoent(e)) throw e; // non-ENOENT rm failure → op-failure path below
-        log.info("outbox op claimed by a concurrent flusher — not counting as sent", {
-          id: s.id,
-        });
-        continue; // the other flusher's send, not ours
-      }
-      result.sent++;
-    } catch (e) {
-      if (isOffline(e)) {
-        result.offline = true;
+    for (let i = 0; i < ops.length; i++) {
+      const s = ops[i];
+      if (result.offline) {
         result.remaining++;
         continue;
       }
-      s.attempts += 1;
-      s.lastError = describeError(e);
-      if (s.attempts >= MAX_OP_ATTEMPTS) {
-        mkdirFn(dead);
+      try {
+        await execute(s);
         try {
-          renameFn(s.path, join(dead, basename(s.path)));
-        } catch (e2) {
-          if (!isEnoent(e2)) throw e2;
-          log.info("outbox op claimed by a concurrent flusher — not dead-lettering", {
+          rmFn(s.path);
+        } catch (e) {
+          if (!isEnoent(e)) throw e; // non-ENOENT rm failure → op-failure path below
+          log.info("outbox op claimed by a concurrent flusher — not counting as sent", {
             id: s.id,
           });
-          continue; // its fate (dead or sent) is the other flusher's to count
+          continue; // the other flusher's send, not ours
         }
-        result.dead++;
-        log.warn("outbox op dead-lettered", { id: s.id, error: s.lastError });
-      } else {
-        if (rewrite(s)) result.remaining++;
+        result.sent++;
+      } catch (e) {
+        if (isOffline(e)) {
+          result.offline = true;
+          result.remaining++;
+          continue;
+        }
+        s.attempts += 1;
+        s.lastError = describeError(e);
+        if (s.attempts >= MAX_OP_ATTEMPTS) {
+          mkdirFn(dead);
+          try {
+            renameFn(s.path, join(dead, basename(s.path)));
+          } catch (e2) {
+            if (!isEnoent(e2)) throw e2;
+            log.info("outbox op claimed by a concurrent flusher — not dead-lettering", {
+              id: s.id,
+            });
+            continue; // its fate (dead or sent) is the other flusher's to count
+          }
+          result.dead++;
+          log.warn("outbox op dead-lettered", { id: s.id, error: s.lastError });
+        } else {
+          if (rewrite(s)) result.remaining++;
+        }
       }
     }
+    return result;
   }
-  return result;
 }
