@@ -44,6 +44,7 @@ import { runInitWizard } from "./wizard.js";
 import { runStatusCommand } from "./statusCmd.js";
 import { runListCommand } from "./listCmd.js";
 import { runRetryCommand } from "./retryCmd.js";
+import { runRmCommand } from "./rmCmd.js";
 import { runDoctor } from "./doctor.js";
 import { runLogsCommand } from "./logsCmd.js";
 
@@ -90,6 +91,7 @@ Subcommands:
   status       Show daemon / endpoint / queue health at a glance
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
+  rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
   assess <path|owner/repo> [--auto-plan]  audit a repo for vulnerabilities and file GitHub issues
@@ -368,6 +370,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "retry") {
     const cfg = loadConfigFn(configPath);
     return runRetryCommand(cfg, positionals.slice(1), { all: values.all as boolean }, { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // rm: best-effort delete of a queued ticket from inbox/ (src/rmCmd.ts).
+  // Never touches processing/ — the daemon owns it.
+  // ------------------------------------------------------------
+  if (subcommand === "rm") {
+    const cfg = loadConfigFn(configPath);
+    return runRmCommand(cfg, positionals.slice(1), { printFn });
   }
 
   // ------------------------------------------------------------
