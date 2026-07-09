@@ -1452,7 +1452,7 @@ export function App(props: AppProps): React.JSX.Element {
 
   const onMouseEvent = (ev: TuiMouseEvent): void => {
     // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
-    if (view === "help" || view === "palette" || view === "addRepo") return;
+    if (view === "help" || view === "palette" || view === "addRepo" || view === "review") return;
     if (ev.kind === "release") return; // presses act on press, not release
     if (ev.kind === "press") dismissToast();
 

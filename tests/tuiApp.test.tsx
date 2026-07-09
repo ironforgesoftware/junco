@@ -783,6 +783,51 @@ describe("App", () => {
       await until(() => prCalls.length === 1);
       expect(prCalls[0]).toEqual(["acme/api", 100]);
     });
+
+    // The review view (v) is keyboard-driven (cursor-based, no scroll offset);
+    // a leaked click/wheel must never fall through to the main-layout hit-test
+    // (which would openDetail() and eject the operator into the issue overlay).
+    it("review view ignores mouse events: no eject into issue-detail, no stray scroll", async () => {
+      const { client } = makeClient({ "acme/api": [rawIssue] });
+      (client as { listReview: () => Promise<unknown> }).listReview = async () =>
+        okv([
+          {
+            id: "assess-x-1",
+            nwo: "o/r",
+            external: true,
+            autoPlan: false,
+            repoPath: "/x",
+            createdAt: "2026-07-09T00:00:00.000Z",
+            findings: [
+              {
+                fingerprint: "f1",
+                kind: "code" as const,
+                severity: "high" as const,
+                ruleId: "R",
+                title: "SQL injection",
+                description: "",
+                references: [],
+              },
+            ],
+          },
+        ]);
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      r.stdin.write("v");
+      await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
+      // Same coordinates that, in the main view, focus pane 2 and (on a second
+      // click) open the issue-detail overlay — see "first click focuses pane 2
+      // + selects" above. Here they must be a total no-op.
+      r.stdin.write(click(30, 4));
+      r.stdin.write(click(30, 4));
+      r.stdin.write(wheelDown(30, 5));
+      await wait(50);
+      expect(r.lastFrame() ?? "").toContain("o/r"); // still the batch list
+      expect(r.lastFrame() ?? "").not.toContain("the body"); // never ejected into issue detail
+      // The view is still alive and keyboard-driven: Enter still drills in.
+      r.stdin.write("\r");
+      await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
+    });
   });
 });
 
