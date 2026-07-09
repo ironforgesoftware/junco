@@ -286,6 +286,12 @@ const FINDING_LABEL_DEFAULT = { color: "ededed", description: "" };
 // Fingerprints already filed on <nwo>: scan the bodies of every issue
 // carrying the finding label (state all, most recent 500). Bodies can be
 // null (githubInbox.ts GhIssue precedent) — treated as empty.
+//
+// KNOWN LIMITATION (issue #41 follow-up): `--limit 500` truncates the dedup
+// set on repos that have accumulated more than 500 finding issues, so the
+// oldest findings fall out of the scan and can re-file. The fix is true
+// pagination via `gh api --paginate`, deferred here to keep this change from
+// spilling into the runOnce e2e fixture (owned elsewhere).
 export async function fetchFindingMarkers(
   cfg: Config,
   nwo: string,

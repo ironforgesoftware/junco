@@ -170,6 +170,53 @@ describe("fingerprintFinding", () => {
     const expected = createHash("sha256").update("code|r|My Title").digest("hex").slice(0, 16);
     expect(fp).toBe(expected);
   });
+
+  // Issue #41: kind|ruleId|path collapsed two distinct findings in one file
+  // under one rule into a single fingerprint — and the --state all GitHub-side
+  // dedup then suppressed the survivor forever.
+  it("distinguishes two distinct findings sharing file and rule by their titles", () => {
+    const a = fingerprintFinding({
+      kind: "code",
+      ruleId: "sql-injection",
+      title: "Unsanitized query in getUser",
+      location: { path: "src/db.ts", line: 10 },
+    } as never);
+    const b = fingerprintFinding({
+      kind: "code",
+      ruleId: "sql-injection",
+      title: "Unsanitized query in listOrders",
+      location: { path: "src/db.ts", line: 90 },
+    } as never);
+    expect(a).not.toBe(b);
+  });
+
+  it("is drift-resistant: title case/punctuation/whitespace variations keep the fingerprint stable", () => {
+    const mk = (title: string) =>
+      fingerprintFinding({
+        kind: "code",
+        ruleId: "sql-injection",
+        title,
+        location: { path: "src/db.ts" },
+      } as never);
+    const base = mk("Unsanitized query in getUser()");
+    expect(mk("unsanitized query in getUser")).toBe(base);
+    expect(mk("Unsanitized  query,\tin `getUser()`")).toBe(base);
+    expect(mk("  UNSANITIZED QUERY IN GETUSER!  ")).toBe(base);
+  });
+
+  it("keeps dependency findings keyed by exactly kind|ruleId|package.name (unchanged by the code-locus fix)", () => {
+    const fp = fingerprintFinding({
+      kind: "dependency",
+      ruleId: "GHSA-1",
+      title: "whatever the advisory title is",
+      package: { name: "lodash", range: "*", fixedIn: null },
+    } as never);
+    const expected = createHash("sha256")
+      .update("dependency|GHSA-1|lodash")
+      .digest("hex")
+      .slice(0, 16);
+    expect(fp).toBe(expected);
+  });
 });
 
 describe("AgentFindingSchema", () => {
