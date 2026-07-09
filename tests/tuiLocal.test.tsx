@@ -1,11 +1,19 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { SectionRail } from "../src/tui/components/LocalDashboard.js";
+import {
+  SectionRail,
+  OutboxSection,
+  ReposSection,
+  WorktreesSection,
+  DaemonSection,
+} from "../src/tui/components/LocalDashboard.js";
 import type { LocalCheap, LocalHeavy, DaemonDetail } from "../src/tui/localSnapshot.js";
 import type { StoredOp } from "../src/githubOutbox.js";
 
 const NOW = new Date("2026-07-09T12:00:00Z");
+
+const FULL_WIN = { start: 0, end: 10 };
 
 const DAEMON: DaemonDetail = {
   up: true,
@@ -147,5 +155,132 @@ describe("SectionRail", () => {
     expect(f).not.toContain("⇡");
     expect(f).not.toContain("⚑");
     expect(f).toContain("○");
+  });
+});
+
+describe("OutboxSection", () => {
+  it("header counts, op line, and cursor on the selected op", () => {
+    const f = render(
+      <OutboxSection
+        outbox={CHEAP.outbox}
+        cursor={0}
+        window={FULL_WIN}
+        height={20}
+        focused
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("⇡2 live");
+    expect(f).toContain("✗1 dead");
+    expect(f).toContain("comment acme/api#7");
+    expect(f).toContain("attempts=2");
+    expect(f).toContain("connect ETIMEDOUT"); // selected op expands its lastError
+    const opLine = f.split("\n").find((l) => l.includes("comment"))!;
+    expect(opLine).toContain("▌");
+  });
+
+  it("null → loading", () => {
+    const f = render(
+      <OutboxSection
+        outbox={null}
+        cursor={0}
+        window={FULL_WIN}
+        height={20}
+        focused={false}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("loading…");
+  });
+});
+
+describe("ReposSection", () => {
+  it("renders nwo, source tag, branch@sha7, dirty mark, cursor", () => {
+    const f = render(
+      <ReposSection
+        repos={HEAVY.repos}
+        error={null}
+        cursor={0}
+        window={FULL_WIN}
+        height={20}
+        focused
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("acme/api");
+    expect(f).toContain("(clone)");
+    expect(f).toContain("main@abcdef1");
+    expect(f).toContain("✎");
+    const line = f.split("\n").find((l) => l.includes("acme/api"))!;
+    expect(line).toContain("▌");
+  });
+
+  it("per-repo error renders without collapsing the frame", () => {
+    const f = render(
+      <ReposSection
+        repos={[{ ...HEAVY.repos[0], error: "not a git repo" }]}
+        error={null}
+        cursor={0}
+        window={FULL_WIN}
+        height={20}
+        focused={false}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("not a git repo");
+  });
+});
+
+describe("WorktreesSection", () => {
+  it("renders mapped nwo, slug, class, sha7, age, cursor", () => {
+    const f = render(
+      <WorktreesSection
+        worktrees={HEAVY.worktrees}
+        error={null}
+        cursor={0}
+        window={FULL_WIN}
+        height={20}
+        focused
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("acme/api");
+    expect(f).toContain("slug-1");
+    expect(f).toContain("stale");
+    expect(f).toContain("abcdef1");
+    expect(f).toContain("2h"); // 7200s
+    const line = f.split("\n").find((l) => l.includes("slug-1"))!;
+    expect(line).toContain("▌");
+  });
+
+  it("unmapped worktree shows ⟨unmapped⟩", () => {
+    const f = render(
+      <WorktreesSection
+        worktrees={[{ ...HEAVY.worktrees[0], repoNwo: null }]}
+        error={null}
+        cursor={0}
+        window={FULL_WIN}
+        height={20}
+        focused={false}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("⟨unmapped⟩");
+  });
+});
+
+describe("DaemonSection", () => {
+  it("renders pid, uptime, endpoint, guards, tokens, per-ticket progress", () => {
+    const f = render(<DaemonSection daemon={DAEMON} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).toContain("pid 4242");
+    expect(f).toContain("up 2h13m"); // 8000s
+    expect(f).toContain("inference endpoint");
+    expect(f).toContain("127.0.0.1:8787");
+    expect(f).toContain("nudges 1");
+    expect(f).toContain("kills 0");
+    expect(f).toContain("turn 3");
+  });
+
+  it("daemon down → ○ not running", () => {
+    const f = render(
+      <DaemonSection daemon={{ ...DAEMON, up: false }} scroll={0} height={20} focused={false} />,
+    ).lastFrame()!;
+    expect(f).toContain("○ not running");
   });
 });
