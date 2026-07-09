@@ -162,19 +162,48 @@ describe("GuardManager — text repetition", () => {
     expect(gm.observe(textDelta("short reply"))).toBeNull();
   });
 
+  it("does not re-trip right after a nudge — the tripped buffer is cleared with it", () => {
+    // The nudge is a steering prompt the SDK can only deliver AFTER the
+    // current assistant turn — if the cumulative buffer survived the nudge,
+    // the very next delta would re-trip the fresh guard on the same buffered
+    // text and the supervisor would kill with "nudge ignored" before the
+    // nudge could ever reach the model (issue #27).
+    const gm = new GuardManager();
+    let first = null as ReturnType<GuardManager["observe"]>;
+    for (let i = 0; i < 8 && first === null; i++) first = gm.observe(textDelta(REP_BLOCK));
+    expect(first!.action).toBe("nudge");
+    // Immediately after the nudge: further deltas must NOT re-trip while the
+    // fresh (post-nudge) text is still below the guard's minChars (1000).
+    // Each REP_BLOCK is ~200 chars, so the first four stay under the floor.
+    for (let i = 0; i < 4; i++) {
+      expect(gm.observe(textDelta(REP_BLOCK))).toBeNull();
+    }
+  });
+
   it("escalates to kill when text repetition re-trips after the nudge", () => {
     const gm = new GuardManager();
     let first = null as ReturnType<GuardManager["observe"]>;
     for (let i = 0; i < 8 && first === null; i++) first = gm.observe(textDelta(REP_BLOCK));
     expect(first!.action).toBe("nudge");
-    // Same kind re-trips within the escalation window (same turnIndex) → kill.
-    // The buffer was NOT reset (no message boundary), so it keeps growing and
-    // re-trips after the rep guard was re-instantiated.
+    // The buffer was cleared with the nudge, so ≥ minChars of FRESH repetitive
+    // text must accumulate before the guard can trip again. Same kind re-trips
+    // within the escalation window (same turnIndex) → kill ("nudge ignored").
     let second = null as ReturnType<GuardManager["observe"]>;
-    for (let i = 0; i < 8 && second === null; i++) second = gm.observe(textDelta(REP_BLOCK));
+    for (let i = 0; i < 12 && second === null; i++) second = gm.observe(textDelta(REP_BLOCK));
     expect(second).not.toBeNull();
     expect(second!.action).toBe("kill");
     expect(second!.kind).toBe("text_rep");
+  });
+
+  it("clears the thinking buffer too when a thinking_rep nudge is issued", () => {
+    const gm = new GuardManager();
+    let first = null as ReturnType<GuardManager["observe"]>;
+    for (let i = 0; i < 8 && first === null; i++) first = gm.observe(thinkingDelta(REP_BLOCK));
+    expect(first!.action).toBe("nudge");
+    expect(first!.kind).toBe("thinking_rep");
+    for (let i = 0; i < 4; i++) {
+      expect(gm.observe(thinkingDelta(REP_BLOCK))).toBeNull();
+    }
   });
 });
 
