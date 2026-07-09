@@ -192,6 +192,65 @@ describe("OutboxSection", () => {
     ).lastFrame()!;
     expect(f).toContain("loading…");
   });
+
+  it("pr op with a null issue renders the precomputed issueKey, never #null", () => {
+    const prOp: StoredOp = {
+      id: "op-pr-null",
+      path: "/x/github-outbox/op-pr-null.json",
+      createdAt: "2026-07-09T11:59:00Z",
+      origin: "prflow",
+      issueKey: null, // matches issueKeyOf's real output for a pr op with issue: null
+      attempts: 0,
+      lastError: null,
+      op: {
+        kind: "pr",
+        repoPath: "/repos/acme-api",
+        branch: "feat/x",
+        nwo: "acme/api",
+        issue: null,
+        base: "main",
+        title: "t",
+        bodyText: "b",
+        draft: false,
+        labels: [],
+        reviewers: [],
+        finalize: null,
+        pushed: false,
+        prUrl: null,
+      },
+    };
+    const f = render(
+      <OutboxSection
+        outbox={{ depth: 1, dead: 0, ops: [prOp], deadOps: [], error: null }}
+        cursor={0}
+        window={FULL_WIN}
+        height={20}
+        focused
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("pr ?");
+    expect(f).not.toContain("#null");
+  });
+
+  it("shows cursor+1/total when the live-ops window doesn't cover the whole list", () => {
+    const manyOps: StoredOp[] = Array.from({ length: 5 }, (_, i) => ({
+      ...OP,
+      id: `op-${i}`,
+      path: `/x/github-outbox/op-${i}.json`,
+    }));
+    const f = render(
+      <OutboxSection
+        outbox={{ depth: 5, dead: 0, ops: manyOps, deadOps: [], error: null }}
+        cursor={1}
+        window={{ start: 0, end: 3 }}
+        height={20}
+        focused
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("2/5");
+  });
 });
 
 describe("ReposSection", () => {

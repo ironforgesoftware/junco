@@ -178,8 +178,7 @@ export function OutboxSection({
   outbox.ops.slice(window.start, window.end).forEach((s, i) => {
     const idx = window.start + i;
     const sel = idx === cursor;
-    const target =
-      "nwo" in s.op && "issue" in s.op ? `${s.op.nwo}#${s.op.issue}` : (s.issueKey ?? "?");
+    const target = s.issueKey ?? "?";
     rows.push(
       <Box key={s.id} width="100%" backgroundColor={sel ? theme.selectionBg : undefined}>
         <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
@@ -198,6 +197,13 @@ export function OutboxSection({
       );
     }
   });
+  if (outbox.ops.length > window.end - window.start) {
+    rows.push(
+      <Text key="pos" dimColor>
+        {cursor + 1}/{outbox.ops.length}
+      </Text>,
+    );
+  }
   if (outbox.deadOps.length > 0) {
     rows.push(
       <Text key="dead-h" bold color={theme.error}>
