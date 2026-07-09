@@ -30,8 +30,10 @@ import {
   prepareWorktree,
   cleanupWorktree,
   pruneStaleWorktrees,
+  worktreesLockPath,
 } from "../src/worktree.js";
 import { GitOpError } from "../src/git.js";
+import { acquirePidfileLock } from "../src/pidfileLock.js";
 import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 import { setupForkHarness } from "./helpers/forkHarness.js";
@@ -656,4 +658,109 @@ describe("prepareWorktree — amend mode (fork)", () => {
     const wt = await prepareWorktree(cfg, ctx, "t-amend");
     expect(run(["git", "-C", wt, "log", "-1", "--format=%s"]).trim()).toBe("fork tip");
   }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// worktrees.lock — daemon-side mutation serialization (behavior-preserving)
+// ---------------------------------------------------------------------------
+
+describe("worktreesLockPath", () => {
+  it("is `.worktrees.lock` directly under worktreeRoot", () => {
+    const cfg = makeConfig(join(tmpRoot, "w"), join(tmpRoot, "wts"));
+    expect(worktreesLockPath(cfg)).toBe(join(tmpRoot, "wts", ".worktrees.lock"));
+  });
+});
+
+describe("worktrees.lock contention", () => {
+  it("a held lock blocks a second acquirer at the same path, and frees on release", () => {
+    const cfg = makeConfig(join(tmpRoot, "w"), join(tmpRoot, "wts"));
+    const first = acquirePidfileLock(worktreesLockPath(cfg));
+    expect(first).not.toBeNull();
+    // Same path, holder still alive → second acquirer is refused.
+    expect(acquirePidfileLock(worktreesLockPath(cfg))).toBeNull();
+    first!.release();
+    // Released → a fresh acquirer wins again.
+    const third = acquirePidfileLock(worktreesLockPath(cfg));
+    expect(third).not.toBeNull();
+    third!.release();
+  });
+});
+
+describe("worktree mutators release the lock", () => {
+  it("prepareWorktree releases the worktrees lock on success", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    await prepareWorktree(cfg, makeContext(work), "lock-ok-task");
+    const after = acquirePidfileLock(worktreesLockPath(cfg));
+    expect(after).not.toBeNull(); // lock was released
+    after!.release();
+  }, 30000);
+
+  it("prepareWorktree releases the worktrees lock when it throws", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    const ctx = makeContext(work);
+    // Reuse the stale-dir cleanup failure: a plain dir occupies the worktree
+    // path and a read-only per-repo parent makes the move-aside rename fail.
+    const repoDir = join(wtsRoot, repoDiscriminator(work));
+    const wtPath = join(repoDir, "lock-throw-task");
+    mkdirSync(wtPath, { recursive: true });
+    chmodSync(repoDir, 0o555);
+    try {
+      await expect(prepareWorktree(cfg, ctx, "lock-throw-task")).rejects.toThrow(GitOpError);
+    } finally {
+      chmodSync(repoDir, 0o755);
+    }
+    const after = acquirePidfileLock(worktreesLockPath(cfg));
+    expect(after).not.toBeNull(); // finally released the lock despite the throw
+    after!.release();
+  }, 30000);
+
+  it("prepareWorktree still provisions when the lock is already held (behavior-preserving)", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    const held = acquirePidfileLock(worktreesLockPath(cfg));
+    expect(held).not.toBeNull();
+    // Contention must not deadlock or throw: the daemon is authoritative and
+    // proceeds. Its `lock?.release()` no-ops on the null it got, so OUR held
+    // lock is left intact.
+    const wtPath = await prepareWorktree(cfg, makeContext(work), "held-lock-task");
+    expect(existsSync(wtPath)).toBe(true);
+    // Our lock survived the mutator's finally.
+    expect(acquirePidfileLock(worktreesLockPath(cfg))).toBeNull();
+    held!.release();
+  }, 30000);
+
+  it("cleanupWorktree releases the worktrees lock", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    const ctx = makeContext(work);
+    const wtPath = await prepareWorktree(cfg, ctx, "cleanup-lock-task");
+    await cleanupWorktree(cfg, ctx, wtPath);
+    const after = acquirePidfileLock(worktreesLockPath(cfg));
+    expect(after).not.toBeNull();
+    after!.release();
+  }, 30000);
+
+  it("pruneStaleWorktrees releases the lock and still prunes", () => {
+    const wtsRoot = join(tmpRoot, "wts-lock-prune");
+    mkdirSync(wtsRoot, { recursive: true });
+    const oldDir = join(wtsRoot, "ticket.old-100");
+    mkdirSync(oldDir, { recursive: true });
+
+    pruneStaleWorktrees(wtsRoot, 3 * 86400);
+
+    expect(existsSync(oldDir)).toBe(false); // still prunes
+    const after = acquirePidfileLock(worktreesLockPath({ worktreeRoot: wtsRoot }));
+    expect(after).not.toBeNull(); // lock released
+    after!.release();
+  });
+
+  it("pruneStaleWorktrees stays a no-op when worktreeRoot is absent (no dir/lock created)", () => {
+    const absent = join(tmpRoot, "never-created");
+    expect(() => pruneStaleWorktrees(absent, 3 * 86400)).not.toThrow();
+    // The lock guard must sit AFTER the existsSync early-return, so acquiring
+    // the lock never resurrects the root dir.
+    expect(existsSync(absent)).toBe(false);
+  });
 });

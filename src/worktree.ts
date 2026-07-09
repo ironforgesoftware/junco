@@ -26,6 +26,24 @@ import { log } from "./logging.js";
 import type { RepoContext } from "./repoContext.js";
 import type { Config } from "./types.js";
 import { GitOpError } from "./git.js";
+import { acquirePidfileLock } from "./pidfileLock.js";
+
+// ---------------------------------------------------------------------------
+// worktreesLockPath
+// ---------------------------------------------------------------------------
+
+/**
+ * Path of the daemon-side worktrees lock — the cross-process mutex that
+ * serializes every mutation of `worktreeRoot` (prepare/cleanup/prune here, and
+ * the `junco worktree prune` CLI). Same hardened primitive as the outbox flush
+ * lock (src/pidfileLock.ts). A singleton daemon is already the sole writer, so
+ * acquiring it here is behavior-preserving: it exists so an out-of-process
+ * prune can detect the daemon mid-mutation and skip rather than race
+ * `git worktree add/remove` on shared `.git/worktrees/<id>` metadata.
+ */
+export function worktreesLockPath(cfg: Pick<Config, "worktreeRoot">): string {
+  return join(cfg.worktreeRoot, ".worktrees.lock");
+}
 
 // ---------------------------------------------------------------------------
 // worktreeSlug
@@ -141,72 +159,131 @@ export async function prepareWorktree(
   taskId: string,
   opts: { signals?: { staleBase: boolean }; retryBaseDelayMs?: number } = {},
 ): Promise<string> {
-  const slug = worktreeSlug(taskId);
-  // Worktree paths are namespaced per repo (issue #33): the stale-dir pruning
-  // below must never be able to hit a same-slug ticket running against a
-  // DIFFERENT repo. Creates worktreeRoot too (recursive).
-  const repoDir = join(cfg.worktreeRoot, repoDiscriminator(ctx.repo));
-  mkdirSync(repoDir, { recursive: true });
-  const wtPath = join(repoDir, slug);
+  const lock = acquirePidfileLock(worktreesLockPath(cfg));
+  try {
+    const slug = worktreeSlug(taskId);
+    // Worktree paths are namespaced per repo (issue #33): the stale-dir pruning
+    // below must never be able to hit a same-slug ticket running against a
+    // DIFFERENT repo. Creates worktreeRoot too (recursive).
+    const repoDir = join(cfg.worktreeRoot, repoDiscriminator(ctx.repo));
+    mkdirSync(repoDir, { recursive: true });
+    const wtPath = join(repoDir, slug);
 
-  // Handle stale worktree from a prior run
-  if (existsSync(wtPath)) {
-    log.warn(`stale worktree dir exists, pruning: ${wtPath}`);
-    // Attempt clean removal via git worktree remove
-    await git(cfg, ["worktree", "remove", "--force", wtPath], {
-      cwd: ctx.repo,
-      check: false,
-    });
+    // Handle stale worktree from a prior run
     if (existsSync(wtPath)) {
-      // Last resort: rename out of the way
-      const backup = `${wtPath}.old-${Math.floor(Date.now() / 1000)}`;
-      try {
-        renameSync(wtPath, backup);
-      } catch (e) {
-        throw new GitOpError(
-          `stale worktree cleanup failed: could not move ${wtPath} aside: ` +
-            (e instanceof Error ? e.message : String(e)),
-        );
-      }
-      log.warn(`unprunable worktree moved aside: ${wtPath} -> ${backup}`);
-    }
-  }
-
-  if (isAmend(ctx)) {
-    // Amend mode: fetch the feature branch from the push remote (the
-    // operator's own fork when ctx.pushRemote !== "origin"), then add
-    // worktree on it.
-    await git(cfg, ["fetch", ctx.pushRemote, ctx.branchName], {
-      cwd: ctx.repo,
-      timeoutMs: 180_000,
-      retryNetwork: true,
-      retryBaseDelayMs: opts.retryBaseDelayMs,
-    });
-
-    // Force-reset the local branch pointer to the push remote's tip
-    // (check:false — harmless if branch doesn't exist yet; worktree add -B
-    // covers it).
-    await git(cfg, ["branch", "-f", ctx.branchName, `${ctx.pushRemote}/${ctx.branchName}`], {
-      cwd: ctx.repo,
-      timeoutMs: 60_000,
-      check: false,
-    });
-
-    try {
-      await git(cfg, ["worktree", "add", wtPath, ctx.branchName], {
+      log.warn(`stale worktree dir exists, pruning: ${wtPath}`);
+      // Attempt clean removal via git worktree remove
+      await git(cfg, ["worktree", "remove", "--force", wtPath], {
         cwd: ctx.repo,
-        timeoutMs: 120_000,
+        check: false,
+      });
+      if (existsSync(wtPath)) {
+        // Last resort: rename out of the way
+        const backup = `${wtPath}.old-${Math.floor(Date.now() / 1000)}`;
+        try {
+          renameSync(wtPath, backup);
+        } catch (e) {
+          throw new GitOpError(
+            `stale worktree cleanup failed: could not move ${wtPath} aside: ` +
+              (e instanceof Error ? e.message : String(e)),
+          );
+        }
+        log.warn(`unprunable worktree moved aside: ${wtPath} -> ${backup}`);
+      }
+    }
+
+    if (isAmend(ctx)) {
+      // Amend mode: fetch the feature branch from the push remote (the
+      // operator's own fork when ctx.pushRemote !== "origin"), then add
+      // worktree on it.
+      await git(cfg, ["fetch", ctx.pushRemote, ctx.branchName], {
+        cwd: ctx.repo,
+        timeoutMs: 180_000,
+        retryNetwork: true,
+        retryBaseDelayMs: opts.retryBaseDelayMs,
+      });
+
+      // Force-reset the local branch pointer to the push remote's tip
+      // (check:false — harmless if branch doesn't exist yet; worktree add -B
+      // covers it).
+      await git(cfg, ["branch", "-f", ctx.branchName, `${ctx.pushRemote}/${ctx.branchName}`], {
+        cwd: ctx.repo,
+        timeoutMs: 60_000,
+        check: false,
+      });
+
+      try {
+        await git(cfg, ["worktree", "add", wtPath, ctx.branchName], {
+          cwd: ctx.repo,
+          timeoutMs: 120_000,
+        });
+      } catch (e) {
+        if (
+          e instanceof GitOpError &&
+          (e.stderr.toLowerCase().includes("already checked out") ||
+            e.stderr.toLowerCase().includes("missing"))
+        ) {
+          // Fall back to force-reset via -B semantics
+          await git(
+            cfg,
+            [
+              "worktree",
+              "add",
+              "-B",
+              ctx.branchName,
+              wtPath,
+              `${ctx.pushRemote}/${ctx.branchName}`,
+            ],
+            { cwd: ctx.repo, timeoutMs: 120_000 },
+          );
+        } else {
+          throw e;
+        }
+      }
+
+      linkNodeModules(ctx.repo, wtPath);
+      return wtPath;
+    }
+
+    // Fresh-ticket mode: fetch base, create a NEW feature branch. Offline
+    // tolerance: a network-shaped fetch failure is survivable — the worktree is
+    // cut from whatever `origin/<base>` we already have locally, and the caller
+    // is told the base may be stale (see signals.staleBase).
+    try {
+      await git(cfg, ["fetch", "origin", ctx.baseBranch], {
+        cwd: ctx.repo,
+        timeoutMs: 180_000,
+        retryNetwork: true,
+        retryBaseDelayMs: opts.retryBaseDelayMs,
       });
     } catch (e) {
-      if (
-        e instanceof GitOpError &&
-        (e.stderr.toLowerCase().includes("already checked out") ||
-          e.stderr.toLowerCase().includes("missing"))
-      ) {
-        // Fall back to force-reset via -B semantics
+      if (e instanceof GitOpError && isNetworkError(e.stderr)) {
+        log.warn("offline — proceeding from local base");
+        if (opts.signals) opts.signals.staleBase = true;
+      } else {
+        throw e;
+      }
+    }
+
+    try {
+      await git(
+        cfg,
+        ["worktree", "add", "-b", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
+        {
+          cwd: ctx.repo,
+          timeoutMs: 120_000,
+        },
+      );
+    } catch (e) {
+      if (e instanceof GitOpError && e.stderr.toLowerCase().includes("already exists")) {
+        // Branch already exists locally — a leftover from a crashed run that
+        // committed but never pushed. Force-reset it to the base (issue #34):
+        // adding it without -B would check out the stale tip and the retry
+        // would silently build on (and re-verify against) the aborted work.
+        // Mirrors the amend path's -B recovery above.
         await git(
           cfg,
-          ["worktree", "add", "-B", ctx.branchName, wtPath, `${ctx.pushRemote}/${ctx.branchName}`],
+          ["worktree", "add", "-B", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
           { cwd: ctx.repo, timeoutMs: 120_000 },
         );
       } else {
@@ -216,52 +293,9 @@ export async function prepareWorktree(
 
     linkNodeModules(ctx.repo, wtPath);
     return wtPath;
+  } finally {
+    lock?.release();
   }
-
-  // Fresh-ticket mode: fetch base, create a NEW feature branch. Offline
-  // tolerance: a network-shaped fetch failure is survivable — the worktree is
-  // cut from whatever `origin/<base>` we already have locally, and the caller
-  // is told the base may be stale (see signals.staleBase).
-  try {
-    await git(cfg, ["fetch", "origin", ctx.baseBranch], {
-      cwd: ctx.repo,
-      timeoutMs: 180_000,
-      retryNetwork: true,
-      retryBaseDelayMs: opts.retryBaseDelayMs,
-    });
-  } catch (e) {
-    if (e instanceof GitOpError && isNetworkError(e.stderr)) {
-      log.warn("offline — proceeding from local base");
-      if (opts.signals) opts.signals.staleBase = true;
-    } else {
-      throw e;
-    }
-  }
-
-  try {
-    await git(cfg, ["worktree", "add", "-b", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`], {
-      cwd: ctx.repo,
-      timeoutMs: 120_000,
-    });
-  } catch (e) {
-    if (e instanceof GitOpError && e.stderr.toLowerCase().includes("already exists")) {
-      // Branch already exists locally — a leftover from a crashed run that
-      // committed but never pushed. Force-reset it to the base (issue #34):
-      // adding it without -B would check out the stale tip and the retry
-      // would silently build on (and re-verify against) the aborted work.
-      // Mirrors the amend path's -B recovery above.
-      await git(
-        cfg,
-        ["worktree", "add", "-B", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
-        { cwd: ctx.repo, timeoutMs: 120_000 },
-      );
-    } else {
-      throw e;
-    }
-  }
-
-  linkNodeModules(ctx.repo, wtPath);
-  return wtPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -278,25 +312,30 @@ export async function cleanupWorktree(
   ctx: RepoContext,
   wtPath: string,
 ): Promise<void> {
+  const lock = acquirePidfileLock(worktreesLockPath(cfg));
   try {
-    await git(cfg, ["worktree", "remove", wtPath], {
-      cwd: ctx.repo,
-      timeoutMs: 60_000,
-      check: false,
-    });
-  } catch (e) {
-    log.warn(`worktree remove failed (non-fatal): ${e}`);
-  }
-  // Issue #33 layout: worktrees live under worktreeRoot/<repo-discriminator>/.
-  // Drop the per-repo parent when this was its last worktree — rmdir only
-  // removes EMPTY dirs, so a live sibling (or .old-* backup) keeps it alive.
-  const parent = dirname(wtPath);
-  if (resolve(parent) !== resolve(cfg.worktreeRoot)) {
     try {
-      rmdirSync(parent);
-    } catch {
-      /* non-empty or already gone — fine */
+      await git(cfg, ["worktree", "remove", wtPath], {
+        cwd: ctx.repo,
+        timeoutMs: 60_000,
+        check: false,
+      });
+    } catch (e) {
+      log.warn(`worktree remove failed (non-fatal): ${e}`);
     }
+    // Issue #33 layout: worktrees live under worktreeRoot/<repo-discriminator>/.
+    // Drop the per-repo parent when this was its last worktree — rmdir only
+    // removes EMPTY dirs, so a live sibling (or .old-* backup) keeps it alive.
+    const parent = dirname(wtPath);
+    if (resolve(parent) !== resolve(cfg.worktreeRoot)) {
+      try {
+        rmdirSync(parent);
+      } catch {
+        /* non-empty or already gone — fine */
+      }
+    }
+  } finally {
+    lock?.release();
   }
 }
 
@@ -319,44 +358,49 @@ export async function cleanupWorktree(
 export function pruneStaleWorktrees(worktreeRoot: string, maxAgeSeconds = 3 * 86400): void {
   if (!existsSync(worktreeRoot)) return;
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const OLD_TS_RE = /\.old-(\d+)$/;
+  const lock = acquirePidfileLock(worktreesLockPath({ worktreeRoot }));
+  try {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const OLD_TS_RE = /\.old-(\d+)$/;
 
-  const pruneDir = (dir: string, depth: number): void => {
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
-    }
-
-    for (const name of entries) {
-      const childPath = join(dir, name);
-
-      // Must be a directory
+    const pruneDir = (dir: string, depth: number): void => {
+      let entries: string[];
       try {
-        const st = lstatSync(childPath);
-        if (!st.isDirectory()) continue;
+        entries = readdirSync(dir);
       } catch {
-        continue;
+        return;
       }
 
-      const m = OLD_TS_RE.exec(name);
-      if (!m) {
-        // Per-repo discriminator dirs hold the backups one level down; a git
-        // checkout (`.git` file or dir) is a live worktree — never enter it.
-        if (depth === 0 && !existsSync(join(childPath, ".git"))) pruneDir(childPath, 1);
-        continue;
+      for (const name of entries) {
+        const childPath = join(dir, name);
+
+        // Must be a directory
+        try {
+          const st = lstatSync(childPath);
+          if (!st.isDirectory()) continue;
+        } catch {
+          continue;
+        }
+
+        const m = OLD_TS_RE.exec(name);
+        if (!m) {
+          // Per-repo discriminator dirs hold the backups one level down; a git
+          // checkout (`.git` file or dir) is a live worktree — never enter it.
+          if (depth === 0 && !existsSync(join(childPath, ".git"))) pruneDir(childPath, 1);
+          continue;
+        }
+
+        const ts = parseInt(m[1], 10);
+        const age = nowSeconds - ts;
+        if (age < maxAgeSeconds) continue;
+
+        log.info(`pruning stale worktree backup (age=${age}s): ${childPath}`);
+        rmSync(childPath, { recursive: true, force: true });
       }
+    };
 
-      const ts = parseInt(m[1], 10);
-      const age = nowSeconds - ts;
-      if (age < maxAgeSeconds) continue;
-
-      log.info(`pruning stale worktree backup (age=${age}s): ${childPath}`);
-      rmSync(childPath, { recursive: true, force: true });
-    }
-  };
-
-  pruneDir(worktreeRoot, 0);
+    pruneDir(worktreeRoot, 0);
+  } finally {
+    lock?.release();
+  }
 }
