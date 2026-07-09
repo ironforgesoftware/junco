@@ -18,16 +18,13 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
-  openSync,
-  writeSync,
-  closeSync,
-  unlinkSync,
 } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { TERMINAL_DONE_STATUSES, type Config } from "./types.js";
 import { log } from "./logging.js";
 import { gh, git, GitOpError, isNetworkError } from "./git.js";
+import { acquirePidfileLock } from "./pidfileLock.js";
 import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL, FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
 
@@ -236,9 +233,14 @@ export async function tryOrEnqueue(
 export interface FlushDeps extends OutboxDeps {
   ghFn?: typeof gh;
   gitFn?: typeof git;
-  /** Liveness probe for the flush-lock owner pid (default: signal 0, mirroring
-   * src/lock.ts checkStale). Injectable so tests can pin alive/dead. */
+  /** Liveness probe for the flush-lock owner pid (default: signal 0). Passed
+   * straight to the shared pidfile helper. Injectable so tests can pin
+   * alive/dead. */
   pidAliveFn?: (pid: number) => boolean;
+  /** Start-time discriminator lookup for the flush lock (default: real ps).
+   * Injectable so tests can drive the recycled-pid and ABA races
+   * deterministically. */
+  getProcessStartTimeFn?: (pid: number) => string | null;
 }
 export interface FlushResult {
   sent: number;
@@ -364,79 +366,21 @@ export async function ensureFindingLabels(
 // a lost rm/rename race harmless, but the issue-create op's scan→create
 // dedup is a TOCTOU: two flushers can both list (no marker yet) and both
 // `gh issue create` the same finding. Holding this lock for the whole flush
-// closes that window. Same pidfile pattern as src/lock.ts
-// acquireSingletonLock (O_EXCL create + stale-pid steal), kept local and
-// outbox-scoped: it must never contend with the daemon's worker.lock, and a
-// held lock here is a clean skip for the caller, not an exit.
+// closes that window.
+//
+// It is the SAME hardened primitive as the daemon singleton lock
+// (src/pidfileLock.ts): atomic temp+link create, a rename-aside steal with
+// post-move ABA verification (so two stealers can never both "hold" a stale
+// lock, issue #68), and a pid + start-time discriminator (so a recycled pid
+// can't block flushes forever, issue #74). It is outbox-scoped — a distinct
+// lock file that never contends with worker.lock — and a held lock here is a
+// clean skip for the caller, not an exit. The lock file deliberately uses the
+// REAL fs even where op files go through injected deps: it is the
+// cross-process mutual-exclusion primitive, and faking it would fake away the
+// very guarantee it exists to provide.
 // ---------------------------------------------------------------------------
 
 export const FLUSH_LOCK_FILENAME = "flush.lock";
-
-/** Default owner-liveness probe: signal 0. ESRCH → dead (stale); EPERM or
- * any other failure → treat as alive (safe choice, mirrors lock.ts). */
-function defaultPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
-
-/** O_CREAT|O_EXCL the lock file with our pid. false ⇔ EEXIST (held). The
- * lock file deliberately uses the REAL fs even where op files go through
- * injected deps — it is the cross-process mutual-exclusion primitive, and
- * faking it would fake away the very guarantee it exists to provide. */
-function tryCreateFlushLock(lockPath: string): boolean {
-  let fd: number;
-  try {
-    fd = openSync(lockPath, "wx");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw e;
-  }
-  writeSync(fd, `${process.pid}\n`);
-  closeSync(fd);
-  return true;
-}
-
-/** Acquire the flush lock, stealing it when the recorded owner is stale
- * (dead pid, or unreadable/unparseable content — e.g. a crash between open
- * and write left it empty). Returns a release fn, or null when a live
- * flusher holds it. Release only unlinks while the file still carries our
- * pid, so a slow release can never delete a successor's lock. */
-function acquireFlushLock(dir: string, pidAlive: (pid: number) => boolean): (() => void) | null {
-  mkdirSync(dir, { recursive: true });
-  const lockPath = join(dir, FLUSH_LOCK_FILENAME);
-  const release = (): void => {
-    try {
-      const raw = readFileSync(lockPath, "utf8");
-      if (parseInt(raw.trim().split("\n")[0] ?? "", 10) !== process.pid) return;
-      unlinkSync(lockPath);
-    } catch {
-      // Best-effort: gone (ENOENT) or unreadable — nothing to release.
-    }
-  };
-  if (tryCreateFlushLock(lockPath)) return release;
-
-  // EEXIST: stale (owner dead / content unreadable) → steal; live → back off.
-  let raw: string;
-  try {
-    raw = readFileSync(lockPath, "utf8");
-  } catch {
-    raw = ""; // vanished between EEXIST and read — the retry below settles it
-  }
-  const pid = parseInt(raw.trim().split("\n")[0] ?? "", 10);
-  if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return null;
-  try {
-    unlinkSync(lockPath);
-  } catch (e) {
-    // ENOENT: another process already stole it — the retry settles who won.
-    // Anything else: bail out rather than fight over it.
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null;
-  }
-  return tryCreateFlushLock(lockPath) ? release : null;
-}
 
 export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<FlushResult> {
   const ghFn = deps.ghFn ?? gh;
@@ -445,7 +389,6 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
   const rmFn = deps.rmFn ?? ((p: string) => rmSync(p, { force: true }));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
-  const pidAliveFn = deps.pidAliveFn ?? defaultPidAlive;
   const { dir, dead } = outboxPaths(cfg);
   const result: FlushResult = { sent: 0, dead: 0, remaining: 0, offline: false };
 
@@ -454,15 +397,18 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
   const preOps = listOps(cfg, deps);
   if (preOps.length === 0) return result;
 
-  const releaseLock = acquireFlushLock(dir, pidAliveFn);
-  if (releaseLock === null) {
+  const lock = acquirePidfileLock(join(dir, FLUSH_LOCK_FILENAME), {
+    pidAliveFn: deps.pidAliveFn,
+    getProcessStartTimeFn: deps.getProcessStartTimeFn,
+  });
+  if (lock === null) {
     log.info("outbox flush already in progress — skipping", { dir, depth: preOps.length });
     return { ...result, remaining: preOps.length, skipped: true };
   }
   try {
     return await flushLocked();
   } finally {
-    releaseLock();
+    lock.release();
   }
 
   async function flushLocked(): Promise<FlushResult> {

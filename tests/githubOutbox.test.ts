@@ -26,6 +26,7 @@ import {
   type OutboxOp,
 } from "../src/githubOutbox.js";
 import { findingMarker, FINDING_LABEL_SPECS } from "../src/findings.js";
+import { PIDFILE_DISCRIMINATOR_PREFIX } from "../src/pidfileLock.js";
 import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
 
@@ -712,6 +713,60 @@ describe("flushOutbox — flush lock", () => {
     const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(r).toMatchObject({ sent: 0, dead: 0, remaining: 0, offline: false });
     expect(existsSync(outboxPaths(cfg).dir)).toBe(false);
+  });
+
+  it("recycled owner pid does not block flushes forever (start-time discriminator, #74)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-lock74-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    const lockPath = join(outboxPaths(cfg).dir, FLUSH_LOCK_FILENAME);
+    // A crashed flusher (pid 4242) left this lock; the OS later recycled pid
+    // 4242 to an unrelated LIVE process whose identity differs. The old
+    // pid-only lock saw pidAlive(4242)=true and skipped forever.
+    writeFileSync(lockPath, `4242\n${PIDFILE_DISCRIMINATOR_PREFIX}crashed-owner-start\n`, "utf8");
+    const f = fakes(() => undefined);
+    const r = await flushOutbox(cfg, {
+      ghFn: f.ghFn,
+      gitFn: f.gitFn,
+      pidAliveFn: () => true, // pid 4242 is alive (recycled)
+      getProcessStartTimeFn: () => `${PIDFILE_DISCRIMINATOR_PREFIX}unrelated-live-start`,
+    });
+    expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+    expect(r.skipped).toBeUndefined(); // reclaimed, not blocked
+    expect(existsSync(lockPath)).toBe(false); // released after the flush
+  });
+
+  it("steal is atomic — never destroys a racing winner's fresh flush lock (ABA, #68)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-lock68-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    const lockPath = join(outboxPaths(cfg).dir, FLUSH_LOCK_FILENAME);
+    // We judge this lock stale (recycled pid) ...
+    writeFileSync(lockPath, `${process.pid}\n${PIDFILE_DISCRIMINATOR_PREFIX}stale-old\n`, "utf8");
+    const CURRENT = `${PIDFILE_DISCRIMINATOR_PREFIX}current-live`;
+    const freshLiveContent = `${process.pid}\n${CURRENT}\n`;
+    const f = fakes(() => undefined);
+    let calls = 0;
+    const r = await flushOutbox(cfg, {
+      ghFn: f.ghFn,
+      gitFn: f.gitFn,
+      // During the identity check (call 2 — between judging stale and stealing)
+      // a racing starter completes its ENTIRE steal: the lock name now holds a
+      // fresh, live, matching pidfile. The rename-aside steal must detect this
+      // on post-move verification and LOSE, leaving the winner's lock in place.
+      // The naive unlink-in-place steal (#68) destroyed it and let both flush.
+      getProcessStartTimeFn: () => {
+        calls += 1;
+        if (calls === 2) {
+          rmSync(lockPath, { force: true });
+          writeFileSync(lockPath, freshLiveContent, "utf8");
+        }
+        return CURRENT;
+      },
+    });
+    expect(r).toMatchObject({ sent: 0, remaining: 1, skipped: true });
+    expect(f.calls).toHaveLength(0); // never flushed — the winner is running
+    expect(readFileSync(lockPath, "utf8")).toBe(freshLiveContent); // winner preserved
   });
 });
 
