@@ -143,7 +143,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
 
   return {
     async onStart(t: Ticket): Promise<void> {
-      if (!t.github || t.github.kind === "plan") return; // planning label persists
+      if (!t.github || t.github.external || t.github.kind === "plan") return; // planning label persists
       const g = t.github;
       await guardOrQueue(
         "onStart",
@@ -153,7 +153,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       );
     },
     async onRequeue(t: Ticket): Promise<void> {
-      if (!t.github || t.github.kind === "plan") return;
+      if (!t.github || t.github.external || t.github.kind === "plan") return;
       const g = t.github;
       await guardOrQueue(
         "onRequeue",
@@ -163,7 +163,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       );
     },
     async onFinal(t: Ticket, outcome: TicketOutcome): Promise<void> {
-      if (!t.github) return;
+      if (!t.github || t.github.external) return;
       const g = t.github;
       if (g.kind === "plan") {
         const done = TERMINAL_DONE_STATUSES.has(outcome.status);

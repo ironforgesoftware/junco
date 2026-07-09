@@ -76,6 +76,7 @@ function cfg(root: string): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
     stateDir: join(root, "state"),

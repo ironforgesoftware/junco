@@ -470,15 +470,24 @@ export async function runPrFlow(
       kind: "pr",
       repoPath: ctx.repo,
       branch: ctx.branchName,
+      remote: ctx.pushRemote,
+      head:
+        ctx.forkNwo !== null ? `${ctx.forkNwo.split("/")[0]}:${ctx.branchName}` : ctx.branchName,
       nwo,
       issue: task.github?.issue ?? null,
       base: ctx.baseBranch,
       title,
       bodyText,
       draft: ctx.draft,
-      labels: ctx.labels,
+      // Fork PRs are label-free — the upstream label namespace is not ours.
+      labels: ctx.forkNwo !== null ? [] : ctx.labels,
       reviewers: ctx.reviewers,
-      finalize: task.github ? { ticketId: task.id, status, finalText: result.finalText } : null,
+      // External tickets stay silent on the upstream issue — no comment/label
+      // replay when connectivity returns (etiquette invariant).
+      finalize:
+        task.github && !task.github.external
+          ? { ticketId: task.id, status, finalText: result.finalText }
+          : null,
       pushed,
       prUrl: null,
     });
@@ -652,8 +661,8 @@ export async function runPrFlow(
       );
     }
 
-    // Phase 11: push.
-    await pushBranch(cfg, wtPath, ctx.branchName, deps.retryBaseDelayMs);
+    // Phase 11: push (to ctx.pushRemote — the ticket's fork in fork-PR mode).
+    await pushBranch(cfg, wtPath, ctx.branchName, deps.retryBaseDelayMs, ctx.pushRemote);
     prOutcome.pushed = true;
     log.info(`pushed ${ctx.branchName} (${newCommits} new commit${newCommits === 1 ? "" : "s"})`);
   } catch (e) {
@@ -672,7 +681,12 @@ export async function runPrFlow(
       // Offline amend: only the push is unknown; the PR URL is already known, so
       // the reporter posts its normal finalize comment (which itself queues if
       // still offline). Just park the push.
-      enqueueOp(cfg, "prflow", { kind: "push", repoPath: ctx.repo, branch: ctx.branchName });
+      enqueueOp(cfg, "prflow", {
+        kind: "push",
+        repoPath: ctx.repo,
+        branch: ctx.branchName,
+        remote: ctx.pushRemote,
+      });
       prOutcome.prQueued = false; // URL known; reporter comment proceeds normally
       prOutcome.pushed = false;
       prOutcome.worktreePreserved = true;

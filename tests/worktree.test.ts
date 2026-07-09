@@ -33,6 +33,7 @@ import {
 import { GitOpError } from "../src/git.js";
 import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
+import { setupForkHarness } from "./helpers/forkHarness.js";
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
@@ -149,6 +150,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
   };
@@ -164,6 +166,8 @@ function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoCo
     labels: [],
     reviewers: [],
     amendsPr: null,
+    pushRemote: "origin",
+    forkNwo: null,
     ...overrides,
   };
 }
@@ -481,5 +485,43 @@ describe("prepareWorktree (stale-dir cleanup failure)", () => {
     } finally {
       chmodSync(wtsRoot, 0o755);
     }
+  }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// prepareWorktree — amend mode (fork): fetch/reset from ctx.pushRemote
+// ---------------------------------------------------------------------------
+
+describe("prepareWorktree — amend mode (fork)", () => {
+  let forkTmp: string;
+  let h: ReturnType<typeof setupForkHarness>;
+  let cfg: Config;
+
+  beforeEach(() => {
+    forkTmp = mkdtempSync(join(tmpdir(), "junco-wt-fork-test-"));
+    h = setupForkHarness(forkTmp);
+    cfg = makeConfig(h.work, join(forkTmp, "wts"));
+  });
+
+  afterEach(() => {
+    rmSync(forkTmp, { recursive: true, force: true });
+  });
+
+  const forkCtx = (overrides: Partial<RepoContext> = {}): RepoContext =>
+    makeContext(h.work, { pushRemote: "fork", amendsPr: 9, ...overrides });
+
+  it("amend mode fetches the head branch from the push remote (fork)", async () => {
+    // plant junco/amend-me on the FORK bare only
+    run(["git", "-C", h.work, "checkout", "-b", "junco/amend-me"]);
+    writeFileSync(join(h.work, "f.txt"), "fork tip\n");
+    run(["git", "-C", h.work, "add", "f.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "fork tip"]);
+    run(["git", "-C", h.work, "push", "fork", "junco/amend-me"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+    run(["git", "-C", h.work, "branch", "-D", "junco/amend-me"]);
+
+    const ctx = forkCtx({ amendsPr: 9, branchName: "junco/amend-me" });
+    const wt = await prepareWorktree(cfg, ctx, "t-amend");
+    expect(run(["git", "-C", wt, "log", "-1", "--format=%s"]).trim()).toBe("fork tip");
   }, 30000);
 });

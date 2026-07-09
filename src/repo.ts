@@ -10,6 +10,7 @@ import { join, resolve, sep } from "node:path";
 import { git, gh, GitOpError } from "./git.js";
 import { isAmend } from "./repoContext.js";
 import { log } from "./logging.js";
+import { nwoFromRemoteUrl } from "./githubInbox.js";
 import type { RepoContext } from "./repoContext.js";
 import type { Config } from "./types.js";
 
@@ -32,7 +33,8 @@ export interface AmendTarget {
 /**
  * Port of worker.py `resolve_amend_target` (lines 1776-1812).
  *
- * Queries gh for the PR's metadata; refuses closed/merged/cross-repo PRs.
+ * Queries gh for the PR's metadata; refuses closed/merged PRs, and refuses
+ * cross-repo PRs unless the head is the operator's own fork (ctx.forkNwo).
  */
 export async function resolveAmendTarget(
   cfg: Config,
@@ -54,7 +56,7 @@ export async function resolveAmendTarget(
         "--repo",
         nwo,
         "--json",
-        "state,headRefName,baseRefName,isDraft,url,isCrossRepository",
+        "state,headRefName,baseRefName,isDraft,url,isCrossRepository,headRepositoryOwner,headRepository",
       ],
       { cwd: ctx.repo, retryNetwork: true },
     );
@@ -81,9 +83,28 @@ export async function resolveAmendTarget(
   }
 
   if (data["isCrossRepository"]) {
-    throw new GitOpError(
-      `PR #${ctx.amendsPr} is from a fork (cross-repo); worker cannot push to it`,
+    // Cross-repo PRs are refused UNLESS the head is the operator's own fork
+    // (ctx.forkNwo, derived from ctx.pushRemote in validateRepoContext) —
+    // anyone else's fork keeps the blanket refusal.
+    const owner = String(
+      (data["headRepositoryOwner"] as Record<string, unknown> | undefined)?.["login"] ?? "",
     );
+    const name = String(
+      (data["headRepository"] as Record<string, unknown> | undefined)?.["name"] ?? "",
+    );
+    const headNwo = owner && name ? `${owner}/${name}` : null;
+    const ownFork =
+      ctx.forkNwo !== null &&
+      headNwo !== null &&
+      headNwo.toLowerCase() === ctx.forkNwo.toLowerCase();
+    if (!ownFork) {
+      throw new GitOpError(
+        `PR #${ctx.amendsPr} is from a fork (cross-repo); worker cannot push to it` +
+          (ctx.forkNwo === null
+            ? " — set push_remote on the ticket to amend a PR from YOUR fork"
+            : ` — PR head ${headNwo ?? "unknown"} is not the ${ctx.pushRemote} remote (${ctx.forkNwo})`),
+      );
+    }
   }
 
   const head = String(data["headRefName"] ?? "");
@@ -123,7 +144,10 @@ export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promis
   // boundary — this caps where a hostile or fat-fingered ticket can point it.
   if (cfg.allowedRepoRoots.length > 0) {
     const real = resolve(ctx.repo);
-    const ok = cfg.allowedRepoRoots.some((root) => {
+    // externalReposRoot is implicitly allowed: dispatch-managed clones must not
+    // silently break under a locked-down allowed_repo_roots.
+    const allowed = [...cfg.allowedRepoRoots, cfg.github.externalReposRoot];
+    const ok = allowed.some((root) => {
       const r = resolve(root);
       return real === r || real.startsWith(r + sep);
     });
@@ -173,6 +197,40 @@ export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promis
     throw new GitOpError(`gh could not determine nameWithOwner for ${ctx.repo}`);
   }
 
+  // push_remote resolution. The remote NAME is validated: a leading '-' would
+  // read as a git flag, so the anchor forbids it (interior hyphens are fine);
+  // the config-key probe below (`git config --get remote.<name>.url`) is the
+  // second rail. For a non-origin remote the fork's nwo is derived from the
+  // remote URL — never guessed from a username.
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(ctx.pushRemote)) {
+    throw new GitOpError(
+      `push_remote ${JSON.stringify(ctx.pushRemote)} is not a valid git remote name`,
+    );
+  }
+  if (ctx.pushRemote !== "origin") {
+    // `git remote get-url` resolves `url.<base>.insteadOf` rewrites (per its
+    // own docs), which would hand us the rewritten push target instead of the
+    // configured github.com URL. `git config --get remote.<name>.url` reads
+    // the raw value, which is what nwoFromRemoteUrl needs.
+    const fr = await git(cfg, ["config", "--get", `remote.${ctx.pushRemote}.url`], {
+      cwd: ctx.repo,
+      check: false,
+    });
+    if (fr.code !== 0 || !fr.stdout.trim()) {
+      throw new GitOpError(
+        `push_remote ${JSON.stringify(ctx.pushRemote)} is not a remote on ${ctx.repo} — ` +
+          `run junco dispatch (or add the fork remote) first`,
+      );
+    }
+    const forkNwo = nwoFromRemoteUrl(fr.stdout.trim());
+    if (forkNwo === null) {
+      throw new GitOpError(
+        `push_remote ${ctx.pushRemote} URL is not a github.com remote: ${fr.stdout.trim()}`,
+      );
+    }
+    ctx.forkNwo = forkNwo;
+  }
+
   if (isAmend(ctx)) {
     // Amend mode: resolve the PR's branches and override ctx accordingly.
     const target = await resolveAmendTarget(cfg, ctx, nwo);
@@ -192,15 +250,15 @@ export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promis
     ctx.branchName = target.headRef;
     ctx.baseBranch = target.baseRef;
 
-    // Verify the head branch actually exists on origin
-    const bls = await git(cfg, ["ls-remote", "--heads", "origin", ctx.branchName], {
+    // Verify the head branch actually exists on the push remote
+    const bls = await git(cfg, ["ls-remote", "--heads", ctx.pushRemote, ctx.branchName], {
       cwd: ctx.repo,
       check: false,
       retryNetwork: true,
     });
     if (bls.code !== 0 || !bls.stdout.trim()) {
       throw new GitOpError(
-        `PR #${ctx.amendsPr} head branch ${JSON.stringify(ctx.branchName)} not on origin`,
+        `PR #${ctx.amendsPr} head branch ${JSON.stringify(ctx.branchName)} not on ${ctx.pushRemote}`,
       );
     }
     return nwo;
@@ -219,15 +277,25 @@ export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promis
     );
   }
 
-  // Refuse to stomp an existing branch on origin.
-  const bls = await git(cfg, ["ls-remote", "--heads", "origin", ctx.branchName], {
+  // Refuse to stomp an existing branch on the push remote.
+  const bls = await git(cfg, ["ls-remote", "--heads", ctx.pushRemote, ctx.branchName], {
     cwd: ctx.repo,
     check: false,
     retryNetwork: true,
   });
   if (bls.code === 0 && bls.stdout.trim()) {
+    // Fork mode: an existing branch is usually the open PR from a prior
+    // dispatch — point the operator at the amend iteration path rather than
+    // just "pick a different branch". Origin mode keeps the terse message.
+    if (ctx.pushRemote !== "origin") {
+      throw new GitOpError(
+        `branch ${JSON.stringify(ctx.branchName)} already exists on fork; ` +
+          `to push feedback commits to the open PR, dispatch a ticket with ` +
+          `amends_pr: <PR#> and push_remote: ${ctx.pushRemote} — or pick a different branch_name`,
+      );
+    }
     throw new GitOpError(
-      `branch ${JSON.stringify(ctx.branchName)} already exists on origin; pick a different branch_name or delete the remote branch first`,
+      `branch ${JSON.stringify(ctx.branchName)} already exists on ${ctx.pushRemote}; pick a different branch_name or delete the remote branch first`,
     );
   }
 

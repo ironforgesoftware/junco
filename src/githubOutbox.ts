@@ -30,11 +30,15 @@ import { FINDING_LABEL, FINDING_LABEL_SPECS, extractFindingMarkers } from "./fin
 export type OutboxOp =
   | { kind: "labels"; nwo: string; issue: number; add: string[]; remove: string[] }
   | { kind: "comment"; nwo: string; issue: number; body: string }
-  | { kind: "push"; repoPath: string; branch: string }
+  | { kind: "push"; repoPath: string; branch: string; remote?: string }
   | {
       kind: "pr";
       repoPath: string;
       branch: string;
+      /** Push remote (fork-PR mode). Absent on ops from older builds -> origin. */
+      remote?: string;
+      /** gh pr create --head value (owner:branch in fork mode). Absent -> branch. */
+      head?: string;
       nwo: string;
       issue: number | null;
       base: string;
@@ -404,15 +408,19 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
         await postCommentIdempotent(op.nwo, op.issue, op.body, s.id);
         return;
       case "push":
-        await gitFn(cfg, ["-C", op.repoPath, "push", "--set-upstream", "origin", op.branch], {
-          timeoutMs: PUSH_TIMEOUT,
-        });
+        await gitFn(
+          cfg,
+          ["-C", op.repoPath, "push", "--set-upstream", op.remote ?? "origin", op.branch],
+          { timeoutMs: PUSH_TIMEOUT },
+        );
         return;
       case "pr": {
         if (!op.pushed) {
-          await gitFn(cfg, ["-C", op.repoPath, "push", "--set-upstream", "origin", op.branch], {
-            timeoutMs: PUSH_TIMEOUT,
-          });
+          await gitFn(
+            cfg,
+            ["-C", op.repoPath, "push", "--set-upstream", op.remote ?? "origin", op.branch],
+            { timeoutMs: PUSH_TIMEOUT },
+          );
           op.pushed = true;
           rewrite(s);
         }
@@ -429,7 +437,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
               "--base",
               op.base,
               "--head",
-              op.branch,
+              op.head ?? op.branch,
               "--title",
               op.title,
               "--body-file",
@@ -450,7 +458,17 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
             if (e instanceof GitOpError && /already exists/i.test(e.stderr)) {
               const v = await ghFn(
                 cfg,
-                ["pr", "view", op.branch, "--repo", op.nwo, "--json", "url", "--jq", ".url"],
+                [
+                  "pr",
+                  "view",
+                  op.head ?? op.branch,
+                  "--repo",
+                  op.nwo,
+                  "--json",
+                  "url",
+                  "--jq",
+                  ".url",
+                ],
                 { timeoutMs: GH_TIMEOUT },
               );
               op.prUrl = v.stdout.trim();

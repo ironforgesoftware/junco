@@ -216,6 +216,7 @@ const TomlSchema = z.object({
       poll_interval_seconds: z.number().min(5).default(60),
       require_approval: z.boolean().default(true),
       planner_model_id: z.string().min(1).optional(),
+      external_repos_root: z.string().min(1).optional(),
       repos: z
         .array(
           z.object({
@@ -311,6 +312,9 @@ export function loadConfig(path: string): Config {
       pollIntervalSeconds: d.github.poll_interval_seconds,
       requireApproval: d.github.require_approval,
       plannerModelId: d.github.planner_model_id ?? null,
+      externalReposRoot: expandHome(
+        d.github.external_repos_root ?? join(d.observability.state_dir, "external"),
+      ),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
     },
     assess: {

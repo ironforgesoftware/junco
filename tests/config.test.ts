@@ -245,6 +245,7 @@ describe("[github] config section", () => {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: join(homedir(), ".local/state/junco/external"),
     });
   });
 
@@ -291,6 +292,22 @@ describe("[github] config section", () => {
         ),
       ),
     ).toThrow(/owner\/repo/);
+  });
+});
+
+describe("github.external_repos_root", () => {
+  it("defaults to <state_dir>/external", () => {
+    const cfg = loadConfig(
+      writeToml(`vault_root = "/tmp/vault"\n[observability]\nstate_dir = "/tmp/junco-state"\n`),
+    );
+    expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/external");
+  });
+
+  it("expands ~ in an explicit value", () => {
+    const cfg = loadConfig(
+      writeToml(`vault_root = "/tmp/vault"\n[github]\nexternal_repos_root = "~/ext-clones"\n`),
+    );
+    expect(cfg.github.externalReposRoot).toBe(join(homedir(), "ext-clones"));
   });
 });
 

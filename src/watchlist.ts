@@ -13,6 +13,8 @@ import { log } from "./logging.js";
 export interface WatchlistEntry {
   nwo: string;
   path: string;
+  /** Fork-PR mode: shown in the dashboard, but NEVER polled by the bridge. */
+  external?: boolean;
 }
 
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
@@ -48,9 +50,14 @@ export function readWatchlist(file: string): { entries: WatchlistEntry[]; error:
       typeof e.nwo === "string" &&
       NWO_RE.test(e.nwo) &&
       typeof e.path === "string" &&
-      e.path.trim() !== ""
+      e.path.trim() !== "" &&
+      (!("external" in e) || typeof e.external === "boolean")
     ) {
-      entries.push({ nwo: e.nwo, path: e.path });
+      entries.push({
+        nwo: e.nwo,
+        path: e.path,
+        ...(e.external === true ? { external: true } : {}),
+      });
     } else {
       invalid++;
     }
@@ -79,6 +86,10 @@ export function resolveWatchedRepos(cfg: Config): GithubRepoMapping[] {
     log.warn("github watchlist unreadable; using config repos only", { error });
   }
   for (const e of entries) {
+    // fork-PR repos: dashboard-only. The bridge must never poll them — an upstream
+    // maintainer (write access by definition) with their own trigger label would pass
+    // verifyLabelApplier and inject tickets.
+    if (e.external === true) continue;
     if (seen.has(e.nwo.toLowerCase())) continue;
     seen.add(e.nwo.toLowerCase());
     out.push({ nwo: e.nwo, path: e.path });

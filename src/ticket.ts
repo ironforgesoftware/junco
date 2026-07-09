@@ -46,7 +46,7 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       g.issue > 0 &&
       (g.kind === "pr" || g.kind === "ask" || g.kind === "plan")
     ) {
-      github = { nwo: g.nwo, issue: g.issue, kind: g.kind };
+      github = { nwo: g.nwo, issue: g.issue, kind: g.kind, external: g.external === true };
     }
   }
   const assessRaw = frontmatter.assess;

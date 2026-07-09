@@ -23,6 +23,7 @@ import {
 import { GitOpError } from "../src/git.js";
 import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
+import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
@@ -136,6 +137,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
     },
     assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
   };
@@ -151,6 +153,8 @@ function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoCo
     labels: [],
     reviewers: [],
     amendsPr: null,
+    pushRemote: "origin",
+    forkNwo: null,
     ...overrides,
   };
 }
@@ -311,6 +315,25 @@ describe("pushBranch", () => {
     // Assert the branch now exists on the remote
     const lsRemote = run(["git", "-C", work, "ls-remote", "--heads", "origin", "junco/push-test"]);
     expect(lsRemote.trim()).not.toBe("");
+  }, 30000);
+
+  it("pushBranch honors a non-origin remote", async () => {
+    const h = setupForkHarness(tmpRoot);
+    const cfg = makeConfig(h.work, tmpRoot);
+
+    run(["git", "-C", h.work, "checkout", "-b", "junco/fp"]);
+    writeFileSync(join(h.work, "fp.txt"), "fp\n");
+    run(["git", "-C", h.work, "add", "fp.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "fork push commit"]);
+
+    await pushBranch(cfg, h.work, "junco/fp", undefined, "fork");
+
+    // Lands on the fork remote...
+    expect(
+      run(["git", "-C", h.forkRemote, "rev-parse", "refs/heads/junco/fp"]).trim(),
+    ).toBeTruthy();
+    // ...and must NOT land on upstream.
+    expect(() => run(["git", "-C", h.upstream, "rev-parse", "refs/heads/junco/fp"])).toThrow();
   }, 30000);
 });
 
@@ -494,6 +517,42 @@ describe("openPullRequest", () => {
     } finally {
       delete process.env.FAKE_GH_OUTPUT;
       delete process.env.FAKE_GH_EXIT_CODE;
+    }
+  }, 15000);
+
+  it("prefixes --head with the fork owner when forkNwo is set", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const ghScript = join(tmpRoot, "fake-gh.sh");
+    writeFakeGhForPr(ghScript);
+    const cfg = makeConfig(work, tmpRoot, ghScript);
+    mkdirSync(cfg.worktreeRoot, { recursive: true });
+    const ctx = makeContext(work, {
+      branchName: "junco/fp",
+      forkNwo: FORK_NWO,
+      // A default workflow label would normally flow into --label; on a fork PR
+      // the upstream label namespace is not ours, so it must be suppressed.
+      labels: ["junco"],
+    });
+
+    const bodyFile = join(tmpRoot, "body.md");
+    writeFileSync(bodyFile, "PR body\n");
+    const logFile = join(tmpRoot, "gh-fork.log");
+
+    process.env.FAKE_GH_OUTPUT = "https://github.com/up/stream/pull/1";
+    process.env.FAKE_GH_EXIT_CODE = "0";
+    process.env.FAKE_GH_LOG_FILE = logFile;
+    try {
+      const url = await openPullRequest(cfg, ctx, "up/stream", "t", bodyFile);
+      expect(url).toBe("https://github.com/up/stream/pull/1");
+      const argv = readFileSync(logFile, "utf8");
+      expect(argv).toContain("--head me:junco/fp");
+      expect(argv).toContain("--repo up/stream");
+      // Fork PRs are label-free — the upstream label namespace is not ours.
+      expect(argv).not.toContain("--label");
+    } finally {
+      delete process.env.FAKE_GH_OUTPUT;
+      delete process.env.FAKE_GH_EXIT_CODE;
+      delete process.env.FAKE_GH_LOG_FILE;
     }
   }, 15000);
 

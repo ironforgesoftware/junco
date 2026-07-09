@@ -427,6 +427,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   },
   assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
 };
@@ -770,5 +771,48 @@ describe("run(['restart']) — routing", () => {
     });
     expect(code).not.toBe(0);
     expect(ran).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dispatch subcommand — SDD Task 12
+// ---------------------------------------------------------------------------
+
+describe("run(['dispatch', ref])", () => {
+  it("happy path prints the ticket + fork info", async () => {
+    const captured: string[] = [];
+    const code = await run(["dispatch", "up/stream#7"], {
+      loadConfigFn: () => ({}) as Config,
+      printFn: (s) => captured.push(s),
+      dispatchIssueFn: async () => ({
+        id: "gh-up-stream-7",
+        destPath: "/inbox/gh-up-stream-7.md",
+        external: true,
+        clonePath: "/ext/up/stream",
+        forkNwo: "me/stream",
+      }),
+    });
+    expect(code).toBe(0);
+    const out = captured.join("");
+    expect(out).toContain("dispatched: /inbox/gh-up-stream-7.md");
+    expect(out).toContain("fork: me/stream");
+  });
+
+  it("missing ref is usage error 2; a throwing core is exit 1", async () => {
+    expect(await run(["dispatch"], {})).toBe(2);
+    expect(
+      await run(["dispatch", "x#1"], {
+        loadConfigFn: () => ({}) as Config,
+        dispatchIssueFn: async () => {
+          throw new Error("boom");
+        },
+      }),
+    ).toBe(1);
+  });
+
+  it("does NOT call loadConfigFn when the ref is missing (usage error short-circuits)", async () => {
+    const loadConfigFn = vi.fn(() => ({}) as Config);
+    await run(["dispatch"], { loadConfigFn });
+    expect(loadConfigFn).not.toHaveBeenCalled();
   });
 });

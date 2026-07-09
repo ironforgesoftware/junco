@@ -256,12 +256,18 @@ export function App(props: AppProps): React.JSX.Element {
   // Config repos ∪ watchlist, deduped by nwo (config wins) — recomputed after
   // every watchlist write since setWatchlistEntries drives this memo.
   const repoMappings = useMemo(() => {
-    const out = configRepos.map((r) => ({ nwo: r.nwo, path: r.path, fromConfig: true }));
+    const out = configRepos.map((r) => ({
+      nwo: r.nwo,
+      path: r.path,
+      fromConfig: true,
+      external: false,
+    }));
     const seen = new Set(out.map((r) => r.nwo.toLowerCase()));
     for (const e of watchlistEntries) {
       if (seen.has(e.nwo.toLowerCase())) continue;
       seen.add(e.nwo.toLowerCase());
-      out.push({ nwo: e.nwo, path: e.path, fromConfig: false });
+      // external === true → fork-PR mode: dispatch queues a ticket (no labels).
+      out.push({ nwo: e.nwo, path: e.path, fromConfig: false, external: e.external === true });
     }
     return out;
   }, [configRepos, watchlistEntries]);
@@ -678,6 +684,14 @@ export function App(props: AppProps): React.JSX.Element {
         showToast("error", "no repo selected");
         return;
       }
+      // External (fork-PR) repos: assess files finding ISSUES on the target
+      // repo — an upstream write the etiquette invariant forbids. assessCmd
+      // already fails closed (external entries are not "watched"), but gate
+      // here so the toast explains instead of suggesting a config change.
+      if (currentRepo?.external === true) {
+        showToast("error", "assess is not available for external repos — it files issues upstream");
+        return;
+      }
       const nwo = currentNwo;
       if (assessInFlightRef.current.has(nwo)) {
         showToast("info", "assess already running");
@@ -699,7 +713,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
       });
     },
-    [currentNwo, runCliFn, showToast],
+    [currentNwo, currentRepo, runCliFn, showToast],
   );
 
   // Elapsed ticker for a running palette command (1s resolution).
@@ -816,6 +830,38 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       nwo = parsed;
+      // No push access → fork-PR mode: junco manages the fork + clone; the
+      // bridge never polls this entry (external: true). A failed/unknown probe
+      // (offline) falls through to the owned-repo flow unchanged.
+      setAddRepoBusy("checking permissions…");
+      const perm = await client.repoPermission(nwo);
+      if (perm.ok && !perm.value.canPush) {
+        if (path.trim() !== "") {
+          setAddRepoBusy(null);
+          setAddRepoError("no push access to this repo — leave path empty (managed fork mode)");
+          return;
+        }
+        setAddRepoBusy("forking & cloning…");
+        const prep = await client.prepareExternalRepo(nwo);
+        setAddRepoBusy(null);
+        if (!prep.ok) {
+          setAddRepoError(prep.error);
+          return;
+        }
+        const { entries: cur, error } = readWatchlist(watchlistFile);
+        if (error) {
+          setWatchlistError(error);
+          setView("main");
+          showToast("error", "watchlist unreadable — not written");
+          return;
+        }
+        const next = [...cur, { nwo, path: prep.value.path, external: true }];
+        writeWatchlist(watchlistFile, next);
+        setWatchlistEntries(next);
+        setView("main");
+        showToast("success", `watching ${nwo} (fork-PR mode via ${prep.value.forkNwo})`);
+        return;
+      }
       // Empty path = clone into the managed directory for the operator.
       let expanded: string;
       setAddRepoError(null);
@@ -1180,10 +1226,30 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "g") return void moveIssueTo(0);
     if (input === "G") return void moveIssueTo(filteredIssues.length - 1);
     if (key.return) return void openDetail();
-    if (input === "d") return void runAction("dispatch");
-    if (input === "D") return void runAction("dispatchAsk");
-    if (input === "a") return void runAction("approve");
-    if (input === "R") {
+    // External (fork-PR) repos have no upstream label lifecycle: `d` queues a
+    // ticket via the dispatch core; the label-driven keys explain instead of
+    // acting. Owned repos keep the existing optimistic label flow untouched.
+    const currentExternal = currentRepo?.external === true;
+    if (input === "d") {
+      if (!currentExternal) return void runAction("dispatch");
+      if (!currentNwo || !currentIssue) return;
+      const num = currentIssue.number;
+      showToast("info", `dispatching ${currentNwo}#${num}…`);
+      void client.dispatchTicket(currentNwo, num).then((res) => {
+        if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
+        else showToast("error", res.error);
+      });
+      return;
+    }
+    if (input === "D" || input === "a" || input === "R") {
+      if (currentExternal) {
+        return void showToast(
+          "error",
+          "not available for external repos — d dispatches a fork-PR ticket",
+        );
+      }
+      if (input === "D") return void runAction("dispatchAsk");
+      if (input === "a") return void runAction("approve");
       const st = currentIssue ? deriveState(currentIssue.labels, trigger) : "raw";
       return void runAction(st === "plan-ready" || st === "approved" ? "replan" : "recycle");
     }

@@ -23,7 +23,7 @@ const ticket = (github: Ticket["github"]): Ticket => ({
   assess: null,
   workdir: null,
 });
-const gt = { nwo: "acme/api", issue: 42, kind: "pr" as const };
+const gt = { nwo: "acme/api", issue: 42, kind: "pr" as const, external: false };
 const out = (o: Partial<TicketOutcome>): TicketOutcome => ({
   kind: "pr",
   status: "completed",
@@ -42,6 +42,7 @@ const cfg = {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   },
 } as unknown as Config;
 // Offline-outbox tests need a real stateDir (enqueueOp writes files under
@@ -198,7 +199,7 @@ describe("makeGithubReporter", () => {
 });
 
 describe("plan-kind reporting", () => {
-  const planTicket = ticket({ nwo: "acme/api", issue: 42, kind: "plan" });
+  const planTicket = ticket({ nwo: "acme/api", issue: 42, kind: "plan", external: false });
   // 4-backtick outer fence wrapping an inner ```bash block (the template
   // mandates one in ## Verification) — must NOT truncate at the inner fence.
   const goodFinal = out({
@@ -324,6 +325,19 @@ describe("reporter offline (outbox)", () => {
     const f = fakeGh();
     const reporter = makeGithubReporter(rc, f as never);
     await reporter.onFinal(prTicket, out({ prUrl: null, finalText: "x", prQueued: true }));
+    expect(f.calls).toHaveLength(0);
+    expect(listOps(rc)).toHaveLength(0);
+  });
+
+  it("is a complete no-op for external tickets (etiquette invariant)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-external-"));
+    const rc = repCfg(root);
+    const f = fakeGh();
+    const t = ticket({ nwo: "up/stream", issue: 7, kind: "pr", external: true });
+    const reporter = makeGithubReporter(rc, f as never);
+    await reporter.onStart(t);
+    await reporter.onRequeue(t);
+    await reporter.onFinal(t, out({}));
     expect(f.calls).toHaveLength(0);
     expect(listOps(rc)).toHaveLength(0);
   });

@@ -48,6 +48,7 @@ export interface GithubConfig {
   repos: GithubRepoMapping[];
   requireApproval: boolean; // false ⇒ plan-ready auto-executes next sweep
   plannerModelId: string | null; // planning-session model id override (same endpoint)
+  externalReposRoot: string; // managed clones of unowned repos (fork-PR flow)
 }
 /** [assess] — knobs for `junco assess` runs (vulnerability audit → GitHub issues). */
 export interface AssessConfig {
@@ -140,6 +141,8 @@ export interface TicketGithub {
   nwo: string;
   issue: number;
   kind: "pr" | "ask" | "plan";
+  /** Repo the operator does not control: reporter is a no-op for this ticket. */
+  external: boolean;
 }
 
 export interface Ticket {

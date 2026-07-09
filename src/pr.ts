@@ -6,8 +6,8 @@
  *   - countNewCommits    — rev-list --count sinceRef..HEAD
  *   - listNewCommits     — git log --format=%h%x09%s sinceRef..HEAD
  *   - commitLeftovers    — git add -A + git commit (gpgsign off, allow-empty-message)
- *   - pushBranch         — git push --set-upstream origin <branch>
- *   - openPullRequest    — gh pr create + URL extraction
+ *   - pushBranch         — git push --set-upstream <remote> <branch> (remote defaults to origin)
+ *   - openPullRequest    — gh pr create + URL extraction (--head <fork-owner>:<branch> for forks)
  *   - derivePrTitle      — ctx.prTitle → first H1 → task.id
  */
 
@@ -105,7 +105,8 @@ export async function commitLeftovers(
 
 /**
  * Port of worker.py `push_branch` (lines 2034-2035).
- * Pushes the named branch to origin with --set-upstream.
+ * Pushes the named branch with --set-upstream to `remote` (default "origin";
+ * fork-PR mode threads through the ticket's `push_remote`).
  * Uses network retry and a 3-minute timeout. `retryBaseDelayMs` overrides the
  * retry backoff base (default 1000ms) — tests scripting offline pushes pass ~5ms.
  */
@@ -114,8 +115,9 @@ export async function pushBranch(
   wtPath: string,
   branch: string,
   retryBaseDelayMs?: number,
+  remote = "origin",
 ): Promise<void> {
-  await git(cfg, ["push", "--set-upstream", "origin", branch], {
+  await git(cfg, ["push", "--set-upstream", remote, branch], {
     cwd: wtPath,
     timeoutMs: 180_000,
     retryNetwork: true,
@@ -131,10 +133,10 @@ export async function pushBranch(
  * Port of worker.py `open_pull_request` (lines 2038-2063).
  *
  * Builds the gh pr create argv faithfully:
- *   gh pr create --repo nwo --base ctx.baseBranch --head ctx.branchName
+ *   gh pr create --repo nwo --base ctx.baseBranch --head [<fork-owner>:]branch
  *                --title title --body-file bodyFile
  *                [--draft]
- *                [--label label …]
+ *                [--label label …]   (skipped in fork mode — see openPullRequest)
  *                [--reviewer rv …]
  *
  * The PR URL is the LAST line of stdout that starts with "https://".
@@ -148,6 +150,10 @@ export async function openPullRequest(
   bodyFile: string,
   retryBaseDelayMs?: number,
 ): Promise<string> {
+  // Fork-PR mode: gh needs the cross-repo head form <fork-owner>:<branch>.
+  const head =
+    ctx.forkNwo !== null ? `${ctx.forkNwo.split("/")[0]}:${ctx.branchName}` : ctx.branchName;
+
   const argv: string[] = [
     "pr",
     "create",
@@ -156,7 +162,7 @@ export async function openPullRequest(
     "--base",
     ctx.baseBranch,
     "--head",
-    ctx.branchName,
+    head,
     "--title",
     title,
     "--body-file",
@@ -167,8 +173,12 @@ export async function openPullRequest(
     argv.push("--draft");
   }
 
-  for (const label of ctx.labels) {
-    argv.push("--label", label);
+  // Fork PRs are label-free — the upstream label namespace is not ours (spec
+  // etiquette invariant); skip the whole loop when in fork mode.
+  if (ctx.forkNwo === null) {
+    for (const label of ctx.labels) {
+      argv.push("--label", label);
+    }
   }
 
   for (const rv of ctx.reviewers) {

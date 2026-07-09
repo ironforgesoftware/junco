@@ -67,6 +67,12 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         "Pull request number to amend (push additional commits to) instead of opening a new PR.",
     },
+    push_remote: {
+      type: "string",
+      pattern: "^[A-Za-z0-9_-]+$",
+      description:
+        "Git remote the PR flow pushes the feature branch to. Defaults to origin. Set to fork (with a fork remote configured on the clone) for fork-based PRs against repos the operator cannot push to; gh pr create then uses --head <fork-owner>:<branch>.",
+    },
     not_before: {
       type: "string",
       format: "date-time",
@@ -98,6 +104,11 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
         nwo: { type: "string", description: "Repository name-with-owner, e.g. acme/api." },
         issue: { type: "integer", minimum: 1, description: "Source issue number." },
         kind: { type: "string", enum: ["pr", "ask", "plan"], description: "Execution path." },
+        external: {
+          type: "boolean",
+          description:
+            "Worker-managed: true when the ticket targets a repo the operator does not control. The reporter posts no labels/comments to the upstream issue; the PR itself (from the push_remote fork) is the only outward-facing write.",
+        },
       },
     },
     assess: {

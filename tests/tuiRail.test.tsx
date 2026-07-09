@@ -13,7 +13,7 @@ const QUEUE: QueueSnapshot = {
   running: [
     {
       id: "gh-a-b-46",
-      github: { nwo: "a/b", issue: 46, kind: "pr" },
+      github: { nwo: "a/b", issue: 46, kind: "pr", external: false },
       turns: 14,
       lastTool: "bash",
       outputTokens: 900,
@@ -104,7 +104,7 @@ describe("Rail", () => {
       running: [
         {
           id: "gh-a-b-46",
-          github: { nwo: "a/b", issue: 46, kind: "pr" },
+          github: { nwo: "a/b", issue: 46, kind: "pr", external: false },
           turns: 14,
           lastTool: "bash",
           outputTokens: 900,
@@ -113,7 +113,7 @@ describe("Rail", () => {
         },
         {
           id: "gh-a-b-47",
-          github: { nwo: "a/b", issue: 47, kind: "pr" },
+          github: { nwo: "a/b", issue: 47, kind: "pr", external: false },
           turns: 3,
           lastTool: "edit",
           outputTokens: 100,

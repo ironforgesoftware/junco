@@ -23,6 +23,7 @@ const okConfig = {
     repos: [],
     requireApproval: true,
     plannerModelId: null,
+    externalReposRoot: "/tmp/junco-test-external",
   },
 } as unknown as Config;
 

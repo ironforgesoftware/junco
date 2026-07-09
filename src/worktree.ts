@@ -150,17 +150,20 @@ export async function prepareWorktree(
   }
 
   if (isAmend(ctx)) {
-    // Amend mode: fetch the feature branch, then add worktree on it.
-    await git(cfg, ["fetch", "origin", ctx.branchName], {
+    // Amend mode: fetch the feature branch from the push remote (the
+    // operator's own fork when ctx.pushRemote !== "origin"), then add
+    // worktree on it.
+    await git(cfg, ["fetch", ctx.pushRemote, ctx.branchName], {
       cwd: ctx.repo,
       timeoutMs: 180_000,
       retryNetwork: true,
       retryBaseDelayMs: opts.retryBaseDelayMs,
     });
 
-    // Force-reset the local branch pointer to origin's tip (check:false —
-    // harmless if branch doesn't exist yet; worktree add -B covers it).
-    await git(cfg, ["branch", "-f", ctx.branchName, `origin/${ctx.branchName}`], {
+    // Force-reset the local branch pointer to the push remote's tip
+    // (check:false — harmless if branch doesn't exist yet; worktree add -B
+    // covers it).
+    await git(cfg, ["branch", "-f", ctx.branchName, `${ctx.pushRemote}/${ctx.branchName}`], {
       cwd: ctx.repo,
       timeoutMs: 60_000,
       check: false,
@@ -180,7 +183,7 @@ export async function prepareWorktree(
         // Fall back to force-reset via -B semantics
         await git(
           cfg,
-          ["worktree", "add", "-B", ctx.branchName, wtPath, `origin/${ctx.branchName}`],
+          ["worktree", "add", "-B", ctx.branchName, wtPath, `${ctx.pushRemote}/${ctx.branchName}`],
           { cwd: ctx.repo, timeoutMs: 120_000 },
         );
       } else {

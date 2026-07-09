@@ -43,7 +43,7 @@ const QUEUE_SNAP: QueueSnapshot = {
   running: [
     {
       id: "gh-acme-api-46",
-      github: { nwo: "acme/api", issue: 46, kind: "pr" },
+      github: { nwo: "acme/api", issue: 46, kind: "pr", external: false },
       turns: 3,
       lastTool: "bash",
       outputTokens: 500,
@@ -54,7 +54,7 @@ const QUEUE_SNAP: QueueSnapshot = {
   waiting: [
     {
       id: "gh-acme-api-51-plan",
-      github: { nwo: "acme/api", issue: 51, kind: "plan" },
+      github: { nwo: "acme/api", issue: 51, kind: "plan", external: false },
       kind: "plan",
       priority: "normal",
       retryCount: 0,
@@ -101,6 +101,10 @@ function makeClient(
       repoOpens.push(nwo);
       return okv(undefined);
     },
+    repoPermission: async () => okv({ canPush: true }),
+    prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    dispatchTicket: async (nwo, num) =>
+      okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -142,6 +146,10 @@ function makeSeqClient(sequence: DashIssue[][]) {
     openInBrowser: async () => okv(undefined),
     openPrInBrowser: async () => okv(undefined),
     openRepoInBrowser: async () => okv(undefined),
+    repoPermission: async () => okv({ canPush: true }),
+    prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    dispatchTicket: async (nwo, num) =>
+      okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -186,6 +194,10 @@ function makePrSeqClient(sequence: DashPr[][]) {
       return okv(undefined);
     },
     openRepoInBrowser: async () => okv(undefined),
+    repoPermission: async () => okv({ canPush: true }),
+    prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    dispatchTicket: async (nwo, num) =>
+      okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -523,6 +535,10 @@ describe("App", () => {
       openInBrowser: async () => okv(undefined),
       openPrInBrowser: async () => okv(undefined),
       openRepoInBrowser: async () => okv(undefined),
+      repoPermission: async () => okv({ canPush: true }),
+      prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+      dispatchTicket: async (nwo, num) =>
+        okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,
@@ -777,6 +793,118 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("/up"));
       expect(r.lastFrame() ?? "").not.toContain("/[<"); // no garbage prefix in the filter
     });
+  });
+});
+
+describe("external-repo routing", () => {
+  const wle = () => join(mkdtempSync(join(tmpdir(), "junco-ext-")), "wl.json");
+  const upIssue: DashIssue = {
+    number: 7,
+    title: "Stream bug",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T10:00:00Z",
+    url: "https://github.com/up/stream/issues/7",
+  };
+
+  it("addRepo routes a no-push repo to external fork provisioning", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    client.repoPermission = async () => okv({ canPush: false });
+    client.prepareExternalRepo = async (nwo) => okv({ path: `/ext/${nwo}`, forkNwo: "me/stream" });
+    const file = wle();
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("up/stream");
+    await tick();
+    r.stdin.write("\r"); // → path field
+    await tick();
+    r.stdin.write("\r"); // EMPTY path → external fork route
+    // Async permission→provision→write chain — bounded until-loop, never fixed ticks.
+    await until(() => readWatchlist(file).entries.some((e) => e.external === true));
+    expect(readWatchlist(file).entries).toEqual([
+      { nwo: "up/stream", path: "/ext/up/stream", external: true },
+    ]);
+    await until(() => (r.lastFrame() ?? "").includes("watching up/stream"));
+  });
+
+  it("addRepo with a no-push repo AND an explicit path errors (managed fork mode owns the path)", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    client.repoPermission = async () => okv({ canPush: false });
+    const file = wle();
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("up/stream");
+    await tick();
+    r.stdin.write("\r"); // → path field
+    await tick();
+    r.stdin.write("/my/path");
+    await tick();
+    r.stdin.write("\r"); // non-empty path → refused
+    await until(() => (r.lastFrame() ?? "").toLowerCase().includes("no push access"));
+    expect(readWatchlist(file).entries).toEqual([]);
+  });
+
+  it("addRepo falls through to the owned flow when the permission probe fails (offline)", async () => {
+    const { client, validatePaths } = makeClient({ "acme/api": [] });
+    client.repoPermission = async () => ({ ok: false, error: "offline" });
+    const file = wle();
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("alx/coral");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("/c/coral");
+    await tick();
+    r.stdin.write("\r");
+    // perm-not-ok → the existing owned validate→write path runs unchanged.
+    await until(() => readWatchlist(file).entries.length > 0);
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+    expect(validatePaths).toEqual(["/c/coral"]);
+  });
+
+  it("d on an external repo dispatches a ticket instead of labeling", async () => {
+    const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
+    const dispatched: string[] = [];
+    client.dispatchTicket = async (nwo, num) => {
+      dispatched.push(`${nwo}#${num}`);
+      return okv({ id: "gh-up-stream-7", destPath: "/inbox/x.md" });
+    };
+    const file = wle();
+    writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("j"); // select up/stream (pane 1, index 1)
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // its issue loaded
+    r.stdin.write("2"); // focus issues pane
+    await tick();
+    r.stdin.write("d");
+    await until(() => dispatched.length === 1);
+    expect(dispatched[0]).toBe("up/stream#7");
+    expect(actions).toHaveLength(0); // no label flow
+    await until(() => (r.lastFrame() ?? "").includes("ticket queued: gh-up-stream-7"));
+  });
+
+  it("D/a/R on an external repo explains instead of acting", async () => {
+    const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
+    const file = wle();
+    writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("j"); // select up/stream
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("2"); // focus issues pane
+    await tick();
+    r.stdin.write("D");
+    await until(() => (r.lastFrame() ?? "").includes("not available for external repos"));
+    r.stdin.write("a"); // dismisses the toast, then re-explains
+    await until(() => (r.lastFrame() ?? "").includes("not available for external repos"));
+    expect(actions).toHaveLength(0);
   });
 });
 
