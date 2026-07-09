@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -14,6 +22,7 @@ import {
   ensureFindingLabels,
   MAX_OP_ATTEMPTS,
   OUTBOX_MARKER_PREFIX,
+  FLUSH_LOCK_FILENAME,
   type OutboxOp,
 } from "../src/githubOutbox.js";
 import { findingMarker, FINDING_LABEL_SPECS } from "../src/findings.js";
@@ -625,6 +634,84 @@ describe("flushOutbox", () => {
         f.calls.filter((c) => c.args[0] === "label" && c.args[1] === "create"),
       ).not.toHaveLength(0);
     });
+  });
+});
+
+describe("flushOutbox — flush lock", () => {
+  it("second flusher skips cleanly while a live flusher holds the lock", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-lock1-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    // Simulate a concurrent live flusher: our own pid is definitionally alive
+    // (exercises the real default liveness probe).
+    const lockPath = join(outboxPaths(cfg).dir, FLUSH_LOCK_FILENAME);
+    writeFileSync(lockPath, `${process.pid}\n`, "utf8");
+    const f = fakes(() => undefined);
+    const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(r).toMatchObject({ sent: 0, dead: 0, remaining: 1, offline: false, skipped: true });
+    expect(f.calls).toHaveLength(0); // never touched gh/git
+    expect(outboxDepth(cfg)).toBe(1); // the op is the other flusher's to send
+    // The lock belongs to the other flusher — the skipper must not release it.
+    expect(readFileSync(lockPath, "utf8")).toBe(`${process.pid}\n`);
+  });
+
+  it("stale lock (dead owner pid) is reclaimed, the flush proceeds, and the lock is released after", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-lock2-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    const lockPath = join(outboxPaths(cfg).dir, FLUSH_LOCK_FILENAME);
+    writeFileSync(lockPath, "99999\n", "utf8");
+    const f = fakes(() => undefined);
+    const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn, pidAliveFn: () => false });
+    expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+    expect(r.skipped).toBeUndefined();
+    expect(outboxDepth(cfg)).toBe(0);
+    expect(existsSync(lockPath)).toBe(false); // released in finally
+  });
+
+  it("unparseable lock content is stale even when the liveness probe would say alive", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-lock3-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    const lockPath = join(outboxPaths(cfg).dir, FLUSH_LOCK_FILENAME);
+    writeFileSync(lockPath, "not-a-pid\n", "utf8");
+    const f = fakes(() => undefined);
+    const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn, pidAliveFn: () => true });
+    expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("a normal flush releases the lock even when an op dead-letter path throws", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-lock4-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "dashboard", { ...LABELS });
+    const f = fakes(() => {
+      throw PERM_ERR;
+    });
+    // Burn to MAX-1, then make the dead-letter rename explode (non-ENOENT) —
+    // the one class flushOutbox still propagates by design.
+    for (let i = 1; i < MAX_OP_ATTEMPTS; i++)
+      await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    await expect(
+      flushOutbox(cfg, {
+        ghFn: f.ghFn,
+        gitFn: f.gitFn,
+        renameFn: () => {
+          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+        },
+      }),
+    ).rejects.toThrow("EACCES");
+    // The lock must not leak — the next flusher is not blocked.
+    expect(existsSync(join(outboxPaths(cfg).dir, FLUSH_LOCK_FILENAME))).toBe(false);
+  });
+
+  it("empty outbox returns zeros without creating the outbox dir or the lock", async () => {
+    const root = join(tmpdir(), "junco-obx-lock-nonexistent-xyz");
+    const cfg = cfgAt(root);
+    const f = fakes(() => undefined);
+    const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(r).toMatchObject({ sent: 0, dead: 0, remaining: 0, offline: false });
+    expect(existsSync(outboxPaths(cfg).dir)).toBe(false);
   });
 });
 

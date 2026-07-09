@@ -385,10 +385,17 @@ export async function runAssessFlow(
     return true;
   });
 
-  // --- Phase 7: Cap. Keep the first maxIssuesPerRun; record the rest (with
-  // titles) so the operator can re-run to file them. ---
-  const toFile = afterDedup.slice(0, cfg.assess.maxIssuesPerRun);
-  const overflow = afterDedup.slice(cfg.assess.maxIssuesPerRun);
+  // --- Phase 7: Cap. Stable-sort by severity (descending) FIRST so the cap
+  // always retains the highest-severity findings — merge order is
+  // [npm, agent], and without the sort a critical agent finding could be
+  // capped while low npm advisories get filed. toSorted keeps merge order
+  // among equal severities. Then keep the first maxIssuesPerRun; record the
+  // rest (with titles) so the operator can re-run to file them. ---
+  const bySeverity = afterDedup.toSorted(
+    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity],
+  );
+  const toFile = bySeverity.slice(0, cfg.assess.maxIssuesPerRun);
+  const overflow = bySeverity.slice(cfg.assess.maxIssuesPerRun);
   counts.capped = overflow.length;
   for (const f of overflow) cappedTitles.push(buildIssueTitle(f));
 

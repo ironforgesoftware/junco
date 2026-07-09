@@ -66,6 +66,12 @@ export async function runOutboxCommand(
       print(`outbox flush failed: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
+    if (result.skipped) {
+      // Another live flusher (usually the daemon sweep) holds the flush lock —
+      // an expected condition, not a failure; its holder will drain the queue.
+      print(`another flush is already in progress — skipped\n`);
+      return 0;
+    }
     print(`sent ${result.sent} · dead ${result.dead} · remaining ${result.remaining}\n`);
     if (result.offline) print(`offline — will retry when GitHub is reachable\n`);
     return result.dead > 0 ? 1 : 0;

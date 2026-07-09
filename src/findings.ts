@@ -69,13 +69,33 @@ export const AgentFindingSchema = z.object({
     .optional(),
 }) as z.ZodType<Omit<Finding, "fingerprint">>;
 
-// sha256 hex of `${kind}|${ruleId}|${locus}`, sliced to 16 chars. locus
-// precedence: package?.name ?? location?.path ?? title. location.line is
+// Case-folded, punctuation-free, whitespace-collapsed title — the stable
+// discriminator folded into a code finding's locus. Titles are the only
+// required per-finding field (evidence and location.line are optional), and
+// this normalization survives the casing/punctuation/backtick drift a model
+// exhibits between runs while still separating genuinely distinct findings.
+function normalizeTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// sha256 hex of `${kind}|${ruleId}|${locus}`, sliced to 16 chars. locus:
+// package.name for package findings (exactly that — advisory identity is
+// package x rule); `${location.path}#${normalizeTitle(title)}` for findings
+// with a location (bare path collapsed two distinct findings in one file
+// under one rule, and the state-all GitHub dedup then suppressed the
+// survivor forever — issue #41); title otherwise. location.line is
 // deliberately EXCLUDED so fingerprints survive line drift.
 export function fingerprintFinding(
   f: Pick<Finding, "kind" | "ruleId" | "package" | "location" | "title">,
 ): string {
-  const locus = f.package?.name ?? f.location?.path ?? f.title;
+  const locus = f.package
+    ? f.package.name
+    : f.location
+      ? `${f.location.path}#${normalizeTitle(f.title)}`
+      : f.title;
   return createHash("sha256").update(`${f.kind}|${f.ruleId}|${locus}`).digest("hex").slice(0, 16);
 }
 
