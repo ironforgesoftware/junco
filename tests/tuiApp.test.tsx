@@ -106,6 +106,9 @@ function makeClient(
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+    listReview: async () => okv([]),
+    fileReview: async () =>
+      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -151,6 +154,9 @@ function makeSeqClient(sequence: DashIssue[][]) {
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+    listReview: async () => okv([]),
+    fileReview: async () =>
+      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -199,6 +205,9 @@ function makePrSeqClient(sequence: DashPr[][]) {
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+    listReview: async () => okv([]),
+    fileReview: async () =>
+      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -485,6 +494,9 @@ describe("App", () => {
       prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
       dispatchTicket: async (nwo, num) =>
         okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+      listReview: async () => okv([]),
+      fileReview: async () =>
+        okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,
