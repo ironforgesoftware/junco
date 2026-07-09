@@ -122,6 +122,17 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     try {
       mkdirSync(dirname(opts.transcriptPath), { recursive: true });
       transcript = createWriteStream(opts.transcriptPath, { flags: "a" });
+      // createWriteStream opens the file ASYNCHRONOUSLY: open and write
+      // failures (EACCES, ENOSPC, ...) arrive as an 'error' event, never a
+      // throw — without a listener that event crashes the process mid-ticket.
+      // Degrade to a warning and drop the transcript, as promised above.
+      transcript.on("error", (e: Error) => {
+        log.warn("transcript disabled (stream error)", {
+          path: opts.transcriptPath,
+          error: e.message,
+        });
+        transcript = null;
+      });
     } catch (e) {
       log.warn("transcript disabled (path not writable)", {
         path: opts.transcriptPath,

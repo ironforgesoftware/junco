@@ -1,9 +1,27 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
+
+// Overridable createWriteStream so the transcript stream can be stubbed
+// (issue #26: fs.createWriteStream opens ASYNCHRONOUSLY — open/write failures
+// arrive as 'error' events, never throws). Default passes through to real fs.
+const createWriteStreamOverride = vi.hoisted(() => ({
+  current: null as null | ((...args: any[]) => any),
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    createWriteStream: (...args: any[]) =>
+      createWriteStreamOverride.current
+        ? createWriteStreamOverride.current(...args)
+        : (actual.createWriteStream as any)(...args),
+  };
+});
 
 // A fake AgentSession: records prompts, emits scripted events to all listeners
 // when prompted, and resolves prompt() afterward (mirroring the real SDK, whose
@@ -490,5 +508,93 @@ describe("runAgent (transcript sidecar)", () => {
       transcriptPath: "/dev/null/impossible/t.jsonl",
     });
     expect(result.errorMessage).toBeNull();
+  });
+
+  // Fake WriteStream for the ASYNC failure paths: a plain EventEmitter with
+  // write/end. Emitting 'error' with no listener attached throws (crashing the
+  // daemon) — exactly what a real stream does.
+  class FakeTranscriptStream extends EventEmitter {
+    written: string[] = [];
+    ended = false;
+    constructor(private readonly failOnFirstWrite = false) {
+      super();
+    }
+    write(chunk: string): boolean {
+      this.written.push(chunk);
+      if (this.failOnFirstWrite && this.written.length === 1) {
+        this.emit("error", new Error("ENOSPC: no space left on device, write"));
+        return false;
+      }
+      return true;
+    }
+    end(): void {
+      this.ended = true;
+    }
+  }
+
+  it("an async open failure ('error' event) degrades to a warning — no writes, no crash", async () => {
+    const fake = new FakeTranscriptStream();
+    createWriteStreamOverride.current = () => {
+      // fs.createWriteStream opens the file asynchronously; EACCES/ENOTDIR
+      // surface as a later 'error' event, never a synchronous throw.
+      queueMicrotask(() =>
+        fake.emit("error", new Error("EACCES: permission denied, open '/ro/t.jsonl'")),
+      );
+      return fake;
+    };
+    try {
+      // Deliver events on a macrotask so the async open failure lands first.
+      const listeners: ((e: any) => void)[] = [];
+      const session = {
+        subscribe(l: (e: any) => void) {
+          listeners.push(l);
+          return () => {};
+        },
+        async prompt() {
+          await new Promise((r) => setTimeout(r, 5));
+          listeners.forEach((l) => l({ type: "tool_execution_start", toolName: "read", args: {} }));
+        },
+        dispose() {},
+        abort: async () => {},
+      };
+      const result = await runAgent({
+        body: "x",
+        cwd: "/tmp",
+        timeoutMs: 5000,
+        createSession: async () => session as any,
+        transcriptPath: join(tmpdir(), "junco-fake-tx", "t.jsonl"),
+      });
+      expect(result.errorMessage).toBeNull();
+      // The transcript was dropped before any event was written.
+      expect(fake.written).toHaveLength(0);
+    } finally {
+      createWriteStreamOverride.current = null;
+    }
+  });
+
+  it("a mid-run write 'error' (ENOSPC) disables the transcript and the run completes", async () => {
+    const fake = new FakeTranscriptStream(true);
+    createWriteStreamOverride.current = () => fake;
+    try {
+      const events = [
+        { type: "tool_execution_start", toolName: "read", args: { path: "/a" } },
+        { type: "tool_execution_start", toolName: "bash", args: { command: "ls" } },
+        { type: "agent_end", messages: [], willRetry: false },
+      ];
+      const session = fakeSession(events);
+      const result = await runAgent({
+        body: "x",
+        cwd: "/tmp",
+        timeoutMs: 5000,
+        createSession: async () => session as any,
+        transcriptPath: join(tmpdir(), "junco-fake-tx", "t.jsonl"),
+      });
+      expect(result.errorMessage).toBeNull();
+      // The first write errored; the transcript was nulled — later events are
+      // NOT written to the dead stream.
+      expect(fake.written).toHaveLength(1);
+    } finally {
+      createWriteStreamOverride.current = null;
+    }
   });
 });
