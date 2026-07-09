@@ -36,8 +36,6 @@ export interface IssueListProps {
   now: Date;
   /** listIssues' cache-served fetchedAt (offline) — null when the list is fresh. */
   staleAt: string | null;
-  /** Last fresh listIssues completion — the ↻ stamp; staleAt (cache age) wins when offline. */
-  fetchedAt: string | null;
   window: { start: number; end: number };
 }
 
@@ -54,7 +52,6 @@ export function IssueList({
   height,
   now,
   staleAt,
-  fetchedAt,
   window,
 }: IssueListProps): React.JSX.Element {
   return (
@@ -79,9 +76,6 @@ export function IssueList({
             {" "}
             <Spinner />
           </>
-        )}
-        {(staleAt ?? fetchedAt) !== null && (
-          <Text dimColor> ↻ {relTimeShort((staleAt ?? fetchedAt) as string, now)}</Text>
         )}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>

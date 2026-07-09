@@ -72,7 +72,6 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
-        fetchedAt={null}
         window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
@@ -96,7 +95,6 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt="2026-07-07T14:00:00Z"
-        fetchedAt={null}
         window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
@@ -116,7 +114,6 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
-        fetchedAt={null}
         window={{ start: 0, end: 1 }}
       />,
     ).lastFrame()!;
@@ -135,7 +132,6 @@ describe("IssueList", () => {
         height={20}
         now={NOW}
         staleAt={null}
-        fetchedAt={null}
         window={{ start: 0, end: 0 }}
       />,
     ).lastFrame()!;
@@ -156,57 +152,11 @@ describe("IssueList", () => {
         height={12}
         now={NOW}
         staleAt={null}
-        fetchedAt={null}
         window={windowSlice(many.length, listRowsHeight(12), 39, 0)}
       />,
     ).lastFrame()!;
     expect(f).toContain("Issue number 40");
     expect(f).not.toContain("Issue number 1 "); // note trailing space — #1's row, not #10+
     expect(f).toContain("40/40");
-  });
-});
-
-describe("IssueList freshness stamp", () => {
-  const one = [iss(1, "Some issue")];
-  it("renders ↻ age from fetchedAt", () => {
-    const now = new Date("2026-07-08T12:00:00Z");
-    const { lastFrame } = render(
-      <IssueList
-        issues={one}
-        trigger="junco"
-        selected={0}
-        focused
-        refreshing={false}
-        filter=""
-        filtering={false}
-        height={20}
-        now={now}
-        staleAt={null}
-        fetchedAt="2026-07-08T11:59:48Z"
-        window={{ start: 0, end: 1 }}
-      />,
-    );
-    expect(lastFrame()).toContain("↻ 12s");
-  });
-  it("offline: stamp shows the CACHE's age (staleAt wins over fetchedAt)", () => {
-    const now = new Date("2026-07-08T12:00:00Z");
-    const { lastFrame } = render(
-      <IssueList
-        issues={one}
-        trigger="junco"
-        selected={0}
-        focused
-        refreshing={false}
-        filter=""
-        filtering={false}
-        height={20}
-        now={now}
-        staleAt="2026-07-08T11:55:00Z"
-        fetchedAt="2026-07-08T11:59:48Z"
-        window={{ start: 0, end: 1 }}
-      />,
-    );
-    expect(lastFrame()).toContain("↻ 5m");
-    expect(lastFrame()).toContain("offline");
   });
 });

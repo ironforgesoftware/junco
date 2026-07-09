@@ -63,6 +63,7 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
+        refreshedAt={null}
       />,
     ).lastFrame()!;
     expect(f).toContain("🐦");
@@ -87,6 +88,7 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
+        refreshedAt={null}
       />,
     ).lastFrame()!;
     expect(f).toContain("daemon ○");
@@ -107,6 +109,7 @@ describe("Header", () => {
         outboxDepth={3}
         prAttention={0}
         prFailing={false}
+        refreshedAt={null}
       />,
     ).lastFrame()!;
     expect(withDepth).toContain("⇡3 unpushed");
@@ -124,6 +127,7 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
+        refreshedAt={null}
       />,
     ).lastFrame()!;
     expect(noDepth).not.toContain("unpushed");
@@ -141,6 +145,7 @@ describe("Header pulse", () => {
     outboxDepth: 0,
     prAttention: 0,
     prFailing: false,
+    refreshedAt: null,
   };
 
   it("renders the full pulse row when healthy: review, task counts, last-task, tokens, bridge", () => {
@@ -247,6 +252,7 @@ describe("Header PR attention chip", () => {
     queueWaiting: 0,
     watchlistError: null,
     outboxDepth: 0,
+    refreshedAt: null,
   };
 
   it("hidden at 0, shown as ⚑N PR at 3", () => {
@@ -389,5 +395,39 @@ describe("Footer / hintsFor", () => {
     const keys = hintsFor("queue", 2, "wide", false).map(([k]) => k);
     expect(keys).toContain("↑/↓");
     expect(keys).toContain("esc/t");
+  });
+});
+
+describe("Header unified refresh stamp", () => {
+  const base = {
+    repoNwo: "acme/api",
+    health: UP_BARE,
+    reviewCount: 0,
+    now: NOW,
+    queueRunning: 0,
+    queueWaiting: 0,
+    watchlistError: null,
+    outboxDepth: 0,
+    prAttention: 0,
+    prFailing: false,
+  };
+
+  it("renders ↻ age from refreshedAt", () => {
+    const f = render(
+      <Header {...base} mode="wide" refreshedAt="2026-07-07T09:59:48Z" />, // 12s before NOW
+    ).lastFrame()!;
+    expect(f).toContain("↻ 12s");
+  });
+
+  it("hidden before the first cycle completes (refreshedAt null)", () => {
+    const f = render(<Header {...base} mode="wide" refreshedAt={null} />).lastFrame()!;
+    expect(f).not.toContain("↻");
+  });
+
+  it("survives narrow modes — the stamp is an essential chip", () => {
+    const f = render(
+      <Header {...base} mode="medium" refreshedAt="2026-07-07T09:59:48Z" />,
+    ).lastFrame()!;
+    expect(f).toContain("↻ 12s");
   });
 });
