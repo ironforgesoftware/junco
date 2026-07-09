@@ -324,13 +324,14 @@ describe("validateRepoContext — fresh mode", () => {
 // validateRepoContext — pushed branch with no PR resumes (issue #29)
 // ---------------------------------------------------------------------------
 
-describe("validateRepoContext — pushed branch with no PR (issue #29)", () => {
-  it("resumes when the existing remote branch has NO open PR: resolves + signals the remote sha", async () => {
+describe("validateRepoContext — pushed branch with no PR (issues #29, #70)", () => {
+  it("resumes a REQUEUED ticket (retry_count>0) whose branch has NO open PR: resolves + signals the sha", async () => {
     const { work } = setupGitHarness(tmpRoot);
     const cfg = makeConfig(work, ghScript);
     const ctx = makeContext(work, { branchName: "junco/crashed" });
 
-    // A crashed run pushed the branch but never opened a PR.
+    // A crashed run pushed the branch but never opened a PR; orphan recovery
+    // requeued the ticket (retry_count > 0) — positive crash-recovery provenance.
     run(["git", "-C", work, "checkout", "-b", "junco/crashed"]);
     writeFileSync(join(work, "crashed.txt"), "pushed then crashed\n");
     run(["git", "-C", work, "add", "crashed.txt"]);
@@ -341,8 +342,32 @@ describe("validateRepoContext — pushed branch with no PR (issue #29)", () => {
 
     // fake gh pr list defaults to [] — no open PR for that head.
     const signals = { resumeRemoteSha: null as string | null };
-    await expect(validateRepoContext(cfg, ctx, { signals })).resolves.toBe("owner/repo");
+    await expect(validateRepoContext(cfg, ctx, { signals, retryCount: 1 })).resolves.toBe(
+      "owner/repo",
+    );
     expect(signals.resumeRemoteSha).toBe(remoteSha);
+  }, 15000);
+
+  it("REFUSES a FRESH ticket (retry_count 0) whose branch collides with a PR-less remote branch (issue #70)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, ghScript);
+    const ctx = makeContext(work, { branchName: "junco/human-wip" });
+
+    // A human's WIP branch that happens to collide on the ticket's branch_name,
+    // with no open PR. A fresh ticket must NOT force-push over it.
+    run(["git", "-C", work, "checkout", "-b", "junco/human-wip"]);
+    writeFileSync(join(work, "wip.txt"), "human work in progress\n");
+    run(["git", "-C", work, "add", "wip.txt"]);
+    run(["git", "-C", work, "commit", "-m", "human WIP"]);
+    run(["git", "-C", work, "push", "-u", "origin", "junco/human-wip"]);
+    run(["git", "-C", work, "checkout", "main"]);
+
+    // retryCount defaults to 0 (fresh) → refuse, never signal a resume sha.
+    const signals = { resumeRemoteSha: null as string | null };
+    await expect(validateRepoContext(cfg, ctx, { signals })).rejects.toThrow(
+      /no open PR of ours|refusing to overwrite/i,
+    );
+    expect(signals.resumeRemoteSha).toBeNull();
   }, 15000);
 
   it("leaves the resume signal null when the branch does not exist on the remote", async () => {
@@ -353,6 +378,67 @@ describe("validateRepoContext — pushed branch with no PR (issue #29)", () => {
     const signals = { resumeRemoteSha: null as string | null };
     await expect(validateRepoContext(cfg, ctx, { signals })).resolves.toBe("owner/repo");
     expect(signals.resumeRemoteSha).toBeNull();
+  }, 15000);
+});
+
+// ---------------------------------------------------------------------------
+// validateRepoContext — ls-remote exact-ref match (issue #72)
+// ---------------------------------------------------------------------------
+
+describe("validateRepoContext — ls-remote exact-ref match (issue #72)", () => {
+  it("a sibling ref refs/heads/<x>/<branch> alone is NOT a collision (exact-match only)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, ghScript);
+    const ctx = makeContext(work, { branchName: "junco/foo" });
+
+    // Only a sibling exists on origin; the EXACT branch does not. `git ls-remote
+    // --heads origin junco/foo` tail-matches refs/heads/aaa/junco/foo, so the
+    // pre-fix code read it as a collision.
+    run(["git", "-C", work, "checkout", "-b", "aaa/junco/foo"]);
+    writeFileSync(join(work, "sib.txt"), "sibling\n");
+    run(["git", "-C", work, "add", "sib.txt"]);
+    run(["git", "-C", work, "commit", "-m", "sibling commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "aaa/junco/foo"]);
+    run(["git", "-C", work, "checkout", "main"]);
+
+    // No exact branch → no collision, no resume signal (fresh ticket resolves).
+    const signals = { resumeRemoteSha: null as string | null };
+    await expect(validateRepoContext(cfg, ctx, { signals })).resolves.toBe("owner/repo");
+    expect(signals.resumeRemoteSha).toBeNull();
+  }, 15000);
+
+  it("with BOTH the exact branch and a sibling present, resume uses the EXACT branch's sha", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, ghScript);
+    const ctx = makeContext(work, { branchName: "junco/foo" });
+
+    // Sibling (a DIFFERENT commit) that sorts BEFORE the exact ref in
+    // ls-remote's output — the pre-fix `split[0]` would grab its sha.
+    run(["git", "-C", work, "checkout", "-b", "aaa/junco/foo"]);
+    writeFileSync(join(work, "sib.txt"), "sibling\n");
+    run(["git", "-C", work, "add", "sib.txt"]);
+    run(["git", "-C", work, "commit", "-m", "sibling commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "aaa/junco/foo"]);
+    run(["git", "-C", work, "checkout", "main"]);
+
+    run(["git", "-C", work, "checkout", "-b", "junco/foo"]);
+    writeFileSync(join(work, "exact.txt"), "exact branch\n");
+    run(["git", "-C", work, "add", "exact.txt"]);
+    run(["git", "-C", work, "commit", "-m", "exact-branch commit"]);
+    run(["git", "-C", work, "push", "-u", "origin", "junco/foo"]);
+    run(["git", "-C", work, "checkout", "main"]);
+    const exactSha = run(["git", "-C", work, "rev-parse", "junco/foo"]).trim();
+    const siblingSha = run(["git", "-C", work, "rev-parse", "aaa/junco/foo"]).trim();
+    expect(exactSha).not.toBe(siblingSha);
+
+    // Requeued ticket (retry_count>0), no PR → resume; the force-with-lease sha
+    // must be the EXACT branch's tip, never the sibling's.
+    const signals = { resumeRemoteSha: null as string | null };
+    await expect(validateRepoContext(cfg, ctx, { signals, retryCount: 1 })).resolves.toBe(
+      "owner/repo",
+    );
+    expect(signals.resumeRemoteSha).toBe(exactSha);
+    expect(signals.resumeRemoteSha).not.toBe(siblingSha);
   }, 15000);
 });
 
@@ -609,7 +695,7 @@ describe("validateRepoContext — push_remote (fork mode)", () => {
     await expect(validateRepoContext(cfg, ok)).resolves.toBeTruthy();
   }, 15000);
 
-  it("fork mode: a same-named branch PR from SOMEONE ELSE'S fork does not block the resume (issue #29)", async () => {
+  it("fork mode: a same-named branch PR from SOMEONE ELSE'S fork does not block the resume (issues #29, #70)", async () => {
     run(["git", "-C", h.work, "push", "fork", "HEAD:refs/heads/junco/x"]);
     const remoteSha = run(["git", "-C", h.work, "rev-parse", "HEAD"]).trim();
     // gh pr list --head matches on headRefName only — a stranger's fork with
@@ -623,7 +709,10 @@ describe("validateRepoContext — push_remote (fork mode)", () => {
     ]);
     try {
       const signals = { resumeRemoteSha: null as string | null };
-      await expect(validateRepoContext(cfg, forkCtx(), { signals })).resolves.toBeTruthy();
+      // retry_count>0 → crash-recovery provenance arms the resume (#70).
+      await expect(
+        validateRepoContext(cfg, forkCtx(), { signals, retryCount: 1 }),
+      ).resolves.toBeTruthy();
       expect(signals.resumeRemoteSha).toBe(remoteSha);
     } finally {
       delete process.env.FAKE_GH_PR_LIST_JSON;

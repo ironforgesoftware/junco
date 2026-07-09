@@ -845,7 +845,7 @@ esac
     return p;
   }
 
-  it("resume: a pushed branch with no PR force-pushes over the stale tip and opens a PR", async () => {
+  it("resume (requeued ticket): a pushed branch with no PR force-pushes over the stale tip and opens a PR", async () => {
     const cfg = makeConfig(h, {
       ghBin: ghCases("gh-resume.sh", {
         '"pr list "*': 'echo "[]"; exit 0',
@@ -854,7 +854,9 @@ esac
     });
 
     // Simulate a crashed run: branch pushed to origin carrying a stale commit,
-    // NO PR, local branch deleted (the orphan re-runs the fresh flow).
+    // NO PR, local branch deleted (the orphan re-runs the fresh flow). Orphan
+    // recovery requeued the ticket, so retry_count > 0 — the crash-recovery
+    // provenance that arms the resume (#70).
     run(["git", "-C", h.work, "checkout", "-b", "junco/resume-me"]);
     writeFileSync(join(h.work, "stale.txt"), "stale\n");
     run(["git", "-C", h.work, "add", "stale.txt"]);
@@ -866,7 +868,7 @@ esac
     const { task, path } = makeTicket(
       h,
       "resume-me.md",
-      `---\nid: resume-me\nrepo: ${h.work}\n---\n# Resume\n\nDo it.\n`,
+      `---\nid: resume-me\nrepo: ${h.work}\nretry_count: 1\n---\n# Resume\n\nDo it.\n`,
     );
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true, file: "fresh.txt" }),
@@ -883,11 +885,49 @@ esac
     expect(remoteLog).not.toContain("crashed-run commit");
   }, 30000);
 
-  it("idempotent create: gh pr create 'already exists' recovers the URL via pr view → completed", async () => {
+  it("fresh ticket: a colliding PR-less remote branch is REFUSED, not force-pushed (issue #70)", async () => {
+    const cfg = makeConfig(h, {
+      ghBin: ghCases("gh-refuse.sh", {
+        '"pr list "*': 'echo "[]"; exit 0',
+        '"pr create "*': 'echo "https://github.com/owner/repo/pull/999"; exit 0',
+      }),
+    });
+
+    // A human's WIP branch collides on the ticket's branch_name, with no PR.
+    run(["git", "-C", h.work, "checkout", "-b", "junco/collide-fresh"]);
+    writeFileSync(join(h.work, "human.txt"), "human work in progress\n");
+    run(["git", "-C", h.work, "add", "human.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "human WIP commit"]);
+    run(["git", "-C", h.work, "push", "-u", "origin", "junco/collide-fresh"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+    run(["git", "-C", h.work, "branch", "-D", "junco/collide-fresh"]);
+
+    // Fresh ticket (no retry_count) — validate must REFUSE, never force-push.
+    const { task, path } = makeTicket(
+      h,
+      "collide-fresh.md",
+      `---\nid: collide-fresh\nrepo: ${h.work}\n---\n# Fresh collide\n\nDo it.\n`,
+    );
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true, file: "fresh.txt" }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(flow.phaseError).toMatch(/no open PR of ours|refusing to overwrite/i);
+    // The human's branch is untouched on the remote (never force-pushed).
+    const remoteLog = run(["git", "-C", h.remote, "log", "--format=%s", "junco/collide-fresh"]);
+    expect(remoteLog).toContain("human WIP commit");
+    expect(remoteLog).not.toContain("fresh.txt");
+  }, 30000);
+
+  it("idempotent create: gh pr create 'already exists' recovers the URL via pr list → completed", async () => {
     const cfg = makeConfig(h, {
       ghBin: ghCases("gh-exists.sh", {
         '"pr create "*': 'echo "a pull request for branch junco/idem already exists" >&2; exit 1',
-        '"pr view "*': 'echo "https://github.com/owner/repo/pull/456"; exit 0',
+        '"pr list "*':
+          'echo \'[{"number":456,"url":"https://github.com/owner/repo/pull/456"}]\'; exit 0',
       }),
     });
     const { task, path } = makeTicket(
@@ -908,16 +948,19 @@ esac
     );
   }, 30000);
 
-  it("non-network gh pr create failure requeues (branch pushed, resumable) instead of failing", async () => {
+  it("deterministic gh pr create failure fails terminally (branch pushed, open manually), never requeues (issue #73)", async () => {
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-502.sh", {
-        '"pr create "*': 'echo "HTTP 502: Bad Gateway (https://api.github.com)" >&2; exit 1',
+      ghBin: ghCases("gh-nogo.sh", {
+        // A deterministic create failure (not network, not "already exists") —
+        // it would fail identically on every retry.
+        '"pr create "*':
+          'echo "pull request create failed: No commits between main and junco/nogo" >&2; exit 1',
       }),
     });
     const { task, path } = makeTicket(
       h,
-      "gw.md",
-      `---\nid: gw\nrepo: ${h.work}\n---\n# Gateway\n\nDo it.\n`,
+      "nogo.md",
+      `---\nid: nogo\nrepo: ${h.work}\n---\n# No-go\n\nDo it.\n`,
     );
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true }),
@@ -925,37 +968,43 @@ esac
       retryBaseDelayMs: 5,
     });
 
-    expect(flow.requeued).toBe(true);
-    expect(flow.status).toBe("requeued");
-    expect(flow.dst).toContain(join("Junco", "inbox"));
+    // Terminal fail — NOT requeued (a fresh ticket with retry budget available).
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
     const text = readFileSync(flow.dst, "utf8");
-    expect(text).toMatch(/retry_count: 1/);
-    expect(text).not.toMatch(/junco-result/);
-    // The branch really did push before gh failed — the resumable state.
-    expect(run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/gw"])).toContain(
-      "junco/gw",
+    expect(text).toContain("status: failed");
+    expect(text).toContain("gh pr create failed (branch pushed, open manually)");
+    expect(readdirSync(h.done)).toHaveLength(0);
+    // The branch really did push before gh failed — the resumable state is
+    // preserved on the remote for a manual open.
+    expect(run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/nogo"])).toContain(
+      "junco/nogo",
     );
-    expect(readdirSync(h.failed)).toHaveLength(0);
   }, 30000);
 
-  it("non-network create failure with budget exhausted still fails terminally", async () => {
+  it("a network gh pr create failure whose text lands only in the offline branch queues the endgame", async () => {
+    // A network create failure is caught by the offline branch and parked in the
+    // outbox — it neither requeues nor fails terminally (issue #73 leaves this
+    // untouched: transient create failures are still handled durably).
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-502b.sh", {
-        '"pr create "*': 'echo "HTTP 502: Bad Gateway" >&2; exit 1',
+      ghBin: ghCases("gh-net.sh", {
+        '"pr create "*': 'echo "error connecting to api.github.com" >&2; exit 1',
       }),
     });
     const { task, path } = makeTicket(
       h,
-      "gw2.md",
-      `---\nid: gw2\nrepo: ${h.work}\nretry_count: 2\n---\n# Gateway\n\nDo it.\n`,
+      "netpr.md",
+      `---\nid: netpr\nrepo: ${h.work}\n---\n# Net\n\nDo it.\n`,
     );
     const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
       sessionFactoryFor: commitFactory({ commit: true }),
       dirs: { done: h.done, failed: h.failed },
       retryBaseDelayMs: 5,
     });
-    expect(flow.dst.startsWith(h.failed)).toBe(true);
-    expect(readFileSync(flow.dst, "utf8")).toContain("gh pr create failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.prQueued).toBe(true);
+    expect(TERMINAL_DONE_STATUSES.has(flow.status)).toBe(true);
+    expect(listOps(cfg)).toHaveLength(1);
   }, 30000);
 
   // -------------------------------------------------------------------------
@@ -1166,6 +1215,49 @@ exec ${JSON.stringify(realGit)} "$@"
     expect(pr.head).toBe(`${FORK_NWO.split("/")[0]}:junco/gh-up-stream-7`);
     expect(pr.labels).toEqual([]); // fork PRs are label-free (upstream namespace not ours)
     expect(pr.finalize).toBeNull(); // external — no upstream comment/label replay
+  }, 30000);
+
+  it("fork PR recovery: 'already exists' resolves the URL via gh pr list --head owner:branch (issue #75)", async () => {
+    // gh pr create reports the fork PR already exists; recovery must resolve its
+    // URL. `gh pr view <owner>:<branch>` cannot resolve a cross-repo selector, so
+    // the recovery uses `gh pr list --head <owner>:<branch>` instead (#75).
+    const listArgs = join(h.root, "gh-list-args.log");
+    const ghBin = join(h.root, "fake-gh-fork-exists.sh");
+    writeFileSync(
+      ghBin,
+      `#!/bin/sh
+args="$*"
+case "$args" in
+  "repo view --json nameWithOwner -q .nameWithOwner"*)
+    echo "up/stream"; exit 0 ;;
+  "pr create "*)
+    echo "a pull request for branch me:junco/gh-up-stream-7 already exists" >&2; exit 1 ;;
+  "pr list "*)
+    printf '%s\\n' "$*" >> ${JSON.stringify(listArgs)}
+    echo '[{"number":7,"url":"https://github.com/up/stream/pull/7"}]'; exit 0 ;;
+  *)
+    echo "fake-gh: unhandled: $args" >&2; exit 1 ;;
+esac
+`,
+      "utf8",
+    );
+    chmodSync(ghBin, 0o755);
+
+    const cfg = makeConfig(h, { ghBin });
+    const { task, path } = makeTicket(h, "gh-up-stream-7.md", forkTicketContent(h.work));
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.prUrl).toBe("https://github.com/up/stream/pull/7");
+    expect(flow.dst.startsWith(h.done)).toBe(true);
+    // Recovery used the cross-repo head qualifier that gh pr list supports.
+    const listArgv = readFileSync(listArgs, "utf8");
+    expect(listArgv).toContain("--head me:junco/gh-up-stream-7");
+    expect(listArgv).toContain("--state open");
   }, 30000);
 });
 
