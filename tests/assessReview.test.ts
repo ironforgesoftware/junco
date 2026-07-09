@@ -75,4 +75,29 @@ describe("assessReview store", () => {
     );
     expect(readPending(c, "dup").batch?.nwo).toBe("o/r2");
   });
+
+  it("contains a path-traversal id to a single filename inside the dir (issue #32 class)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-"));
+    const c = cfg(dir);
+    const evilId = "../../evil";
+    const { dir: reviewDir } = assessReviewPaths(c);
+
+    const dst = writePending(c, batch(evilId));
+    // The written file must stay inside the assess-review dir: a single inert
+    // filename component, not a traversal out of it.
+    expect(dst.startsWith(reviewDir + "/")).toBe(true);
+    expect(dst.slice(reviewDir.length + 1)).not.toMatch(/[\\/]/);
+    expect(existsSync(dst)).toBe(true);
+
+    // A raw id round-trips: read/remove find the same slugified file.
+    const { batch: read, error } = readPending(c, evilId);
+    expect(error).toBeNull();
+    expect(read?.id).toBe(evilId); // stored field stays the raw, human-facing id
+
+    removePending(c, evilId);
+    const { filed } = assessReviewPaths(c);
+    const filedNames = readdirSync(filed);
+    expect(filedNames).toHaveLength(1);
+    expect(filedNames[0]).not.toMatch(/[\\/]/);
+  });
 });

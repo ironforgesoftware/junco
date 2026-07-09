@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { Config } from "./types.js";
 import type { Finding } from "./findings.js";
 import { log } from "./logging.js";
+import { slugifyId } from "./slug.js";
 
 export interface PendingAssess {
   id: string; // = the assess ticket id (stable across requeue → re-run overwrites)
@@ -34,6 +35,15 @@ export function assessReviewPaths(cfg: Config): { dir: string; filed: string } {
   return { dir, filed: join(dir, "filed") };
 }
 
+/**
+ * Filename for a pending-assess batch id, confined to a single inert path
+ * component (issue #32 class — see slug.ts). Applied at every read/write/
+ * remove call site so the id can never escape <state_dir>/assess-review/.
+ */
+function pendingFileName(id: string): string {
+  return `${slugifyId(id)}.json`;
+}
+
 export function writePending(
   cfg: Config,
   batch: PendingAssess,
@@ -44,7 +54,7 @@ export function writePending(
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
   const { dir } = assessReviewPaths(cfg);
   mkdirFn(dir);
-  const dst = join(dir, `${batch.id}.json`);
+  const dst = join(dir, pendingFileName(batch.id));
   const tmp = `${dst}.tmp`;
   writeFileFn(tmp, JSON.stringify(batch, null, 2) + "\n");
   renameFn(tmp, dst);
@@ -83,7 +93,7 @@ export function readPending(
   const { dir } = assessReviewPaths(cfg);
   let raw: string;
   try {
-    raw = readFileFn(join(dir, `${id}.json`));
+    raw = readFileFn(join(dir, pendingFileName(id)));
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return { batch: null, error: null };
     return { batch: null, error: e instanceof Error ? e.message : String(e) };
@@ -100,7 +110,7 @@ export function removePending(cfg: Config, id: string, deps: AssessReviewDeps = 
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
   const { dir, filed } = assessReviewPaths(cfg);
   mkdirFn(filed);
-  renameFn(join(dir, `${id}.json`), join(filed, `${id}.json`));
+  renameFn(join(dir, pendingFileName(id)), join(filed, pendingFileName(id)));
 }
 
 export function pendingCount(cfg: Config, deps: AssessReviewDeps = {}): number {
