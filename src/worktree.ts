@@ -13,11 +13,13 @@ import {
   lstatSync,
   mkdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   readdirSync,
   symlinkSync,
 } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { git, isNetworkError } from "./git.js";
 import { isAmend } from "./repoContext.js";
 import { log } from "./logging.js";
@@ -38,6 +40,25 @@ import { GitOpError } from "./git.js";
  */
 export function worktreeSlug(taskId: string): string {
   return taskId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
+}
+
+// ---------------------------------------------------------------------------
+// repoDiscriminator
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-repo namespace segment for worktree paths (issue #33): with
+ * max_concurrent > 1 the scheduler serializes same-REPO tickets only, so two
+ * same-slug tickets targeting different repos may run concurrently — keying
+ * the worktree path on the slug alone let the second provision destroy the
+ * first's live worktree. The discriminator derives from the RESOLVED repo
+ * path: a readable basename slug plus a short hash so two repos sharing a
+ * basename still get distinct namespaces.
+ */
+export function repoDiscriminator(repoPath: string): string {
+  const real = resolve(repoPath);
+  const hash = createHash("sha256").update(real).digest("hex").slice(0, 8);
+  return `${worktreeSlug(basename(real))}-${hash}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,11 +141,13 @@ export async function prepareWorktree(
   taskId: string,
   opts: { signals?: { staleBase: boolean }; retryBaseDelayMs?: number } = {},
 ): Promise<string> {
-  // Ensure worktreeRoot exists
-  mkdirSync(cfg.worktreeRoot, { recursive: true });
-
   const slug = worktreeSlug(taskId);
-  const wtPath = join(cfg.worktreeRoot, slug);
+  // Worktree paths are namespaced per repo (issue #33): the stale-dir pruning
+  // below must never be able to hit a same-slug ticket running against a
+  // DIFFERENT repo. Creates worktreeRoot too (recursive).
+  const repoDir = join(cfg.worktreeRoot, repoDiscriminator(ctx.repo));
+  mkdirSync(repoDir, { recursive: true });
+  const wtPath = join(repoDir, slug);
 
   // Handle stale worktree from a prior run
   if (existsSync(wtPath)) {
@@ -222,11 +245,16 @@ export async function prepareWorktree(
     });
   } catch (e) {
     if (e instanceof GitOpError && e.stderr.toLowerCase().includes("already exists")) {
-      // Branch may already exist locally (no remote) — add without -b.
-      await git(cfg, ["worktree", "add", wtPath, ctx.branchName], {
-        cwd: ctx.repo,
-        timeoutMs: 120_000,
-      });
+      // Branch already exists locally — a leftover from a crashed run that
+      // committed but never pushed. Force-reset it to the base (issue #34):
+      // adding it without -B would check out the stale tip and the retry
+      // would silently build on (and re-verify against) the aborted work.
+      // Mirrors the amend path's -B recovery above.
+      await git(
+        cfg,
+        ["worktree", "add", "-B", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
+        { cwd: ctx.repo, timeoutMs: 120_000 },
+      );
     } else {
       throw e;
     }
@@ -259,6 +287,17 @@ export async function cleanupWorktree(
   } catch (e) {
     log.warn(`worktree remove failed (non-fatal): ${e}`);
   }
+  // Issue #33 layout: worktrees live under worktreeRoot/<repo-discriminator>/.
+  // Drop the per-repo parent when this was its last worktree — rmdir only
+  // removes EMPTY dirs, so a live sibling (or .old-* backup) keeps it alive.
+  const parent = dirname(wtPath);
+  if (resolve(parent) !== resolve(cfg.worktreeRoot)) {
+    try {
+      rmdirSync(parent);
+    } catch {
+      /* non-empty or already gone — fine */
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,8 +307,12 @@ export async function cleanupWorktree(
 /**
  * Port of worker.py `prune_stale_worktrees` (lines 588-609).
  *
- * Removes `*.old-<unix-ts>` dirs in worktreeRoot that are older than
+ * Removes `*.old-<unix-ts>` dirs under worktreeRoot that are older than
  * maxAgeSeconds. Uses the timestamp embedded in the name (not dir mtime).
+ * Backups live either directly in worktreeRoot (legacy flat layout) or one
+ * level down inside a per-repo discriminator dir (issue #33 layout) — both
+ * are scanned. Recursion never enters a git checkout (a dir with a `.git`
+ * entry): a legacy live worktree's own files are not junco's to prune.
  *
  * No-op if worktreeRoot does not exist.
  */
@@ -279,32 +322,41 @@ export function pruneStaleWorktrees(worktreeRoot: string, maxAgeSeconds = 3 * 86
   const nowSeconds = Math.floor(Date.now() / 1000);
   const OLD_TS_RE = /\.old-(\d+)$/;
 
-  let entries: string[];
-  try {
-    entries = readdirSync(worktreeRoot);
-  } catch {
-    return;
-  }
-
-  for (const name of entries) {
-    const m = OLD_TS_RE.exec(name);
-    if (!m) continue;
-
-    const childPath = join(worktreeRoot, name);
-
-    // Must be a directory
+  const pruneDir = (dir: string, depth: number): void => {
+    let entries: string[];
     try {
-      const st = lstatSync(childPath);
-      if (!st.isDirectory()) continue;
+      entries = readdirSync(dir);
     } catch {
-      continue;
+      return;
     }
 
-    const ts = parseInt(m[1], 10);
-    const age = nowSeconds - ts;
-    if (age < maxAgeSeconds) continue;
+    for (const name of entries) {
+      const childPath = join(dir, name);
 
-    log.info(`pruning stale worktree backup (age=${age}s): ${childPath}`);
-    rmSync(childPath, { recursive: true, force: true });
-  }
+      // Must be a directory
+      try {
+        const st = lstatSync(childPath);
+        if (!st.isDirectory()) continue;
+      } catch {
+        continue;
+      }
+
+      const m = OLD_TS_RE.exec(name);
+      if (!m) {
+        // Per-repo discriminator dirs hold the backups one level down; a git
+        // checkout (`.git` file or dir) is a live worktree — never enter it.
+        if (depth === 0 && !existsSync(join(childPath, ".git"))) pruneDir(childPath, 1);
+        continue;
+      }
+
+      const ts = parseInt(m[1], 10);
+      const age = nowSeconds - ts;
+      if (age < maxAgeSeconds) continue;
+
+      log.info(`pruning stale worktree backup (age=${age}s): ${childPath}`);
+      rmSync(childPath, { recursive: true, force: true });
+    }
+  };
+
+  pruneDir(worktreeRoot, 0);
 }

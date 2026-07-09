@@ -128,6 +128,69 @@ export async function resolveAmendTarget(
 // validateRepoContext
 // ---------------------------------------------------------------------------
 
+/** Optional signals threaded out of a fresh-mode validation.
+ * `resumeRemoteSha` is set (issue #29) when the ticket's branch already
+ * exists on the push remote but carries NO open PR of ours — the state is a
+ * crashed/interrupted run, not a collision, so the flow may RESUME: push
+ * `--force-with-lease` against this sha and idempotently (re)create the PR. */
+export interface ValidateSignals {
+  resumeRemoteSha: string | null;
+}
+
+export interface ValidateOpts {
+  signals?: ValidateSignals;
+}
+
+/** A minimal open-PR reference for the fresh-mode collision check. */
+interface OpenPrRef {
+  number: number;
+  url: string;
+  headOwner: string | null;
+}
+
+/**
+ * List OPEN PRs whose head branch is `ctx.branchName` on `nwo`. Returns null
+ * when the query could not be run/parsed — the caller then treats the branch
+ * as un-resumable (conservative: never force-push when we cannot confirm no
+ * PR exists).
+ */
+async function listOpenPrsForHead(
+  cfg: Config,
+  ctx: RepoContext,
+  nwo: string,
+): Promise<OpenPrRef[] | null> {
+  const r = await gh(
+    cfg,
+    [
+      "pr",
+      "list",
+      "--repo",
+      nwo,
+      "--head",
+      ctx.branchName,
+      "--state",
+      "open",
+      "--json",
+      "number,url,headRepositoryOwner",
+    ],
+    { cwd: ctx.repo, check: false, retryNetwork: true },
+  );
+  if (r.code !== 0) return null;
+  try {
+    const arr = JSON.parse(r.stdout || "[]") as Record<string, unknown>[];
+    if (!Array.isArray(arr)) return null;
+    return arr.map((p) => ({
+      number: Number(p["number"] ?? 0),
+      url: String(p["url"] ?? ""),
+      headOwner: (p["headRepositoryOwner"] as Record<string, unknown> | undefined)?.["login"]
+        ? String((p["headRepositoryOwner"] as Record<string, unknown>)["login"])
+        : null,
+    }));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Port of worker.py `validate_repo_context` (lines 1815-1874).
  *
@@ -137,8 +200,17 @@ export async function resolveAmendTarget(
  * If ctx.amendsPr is set, the branch-collision check is replaced by a PR
  * lookup and ctx.branchName / ctx.baseBranch are MUTATED to match the PR's
  * head / base refs.
+ *
+ * Fresh mode (issue #29): when the branch already exists on the push remote,
+ * an open PR of ours keeps the terminal refusal (hinting `amends_pr`); with
+ * NO such PR the run is treated as resumable and `opts.signals.resumeRemoteSha`
+ * is set to the remote tip so the flow can force-push-with-lease + recreate.
  */
-export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promise<string> {
+export async function validateRepoContext(
+  cfg: Config,
+  ctx: RepoContext,
+  opts: ValidateOpts = {},
+): Promise<string> {
   // Containment rail: when [git].allowed_repo_roots is non-empty, a ticket may
   // only target repos under one of those roots. The inbox is a code-execution
   // boundary — this caps where a hostile or fat-fingered ticket can point it.
@@ -277,25 +349,52 @@ export async function validateRepoContext(cfg: Config, ctx: RepoContext): Promis
     );
   }
 
-  // Refuse to stomp an existing branch on the push remote.
+  // The branch's state on the push remote decides collision vs. resume.
   const bls = await git(cfg, ["ls-remote", "--heads", ctx.pushRemote, ctx.branchName], {
     cwd: ctx.repo,
     check: false,
     retryNetwork: true,
   });
   if (bls.code === 0 && bls.stdout.trim()) {
-    // Fork mode: an existing branch is usually the open PR from a prior
-    // dispatch — point the operator at the amend iteration path rather than
-    // just "pick a different branch". Origin mode keeps the terse message.
+    const remoteSha = bls.stdout.trim().split(/\s+/)[0];
+
+    // Does an OPEN PR of OURS already track this branch? For a fork push the
+    // head owner must be our fork's owner (a stranger's same-named branch PR
+    // is not ours); for origin it is the repo owner. A null/failed query is
+    // treated as "cannot confirm" → refuse (never force-push blindly).
+    const expectedOwner = (ctx.pushRemote !== "origin" && ctx.forkNwo ? ctx.forkNwo : nwo)
+      .split("/")[0]
+      .toLowerCase();
+    const prs = await listOpenPrsForHead(cfg, ctx, nwo);
+    const ours =
+      prs === null
+        ? undefined
+        : prs.find((p) => (p.headOwner ?? expectedOwner).toLowerCase() === expectedOwner);
+
+    // No open PR of ours + the caller opted into resume → the pushed branch is
+    // a crashed/interrupted run, not a collision. Signal the remote tip so the
+    // flow force-pushes with a lease on it and idempotently (re)creates the PR.
+    if (prs !== null && ours === undefined && opts.signals) {
+      opts.signals.resumeRemoteSha = remoteSha;
+      log.warn(
+        `branch ${JSON.stringify(ctx.branchName)} already on ${ctx.pushRemote} but no open PR of ours — resuming (will push --force-with-lease)`,
+      );
+      return nwo;
+    }
+
+    // Otherwise refuse. Fork mode already pointed the operator at the amend
+    // iteration path; both messages now hint the actual PR number when known.
+    const prHint = ours ? String(ours.number) : "<PR#>";
     if (ctx.pushRemote !== "origin") {
       throw new GitOpError(
         `branch ${JSON.stringify(ctx.branchName)} already exists on fork; ` +
           `to push feedback commits to the open PR, dispatch a ticket with ` +
-          `amends_pr: <PR#> and push_remote: ${ctx.pushRemote} — or pick a different branch_name`,
+          `amends_pr: ${prHint} and push_remote: ${ctx.pushRemote} — or pick a different branch_name`,
       );
     }
     throw new GitOpError(
-      `branch ${JSON.stringify(ctx.branchName)} already exists on ${ctx.pushRemote}; pick a different branch_name or delete the remote branch first`,
+      `branch ${JSON.stringify(ctx.branchName)} already exists on ${ctx.pushRemote} with an open PR; ` +
+        `iterate with amends_pr: ${prHint} (or pick a different branch_name or delete the remote branch)`,
     );
   }
 

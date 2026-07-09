@@ -189,4 +189,40 @@ describe("finalizePr offline note", () => {
     );
     expect(readFileSync(dst, "utf8")).not.toContain("PR queued for offline push");
   });
+
+  // Issue #50: an offline AMEND parks only the push (the PR URL is already
+  // known), so the result block must say the push is queued rather than
+  // reading as unqualified success — mirroring the offline-fresh prQueued note,
+  // without a new terminal status.
+  it("renders the queued-push note for an offline amend (pushQueued), staying completed", () => {
+    const { ticket, done, failed } = sandbox();
+    const { dst, status } = finalizePr(
+      ticket,
+      ok,
+      outcome({
+        pushQueued: true,
+        pushed: false,
+        prUrl: "https://github.com/owner/repo/pull/1",
+        amendedPrNumber: 1,
+      }),
+      { dirs: { done, failed } },
+    );
+    expect(status).toBe("completed");
+    expect(dst.startsWith(done)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("Amend push queued for offline delivery");
+    // Not the fresh-path wording (a PR already exists here).
+    expect(text).not.toContain("PR queued for offline push");
+  });
+
+  it("omits the queued-push note when the amend push landed", () => {
+    const { ticket, done, failed } = sandbox();
+    const { dst } = finalizePr(
+      ticket,
+      ok,
+      outcome({ pushed: true, prUrl: "https://github.com/owner/repo/pull/1", amendedPrNumber: 1 }),
+      { dirs: { done, failed } },
+    );
+    expect(readFileSync(dst, "utf8")).not.toContain("Amend push queued");
+  });
 });

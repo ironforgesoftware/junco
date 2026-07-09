@@ -109,6 +109,12 @@ export async function commitLeftovers(
  * fork-PR mode threads through the ticket's `push_remote`).
  * Uses network retry and a 3-minute timeout. `retryBaseDelayMs` overrides the
  * retry backoff base (default 1000ms) — tests scripting offline pushes pass ~5ms.
+ *
+ * `forceWithLeaseSha` (issue #29 resume): when set, the push uses
+ * `--force-with-lease=<branch>:<sha>` so a fresh retry can overwrite the stale
+ * tip a crashed run left on the remote — but ONLY while the remote ref still
+ * points where validation saw it (the lease rejects a push if someone else
+ * has since moved the branch).
  */
 export async function pushBranch(
   cfg: { gitBin: string },
@@ -116,8 +122,12 @@ export async function pushBranch(
   branch: string,
   retryBaseDelayMs?: number,
   remote = "origin",
+  forceWithLeaseSha?: string,
 ): Promise<void> {
-  await git(cfg, ["push", "--set-upstream", remote, branch], {
+  const args = ["push"];
+  if (forceWithLeaseSha) args.push(`--force-with-lease=${branch}:${forceWithLeaseSha}`);
+  args.push("--set-upstream", remote, branch);
+  await git(cfg, args, {
     cwd: wtPath,
     timeoutMs: 180_000,
     retryNetwork: true,
