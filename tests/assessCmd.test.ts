@@ -4,14 +4,17 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildAssessTicket, runAssessCommand } from "../src/assessCmd.js";
 import { parseTicket } from "../src/ticket.js";
+import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
 
-function cfg(repos: GithubRepoMapping[] = []): Config {
+const NONEXISTENT_STATE_DIR = "/nonexistent-junco-assesscmd-state";
+
+function cfg(repos: GithubRepoMapping[] = [], stateDir: string = NONEXISTENT_STATE_DIR): Config {
   return {
     vaultRoot: "/vault",
     juncoSubdir: "Junco",
-    stateDir: "/nonexistent-junco-assesscmd-state",
+    stateDir,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -137,6 +140,29 @@ describe("runAssessCommand", () => {
 
     expect(code).toBe(0);
     expect(submittedContent).toContain(`repo: ${JSON.stringify(dir)}`);
+  });
+
+  it("resolves an external watchlist entry to its clone path", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acmd-"));
+    const c = cfg([], dir); // stateDir = dir
+    writeWatchlist(watchlistPath(c), [
+      { nwo: "up/stream", path: join(dir, "clone"), external: true },
+    ]);
+    let submitted = "";
+    const submitFn = ((_c: Config, content: string) => {
+      submitted = content;
+      return "/dst";
+    }) as typeof submitTicket;
+
+    const code = await runAssessCommand(
+      c,
+      "up/stream",
+      { autoPlan: false },
+      { printFn: () => {}, submitFn },
+    );
+
+    expect(code).toBe(0);
+    expect(submitted).toContain(JSON.stringify(join(dir, "clone")));
   });
 
   it("unknown nwo -> exit 2, message mentions the repo isn't watched", async () => {

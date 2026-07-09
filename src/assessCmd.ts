@@ -10,7 +10,7 @@ import { basename, resolve } from "node:path";
 import type { Config } from "./types.js";
 import { expandHome } from "./config.js";
 import { submitTicket } from "./dispatch.js";
-import { resolveWatchedRepos } from "./watchlist.js";
+import { readWatchlist, watchlistPath } from "./watchlist.js";
 import { buildAssessPrompt } from "./assessPrompt.js";
 
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
@@ -90,16 +90,20 @@ export async function runAssessCommand(
 
   let repoPath: string;
   if (NWO_RE.test(target) && !isDirectory(target)) {
-    const match = resolveWatchedRepos(cfg).find(
-      (r) => r.nwo.toLowerCase() === target.toLowerCase(),
-    );
+    // Include EXTERNAL entries: assess now files (via review) on repos the operator
+    // does not own, so external clones are valid targets (unlike the bridge poll,
+    // which still excludes them via resolveWatchedRepos).
+    const fromConfig = cfg.github.repos.find((r) => r.nwo.toLowerCase() === target.toLowerCase());
+    const { entries } = readWatchlist(watchlistPath(cfg));
+    const fromWatch = entries.find((e) => e.nwo.toLowerCase() === target.toLowerCase());
+    const match = fromConfig ?? fromWatch;
     if (!match) {
       print(
         `junco assess: '${target}' is not watched — add it under [[github.repos]] in config.toml, or watch it from the dashboard, then retry\n`,
       );
       return 2;
     }
-    repoPath = match.path;
+    repoPath = expandHome(match.path);
   } else {
     const candidate = resolve(expandHome(target));
     if (!isDirectory(candidate)) {
