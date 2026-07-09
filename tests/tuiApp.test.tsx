@@ -676,7 +676,7 @@ describe("App", () => {
       // Click-again = enter: row 0 is selected from mount, so the click opens
       // the fullscreen PR overlay (its footer is the unique marker).
       r.stdin.write(click(30, 4));
-      await until(() => (r.lastFrame() ?? "").includes("esc back · o open"));
+      await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
       r.stdin.write(ESC); // back to the prs view, side card visible again
       await until(() => (r.lastFrame() ?? "").includes("pull requests"));
       // 130 cols wide → preview band starts at x=79 (1-based); the side card's
@@ -719,7 +719,7 @@ describe("App", () => {
       r.stdin.write(click(85, 5)); // 1-based y=5 → row 1: focus pane 3 + select
       await until(() => pane3BarOn(4) && !pane3BarOn(3));
       r.stdin.write(click(85, 5)); // click-again = enter → fullscreen PR overlay
-      await until(() => (r.lastFrame() ?? "").includes("esc back · o open"));
+      await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
       r.stdin.write(ESC); // back to main; pane-3 selection intact
       await until(() => (r.lastFrame() ?? "").includes("3 PRs"));
       await until(() => pane3BarOn(4));
@@ -741,6 +741,39 @@ describe("App", () => {
       r.stdin.write("up");
       await until(() => (r.lastFrame() ?? "").includes("/up"));
       expect(r.lastFrame() ?? "").not.toContain("/[<"); // no garbage prefix in the filter
+    });
+
+    it("clicking the ↗ metadata line in the issue detail opens the browser (snapshot number)", async () => {
+      const { client } = makeClient({ "acme/api": [rawIssue] });
+      const issueOpens: number[] = [];
+      client.openInBrowser = async (_nwo, num) => {
+        issueOpens.push(num);
+        return okv(undefined);
+      };
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      r.stdin.write("2");
+      await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+      r.stdin.write("\r"); // open the issue detail
+      await until(() => (r.lastFrame() ?? "").includes("the body"));
+      r.stdin.write(click(30, 5)); // ↗ metadata row: 1-based y=5, middle band
+      await until(() => issueOpens.length === 1);
+      expect(issueOpens).toEqual([7]);
+    });
+
+    it("clicking the ↗ metadata line in the PR overlay opens the browser", async () => {
+      const { client, prCalls } = makeClient(
+        { "acme/api": [] },
+        { prsByRepo: { "acme/api": [makePr()] } },
+      );
+      const r = renderApp(client, wl());
+      r.stdin.write("p");
+      await until(() => (r.lastFrame() ?? "").includes("Some PR"));
+      r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
+      await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
+      r.stdin.write(click(30, 5)); // ↗ metadata row of the overlay card
+      await until(() => prCalls.length === 1);
+      expect(prCalls[0]).toEqual(["acme/api", 100]);
     });
   });
 });
@@ -1524,7 +1557,7 @@ describe("workspace filter + pane navigation (medium)", () => {
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write("3");
     await tick();
-    expect(r.lastFrame()).not.toContain("o open"); // pane-3's hint never leaked in
+    expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint never leaked in
     expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
   });
 
@@ -1537,7 +1570,7 @@ describe("workspace filter + pane navigation (medium)", () => {
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write(ESC + "[C"); // →
     await tick();
-    expect(r.lastFrame()).not.toContain("o open"); // pane-3's hint never leaked in
+    expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint never leaked in
     expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
   });
 });
@@ -1708,7 +1741,7 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("#10")); // #10 sorts first (newer)
     r.stdin.write("3"); // focus pane 3
-    await until(() => (r.lastFrame() ?? "").includes("o open"));
+    await until(() => (r.lastFrame() ?? "").includes("← issues"));
     r.stdin.write("j"); // move down to #11
     await tick();
     r.stdin.write("o");
@@ -1727,7 +1760,7 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("#10"));
     r.stdin.write("3");
-    await until(() => (r.lastFrame() ?? "").includes("o open"));
+    await until(() => (r.lastFrame() ?? "").includes("← issues"));
     r.stdin.write("\r"); // enter -> prDetail
     await until(() => (r.lastFrame() ?? "").includes("checks:"));
     expect(r.lastFrame()).toContain("branch:");
@@ -1736,7 +1769,7 @@ describe("workspace wide mode", () => {
     expect(r.lastFrame()).not.toContain("3 pr");
     expect(r.lastFrame()).toContain("pr · #10");
     r.stdin.write(ESC);
-    await until(() => (r.lastFrame() ?? "").includes("o open")); // back to pane-3 footer
+    await until(() => (r.lastFrame() ?? "").includes("← issues")); // back to pane-3 footer
     expect(r.lastFrame()).toContain("#10"); // selection/list intact
   });
 
@@ -1844,12 +1877,12 @@ describe("workspace wide mode", () => {
     const r = render(appEl({ columns: 130, rows: 30 }));
     await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write("3"); // focus pane 3 directly
-    await until(() => (r.lastFrame() ?? "").includes("o open")); // pane-3 footer hints
+    await until(() => (r.lastFrame() ?? "").includes("← issues")); // pane-3 footer hints
     r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
     // Pane 2's footer hint set is back — d dispatch is the reliable marker
     // regardless of the enter-key wording.
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
-    expect(r.lastFrame()).not.toContain("o open"); // pane-3's hint is gone
+    expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint is gone
   });
 
   // → is the advertised primary pane-movement key (l is now the quiet alias) —
@@ -1862,7 +1895,7 @@ describe("workspace wide mode", () => {
     r.stdin.write("2"); // focus issues pane
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
     r.stdin.write(ESC + "[C"); // → focuses pane 3
-    await until(() => (r.lastFrame() ?? "").includes("o open"));
+    await until(() => (r.lastFrame() ?? "").includes("← issues"));
     expect(r.lastFrame()).toContain("← issues"); // pane 3 footer still carries ←
     r.stdin.write(ESC + "[D"); // ← back to pane 2
     await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
