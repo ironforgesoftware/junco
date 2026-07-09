@@ -24,6 +24,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   worktreeSlug,
+  repoDiscriminator,
   currentHeadSha,
   linkNodeModules,
   prepareWorktree,
@@ -223,6 +224,28 @@ describe("worktreeSlug", () => {
 });
 
 // ---------------------------------------------------------------------------
+// repoDiscriminator (issue #33)
+// ---------------------------------------------------------------------------
+
+describe("repoDiscriminator", () => {
+  it("is a stable, filesystem-safe name derived from the resolved repo path", () => {
+    const d = repoDiscriminator("/srv/repos/my-app");
+    expect(d).toBe(repoDiscriminator("/srv/repos/my-app")); // deterministic
+    expect(d).toMatch(/^my-app-[0-9a-f]{8}$/); // readable basename + short hash
+  });
+
+  it("differs for two repos that share a basename", () => {
+    expect(repoDiscriminator("/srv/a/api")).not.toBe(repoDiscriminator("/srv/b/api"));
+  });
+
+  it("resolves relative segments so equivalent paths collapse to one namespace", () => {
+    expect(repoDiscriminator("/srv/repos/../repos/my-app")).toBe(
+      repoDiscriminator("/srv/repos/my-app"),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // currentHeadSha
 // ---------------------------------------------------------------------------
 
@@ -333,7 +356,7 @@ describe("prepareWorktree — fresh mode", () => {
     expect(existsSync(wtsRoot)).toBe(true);
   }, 30000);
 
-  it("slug from taskId becomes the worktree dir name", async () => {
+  it("slug from taskId becomes the worktree dir name, namespaced per repo", async () => {
     const { work, wtsRoot } = setupGitHarness(tmpRoot);
     const cfg = makeConfig(work, wtsRoot);
     const ctx = makeContext(work, { branchName: "junco/slug-test" });
@@ -344,7 +367,31 @@ describe("prepareWorktree — fresh mode", () => {
     //   strip leading/trailing dashes → "my-ticket-id"
     const slug = worktreeSlug("my ticket id!");
     expect(slug).toBe("my-ticket-id");
-    expect(wtPath).toBe(join(wtsRoot, slug));
+    // Issue #33: the path is namespaced by a per-repo discriminator so
+    // same-slug tickets to different repos never collide.
+    expect(wtPath).toBe(join(wtsRoot, repoDiscriminator(work), slug));
+  }, 30000);
+
+  it("same task id in two different repos: distinct paths, live sibling untouched (issue #33)", async () => {
+    // Two independent repos sharing ONE worktree root — the scheduler lets
+    // these run concurrently (busyRepos keys on the repo, not the slug).
+    const a = setupGitHarness(join(tmpRoot, "a"));
+    const b = setupGitHarness(join(tmpRoot, "b"));
+    const wtsRoot = join(tmpRoot, "shared-wts");
+    const cfgA = makeConfig(a.work, wtsRoot);
+    const cfgB = makeConfig(b.work, wtsRoot);
+
+    // Ticket A is "live": provisioned with uncommitted work in progress.
+    const wtA = await prepareWorktree(cfgA, makeContext(a.work), "fix-lint");
+    writeFileSync(join(wtA, "in-progress.txt"), "uncommitted live work\n");
+
+    // Ticket B (same generic id, different repo) provisions concurrently.
+    const wtB = await prepareWorktree(cfgB, makeContext(b.work), "fix-lint");
+
+    expect(wtB).not.toBe(wtA);
+    // A's live worktree was NOT pruned/renamed aside by B's provisioning.
+    expect(existsSync(join(wtA, "in-progress.txt"))).toBe(true);
+    expect(existsSync(wtB)).toBe(true);
   }, 30000);
 
   it("handles stale worktree by renaming aside", async () => {
@@ -405,6 +452,32 @@ describe("cleanupWorktree", () => {
 
     await expect(cleanupWorktree(cfg, ctx, join(wtsRoot, "does-not-exist"))).resolves.not.toThrow();
   }, 30000);
+
+  it("removes the now-empty repo-discriminator parent dir (issue #33 layout)", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    const ctx = makeContext(work);
+
+    const wtPath = await prepareWorktree(cfg, ctx, "empty-parent-task");
+    await cleanupWorktree(cfg, ctx, wtPath);
+
+    // Both the worktree and its per-repo parent dir are gone; the root stays.
+    expect(existsSync(wtPath)).toBe(false);
+    expect(existsSync(join(wtsRoot, repoDiscriminator(work)))).toBe(false);
+    expect(existsSync(wtsRoot)).toBe(true);
+  }, 30000);
+
+  it("keeps the repo-discriminator parent when a sibling worktree is still live", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+
+    const wt1 = await prepareWorktree(cfg, makeContext(work, { branchName: "junco/s1" }), "sib-1");
+    const wt2 = await prepareWorktree(cfg, makeContext(work, { branchName: "junco/s2" }), "sib-2");
+    await cleanupWorktree(cfg, makeContext(work), wt1);
+
+    expect(existsSync(wt1)).toBe(false);
+    expect(existsSync(wt2)).toBe(true); // sibling untouched, parent kept
+  }, 30000);
 });
 
 // ---------------------------------------------------------------------------
@@ -459,6 +532,38 @@ describe("pruneStaleWorktrees", () => {
     expect(existsSync(normalDir)).toBe(true);
     expect(existsSync(plainDir)).toBe(true);
   });
+
+  it("prunes stale backups nested one level down (issue #33 per-repo layout)", () => {
+    const wtsRoot = join(tmpRoot, "wts-prune");
+    const repoDir = join(wtsRoot, "my-app-0a1b2c3d");
+    mkdirSync(repoDir, { recursive: true });
+
+    const oldNested = join(repoDir, "ticket.old-100");
+    mkdirSync(oldNested, { recursive: true });
+    const nowTs = Math.floor(Date.now() / 1000);
+    const recentNested = join(repoDir, `ticket.old-${nowTs}`);
+    mkdirSync(recentNested, { recursive: true });
+
+    pruneStaleWorktrees(wtsRoot, 3 * 86400);
+
+    expect(existsSync(oldNested)).toBe(false);
+    expect(existsSync(recentNested)).toBe(true);
+  });
+
+  it("never descends into a git checkout (a .old-<ts> dir INSIDE a legacy live worktree survives)", () => {
+    const wtsRoot = join(tmpRoot, "wts-prune");
+    // A legacy flat live worktree: identified by its .git entry.
+    const legacyLive = join(wtsRoot, "legacy-ticket");
+    mkdirSync(legacyLive, { recursive: true });
+    writeFileSync(join(legacyLive, ".git"), "gitdir: /somewhere\n");
+    const repoOwnedDir = join(legacyLive, "fixtures.old-100");
+    mkdirSync(repoOwnedDir, { recursive: true });
+
+    pruneStaleWorktrees(wtsRoot, 3 * 86400);
+
+    // The repo's own files are not junco's to prune.
+    expect(existsSync(repoOwnedDir)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -472,18 +577,20 @@ describe("prepareWorktree (stale-dir cleanup failure)", () => {
     const ctx = makeContext(work);
 
     // A stale plain dir occupies the worktree path (git worktree remove will
-    // fail — it is not a registered worktree). A read-only PARENT then makes
-    // the move-aside rename fail too (rename needs write perm on the parent).
-    const wtPath = join(wtsRoot, "stale-guard-ticket");
+    // fail — it is not a registered worktree). A read-only PARENT (the per-repo
+    // discriminator dir) then makes the move-aside rename fail too (rename
+    // needs write perm on the parent).
+    const repoDir = join(wtsRoot, repoDiscriminator(work));
+    const wtPath = join(repoDir, "stale-guard-ticket");
     mkdirSync(wtPath, { recursive: true });
-    chmodSync(wtsRoot, 0o555);
+    chmodSync(repoDir, 0o555);
     try {
       await expect(prepareWorktree(cfg, ctx, "stale-guard-ticket")).rejects.toThrow(GitOpError);
       await expect(prepareWorktree(cfg, ctx, "stale-guard-ticket")).rejects.toThrow(
         /stale worktree cleanup failed/,
       );
     } finally {
-      chmodSync(wtsRoot, 0o755);
+      chmodSync(repoDir, 0o755);
     }
   }, 30000);
 });
