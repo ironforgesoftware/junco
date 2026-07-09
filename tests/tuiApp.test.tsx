@@ -12,6 +12,7 @@ import type { DashIssue } from "../src/tui/state.js";
 import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import { until } from "./helpers/until.js";
 
 // Every App mount registers a `process.on("exit")` listener via useMouse; this
 // file's ~57 renders never unmount on their own, which trips Node's
@@ -281,14 +282,6 @@ function renderApp(
 }
 const tick = () => new Promise((r) => setTimeout(r, 30));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function until(cond: () => boolean, tries = 50): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    if (cond()) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  expect(cond()).toBe(true); // final assert with a real failure message
-}
 
 describe("App", () => {
   const wl = () => join(mkdtempSync(join(tmpdir(), "junco-app-")), "wl.json");
