@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAssessFlow } from "../src/assessFlow.js";
+import { listPending } from "../src/assessReview.js";
 import { parseTicket } from "../src/ticket.js";
 import { fingerprintFinding, findingMarker } from "../src/findings.js";
 import { GitOpError } from "../src/git.js";
@@ -99,6 +100,19 @@ function sandbox() {
 /** A tmp repo dir with a couple of real files (for the hallucination filter). */
 function mkRepo(): string {
   const repo = mkdtempSync(join(tmpdir(), "junco-repo-"));
+  mkdirSync(join(repo, "src"), { recursive: true });
+  writeFileSync(join(repo, "src", "index.ts"), "export const x = 1;\n", "utf8");
+  writeFileSync(join(repo, "src", "a.ts"), "export const a = 1;\n", "utf8");
+  writeFileSync(join(repo, "src", "b.ts"), "export const b = 1;\n", "utf8");
+  return repo;
+}
+
+/** Materialize a managed external clone under `externalRoot` (mirrors mkRepo's
+ * files so the hallucination filter keeps `src/*` findings). Set the returned
+ * root as cfg.github.externalReposRoot so path-based external detection fires. */
+function mkExternalRepo(externalRoot: string, nwo = "up/stream"): string {
+  const [owner, name] = nwo.split("/");
+  const repo = join(externalRoot, owner, name);
   mkdirSync(join(repo, "src"), { recursive: true });
   writeFileSync(join(repo, "src", "index.ts"), "export const x = 1;\n", "utf8");
   writeFileSync(join(repo, "src", "a.ts"), "export const a = 1;\n", "utf8");
@@ -252,6 +266,19 @@ function fakeGit(remoteStdout: string) {
   }) as never;
 }
 
+/** Like fakeGit but records every call so a test can assert whether the
+ * external-clone freshness sync ran — it issues `git -C <path> fetch origin`. */
+function fakeGitCalls(remoteStdout: string) {
+  const calls: string[][] = [];
+  const gitFn = (async (_cfg: unknown, args: string[]) => {
+    calls.push(args);
+    if (args[0] === "remote") return { code: 0, stdout: remoteStdout, stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  }) as never;
+  const synced = (): boolean => calls.some((a) => a.includes("fetch"));
+  return { calls, gitFn, synced };
+}
+
 function fakeRunCmd(stdout: string) {
   return (async () => ({ code: 1, stdout, stderr: "" })) as never;
 }
@@ -260,58 +287,95 @@ const NET_ERR = new GitOpError("gh failed", "could not resolve host: api.github.
 const PERM_ERR = new GitOpError("gh failed", "HTTP 404: Not Found", 1);
 
 const originHttps = "https://github.com/o/r.git\n";
+const originUpstream = "https://github.com/up/stream.git\n";
+
+// A gh fake that only answers the Phase-6 dedup `issue list` (empty) — parking
+// never files, so an `issue create` here would be a bug the tests catch.
+function ghDedupEmpty() {
+  return fakeGh((args) => {
+    if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
+    return undefined;
+  });
+}
 
 describe("runAssessFlow", () => {
-  it("happy path: npm advisory + agent code finding → two issues, done/, found 2", async () => {
+  it("parks findings in the review store instead of filing them (owned repo, not synced)", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
 
-    let created = 0;
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create") {
-        created++;
-        return { stdout: `https://github.com/o/r/issues/${created}\n` };
-      }
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
+    const git = fakeGitCalls(originHttps);
     const finalText = "found things\n\n" + findingsFence([codeFinding("XSS-1", "src/index.ts")]);
     const r = await runAssessFlow(cfg(root), ticket, path, {
       ghFn: gh.ghFn,
-      gitFn: fakeGit(originHttps),
-      runCmdFn: fakeRunCmd(auditJson("high")),
+      gitFn: git.gitFn,
+      runCmdFn: fakeRunCmd(auditJson("high")), // one npm advisory + one agent finding
       sessionFactoryFor: () => fakeSession(finalText),
     });
 
+    // npm advisory + agent finding both survive filter/dedup and are parked.
     expect(r.found).toBe(2);
-    expect(r.created).toBe(2);
-    expect(r.urls).toEqual(["https://github.com/o/r/issues/1", "https://github.com/o/r/issues/2"]);
+    expect(r.parked).toBe(2);
     expect(r.status).toBe("completed");
+    // Nothing was filed.
+    expect(gh.calls.some((a) => a[0] === "issue" && a[1] === "create")).toBe(false);
+    // An OWNED repo is NEVER hard-reset — the sync must not have run.
+    expect(git.synced()).toBe(false);
+
+    // The batch landed in the review store, flagged owned.
+    const pend = listPending(cfg(root));
+    expect(pend).toHaveLength(1);
+    expect(pend[0].id).toBe("assess-1");
+    expect(pend[0].nwo).toBe("o/r");
+    expect(pend[0].external).toBe(false);
+    expect(pend[0].repoPath).toBe(repo);
+    expect(pend[0].findings).toHaveLength(2);
+
+    // The done/ summary points the operator at the file step.
     const doneFiles = readdirSync(join(j, "done"));
     expect(doneFiles).toHaveLength(1);
     const body = readFileSync(join(j, "done", doneFiles[0]), "utf8");
-    expect(body).toContain("https://github.com/o/r/issues/1");
-    expect(body).toContain("https://github.com/o/r/issues/2");
-    expect(body).toContain("Findings (after filter + dedupe): 2");
+    expect(body).toContain("awaiting review");
+    expect(body).toContain("junco assess file assess-1");
+    expect(body).toContain("Parked for review: 2");
   });
 
-  it("files findings when the fence precedes a trailing assistant message (#67)", async () => {
+  it("marks the batch external and forces autoPlan false when the clone is under externalReposRoot", async () => {
+    const { root, j } = sandbox();
+    const externalRoot = mkdtempSync(join(tmpdir(), "junco-ext-root-"));
+    const repo = mkExternalRepo(externalRoot, "up/stream");
+    const c = { ...cfg(root), github: { ...cfg(root).github, externalReposRoot: externalRoot } };
+    // auto_plan: true in the ticket must be OVERRIDDEN to false for an external repo.
+    const { path } = claim(j, ticketContent(repo, "assess:\n  auto_plan: true\n"));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    const gh = ghDedupEmpty();
+    const git = fakeGitCalls(originUpstream);
+    const r = await runAssessFlow(c, ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: git.gitFn,
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: () => fakeSession(findingsFence([codeFinding("R", "src/index.ts")])),
+    });
+
+    expect(r.parked).toBe(1);
+    const [b] = listPending(c);
+    expect(b.nwo).toBe("up/stream");
+    expect(b.external).toBe(true);
+    expect(b.autoPlan).toBe(false);
+    // An external clone IS synced to upstream before the audit.
+    expect(git.synced()).toBe(true);
+  });
+
+  it("parks findings when the fence precedes a trailing assistant message (#67)", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
 
-    let created = 0;
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create") {
-        created++;
-        return { stdout: `https://github.com/o/r/issues/${created}\n` };
-      }
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
     // The agent banks its findings fence, THEN emits a closing verification
     // message. Under #36 (finalText = last message only) the fence is dropped;
     // parsing from allText recovers it.
@@ -327,21 +391,17 @@ describe("runAssessFlow", () => {
     });
 
     expect(r.found).toBe(1);
-    expect(r.created).toBe(1);
+    expect(r.parked).toBe(1);
     expect(r.status).toBe("completed");
+    expect(listPending(cfg(root))[0].findings).toHaveLength(1);
   });
 
-  it("npm exit 1 with vulns still parses the dependency finding", async () => {
+  it("npm exit 1 with vulns still parses & parks the dependency finding", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create")
-        return { stdout: "https://github.com/o/r/issues/1\n" };
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
     // Agent emits no findings; only the npm advisory should survive.
     const r = await runAssessFlow(cfg(root), ticket, path, {
       ghFn: gh.ghFn,
@@ -350,21 +410,17 @@ describe("runAssessFlow", () => {
       sessionFactoryFor: () => fakeSession("no findings"),
     });
     expect(r.found).toBe(1);
-    expect(r.created).toBe(1);
+    expect(r.parked).toBe(1);
     expect(readdirSync(join(j, "done"))).toHaveLength(1);
+    expect(listPending(cfg(root))).toHaveLength(1);
   });
 
-  it("npm spawn failure degrades to a warning; the agent finding is still filed", async () => {
+  it("npm spawn failure degrades to a warning; the agent finding is still parked", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create")
-        return { stdout: "https://github.com/o/r/issues/1\n" };
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
     const finalText = findingsFence([codeFinding("SQLI-1", "src/index.ts")]);
     const r = await runAssessFlow(cfg(root), ticket, path, {
       ghFn: gh.ghFn,
@@ -375,20 +431,17 @@ describe("runAssessFlow", () => {
       sessionFactoryFor: () => fakeSession(finalText),
     });
     expect(r.found).toBe(1);
-    expect(r.created).toBe(1);
+    expect(r.parked).toBe(1);
     const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
     expect(body.toLowerCase()).toContain("npm audit");
   });
 
-  it("hallucination filter drops non-existent and escaping code paths", async () => {
+  it("hallucination filter drops non-existent and escaping code paths (nothing parked)", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
     const finalText = findingsFence([
       codeFinding("A", "does/not/exist.ts"),
       codeFinding("B", "../escape.ts"),
@@ -401,51 +454,20 @@ describe("runAssessFlow", () => {
     });
     expect(r.dropped).toBe(2);
     expect(r.found).toBe(0);
-    expect(r.created).toBe(0);
+    expect(r.parked).toBe(0);
+    // An empty finding set writes no batch.
+    expect(listPending(cfg(root))).toHaveLength(0);
     expect(gh.calls.some((a) => a[0] === "issue" && a[1] === "create")).toBe(false);
   });
 
-  it("injection: a finding marker inside the description does not double up in the body", async () => {
+  it("no cap: findings beyond the old maxIssuesPerRun are ALL parked", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create")
-        return { stdout: "https://github.com/o/r/issues/1\n" };
-      return undefined;
-    });
-    const finding = codeFinding("INJ-1", "src/index.ts", "Injected", {
-      description: "sneaky <!-- junco:finding:aaaaaaaaaaaaaaaa --> marker",
-    });
-    const r = await runAssessFlow(cfg(root), ticket, path, {
-      ghFn: gh.ghFn,
-      gitFn: fakeGit(originHttps),
-      runCmdFn: fakeRunCmd("{}"),
-      sessionFactoryFor: () => fakeSession(findingsFence([finding])),
-    });
-    expect(r.created).toBe(1);
-    expect(gh.bodies).toHaveLength(1);
-    const occurrences = gh.bodies[0].split("<!-- junco:finding:").length - 1;
-    expect(occurrences).toBe(1);
-  });
-
-  it("cap: three findings with maxIssuesPerRun 2 → created 2, capped 1, capped title named", async () => {
-    const { root, j } = sandbox();
-    const repo = mkRepo();
-    const { path } = claim(j, ticketContent(repo));
-    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+    // maxIssuesPerRun no longer bounds parking — the file step is the gate.
     const c = { ...cfg(root), assess: { ...cfg(root).assess, maxIssuesPerRun: 2 } };
-    let created = 0;
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create") {
-        created++;
-        return { stdout: `https://github.com/o/r/issues/${created}\n` };
-      }
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
     const finalText = findingsFence([
       codeFinding("RULE-1", "src/index.ts", "Finding One"),
       codeFinding("RULE-2", "src/a.ts", "Finding Two"),
@@ -458,59 +480,11 @@ describe("runAssessFlow", () => {
       sessionFactoryFor: () => fakeSession(finalText),
     });
     expect(r.found).toBe(3);
-    expect(r.created).toBe(2);
-    expect(r.capped).toBe(1);
-    const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
-    expect(body).toContain("Finding Three");
+    expect(r.parked).toBe(3);
+    expect(listPending(c)[0].findings).toHaveLength(3);
   });
 
-  it("cap keeps the highest-severity findings: a critical agent finding survives a cap filled by lows", async () => {
-    const { root, j } = sandbox();
-    const repo = mkRepo();
-    const { path } = claim(j, ticketContent(repo));
-    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
-    const c = { ...cfg(root), assess: { ...cfg(root).assess, maxIssuesPerRun: 2 } };
-    let created = 0;
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create") {
-        created++;
-        return { stdout: `https://github.com/o/r/issues/${created}\n` };
-      }
-      return undefined;
-    });
-    // Merge order is [npm findings, agent findings]: the low npm advisory and
-    // a low agent finding come BEFORE the critical agent finding, so an
-    // unsorted slice(0, 2) would file the two lows and cap the critical.
-    const finalText = findingsFence([
-      codeFinding("LOW-2", "src/a.ts", "Low Two", { severity: "low" }),
-      codeFinding("CRIT-1", "src/index.ts", "Critical One", { severity: "critical" }),
-    ]);
-    const r = await runAssessFlow(c, ticket, path, {
-      ghFn: gh.ghFn,
-      gitFn: fakeGit(originHttps),
-      runCmdFn: fakeRunCmd(auditJson("low")),
-      sessionFactoryFor: () => fakeSession(finalText),
-    });
-    expect(r.found).toBe(3);
-    expect(r.created).toBe(2);
-    expect(r.capped).toBe(1);
-    const createTitles = gh.calls
-      .filter((a) => a[0] === "issue" && a[1] === "create")
-      .map((a) => a[a.indexOf("--title") + 1]);
-    // The critical finding is filed FIRST (severity-desc order)…
-    expect(createTitles[0]).toContain("Critical One");
-    // …and the sort is stable: among the two lows, the npm advisory (earlier
-    // in merge order) wins the remaining slot.
-    expect(createTitles[1]).toContain("Prototype Pollution");
-    expect(createTitles.some((t) => t.includes("Low Two"))).toBe(false);
-    // The capped low is named in the summary for a re-run.
-    const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
-    expect(body).toContain("Capped — re-run to file");
-    expect(body).toContain("Low Two");
-  });
-
-  it("github dedup: a finding already filed upstream is skipped", async () => {
+  it("github dedup: a finding already filed upstream is skipped before parking", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
@@ -521,14 +495,9 @@ describe("runAssessFlow", () => {
       location: { path: "src/a.ts" },
       title: "A",
     });
-    let created = 0;
     const gh = fakeGh((args) => {
       if (args[0] === "issue" && args[1] === "list") {
         return { stdout: JSON.stringify([{ body: `x ${findingMarker(fpA)} y` }]) };
-      }
-      if (args[0] === "issue" && args[1] === "create") {
-        created++;
-        return { stdout: `https://github.com/o/r/issues/${created}\n` };
       }
       return undefined;
     });
@@ -544,52 +513,20 @@ describe("runAssessFlow", () => {
     });
     expect(r.found).toBe(2);
     expect(r.deduped).toBe(1);
-    expect(r.created).toBe(1);
+    expect(r.parked).toBe(1);
+    // Only the un-filed finding is parked.
+    const [b] = listPending(cfg(root));
+    expect(b.findings).toHaveLength(1);
+    expect(b.findings[0].ruleId).toBe("RULE-B");
   });
 
-  it("offline create → outbox: issue create network failure enqueues an op, ticket still done/", async () => {
-    const { root, j } = sandbox();
-    const repo = mkRepo();
-    const { path } = claim(j, ticketContent(repo));
-    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
-    const fp = fingerprintFinding({
-      kind: "code",
-      ruleId: "OFF-1",
-      location: { path: "src/index.ts" },
-      title: "Offline",
-    });
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create") throw NET_ERR;
-      return undefined;
-    });
-    const r = await runAssessFlow(cfg(root), ticket, path, {
-      ghFn: gh.ghFn,
-      gitFn: fakeGit(originHttps),
-      runCmdFn: fakeRunCmd("{}"),
-      sessionFactoryFor: () =>
-        fakeSession(findingsFence([codeFinding("OFF-1", "src/index.ts", "Offline")])),
-    });
-    expect(r.queuedOffline).toBe(1);
-    expect(r.created).toBe(0);
-    expect(readdirSync(join(j, "done"))).toHaveLength(1);
-    const outbox = join(root, "state", "github-outbox");
-    const opFiles = readdirSync(outbox).filter((n) => n.endsWith(".json"));
-    expect(opFiles).toHaveLength(1);
-    const op = JSON.parse(readFileSync(join(outbox, opFiles[0]), "utf8"));
-    expect(op.op.kind).toBe("issue-create");
-    expect(op.op.fingerprint).toBe(fp);
-  });
-
-  it("offline dedup list: a network failure on issue list warns and still files live", async () => {
+  it("offline dedup list: a network failure on issue list warns and still parks", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
     const gh = fakeGh((args) => {
       if (args[0] === "issue" && args[1] === "list") throw NET_ERR;
-      if (args[0] === "issue" && args[1] === "create")
-        return { stdout: "https://github.com/o/r/issues/1\n" };
       return undefined;
     });
     const r = await runAssessFlow(cfg(root), ticket, path, {
@@ -598,13 +535,14 @@ describe("runAssessFlow", () => {
       runCmdFn: fakeRunCmd("{}"),
       sessionFactoryFor: () => fakeSession(findingsFence([codeFinding("NET-1", "src/index.ts")])),
     });
-    expect(r.created).toBe(1);
+    expect(r.parked).toBe(1);
     expect(readdirSync(join(j, "done"))).toHaveLength(1);
+    expect(listPending(cfg(root))).toHaveLength(1);
     const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
     expect(body.toLowerCase()).toContain("warning");
   });
 
-  it("no origin remote: unparseable remote → failed/, phase error, zero gh calls", async () => {
+  it("no origin remote: unparseable remote → failed/, phase error, zero gh calls, nothing parked", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
@@ -617,8 +555,9 @@ describe("runAssessFlow", () => {
       sessionFactoryFor: () => fakeSession("unused"),
     });
     expect(r.status).toBe("failed");
-    expect(r.created).toBe(0);
+    expect(r.parked).toBe(0);
     expect(gh.calls).toHaveLength(0);
+    expect(listPending(cfg(root))).toHaveLength(0);
     const failed = readdirSync(join(j, "failed"));
     expect(failed).toHaveLength(1);
     const body = readFileSync(join(j, "failed", failed[0]), "utf8");
@@ -632,15 +571,7 @@ describe("runAssessFlow", () => {
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
     const c = { ...cfg(root), assess: { ...cfg(root).assess, minSeverity: "high" as const } };
-    let created = 0;
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create") {
-        created++;
-        return { stdout: `https://github.com/o/r/issues/${created}\n` };
-      }
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
     const finalText = findingsFence([
       {
         kind: "code",
@@ -666,15 +597,14 @@ describe("runAssessFlow", () => {
       sessionFactoryFor: () => fakeSession(finalText),
     });
     expect(r.found).toBe(1);
-    expect(r.created).toBe(1);
-    const createTitles = gh.calls
-      .filter((a) => a[0] === "issue" && a[1] === "create")
-      .map((a) => a[a.indexOf("--title") + 1]);
-    expect(createTitles.some((t) => t.includes("High"))).toBe(true);
-    expect(createTitles.some((t) => t.includes("Med"))).toBe(false);
+    expect(r.parked).toBe(1);
+    // Only the high finding is parked; the medium is below threshold.
+    const [b] = listPending(c);
+    expect(b.findings).toHaveLength(1);
+    expect(b.findings[0].ruleId).toBe("HIGH-1");
   });
 
-  it("transient requeue: a transient agent failure requeues to inbox, files nothing", async () => {
+  it("transient requeue: a transient agent failure requeues to inbox, parks nothing", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
@@ -687,8 +617,9 @@ describe("runAssessFlow", () => {
       sessionFactoryFor: () => throwingSession(),
     });
     expect(r.requeued).toBe(true);
-    expect(r.created).toBe(0);
+    expect(r.parked).toBe(0);
     expect(r.found).toBe(0);
+    expect(listPending(cfg(root))).toHaveLength(0);
     expect(readdirSync(join(j, "done"))).toHaveLength(0);
     expect(readdirSync(join(j, "failed"))).toHaveLength(0);
     const inbox = readdirSync(join(j, "inbox"));
@@ -697,28 +628,23 @@ describe("runAssessFlow", () => {
     expect(content).toMatch(/retry_count: 1/);
   });
 
-  it("auto_plan: the trigger label is added to filed issues", async () => {
+  it("auto_plan: the parked batch carries autoPlan true for an owned repo", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo, "assess:\n  auto_plan: true\n"));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
     expect(ticket.assess).toEqual({ autoPlan: true });
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create")
-        return { stdout: "https://github.com/o/r/issues/1\n" };
-      return undefined;
-    });
+    const gh = ghDedupEmpty();
     const r = await runAssessFlow(cfg(root), ticket, path, {
       ghFn: gh.ghFn,
       gitFn: fakeGit(originHttps),
       runCmdFn: fakeRunCmd("{}"),
       sessionFactoryFor: () => fakeSession(findingsFence([codeFinding("AP-1", "src/index.ts")])),
     });
-    expect(r.created).toBe(1);
-    const createCall = gh.calls.find((a) => a[0] === "issue" && a[1] === "create")!;
-    const labels = createCall.filter((_v, i) => createCall[i - 1] === "--label");
-    expect(labels).toContain("junco");
+    expect(r.parked).toBe(1);
+    const [b] = listPending(cfg(root));
+    expect(b.external).toBe(false);
+    expect(b.autoPlan).toBe(true);
   });
 
   it("path containment: a repo outside allowed_repo_roots → failed/, no gh/npm/agent", async () => {
@@ -743,6 +669,7 @@ describe("runAssessFlow", () => {
       },
     });
     expect(r.status).toBe("failed");
+    expect(r.parked).toBe(0);
     expect(gh.calls).toHaveLength(0);
     expect(npmRan).toBe(false);
     expect(sessionBuilt).toBe(false);
@@ -751,7 +678,7 @@ describe("runAssessFlow", () => {
     expect(readFileSync(join(j, "failed", failed[0]), "utf8")).toContain("status: failed");
   });
 
-  it("non-network dedup failure is fatal (ticket → failed/, no issues filed)", async () => {
+  it("non-network dedup failure is fatal (ticket → failed/, nothing parked)", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
@@ -767,51 +694,9 @@ describe("runAssessFlow", () => {
       sessionFactoryFor: () => fakeSession(findingsFence([codeFinding("PERM-1", "src/index.ts")])),
     });
     expect(r.status).toBe("failed");
-    expect(r.created).toBe(0);
+    expect(r.parked).toBe(0);
+    expect(listPending(cfg(root))).toHaveLength(0);
     expect(gh.calls.some((a) => a[0] === "issue" && a[1] === "create")).toBe(false);
     expect(readdirSync(join(j, "failed"))).toHaveLength(1);
-  });
-
-  it("per-finding non-network create failure continues with remaining findings", async () => {
-    const { root, j } = sandbox();
-    const repo = mkRepo();
-    const { path } = claim(j, ticketContent(repo));
-    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
-
-    let createAttempts = 0;
-    const gh = fakeGh((args) => {
-      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]" };
-      if (args[0] === "issue" && args[1] === "create") {
-        createAttempts++;
-        if (createAttempts === 1) {
-          throw new GitOpError("gh failed", "HTTP 422: Validation Failed", 1);
-        }
-        return { stdout: "https://github.com/o/r/issues/1\n" };
-      }
-      return undefined;
-    });
-    const finalText = findingsFence([
-      codeFinding("FAIL-1", "src/index.ts", "First Finding"),
-      codeFinding("OK-1", "src/a.ts", "Second Finding"),
-    ]);
-    const r = await runAssessFlow(cfg(root), ticket, path, {
-      ghFn: gh.ghFn,
-      gitFn: fakeGit(originHttps),
-      runCmdFn: fakeRunCmd("{}"),
-      sessionFactoryFor: () => fakeSession(finalText),
-    });
-
-    // One finding succeeded, one failed
-    expect(r.created).toBe(1);
-    expect(r.failed).toBe(1);
-    // Both were attempted
-    const createCalls = gh.calls.filter((a) => a[0] === "issue" && a[1] === "create");
-    expect(createCalls).toHaveLength(2);
-    // Ticket finalized to done/ (not failed/)
-    const doneFiles = readdirSync(join(j, "done"));
-    expect(doneFiles).toHaveLength(1);
-    // Summary mentions the failure
-    const body = readFileSync(join(j, "done", doneFiles[0]), "utf8");
-    expect(body).toMatch(/422|[Ff]ail|[Ee]rror/);
   });
 });

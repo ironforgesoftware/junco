@@ -132,3 +132,25 @@ export async function ensureExternalClone(
   });
   return { path, forkNwo };
 }
+
+const FETCH_TIMEOUT = 180_000;
+
+/** Sync a managed external clone to upstream's current default branch before an
+ * audit: fetch origin, resolve origin/HEAD, hard-reset the working tree to it.
+ * Junco OWNS these clones (under externalReposRoot), so a reset is safe — this
+ * makes assess reflect upstream's live default branch, not the provisioned
+ * snapshot. NEVER call this on an owned repo (the operator's own checkout). */
+export async function syncExternalClone(
+  cfg: Config,
+  repoPath: string,
+  deps: ExternalRepoDeps = {},
+): Promise<void> {
+  const gitFn = deps.gitFn ?? git;
+  await gitFn(cfg, ["-C", repoPath, "fetch", "origin"], { timeoutMs: FETCH_TIMEOUT });
+  const head = await gitFn(cfg, ["-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+    check: false,
+  });
+  // "refs/remotes/origin/main" → "origin/main"; fall back to origin/HEAD if unset.
+  const ref = head.code === 0 ? head.stdout.trim().replace(/^refs\/remotes\//, "") : "origin/HEAD";
+  await gitFn(cfg, ["-C", repoPath, "reset", "--hard", ref], { timeoutMs: FETCH_TIMEOUT });
+}

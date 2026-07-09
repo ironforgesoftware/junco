@@ -99,15 +99,22 @@ $ junco logs -f
 - **Local-first by design** — your machine, your git, your `gh` auth, your choice
   of inference endpoint. There is no third service in the loop.
 
-## It files its own issues
+## It audits, you decide what to file
 
 `junco assess <path|owner/repo>` audits a repo — `npm audit` for the dependency
-tree plus a read-only agent pass over the code — and files the findings as GitHub
-issues titled `[<severity>] <title> (<ruleId>)`, labeled `junco:finding` and
-`severity/<level>`. Every finding carries a fingerprint, and new runs dedupe
-against the most recent 500 finding issues — closed ones included — so nothing is
-filed twice. With `--auto-plan`, each new issue also carries the trigger label:
-junco plans its own findings, and you approve the ones worth doing.
+tree plus a read-only agent pass over the code — and **parks** the findings for
+review instead of filing them right away. `junco assess review` lists what's
+pending; `junco assess review <id>` shows each finding's fingerprint, severity,
+and title; `junco assess file <id> --all` (or `--only <fingerprint,…>`) files the
+ones you confirm as GitHub issues titled `[<severity>] <title> (<ruleId>)`. Every
+finding carries a fingerprint, and filing dedupes against your own most recent
+500 issues on that repo — closed ones included — so nothing is filed twice.
+
+It works on any watched repo, owned or not. On a repo you own, filed issues get
+`junco:finding` + `severity/<level>` labels (best-effort), and `--auto-plan` adds
+the trigger label so junco plans its own findings for you to approve. On a repo
+you don't own, issues file label-free — junco never assumes triage rights it
+doesn't have — and `--auto-plan` has no effect there.
 → [Vulnerability assessment guide](docs/assess.md)
 
 ## Sixty seconds to a running worker
@@ -141,31 +148,31 @@ frontmatter contract, `examples/` has templates, and the bundled
 
 ## Documentation
 
-| Guide                                      | What's inside                                                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------------ |
-| [Tickets](docs/tickets.md)                 | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle   |
-| [Configuration](docs/configuration.md)     | The annotated `config.toml` reference and the knobs worth knowing                    |
-| [GitHub mode](docs/github-mode.md)         | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model |
-| [Vulnerability assessment](docs/assess.md) | `junco assess` — audit a repo, file GitHub issues, dedup semantics, `--auto-plan`    |
-| [Dashboard](docs/dashboard.md)             | Every pane, key, and the command palette                                             |
-| [Operations](docs/operations.md)           | Health endpoint, running as a service, security model, troubleshooting               |
-| [ARCHITECTURE.md](ARCHITECTURE.md)         | The runtime, module by module — accurate and maintained                              |
+| Guide                                      | What's inside                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| [Tickets](docs/tickets.md)                 | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle         |
+| [Configuration](docs/configuration.md)     | The annotated `config.toml` reference and the knobs worth knowing                          |
+| [GitHub mode](docs/github-mode.md)         | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model       |
+| [Vulnerability assessment](docs/assess.md) | `junco assess` — audit any watched repo, review parked findings, file the ones you confirm |
+| [Dashboard](docs/dashboard.md)             | Every pane, key, and the command palette                                                   |
+| [Operations](docs/operations.md)           | Health endpoint, running as a service, security model, troubleshooting                     |
+| [ARCHITECTURE.md](ARCHITECTURE.md)         | The runtime, module by module — accurate and maintained                                    |
 
 ## CLI at a glance
 
-|                                                 |                                                         |
-| ----------------------------------------------- | ------------------------------------------------------- |
-| `junco start` / `junco restart`                 | run the daemon / restart the installed service          |
-| `junco submit <file>`                           | queue a ticket (also reads stdin)                       |
-| `junco dashboard`                               | the fullscreen TUI                                      |
-| `junco dispatch <owner/repo#N \| url>`          | fork-PR mode: plan and PR an external repo's issue      |
-| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                       |
-| `junco prs`                                     | list junco-authored pull requests across watched repos  |
-| `junco assess <path\|owner/repo> [--auto-plan]` | audit a repo for vulnerabilities and file GitHub issues |
-| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                   |
-| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog              |
-| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model          |
-| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                  |
+|                                                 |                                                                                          |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `junco start` / `junco restart`                 | run the daemon / restart the installed service                                           |
+| `junco submit <file>`                           | queue a ticket (also reads stdin)                                                        |
+| `junco dashboard`                               | the fullscreen TUI                                                                       |
+| `junco dispatch <owner/repo#N \| url>`          | fork-PR mode: plan and PR an external repo's issue                                       |
+| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                                                        |
+| `junco prs`                                     | list junco-authored pull requests across watched repos                                   |
+| `junco assess <path\|owner/repo> [--auto-plan]` | audit a repo (owned or external); findings await review (`assess review`, `assess file`) |
+| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                                                    |
+| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog                                               |
+| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model                                           |
+| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                                                   |
 
 ## Contributing
 

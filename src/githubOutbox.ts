@@ -26,7 +26,7 @@ import { log } from "./logging.js";
 import { gh, git, GitOpError, isNetworkError } from "./git.js";
 import { acquirePidfileLock } from "./pidfileLock.js";
 import { lifecycleLabels } from "./githubInbox.js";
-import { FINDING_LABEL, FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
+import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
 
 export type OutboxOp =
   | { kind: "labels"; nwo: string; issue: number; add: string[]; remove: string[] }
@@ -298,15 +298,17 @@ function prCommentKey(prUrl: string): string {
 
 const FINDING_LABEL_DEFAULT = { color: "ededed", description: "" };
 
-// Fingerprints already filed on <nwo>: scan the bodies of every issue
-// carrying the finding label (state all, most recent 500). Bodies can be
-// null (githubInbox.ts GhIssue precedent) — treated as empty.
+// Fingerprints already filed on <nwo>: scan the bodies of every issue AUTHORED
+// BY THE OPERATOR (state all, most recent 500) for finding markers. Author-scoped
+// (not label-scoped) so the SAME dedup works on repos junco cannot label — the
+// finding marker in the body is the identity, the label was only ever a list
+// filter. Bodies can be null (githubInbox.ts GhIssue precedent) → treated as
+// empty. Older label-based issues were authored by @me too, so replay stays correct.
 //
-// KNOWN LIMITATION (issue #41 follow-up): `--limit 500` truncates the dedup
-// set on repos that have accumulated more than 500 finding issues, so the
-// oldest findings fall out of the scan and can re-file. The fix is true
-// pagination via `gh api --paginate`, deferred here to keep this change from
-// spilling into the runOnce e2e fixture (owned elsewhere).
+// KNOWN LIMITATION: `--limit 500` truncates on repos with >500 finding issues
+// (issue #41 follow-up). Second limitation: on a shared OWNED repo where multiple
+// operator accounts file findings, `--author @me` misses a teammate's issue and
+// can re-file; the marker keeps that from corrupting state.
 export async function fetchFindingMarkers(
   cfg: Config,
   nwo: string,
@@ -319,8 +321,8 @@ export async function fetchFindingMarkers(
       "list",
       "--repo",
       nwo,
-      "--label",
-      FINDING_LABEL,
+      "--author",
+      "@me",
       "--state",
       "all",
       "--limit",
@@ -611,8 +613,8 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
         }
         case "issue-create": {
           // Labels FIRST: `gh issue create --label X` hard-fails on a missing
-          // label, and the dedup list-scan below filters by FINDING_LABEL,
-          // which must exist too.
+          // label. (The dedup list-scan below is author-scoped, not
+          // label-scoped, so it no longer needs the label to exist.)
           await ensureFindingLabels(cfg, op.nwo, op.labels, ghFn);
           // FRESH scan every time — never cache across ops within a flush.
           // Two offline assess runs can enqueue duplicate fingerprints; FIFO
