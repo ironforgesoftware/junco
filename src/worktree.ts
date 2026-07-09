@@ -245,11 +245,16 @@ export async function prepareWorktree(
     });
   } catch (e) {
     if (e instanceof GitOpError && e.stderr.toLowerCase().includes("already exists")) {
-      // Branch may already exist locally (no remote) — add without -b.
-      await git(cfg, ["worktree", "add", wtPath, ctx.branchName], {
-        cwd: ctx.repo,
-        timeoutMs: 120_000,
-      });
+      // Branch already exists locally — a leftover from a crashed run that
+      // committed but never pushed. Force-reset it to the base (issue #34):
+      // adding it without -B would check out the stale tip and the retry
+      // would silently build on (and re-verify against) the aborted work.
+      // Mirrors the amend path's -B recovery above.
+      await git(
+        cfg,
+        ["worktree", "add", "-B", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
+        { cwd: ctx.repo, timeoutMs: 120_000 },
+      );
     } else {
       throw e;
     }

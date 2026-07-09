@@ -412,7 +412,7 @@ describe("prepareWorktree — fresh mode", () => {
     expect(existsSync(wtPath2)).toBe(true);
   }, 30000);
 
-  it("falls back to worktree-add without -b if branch already exists locally", async () => {
+  it("falls back to a forced worktree-add if the branch already exists locally", async () => {
     const { work, wtsRoot } = setupGitHarness(tmpRoot);
     const cfg = makeConfig(work, wtsRoot);
     const ctx = makeContext(work, { branchName: "junco/existing-local" });
@@ -424,6 +424,31 @@ describe("prepareWorktree — fresh mode", () => {
     expect(existsSync(wtPath)).toBe(true);
     const branch = run(["git", "-C", wtPath, "rev-parse", "--abbrev-ref", "HEAD"]).trim();
     expect(branch).toBe("junco/existing-local");
+  }, 30000);
+
+  it("fallback resets a stale local branch to origin/<base> — retries never build on crashed-run commits (issue #34)", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    const ctx = makeContext(work, { branchName: "junco/stale-local" });
+
+    // Simulate a crashed run's leftover: a local feature branch carrying a
+    // commit that was never pushed (validateRepoContext only checks the
+    // REMOTE branch, so fresh-mode validation passes on retry).
+    run(["git", "-C", work, "checkout", "-b", "junco/stale-local"]);
+    writeFileSync(join(work, "stale.txt"), "crashed-run leftover\n");
+    run(["git", "-C", work, "add", "stale.txt"]);
+    run(["git", "-C", work, "commit", "-m", "crashed-run commit"]);
+    run(["git", "-C", work, "checkout", "main"]);
+
+    const wtPath = await prepareWorktree(cfg, ctx, "stale-local-task");
+
+    const branch = run(["git", "-C", wtPath, "rev-parse", "--abbrev-ref", "HEAD"]).trim();
+    expect(branch).toBe("junco/stale-local");
+    // The retry starts from origin/main — NOT from the crashed run's tip.
+    const head = run(["git", "-C", wtPath, "rev-parse", "HEAD"]).trim();
+    const base = run(["git", "-C", work, "rev-parse", "origin/main"]).trim();
+    expect(head).toBe(base);
+    expect(existsSync(join(wtPath, "stale.txt"))).toBe(false);
   }, 30000);
 });
 
