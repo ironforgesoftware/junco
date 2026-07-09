@@ -167,7 +167,10 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       const g = t.github;
       if (g.kind === "plan") {
         const done = TERMINAL_DONE_STATUSES.has(outcome.status);
-        const planBody = done ? extractPlanBody(outcome.finalText) : null;
+        // Prefer allText: the plan fence often precedes a trailing assistant
+        // message, which #36 narrowed finalText to — so the fence survives only
+        // in the whole-run text (#86, same class as the assess bug #67).
+        const planBody = done ? extractPlanBody(outcome.allText ?? outcome.finalText) : null;
         const comment = planBody
           ? buildPlanComment(planBody, {
               issue: g.issue,
