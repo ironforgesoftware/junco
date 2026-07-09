@@ -49,35 +49,41 @@ A ticket is a Markdown file with a YAML frontmatter block validated against the 
     A guard kill is a SOFT abort, and so is a TIMEOUT: both continue through
     post-processing so commits made before the cutoff are salvaged.
 
- 6. Count / commit
+ 6. Count commits
     Count new commits since the base; optionally commit unstaged leftovers (pr.ts).
 
- 7. No-commits gate
+ 7. List commits
+    Collect the new commits (recorded on the PR outcome, quoted in the PR body).
+
+ 8. No-commits gate
     Timeout with no commits → preserve worktree + fail.
     stop_reason error/length with no commits → requeue (budget permitting),
     else fail. Clean no-change → terminal status completed_no_changes.
 
- 8. Post-session review  (skipped on a guard abort or timeout)
+ 9. Post-session review  (skipped on a guard abort or timeout)
     a. Run ## Verification bash blocks in the worktree (verify.ts).
     b. Run the critic (critic.ts): in-process diff-vs-spec review → PASS | MISSING.
     c. On MISSING + retries remaining + not amend mode →
        ONE corrective agent re-dispatch, then re-evaluate.
 
- 9. Verification gate
+10. Verification gate
     If block_on_fail and verification failures → preserve worktree + fail.
 
-10. Push
+11. Push
     Branch is pushed to ctx.pushRemote (pr.ts) — origin by default; in
     fork-PR mode (push_remote: fork) it pushes to the operator's fork remote.
 
-11. Open / update PR
+12. Open / update PR
     gh pr create --draft   (or, in amend mode, the existing PR auto-updates).
     In fork-PR mode the PR is opened against upstream with
     --head <fork-owner>:<branch>.
 
-12. Finalize
-    Worktree pruned; finalize.ts computes the terminal status, appends a result
-    block to the ticket, and atomically moves it to done/ or failed/.
+13. Cleanup
+    Worktree pruned (or preserved when remove_worktree_on_success = false).
+
+14. Finalize
+    finalize.ts computes the terminal status, appends a result block to the
+    ticket, and atomically moves it to done/ or failed/.
 ```
 
 ### The Q&A path
