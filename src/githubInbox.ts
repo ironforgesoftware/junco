@@ -448,14 +448,18 @@ async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Pr
 }
 
 /** Latest plan comment AUTHORED BY the bridge's own login — a contributor's
- * forged marker comment is never recoverable. Null = nothing usable. */
+ * forged marker comment is never recoverable. Null = nothing usable.
+ * updatedAtMs (NaN when missing/unparseable — the approval gate fails closed
+ * on it) lets the caller bind an approval to the comment's CURRENT content:
+ * GitHub bumps updated_at on every edit while created_at stays fixed, so an
+ * edit after approval is only visible through updated_at. */
 async function findOwnPlanComment(
   cfg: Config,
   nwo: string,
   issueNumber: number,
   login: string,
   ghFn: typeof gh,
-): Promise<{ body: string; createdAtMs: number } | null> {
+): Promise<{ body: string; createdAtMs: number; updatedAtMs: number } | null> {
   const r = await ghFn(
     cfg,
     [
@@ -463,31 +467,43 @@ async function findOwnPlanComment(
       "--paginate",
       `repos/${nwo}/issues/${issueNumber}/comments`,
       "--jq",
-      ".[] | {author: .user.login, body: .body, created_at: .created_at}",
+      ".[] | {author: .user.login, body: .body, created_at: .created_at, updated_at: .updated_at}",
     ],
     { timeoutMs: GH_TIMEOUT, retryNetwork: true },
   );
-  let found: { body: string; createdAtMs: number } | null = null;
+  let found: { body: string; createdAtMs: number; updatedAtMs: number } | null = null;
   for (const line of r.stdout.trim().split("\n").filter(Boolean)) {
-    const c = JSON.parse(line) as { author: string; body: string; created_at: string };
+    const c = JSON.parse(line) as {
+      author: string;
+      body: string;
+      created_at: string;
+      updated_at?: string;
+    };
     if (c.author === login && c.body.includes(PLAN_COMMENT_MARKER)) {
-      found = { body: c.body, createdAtMs: Date.parse(c.created_at) }; // last wins
+      found = {
+        body: c.body,
+        createdAtMs: Date.parse(c.created_at),
+        updatedAtMs: c.updated_at === undefined ? NaN : Date.parse(c.updated_at),
+      }; // last wins
     }
   }
   return found;
 }
 
-/** Is an execution ticket with this id currently IN FLIGHT in the local queue?
- * Scans ONLY inbox/ and processing/ for `${id}.md` or a claim-prefixed
- * `*__${id}.md`; a missing dir (ENOENT) counts as absent. This guards exactly
- * the crash window between submit and label swap — during that window the
- * ticket can only be in those two dirs. done/ and failed/ are deliberately NOT
- * scanned: a finalized ticket there belongs to a PREVIOUS execution cycle, and
- * counting it would wedge the documented re-cycle gesture (remove junco:failed
- * → fresh plan → fresh approval) by skipping the new submit while still
- * flipping labels to queued. Already-dispatched-this-cycle issues are handled
- * earlier by the lifecycle-label bail. */
-function executionTicketExists(cfg: Config, id: string): boolean {
+/** Is a ticket with this id currently IN FLIGHT in the local queue? Shared by
+ * all three dispatch paths (ask, planning, execution): each submits BEFORE
+ * marking the issue, so a crash — or a swallowed label-add failure — between
+ * the two leaves the issue eligible while the ticket lives on. Scans ONLY
+ * inbox/ and processing/ for `${id}.md` or a claim-prefixed `*__${id}.md`; a
+ * missing dir (ENOENT) counts as absent. Both dirs matter: once the worker
+ * CLAIMS the ticket into processing/, submitTicket's inbox-filename collision
+ * no longer fires, and the whole run duration is a duplicate-submit window.
+ * done/ and failed/ are deliberately NOT scanned: a finalized ticket there
+ * belongs to a PREVIOUS cycle, and counting it would wedge the documented
+ * re-cycle gesture (remove junco:failed → fresh plan → fresh approval) by
+ * skipping the new submit while still flipping labels. Already-dispatched
+ * issues are normally short-circuited earlier by the lifecycle-label bail. */
+function ticketInFlight(cfg: Config, id: string): boolean {
   const paths = queuePaths(cfg);
   const exact = `${id}.md`;
   const claimed = `__${id}.md`;
@@ -638,19 +654,27 @@ export async function pollGithubInbox(
                   continue;
                 }
                 // Fail closed on an unparseable timestamp on EITHER side: an
-                // approval only counts if it is strictly newer than a plan
-                // comment whose own createdAtMs actually parsed.
+                // approval only counts if it is strictly newer than BOTH the
+                // plan comment's creation AND its last edit (updated_at). The
+                // body that executes is read fresh below, so an edit AFTER the
+                // approval label must invalidate it — otherwise an injected
+                // plan would run under the stale approval.
                 if (
                   !(
                     Number.isFinite(comment.createdAtMs) &&
+                    Number.isFinite(comment.updatedAtMs) &&
                     approval.atMs !== null &&
-                    approval.atMs > comment.createdAtMs
+                    approval.atMs > comment.createdAtMs &&
+                    approval.atMs > comment.updatedAtMs
                   )
                 ) {
-                  log.warn("github bridge: approval predates the plan comment; re-apply it", {
-                    nwo: repo.nwo,
-                    issue: issue.number,
-                  });
+                  log.warn(
+                    "github bridge: approval predates the plan comment or its latest edit; re-apply it",
+                    {
+                      nwo: repo.nwo,
+                      issue: issue.number,
+                    },
+                  );
                   continue;
                 }
               }
@@ -666,7 +690,7 @@ export async function pollGithubInbox(
               // A prior sweep may have queued this ticket then crashed before the
               // label swap. Detect the existing file and skip re-submit, going
               // straight to the (idempotent) label swap.
-              if (executionTicketExists(cfg, t.id)) {
+              if (ticketInFlight(cfg, t.id)) {
                 log.info("github bridge: execution ticket already in local queue; re-marking", {
                   id: t.id,
                 });
@@ -729,11 +753,21 @@ export async function pollGithubInbox(
             ? issueToTicket(issue, repo, cfg, null)
             : buildPlanningTicket(issue, repo, parent);
           const stateLabel = isAsk ? ll.queued : ll.planning;
-          try {
-            submitFn(cfg, t.content, { idHint: t.id });
-          } catch (e) {
-            if (!errMsg(e).includes("already queued")) throw e;
-            log.info("github bridge: ticket already queued; re-marking", { id: t.id });
+          // Same in-flight guard as the execution path: a prior sweep may have
+          // submitted this ticket and then lost the label add (crash, or a
+          // non-network gh failure swallowed by the per-issue catch). Once the
+          // worker claims it into processing/, submitTicket's inbox collision
+          // no longer fires — detect the file and skip straight to the
+          // (idempotent) label marking instead of double-running the ticket.
+          if (ticketInFlight(cfg, t.id)) {
+            log.info("github bridge: ticket already in local queue; re-marking", { id: t.id });
+          } else {
+            try {
+              submitFn(cfg, t.content, { idHint: t.id });
+            } catch (e) {
+              if (!errMsg(e).includes("already queued")) throw e;
+              log.info("github bridge: ticket already queued; re-marking", { id: t.id });
+            }
           }
           await ghFn(
             cfg,

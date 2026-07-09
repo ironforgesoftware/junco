@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, join as joinPath } from "node:path";
@@ -15,11 +15,12 @@ import {
   type GhIssue,
 } from "../src/githubInbox.js";
 import { parseTicket } from "../src/ticket.js";
+import { log } from "../src/logging.js";
 import type { Config } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 
-// executionTicketExists (approval path) calls queuePaths(cfg); point bridge
+// ticketInFlight (every dispatch path) calls queuePaths(cfg); point bridge
 // configs at a vault dir that does not exist so readdirSync ENOENTs → "absent".
 const NX_VAULT = join(tmpdir(), `junco-nx-${Math.random().toString(36).slice(2)}`);
 const NX_STATE_DIR = join(tmpdir(), `junco-state-${Math.random().toString(36).slice(2)}`);
@@ -453,10 +454,13 @@ describe("pollGithubInbox", () => {
   });
 
   describe("approval scan", () => {
+    // updated_at defaults to created_at — GitHub returns both on every comment
+    // (equal until the comment is edited).
     const planComment = (body: string, over: Record<string, unknown> = {}) => ({
       author: "junco-bot",
       body,
       created_at: "2026-07-06T10:00:00Z",
+      updated_at: "2026-07-06T10:00:00Z",
       ...over,
     });
     const planBody = "# The plan\n\n## Steps\n- do it";
@@ -515,6 +519,49 @@ describe("pollGithubInbox", () => {
         comments: [planComment(fencedComment)],
       });
       expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+    });
+
+    it("plan comment EDITED after approval → approval is stale: no dispatch, warn logged", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const f = makeFakes({
+          issues: [readyIssue],
+          events: approvedAfter, // approved 11:00 …
+          permission: "write",
+          comments: [planComment(fencedComment, { updated_at: "2026-07-06T12:00:00Z" })], // … edited 12:00
+        });
+        expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+        expect(f.submitted).toHaveLength(0);
+        expect(f.calls.find((c) => c[1] === "edit")).toBeUndefined(); // labels untouched
+        expect(warnSpy.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/approval predates/);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("plan comment edited BEFORE approval still dispatches (edit-then-approve flow)", async () => {
+      const f = makeFakes({
+        issues: [readyIssue],
+        events: approvedAfter, // approved 11:00, after the 10:30 edit
+        permission: "write",
+        comments: [planComment(fencedComment, { updated_at: "2026-07-06T10:30:00Z" })],
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+    });
+
+    it("plan comment with a missing or unparseable updated_at → no submit (fails closed)", async () => {
+      for (const updated_at of ["not-a-real-date", undefined]) {
+        const f = makeFakes({
+          issues: [readyIssue],
+          events: approvedAfter,
+          permission: "write",
+          comments: [planComment(fencedComment, { updated_at })],
+        });
+        expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+        expect(f.submitted).toHaveLength(0);
+      }
     });
 
     it("approval by a non-writer is ignored", async () => {
@@ -669,6 +716,71 @@ describe("pollGithubInbox", () => {
             "junco:plan-ready",
           ]),
         );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("ask/planning duplicate guard", () => {
+    // Scenario (issue #38): the first sweep submitted the ticket but the
+    // label add failed (rate limit, 502 — swallowed by the per-issue catch),
+    // so the issue kept its trigger label with no lifecycle label. The worker
+    // then CLAIMED the ticket into processing/ — the inbox-filename collision
+    // no longer fires. The next sweep must NOT resubmit; it must only
+    // re-attempt the (idempotent) label marking, like the execution path.
+    it("planning ticket already claimed into processing/ → no resubmit, planning label re-marked", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const processing = join(root, "tickets", "processing");
+        mkdirSync(processing, { recursive: true });
+        // Claim-prefixed file for the planning-ticket id gh-acme-api-42-plan.
+        writeFileSync(join(processing, "1720000000000__gh-acme-api-42-plan.md"), "stub", "utf8");
+        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
+        const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+        expect(n).toBe(1);
+        expect(f.submitted).toHaveLength(0); // no duplicate planning run
+        const edit = f.calls.find((c) => c[1] === "edit");
+        expect(edit).toEqual(expect.arrayContaining(["--add-label", "junco:planning"]));
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("ask ticket already claimed into processing/ → no resubmit, queued label re-marked", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const processing = join(root, "tickets", "processing");
+        mkdirSync(processing, { recursive: true });
+        // Claim-prefixed file for the ask-ticket id gh-acme-api-42.
+        writeFileSync(join(processing, "1720000000000__gh-acme-api-42.md"), "stub", "utf8");
+        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
+        const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
+        const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+        expect(n).toBe(1);
+        expect(f.submitted).toHaveLength(0); // no duplicate answer
+        const edit = f.calls.find((c) => c[1] === "edit");
+        expect(edit).toEqual(expect.arrayContaining(["--add-label", "junco:queued"]));
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("planning ticket still sitting in inbox/ → no resubmit, planning label re-marked", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const inbox = join(root, "tickets", "inbox");
+        mkdirSync(inbox, { recursive: true });
+        writeFileSync(join(inbox, "gh-acme-api-42-plan.md"), "stub", "utf8");
+        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
+        const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+        expect(n).toBe(1);
+        expect(f.submitted).toHaveLength(0);
+        const edit = f.calls.find((c) => c[1] === "edit");
+        expect(edit).toEqual(expect.arrayContaining(["--add-label", "junco:planning"]));
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
