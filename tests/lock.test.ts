@@ -1,8 +1,16 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { acquireSingletonLock, readLockHolder } from "../src/lock.js";
+import { acquireSingletonLock, getProcessStartTime, readLockHolder } from "../src/lock.js";
 
 let tmpDirs: string[] = [];
 
@@ -123,6 +131,196 @@ describe("acquireSingletonLock", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
+  it("fresh acquire writes pid on line 1 and our process start time on line 2", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).not.toBeNull();
+
+    const lines = readFileSync(lockPath, "utf-8").split("\n");
+    expect(parseInt(lines[0]!, 10)).toBe(process.pid);
+    // Line 2 is the identity discriminator: our own start time (or "" if ps is unavailable)
+    expect(lines[1]).toBe(getProcessStartTime(process.pid) ?? "");
+    lock!.release();
+  });
+
+  it("PID reuse: live pid with a mismatched start time is treated as stale and stolen", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    // A recycled pid: the pid is alive (it's us) but the recorded start time
+    // belongs to the dead previous owner.
+    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).not.toBeNull();
+    const contents = readFileSync(lockPath, "utf-8").trim();
+    expect(parseInt(contents, 10)).toBe(process.pid);
+    lock!.release();
+  });
+
+  it("live pid with a matching start time returns null (held)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    const start = getProcessStartTime(process.pid);
+    expect(start).not.toBeNull(); // sanity: ps must work in the test env
+    writeFileSync(lockPath, `${process.pid}\n${start}\n`);
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).toBeNull();
+  });
+
+  it("live pid with an unknown start time is treated as alive (safe fallback)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    writeFileSync(lockPath, `${process.pid}\nsome-recorded-start-time\n`);
+
+    // ps lookup fails → identity unknown → preserve the safe-choice bias: alive
+    const lock = acquireSingletonLock(lockPath, { getProcessStartTimeFn: () => null });
+    expect(lock).toBeNull();
+  });
+
+  it("legacy single-line pidfile with a live pid returns null (no false steal on upgrade)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    // Old-format pidfile written by a still-running pre-upgrade daemon
+    writeFileSync(lockPath, String(process.pid) + "\n");
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).toBeNull();
+  });
+
+  it("never exposes the lock name before its content is complete (atomic create)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    // The identity lookup runs while the pidfile content is being assembled.
+    // If the lock name is already visible at that point, a concurrent reader
+    // could observe an empty/partial pidfile, parse it as stale, and steal a
+    // lock whose owner is alive (issue #24, vector 2).
+    let visibleDuringContentBuild: boolean | null = null;
+    const lock = acquireSingletonLock(lockPath, {
+      getProcessStartTimeFn: (pid) => {
+        visibleDuringContentBuild = existsSync(lockPath);
+        return getProcessStartTime(pid);
+      },
+    });
+
+    expect(lock).not.toBeNull();
+    expect(visibleDuringContentBuild).toBe(false);
+    lock!.release();
+  });
+
+  it("empty pidfile is treated as stale and stolen (creation is atomic, so empty = corrupt)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    writeFileSync(lockPath, "");
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).not.toBeNull();
+    const contents = readFileSync(lockPath, "utf-8").trim();
+    expect(parseInt(contents, 10)).toBe(process.pid);
+    lock!.release();
+  });
+
+  it("winning acquire leaves only the lock file — no temp residue", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).not.toBeNull();
+    expect(readdirSync(dir)).toEqual(["worker.lock"]);
+    lock!.release();
+  });
+
+  it("losing acquire (live holder) leaves only the holder's lock file — no temp residue", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    writeFileSync(lockPath, `${process.pid}\n${getProcessStartTime(process.pid)}\n`);
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).toBeNull();
+    expect(readdirSync(dir)).toEqual(["worker.lock"]);
+    // The holder's pidfile is untouched
+    expect(parseInt(readFileSync(lockPath, "utf-8"), 10)).toBe(process.pid);
+  });
+
+  it("steal of a genuinely stale lock leaves no aside/temp residue", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    // Recycled pid: alive, but not the recorded owner — stale
+    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+
+    const lock = acquireSingletonLock(lockPath);
+    expect(lock).not.toBeNull();
+    expect(readdirSync(dir)).toEqual(["worker.lock"]);
+    lock!.release();
+  });
+
+  it("steal race: stale file vanishing mid-steal is settled by the atomic create", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+
+    // Choreography (see acquireSingletonLock): call 1 builds our own pidfile
+    // content, call 2 is the staleness identity check. Unlinking during call 2
+    // simulates a racing stealer removing the stale file between our judgment
+    // and our steal. The retry create must settle it — we win here because the
+    // simulated racer never created a fresh lock.
+    let calls = 0;
+    const lock = acquireSingletonLock(lockPath, {
+      getProcessStartTimeFn: (pid) => {
+        calls += 1;
+        if (calls === 2) unlinkSync(lockPath);
+        return getProcessStartTime(pid);
+      },
+    });
+
+    expect(lock).not.toBeNull();
+    expect(parseInt(readFileSync(lockPath, "utf-8"), 10)).toBe(process.pid);
+    expect(readdirSync(dir)).toEqual(["worker.lock"]);
+    lock!.release();
+  });
+
+  it("steal race: never destroys a racing winner's fresh live lock (ABA)", () => {
+    const dir = makeTmpDir();
+    const lockPath = join(dir, "worker.lock");
+
+    // We judge this file stale (recycled pid) ...
+    writeFileSync(lockPath, `${process.pid}\nnot-the-real-start-time\n`);
+    const freshLiveContent = `${process.pid}\n${getProcessStartTime(process.pid)}\n`;
+
+    // ... but during the identity check (call 2 — the window between judging
+    // and stealing) a racing starter completes its ENTIRE steal: the lock name
+    // now holds a fresh pidfile with a live, matching owner. The old
+    // unlink-in-place code deleted that live lock and acquired anyway — two
+    // daemons. The steal must detect this and lose, leaving the winner's
+    // pidfile in place.
+    let calls = 0;
+    const lock = acquireSingletonLock(lockPath, {
+      getProcessStartTimeFn: (pid) => {
+        calls += 1;
+        if (calls === 2) {
+          unlinkSync(lockPath);
+          writeFileSync(lockPath, freshLiveContent);
+        }
+        return getProcessStartTime(pid);
+      },
+    });
+
+    expect(lock).toBeNull();
+    expect(readFileSync(lockPath, "utf-8")).toBe(freshLiveContent);
+    expect(readdirSync(dir)).toEqual(["worker.lock"]);
+  });
+
   it("parent directory is auto-created if it does not exist", () => {
     const dir = makeTmpDir();
     const lockPath = join(dir, "nonexistent", "subdir", "worker.lock");
@@ -146,5 +344,26 @@ describe("readLockHolder", () => {
     writeFileSync(p, "999999", "utf8");
     expect(readLockHolder(p)).toBeNull(); // (almost certainly) dead
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("checks the start-time discriminator: recycled pid → null, matching → pid", () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-lockread-"));
+    const p = join(dir, "worker.lock");
+    writeFileSync(p, `${process.pid}\nnot-the-real-start-time\n`, "utf8");
+    expect(readLockHolder(p)).toBeNull(); // pid recycled: not the recorded process
+    writeFileSync(p, `${process.pid}\n${getProcessStartTime(process.pid)}\n`, "utf8");
+    expect(readLockHolder(p)).toBe(process.pid); // same pid, same identity
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("getProcessStartTime", () => {
+  it("returns a stable, non-empty string for a live pid and null for a dead pid", () => {
+    const first = getProcessStartTime(process.pid);
+    expect(first).not.toBeNull();
+    expect(first!.length).toBeGreaterThan(0);
+    // Opaque-string contract: two reads of the same live process compare equal
+    expect(getProcessStartTime(process.pid)).toBe(first);
+    expect(getProcessStartTime(2147483646)).toBeNull();
   });
 });
