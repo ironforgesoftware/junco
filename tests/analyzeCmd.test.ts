@@ -1,6 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { buildAnalyzeTicket, runAnalyzeCommand } from "../src/analyzeCmd.js";
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  buildAnalyzeTicket,
+  runAnalyzeCommand,
+  runAnalyzeReviewCommand,
+  runAnalyzeEditCommand,
+} from "../src/analyzeCmd.js";
 import { parseTicket } from "../src/ticket.js";
+import {
+  writeDraft,
+  readDraft,
+  commentReviewPaths,
+  ANALYSIS_FOOTER,
+} from "../src/commentReview.js";
+import type { PendingComment } from "../src/commentReview.js";
 import type { IssueTarget } from "../src/externalDispatch.js";
 import type { Config } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
@@ -23,6 +38,21 @@ function cfg(stateDir: string = NONEXISTENT_STATE_DIR): Config {
       plannerModelId: null,
     },
   } as unknown as Config;
+}
+
+function comment(id: string, overrides: Partial<PendingComment> = {}): PendingComment {
+  return {
+    id,
+    nwo: "o/r",
+    issue: 42,
+    issueTitle: "Something broke",
+    external: true,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    draft: "Here's my analysis of the issue.",
+    footer: true,
+    ...overrides,
+  };
 }
 
 function target(overrides: Partial<IssueTarget> = {}): IssueTarget {
@@ -141,5 +171,182 @@ describe("runAnalyzeCommand", () => {
 
     expect(code).toBe(1);
     expect(out.join("")).toContain("ticket already queued");
+  });
+});
+
+describe("runAnalyzeReviewCommand", () => {
+  it("no id: lists pending drafts (id, nwo#issue, first draft line); empty -> friendly message", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arev-empty-"));
+    const c = cfg(dir);
+    let out = "";
+    const print = (s: string) => {
+      out += s;
+    };
+    expect(await runAnalyzeReviewCommand(c, undefined, { printFn: print })).toBe(0);
+    expect(out).toMatch(/no pending comment drafts/);
+
+    writeDraft(c, comment("analyze-o-r-42"));
+    out = "";
+    expect(await runAnalyzeReviewCommand(c, undefined, { printFn: print })).toBe(0);
+    expect(out).toContain("analyze-o-r-42");
+    expect(out).toContain("o/r#42");
+    expect(out).toContain("Here's my analysis of the issue.");
+  });
+
+  it("with id: prints the full draft, includes the footer line when footer:true", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arev-show-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Full analysis body here." }));
+
+    let out = "";
+    const code = await runAnalyzeReviewCommand(c, "analyze-o-r-42", {
+      printFn: (s) => {
+        out += s;
+      },
+    });
+    expect(code).toBe(0);
+    expect(out).toContain("Full analysis body here.");
+    expect(out).toContain(ANALYSIS_FOOTER);
+    expect(out).toContain("post: junco analyze post analyze-o-r-42");
+  });
+
+  it("with id: footer:false omits the footer line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arev-nofooter-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Body only.", footer: false }));
+
+    let out = "";
+    await runAnalyzeReviewCommand(c, "analyze-o-r-42", {
+      printFn: (s) => {
+        out += s;
+      },
+    });
+    expect(out).toContain("Body only.");
+    expect(out).not.toContain(ANALYSIS_FOOTER);
+  });
+
+  it("unknown id -> exit 2, message names the id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arev-missing-"));
+    const c = cfg(dir);
+    let out = "";
+    const code = await runAnalyzeReviewCommand(c, "analyze-ghost", {
+      printFn: (s) => {
+        out += s;
+      },
+    });
+    expect(code).toBe(2);
+    expect(out).toContain("analyze-ghost");
+  });
+});
+
+describe("runAnalyzeEditCommand", () => {
+  it("round-trip: spawnFn rewrites the temp file, store now holds the sanitized replacement", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aedit-ok-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Original body." }));
+
+    let capturedFile = "";
+    const code = await runAnalyzeEditCommand(c, "analyze-o-r-42", {
+      env: { EDITOR: "vim" },
+      spawnFn: (cmd, args) => {
+        expect(cmd).toBe("vim");
+        capturedFile = args[0] ?? "";
+        writeFileSync(capturedFile, "EDITED body");
+        return { status: 0 };
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(capturedFile).toMatch(/draft\.md$/);
+    const { draft } = readDraft(c, "analyze-o-r-42");
+    expect(draft?.draft).toBe("EDITED body");
+    // Other fields preserved.
+    expect(draft?.nwo).toBe("o/r");
+    expect(draft?.issue).toBe(42);
+    expect(draft?.footer).toBe(true);
+  });
+
+  it("$EDITOR and $VISUAL both unset -> exit 2, prints the real draft file path", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aedit-noeditor-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42"));
+
+    let out = "";
+    const code = await runAnalyzeEditCommand(c, "analyze-o-r-42", {
+      env: {},
+      printFn: (s) => {
+        out += s;
+      },
+    });
+
+    expect(code).toBe(2);
+    expect(out).toMatch(/EDITOR/);
+    const path = join(commentReviewPaths(c).dir, "analyze-o-r-42.json");
+    expect(existsSync(path)).toBe(true);
+    expect(out).toContain(path);
+  });
+
+  it("editor exits nonzero -> exit 1, store unchanged", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aedit-nonzero-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Original body." }));
+
+    let out = "";
+    const code = await runAnalyzeEditCommand(c, "analyze-o-r-42", {
+      env: { EDITOR: "vim" },
+      spawnFn: () => ({ status: 1 }),
+      printFn: (s) => {
+        out += s;
+      },
+    });
+
+    expect(code).toBe(1);
+    expect(out).toMatch(/unchanged/);
+    const { draft } = readDraft(c, "analyze-o-r-42");
+    expect(draft?.draft).toBe("Original body.");
+  });
+
+  it("sanitizes on write: an outbox-marker HTML comment is stripped from the stored draft", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aedit-sanitize-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Original body." }));
+
+    const code = await runAnalyzeEditCommand(c, "analyze-o-r-42", {
+      env: { EDITOR: "vim" },
+      spawnFn: (_cmd, args) => {
+        writeFileSync(args[0] ?? "", "Edited <!-- junco:outbox:x --> body");
+        return { status: 0 };
+      },
+    });
+
+    expect(code).toBe(0);
+    const { draft } = readDraft(c, "analyze-o-r-42");
+    expect(draft?.draft).toBe("Edited  body");
+    expect(draft?.draft).not.toContain("junco:outbox");
+  });
+
+  it("missing id -> exit 2; store read error -> exit 1", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aedit-missing-"));
+    const c = cfg(dir);
+    let out = "";
+    const code = await runAnalyzeEditCommand(c, "analyze-ghost", {
+      env: { EDITOR: "vim" },
+      printFn: (s) => {
+        out += s;
+      },
+    });
+    expect(code).toBe(2);
+    expect(out).toContain("analyze-ghost");
+
+    mkdirSync(commentReviewPaths(c).dir, { recursive: true });
+    writeFileSync(join(commentReviewPaths(c).dir, "analyze-bad.json"), "{not json");
+    out = "";
+    const code2 = await runAnalyzeEditCommand(c, "analyze-bad", {
+      env: { EDITOR: "vim" },
+      printFn: (s) => {
+        out += s;
+      },
+    });
+    expect(code2).toBe(1);
   });
 });

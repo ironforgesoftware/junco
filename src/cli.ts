@@ -96,6 +96,8 @@ Subcommands:
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
   analyze <owner/repo#N|url>          investigate an issue and park a comment draft for review
+  analyze review [<id>]                   list pending comment drafts, or preview one
+  analyze edit <id>                       edit a pending draft in $EDITOR
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
@@ -426,13 +428,25 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   // analyze: compose + submit a machine-owned issue-investigation ticket
   // (src/analyzeCmd.ts) — the daemon's analyzeFlow.ts investigates and parks
-  // a comment draft. Only the bare-ref path for now; review/edit/post
-  // sub-routes arrive in later tasks.
+  // a comment draft. review/edit read and refine a parked draft; post (the
+  // human-confirmed outward write) arrives in a later task.
   // ------------------------------------------------------------
   if (subcommand === "analyze") {
     const cfg = loadConfigFn(configPath);
     const sub = positionals[1];
-    if (sub === "review" || sub === "edit" || sub === "post") {
+    if (sub === "review") {
+      const { runAnalyzeReviewCommand } = await import("./analyzeCmd.js");
+      return runAnalyzeReviewCommand(cfg, positionals[2], { printFn });
+    }
+    if (sub === "edit") {
+      if (positionals[2] === undefined) {
+        printFn(`Usage: junco analyze edit <id>\n`);
+        return 2;
+      }
+      const { runAnalyzeEditCommand } = await import("./analyzeCmd.js");
+      return runAnalyzeEditCommand(cfg, positionals[2], { printFn });
+    }
+    if (sub === "post") {
       process.stderr.write(`junco analyze ${sub}: not implemented yet\n`);
       return 2;
     }
