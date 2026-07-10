@@ -64,6 +64,14 @@ export class GuardManager {
   /** junco-side turn counter for the supervisor's escalation window. */
   private turnIndex = 0;
 
+  /**
+   * turnIndex at which the last rep nudge of each kind was issued. A rep
+   * re-trip at the SAME turnIndex means the steer nudge (delivered only after
+   * the turn) was never seen, so it must not be charged as "nudge ignored"
+   * (#127). Monotonic turnIndex makes stale entries harmless.
+   */
+  private readonly repNudgeTurn = new Map<"text_rep" | "thinking_rep", number>();
+
   /** Per-message cumulative streaming buffers (reset at message/turn boundaries). */
   private textBuf = "";
   private thinkingBuf = "";
@@ -156,20 +164,44 @@ export class GuardManager {
       trippedGuard: { lastName: guard.lastName, lastCount: guard.lastCount },
       turnIndex: this.turnIndex,
     };
+    // #127: a rep steer nudge is delivered only AFTER the current turn's tool
+    // calls, so a re-trip at the SAME turnIndex as its nudge cannot be the model
+    // ignoring it — the model never saw it. Gate the supervisor's "nudge
+    // ignored" escalation on delivery: a same-turn re-trip is a runaway-output
+    // kill with an accurate reason, decided here (not routed through the
+    // supervisor, which would overstate it and would leave the same phantom
+    // nudge bookkeeping as #126). Only a re-trip at a LATER turnIndex — when the
+    // nudge was actually deliverable — falls through to the supervisor below.
+    const nudgeTurn = this.repNudgeTurn.get(kind);
+    if (nudgeTurn !== undefined && nudgeTurn === this.turnIndex) {
+      return {
+        action: "kill",
+        reason:
+          `${kind} re-tripped within the same turn (turn ${this.turnIndex}) as its ` +
+          `steer nudge — the nudge is deliverable only after the turn, so the model ` +
+          `never saw it: runaway output, not an ignored nudge`,
+        kind,
+        detail: evt.detail,
+        turnIndex: evt.turnIndex,
+      };
+    }
+
     const action = this.supervisor.decide(evt);
     if (action.kind === "nudge" && action.nudgeMessage) {
       // Re-instantiate BOTH rep guards AND clear the cumulative buffers.
       // RepetitionGuard.update() statelessly re-evaluates the full buffer on
-      // every delta, so a fresh guard alone is not enough: with the buffer
-      // kept, the very next delta would re-trip at the same turnIndex and the
-      // supervisor would kill with "nudge ignored" before the steering prompt
-      // (delivered only after the current turn) could reach the model. With
-      // the buffers cleared, a re-trip requires ≥ minChars of fresh post-nudge
-      // repetition — so "nudge ignored" means what it says (issue #27).
+      // every delta, so a fresh guard alone is not enough: with the buffer kept,
+      // the very next delta would re-trip on the same buffered text. With the
+      // buffers cleared, a re-trip requires ≥ minChars of FRESH post-nudge
+      // repetition — and if that fresh re-trip still lands in the same turn
+      // (before the nudge was deliverable), the same-turn gate above kills it as
+      // runaway output rather than overstating it as "nudge ignored" (#27/#127).
+      // Record the turn the nudge was issued so that gate can fire.
       this.textRepGuard = new RepetitionGuard();
       this.thinkingRepGuard = new RepetitionGuard();
       this.textBuf = "";
       this.thinkingBuf = "";
+      this.repNudgeTurn.set(kind, this.turnIndex);
       return {
         action: "nudge",
         message: action.nudgeMessage,
