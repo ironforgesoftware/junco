@@ -495,6 +495,61 @@ describe("runAssessFileCommand", () => {
     expect(readPending(c, "assess-x-9").batch).not.toBeNull();
   });
 
+  it.each([" ", ",,", " , , "])(
+    "--only with a whitespace/comma-only value (%j) -> exit 2, files nothing, preserves the batch",
+    async (only) => {
+      const dir = mkdtempSync(join(tmpdir(), "afc-emptyonly-"));
+      const c = cfg([], dir);
+      writePending(c, {
+        id: "assess-x-empty",
+        nwo: "o/r",
+        external: true,
+        autoPlan: false,
+        repoPath: "/x",
+        createdAt: "2026-07-09T00:00:00.000Z",
+        findings: [
+          {
+            fingerprint: "f1",
+            kind: "code",
+            severity: "high",
+            ruleId: "R",
+            title: "One",
+            description: "",
+            references: [],
+          },
+        ],
+      });
+      let out = "";
+      const calls: string[][] = [];
+      const ghFn = (async (_c: unknown, args: string[]) => {
+        calls.push(args);
+        if (args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+        if (args[1] === "create")
+          return { stdout: "https://github.com/o/r/issues/1\n", stderr: "", code: 0 };
+        return { stdout: "", stderr: "", code: 0 };
+      }) as never;
+
+      const code = await runAssessFileCommand(
+        c,
+        "assess-x-empty",
+        { all: false, only },
+        {
+          printFn: (s) => {
+            out += s;
+          },
+          fileDeps: { ghFn },
+        },
+      );
+      // A --only value that resolves to no fingerprints is a usage error, not a
+      // silent success — it must not exit 0 or file anything (#138).
+      expect(code).toBe(2);
+      expect(out).toMatch(/--only/);
+      expect(calls.some((a) => a[1] === "create")).toBe(false);
+      // batch survives — an empty selection must not discard the review
+      expect(readPending(c, "assess-x-empty").batch).not.toBeNull();
+    },
+  );
+
   it("no id -> usage line, exit 2", async () => {
     const dir = mkdtempSync(join(tmpdir(), "afc-noid-"));
     const c = cfg([], dir);

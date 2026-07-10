@@ -287,6 +287,16 @@ export async function runAssessFileCommand(
   // unknown fingerprint would build an empty selection, file nothing, and (pre
   // the assessFiling defense-in-depth) silently archive the batch at exit 0.
   if (opts.only) {
+    // A whitespace/comma-only --only value is truthy (so the --all/--only guard
+    // above passes) but split/trim/filter yields nothing. Reject it as a usage
+    // error rather than exit 0 as a silent no-op — a filing command whose
+    // selection chose nothing has not succeeded. (#138)
+    if (selected.size === 0) {
+      print(
+        `junco assess file: --only selected no findings — pass one or more fingerprints, e.g. --only <fp,fp,...>\n`,
+      );
+      return 2;
+    }
     const unknown = [...selected].filter((fp) => !known.has(fp));
     if (unknown.length > 0) {
       print(`junco assess file: unknown fingerprint(s): ${unknown.join(", ")}\n`);
