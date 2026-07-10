@@ -16,7 +16,7 @@
  */
 
 import { statSync, existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 
 import type { Config, Ticket, RunResult } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
@@ -26,7 +26,7 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { READ_ONLY_TOOLS } from "./runOnce.js";
-import { slugifyId } from "./slug.js";
+import { transcriptPathFor } from "./slug.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { fetchFindingMarkers } from "./githubOutbox.js";
 import {
@@ -259,9 +259,7 @@ export async function runAssessFlow(
     abortSignal: deps.abortSignal,
     onProgress: deps.onProgress,
     onGuardDecision: deps.onGuardDecision,
-    transcriptPath: cfg.transcriptsEnabled
-      ? join(cfg.stateDir, "transcripts", `${slugifyId(ticket.id)}.jsonl`)
-      : undefined,
+    transcriptPath: cfg.transcriptsEnabled ? transcriptPathFor(cfg.stateDir, ticket.id) : undefined,
   });
 
   // Transient failure → requeue with backoff (mirror runOnce.ts:243-254). Safe

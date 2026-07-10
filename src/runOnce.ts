@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import type { Config, RunResult, Ticket } from "./types.js";
 import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
@@ -21,7 +21,7 @@ import { runAssessFlow } from "./assessFlow.js";
 // function bodies, never during module evaluation).
 import { runAnalyzeFlow } from "./analyzeFlow.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
-import { slugifyId } from "./slug.js";
+import { transcriptPathFor } from "./slug.js";
 import {
   NOOP_REPORTER,
   outcomeFromPrFlow,
@@ -295,7 +295,7 @@ export async function executeClaimed(
         onProgress: (p) => metrics.setTaskProgress(next.id, p),
         onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
         transcriptPath: cfg.transcriptsEnabled
-          ? join(cfg.stateDir, "transcripts", `${slugifyId(next.id)}.jsonl`)
+          ? transcriptPathFor(cfg.stateDir, next.id)
           : undefined,
       });
       // Transient failure (endpoint hiccup, truncated stream) → requeue with

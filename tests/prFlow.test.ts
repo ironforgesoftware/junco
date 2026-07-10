@@ -16,6 +16,7 @@ import {
   readFileSync,
   readdirSync,
   chmodSync,
+  existsSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -308,6 +309,31 @@ describe("runPrFlow", () => {
       "junco/happy",
     ]);
     expect(remoteBranches).toContain("junco/happy");
+  });
+
+  it("a traversal ticket id cannot escape the transcripts dir (#94, regression of #32)", async () => {
+    // A malicious id whose raw form resolves OUTSIDE <stateDir>/transcripts/.
+    // branch_name is pinned so the id influences only the transcript path (the
+    // one call site that regressed), not the git ref. runAgent synchronously
+    // mkdirSync(dirname(transcriptPath)); with the raw-id bug that creates
+    // <stateDir>/pwned/ outside the transcripts dir. The fix slugifies the id
+    // into a single inert path component so nothing escapes.
+    const cfg = makeConfig(h, { transcriptsEnabled: true });
+    const { task, path } = makeTicket(
+      h,
+      "traversal.md",
+      `---\nid: "../pwned/x"\nrepo: ${h.work}\nbranch_name: pwned-branch\n---\n# Add a feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(existsSync(join(cfg.stateDir, "pwned"))).toBe(false);
+    // The transcript still lands, contained, under the slugified filename.
+    expect(existsSync(join(cfg.stateDir, "transcripts"))).toBe(true);
   });
 
   it("threads allText through PrFlowResult when the run has messages before the last (#86)", async () => {
