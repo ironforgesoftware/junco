@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "
 import { join, basename } from "node:path";
 import type { Config, RunResult, Ticket } from "./types.js";
 import { queuePaths } from "./config.js";
+import { parseTicket } from "./ticket.js";
 import { log } from "./logging.js";
 import { metrics } from "./metrics.js";
 
@@ -48,6 +49,15 @@ export interface RequeueOutcome {
   requeued: boolean;
   dst?: string;
   attempt?: number;
+  /**
+   * Set when the requeue was declined because the ticket's frontmatter is
+   * malformed (see #108): the retry mutation could not be made to persist, so
+   * the ticket can never advance its budget and must be finalized to failed/
+   * rather than requeued into a backoff-free hot loop. Additive/optional — the
+   * `requeued:false` contract is unchanged, existing callers still route it to
+   * failed/ as they do for an exhausted budget.
+   */
+  malformed?: boolean;
 }
 
 /**
@@ -70,6 +80,22 @@ export function requeueTicket(
   content = upsertFrontmatterKey(content, "retry_count", attempt);
   content = upsertFrontmatterKey(content, "not_before", JSON.stringify(notBefore));
 
+  // #108: a malformed frontmatter block accepts the textual upsert but still
+  // fails to re-parse, so parseTicket reads retry_count=0 / not_before=null on
+  // every cycle — the budget check above never trips and the ticket becomes a
+  // backoff-free hot loop of back-to-back agent sessions. Re-parse the mutated
+  // content and confirm the retry state actually persisted; if it did not, the
+  // ticket is unexecutable, so decline (leaving it in processing/) and let the
+  // caller finalize it to failed/ exactly as it does for an exhausted budget.
+  const verify = parseTicket(claimedPath, content);
+  if (verify.retryCount !== attempt || verify.notBefore === null) {
+    log.warn("malformed frontmatter — retry state cannot persist; routing to failed/", {
+      path: claimedPath,
+      reason,
+    });
+    return { requeued: false, malformed: true };
+  }
+
   const tmp = claimedPath + ".tmp";
   writeFileSync(tmp, content, "utf8");
   renameSync(tmp, claimedPath);
@@ -77,7 +103,18 @@ export function requeueTicket(
   const inbox = queuePaths(cfg).inbox;
   mkdirSync(inbox, { recursive: true }); // defensive — survives a deleted inbox
   let name = basename(claimedPath).replace(CLAIM_PREFIX_RE, "");
-  if (existsSync(join(inbox, name))) name = name.replace(/\.md$/, `-r${attempt}.md`);
+  if (existsSync(join(inbox, name))) {
+    // #112: the -r{n} suffix must not clobber an already-queued retry (e.g. an
+    // existing t1-r1.md). Loop until a free name is found; the first candidate
+    // stays -r{attempt} so single-collision behavior is unchanged.
+    let n = attempt;
+    let candidate = name.replace(/\.md$/, `-r${n}.md`);
+    while (existsSync(join(inbox, candidate))) {
+      n += 1;
+      candidate = name.replace(/\.md$/, `-r${n}.md`);
+    }
+    name = candidate;
+  }
   const dst = join(inbox, name);
   renameSync(claimedPath, dst);
   // The single chokepoint every requeue path funnels through (Q&A/PR/assess
