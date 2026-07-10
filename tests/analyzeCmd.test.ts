@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -7,6 +7,7 @@ import {
   runAnalyzeCommand,
   runAnalyzeReviewCommand,
   runAnalyzeEditCommand,
+  runAnalyzePostCommand,
 } from "../src/analyzeCmd.js";
 import { parseTicket } from "../src/ticket.js";
 import {
@@ -20,6 +21,13 @@ import type { IssueTarget } from "../src/externalDispatch.js";
 import type { Config } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
 import type { resolveIssueTarget } from "../src/externalDispatch.js";
+import { GitOpError, type gh } from "../src/git.js";
+import { listOps } from "../src/githubOutbox.js";
+
+/** Network-shaped GitOpError → isOffline()/isNetworkError() true. */
+const NET_ERR = new GitOpError("gh failed", "connect: network is unreachable", 1);
+/** Non-network (permission) GitOpError → isOffline() false. */
+const PERM_ERR = new GitOpError("gh failed", "HTTP 403: Forbidden", 1);
 
 const NONEXISTENT_STATE_DIR = "/nonexistent-junco-analyzecmd-state";
 
@@ -373,5 +381,151 @@ describe("runAnalyzeEditCommand", () => {
       },
     });
     expect(code2).toBe(1);
+  });
+});
+
+describe("runAnalyzePostCommand", () => {
+  it("happy post: body ends with footer, prints posted url, draft archived to posted/", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apost-happy-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Here's my analysis of the issue." }));
+
+    let capturedBody = "";
+    const ghFn = (async (_c: Config, args: string[]) => {
+      expect(args[0]).toBe("issue");
+      expect(args[1]).toBe("comment");
+      expect(args[2]).toBe("42");
+      expect(args).toContain("--repo");
+      expect(args[args.indexOf("--repo") + 1]).toBe("o/r");
+      const file = args[args.indexOf("--body-file") + 1];
+      capturedBody = readFileSync(file, "utf8"); // read INSIDE the fake, before cleanup
+      return {
+        stdout: "https://github.com/o/r/issues/42#issuecomment-1\n",
+        stderr: "",
+        code: 0,
+      };
+    }) as unknown as typeof gh;
+
+    let out = "";
+    const code = await runAnalyzePostCommand(
+      c,
+      "analyze-o-r-42",
+      { noFooter: false },
+      { printFn: (s) => (out += s), ghFn },
+    );
+
+    expect(code).toBe(0);
+    expect(out).toContain("posted: https://github.com/o/r/issues/42#issuecomment-1");
+    expect(capturedBody.endsWith(ANALYSIS_FOOTER)).toBe(true);
+    // archived: gone from the pending store, present under posted/
+    expect(readDraft(c, "analyze-o-r-42").draft).toBeNull();
+    expect(existsSync(join(commentReviewPaths(c).posted, "analyze-o-r-42.json"))).toBe(true);
+  });
+
+  it("--no-footer: body handed to gh equals the bare draft", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apost-nofooter-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Bare draft body." }));
+
+    let capturedBody = "";
+    const ghFn = (async (_c: Config, args: string[]) => {
+      const file = args[args.indexOf("--body-file") + 1];
+      capturedBody = readFileSync(file, "utf8");
+      return { stdout: "https://github.com/o/r/issues/42#issuecomment-2\n", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+
+    const code = await runAnalyzePostCommand(c, "analyze-o-r-42", { noFooter: true }, { ghFn });
+
+    expect(code).toBe(0);
+    expect(capturedBody).toBe("Bare draft body.");
+    expect(capturedBody).not.toContain(ANALYSIS_FOOTER);
+  });
+
+  it("offline: network-shaped GitOpError -> queued message, durable op, draft archived", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apost-offline-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42"));
+
+    const ghFn = (async () => {
+      throw NET_ERR;
+    }) as unknown as typeof gh;
+
+    let out = "";
+    const code = await runAnalyzePostCommand(
+      c,
+      "analyze-o-r-42",
+      { noFooter: false },
+      { printFn: (s) => (out += s), ghFn },
+    );
+
+    expect(code).toBe(0);
+    expect(out).toMatch(/offline .* queued to the outbox/);
+    const ops = listOps(c);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].op.kind).toBe("comment");
+    expect(ops[0].origin).toBe("analyze");
+    if (ops[0].op.kind === "comment") {
+      expect(ops[0].op.body.endsWith(ANALYSIS_FOOTER)).toBe(true);
+    }
+    // archived — a queued op is durable, the draft's job is done
+    expect(readDraft(c, "analyze-o-r-42").draft).toBeNull();
+    expect(existsSync(join(commentReviewPaths(c).posted, "analyze-o-r-42.json"))).toBe(true);
+  });
+
+  it("non-network failure -> exit 1, message printed, draft still pending", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apost-forbidden-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42"));
+
+    const ghFn = (async () => {
+      throw PERM_ERR;
+    }) as unknown as typeof gh;
+
+    let out = "";
+    const code = await runAnalyzePostCommand(
+      c,
+      "analyze-o-r-42",
+      { noFooter: false },
+      { printFn: (s) => (out += s), ghFn },
+    );
+
+    expect(code).toBe(1);
+    expect(out).toContain("junco analyze post:");
+    expect(out).toMatch(/403/);
+    const { draft } = readDraft(c, "analyze-o-r-42");
+    expect(draft).not.toBeNull();
+    expect(existsSync(join(commentReviewPaths(c).posted, "analyze-o-r-42.json"))).toBe(false);
+  });
+
+  it("missing id -> exit 2", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apost-missingid-"));
+    const c = cfg(dir);
+    let out = "";
+    const code = await runAnalyzePostCommand(
+      c,
+      undefined,
+      { noFooter: false },
+      {
+        printFn: (s) => (out += s),
+      },
+    );
+    expect(code).toBe(2);
+    expect(out).toMatch(/usage/i);
+  });
+
+  it("unknown id -> exit 2", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apost-unknown-"));
+    const c = cfg(dir);
+    let out = "";
+    const code = await runAnalyzePostCommand(
+      c,
+      "analyze-ghost",
+      { noFooter: false },
+      {
+        printFn: (s) => (out += s),
+      },
+    );
+    expect(code).toBe(2);
+    expect(out).toContain("analyze-ghost");
   });
 });

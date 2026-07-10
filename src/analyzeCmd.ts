@@ -22,11 +22,14 @@ import {
   listDrafts,
   readDraft,
   writeDraft,
+  removeDraft,
   composeCommentBody,
   commentReviewPaths,
 } from "./commentReview.js";
 import { sanitizeFindingText } from "./findings.js";
 import { slugifyId } from "./slug.js";
+import { gh, GitOpError } from "./git.js";
+import { tryOrEnqueue, type OutboxOp } from "./githubOutbox.js";
 
 /** Same slug rule buildExternalTicket applies to compose its ticket id
  * (externalDispatch.ts) — mirrored here since this builds a distinct
@@ -240,5 +243,105 @@ export async function runAnalyzeEditCommand(
     } catch {
       /* best-effort cleanup — the OS temp dir gets swept regardless */
     }
+  }
+}
+
+const GH_TIMEOUT = 60_000;
+
+/** GitOpError's `.message` is often a generic "<bin> <sub> failed (exit N)" —
+ * the actionable reason lives in `.stderr`. Same helper as assessFiling.ts /
+ * githubOutbox.ts (kept local to avoid a cross-module import for one line). */
+function describeError(e: unknown): string {
+  if (e instanceof GitOpError) return e.stderr || e.message;
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Post ONE comment live; return the URL gh prints, or null (a comment post
+ * can legitimately produce no scrapeable URL). Mirrors createIssueLive's
+ * tmpdir + --body-file + reverse-scan shape (assessFiling.ts). */
+async function postCommentLive(
+  cfg: Config,
+  nwo: string,
+  issue: number,
+  body: string,
+  ghFn: typeof gh,
+): Promise<string | null> {
+  const dir = mkdtempSync(join(tmpdir(), "junco-analyze-post-"));
+  const file = join(dir, "comment.md");
+  writeFileSync(file, body, "utf8");
+  try {
+    const out = await ghFn(
+      cfg,
+      ["issue", "comment", String(issue), "--repo", nwo, "--body-file", file],
+      { timeoutMs: GH_TIMEOUT },
+    );
+    return (
+      out.stdout
+        .trim()
+        .split("\n")
+        .reverse()
+        .find((l) => l.startsWith("https://")) ?? null
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+export interface AnalyzePostDeps {
+  printFn?: (s: string) => void;
+  ghFn?: typeof gh;
+}
+
+/**
+ * `junco analyze post <id> [--no-footer]` — the human-confirmed step: posts a
+ * parked draft (commentReview.ts) as a comment on its issue, through the
+ * outbox seam (githubOutbox.ts) so an offline run converges on the next
+ * flush. Archives the draft to posted/ on EITHER outcome (sent or queued) —
+ * a queued op is durable, so the draft's job is done; a genuine (non-network)
+ * failure leaves the draft pending so the operator can retry.
+ */
+export async function runAnalyzePostCommand(
+  cfg: Config,
+  id: string | undefined,
+  opts: { noFooter: boolean },
+  deps: AnalyzePostDeps = {},
+): Promise<number> {
+  const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+  const ghFn = deps.ghFn ?? gh;
+
+  if (!id) {
+    print(`Usage: junco analyze post <id> [--no-footer]\n`);
+    return 2;
+  }
+
+  const { draft, error } = readDraft(cfg, id);
+  if (error) {
+    print(`junco analyze post: ${error}\n`);
+    return 1;
+  }
+  if (!draft) {
+    print(`junco analyze post: no pending draft '${id}'\n`);
+    return 2;
+  }
+
+  if (opts.noFooter) draft.footer = false;
+  const body = composeCommentBody(draft);
+  const op: OutboxOp = { kind: "comment", nwo: draft.nwo, issue: draft.issue, body };
+
+  let url: string | null = null;
+  try {
+    const outcome = await tryOrEnqueue(cfg, "analyze", op, async () => {
+      url = await postCommentLive(cfg, draft.nwo, draft.issue, body, ghFn);
+    });
+    if (outcome === "sent") {
+      print(url ? `posted: ${url}\n` : "posted\n");
+    } else {
+      print("offline — queued to the outbox; it will post on the next flush\n");
+    }
+    removeDraft(cfg, id, "posted");
+    return 0;
+  } catch (e) {
+    print(`junco analyze post: ${describeError(e)}\n`);
+    return 1;
   }
 }
