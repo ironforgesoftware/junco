@@ -95,6 +95,7 @@ Subcommands:
   assess <path|owner/repo> [--auto-plan]  audit a repo; findings await review (junco assess review)
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
+  analyze <owner/repo#N|url>          investigate an issue and park a comment draft for review
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
@@ -420,6 +421,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       { autoPlan: values["auto-plan"] === true },
       { printFn },
     );
+  }
+
+  // ------------------------------------------------------------
+  // analyze: compose + submit a machine-owned issue-investigation ticket
+  // (src/analyzeCmd.ts) — the daemon's analyzeFlow.ts investigates and parks
+  // a comment draft. Only the bare-ref path for now; review/edit/post
+  // sub-routes arrive in later tasks.
+  // ------------------------------------------------------------
+  if (subcommand === "analyze") {
+    const cfg = loadConfigFn(configPath);
+    const sub = positionals[1];
+    if (sub === "review" || sub === "edit" || sub === "post") {
+      process.stderr.write(`junco analyze ${sub}: not implemented yet\n`);
+      return 2;
+    }
+    const { runAnalyzeCommand } = await import("./analyzeCmd.js");
+    return runAnalyzeCommand(cfg, positionals[1], { printFn });
   }
 
   // ------------------------------------------------------------
