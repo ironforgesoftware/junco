@@ -20,6 +20,7 @@ export interface PendingAssess {
   repoPath: string;
   createdAt: string; // ISO
   findings: Finding[];
+  issue?: number; // scoping issue (junco assess owner/repo#N) — filed findings reference it
 }
 
 export type AssessReviewDeps = ReviewStoreDeps;

@@ -361,6 +361,7 @@ export async function runAssessFlow(
     repoPath,
     createdAt: nowFn().toISOString(),
     findings: afterDedup,
+    ...(ticket.assess?.issue !== undefined ? { issue: ticket.assess.issue } : {}),
   };
   if (afterDedup.length > 0) writePending(cfg, parked);
   counts.parked = afterDedup.length;

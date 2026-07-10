@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAssessFlow } from "../src/assessFlow.js";
-import { listPending } from "../src/assessReview.js";
+import { listPending, assessReviewPaths } from "../src/assessReview.js";
 import { parseTicket } from "../src/ticket.js";
 import { fingerprintFinding, findingMarker } from "../src/findings.js";
 import { GitOpError } from "../src/git.js";
@@ -340,6 +340,51 @@ describe("runAssessFlow", () => {
     expect(body).toContain("awaiting review");
     expect(body).toContain("junco assess file assess-1");
     expect(body).toContain("Parked for review: 2");
+  });
+
+  it("threads the ticket's scoping issue into the parked batch", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo, "assess:\n  issue: 7\n"));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    const gh = ghDedupEmpty();
+    const git = fakeGitCalls(originHttps);
+    const finalText = findingsFence([codeFinding("XSS-1", "src/index.ts")]);
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: git.gitFn,
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: () => fakeSession(finalText),
+    });
+
+    expect(r.parked).toBe(1);
+    expect(listPending(cfg(root))[0].issue).toBe(7);
+  });
+
+  it("omits the issue key entirely from the stored JSON for an unscoped ticket", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    const gh = ghDedupEmpty();
+    const git = fakeGitCalls(originHttps);
+    const finalText = findingsFence([codeFinding("XSS-1", "src/index.ts")]);
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: git.gitFn,
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: () => fakeSession(finalText),
+    });
+
+    expect(r.parked).toBe(1);
+    expect(listPending(cfg(root))[0].issue).toBeUndefined();
+
+    const { dir } = assessReviewPaths(cfg(root));
+    const [file] = readdirSync(dir);
+    const raw = readFileSync(join(dir, file), "utf8");
+    expect("issue" in JSON.parse(raw)).toBe(false);
   });
 
   it("marks the batch external and forces autoPlan false when the clone is under externalReposRoot", async () => {
