@@ -18,6 +18,8 @@ import { ensureExternalClone } from "../externalRepo.js";
 import { dispatchIssue } from "../externalDispatch.js";
 import { listPending, readPending, type PendingAssess } from "../assessReview.js";
 import { fileFindings, type FileResult } from "../assessFiling.js";
+import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
+import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -146,6 +148,17 @@ export interface DashboardClient {
   /** File the selected findings (by fingerprint) from a parked batch; throws
    * (surfacing as an error `Result`) if the batch is missing or corrupt. */
   fileReview(id: string, fingerprints: string[]): Promise<Result<FileResult>>;
+  /** Parked `junco analyze` comment drafts awaiting human confirmation. */
+  listCommentDrafts(): Promise<Result<PendingComment[]>>;
+  /** Post (or, offline, durably enqueue) a parked draft with its footer
+   * intact, archiving it on either outcome — mirrors `junco analyze post`'s
+   * default (non `--no-footer`) behavior. */
+  postCommentDraft(id: string): Promise<Result<{ outcome: "sent" | "queued"; url: string | null }>>;
+  /** Discard a parked draft without posting it. */
+  discardCommentDraft(id: string): Promise<Result<null>>;
+  /** Build + submit a `junco analyze` ticket for `nwo#num` via the shared
+   * analyze core. */
+  analyzeIssue(nwo: string, num: number): Promise<Result<{ id: string }>>;
   health(): Promise<HealthInfo>;
 }
 
@@ -162,6 +175,10 @@ export interface GhClientDeps {
   listPendingFn?: typeof listPending;
   readPendingFn?: typeof readPending;
   fileFindingsFn?: typeof fileFindings;
+  listDraftsFn?: typeof listDrafts;
+  postDraftFn?: typeof postDraftCore;
+  discardDraftFn?: typeof removeDraft;
+  analyzeCoreFn?: typeof analyzeIssueCore;
 }
 
 const GH_TIMEOUT = 30_000;
@@ -487,6 +504,30 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         if (error) throw new Error(error);
         if (!batch) throw new Error(`no pending review '${id}'`);
         return (deps.fileFindingsFn ?? fileFindings)(cfg, batch, new Set(fingerprints), { ghFn });
+      });
+    },
+
+    listCommentDrafts() {
+      return attempt(async () => (deps.listDraftsFn ?? listDrafts)(cfg));
+    },
+
+    postCommentDraft(id) {
+      return attempt(() =>
+        (deps.postDraftFn ?? postDraftCore)(cfg, id, { noFooter: false }, { ghFn }),
+      );
+    },
+
+    discardCommentDraft(id) {
+      return attempt(async () => {
+        (deps.discardDraftFn ?? removeDraft)(cfg, id, "discarded");
+        return null;
+      });
+    },
+
+    analyzeIssue(nwo, num) {
+      return attempt(async () => {
+        const r = await (deps.analyzeCoreFn ?? analyzeIssueCore)(cfg, `${nwo}#${num}`);
+        return { id: r.id };
       });
     },
 

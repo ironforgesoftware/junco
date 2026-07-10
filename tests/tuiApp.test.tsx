@@ -109,6 +109,10 @@ function makeClient(
     listReview: async () => okv([]),
     fileReview: async () =>
       okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+    listCommentDrafts: async () => okv([]),
+    postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+    discardCommentDraft: async () => okv(null),
+    analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -157,6 +161,10 @@ function makeSeqClient(sequence: DashIssue[][]) {
     listReview: async () => okv([]),
     fileReview: async () =>
       okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+    listCommentDrafts: async () => okv([]),
+    postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+    discardCommentDraft: async () => okv(null),
+    analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -208,6 +216,10 @@ function makePrSeqClient(sequence: DashPr[][]) {
     listReview: async () => okv([]),
     fileReview: async () =>
       okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+    listCommentDrafts: async () => okv([]),
+    postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+    discardCommentDraft: async () => okv(null),
+    analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -497,6 +509,10 @@ describe("App", () => {
       listReview: async () => okv([]),
       fileReview: async () =>
         okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+      listCommentDrafts: async () => okv([]),
+      postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+      discardCommentDraft: async () => okv(null),
+      analyzeIssue: async () => okv({ id: "x" }),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,

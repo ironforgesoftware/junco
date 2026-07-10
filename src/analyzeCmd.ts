@@ -70,39 +70,47 @@ export interface AnalyzeCmdDeps {
   resolveDeps?: ExternalDispatchDeps;
 }
 
+/**
+ * Shared core of `junco analyze <ref>`: resolve → build ticket → submit.
+ * Throws on any failure. The CLI shell (`runAnalyzeCommand`) wraps this in a
+ * single try/catch that prints the message and exits 1; the dashboard's
+ * `analyzeIssue` client method wraps it in `attempt` instead.
+ */
+export async function analyzeIssueCore(
+  cfg: Config,
+  ref: string,
+  deps: AnalyzeCmdDeps = {},
+): Promise<{ id: string; destPath: string }> {
+  const submitFn = deps.submitFn ?? submitTicket;
+  const resolveFn = deps.resolveFn ?? resolveIssueTarget;
+
+  const target: IssueTarget = await resolveFn(cfg, ref, deps.resolveDeps ?? {});
+  const { id, content } = buildAnalyzeTicket(target);
+  const destPath = submitFn(cfg, content, { idHint: id });
+  return { id, destPath };
+}
+
 export async function runAnalyzeCommand(
   cfg: Config,
   ref: string | undefined,
   deps: AnalyzeCmdDeps = {},
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
-  const submitFn = deps.submitFn ?? submitTicket;
-  const resolveFn = deps.resolveFn ?? resolveIssueTarget;
 
   if (!ref) {
     print(`Usage: junco analyze <owner/repo#N|url>\n`);
     return 2;
   }
 
-  let target: IssueTarget;
+  let destPath: string;
   try {
-    target = await resolveFn(cfg, ref, deps.resolveDeps ?? {});
+    ({ destPath } = await analyzeIssueCore(cfg, ref, deps));
   } catch (e) {
     print(`junco analyze: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
 
-  const { id, content } = buildAnalyzeTicket(target);
-
-  let dst: string;
-  try {
-    dst = submitFn(cfg, content, { idHint: id });
-  } catch (e) {
-    print(`junco analyze: ${e instanceof Error ? e.message : String(e)}\n`);
-    return 1;
-  }
-
-  print(`queued: ${dst}\n`);
+  print(`queued: ${destPath}\n`);
   print(
     "queued — the worker will investigate and park a comment draft; " +
       "run `junco analyze review` when it lands\n",
@@ -293,6 +301,42 @@ export interface AnalyzePostDeps {
 }
 
 /**
+ * Shared core of `junco analyze post`: read → compose → post/enqueue →
+ * archive-on-success. Throws on read-error/missing/permanent-failure — a
+ * plain `Error` carrying the CLI's own message text (`error`'s string, or
+ * `no pending draft '<id>'`) for the first two, and the outbox's
+ * describeError-friendly error for the last. The CLI shell
+ * (`runAnalyzePostCommand`) keeps its OWN readDraft pre-check ahead of this
+ * call so it can tell exit 2 (missing/unknown id) apart from exit 1 (read
+ * error/permanent failure) — this core has no such distinction to offer,
+ * since the dashboard's `postCommentDraft` client method just wraps it in
+ * `attempt` and reports one flat `Result`.
+ */
+export async function postDraftCore(
+  cfg: Config,
+  id: string,
+  opts: { noFooter: boolean },
+  deps: { ghFn?: typeof gh } = {},
+): Promise<{ outcome: "sent" | "queued"; url: string | null }> {
+  const ghFn = deps.ghFn ?? gh;
+
+  const { draft, error } = readDraft(cfg, id);
+  if (error) throw new Error(error);
+  if (!draft) throw new Error(`no pending draft '${id}'`);
+
+  if (opts.noFooter) draft.footer = false;
+  const body = composeCommentBody(draft);
+  const op: OutboxOp = { kind: "comment", nwo: draft.nwo, issue: draft.issue, body };
+
+  let url: string | null = null;
+  const outcome = await tryOrEnqueue(cfg, "analyze", op, async () => {
+    url = await postCommentLive(cfg, draft.nwo, draft.issue, body, ghFn);
+  });
+  removeDraft(cfg, id, "posted");
+  return { outcome, url };
+}
+
+/**
  * `junco analyze post <id> [--no-footer]` — the human-confirmed step: posts a
  * parked draft (commentReview.ts) as a comment on its issue, through the
  * outbox seam (githubOutbox.ts) so an offline run converges on the next
@@ -307,13 +351,15 @@ export async function runAnalyzePostCommand(
   deps: AnalyzePostDeps = {},
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
-  const ghFn = deps.ghFn ?? gh;
 
   if (!id) {
     print(`Usage: junco analyze post <id> [--no-footer]\n`);
     return 2;
   }
 
+  // Kept as the shell's own pre-check (rather than inspecting what
+  // postDraftCore throws) so exit 2 (missing/unknown id) stays distinct from
+  // exit 1 (read error/permanent failure) without a typed-error seam.
   const { draft, error } = readDraft(cfg, id);
   if (error) {
     print(`junco analyze post: ${error}\n`);
@@ -324,21 +370,13 @@ export async function runAnalyzePostCommand(
     return 2;
   }
 
-  if (opts.noFooter) draft.footer = false;
-  const body = composeCommentBody(draft);
-  const op: OutboxOp = { kind: "comment", nwo: draft.nwo, issue: draft.issue, body };
-
-  let url: string | null = null;
   try {
-    const outcome = await tryOrEnqueue(cfg, "analyze", op, async () => {
-      url = await postCommentLive(cfg, draft.nwo, draft.issue, body, ghFn);
-    });
+    const { outcome, url } = await postDraftCore(cfg, id, opts, deps);
     if (outcome === "sent") {
       print(url ? `posted: ${url}\n` : "posted\n");
     } else {
       print("offline — queued to the outbox; it will post on the next flush\n");
     }
-    removeDraft(cfg, id, "posted");
     return 0;
   } catch (e) {
     print(`junco analyze post: ${describeError(e)}\n`);

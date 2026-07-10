@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { makeGhDashboardClient, cachePathFor } from "../src/tui/ghClient.js";
 import { listOps } from "../src/githubOutbox.js";
 import type { Config } from "../src/types.js";
-import type { CmdResult } from "../src/git.js";
+import type { CmdResult, gh } from "../src/git.js";
 import { GitOpError } from "../src/git.js";
 import type { PendingAssess } from "../src/assessReview.js";
 import type { FileResult } from "../src/assessFiling.js";
+import type { PendingComment } from "../src/commentReview.js";
 
 const cfg = {
   ghBin: "gh",
@@ -731,5 +732,113 @@ describe("fileReview", () => {
     const r = await client.fileReview("assess-x-1", ["f1"]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("not valid JSON");
+  });
+});
+
+describe("listCommentDrafts", () => {
+  it("maps through the listDraftsFn dep", async () => {
+    const drafts: PendingComment[] = [
+      {
+        id: "analyze-o-r-1",
+        nwo: "o/r",
+        issue: 1,
+        issueTitle: "Something broke",
+        external: true,
+        repoPath: "/x",
+        createdAt: "2026-07-09T00:00:00.000Z",
+        draft: "Here's my analysis.",
+        footer: true,
+      },
+    ];
+    const listDraftsFn = vi.fn((_c: Config) => drafts);
+    const client = makeGhDashboardClient(cfg, { ...fakes(), listDraftsFn });
+    const r = await client.listCommentDrafts();
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((d) => d.id)).toEqual(["analyze-o-r-1"]);
+    expect(listDraftsFn).toHaveBeenCalledWith(cfg);
+  });
+
+  it("failure surfaces as ok:false", async () => {
+    const listDraftsFn = vi.fn((_c: Config) => {
+      throw new Error("readdir boom");
+    });
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), listDraftsFn }).listCommentDrafts();
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("postCommentDraft", () => {
+  it("threads id + {noFooter:false} through to postDraftFn and returns {outcome,url}", async () => {
+    let gotArgs: unknown[] = [];
+    const postDraftFn = vi.fn(
+      async (_c: Config, id: string, opts: { noFooter: boolean }, _d?: { ghFn?: typeof gh }) => {
+        gotArgs = [id, opts];
+        return {
+          outcome: "sent" as const,
+          url: "https://github.com/o/r/issues/1#issuecomment-1",
+        };
+      },
+    );
+    const client = makeGhDashboardClient(cfg, { ...fakes(), postDraftFn });
+    const r = await client.postCommentDraft("analyze-o-r-1");
+    expect(r).toEqual({
+      ok: true,
+      value: { outcome: "sent", url: "https://github.com/o/r/issues/1#issuecomment-1" },
+    });
+    expect(gotArgs).toEqual(["analyze-o-r-1", { noFooter: false }]);
+  });
+
+  it("a throwing postDraftFn -> ok:false with the message", async () => {
+    const postDraftFn = vi.fn(async () => {
+      throw new Error("no pending draft 'nope'");
+    });
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), postDraftFn }).postCommentDraft(
+      "nope",
+    );
+    expect(r).toEqual({ ok: false, error: "no pending draft 'nope'" });
+  });
+});
+
+describe("discardCommentDraft", () => {
+  it('calls the dep with (cfg, id, "discarded")', async () => {
+    const discardDraftFn = vi.fn((_c: Config, _id: string, _to: "posted" | "discarded") => {});
+    const client = makeGhDashboardClient(cfg, { ...fakes(), discardDraftFn });
+    const r = await client.discardCommentDraft("analyze-o-r-1");
+    expect(r).toEqual({ ok: true, value: null });
+    expect(discardDraftFn).toHaveBeenCalledWith(cfg, "analyze-o-r-1", "discarded");
+  });
+
+  it("failure surfaces as ok:false", async () => {
+    const discardDraftFn = vi.fn(() => {
+      throw new Error("enoent");
+    });
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), discardDraftFn }).discardCommentDraft(
+      "nope",
+    );
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("analyzeIssue", () => {
+  it("builds the ref 'o/r#7' and returns the id", async () => {
+    const analyzeCoreFn = vi.fn(async (_c: Config, ref: string) => {
+      expect(ref).toBe("o/r#7");
+      return { id: "analyze-o-r-7", destPath: "/inbox/analyze-o-r-7.md" };
+    });
+    const client = makeGhDashboardClient(cfg, { ...fakes(), analyzeCoreFn });
+    const r = await client.analyzeIssue("o/r", 7);
+    expect(r).toEqual({ ok: true, value: { id: "analyze-o-r-7" } });
+    expect(analyzeCoreFn).toHaveBeenCalledWith(cfg, "o/r#7");
+  });
+
+  it("throwing core -> ok:false", async () => {
+    const analyzeCoreFn = vi.fn(async () => {
+      throw new Error("resolve boom");
+    });
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), analyzeCoreFn }).analyzeIssue(
+      "o/r",
+      7,
+    );
+    expect(r.ok).toBe(false);
   });
 });
