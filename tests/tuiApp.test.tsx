@@ -369,6 +369,35 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("planning")); // optimistic label applied
   });
 
+  it("c drafts an analysis comment for the selected issue", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const analyzed: [string, number][] = [];
+    client.analyzeIssue = async (nwo, num) => {
+      analyzed.push([nwo, num]);
+      return okv({ id: "gh-acme-api-7-analyze" });
+    };
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
+    r.stdin.write("\t"); // focus issues pane
+    await tick();
+    r.stdin.write("c");
+    await until(() => analyzed.length === 1);
+    expect(analyzed).toEqual([["acme/api", 7]]);
+    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-acme-api-7-analyze"));
+    expect(r.lastFrame()).toContain("v to review when parked");
+  });
+
+  it("c on the selected issue toasts an error when the client call fails", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    client.analyzeIssue = async () => ({ ok: false, error: "no unowned clone available" });
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("\t");
+    await tick();
+    r.stdin.write("c");
+    await until(() => (r.lastFrame() ?? "").includes("no unowned clone available"));
+  });
+
   it("approve is refused on a raw issue with a reason toast (no client call)", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());
@@ -939,6 +968,29 @@ describe("external-repo routing", () => {
     expect(dispatched[0]).toBe("up/stream#7");
     expect(actions).toHaveLength(0); // no label flow
     await until(() => (r.lastFrame() ?? "").includes("ticket queued: gh-up-stream-7"));
+  });
+
+  it("c on an external repo drafts an analysis comment too (no refusal)", async () => {
+    const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
+    const analyzed: string[] = [];
+    client.analyzeIssue = async (nwo, num) => {
+      analyzed.push(`${nwo}#${num}`);
+      return okv({ id: "gh-up-stream-7-analyze" });
+    };
+    const file = wle();
+    writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("j"); // select up/stream (pane 1, index 1)
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // its issue loaded
+    r.stdin.write("2"); // focus issues pane
+    await tick();
+    r.stdin.write("c");
+    await until(() => analyzed.length === 1);
+    expect(analyzed[0]).toBe("up/stream#7");
+    expect(actions).toHaveLength(0); // no label flow
+    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-up-stream-7-analyze"));
+    expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
   });
 
   it("D/a/R on an external repo explains instead of acting", async () => {

@@ -276,6 +276,7 @@ export function hintsFor(
     ["enter", "preview"],
     ["d", "dispatch"],
     ["a", "approve"],
+    ["c", "analyze"],
     ["/", "filter"],
     ["t", "queue"],
     ["p", "PRs"],
