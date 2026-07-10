@@ -491,6 +491,69 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("alx/coral"));
   });
 
+  it("a handler resolving after unmount is swallowed by the aliveRef guard (no crash)", async () => {
+    // Hold applyAction open, fire `d` (runAction → applyAction), unmount, THEN
+    // resolve to a FAILURE so the continuation would roll labels back and toast.
+    // Post-unmount setState is a silent no-op under React 19, so the observable
+    // contract is "no throw / no console.error"; the guard keeps it that way if
+    // a future React reinstates the setState-after-unmount warning.
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    let releaseAction: (() => void) | undefined;
+    client.applyAction = () =>
+      new Promise((res) => {
+        releaseAction = () => res({ ok: false, error: "late boom" });
+      });
+    const errors: unknown[][] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+    try {
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      r.stdin.write("\t"); // focus issues pane
+      await tick();
+      r.stdin.write("d"); // runAction("dispatch") → applyAction (now pending)
+      await until(() => releaseAction !== undefined);
+      r.unmount(); // unmount cleanup flips aliveRef.current = false synchronously
+      releaseAction!(); // resolve AFTER unmount — the guard must swallow the .then
+      await new Promise((res) => setTimeout(res, 20)); // drain the continuation
+      expect(errors).toEqual([]);
+    } finally {
+      console.error = origError;
+    }
+  });
+
+  it("add-repo unmounting mid-validate does not write the watchlist (aliveRef guard)", async () => {
+    // Submit the add-repo form, then unmount while validateAndPrepareRepo is
+    // still in flight. The await-guard must short-circuit the continuation before
+    // its durable writeWatchlist — the file must stay unwritten.
+    const { client } = makeClient({ "acme/api": [] });
+    const file = wl();
+    let validateCalled = false;
+    let releaseValidate: (() => void) | undefined;
+    client.validateAndPrepareRepo = () => {
+      validateCalled = true;
+      return new Promise((res) => {
+        releaseValidate = () => res(okv(undefined));
+      });
+    };
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("w");
+    await tick();
+    r.stdin.write("alx/coral");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("/c/coral");
+    await tick();
+    r.stdin.write("\r"); // submit → handleAddRepo → validateAndPrepareRepo (pending)
+    await until(() => validateCalled);
+    r.unmount(); // aliveRef.current = false before the validate resolves
+    releaseValidate!(); // resolve AFTER unmount — guard returns before writeWatchlist
+    await new Promise((res) => setTimeout(res, 20)); // let the continuation (not) run
+    expect(readWatchlist(file).entries).toEqual([]); // never persisted
+  });
+
   it("unwatch removes watchlist entries but refuses config entries", async () => {
     const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
     const file = wl();

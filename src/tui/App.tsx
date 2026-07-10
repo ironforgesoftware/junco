@@ -783,6 +783,20 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, []);
 
+  // Flips false on unmount so every async `.then`/`await` continuation below can
+  // bail before touching state after the dashboard has exited. `assess` and the
+  // other spawned CLIs can resolve up to cliRunner's 120s timeout past unmount;
+  // the optimistic/browser/detail handlers resolve fast but carry the same guard
+  // for consistency (post-unmount setState is a silent no-op under React 19, so
+  // this is a uniformity guard, not a live-bug fix).
+  const aliveRef = useRef(true);
+  useEffect(
+    () => () => {
+      aliveRef.current = false;
+    },
+    [],
+  );
+
   // Optimistic action: apply the label delta locally, call gh with the ORIGINAL
   // labels, restore + toast on failure.
   const runAction = useCallback(
@@ -798,6 +812,7 @@ export function App(props: AppProps): React.JSX.Element {
       const prevLabels = currentIssue.labels;
       setIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
       void client.applyAction(nwo, num, action, prevLabels).then((res) => {
+        if (!aliveRef.current) return;
         if (!res.ok) {
           setIssueLabels(nwo, num, prevLabels);
           showToast("error", res.error);
@@ -823,6 +838,7 @@ export function App(props: AppProps): React.JSX.Element {
     setDetail({ issue: snapshot, nwo, body: null, planComment: null, loading: true });
     setView("detail");
     void client.issueDetail(nwo, num).then((res) => {
+      if (!aliveRef.current) return;
       if (res.ok) {
         setDetail({
           issue: snapshot,
@@ -841,6 +857,7 @@ export function App(props: AppProps): React.JSX.Element {
   const openBrowser = useCallback(() => {
     if (!currentNwo || !currentIssue) return;
     void client.openInBrowser(currentNwo, currentIssue.number).then((res) => {
+      if (!aliveRef.current) return;
       if (!res.ok) showToast("error", res.error);
     });
   }, [client, currentNwo, currentIssue, showToast]);
@@ -851,6 +868,7 @@ export function App(props: AppProps): React.JSX.Element {
     (nwo: string) => {
       if (!nwo) return;
       void client.openRepoInBrowser(nwo).then((res) => {
+        if (!aliveRef.current) return;
         if (!res.ok) showToast("error", res.error);
       });
     },
@@ -863,6 +881,7 @@ export function App(props: AppProps): React.JSX.Element {
   const openDetailIssueInBrowser = useCallback(() => {
     if (!detail) return;
     void client.openInBrowser(detail.nwo, detail.issue.number).then((res) => {
+      if (!aliveRef.current) return;
       if (!res.ok) showToast("error", res.error);
     });
   }, [client, detail, showToast]);
@@ -870,6 +889,7 @@ export function App(props: AppProps): React.JSX.Element {
     if (!prDetail) return;
     const { nwo, number } = prDetail.pr;
     void client.openPrInBrowser(nwo, number).then((res) => {
+      if (!aliveRef.current) return;
       if (!res.ok) showToast("error", res.error);
     });
   }, [client, prDetail, showToast]);
@@ -877,16 +897,6 @@ export function App(props: AppProps): React.JSX.Element {
   // Repos currently mid-`assess` — guards a second `s`/`S` press on the same
   // repo from double-spawning the CLI while the first run is still going.
   const assessInFlightRef = useRef<Set<string>>(new Set());
-  // Flips false on unmount. `assess` spawns a real subprocess (cliRunner's
-  // default timeout is 120s) — the `.then` below must not setState after the
-  // dashboard has already exited.
-  const aliveRef = useRef(true);
-  useEffect(
-    () => () => {
-      aliveRef.current = false;
-    },
-    [],
-  );
 
   // Immediate LOCAL refresh (rail `r`): cheap always, heavy only for the two
   // git-backed sections. aliveRef drops late results after unmount.
@@ -1139,6 +1149,7 @@ export function App(props: AppProps): React.JSX.Element {
       // (offline) falls through to the owned-repo flow unchanged.
       setAddRepoBusy("checking permissions…");
       const perm = await client.repoPermission(nwo);
+      if (!aliveRef.current) return;
       if (perm.ok && !perm.value.canPush) {
         if (path.trim() !== "") {
           setAddRepoBusy(null);
@@ -1147,6 +1158,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
         setAddRepoBusy("forking & cloning…");
         const prep = await client.prepareExternalRepo(nwo);
+        if (!aliveRef.current) return;
         setAddRepoBusy(null);
         if (!prep.ok) {
           setAddRepoError(prep.error);
@@ -1174,6 +1186,7 @@ export function App(props: AppProps): React.JSX.Element {
         expanded = join(clonesDir, owner ?? nwo, repo ?? "repo");
         setAddRepoBusy("cloning repository…");
         const cloned = await client.cloneRepo(nwo, expanded);
+        if (!aliveRef.current) return;
         if (!cloned.ok) {
           setAddRepoBusy(null);
           setAddRepoError(cloned.error);
@@ -1184,6 +1197,7 @@ export function App(props: AppProps): React.JSX.Element {
       }
       setAddRepoBusy("validating…");
       const res = await client.validateAndPrepareRepo(nwo, expanded);
+      if (!aliveRef.current) return;
       setAddRepoBusy(null);
       if (!res.ok) {
         setAddRepoError(res.error);
@@ -1243,6 +1257,7 @@ export function App(props: AppProps): React.JSX.Element {
     if (!selectedPr) return;
     const { nwo, number } = selectedPr;
     void client.openPrInBrowser(nwo, number).then((res) => {
+      if (!aliveRef.current) return;
       if (!res.ok) showToast("error", res.error);
     });
   }, [client, selectedPr, showToast]);
@@ -1873,6 +1888,7 @@ export function App(props: AppProps): React.JSX.Element {
         if (selectedPane3Pr) {
           const { nwo, number } = selectedPane3Pr;
           void client.openPrInBrowser(nwo, number).then((res) => {
+            if (!aliveRef.current) return;
             if (!res.ok) showToast("error", res.error);
           });
         }
