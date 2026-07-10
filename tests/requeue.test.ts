@@ -114,6 +114,22 @@ describe("requeueTicket", () => {
     expect(out.dst).toBe(join(root, "inbox", "t1-r1.md"));
   });
 
+  it("declines a malformed-frontmatter ticket so the caller routes it to failed/ instead of looping (#108)", () => {
+    // A frontmatter block with valid fences but invalid YAML re-parses to
+    // retryCount 0 on every cycle; the textual upsert can't make the increment
+    // stick, so the budget check would never trip → a backoff-free hot loop.
+    const p = claimedFile("---\nid: t1\nfoo: [1, 2\n---\ndo it\n");
+    const t = parseTicket(p, readFileSync(p, "utf8"));
+    expect(t.retryCount).toBe(0); // malformed → parses as 0 (budget check passes forever)
+    const before = metrics.snapshot().requeues;
+    const out = requeueTicket(cfg, p, t, "stop_reason=error");
+    expect(out.requeued).toBe(false); // NOT requeued
+    expect(out.malformed).toBe(true); // signalled unexecutable so the caller finalizes to failed/
+    expect(existsSync(p)).toBe(true); // left in processing/ for the caller to finalize
+    expect(existsSync(join(root, "inbox", "t1.md"))).toBe(false); // never re-queued
+    expect(metrics.snapshot().requeues).toBe(before); // not counted as a requeue
+  });
+
   it("second retry stamps retry_count 2 and replaces (not duplicates) the keys", () => {
     const p = claimedFile(
       '---\nid: t1\nretry_count: 1\nnot_before: "2026-01-01T00:00:00Z"\n---\nx',
