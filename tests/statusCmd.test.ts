@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { runStatusCommand, fmtUptime } from "../src/statusCmd.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
+import { writeDraft } from "../src/commentReview.js";
 import type { Config } from "../src/types.js";
 
 describe("fmtUptime", () => {
@@ -252,6 +253,35 @@ describe("runStatusCommand", () => {
     const text = out.join("");
     expect(text).toContain("assess review");
     expect(text).toMatch(/1 pending \(junco assess review\)/);
+  });
+
+  it("omits the analyze review line when nothing is pending", async () => {
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    expect(out.join("")).not.toMatch(/analyze review:/);
+  });
+
+  it("shows the pending comment-draft count", async () => {
+    writeDraft(cfg, {
+      id: "a",
+      nwo: "o/r",
+      issue: 1,
+      issueTitle: "Title",
+      external: true,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      draft: "draft body",
+      footer: true,
+    });
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    const text = out.join("");
+    expect(text).toContain("analyze review");
+    expect(text).toMatch(/1 pending \(junco analyze review\)/);
   });
 
   it("lock held but /health unreachable → 'not responding'", async () => {

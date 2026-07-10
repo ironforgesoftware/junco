@@ -18,6 +18,7 @@ import { loadDispatchTemplate } from "./planPrompt.js";
 import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
+import { draftCount } from "./commentReview.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -213,6 +214,13 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     const reviews = pendingCount(cfg);
     if (reviews > 0) {
       report("ok", "assess review", `${reviews} pending (junco assess review)`);
+    }
+
+    // 7e. analyze comment-draft backlog — informational only (normal workflow
+    // state, not a health problem), independent of the github.enabled gate.
+    const drafts = draftCount(cfg);
+    if (drafts > 0) {
+      report("ok", "analyze drafts", `${drafts} pending (junco analyze review)`);
     }
 
     // 8. daemon (informational)
