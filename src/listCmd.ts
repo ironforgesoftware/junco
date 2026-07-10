@@ -55,14 +55,27 @@ export async function runListCommand(
       /* missing dir → empty box */
     }
     const entries = names
-      .map((n) => ({ n, mtime: statSync(join(dir, n)).mtimeMs }))
+      .map((n) => {
+        // A live daemon can rename a ticket out of this box between readdir and
+        // stat; a vanished entry (ENOENT) is skipped, not fatal (#120).
+        try {
+          return { n, mtime: statSync(join(dir, n)).mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is { n: string; mtime: number } => e !== null)
       .sort((a, b2) => b2.mtime - a.mtime);
     print(`${b} (${entries.length})\n`);
     for (const e of entries.slice(0, limit)) {
       let statusTag = "";
       if (b === "done" || b === "failed") {
-        const s = ticketStatusOf(readFileSync(join(dir, e.n), "utf8"));
-        if (s) statusTag = `  [${s}]`;
+        try {
+          const s = ticketStatusOf(readFileSync(join(dir, e.n), "utf8"));
+          if (s) statusTag = `  [${s}]`;
+        } catch {
+          /* vanished between stat and read → list it without a status tag */
+        }
       }
       print(`  ${e.n}  (${age(e.mtime, now)})${statusTag}\n`);
     }
