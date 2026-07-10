@@ -320,6 +320,35 @@ describe("submitTicket — clobber protection", () => {
     expect(readdirSync(inbox).filter((n) => n.endsWith(".tmp"))).toHaveLength(0);
   });
 
+  it("no-hardlink fallback claims an exclusive slot (not check-then-act): a held slot blocks a racing submit before dest exists (issue #111)", () => {
+    const { cfg, vaultRoot } = freshVault();
+    const inbox = join(vaultRoot, "Junco", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    // Simulate a concurrent no-hardlink submit that has ATOMICALLY claimed the
+    // slot but not yet renamed its temp into place: the destination .md does
+    // not exist yet, so the old existsSync(destPath) check would say "free" and
+    // proceed to rename — a check-then-act race.
+    const slot = join(inbox, ".my-cool-task.md.claim");
+    writeFileSync(slot, "");
+    const destPath = join(inbox, "my-cool-task.md");
+    expect(existsSync(destPath)).toBe(false); // the stale check would say "free"
+
+    const enosys = () => {
+      throw Object.assign(new Error("ENOSYS"), { code: "ENOSYS" });
+    };
+    // The exclusive-create slot claim must fail EEXIST → "already queued"
+    // instead of check-then-act renaming over the racing winner.
+    expect(() => submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: enosys })).toThrow(
+      /already queued/,
+    );
+
+    // The winner's held slot is untouched, and the loser placed no ticket .md.
+    expect(existsSync(slot)).toBe(true);
+    expect(existsSync(destPath)).toBe(false);
+    // No leftover temp from the loser.
+    expect(readdirSync(inbox).filter((n) => n.endsWith(".tmp"))).toHaveLength(0);
+  });
+
   it("atomic placement: does not clobber an occupied slot the existence check can't see (issue #49)", () => {
     const { cfg, vaultRoot } = freshVault();
     const inbox = join(vaultRoot, "Junco", "inbox");

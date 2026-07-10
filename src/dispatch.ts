@@ -5,7 +5,16 @@
  * they only know where the inbox lives and how to write a file safely.
  */
 
-import { mkdirSync, writeFileSync, linkSync, renameSync, unlinkSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  writeFileSync,
+  linkSync,
+  renameSync,
+  unlinkSync,
+  existsSync,
+  openSync,
+  closeSync,
+} from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Config } from "./types.js";
@@ -89,15 +98,44 @@ export function submitTicket(
       throw new Error(`ticket already queued: ${destPath}`);
     }
     if (code && NO_HARDLINK_CODES.has(code)) {
-      // No hard-link support on this filesystem — fall back to the pre-#49
-      // primitive, a check-then-act rename. Weaker guarantee: the existence
-      // check races a concurrent submit for the same id, so a clobber is
-      // possible where linkSync would have failed EEXIST. Universally
-      // supported where the hard link is not (issue #81).
-      if (existsSync(destPath)) {
-        throw new Error(`ticket already queued: ${destPath}`);
+      // No hard-link support on this filesystem (issue #81) — fall back without
+      // linkSync's EEXIST atomicity, but NOT to a check-then-act existsSync+
+      // rename (issue #111). Claim an exclusive sentinel with O_EXCL (mirroring
+      // pidfileLock): a racing submit fails EEXIST on the slot rather than
+      // slipping through a bare existence check, and we only rename the
+      // fully-written temp into place once we own the slot. We deliberately do
+      // NOT O_EXCL destPath itself — a bare `wx` write there would momentarily
+      // expose a half-written *.md to the daemon's glob — so the sentinel is a
+      // hidden non-.md path and the .md only ever appears via an atomic rename
+      // of a complete file.
+      const slotPath = join(inbox, `.${slug}.md.claim`);
+      let slotFd: number;
+      try {
+        slotFd = openSync(slotPath, "wx"); // O_CREAT | O_EXCL — atomic slot claim
+      } catch (se) {
+        // EEXIST: another submit owns the slot (or is mid-place) → duplicate.
+        // Do NOT enter the finally below — we must not unlink a slot we don't own.
+        if ((se as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`ticket already queued: ${destPath}`);
+        }
+        throw se;
       }
-      renameSync(tmpPath, destPath);
+      try {
+        closeSync(slotFd);
+        // Slot is ours; a concurrent submit is now blocked at the O_EXCL above,
+        // so this existence check + rename is effectively atomic against other
+        // submitters. A pre-existing dest is a completed prior submit → duplicate.
+        if (existsSync(destPath)) {
+          throw new Error(`ticket already queued: ${destPath}`);
+        }
+        renameSync(tmpPath, destPath);
+      } finally {
+        try {
+          unlinkSync(slotPath);
+        } catch {
+          /* slot already gone */
+        }
+      }
     } else {
       throw e;
     }
