@@ -23,8 +23,8 @@ import {
   isOffline,
   ensureFindingLabels,
   fetchFindingMarkers,
+  withCommentMarker,
   MAX_OP_ATTEMPTS,
-  OUTBOX_MARKER_PREFIX,
   FLUSH_LOCK_FILENAME,
   type OutboxOp,
 } from "../src/githubOutbox.js";
@@ -202,19 +202,45 @@ describe("flushOutbox", () => {
     expect(outboxDepth(cfg)).toBe(0);
   });
 
-  it("comment op appends the marker and skips when the marker already exists upstream", async () => {
+  it("comment op dedups on the content marker in the operator's own upstream comment", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f2-"));
     const cfg = cfgAt(root);
-    const id = enqueueOp(cfg, "reporter", { kind: "comment", nwo: "a/b", issue: 7, body: "hello" });
+    enqueueOp(cfg, "reporter", { kind: "comment", nwo: "a/b", issue: 7, body: "hello" });
+    const ME = "junco-bot";
+    // junco's own already-delivered comment carries the content-derived marker.
+    const delivered = withCommentMarker("a/b", 7, "hello");
     let posted = 0;
     const f = fakes((tool, args) => {
-      if (tool === "gh" && args[0] === "api") return { stdout: `${OUTBOX_MARKER_PREFIX}${id} -->` };
+      if (tool === "gh" && args[0] === "api" && args[1] === "user") return { stdout: `${ME}\n` };
+      if (tool === "gh" && args[0] === "api")
+        return { stdout: JSON.stringify({ login: ME, body: delivered }) };
       if (tool === "gh" && args[0] === "issue" && args[1] === "comment") posted++;
       return undefined;
     });
     const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(r.sent).toBe(1);
-    expect(posted).toBe(0); // marker found → treated as already delivered
+    expect(posted).toBe(0); // marker found in our own comment → already delivered
+  });
+
+  it("a foreign-author pre-planted marker does NOT suppress junco's own comment (#132)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-f2b-"));
+    const cfg = cfgAt(root);
+    enqueueOp(cfg, "reporter", { kind: "comment", nwo: "a/b", issue: 7, body: "hello" });
+    const ME = "junco-bot";
+    // An outsider pre-planted the (content-derivable) marker — but under a
+    // different author. Author-scoping must ignore it so junco still posts.
+    const foreign = withCommentMarker("a/b", 7, "hello");
+    let posted = 0;
+    const f = fakes((tool, args) => {
+      if (tool === "gh" && args[0] === "api" && args[1] === "user") return { stdout: `${ME}\n` };
+      if (tool === "gh" && args[0] === "api")
+        return { stdout: JSON.stringify({ login: "attacker", body: foreign }) };
+      if (tool === "gh" && args[0] === "issue" && args[1] === "comment") posted++;
+      return undefined;
+    });
+    const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(r.sent).toBe(1);
+    expect(posted).toBe(1); // foreign marker ignored → junco still posts once
   });
 
   it("offline mid-flush stops everything, attempts untouched, remaining counted", async () => {
@@ -335,11 +361,16 @@ describe("flushOutbox", () => {
 
     // Finalize comment posts fine; the done/failed LABEL flip fails permanently
     // (e.g. a token that lost issues:write). Comments are tracked so the dedup
-    // across the original + replayed tail can be asserted.
+    // across the original + replayed tail can be asserted. The dedup scan is
+    // author-scoped, so the fake reports junco's own posted comment as NDJSON
+    // {login, body} under the operator login.
+    const ME = "junco-bot";
     let commentBody = "";
     let commentPosts = 0;
     const f = fakes((_tool, args) => {
-      if (args[0] === "api") return { stdout: commentBody };
+      if (args[0] === "api" && args[1] === "user") return { stdout: `${ME}\n` };
+      if (args[0] === "api")
+        return { stdout: commentBody ? JSON.stringify({ login: ME, body: commentBody }) : "" };
       if (args[0] === "issue" && args[1] === "comment") {
         commentPosts++;
         const idx = args.indexOf("--body-file");
@@ -358,7 +389,9 @@ describe("flushOutbox", () => {
     expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1); // original parked in dead/
     expect(commentPosts).toBe(1); // posted once, then deduped across attempts
 
-    // The finalize tail was re-enqueued (bounded, finalizeOnly, keyed by PR URL).
+    // The finalize tail was re-enqueued (bounded, finalizeOnly); its finalize
+    // comment dedups on the content-derived marker (stable across original +
+    // tail since the body is identical), not the old guessable pr:<url> key.
     const live = listOps(cfg);
     expect(live).toHaveLength(1);
     const tail = live[0].op as Extract<OutboxOp, { kind: "pr" }>;
@@ -370,9 +403,9 @@ describe("flushOutbox", () => {
     });
     expect(tail.finalize).not.toBeNull();
 
-    // Replaying the tail does NOT re-post the finalize comment (dedup by PR
-    // URL), and — the label flip still failing — it dead-letters WITHOUT
-    // spawning yet another tail (re-enqueue is bounded to one).
+    // Replaying the tail does NOT re-post the finalize comment (dedup by the
+    // content-derived marker), and — the label flip still failing — it
+    // dead-letters WITHOUT spawning yet another tail (re-enqueue is bounded to one).
     for (let i = 0; i < MAX_OP_ATTEMPTS; i++)
       await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(commentPosts).toBe(1); // no double comment

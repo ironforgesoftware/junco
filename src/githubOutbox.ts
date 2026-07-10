@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { TERMINAL_DONE_STATUSES, type Config } from "./types.js";
 import { log } from "./logging.js";
 import { gh, git, GitOpError, isNetworkError } from "./git.js";
@@ -272,6 +273,73 @@ function marker(id: string): string {
   return `${OUTBOX_MARKER_PREFIX}${id} -->`;
 }
 
+/** Deterministic, content-derived idempotency key for a comment (nwo + issue +
+ * body). Unlike an op-file id, both sides of a lost-ack replay can compute it:
+ * the LIVE post (analyze post / the reporter) embeds marker(key) in the body,
+ * and the flush's scan looks for the SAME marker(key) — so a comment created
+ * server-side whose ack was lost (→ classified offline → re-enqueued) is
+ * recognized on the next flush and never double-posted (#132). The pr-finalize
+ * comment inherits this too: its body (Opened <url> + finalText) is stable
+ * across the original op and any re-enqueued finalize tail, so it converges
+ * without the old guessable `pr:<url>` key. */
+function commentContentKey(nwo: string, issue: number, body: string): string {
+  return "c" + createHash("sha256").update(`${nwo}\n${issue}\n${body}`).digest("hex").slice(0, 24);
+}
+
+/** The outbox idempotency marker for a given comment — the exact substring the
+ * flush scans upstream comments for, and the exact substring embedded by the
+ * live post (via withCommentMarker). */
+function commentMarker(nwo: string, issue: number, body: string): string {
+  return marker(commentContentKey(nwo, issue, body));
+}
+
+/** The marker-embedded comment body: the operator's text with the
+ * content-derived outbox idempotency marker appended. THE single
+ * marker-embedding path both live consumers (analyzeCmd's postCommentLive and
+ * githubReport's postComment) and the flush replay route through, so the live
+ * body and the replayed flush body carry an identical marker(commentContentKey)
+ * and a lost-ack replay converges instead of double-posting (#132). */
+export function withCommentMarker(nwo: string, issue: number, body: string): string {
+  return `${body.trimEnd()}\n\n${commentMarker(nwo, issue, body)}\n`;
+}
+
+/** Bodies of the comments on <nwo>#<issue> AUTHORED BY `login` (the operator's
+ * gh login, "@me"). Author-scoping the dedup scan (mirroring
+ * fetchFindingMarkers' `--author @me`) closes the pre-plant hole: the
+ * content-derived marker is derivable from public content, so an outside
+ * commenter could otherwise pre-plant it to suppress junco's own comment. The
+ * comments API has no author filter, so we fetch {login, body} as NDJSON and
+ * filter client-side; unparseable lines and null bodies are ignored. */
+async function fetchOwnCommentBodies(
+  cfg: Config,
+  nwo: string,
+  issue: number,
+  login: string,
+  ghFn: typeof gh,
+): Promise<string[]> {
+  const listed = await ghFn(
+    cfg,
+    [
+      "api",
+      "--paginate",
+      `repos/${nwo}/issues/${issue}/comments`,
+      "--jq",
+      ".[] | {login: .user.login, body: .body}",
+    ],
+    { timeoutMs: GH_TIMEOUT },
+  );
+  return listed.stdout.split("\n").flatMap((line) => {
+    const t = line.trim();
+    if (!t) return [];
+    try {
+      const c = JSON.parse(t) as { login?: string | null; body?: string | null };
+      return c.login === login && typeof c.body === "string" ? [c.body] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 /** ENOENT from an op-file mutation means a CONCURRENT flusher (the daemon
  * sweep vs a manual `junco outbox flush` — both walk the same dir) already
  * removed/renamed the file after we read it. That op is the other flusher's
@@ -296,13 +364,6 @@ function cap(text: string, limit = 700): string {
  * takes a Ticket (not available here), so this is a local equivalent. */
 function prFlushComment(finalize: { finalText: string }, prUrl: string): string {
   return `Opened ${prUrl}\n\n${cap(finalize.finalText)}`;
-}
-
-/** Idempotency key for a PR-op finalize comment, derived from the created PR
- * URL rather than the op-file id so the original op and any re-enqueued
- * finalize tail (#77) share one marker and can never double-post the comment. */
-function prCommentKey(prUrl: string): string {
-  return `pr:${prUrl}`;
 }
 
 const FINDING_LABEL_DEFAULT = { color: "ededed", description: "" };
@@ -457,21 +518,33 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
       }
     };
 
+    // The operator's gh login ("@me"), resolved once per flush and reused to
+    // author-scope every comment dedup scan (fetchOwnCommentBodies).
+    let loginMemo: string | null = null;
+    const ownLogin = async (): Promise<string> => {
+      if (loginMemo === null) {
+        const out = await ghFn(cfg, ["api", "user", "--jq", ".login"], { timeoutMs: GH_TIMEOUT });
+        loginMemo = out.stdout.trim();
+      }
+      return loginMemo;
+    };
+
     const postCommentIdempotent = async (
       nwo: string,
       issue: number,
       body: string,
-      id: string,
     ): Promise<void> => {
-      const existing = await ghFn(
-        cfg,
-        ["api", "--paginate", `repos/${nwo}/issues/${issue}/comments`, "--jq", ".[].body"],
-        { timeoutMs: GH_TIMEOUT },
-      );
-      if (existing.stdout.includes(marker(id))) return; // crash-replay: already delivered
+      // Dedup on the content-derived marker (commentContentKey), author-scoped
+      // to the operator's own comments — the same marker the LIVE post embeds
+      // via withCommentMarker, so a lost-ack replay is recognized here and not
+      // double-posted, and a foreign pre-planted marker cannot suppress us (#132).
+      const mk = commentMarker(nwo, issue, body);
+      const login = await ownLogin();
+      const own = await fetchOwnCommentBodies(cfg, nwo, issue, login, ghFn);
+      if (own.some((b) => b.includes(mk))) return; // already delivered by us
       const dir = mkdtempSync(join(tmpdir(), "junco-obxc-"));
       const file = join(dir, "comment.md");
-      writeFileSync(file, `${body.trimEnd()}\n\n${marker(id)}\n`, "utf8");
+      writeFileSync(file, withCommentMarker(nwo, issue, body), "utf8");
       try {
         await ghFn(cfg, ["issue", "comment", String(issue), "--repo", nwo, "--body-file", file], {
           timeoutMs: GH_TIMEOUT,
@@ -522,7 +595,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           return;
         }
         case "comment":
-          await postCommentIdempotent(op.nwo, op.issue, op.body, s.id);
+          await postCommentIdempotent(op.nwo, op.issue, op.body);
           return;
         case "push":
           await gitFn(
@@ -599,7 +672,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           }
           if (op.finalize !== null && op.issue !== null) {
             const body = prFlushComment(op.finalize, op.prUrl!);
-            await postCommentIdempotent(op.nwo, op.issue, body, prCommentKey(op.prUrl!));
+            await postCommentIdempotent(op.nwo, op.issue, body);
             const ll = lifecycleLabels(cfg.github.triggerLabel);
             const doneLabel = TERMINAL_DONE_STATUSES.has(op.finalize.status) ? ll.done : ll.failed;
             await ghFn(

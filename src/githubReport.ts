@@ -20,7 +20,7 @@ import {
 } from "./githubInbox.js";
 import { gh } from "./git.js";
 import { log } from "./logging.js";
-import { tryOrEnqueue, type OutboxOp } from "./githubOutbox.js";
+import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
 
 // COMMENT_LIMIT is defined in githubInbox.ts (buildPlanComment shares it);
 // re-exported here so existing importers keep working without an import cycle.
@@ -130,7 +130,10 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
   const postComment = async (g: TicketGithub, body: string): Promise<void> => {
     const dir = mkdtempSync(join(tmpdir(), "junco-ghc-"));
     const file = join(dir, "comment.md");
-    writeFileSync(file, body, "utf8");
+    // Embed the outbox idempotency marker (withCommentMarker) so a lost-ack
+    // replay of the queued comment op is deduped by the next flush and never
+    // double-posts this comment (#132).
+    writeFileSync(file, withCommentMarker(g.nwo, g.issue, body), "utf8");
     try {
       await ghFn(cfg, ["issue", "comment", String(g.issue), "--repo", g.nwo, "--body-file", file], {
         timeoutMs: GH_TIMEOUT,

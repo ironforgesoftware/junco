@@ -22,7 +22,7 @@ import type { Config } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
 import type { resolveIssueTarget } from "../src/externalDispatch.js";
 import { GitOpError, type gh } from "../src/git.js";
-import { listOps } from "../src/githubOutbox.js";
+import { listOps, flushOutbox } from "../src/githubOutbox.js";
 
 /** Network-shaped GitOpError → isOffline()/isNetworkError() true. */
 const NET_ERR = new GitOpError("gh failed", "connect: network is unreachable", 1);
@@ -416,7 +416,8 @@ describe("runAnalyzePostCommand", () => {
 
     expect(code).toBe(0);
     expect(out).toContain("posted: https://github.com/o/r/issues/42#issuecomment-1");
-    expect(capturedBody.endsWith(ANALYSIS_FOOTER)).toBe(true);
+    expect(capturedBody).toContain(ANALYSIS_FOOTER);
+    expect(capturedBody).toContain("<!-- junco:outbox:"); // idempotency marker embedded (#132)
     // archived: gone from the pending store, present under posted/
     expect(readDraft(c, "analyze-o-r-42").draft).toBeNull();
     expect(existsSync(join(commentReviewPaths(c).posted, "analyze-o-r-42.json"))).toBe(true);
@@ -437,8 +438,9 @@ describe("runAnalyzePostCommand", () => {
     const code = await runAnalyzePostCommand(c, "analyze-o-r-42", { noFooter: true }, { ghFn });
 
     expect(code).toBe(0);
-    expect(capturedBody).toBe("Bare draft body.");
+    expect(capturedBody).toContain("Bare draft body.");
     expect(capturedBody).not.toContain(ANALYSIS_FOOTER);
+    expect(capturedBody).toContain("<!-- junco:outbox:"); // marker embedded, no footer (#132)
   });
 
   it("offline: network-shaped GitOpError -> queued message, durable op, draft archived", async () => {
@@ -527,5 +529,41 @@ describe("runAnalyzePostCommand", () => {
     );
     expect(code).toBe(2);
     expect(out).toContain("analyze-ghost");
+  });
+
+  it("lost-ack: a live post that succeeded but lost its ack is NOT double-posted on the next flush (#132)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apost-lostack-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Here's my analysis." }));
+
+    const ME = "junco-bot";
+    const upstream: { login: string; body: string }[] = [];
+    let posts = 0;
+    const ghFn = (async (_c: Config, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "comment") {
+        // The server DID create the comment ...
+        const file = args[args.indexOf("--body-file") + 1];
+        upstream.push({ login: ME, body: readFileSync(file, "utf8") });
+        posts++;
+        // ... but the ack never arrived → surfaces as a network error.
+        throw NET_ERR;
+      }
+      if (args[0] === "api" && args[1] === "user")
+        return { stdout: `${ME}\n`, stderr: "", code: 0 };
+      if (args[0] === "api")
+        return { stdout: upstream.map((u) => JSON.stringify(u)).join("\n"), stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+
+    // Live post: comment created server-side, ack lost → op enqueued, draft archived.
+    const code = await runAnalyzePostCommand(c, "analyze-o-r-42", { noFooter: false }, { ghFn });
+    expect(code).toBe(0);
+    expect(posts).toBe(1);
+    expect(listOps(c)).toHaveLength(1);
+
+    // Flush: the scan recognizes junco's own already-delivered comment → no re-post.
+    const r = await flushOutbox(c, { ghFn });
+    expect(r).toMatchObject({ sent: 1, remaining: 0, offline: false });
+    expect(posts).toBe(1); // NOT double-posted
   });
 });
