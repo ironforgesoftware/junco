@@ -187,7 +187,11 @@ function longestBacktickRun(text: string): number {
  * frontmatter is machine-owned, model output and issue text can never set
  * repo:/workdir:/tools:. Null = no usable (complete) plan. */
 export function extractPlanBody(text: string): string | null {
-  const lines = text.split("\n");
+  // Normalize CRLF (and lone CR) to LF first: editing the plan comment in
+  // GitHub's web UI yields CRLF, and the fence match survives only via
+  // incidental `\s*` tolerance while interior `\r` would otherwise leak
+  // verbatim into the execution ticket and PR body (#134).
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const openRe = new RegExp("^(`{3,})" + PLAN_FENCE + "\\s*$");
   let last: string | null = null;
   for (let i = 0; i < lines.length; i++) {

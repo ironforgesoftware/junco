@@ -848,6 +848,14 @@ describe("extractPlanBody", () => {
   it("ignores an unterminated fence (no complete block)", () => {
     expect(extractPlanBody("````junco-ticket\n# No closer")).toBeNull();
   });
+
+  it("normalizes CRLF line endings from a web-UI comment edit — no \\r leaks (#134)", () => {
+    const plan = "# Title\r\n\r\n## Steps\r\n- do it";
+    const text = "chatter\r\n\r\n```junco-ticket\r\n" + plan + "\r\n```\r\n\r\ntrailing";
+    const out = extractPlanBody(text);
+    expect(out).toBe("# Title\n\n## Steps\n- do it");
+    expect(out).not.toContain("\r");
+  });
 });
 
 describe("buildPlanComment", () => {
