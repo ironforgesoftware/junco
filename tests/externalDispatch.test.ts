@@ -9,7 +9,12 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
-import { parseIssueRef, buildExternalTicket, dispatchIssue } from "../src/externalDispatch.js";
+import {
+  parseIssueRef,
+  buildExternalTicket,
+  dispatchIssue,
+  resolveIssueTarget,
+} from "../src/externalDispatch.js";
 import { parseTicket } from "../src/ticket.js";
 import { deriveRepoContext } from "../src/repoContext.js";
 import { readWatchlist, watchlistPath } from "../src/watchlist.js";
@@ -189,5 +194,117 @@ describe("dispatchIssue", () => {
   it("throws on an unparseable ref", async () => {
     const cfg = freshCfg();
     await expect(dispatchIssue(cfg, "nope", {})).rejects.toThrow(/issue reference/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveIssueTarget
+// ---------------------------------------------------------------------------
+
+describe("resolveIssueTarget", () => {
+  // Same fixture style as the dispatchIssue block above, duplicated (not
+  // shared) so that block stays byte-for-byte untouched.
+  let tmpDirs: string[] = [];
+
+  function freshCfg(): Config {
+    const vaultRoot = mkdtempSync(join(tmpdir(), "junco-extdispatch-vault-"));
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-extdispatch-state-"));
+    tmpDirs.push(vaultRoot, stateDir);
+    return {
+      vaultRoot,
+      juncoSubdir: "Junco",
+      stateDir,
+      ghBin: "gh",
+      gitBin: "git",
+      github: {
+        enabled: false,
+        triggerLabel: "junco",
+        askLabel: "junco:ask",
+        pollIntervalSeconds: 60,
+        repos: [{ nwo: "acme/api", path: "/c/api" }],
+        requireApproval: true,
+        plannerModelId: null,
+        externalReposRoot: join(vaultRoot, "external"),
+      },
+    } as unknown as Config;
+  }
+
+  afterEach(() => {
+    for (const d of tmpDirs) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    tmpDirs = [];
+  });
+
+  function ghRespondingToIssueView(json: { title: string; body: string | null }) {
+    return async (
+      _cfg: unknown,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string; code: number }> => {
+      if (args[0] === "issue" && args[1] === "view") {
+        return { stdout: JSON.stringify(json), stderr: "", code: 0 };
+      }
+      throw new Error(`unexpected gh call in this test: ${args.join(" ")}`);
+    };
+  }
+
+  const ghFn = ghRespondingToIssueView({ title: "T", body: "B" });
+
+  it("maps an owned repo without provisioning", async () => {
+    const cfg = freshCfg();
+    let ensureCloneCalled = false;
+    const t = await resolveIssueTarget(cfg, "acme/api#7", {
+      ghFn,
+      ensureCloneFn: async () => {
+        ensureCloneCalled = true;
+        return { path: "/should/not/be/used", forkNwo: "should-not-be-used" };
+      },
+    });
+    expect(t).toMatchObject({
+      nwo: "acme/api",
+      issue: 7,
+      title: "T",
+      body: "B",
+      clonePath: "/c/api",
+      external: false,
+      forkNwo: null,
+    });
+    expect(ensureCloneCalled).toBe(false); // owned path never touches fork machinery
+  });
+
+  it("provisions an unowned repo and adds a watchlist entry", async () => {
+    const cfg = freshCfg();
+    const t = await resolveIssueTarget(cfg, "up/stream#3", {
+      ghFn,
+      ensureCloneFn: async () => ({ path: "/clones/up/stream", forkNwo: "me/stream" }),
+    });
+    expect(t.external).toBe(true);
+    expect(t.clonePath).toBe("/clones/up/stream");
+    expect(t.forkNwo).toBe("me/stream");
+    const wl = readWatchlist(watchlistPath(cfg));
+    expect(wl.entries).toContainEqual({
+      nwo: "up/stream",
+      path: "/clones/up/stream",
+      external: true,
+    });
+  });
+
+  it("defaults a null issue body to an empty string", async () => {
+    const cfg = freshCfg();
+    const t = await resolveIssueTarget(cfg, "acme/api#5", {
+      ghFn: ghRespondingToIssueView({ title: "T", body: null }),
+    });
+    expect(t.body).toBe("");
+  });
+
+  it("rejects a non-issue ref", async () => {
+    const cfg = freshCfg();
+    await expect(resolveIssueTarget(cfg, "not-a-ref")).rejects.toThrow(
+      /not a GitHub issue reference/,
+    );
   });
 });

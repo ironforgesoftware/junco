@@ -68,19 +68,28 @@ export function buildExternalTicket(opts: {
   return { id, content: fm.join("\n") + "\n\n" + body + "\n" };
 }
 
-export async function dispatchIssue(
+/** The resolved subject of an issue-driven operation: what issue, on what
+ * repo, cloned where — the shared front half of dispatch/analyze/assess. */
+export interface IssueTarget {
+  nwo: string;
+  issue: number;
+  title: string;
+  body: string;
+  clonePath: string;
+  external: boolean;
+  forkNwo: string | null;
+}
+
+/** Parse an issue ref, fetch it via `gh`, and resolve it to a local clone —
+ * owned repos (config ∪ non-external watchlist) resolve directly; unowned
+ * repos are provisioned via `ensureCloneFn` and added to the watchlist.
+ * Shared by `dispatchIssue`, `junco analyze`, and `junco assess`. */
+export async function resolveIssueTarget(
   cfg: Config,
   input: string,
   deps: ExternalDispatchDeps = {},
-): Promise<{
-  id: string;
-  destPath: string;
-  external: boolean;
-  clonePath: string;
-  forkNwo: string | null;
-}> {
+): Promise<IssueTarget> {
   const ghFn = deps.ghFn ?? gh;
-  const submitFn = deps.submitFn ?? submitTicket;
   const ensureCloneFn = deps.ensureCloneFn ?? ensureExternalClone;
 
   const ref = parseIssueRef(input);
@@ -117,14 +126,37 @@ export async function dispatchIssue(
     }
   }
 
+  return { nwo: ref.nwo, issue: ref.number, title, body: body ?? "", clonePath, external, forkNwo };
+}
+
+export async function dispatchIssue(
+  cfg: Config,
+  input: string,
+  deps: ExternalDispatchDeps = {},
+): Promise<{
+  id: string;
+  destPath: string;
+  external: boolean;
+  clonePath: string;
+  forkNwo: string | null;
+}> {
+  const submitFn = deps.submitFn ?? submitTicket;
+  const t = await resolveIssueTarget(cfg, input, deps);
+
   const ticket = buildExternalTicket({
-    nwo: ref.nwo,
-    issue: ref.number,
-    title,
-    body: body ?? "",
-    clonePath,
-    external,
+    nwo: t.nwo,
+    issue: t.issue,
+    title: t.title,
+    body: t.body,
+    clonePath: t.clonePath,
+    external: t.external,
   });
   const destPath = submitFn(cfg, ticket.content, { idHint: ticket.id });
-  return { id: ticket.id, destPath, external, clonePath, forkNwo };
+  return {
+    id: ticket.id,
+    destPath,
+    external: t.external,
+    clonePath: t.clonePath,
+    forkNwo: t.forkNwo,
+  };
 }
