@@ -383,6 +383,98 @@ describe("runAnalyzeFlow", () => {
     expect(content).toMatch(/retry_count: 1/);
   });
 
+  it("a fence that sanitizes to empty (HTML-comment-only) → failed/, parks nothing", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path, ticket } = claim(j, ticketContent(repo));
+
+    const git = fakeGitCalls(originHttps);
+    // A non-whitespace fence (clears the fence===null / trim==="" guard) whose
+    // only content is an HTML comment — sanitizeFindingText strips it, leaving
+    // an empty draft: the Phase-6 "nothing to review after sanitize" branch.
+    const r = await runAnalyzeFlow(cfg(root), ticket, path, {
+      gitFn: git.gitFn,
+      sessionFactoryFor: () => fakeSession(commentFence("<!-- nothing but a comment -->")),
+    });
+
+    expect(r.status).toBe("failed");
+    expect(r.parked).toBe(false);
+    expect(draftCount(cfg(root))).toBe(0);
+    expect(r.dst.startsWith(join(j, "failed"))).toBe(true);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(1);
+    const body = readFileSync(join(j, "failed", readdirSync(join(j, "failed"))[0]), "utf8");
+    expect(body.toLowerCase()).toContain("no comment draft");
+  });
+
+  it("a whitespace-only fence → failed/, parks nothing", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path, ticket } = claim(j, ticketContent(repo));
+
+    const git = fakeGitCalls(originHttps);
+    // extractLastFencedBlock returns a non-null but all-whitespace body: the
+    // Phase-5 `fence.trim() === ""` branch (distinct from `fence === null`).
+    const r = await runAnalyzeFlow(cfg(root), ticket, path, {
+      gitFn: git.gitFn,
+      sessionFactoryFor: () => fakeSession(commentFence("   \t  ")),
+    });
+
+    expect(r.status).toBe("failed");
+    expect(r.parked).toBe(false);
+    expect(draftCount(cfg(root))).toBe(0);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(1);
+    const body = readFileSync(join(j, "failed", readdirSync(join(j, "failed"))[0]), "utf8");
+    expect(body.toLowerCase()).toContain("no comment draft");
+  });
+
+  it("Phase-1 containment rejection (repo outside allowedRepoRoots) → failed/, no agent run", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    // A real, existing allowed root that does NOT contain `repo`: repo is a
+    // directory (clears the isDir guard) but fails the containment check.
+    const allowed = mkdtempSync(join(tmpdir(), "junco-allowed-"));
+    const c = { ...cfg(root), allowedRepoRoots: [allowed] };
+    const { path, ticket } = claim(j, ticketContent(repo));
+
+    const git = fakeGitCalls(originHttps);
+    const r = await runAnalyzeFlow(c, ticket, path, {
+      gitFn: git.gitFn,
+      // If the flow reached the agent this would throw; containment must return first.
+      sessionFactoryFor: () => throwingSession(),
+    });
+
+    expect(r.status).toBe("failed");
+    expect(r.parked).toBe(false);
+    expect(draftCount(c)).toBe(0);
+    // Phase 1 returns before ever reading the origin remote.
+    expect(git.calls).toHaveLength(0);
+    expect(r.result.errorMessage).toContain("repo path not permitted");
+    const body = readFileSync(join(j, "failed", readdirSync(join(j, "failed"))[0]), "utf8");
+    expect(body).toContain("repo path not permitted");
+  });
+
+  it("Phase-2 unparseable origin remote (non-GitHub) → failed/, no agent run", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path, ticket } = claim(j, ticketContent(repo));
+
+    // A well-formed URL that nwoFromRemoteUrl cannot resolve to owner/repo.
+    const git = fakeGitCalls("https://gitlab.com/o/r.git\n");
+    const r = await runAnalyzeFlow(cfg(root), ticket, path, {
+      gitFn: git.gitFn,
+      sessionFactoryFor: () => throwingSession(),
+    });
+
+    expect(r.status).toBe("failed");
+    expect(r.parked).toBe(false);
+    expect(draftCount(cfg(root))).toBe(0);
+    // The remote WAS read (Phase 2) but no agent ran.
+    expect(git.calls.some((a) => a[0] === "remote")).toBe(true);
+    expect(r.result.errorMessage).toContain("not a parseable GitHub repo");
+    const body = readFileSync(join(j, "failed", readdirSync(join(j, "failed"))[0]), "utf8");
+    expect(body).toContain("not a parseable GitHub repo");
+  });
+
   it("transient-exhausted run (no fence) preserves the original errorMessage instead of clobbering it", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
