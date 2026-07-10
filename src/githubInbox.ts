@@ -9,6 +9,7 @@
  */
 
 import { readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import type { Config, GithubRepoMapping } from "./types.js";
 import { gh, git } from "./git.js";
 import { queuePaths } from "./config.js";
@@ -87,6 +88,20 @@ export function parseRepoInput(input: string): string | null {
   return /^[\w.-]+\/[\w.-]+$/.test(t) ? t : null;
 }
 
+/** Stable, collision-free ticket id for a GitHub issue. The slug keeps it
+ * human-recognizable; a short hash of the RAW `owner/repo` disambiguates the
+ * owner/name boundary the slug alone loses — `acme/api-x#5` and `acme-api/x#5`
+ * both slug to `gh-acme-api-x-5`, which cross-wired their tickets and stranded
+ * the second issue (#133). The hash is over the lowercased nwo so it agrees
+ * with the case-insensitive dedup used everywhere else. */
+export function githubTicketId(nwo: string, issueNumber: number, suffix?: string): string {
+  const [owner, name] = nwo.split("/");
+  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const hash = createHash("sha256").update(nwo.toLowerCase()).digest("hex").slice(0, 8);
+  const base = `gh-${slug(owner)}-${slug(name)}-${hash}-${issueNumber}`;
+  return suffix ? `${base}-${suffix}` : base;
+}
+
 /** Convert an eligible issue into a Junco ticket file (id + full content).
  * JSON.stringify produces valid YAML double-quoted scalars — titles and paths
  * with quotes/colons round-trip through parseTicket. */
@@ -96,9 +111,7 @@ export function issueToTicket(
   cfg: Config,
   parent: { title: string; body: string | null } | null,
 ): { id: string; content: string } {
-  const [owner, name] = repo.nwo.split("/");
-  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
-  const id = `gh-${slug(owner)}-${slug(name)}-${issue.number}`;
+  const id = githubTicketId(repo.nwo, issue.number);
   const kind = issue.labels.some((l) => l.name === cfg.github.askLabel) ? "ask" : "pr";
 
   const fm: string[] = ["---", `id: ${id}`];
@@ -139,9 +152,7 @@ export function buildPlanningTicket(
   repo: GithubRepoMapping,
   parent: { title: string; body: string | null } | null,
 ): { id: string; content: string } {
-  const [owner, name] = repo.nwo.split("/");
-  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
-  const id = `gh-${slug(owner)}-${slug(name)}-${issue.number}-plan`;
+  const id = githubTicketId(repo.nwo, issue.number, "plan");
   const fm = [
     "---",
     `id: ${id}`,
@@ -531,9 +542,7 @@ export function buildExecutionTicket(
   repo: GithubRepoMapping,
   planBody: string,
 ): { id: string; content: string } {
-  const [owner, name] = repo.nwo.split("/");
-  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
-  const id = `gh-${slug(owner)}-${slug(name)}-${issueNumber}`;
+  const id = githubTicketId(repo.nwo, issueNumber);
   const fm = [
     "---",
     `id: ${id}`,
