@@ -149,7 +149,12 @@ export async function runRestartCommand(
           "-k",
           `gui/${deps.uid ?? process.getuid?.() ?? 0}/${svc.id}`,
         ])
-      : await execFn("systemctl", ["--user", "restart", svc.id]);
+      : // `--no-block` returns as soon as the restart job is ENQUEUED instead of
+        // waiting out the unit's TimeoutStopSec (sized to the ticket timeout,
+        // potentially minutes) — which would outlive defaultExec's 15s budget,
+        // get killed (err.code=null → exit 1), and be misreported as a failed
+        // restart. The pid-poll below is what actually confirms the relaunch. (#117)
+        await execFn("systemctl", ["--user", "--no-block", "restart", svc.id]);
   if (kick.code !== 0) {
     print(`restart failed for ${svc.id}: ${kick.stderr.trim() || `exit ${kick.code}`}\n`);
     return 1;
