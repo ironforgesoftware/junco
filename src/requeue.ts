@@ -103,7 +103,18 @@ export function requeueTicket(
   const inbox = queuePaths(cfg).inbox;
   mkdirSync(inbox, { recursive: true }); // defensive — survives a deleted inbox
   let name = basename(claimedPath).replace(CLAIM_PREFIX_RE, "");
-  if (existsSync(join(inbox, name))) name = name.replace(/\.md$/, `-r${attempt}.md`);
+  if (existsSync(join(inbox, name))) {
+    // #112: the -r{n} suffix must not clobber an already-queued retry (e.g. an
+    // existing t1-r1.md). Loop until a free name is found; the first candidate
+    // stays -r{attempt} so single-collision behavior is unchanged.
+    let n = attempt;
+    let candidate = name.replace(/\.md$/, `-r${n}.md`);
+    while (existsSync(join(inbox, candidate))) {
+      n += 1;
+      candidate = name.replace(/\.md$/, `-r${n}.md`);
+    }
+    name = candidate;
+  }
   const dst = join(inbox, name);
   renameSync(claimedPath, dst);
   // The single chokepoint every requeue path funnels through (Q&A/PR/assess

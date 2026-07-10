@@ -114,6 +114,17 @@ describe("requeueTicket", () => {
     expect(out.dst).toBe(join(root, "inbox", "t1-r1.md"));
   });
 
+  it("loops the -r{n} suffix so an already-queued t1-r1.md is not clobbered (#112)", () => {
+    writeFileSync(join(root, "inbox", "t1.md"), "occupied", "utf8");
+    writeFileSync(join(root, "inbox", "t1-r1.md"), "already queued", "utf8");
+    const p = claimedFile("---\nid: t1\n---\nx");
+    const t = parseTicket(p, readFileSync(p, "utf8"));
+    const out = requeueTicket(cfg, p, t, "r");
+    expect(out.dst).toBe(join(root, "inbox", "t1-r2.md")); // bumped past the collision
+    // the previously queued retry survives untouched
+    expect(readFileSync(join(root, "inbox", "t1-r1.md"), "utf8")).toBe("already queued");
+  });
+
   it("declines a malformed-frontmatter ticket so the caller routes it to failed/ instead of looping (#108)", () => {
     // A frontmatter block with valid fences but invalid YAML re-parses to
     // retryCount 0 on every cycle; the textual upsert can't make the increment
