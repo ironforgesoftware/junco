@@ -170,6 +170,10 @@ export async function syncExternalClone(
   deps: ExternalRepoDeps = {},
 ): Promise<void> {
   const gitFn = deps.gitFn ?? git;
+  // Self-guard: this fetch+hard-reset is destructive, so refuse any target that
+  // is not under the root junco owns — a caller must never point it at the
+  // operator's own checkout, whatever gating upstream believes it applied.
+  assertContained(cfg.github.externalReposRoot, repoPath, "sync target");
   await gitFn(cfg, ["-C", repoPath, "fetch", "origin"], { timeoutMs: FETCH_TIMEOUT });
   const head = await gitFn(cfg, ["-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD"], {
     check: false,

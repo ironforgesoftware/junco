@@ -189,11 +189,30 @@ describe("syncExternalClone", () => {
         return { stdout: "refs/remotes/origin/main\n" };
       return {};
     });
-    await syncExternalClone(cfg, "/clones/o/r", f);
+    await syncExternalClone(cfg, join("/ext", "o", "r"), f);
     expect(f.calls.some((c) => c.args.includes("fetch") && c.args.includes("origin"))).toBe(true);
     const reset = f.calls.find((c) => c.args.includes("reset"));
     expect(reset).toBeDefined();
     expect(reset?.args).toContain("--hard");
     expect(reset?.args).toContain("origin/main");
+  });
+
+  it("falls back to origin/HEAD when symbolic-ref is unset", async () => {
+    const f = fakes((c) => {
+      if (c.bin === "git" && c.args.includes("symbolic-ref")) return { code: 1 }; // unset
+      return {};
+    });
+    await syncExternalClone(cfg, join("/ext", "o", "r"), f);
+    const reset = f.calls.find((c) => c.args.includes("reset"));
+    expect(reset?.args).toContain("--hard");
+    expect(reset?.args).toContain("origin/HEAD");
+  });
+
+  it("refuses to hard-reset a target outside external_repos_root", async () => {
+    // The destructive fetch/reset must self-guard: no reachable caller may aim
+    // it at a path outside the root junco owns, regardless of upstream gating.
+    const f = fakes(() => ({}));
+    await expect(syncExternalClone(cfg, "/outside/o/r", f)).rejects.toThrow(/external_repos_root/);
+    expect(f.calls).toHaveLength(0); // rejected before any git ran
   });
 });
