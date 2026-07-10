@@ -128,6 +128,15 @@ describe("describeTicketSchema()", () => {
     expect(assessProps.auto_plan.type).toBe("boolean");
   });
 
+  it("documents assess.issue and assess.issue_title (additive contract)", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    const assessProps = s.properties.assess.properties as Record<string, Record<string, unknown>>;
+    expect(assessProps.issue.type).toBe("integer");
+    expect(assessProps.issue_title.type).toBe("string");
+  });
+
   it("documents analyze with the right shape (object with issue integer, title string)", () => {
     const s = JSON.parse(describeTicketSchema()) as {
       properties: Record<string, Record<string, unknown>>;

@@ -153,6 +153,32 @@ describe("parseTicket", () => {
     expect(t.assess).toBeNull();
   });
 
+  it("parses assess.issue + assess.issue_title round-trip", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\nassess:\n  auto_plan: true\n  issue: 7\n  issue_title: "Bug"\n---\nbody`,
+    );
+    expect(t.assess).toEqual({ autoPlan: true, issue: 7, issueTitle: "Bug" });
+  });
+
+  it("omits assess.issue when absent (mapping stays valid)", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nassess: {}\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: false });
+    expect(t.assess?.issue).toBeUndefined();
+    expect("issue" in (t.assess as object)).toBe(false);
+  });
+
+  it("omits assess.issue when non-integer (mapping stays valid)", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nassess:\n  issue: "seven"\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: false });
+    expect(t.assess?.issue).toBeUndefined();
+  });
+
+  it("defaults assess.issueTitle to empty string when issue is set but issue_title is omitted", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nassess:\n  issue: 7\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: false, issue: 7, issueTitle: "" });
+  });
+
   it("parses analyze: { issue, title } round-trip", () => {
     const t = parseTicket(
       "/q/a.md",

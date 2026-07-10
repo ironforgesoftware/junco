@@ -54,6 +54,10 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
   if (assessRaw !== null && typeof assessRaw === "object" && !Array.isArray(assessRaw)) {
     const a = assessRaw as Record<string, unknown>;
     assess = { autoPlan: a.auto_plan === true };
+    if (typeof a.issue === "number" && Number.isInteger(a.issue)) {
+      assess.issue = a.issue;
+      assess.issueTitle = String(a.issue_title ?? "");
+    }
   }
   const analyzeRaw = frontmatter.analyze;
   let analyze: Ticket["analyze"] = null;

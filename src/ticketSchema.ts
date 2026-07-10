@@ -123,6 +123,15 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
           description:
             "Also apply the configured GitHub trigger label to each created issue, so the bridge plans it on its next sweep.",
         },
+        issue: {
+          type: "integer",
+          description:
+            "Issue-scoped audit: the audit is steered to the code this issue implicates, and filed findings carry a Context reference to it. Set by `junco assess owner/repo#N`.",
+        },
+        issue_title: {
+          type: "string",
+          description: "The scoping issue's title (machine-built, display-only).",
+        },
       },
     },
     analyze: {
