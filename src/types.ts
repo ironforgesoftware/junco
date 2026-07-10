@@ -161,8 +161,9 @@ export interface Ticket {
   tools: string[] | null;
   /** GitHub issue this ticket was bridged from (null = local dispatch). */
   github: TicketGithub | null;
-  /** Assessment flavor options (null = regular PR/Q&A flow). */
-  assess: { autoPlan: boolean } | null;
+  /** Assessment flavor options (null = regular PR/Q&A flow). issue/issueTitle
+   * scope the audit to a single GitHub issue when set by `junco assess owner/repo#N`. */
+  assess: { autoPlan: boolean; issue?: number; issueTitle?: string } | null;
   /** Analysis flavor options (null = regular PR/Q&A flow). */
   analyze: { issue: number; title: string } | null;
   /** Q&A only: directory the session runs in (read-only tools). Null = default. */

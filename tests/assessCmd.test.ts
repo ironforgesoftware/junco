@@ -13,6 +13,7 @@ import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { writePending, readPending } from "../src/assessReview.js";
 import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
+import type { resolveIssueTarget, IssueTarget } from "../src/externalDispatch.js";
 
 const NONEXISTENT_STATE_DIR = "/nonexistent-junco-assesscmd-state";
 
@@ -54,6 +55,36 @@ describe("buildAssessTicket", () => {
 
     const t = parseTicket("submitted.md", content);
     expect(t.assess).toEqual({ autoPlan: false });
+  });
+
+  it("issue-scoped ticket: issue + issue_title land in frontmatter, body carries issue context, no github block", () => {
+    const { id, content } = buildAssessTicket(
+      "/c/api",
+      { autoPlan: false, issueContext: { nwo: "up/stream", issue: 7, title: "Bug", body: "b" } },
+      FIXED,
+    );
+    expect(id).toBe("assess-api-20260706-1234");
+
+    const t = parseTicket("submitted.md", content);
+    expect(t.assess?.issue).toBe(7);
+    expect(t.assess?.issueTitle).toBe("Bug");
+    expect(t.assess?.autoPlan).toBe(false);
+    expect(t.github).toBeNull();
+    expect(content).toContain("## Issue context (untrusted content)");
+  });
+
+  it("issue-scoped ticket with autoPlan: true carries both auto_plan and issue", () => {
+    const { content } = buildAssessTicket(
+      "/c/api",
+      { autoPlan: true, issueContext: { nwo: "up/stream", issue: 7, title: "Bug", body: "b" } },
+      FIXED,
+    );
+    expect(content).toContain("auto_plan: true");
+    expect(content).toContain("issue: 7");
+
+    const t = parseTicket("submitted.md", content);
+    expect(t.assess?.autoPlan).toBe(true);
+    expect(t.assess?.issue).toBe(7);
   });
 });
 
@@ -169,6 +200,57 @@ describe("runAssessCommand", () => {
 
     expect(code).toBe(0);
     expect(submitted).toContain(JSON.stringify(join(dir, "clone")));
+  });
+
+  it("issue-ref target (owner/repo#N): resolveFn result submits with the resolved clonePath, issue frontmatter", async () => {
+    const resolveFn = (async () => {
+      return {
+        nwo: "up/stream",
+        issue: 7,
+        title: "Bug",
+        body: "details",
+        clonePath: "/clones/up-stream",
+        external: true,
+        forkNwo: "me/stream",
+      } satisfies IssueTarget;
+    }) as typeof resolveIssueTarget;
+
+    let submittedContent = "";
+    const submitFn = ((_c: Config, content: string) => {
+      submittedContent = content;
+      return "/inbox/assess-up-stream-7.md";
+    }) as typeof submitTicket;
+
+    const out: string[] = [];
+    const code = await runAssessCommand(
+      cfg(),
+      "up/stream#7",
+      { autoPlan: false },
+      { printFn: (s) => out.push(s), submitFn, resolveFn },
+    );
+
+    expect(code).toBe(0);
+    expect(submittedContent).toContain(`repo: ${JSON.stringify("/clones/up-stream")}`);
+    expect(submittedContent).toContain("issue: 7");
+    expect(submittedContent).toContain(JSON.stringify("Bug"));
+    expect(out.join("")).toContain("queued:");
+  });
+
+  it("issue-ref target: resolveFn throws -> exit 1, message prefixed `junco assess:`", async () => {
+    const resolveFn = (async () => {
+      throw new Error("issue not found");
+    }) as typeof resolveIssueTarget;
+
+    const out: string[] = [];
+    const code = await runAssessCommand(
+      cfg(),
+      "up/stream#7",
+      { autoPlan: false },
+      { printFn: (s) => out.push(s), resolveFn },
+    );
+
+    expect(code).toBe(1);
+    expect(out.join("")).toContain("junco assess: issue not found");
   });
 
   it("unknown nwo -> exit 2, message mentions the repo isn't watched", async () => {

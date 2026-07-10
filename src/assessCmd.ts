@@ -1,5 +1,5 @@
 /**
- * `junco assess <path|owner/repo> [--auto-plan]` — compose and submit a
+ * `junco assess <path|owner/repo|owner/repo#N> [--auto-plan]` — compose and submit a
  * machine-owned assessment ticket. This command's only job is target
  * resolution + ticket authoring; the daemon's normal claim/execute path
  * (src/assessFlow.ts) runs the actual audit and files issues.
@@ -14,6 +14,12 @@ import { readWatchlist, watchlistPath } from "./watchlist.js";
 import { buildAssessPrompt } from "./assessPrompt.js";
 import { listPending, readPending } from "./assessReview.js";
 import { fileFindings, type FileFindingsDeps, type FileResult } from "./assessFiling.js";
+import {
+  parseIssueRef,
+  resolveIssueTarget,
+  type IssueTarget,
+  type ExternalDispatchDeps,
+} from "./externalDispatch.js";
 
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
 
@@ -48,18 +54,33 @@ function isDirectory(p: string): boolean {
  * Build a machine-owned assessment ticket for `repoPath` (already resolved
  * by the caller). Frontmatter carries only `id`, `repo`, and `assess` —
  * nothing an agent session could widen; the body is the read-only audit
- * prompt. The nwo is unknown at authoring time (it's resolved from the
- * repo's origin remote when the ticket actually runs), so the prompt always
- * gets `nwo: null` here.
+ * prompt. The nwo is unknown at authoring time for a plain path/nwo target
+ * (it's resolved from the repo's origin remote when the ticket actually
+ * runs), so the prompt gets `nwo: null` in that case. When `issueContext`
+ * is set (an issue-ref target, `junco assess owner/repo#N`), the nwo is
+ * already known from the resolved issue, and the `assess:` block also
+ * carries `issue`/`issue_title` so the daemon's assessFlow.ts can scope the
+ * audit and filed findings can reference the issue.
  */
 export function buildAssessTicket(
   repoPath: string,
-  opts: { autoPlan: boolean },
+  opts: {
+    autoPlan: boolean;
+    issueContext?: { nwo: string; issue: number; title: string; body: string };
+  },
   now: Date,
 ): { id: string; content: string } {
   const id = `assess-${slugify(basename(repoPath))}-${stampOf(now)}`;
-  const assessYaml = opts.autoPlan ? "assess:\n  auto_plan: true" : "assess: {}";
-  const body = buildAssessPrompt({ nwo: null, repoPath });
+  const assessLines: string[] = [];
+  if (opts.autoPlan) assessLines.push("  auto_plan: true");
+  if (opts.issueContext) {
+    assessLines.push(`  issue: ${opts.issueContext.issue}`);
+    assessLines.push(`  issue_title: ${JSON.stringify(opts.issueContext.title)}`);
+  }
+  const assessYaml = assessLines.length > 0 ? `assess:\n${assessLines.join("\n")}` : "assess: {}";
+  const body = opts.issueContext
+    ? buildAssessPrompt({ nwo: opts.issueContext.nwo, repoPath, issueContext: opts.issueContext })
+    : buildAssessPrompt({ nwo: null, repoPath });
   const content =
     `---\n` +
     `id: ${id}\n` +
@@ -73,6 +94,8 @@ export interface AssessCmdDeps {
   printFn?: (s: string) => void;
   submitFn?: typeof submitTicket;
   nowFn?: () => Date;
+  resolveFn?: typeof resolveIssueTarget;
+  resolveDeps?: ExternalDispatchDeps;
 }
 
 export async function runAssessCommand(
@@ -86,12 +109,32 @@ export async function runAssessCommand(
   const nowFn = deps.nowFn ?? ((): Date => new Date());
 
   if (!target) {
-    print(`Usage: junco assess <path|owner/repo> [--auto-plan]\n`);
+    print(`Usage: junco assess <path|owner/repo|owner/repo#N> [--auto-plan]\n`);
     return 2;
   }
 
   let repoPath: string;
-  if (NWO_RE.test(target) && !isDirectory(target)) {
+  let issueContext: { nwo: string; issue: number; title: string; body: string } | undefined;
+
+  // Issue-ref target (owner/repo#N or an issue URL) — resolved via the same
+  // fail-fast fetch + auto-provisioning as `junco analyze`/dispatch. Checked
+  // ahead of the plain NWO/path branches below, which stay untouched: a bare
+  // `owner/repo` still requires the repo be already watched (the documented
+  // asymmetry — an issue ref is an explicit, single-issue ask; a bare repo
+  // audit is a broader operation that shouldn't silently provision a clone).
+  const ref = parseIssueRef(target);
+  if (ref !== null) {
+    const resolveFn = deps.resolveFn ?? resolveIssueTarget;
+    let t: IssueTarget;
+    try {
+      t = await resolveFn(cfg, target, deps.resolveDeps ?? {});
+    } catch (e) {
+      print(`junco assess: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+    repoPath = t.clonePath;
+    issueContext = { nwo: t.nwo, issue: t.issue, title: t.title, body: t.body };
+  } else if (NWO_RE.test(target) && !isDirectory(target)) {
     // Include EXTERNAL entries: assess now files (via review) on repos the operator
     // does not own, so external clones are valid targets (unlike the bridge poll,
     // which still excludes them via resolveWatchedRepos).
@@ -118,7 +161,7 @@ export async function runAssessCommand(
     repoPath = candidate;
   }
 
-  const { id, content } = buildAssessTicket(repoPath, opts, nowFn());
+  const { id, content } = buildAssessTicket(repoPath, { ...opts, issueContext }, nowFn());
 
   let dst: string;
   try {

@@ -94,7 +94,7 @@ Subcommands:
   rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
-  assess <path|owner/repo> [--auto-plan]  audit a repo; findings await review (junco assess review)
+  assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
   analyze <owner/repo#N|url>          investigate an issue and park a comment draft for review

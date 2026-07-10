@@ -866,6 +866,48 @@ describe("buildIssueBody", () => {
     expect(bodyWith).toContain("## Remediation");
     expect(bodyWith).toContain("do the thing");
   });
+
+  // SP-3 Task 5: filed findings reference the scoping issue.
+  it("with context, includes a **Context:** line before <details>, and the marker is still last", () => {
+    const f = makeFinding();
+    const body = buildIssueBody(f, { nwo: "o/r", issue: 7 });
+    expect(body).toContain("**Context:** o/r#7");
+    const contextIdx = body.indexOf("**Context:**");
+    const detailsIdx = body.indexOf("<details>");
+    expect(contextIdx).toBeGreaterThanOrEqual(0);
+    expect(detailsIdx).toBeGreaterThan(contextIdx);
+    expect(body.trimEnd().endsWith(findingMarker(f.fingerprint))).toBe(true);
+  });
+
+  it("without context, never renders a **Context:** line", () => {
+    const body = buildIssueBody(makeFinding());
+    expect(body).not.toContain("**Context:**");
+  });
+
+  it("truncation path with context still contains the context line and ends with the marker", () => {
+    const maxFinding: Finding = {
+      fingerprint: fingerprintFinding({
+        kind: "dependency",
+        ruleId: "G".repeat(200),
+        title: "T".repeat(300),
+        package: { name: "pkg-name", range: "range", fixedIn: null },
+      }),
+      kind: "dependency",
+      severity: "critical",
+      ruleId: "G".repeat(200),
+      title: "T".repeat(300),
+      description: "D".repeat(10_000),
+      evidence: "E".repeat(5_000),
+      remediation: "R".repeat(5_000),
+      references: Array.from({ length: 20 }, () => "r".repeat(500)),
+      package: { name: "N".repeat(300), range: "R".repeat(300), fixedIn: "F".repeat(300) },
+    };
+    const body = buildIssueBody(maxFinding, { nwo: "o/r", issue: 7 });
+    expect(body.length).toBeLessThanOrEqual(60_000);
+    expect(body).toContain("**Context:** o/r#7");
+    expect(body).toContain("_(sections truncated to fit)_");
+    expect(body.split("\n").pop()).toBe(findingMarker(maxFinding.fingerprint));
+  });
 });
 
 // ---------------------------------------------------------------------------

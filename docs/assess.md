@@ -15,7 +15,7 @@ Phase A is the daemon's read-only audit; it **parks** findings instead of filing
 ```
 You (or CI, a cron job, …)
 │
-│ junco assess <path|owner/repo> [--auto-plan]
+│ junco assess <path|owner/repo|owner/repo#N> [--auto-plan]
 ▼
 inbox/                              ← one machine-owned assessment ticket
 │
@@ -65,23 +65,24 @@ Nothing is filed until Phase B runs. A batch that's never reviewed just sits in 
 
 ## CLI usage
 
-### `junco assess <path|owner/repo> [--auto-plan]` — audit
+### `junco assess <path|owner/repo|owner/repo#N> [--auto-plan]` — audit
 
 ```bash
-junco assess <path|owner/repo> [--auto-plan]
+junco assess <path|owner/repo|owner/repo#N> [--auto-plan]
 ```
 
 - **`<path>`** — an absolute or `~`-relative filesystem path to a local git checkout.
 - **`<owner/repo>`** — matched case-insensitively against the watched repo list: `[[github.repos]]` entries, anything added from the dashboard, **and external (unowned, fork-managed) watchlist entries**. The target must already be watched — if not, the command errors instead of guessing a clone path.
+- **`owner/repo#N`** (or an issue URL) — scopes the audit to one issue instead of a whole-repo sweep, and **auto-provisions** an unwatched repo (fork, clone, watchlist add) instead of requiring it be watched already. See [Issue-scoped assess](#issue-scoped-assess) below.
 - **`--auto-plan`** — apply the configured GitHub trigger label (`[github].trigger_label`, default `junco`) to every issue filed from this batch, so the bridge can pick each one up. Only takes effect on owned repos filed via Phase B below — an external batch always forces `autoPlan` off, regardless of this flag. See the caveat below.
 
-A target that looks like `owner/repo` (word characters either side of one slash) is treated as a watched-repo lookup unless a local directory by that literal name exists, in which case it's treated as a path instead.
+A target that looks like `owner/repo#N` (or an issue URL) is resolved as an issue reference first. Otherwise, a target that looks like `owner/repo` (word characters either side of one slash) is treated as a watched-repo lookup unless a local directory by that literal name exists, in which case it's treated as a path instead.
 
 What gets printed:
 
 | Outcome                  | stdout                                                                                                                                                                                                                                      | Exit |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| No target given          | `Usage: junco assess <path\|owner/repo> [--auto-plan]`                                                                                                                                                                                      | 2    |
+| No target given          | `Usage: junco assess <path\|owner/repo\|owner/repo#N> [--auto-plan]`                                                                                                                                                                        | 2    |
 | `owner/repo` not watched | `junco assess: '<target>' is not watched — add it under [[github.repos]] in config.toml, or watch it from the dashboard, then retry`                                                                                                        | 2    |
 | Path is not a directory  | `junco assess: not a directory: <resolved-path>`                                                                                                                                                                                            | 2    |
 | Ticket submission failed | `junco assess: <error>`                                                                                                                                                                                                                     | 1    |
@@ -114,6 +115,20 @@ Files the selected findings as GitHub issues (through `assessFiling.ts`) and arc
 Before filing, it re-runs the authoritative dedup scan (so a finding someone already filed by hand in the meantime is skipped, not duplicated) and, on an owned repo, best-effort ensures the `junco:finding` + `severity/<level>` labels exist — if that fails (e.g. a transient permission glitch), the issue still files, just label-free, rather than the whole run failing.
 
 Prints a one-line summary — `filed N · queued N · already-filed N · failed N` — followed by the created issue URLs and any warnings, and exits `1` if anything failed to file.
+
+## Issue-scoped assess
+
+`junco assess owner/repo#N` (or a full issue URL) points the audit at one issue instead of sweeping the whole repo. Target resolution goes through the same `resolveIssueTarget` helper `junco dispatch` and `junco analyze` use: a fail-fast `gh issue view` fetch, then either resolve against an already-watched repo or **auto-provision** an unwatched one — fork, clone into a managed directory, add it to the watchlist.
+
+**This auto-provisioning is asymmetric with the plain `owner/repo` form above, and that's deliberate.** `junco assess <nwo>` on its own still requires the repo be already watched — no clone is provisioned for it. An issue reference is treated as an explicit, single-issue ask; a bare repo target is a broader operation that shouldn't silently provision a clone just because you typed a name it recognizes as `owner/repo`-shaped.
+
+The audit prompt gains an extra section carrying the issue's title and body, framed the same way `junco dispatch`/`junco analyze` frame issue text: explicit untrusted data, not instructions, with an instruction to scope the audit to the code that issue implicates (findings outside that scope are still reported, just deprioritized).
+
+Findings park exactly like a whole-repo audit's do — same store, same `junco assess review` / `junco assess file` flow, same dashboard review view. The one difference is in what gets filed: each finding's issue body gets a `**Context:** <owner/repo>#<N>` line immediately before the machine-readable block. GitHub turns that into an automatic cross-reference, so every filed finding shows up on the original issue's timeline for free. **No comment is posted on the issue itself** — an issue-scoped assess run is read-only apart from the issues it files; posting prose on the original issue is a different, deliberate command, `junco analyze` (see the [analysis comments guide](./analyze.md)).
+
+**Dedup is shared, not scoped.** Fingerprints (`sha256("<kind>|<ruleId>|<locus>")`) never fold in the scoping issue, so a finding surfaced by an issue-scoped audit and the same finding surfaced later by a whole-repo audit — or vice versa — collide and dedup against each other. Re-running assess in either mode never double-files the same defect.
+
+**From the dashboard:** `s`/`S` scope to the selected issue when the issues pane (pane 2) is focused and an issue is selected; everywhere else they stay repo-scoped. See [Dashboard](./dashboard.md).
 
 ## Issue format
 
@@ -165,7 +180,10 @@ Each filed finding becomes one GitHub issue:
 id: assess-<repo-basename>-<UTC stamp>
 repo: <absolute path to the audit target>
 assess:
-  auto_plan: true # only present with --auto-plan; otherwise `assess: {}`
+  auto_plan: true # only present with --auto-plan
+  issue: 42 # only present when scoped via `junco assess owner/repo#N`
+  issue_title: "..." # machine-built, display-only; travels with `issue`
+# `assess: {}` when neither --auto-plan nor an issue scope applies
 ---
 ```
 

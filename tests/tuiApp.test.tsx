@@ -1503,6 +1503,40 @@ describe("assess hotkey (s/S)", () => {
     expect(r.lastFrame()).toContain("v to review");
     expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
   });
+
+  it("pane 2 focused with an issue selected: s scopes assess to that issue", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("2"); // focus issues pane
+    await tick();
+    r.stdin.write("s");
+    await until(() => runs.length > 0);
+    expect(runs).toEqual([["assess", ["acme/api#7"]]]);
+  });
+
+  it("pane 1 focused: s stays repo-scoped even with issues loaded", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("s"); // pane defaults to 1
+    await until(() => runs.length > 0);
+    expect(runs).toEqual([["assess", ["acme/api"]]]);
+  });
+
+  it("pane 2 focused with an issue selected: S scopes auto-plan assess to that issue", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const { runs, runCliFn } = makeAssessRunner();
+    const r = renderApp(client, wl7(), 999999, runCliFn);
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("2"); // focus issues pane
+    await tick();
+    r.stdin.write("S");
+    await until(() => runs.length > 0);
+    expect(runs).toEqual([["assess", ["acme/api#7", "--auto-plan"]]]);
+  });
 });
 
 describe("review view (v)", () => {

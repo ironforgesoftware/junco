@@ -946,32 +946,32 @@ export function App(props: AppProps): React.JSX.Element {
   // is captured at press time, and the result surfaces as a toast whenever it
   // lands (Toast renders at the Workspace level regardless of the current view).
   const runAssess = useCallback(
-    (autoPlan: boolean) => {
-      if (!currentNwo) {
+    (autoPlan: boolean, targetOverride?: string) => {
+      const target = targetOverride ?? currentNwo;
+      if (!target) {
         showToast("error", "no repo selected");
         return;
       }
-      const nwo = currentNwo;
-      if (assessInFlightRef.current.has(nwo)) {
+      if (assessInFlightRef.current.has(target)) {
         showToast("info", "assess already running");
         return;
       }
-      assessInFlightRef.current.add(nwo);
-      showToast("info", `assessing ${nwo}…`);
-      const args = autoPlan ? [nwo, "--auto-plan"] : [nwo];
+      assessInFlightRef.current.add(target);
+      showToast("info", `assessing ${target}…`);
+      const args = autoPlan ? [target, "--auto-plan"] : [target];
       void runCliFn("assess", args).then((r) => {
-        assessInFlightRef.current.delete(nwo);
+        assessInFlightRef.current.delete(target);
         if (!aliveRef.current) return;
         const line = firstNonEmptyLine(r.output);
         if (r.code === 0) {
           showToast(
             "success",
-            line ? `${nwo}: ${line} · v to review` : `assessed ${nwo} · v to review`,
+            line ? `${target}: ${line} · v to review` : `assessed ${target} · v to review`,
           );
         } else {
           // Nonzero exit: assessCmd's first line carries the reason ("not
           // watched", "already queued", etc.) — relay it as-is.
-          showToast("error", line ?? `assess failed for ${nwo}`);
+          showToast("error", line ?? `assess failed for ${target}`);
         }
       });
     },
@@ -1811,9 +1811,19 @@ export function App(props: AppProps): React.JSX.Element {
     }
     // `s`/`S` assess the rail-selected repo — global to the main view (the
     // selection is global state), unlike `d`/`D`/`a` below which are scoped
-    // to the issues pane because they act on the selected ISSUE.
-    if (input === "s") return void runAssess(false);
-    if (input === "S") return void runAssess(true);
+    // to the issues pane because they act on the selected ISSUE. Exception:
+    // with the issues pane (2) focused AND an issue selected, `s`/`S` scope
+    // the assess to that issue (owner/repo#N — the CLI accepts issue-refs).
+    // This is a single global binding structurally ahead of the pane-scoped
+    // blocks below, so the pane-2 variant is gated here rather than added as
+    // a second binding further down.
+    if (input === "s" || input === "S") {
+      const autoPlan = input === "S";
+      if (pane === 2 && currentNwo && currentIssue) {
+        return void runAssess(autoPlan, `${currentNwo}#${currentIssue.number}`);
+      }
+      return void runAssess(autoPlan);
+    }
     // `v` opens the review queue — parked assess batches (findings awaiting
     // human confirmation) AND parked comment drafts (analyze output awaiting a
     // post/discard decision), fetched together.
