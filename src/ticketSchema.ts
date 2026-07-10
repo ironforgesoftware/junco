@@ -118,7 +118,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
     assess: {
       type: "object",
       description:
-        "Presence of this mapping selects the assessment flavor: junco audits the repository named in `repo:` (read-only agent session plus a dependency scan) and files one GitHub issue per vulnerability finding, instead of opening a pull request. Authored by `junco assess`.",
+        "Presence of this mapping selects the assessment flavor: junco audits the repository named in `repo:` (read-only agent session plus a dependency scan) and parks the findings for review instead of opening a pull request — nothing is filed until a human confirms the batch (`junco assess review` then `junco assess file`). Authored by `junco assess`.",
       properties: {
         auto_plan: {
           type: "boolean",
