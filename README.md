@@ -115,6 +115,13 @@ It works on any watched repo, owned or not. On a repo you own, filed issues get
 the trigger label so junco plans its own findings for you to approve. On a repo
 you don't own, issues file label-free — junco never assumes triage rights it
 doesn't have — and `--auto-plan` has no effect there.
+
+Point it at one issue instead of the whole repo — `junco assess owner/repo#N`
+— and the audit scopes to the code that issue implicates; filed findings carry
+a `Context:` line GitHub cross-references onto the issue's timeline
+automatically (no comment is posted; that's `junco analyze`, below). Unlike
+the bare `owner/repo` form above, an issue reference auto-provisions an
+unwatched repo the same way `junco dispatch`/`junco analyze` do.
 → [Vulnerability assessment guide](docs/assess.md)
 
 ## It investigates, you decide what to post
@@ -175,20 +182,20 @@ frontmatter contract, `examples/` has templates, and the bundled
 
 ## CLI at a glance
 
-|                                                 |                                                                                                  |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `junco start` / `junco restart`                 | run the daemon / restart the installed service                                                   |
-| `junco submit <file>`                           | queue a ticket (also reads stdin)                                                                |
-| `junco dashboard`                               | the fullscreen TUI                                                                               |
-| `junco dispatch <owner/repo#N \| url>`          | fork-PR mode: plan and PR an external repo's issue                                               |
-| `junco status` / `junco list` / `junco logs -f` | daemon, queue, and log visibility                                                                |
-| `junco prs`                                     | list junco-authored pull requests across watched repos                                           |
-| `junco assess <path\|owner/repo> [--auto-plan]` | audit a repo (owned or external); findings await review (`assess review`, `assess file`)         |
-| `junco analyze <owner/repo#N\|url>`             | investigate an issue (owned or external); draft awaits review (`analyze review`, `analyze post`) |
-| `junco retry <name…\|--all>`                    | move failed tickets back to the inbox                                                            |
-| `junco outbox [flush]`                          | inspect or push the offline GitHub backlog                                                       |
-| `junco doctor`                                  | preflight config, git/gh auth, endpoint, model                                                   |
-| `junco init` / `junco schema` / `junco service` | wizard, ticket schema, service install                                                           |
+|                                                               |                                                                                                                 |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `junco start` / `junco restart`                               | run the daemon / restart the installed service                                                                  |
+| `junco submit <file>`                                         | queue a ticket (also reads stdin)                                                                               |
+| `junco dashboard`                                             | the fullscreen TUI                                                                                              |
+| `junco dispatch <owner/repo#N \| url>`                        | fork-PR mode: plan and PR an external repo's issue                                                              |
+| `junco status` / `junco list` / `junco logs -f`               | daemon, queue, and log visibility                                                                               |
+| `junco prs`                                                   | list junco-authored pull requests across watched repos                                                          |
+| `junco assess <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`assess review`, `assess file`) |
+| `junco analyze <owner/repo#N\|url>`                           | investigate an issue (owned or external); draft awaits review (`analyze review`, `analyze post`)                |
+| `junco retry <name…\|--all>`                                  | move failed tickets back to the inbox                                                                           |
+| `junco outbox [flush]`                                        | inspect or push the offline GitHub backlog                                                                      |
+| `junco doctor`                                                | preflight config, git/gh auth, endpoint, model                                                                  |
+| `junco init` / `junco schema` / `junco service`               | wizard, ticket schema, service install                                                                          |
 
 ## Contributing
 

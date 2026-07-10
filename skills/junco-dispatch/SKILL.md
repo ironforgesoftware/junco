@@ -213,13 +213,16 @@ Triggered by "assess this repo", "have junco audit this repo", "junco assess <re
 
 **Works on any watched repo, owned or not.** On a repo you own, filed issues get `junco:finding` + `severity/<level>` labels (best-effort). On a repo you don't own, filed issues are label-free — junco never assumes triage rights it doesn't have on someone else's tracker; the severity and fingerprint still live in the issue title and a body marker.
 
+**An issue reference scopes the audit and auto-provisions.** `junco assess owner/repo#N` (or an issue URL) steers the audit to the code that issue implicates and, unlike the bare `owner/repo` form above, **auto-provisions** an unwatched repo — fork, clone, watchlist add, the same as `junco dispatch`/`junco analyze` — instead of requiring it be watched already. Findings filed from a scoped audit carry a `Context: owner/repo#N` line that GitHub cross-references onto the issue's timeline automatically; no comment is posted on the issue itself (that's Analyze mode, below).
+
 Your job here is only: resolve the target, decide whether to pass `--auto-plan`, confirm, run the CLI, and set expectations — including that a review step still stands between the audit and anything landing on GitHub. Do NOT use `TEMPLATE.md`, plan-lint, or any of the authoring discipline above — none of it applies to assess (`junco assess` owns the ticket shape, not you).
 
 ### Inputs to gather
 
 1. **Target** — one of:
    - an absolute (or `~`-relative) path to a local git checkout — default to the current working directory if it's a git repo, and confirm; or
-   - an `owner/repo` that junco already watches — a `[[github.repos]]` entry, one added from the dashboard, or an external (unowned) watchlist entry. An unwatched `owner/repo` is rejected by the CLI — surface that and offer a local path instead.
+   - an `owner/repo` that junco already watches — a `[[github.repos]]` entry, one added from the dashboard, or an external (unowned) watchlist entry. An unwatched `owner/repo` is rejected by the CLI — surface that and offer a local path instead; or
+   - an `owner/repo#N` reference or issue URL — scopes the audit to that issue instead of the whole repo, and auto-provisions an unwatched repo rather than requiring it be watched already (see above).
 2. **`--auto-plan`?** — off by default. It applies the GitHub trigger label to every issue filed from this batch so the bridge can plan them, but only takes effect on a repo you own — an unowned batch always forces it off, since junco doesn't queue plan/PR work against a repo it doesn't own. Only worth setting when the target repo is bridge-watched _and_ GitHub integration is enabled; otherwise the label just sits inert (see caveat). Ask if unsure; when in doubt, leave it off.
 
 ### Preconditions (check before running; fail fast with a useful message)
@@ -249,6 +252,7 @@ When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool avail
 - **`--auto-plan` is inert unless the repo is owned, bridge-watched, and GitHub integration is enabled.** The label lands on filed issues from that batch, but only a watched repo (with the bridge on) turns a labeled issue into a plan; an unowned repo never gets the label regardless of the flag.
 - **Closing a finding issue suppresses it forever.** Dedup scans your own most recent 500 issues on the repo (author-scoped, closed ones included) for the finding marker, so closing an issue (even as wontfix) stops that finding from ever re-filing — including a genuine future regression that hashes the same. To let it re-file, delete the issue or edit the `<!-- junco:finding:... -->` marker line out of its body.
 - **A parked-but-unreviewed finding is not suppressed** — it just re-parks on the next audit, since no issue exists yet.
+- **The auto-provisioning asymmetry is deliberate.** `owner/repo#N` auto-provisions an unwatched repo; bare `owner/repo` does not — it still errors if the repo isn't already watched. Don't "fix" this by watching a repo first when the user gave an issue reference; just run the command.
 - For the authoritative flag list and config knobs (`[assess]`), point the user at `junco assess --help` and the project README.
 
 ### Do NOT
