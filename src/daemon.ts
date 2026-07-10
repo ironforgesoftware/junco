@@ -219,49 +219,60 @@ export async function runScheduler(
   let idleAnnounced = false;
   let breakAfterDrain = false;
 
-  while (!stopFlag.requested && !breakAfterDrain) {
-    metrics.recordPoll();
-    if (deps.maybeBridgeSweepFn) await deps.maybeBridgeSweepFn();
-    let claimedThisPoll = 0;
-    while (inflight.size < cfg.maxConcurrent && !stopFlag.requested) {
-      const work = await claimFn(cfg, { skipRepoKeys: busyRepos, readyFn: deps.readyFn });
-      if (!work) break;
-      claimedThisPoll++;
-      idleAnnounced = false;
-      if (work.repoKey) busyRepos.add(work.repoKey);
-      const p: Promise<void> = executeFn(cfg, work)
-        .catch((e) =>
-          log.error("task execution crashed", {
-            id: work.ticket.id,
-            error: e instanceof Error ? (e.stack ?? e.message) : String(e),
-          }),
-        )
-        .finally(() => {
-          inflight.delete(p);
-          if (work.repoKey) busyRepos.delete(work.repoKey);
-        });
-      inflight.add(p);
-      if (opts.once) break;
-    }
-
-    if (opts.once && (claimedThisPoll > 0 || inflight.size > 0)) {
-      breakAfterDrain = true;
-    } else if (inflight.size === 0) {
-      if (!idleAnnounced) {
-        log.info("idle");
-        idleAnnounced = true;
+  try {
+    while (!stopFlag.requested && !breakAfterDrain) {
+      metrics.recordPoll();
+      if (deps.maybeBridgeSweepFn) await deps.maybeBridgeSweepFn();
+      let claimedThisPoll = 0;
+      while (inflight.size < cfg.maxConcurrent && !stopFlag.requested) {
+        const work = await claimFn(cfg, { skipRepoKeys: busyRepos, readyFn: deps.readyFn });
+        if (!work) break;
+        claimedThisPoll++;
+        idleAnnounced = false;
+        if (work.repoKey) busyRepos.add(work.repoKey);
+        const p: Promise<void> = executeFn(cfg, work)
+          .catch((e) =>
+            log.error("task execution crashed", {
+              id: work.ticket.id,
+              error: e instanceof Error ? (e.stack ?? e.message) : String(e),
+            }),
+          )
+          .finally(() => {
+            inflight.delete(p);
+            if (work.repoKey) busyRepos.delete(work.repoKey);
+          });
+        inflight.add(p);
+        if (opts.once) break;
       }
-      await sleep(cfg.pollIntervalSeconds, stopFlag);
-    } else {
-      // Wake on the next settle OR the next poll tick, whichever first — a
-      // freed slot tops up immediately; a busy-but-not-full pool still polls.
-      await Promise.race([sleep(cfg.pollIntervalSeconds, stopFlag), ...inflight]);
-    }
-  }
 
-  if (inflight.size > 0) {
-    log.info("draining in-flight tasks", { count: inflight.size });
-    await Promise.allSettled([...inflight]);
+      if (opts.once && (claimedThisPoll > 0 || inflight.size > 0)) {
+        breakAfterDrain = true;
+      } else if (inflight.size === 0) {
+        if (!idleAnnounced) {
+          log.info("idle");
+          idleAnnounced = true;
+        }
+        await sleep(cfg.pollIntervalSeconds, stopFlag);
+      } else {
+        // Wake on the next settle OR the next poll tick, whichever first — a
+        // freed slot tops up immediately; a busy-but-not-full pool still polls.
+        await Promise.race([sleep(cfg.pollIntervalSeconds, stopFlag), ...inflight]);
+      }
+    }
+  } catch (e) {
+    // claimNextTask deliberately rethrows non-ENOENT fs errors. Left unhandled
+    // that throw escapes to cli.ts's process.exit(1), which hard-kills every
+    // in-flight agent session with NO commit salvage — the opposite of the
+    // graceful drain a SIGTERM gives. Log it and fall through to the drain in
+    // the finally so in-flight work still completes.
+    log.error("scheduler loop aborted; draining in-flight tasks", {
+      error: e instanceof Error ? (e.stack ?? e.message) : String(e),
+    });
+  } finally {
+    if (inflight.size > 0) {
+      log.info("draining in-flight tasks", { count: inflight.size });
+      await Promise.allSettled([...inflight]);
+    }
   }
 }
 

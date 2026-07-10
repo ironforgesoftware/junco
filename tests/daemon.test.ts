@@ -645,6 +645,32 @@ describe("runScheduler", () => {
     expect(finished).toBe(1); // drained, not abandoned
   });
 
+  it("a claim-time throw drains in-flight work and does not propagate (no process-killing throw)", async () => {
+    // claimNextTask deliberately rethrows non-ENOENT fs errors. That throw must
+    // NOT escape runScheduler to cli.ts's process.exit(1) — which would
+    // hard-kill every in-flight session with no commit salvage. Instead it is
+    // caught and the in-flight set is drained, matching a SIGTERM's graceful
+    // drain.
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    let finished = 0;
+    let claims = 0;
+    const claimFn = async () => {
+      claims++;
+      if (claims === 1) return fakeWork("slow", null); // first: a long in-flight task
+      throw new Error("EIO: non-ENOENT fs error rethrown by claimNextTask");
+    };
+    const executeFn = async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      finished++;
+    };
+    // Must RESOLVE (not reject): a claim throw is caught, not propagated.
+    await expect(
+      runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep }),
+    ).resolves.toBeUndefined();
+    expect(finished).toBe(1); // in-flight task drained to completion, not abandoned
+  });
+
   it("once mode claims one task, drains it, and returns", async () => {
     const cfg = makeConfig({ maxConcurrent: 3, pollIntervalSeconds: 0.001 });
     const stop = new StopFlag();
