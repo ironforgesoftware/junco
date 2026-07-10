@@ -7,6 +7,8 @@ import {
   readFileSync,
   chmodSync,
   existsSync,
+  symlinkSync,
+  realpathSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -618,6 +620,35 @@ describe("claimNextTask (per-repo serialization)", () => {
     const w = await claimNextTask(cfg(root), { skipRepoKeys: new Set(["/anything"]) });
     expect(w?.ticket.id).toBe("q");
     expect(w?.repoKey).toBeNull();
+  });
+
+  // Issue #113: two spellings of ONE repo (a symlink alias, or a case-variant on
+  // a case-insensitive filesystem) must serialize. repoKey is canonicalized via
+  // realpath so aliased paths collapse to a single busy key.
+  it("collapses symlink-aliased repo paths onto one canonical busy key", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    // One real repo plus a symlink alias pointing at it. Two tickets name the
+    // same repo two ways: the real path and the alias.
+    const realRepo = join(root, "repo");
+    mkdirSync(realRepo, { recursive: true });
+    const aliasRepo = join(root, "repo-alias");
+    symlinkSync(realRepo, aliasRepo);
+    writeFileSync(join(j, "inbox", "r1.md"), `---\nid: r1\nrepo: ${realRepo}\n---\nx\n`, "utf8");
+    writeFileSync(join(j, "inbox", "r2.md"), `---\nid: r2\nrepo: ${aliasRepo}\n---\nx\n`, "utf8");
+
+    // Claim r1 first (nothing busy) — its repoKey is the canonical realpath.
+    const w1 = await claimNextTask(cfg(root));
+    expect(w1?.ticket.id).toBe("r1");
+    expect(w1?.repoKey).toBe(realpathSync.native(realRepo));
+
+    // With r1's repo marked busy, the alias-spelled r2 must hash to that same
+    // key and stay queued — the same-repo serialization invariant survives the
+    // aliased spelling (pre-fix the lexical alias key differs and r2 is claimed).
+    const w2 = await claimNextTask(cfg(root), { skipRepoKeys: new Set([w1!.repoKey!]) });
+    expect(w2).toBeNull();
+    expect(readdirSync(join(j, "inbox"))).toEqual(["r2.md"]); // left queued
   });
 });
 
