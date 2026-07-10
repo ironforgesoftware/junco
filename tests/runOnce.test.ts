@@ -378,6 +378,28 @@ describe("executeClaimed crash containment", () => {
     expect(content).toContain("model unresolved at session create");
   });
 
+  // Issue #115: the "both dispositions failed → leave in processing/ for orphan
+  // recovery, never rethrow" branch (runOnce.ts) had zero coverage — every other
+  // containment test keeps the finalize path alive. Here the requeue budget is
+  // exhausted (retry_count:2, disposition #1 fails) AND failed/ is planted as a
+  // regular file so finalize's mkdirSync(failed) throws EEXIST (disposition #2).
+  it("leaves the ticket in processing/ without rethrowing when BOTH dispositions fail", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(join(j, "failed"), "", "utf8"); // a FILE where finalize expects a dir
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\nretry_count: 2\n---\nq\n", "utf8");
+
+    // Must resolve, not throw — a rethrow would crash-loop the daemon.
+    await expect(runOnce(cfg(root), { sessionFactoryFor: rejectingFactory })).resolves.toBe(true);
+
+    // Ticket stranded in processing/ for startup orphan recovery; the inbox was
+    // drained by the claim, done/ stayed empty, and failed/ was never converted.
+    expect(readdirSync(join(j, "processing"))).toHaveLength(1);
+    expect(readdirSync(join(j, "inbox"))).toHaveLength(0);
+    expect(readdirSync(join(j, "done"))).toHaveLength(0);
+  });
+
   it("fires onRequeue (contained crash, budget left) and onFinal (budget exhausted)", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
@@ -649,6 +671,31 @@ describe("claimNextTask (per-repo serialization)", () => {
     const w2 = await claimNextTask(cfg(root), { skipRepoKeys: new Set([w1!.repoKey!]) });
     expect(w2).toBeNull();
     expect(readdirSync(join(j, "inbox"))).toEqual(["r2.md"]); // left queued
+  });
+});
+
+describe("claimNextTask (priority ordering)", () => {
+  // Issue #115: claimNextTask's priority sort (high>normal>low) had no direct
+  // test — only the TUI display sort was covered. Filenames here sort a<b<c,
+  // the INVERSE of priority, so a filename-order claim would take low first.
+  it("claims high before normal before low, regardless of filename order", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-prio-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(join(j, "inbox", "a.md"), "---\nid: low\npriority: low\n---\nx\n", "utf8");
+    writeFileSync(join(j, "inbox", "b.md"), "---\nid: normal\npriority: normal\n---\nx\n", "utf8");
+    writeFileSync(join(j, "inbox", "c.md"), "---\nid: high\npriority: high\n---\nx\n", "utf8");
+
+    // Each claim re-discovers the inbox and takes the highest-priority ticket
+    // remaining, draining high → normal → low.
+    const first = await claimNextTask(cfg(root));
+    const second = await claimNextTask(cfg(root));
+    const third = await claimNextTask(cfg(root));
+    expect([first?.ticket.id, second?.ticket.id, third?.ticket.id]).toEqual([
+      "high",
+      "normal",
+      "low",
+    ]);
   });
 });
 
