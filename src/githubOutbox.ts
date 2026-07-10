@@ -132,15 +132,14 @@ export function enqueueOp(
   return id;
 }
 
-export function listOps(cfg: Config, deps: OutboxDeps = {}): StoredOp[] {
+export function listOpsFrom(dir: string, deps: OutboxDeps = {}): StoredOp[] {
   const readdirFn = deps.readdirFn ?? readdirSync;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
-  const { dir } = outboxPaths(cfg);
   let names: string[];
   try {
     names = readdirFn(dir);
   } catch {
-    return []; // no outbox yet
+    return []; // dir never created yet
   }
   return names
     .filter((n) => n.endsWith(".json"))
@@ -155,6 +154,16 @@ export function listOps(cfg: Config, deps: OutboxDeps = {}): StoredOp[] {
         return [];
       }
     });
+}
+
+export function listOps(cfg: Config, deps: OutboxDeps = {}): StoredOp[] {
+  return listOpsFrom(outboxPaths(cfg).dir, deps);
+}
+
+/** Poisoned ops parked in github-outbox/dead/ (empty [] until something has
+ * dead-lettered) — same envelope/sort/skip-unparseable posture as listOps. */
+export function listDeadOps(cfg: Config, deps: OutboxDeps = {}): StoredOp[] {
+  return listOpsFrom(outboxPaths(cfg).dead, deps);
 }
 
 export function outboxDepth(cfg: Config, deps: OutboxDeps = {}): number {

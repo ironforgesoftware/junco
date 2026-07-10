@@ -7,7 +7,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput } from "ink";
 import type { DashboardClient, HealthInfo } from "./ghClient.js";
 import type { DashAction, DashIssue } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
@@ -20,9 +20,12 @@ import type { GithubRepoMapping } from "../types.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
 import { computeLayout } from "./layout.js";
 import { windowSlice } from "./window.js";
-import { listRowsHeight, railListHeight } from "./geometry.js";
+import { headerTabBands, listRowsHeight, railListHeight } from "./geometry.js";
+import type { UiMode } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
-import { Header, hintsFor, type HintView } from "./components/Chrome.js";
+import { Header, hintsFor, localHintsFor, type HintView } from "./components/Chrome.js";
+import LocalDashboard from "./components/LocalDashboard.js";
+import type { LocalCheap, LocalHeavy, LocalSection, LocalRepo } from "./localSnapshot.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
@@ -38,7 +41,7 @@ import { QueueView } from "./components/QueueView.js";
 import { ReviewView, type ReviewState } from "./components/ReviewView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
-import type { ToastKind } from "./theme.js";
+import { theme, type ToastKind } from "./theme.js";
 import { useMouse } from "./useMouse.js";
 import { hitTest, type HitContext } from "./hitTest.js";
 import { isMouseInput, type MouseEvent as TuiMouseEvent } from "./mouse.js";
@@ -61,6 +64,16 @@ export interface AppProps {
   /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
   queueFn: () => Promise<QueueSnapshot>;
   queuePollMs?: number; // default 2_000
+  /** LOCAL cheap snapshot (@3s): queue + counts + outbox + daemon detail. */
+  localCheapFn: (opts?: { section?: LocalSection }) => Promise<LocalCheap>;
+  /** LOCAL heavy snapshot (@15s, repos/worktrees sections only): repos + worktrees. */
+  localHeavyFn: (signal?: AbortSignal) => Promise<LocalHeavy>;
+  /** Which surface the dashboard opens on (github when github is enabled). */
+  initialUiMode: UiMode;
+  /** When false the GITHUB tab dims and `m`/tab-click into github toasts off. */
+  githubEnabled: boolean;
+  localCheapPollMs?: number; // default 3_000
+  localHeavyPollMs?: number; // default 15_000
   /** Palette command runner override (tests). Defaults to the real subprocess. */
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>;
   /** Fixed terminal size (tests) — ink-testing-library has no resizable stdout. */
@@ -87,6 +100,14 @@ type View =
   | "prDetail"
   | "review";
 
+/** LOCAL destructive-action gate: a `y/n` modal that owns input while open.
+ * `onConfirm` fires the (already-composed) spawn on `y`/enter; `n`/esc drops it. */
+interface ConfirmState {
+  title: string;
+  body: string;
+  danger: boolean;
+  onConfirm: () => void;
+}
 interface CmdState {
   title: string;
   running: boolean;
@@ -181,6 +202,9 @@ export function App(props: AppProps): React.JSX.Element {
   const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
   const queuePollMs = props.queuePollMs ?? 2_000;
+  const localCheapPollMs = props.localCheapPollMs ?? 3_000;
+  const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
+  const LOCAL_SECTIONS: LocalSection[] = ["queue", "outbox", "repos", "worktrees", "daemon"];
   const runCliFn =
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
@@ -255,6 +279,90 @@ export function App(props: AppProps): React.JSX.Element {
   const lastPrIdxRef = useRef(0);
   // Same fallback, for pane 3's repo-scoped PR list.
   const lastPane3IdxRef = useRef(0);
+
+  // ── LOCAL mode: a uiMode axis above `View`, with its own section/focus/cursor
+  // cluster. GitHub state above is untouched; when uiMode==="github" every path
+  // below stays byte-identical. ──
+  const [uiMode, setUiMode] = useState<UiMode>(props.initialUiMode);
+  const [localSection, setLocalSection] = useState<LocalSection>("queue");
+  const [localFocus, setLocalFocus] = useState<"rail" | "body">("rail");
+  const [localCursor, setLocalCursor] = useState<Record<LocalSection, number>>({
+    queue: 0,
+    outbox: 0,
+    repos: 0,
+    worktrees: 0,
+    daemon: 0,
+  });
+  const [localScroll, setLocalScroll] = useState(0);
+  const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
+  const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
+  const [localRefreshedAt, setLocalRefreshedAt] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
+  const localActionInFlightRef = useRef<Set<string>>(new Set());
+
+  // Selectable rows for the current section. INVARIANT: this list is the EXACT
+  // rendered list each section component highlights, in the same order and
+  // 1:1 by index — so the `▌` cursor (localCursorSafe) and the x/R action
+  // target (localTarget) are always the SAME row. That means we do NOT pre-
+  // filter out non-actionable rows here (a done RECENT row, a live worktree):
+  // they stay in the list, exactly where the component draws them, and the
+  // x/R handlers guard them into a safe toast instead. RUNNING/processing rows
+  // are the one exception — QueueView never makes them selectable (the daemon
+  // owns processing/), and they are absent here too, so the mapping still holds.
+  // Gives x/R/o/f an explicit LOCAL target instead of the github currentRepo.
+  type LocalRow =
+    | { kind: "waiting"; id: string }
+    | { kind: "recent"; id: string; status: "done" | "failed" }
+    | { kind: "outboxOp"; id: string }
+    | { kind: "repo"; repo: LocalRepo }
+    | { kind: "worktree"; path: string; slug: string; klass: "live" | "stale" | "backup" };
+
+  const localRowsFor = (section: LocalSection): LocalRow[] => {
+    switch (section) {
+      case "queue": {
+        const q = localCheap?.queue;
+        if (!q) return [];
+        // waiting THEN all recent (done+failed) — the identical index space
+        // QueueView highlights (`selectedRow === waiting.length + j`).
+        return [
+          ...q.waiting.map((w) => ({ kind: "waiting" as const, id: w.id })),
+          ...q.recent.map((rr) => ({ kind: "recent" as const, id: rr.id, status: rr.status })),
+        ];
+      }
+      case "outbox":
+        return (localCheap?.outbox.ops ?? []).map((o) => ({ kind: "outboxOp" as const, id: o.id }));
+      case "repos":
+        return (localHeavy?.repos ?? []).map((repo) => ({ kind: "repo" as const, repo }));
+      case "worktrees":
+        // ALL worktrees, in render order — the identical index space
+        // WorktreesSection highlights (`idx === cursor`). live rows are kept
+        // (and guarded in the x handler) so highlight and target never diverge.
+        return (localHeavy?.worktrees ?? []).map((w) => ({
+          kind: "worktree" as const,
+          path: w.path,
+          slug: w.slug,
+          klass: w.kind,
+        }));
+      case "daemon":
+        return [];
+    }
+  };
+  const localRows = localRowsFor(localSection);
+  const localCursorSafe = Math.max(0, Math.min(localCursor[localSection], localRows.length - 1));
+  const localTarget = localRows[localCursorSafe];
+
+  const moveLocalCursor = (delta: number): void => {
+    if (localRows.length === 0) return;
+    const next = Math.max(0, Math.min(localCursorSafe + delta, localRows.length - 1));
+    setLocalCursor((m) => ({ ...m, [localSection]: next }));
+  };
+  const moveLocalSection = (delta: number): void => {
+    const i = LOCAL_SECTIONS.indexOf(localSection);
+    const next = Math.max(0, Math.min(i + delta, LOCAL_SECTIONS.length - 1));
+    setLocalSection(LOCAL_SECTIONS[next]);
+    setLocalScroll(0); // section switch resets the daemon-panel scroll
+  };
 
   const showToast = useCallback((kind: ToastKind, text: string) => {
     setToast({ kind, text });
@@ -441,11 +549,14 @@ export function App(props: AppProps): React.JSX.Element {
           setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
           return { delivered: true, staleAt: res.value.staleAt };
         }
-        showToast("error", res.error);
+        // Only surface the error toast when GITHUB actually owns the screen —
+        // this same loader fires on the background poll regardless of mode, and
+        // a failing github probe must never flash a red toast over LOCAL.
+        if (uiModeRef.current === "github" && props.githubEnabled) showToast("error", res.error);
         return { delivered: false, staleAt: null };
       });
     },
-    [client, trigger, showToast],
+    [client, trigger, showToast, props.githubEnabled],
   );
 
   // Derived list-level stale marker (see prStaleByRepo above).
@@ -507,6 +618,12 @@ export function App(props: AppProps): React.JSX.Element {
   nwoRef.current = currentNwo;
   const viewRef = useRef(view);
   viewRef.current = view;
+  // Live uiMode for the poll callbacks: a background issues poll must not flash
+  // a github error toast while LOCAL owns the screen (the poll fires on its own
+  // interval regardless of mode). Read via a ref so loadIssues' identity — and
+  // the intervals keyed on it — don't churn on every mode toggle.
+  const uiModeRef = useRef(uiMode);
+  uiModeRef.current = uiMode;
 
   // The ONE refresh cycle. Scope follows the view unless overridden (the `p`
   // handler must sweep before the "prs" view state has committed): main →
@@ -728,12 +845,17 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, [client, currentNwo, currentIssue, showToast]);
 
-  const openRepoBrowser = useCallback(() => {
-    if (!currentRepo) return;
-    void client.openRepoInBrowser(currentRepo.nwo).then((res) => {
-      if (!res.ok) showToast("error", res.error);
-    });
-  }, [client, currentRepo, showToast]);
+  // Takes an explicit nwo so LOCAL passes its cursor's LocalRepo target while
+  // github passes currentRepo.nwo — the open never depends on the github rail.
+  const openRepoBrowser = useCallback(
+    (nwo: string) => {
+      if (!nwo) return;
+      void client.openRepoInBrowser(nwo).then((res) => {
+        if (!res.ok) showToast("error", res.error);
+      });
+    },
+    [client, showToast],
+  );
 
   // Snapshot-anchored browser opens for the two detail views — shared by the
   // keyboard `o` and the ↗ line's mouse click, so the two can never diverge
@@ -765,6 +887,60 @@ export function App(props: AppProps): React.JSX.Element {
     },
     [],
   );
+
+  // Immediate LOCAL refresh (rail `r`): cheap always, heavy only for the two
+  // git-backed sections. aliveRef drops late results after unmount.
+  const forceLocalRefresh = useCallback(async (): Promise<void> => {
+    const c = await props.localCheapFn({ section: localSection });
+    if (!aliveRef.current) return;
+    setLocalCheap(c);
+    setLocalRefreshedAt(new Date().toISOString());
+    if (localSection === "repos" || localSection === "worktrees") {
+      const h = await props.localHeavyFn();
+      if (aliveRef.current) setLocalHeavy(h);
+    }
+  }, [props.localCheapFn, props.localHeavyFn, localSection]);
+
+  // Cheap poll @3s — only while LOCAL is visible. `alive` (per-effect) + aliveRef
+  // (per-App) both gate the setState so neither a mode switch nor an unmount
+  // clobbers state with a late result; the interval is cleared on either.
+  useEffect(() => {
+    if (uiMode !== "local") return;
+    let alive = true;
+    const run = async (): Promise<void> => {
+      const c = await props.localCheapFn({ section: localSection });
+      if (!alive || !aliveRef.current) return;
+      setLocalCheap(c);
+      setLocalRefreshedAt(new Date().toISOString());
+    };
+    void run();
+    const id = setInterval(() => void run(), localCheapPollMs);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [uiMode, localSection, props.localCheapFn, localCheapPollMs]);
+
+  // Heavy poll @15s — LOCAL + repos/worktrees only; AbortController lets the
+  // enumerators drop their in-flight git fan-out when the section/mode changes.
+  useEffect(() => {
+    if (uiMode !== "local") return;
+    if (localSection !== "repos" && localSection !== "worktrees") return;
+    let alive = true;
+    const ctrl = new AbortController();
+    const run = async (): Promise<void> => {
+      const h = await props.localHeavyFn(ctrl.signal);
+      if (!alive || !aliveRef.current) return; // aliveRef drops late results on unmount
+      setLocalHeavy(h);
+    };
+    void run();
+    const id = setInterval(() => void run(), localHeavyPollMs);
+    return () => {
+      alive = false;
+      ctrl.abort();
+      clearInterval(id);
+    };
+  }, [uiMode, localSection, props.localHeavyFn, localHeavyPollMs]);
 
   // Fire-and-toast, mirroring `d`/`a`: no view switch, the selected repo's nwo
   // is captured at press time, and the result surfaces as a toast whenever it
@@ -800,6 +976,38 @@ export function App(props: AppProps): React.JSX.Element {
       });
     },
     [currentNwo, runCliFn, showToast],
+  );
+
+  const askConfirm = useCallback((state: ConfirmState) => setConfirm(state), []);
+
+  // Fire-and-toast, mirroring runAssess: spawn the real CLI, dedupe by a key,
+  // toast the first output line, then force an immediate cheap re-poll so the
+  // mutated state (deleted ticket / drained outbox / gone worktree) shows at once.
+  const runLocalAction = useCallback(
+    (name: string, args: string[], opts: { key?: string; label?: string } = {}) => {
+      const key = opts.key ?? [name, ...args].join(" ");
+      if (localActionInFlightRef.current.has(key)) {
+        showToast("info", `${opts.label ?? name} already running`);
+        return;
+      }
+      localActionInFlightRef.current.add(key);
+      showToast("info", `${opts.label ?? name}…`);
+      void runCliFn(name, args).then((rr) => {
+        localActionInFlightRef.current.delete(key);
+        if (!aliveRef.current) return;
+        const line = firstNonEmptyLine(rr.output);
+        if (rr.code === 0) showToast("success", line ?? `${name} ok`);
+        else showToast("error", line ?? `${name} failed`);
+        // Immediate re-poll (cheap fn is cheap; section-gated counts refresh too).
+        void props.localCheapFn({ section: localSection }).then((c) => {
+          if (aliveRef.current) {
+            setLocalCheap(c);
+            setLocalRefreshedAt(new Date().toISOString());
+          }
+        });
+      });
+    },
+    [runCliFn, showToast, props.localCheapFn, localSection],
   );
 
   // Elapsed ticker for a running palette command (1s resolution).
@@ -855,52 +1063,62 @@ export function App(props: AppProps): React.JSX.Element {
     runPaletteCommand(current.name, extraArgs);
   }, [paletteFilter, paletteSel, paletteArgsMode, paletteArgs, runPaletteCommand, showToast]);
 
-  const unwatch = useCallback(() => {
-    if (!currentRepo) return;
-    if (currentRepo.fromConfig) {
-      showToast("info", `${currentRepo.nwo} is defined in config.toml`);
-      return;
-    }
-    if (watchlistError) {
-      showToast("error", "watchlist unreadable — fix it before writing");
-      return;
-    }
-    // Re-read at write time: never clobber a file that went corrupt since mount.
-    const { entries: cur, error } = readWatchlist(watchlistFile);
-    if (error) {
-      setWatchlistError(error);
-      showToast("error", "watchlist unreadable — not written");
-      return;
-    }
-    const next = cur.filter((e) => e.nwo.toLowerCase() !== currentRepo.nwo.toLowerCase());
-    writeWatchlist(watchlistFile, next);
-    setWatchlistEntries(next);
-    // Drop the repo's cached issue state too — the rail badges and the header
-    // pulse must never read ghost data for a repo that is no longer watched.
-    const gone = currentRepo.nwo;
-    setIssues((prev) => {
-      if (!(gone in prev)) return prev;
-      const rest = { ...prev };
-      delete rest[gone];
-      return rest;
-    });
-    setStaleAt((prev) => {
-      if (!(gone in prev)) return prev;
-      const rest = { ...prev };
-      delete rest[gone];
-      return rest;
-    });
-    setPrStaleByRepo((prev) => {
-      if (!(gone in prev)) return prev;
-      const rest = { ...prev };
-      delete rest[gone];
-      return rest;
-    });
-    // ...and its PRs from the cross-repo aggregate — the ⚑ attention chip and
-    // the PRs view must drop the repo immediately, not on the next poll.
-    setPrs((prev) => prev.filter((p) => p.nwo !== gone));
-    showToast("success", `unwatched ${currentRepo.nwo}`);
-  }, [currentRepo, watchlistFile, watchlistError, showToast]);
+  // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
+  // cursor's LocalRepo.nwo). The config-vs-watchlist decision comes from the
+  // matched repoMappings entry; an nwo absent from the union → not in watchlist.
+  const unwatch = useCallback(
+    (nwo: string) => {
+      const mapping = repoMappings.find((r) => r.nwo.toLowerCase() === nwo.toLowerCase());
+      if (!mapping) {
+        showToast("info", "not in watchlist");
+        return;
+      }
+      if (mapping.fromConfig) {
+        showToast("info", `${mapping.nwo} is defined in config.toml`);
+        return;
+      }
+      if (watchlistError) {
+        showToast("error", "watchlist unreadable — fix it before writing");
+        return;
+      }
+      // Re-read at write time: never clobber a file that went corrupt since mount.
+      const { entries: cur, error } = readWatchlist(watchlistFile);
+      if (error) {
+        setWatchlistError(error);
+        showToast("error", "watchlist unreadable — not written");
+        return;
+      }
+      const next = cur.filter((e) => e.nwo.toLowerCase() !== mapping.nwo.toLowerCase());
+      writeWatchlist(watchlistFile, next);
+      setWatchlistEntries(next);
+      // Drop the repo's cached issue state too — the rail badges and the header
+      // pulse must never read ghost data for a repo that is no longer watched.
+      const gone = mapping.nwo;
+      setIssues((prev) => {
+        if (!(gone in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[gone];
+        return rest;
+      });
+      setStaleAt((prev) => {
+        if (!(gone in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[gone];
+        return rest;
+      });
+      setPrStaleByRepo((prev) => {
+        if (!(gone in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[gone];
+        return rest;
+      });
+      // ...and its PRs from the cross-repo aggregate — the ⚑ attention chip and
+      // the PRs view must drop the repo immediately, not on the next poll.
+      setPrs((prev) => prev.filter((p) => p.nwo !== gone));
+      showToast("success", `unwatched ${mapping.nwo}`);
+    },
+    [repoMappings, watchlistFile, watchlistError, showToast],
+  );
 
   const handleAddRepo = useCallback(
     async (rawNwo: string, path: string): Promise<void> => {
@@ -1061,14 +1279,168 @@ export function App(props: AppProps): React.JSX.Element {
     }
   };
 
+  // The mode toggle is inert while a text field (filter / add-repo / palette)
+  // or the confirm modal owns input — so `m` can never eat a typed character.
+  const canToggleMode = (): boolean =>
+    !filtering && view !== "addRepo" && view !== "palette" && confirm === null;
+  // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
+  const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
+    input === "m" || (key.tab === true && key.shift === true);
+
+  const handleLocalInput = (
+    input: string,
+    key: Parameters<Parameters<typeof useInput>[0]>[1],
+  ): void => {
+    // The help modal owns the screen while open — any key closes it, mirroring
+    // the github cascade's "any key closes help" rule (view === "help" there).
+    // Without this branch keys fell through to rail/body handling underneath
+    // the modal, leaving local help unclosable except by swapping to github.
+    if (view === "help") {
+      setView("main");
+      return;
+    }
+    // The confirm modal owns input while open (LOCAL-only gate).
+    if (confirm) {
+      if (key.escape || input === "n") {
+        setConfirm(null);
+        return;
+      }
+      if (key.return || input === "y") {
+        const fn = confirm.onConfirm;
+        setConfirm(null);
+        fn();
+        return;
+      }
+      return;
+    }
+    if (localFocus === "body") {
+      if (key.escape || input === "h" || key.leftArrow) {
+        setLocalFocus("rail");
+        return;
+      }
+      if (localSection === "daemon") {
+        if (input === "[" || key.upArrow) return void setLocalScroll((s) => Math.max(0, s - 1));
+        if (input === "]" || key.downArrow) return void setLocalScroll((s) => s + 1);
+        if (input === "X") {
+          const n = localCheap?.daemon.currentTickets.length ?? 0;
+          return void askConfirm({
+            title: "restart daemon",
+            danger: true,
+            body: `Restart will interrupt ${n} in-flight ticket(s) (soft-abort, committed work salvaged). Continue?`,
+            onConfirm: () => runLocalAction("restart", [], { label: "restart" }),
+          });
+        }
+        if (input === "f") return void runLocalAction("outbox", ["flush"], { label: "flush" });
+        return;
+      }
+      if (input === "j" || key.downArrow) return void moveLocalCursor(1);
+      if (input === "k" || key.upArrow) return void moveLocalCursor(-1);
+      if (input === "g") return void setLocalCursor((m) => ({ ...m, [localSection]: 0 }));
+      if (input === "G")
+        return void setLocalCursor((m) => ({
+          ...m,
+          [localSection]: Math.max(0, localRows.length - 1),
+        }));
+      const t = localTarget;
+      if (localSection === "queue") {
+        if (input === "R") {
+          // R acts on exactly the highlighted row (localRows is index-aligned
+          // with QueueView's cursor). Only a FAILED recent row is requeuable;
+          // a done row is highlightable but guarded into a safe toast — never a
+          // retry of a different, non-highlighted target.
+          if (t?.kind === "recent" && t.status === "failed")
+            return void runLocalAction("retry", [t.id], { label: "requeue" });
+          if (t?.kind === "recent" && t.status === "done")
+            return void showToast("info", "done tickets can't be requeued");
+          return;
+        }
+        if (input === "x" && t?.kind === "waiting")
+          return void askConfirm({
+            title: "delete queued ticket",
+            danger: true,
+            body: `Delete inbox/${t.id}.md? (best-effort; the daemon may have claimed it)`,
+            onConfirm: () => runLocalAction("rm", [t.id]),
+          });
+      }
+      if (localSection === "outbox" && input === "f")
+        return void runLocalAction("outbox", ["flush"], { label: "flush" });
+      if (localSection === "repos" && t?.kind === "repo") {
+        if (input === "o") return void openRepoBrowser(t.repo.nwo ?? "");
+        if (input === "x")
+          return void (t.repo.nwo ? unwatch(t.repo.nwo) : showToast("info", "not in watchlist"));
+      }
+      if (localSection === "worktrees" && input === "x" && t?.kind === "worktree") {
+        // x acts on exactly the highlighted worktree (localRows is index-aligned
+        // with WorktreesSection's cursor). A live worktree is highlightable but
+        // guarded — the daemon may own it — so x on it is a safe toast, never a
+        // prune of a different, non-highlighted row.
+        if (t.klass === "live") return void showToast("info", "live worktree — not prunable");
+        return void askConfirm({
+          title: "prune worktree",
+          danger: true,
+          body: `Prune ${t.slug} (${t.klass})? git worktree remove --force under the daemon lock.`,
+          onConfirm: () => runLocalAction("worktree", ["prune", t.path], { label: "prune" }),
+        });
+      }
+      return;
+    }
+    // rail focus
+    if (input === "q") {
+      exit();
+      onExit();
+      return;
+    }
+    if (input === "?") return void setView("help");
+    if (input === "r") {
+      void forceLocalRefresh();
+      return;
+    }
+    if (input === "j" || key.downArrow) return void moveLocalSection(1);
+    if (input === "k" || key.upArrow) return void moveLocalSection(-1);
+    if (input === "g") {
+      setLocalSection("queue");
+      setLocalScroll(0);
+      return;
+    }
+    if (input === "G") {
+      setLocalSection("daemon");
+      setLocalScroll(0);
+      return;
+    }
+    if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
+  };
+
   useInput((input, key) => {
     // Mouse reporting leaks SGR sequences into useInput as keypresses (ink
     // strips the ESC) — drop them; onMouseEvent owns the real events via stdin.
-    if (isMouseInput(input)) return;
+    if (isMouseInput(input)) return; // layer 1
 
     // The AddRepoForm (+ its TextFields) own all input while open.
-    if (view === "addRepo") return;
+    if (view === "addRepo") return; // layer 2 (text field owns input)
 
+    // layer 3 — the global mode toggle (`m` / Shift+Tab), hoisted above the
+    // github cascade so `m` never eats a typed char (canToggleMode is false
+    // while filtering / addRepo / palette / a confirm modal is open).
+    if (canToggleMode() && isModeToggle(input, key)) {
+      const target: UiMode = uiMode === "github" ? "local" : "github";
+      if (target === "github" && !props.githubEnabled) {
+        dismissToast();
+        showToast("info", "github mode is off ([github] enabled=false)");
+        return;
+      }
+      setUiMode(target);
+      dismissToast();
+      return;
+    }
+
+    // layer 4 — LOCAL surface owns everything else while it is the active mode.
+    if (uiMode === "local") {
+      dismissToast();
+      handleLocalInput(input, key);
+      return;
+    }
+
+    // layer 5 ── the existing github cascade, verbatim ──
     // Toast is dismissed by the next keystroke, before it is acted on.
     dismissToast();
 
@@ -1474,8 +1846,8 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "k" || key.upArrow) return void setRepoIdx((i) => Math.max(0, i - 1));
       if (input === "g") return void setRepoIdx(0);
       if (input === "G") return void setRepoIdx(repoMappings.length - 1);
-      if (input === "x") return void unwatch();
-      if (input === "o") return void openRepoBrowser();
+      if (input === "x") return void (currentRepo ? unwatch(currentRepo.nwo) : undefined);
+      if (input === "o") return void (currentRepo ? openRepoBrowser(currentRepo.nwo) : undefined);
       return;
     }
 
@@ -1555,6 +1927,26 @@ export function App(props: AppProps): React.JSX.Element {
   });
 
   const onMouseEvent = (ev: TuiMouseEvent): void => {
+    // Resolve the clickable header tab band FIRST — before any per-view guard —
+    // so a mode switch works from every view. headerTabBands takes the TERMINAL
+    // columns (the same value computeLayout gave Header its `mode`), so the
+    // bands line up with the rendered tab regardless of layout mode.
+    if (ev.y === 0 && ev.kind === "press") {
+      const m = headerTabBands(size.columns).hit(ev.x);
+      if (m && m !== uiMode) {
+        if (m === "github" && !props.githubEnabled) {
+          dismissToast();
+          showToast("info", "github mode is off ([github] enabled=false)");
+          return;
+        }
+        dismissToast();
+        setUiMode(m);
+        return;
+      }
+    }
+    if (confirm) return; // the confirm modal owns the screen
+    if (uiMode === "local") return; // the LOCAL body is keyboard-first in v1
+
     // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
     if (view === "help" || view === "palette" || view === "addRepo" || view === "review") return;
     if (ev.kind === "release") return; // presses act on press, not release
@@ -1662,7 +2054,10 @@ export function App(props: AppProps): React.JSX.Element {
   };
   useMouse(onMouseEvent);
 
-  const hints = hintsFor(view as HintView, pane, layout.mode, filtering);
+  const hints =
+    uiMode === "local"
+      ? localHintsFor(localSection, localFocus)
+      : hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
   const paletteProps = {
     commands: PALETTE_COMMANDS,
@@ -1683,18 +2078,32 @@ export function App(props: AppProps): React.JSX.Element {
     onSubmit: (nwo: string, path: string) => void handleAddRepo(nwo, path),
     onCancel: () => setView("main"),
   };
-  const modal =
-    view === "help" ? (
-      <HelpModal view="main" pane={pane} mode={layout.mode} trigger={trigger} />
-    ) : view === "palette" ? (
-      <Modal title="run a junco command" minWidth={64}>
-        <CommandPalette {...paletteProps} />
-      </Modal>
-    ) : view === "addRepo" ? (
-      <Modal title="add repo to watchlist" minWidth={54}>
-        <AddRepoForm {...addRepoProps} />
-      </Modal>
-    ) : null;
+  // The LOCAL confirm modal outranks the github modals when open.
+  const modal = confirm ? (
+    <Modal title={confirm.title} minWidth={54}>
+      <Box flexDirection="column" gap={1}>
+        <Text color={confirm.danger ? theme.error : undefined}>{confirm.body}</Text>
+        <Text dimColor>y/enter confirm · n/esc cancel</Text>
+      </Box>
+    </Modal>
+  ) : view === "help" ? (
+    <HelpModal
+      view="main"
+      pane={pane}
+      mode={layout.mode}
+      trigger={trigger}
+      uiMode={uiMode}
+      localSection={localSection}
+    />
+  ) : view === "palette" ? (
+    <Modal title="run a junco command" minWidth={64}>
+      <CommandPalette {...paletteProps} />
+    </Modal>
+  ) : view === "addRepo" ? (
+    <Modal title="add repo to watchlist" minWidth={54}>
+      <AddRepoForm {...addRepoProps} />
+    </Modal>
+  ) : null;
 
   return (
     <Workspace
@@ -1714,6 +2123,8 @@ export function App(props: AppProps): React.JSX.Element {
           prAttention={prAttention}
           prFailing={prFailing}
           refreshedAt={refreshedAt}
+          uiMode={uiMode}
+          githubEnabled={props.githubEnabled}
         />
       }
       toast={toast}
@@ -1721,102 +2132,124 @@ export function App(props: AppProps): React.JSX.Element {
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}
     >
-      <Rail
-        repos={repoRows}
-        selected={repoIdxSafe}
-        focused={view === "main" && pane === 1}
-        queue={queueSnap}
-        width={layout.railWidth}
-        height={listHeight}
-        window={railWindow}
-      />
-      {view === "queue" ? (
-        <QueueView snap={queueSnap} scroll={scroll} now={queueNow} height={listHeight} focused />
-      ) : view === "cmdOutput" && cmd ? (
-        <CommandOutput
-          title={cmd.title}
-          running={cmd.running}
-          elapsedS={cmdElapsed}
-          output={cmd.output}
-          scroll={scroll}
-          exitCode={cmd.exitCode}
-          timedOut={cmd.timedOut}
-          height={listHeight}
-        />
-      ) : view === "detail" && detail ? (
-        <Preview
-          issue={detail.issue}
-          trigger={trigger}
-          body={detail.body}
-          planComment={detail.planComment}
-          loading={detail.loading}
-          error={null}
-          scroll={scroll}
-          focused
-          height={listHeight}
-        />
-      ) : view === "prDetail" && prDetail ? (
-        <PrPreview
-          pr={prDetail.pr}
-          branchPrefix={branchPrefix}
+      {uiMode === "local" ? (
+        <LocalDashboard
+          cheap={localCheap}
+          heavy={localHeavy}
+          section={localSection}
+          focus={localFocus}
+          cursor={localCursorSafe}
+          scroll={localScroll}
+          layout={layout}
           now={queueNow}
-          height={listHeight}
-          focused
-          titleLabel="pr"
-        />
-      ) : view === "prs" ? (
-        <PrList
-          prs={prs}
-          selected={prIdxSafe}
-          focused
-          height={listHeight}
-          now={queueNow}
-          staleAt={prStaleAt}
-          window={prWindow}
+          refreshedAt={localRefreshedAt}
         />
       ) : view === "review" ? (
         <ReviewView state={reviewState} height={listHeight} focused />
       ) : (
-        <IssueList
-          issues={filteredIssues}
-          trigger={trigger}
-          selected={issueIdxSafe}
-          focused={view === "main" && pane === 2}
-          refreshing={refreshing}
-          filter={filter}
-          filtering={filtering}
-          height={listHeight}
-          now={queueNow}
-          staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
-          window={issueWindow}
-        />
-      )}
-      {layout.mode === "wide" &&
-        (view === "prs" ? (
-          <PrPreview
-            pr={selectedPr}
-            branchPrefix={branchPrefix}
-            now={queueNow}
+        <>
+          <Rail
+            repos={repoRows}
+            selected={repoIdxSafe}
+            focused={view === "main" && pane === 1}
+            queue={queueSnap}
+            width={layout.railWidth}
             height={listHeight}
-            width={layout.previewWidth}
-            focused={false}
+            window={railWindow}
           />
-        ) : view === "main" ? (
-          <Box width={layout.previewWidth} height={listHeight}>
+          {view === "queue" ? (
+            <QueueView
+              snap={queueSnap}
+              scroll={scroll}
+              now={queueNow}
+              height={listHeight}
+              focused
+            />
+          ) : view === "cmdOutput" && cmd ? (
+            <CommandOutput
+              title={cmd.title}
+              running={cmd.running}
+              elapsedS={cmdElapsed}
+              output={cmd.output}
+              scroll={scroll}
+              exitCode={cmd.exitCode}
+              timedOut={cmd.timedOut}
+              height={listHeight}
+            />
+          ) : view === "detail" && detail ? (
+            <Preview
+              issue={detail.issue}
+              trigger={trigger}
+              body={detail.body}
+              planComment={detail.planComment}
+              loading={detail.loading}
+              error={null}
+              scroll={scroll}
+              focused
+              height={listHeight}
+            />
+          ) : view === "prDetail" && prDetail ? (
+            <PrPreview
+              pr={prDetail.pr}
+              branchPrefix={branchPrefix}
+              now={queueNow}
+              height={listHeight}
+              focused
+              titleLabel="pr"
+            />
+          ) : view === "prs" ? (
             <PrList
-              prs={repoPrs}
-              selected={pane3IdxSafe}
-              showNwo={false}
-              focused={pane === 3}
+              prs={prs}
+              selected={prIdxSafe}
+              focused
               height={listHeight}
               now={queueNow}
               staleAt={prStaleAt}
-              window={pane3Window}
-              title={pane3Title}
-              emptyText="no junco PRs for this repo"
+              window={prWindow}
             />
-          </Box>
-        ) : null)}
+          ) : (
+            <IssueList
+              issues={filteredIssues}
+              trigger={trigger}
+              selected={issueIdxSafe}
+              focused={view === "main" && pane === 2}
+              refreshing={refreshing}
+              filter={filter}
+              filtering={filtering}
+              height={listHeight}
+              now={queueNow}
+              staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
+              window={issueWindow}
+            />
+          )}
+          {layout.mode === "wide" &&
+            (view === "prs" ? (
+              <PrPreview
+                pr={selectedPr}
+                branchPrefix={branchPrefix}
+                now={queueNow}
+                height={listHeight}
+                width={layout.previewWidth}
+                focused={false}
+              />
+            ) : view === "main" ? (
+              <Box width={layout.previewWidth} height={listHeight}>
+                <PrList
+                  prs={repoPrs}
+                  selected={pane3IdxSafe}
+                  showNwo={false}
+                  focused={pane === 3}
+                  height={listHeight}
+                  now={queueNow}
+                  staleAt={prStaleAt}
+                  window={pane3Window}
+                  title={pane3Title}
+                  emptyText="no junco PRs for this repo"
+                />
+              </Box>
+            ) : null)}
+        </>
+      )}
     </Workspace>
   );
 }

@@ -6,6 +6,8 @@ import type { HealthInfo } from "../ghClient.js";
 import { fmtCompact } from "../queueFmt.js";
 import { relTime, relTimeShort } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
+import type { UiMode } from "../geometry.js";
+import type { LocalSection } from "../localSnapshot.js";
 
 export type HintView =
   | "main"
@@ -46,6 +48,8 @@ export function Header({
   prAttention,
   prFailing,
   refreshedAt,
+  uiMode,
+  githubEnabled,
 }: {
   repoNwo: string | null;
   /** Extended /health snapshot, null before the first poll resolves. */
@@ -70,6 +74,11 @@ export function Header({
    * was served offline) — the top bar's single ↻ stamp. Null until the first
    * cycle completes. */
   refreshedAt: string | null;
+  /** Present only in the two-mode App; absent → legacy single-surface header
+   * (byte-identical to pre-Stage-E rendering — no tab segment at all). */
+  uiMode?: UiMode;
+  /** When false the GITHUB tab dims (the mode is off in config). */
+  githubEnabled?: boolean;
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -84,6 +93,18 @@ export function Header({
   const lastTaskAt = health?.lastTaskAt ?? null;
   const totalTokensOut = health?.totalTokensOut ?? null;
   const bridgeErrors = health?.bridgeErrors ?? null;
+  // Fixed-width tab labels — mirror geometry.ts's headerTabBands ghWidth/
+  // loWidth exactly ("[GITHUB]"/"[G]" = 8/3, "[LOCAL]"/"[L]" = 7/3) so the
+  // inactive (unbracketed, shorter) label pads out to the SAME column width
+  // as the active one. Without the padEnd, "github"/"g" would be 2 columns
+  // shorter than their slot and the local tab would render 2 columns early,
+  // drifting away from headerTabBands' hit-test bands (Task 16 clicks them).
+  const ghWidth = wide ? 8 : 3;
+  const loWidth = wide ? 7 : 3;
+  const ghLabel =
+    uiMode === "github" ? (wide ? "[GITHUB]" : "[G]") : (wide ? "github" : "g").padEnd(ghWidth);
+  const loLabel =
+    uiMode === "local" ? (wide ? "[LOCAL]" : "[L]") : (wide ? "local" : "l").padEnd(loWidth);
   return (
     <Box paddingX={1} gap={2} height={1}>
       <Box flexShrink={0}>
@@ -93,6 +114,21 @@ export function Header({
           junco
         </Text>
       </Box>
+      {uiMode !== undefined && (
+        <Box flexShrink={0}>
+          <Text
+            color={uiMode === "github" ? theme.accent : undefined}
+            bold={uiMode === "github"}
+            dimColor={githubEnabled === false}
+          >
+            {ghLabel}
+          </Text>
+          <Text> </Text>
+          <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
+            {loLabel}
+          </Text>
+        </Box>
+      )}
       <Box flexShrink={1} minWidth={0}>
         <Text bold wrap="truncate">
           {repoNwo ?? "no repo"}
@@ -255,6 +291,7 @@ export function hintsFor(
       ["r", "refresh"],
       ["s", "assess"],
       [":", "commands"],
+      ["m", "local"],
       ["?", "help"],
       ["q", "quit"],
     ];
@@ -280,7 +317,59 @@ export function hintsFor(
     ["/", "filter"],
     ["t", "queue"],
     ["p", "PRs"],
+    ["m", "local"],
     ["?", "help"],
     ["q", "quit"],
   ];
+}
+
+/** Local-mode key hints — GitHub `hintsFor` is untouched; this is a sibling
+ * for the LOCAL surface. `m`/Shift+Tab is the global mode swap (also in the
+ * github main set so it is discoverable from both sides). */
+export function localHintsFor(section: LocalSection, focus: "rail" | "body"): [string, string][] {
+  if (focus === "rail") {
+    return [
+      ["↑/↓", "section"],
+      ["→", "open"],
+      ["m", "github"],
+      ["r", "refresh"],
+      ["?", "help"],
+      ["q", "quit"],
+    ];
+  }
+  switch (section) {
+    case "queue":
+      return [
+        ["↑/↓", "move"],
+        ["R", "requeue"],
+        ["x", "delete"],
+        ["←", "back"],
+      ];
+    case "outbox":
+      return [
+        ["↑/↓", "move"],
+        ["f", "flush"],
+        ["←", "back"],
+      ];
+    case "repos":
+      return [
+        ["↑/↓", "move"],
+        ["o", "browser"],
+        ["x", "unwatch"],
+        ["←", "back"],
+      ];
+    case "worktrees":
+      return [
+        ["↑/↓", "move"],
+        ["x", "prune"],
+        ["←", "back"],
+      ];
+    case "daemon":
+      return [
+        ["[/]", "scroll"],
+        ["X", "restart"],
+        ["f", "flush"],
+        ["←", "back"],
+      ];
+  }
 }

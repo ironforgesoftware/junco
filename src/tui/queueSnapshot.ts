@@ -10,9 +10,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Config, TicketGithub, Ticket } from "../types.js";
 import { PRIORITY_RANK } from "../types.js";
-import { queuePaths } from "../config.js";
+import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { parseTicket } from "../ticket.js";
 import { outboxDepth as computeOutboxDepth } from "../githubOutbox.js";
+import type { HealthBody } from "./localSnapshot.js";
 
 export interface QueueRunning {
   id: string;
@@ -60,9 +61,13 @@ export interface QueueSnapshotDeps {
   statFn?: (p: string) => { mtimeMs: number };
   fetchFn?: typeof fetch;
   nowFn?: () => Date;
+  /** Pre-fetched /health, threaded in by makeLocalCheapFn so the queue layer
+   * issues no second request (one consistent daemonUp per cheap tick). Absent
+   * (undefined) keeps the self-fetch path; present → a HealthBody means daemon
+   * up (use its metrics); null means daemon down → processing/ fallback. */
+  healthOverride?: { body: HealthBody | null };
 }
 
-const HEALTH_TIMEOUT_MS = 1500;
 const RECENT_CAP = 5;
 
 /** Claimed/finalized basenames carry a `<UTC-stamp>__` prefix (queue.ts
@@ -164,7 +169,30 @@ export function makeQueueSnapshotFn(
       // -- running: /health when up, processing/ fallback when not ----------
       let daemonUp = false;
       let running: QueueRunning[] = [];
-      if (cfg.healthEnabled) {
+      const mkRunning = (tickets: string[], prog: Record<string, HealthProgress>): QueueRunning[] =>
+        tickets.map((id): QueueRunning => {
+          const p = prog[id];
+          return {
+            id,
+            github: procById.get(id)?.github ?? null,
+            turns: p?.turns ?? null,
+            lastTool: p?.lastTool ?? null,
+            outputTokens: p?.outputTokens ?? null,
+            startedAt: p?.startedAt ?? null,
+            stale: false,
+          };
+        });
+      if (deps.healthOverride !== undefined) {
+        // Already fetched by makeLocalCheapFn — never issue a second request.
+        const body = deps.healthOverride.body;
+        if (body !== null) {
+          daemonUp = true;
+          running = mkRunning(
+            body.metrics?.currentTickets ?? [],
+            body.metrics?.currentProgress ?? {},
+          );
+        }
+      } else if (cfg.healthEnabled) {
         try {
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
@@ -180,19 +208,10 @@ export function makeQueueSnapshotFn(
                 };
               };
               daemonUp = true;
-              const prog = j.metrics?.currentProgress ?? {};
-              running = (j.metrics?.currentTickets ?? []).map((id): QueueRunning => {
-                const p = prog[id];
-                return {
-                  id,
-                  github: procById.get(id)?.github ?? null,
-                  turns: p?.turns ?? null,
-                  lastTool: p?.lastTool ?? null,
-                  outputTokens: p?.outputTokens ?? null,
-                  startedAt: p?.startedAt ?? null,
-                  stale: false,
-                };
-              });
+              running = mkRunning(
+                j.metrics?.currentTickets ?? [],
+                j.metrics?.currentProgress ?? {},
+              );
             }
           } finally {
             clearTimeout(timer);

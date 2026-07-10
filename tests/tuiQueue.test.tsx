@@ -196,4 +196,107 @@ describe("QueueView", () => {
       ).lastFrame(),
     ).toContain("loading…");
   });
+
+  it("default-absent props render byte-identical (no cursor glyph)", () => {
+    const base = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} />,
+    ).lastFrame()!;
+    const withFalse = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} selectable={false} />,
+    ).lastFrame()!;
+    expect(withFalse).toBe(base);
+    expect(base).not.toContain("▌");
+  });
+
+  it("selectable path: cursor marks the first WAITING row, never RUNNING", () => {
+    const frame = render(
+      <QueueView
+        snap={FULL}
+        scroll={0}
+        now={NOW}
+        height={30}
+        focused={false}
+        selectable
+        selectedRow={0}
+      />,
+    ).lastFrame()!;
+    expect(frame).toContain("▌"); // cursor present
+    expect(frame).toContain("1. #51 plan"); // still the first waiting row
+    // RUNNING row (◐ + label) carries no cursor glyph on its line.
+    const runLine = frame.split("\n").find((l) => l.includes("#46 exec"))!;
+    expect(runLine).not.toContain("▌");
+  });
+
+  it("selectable path: selectedRow past WAITING lands on a RECENT row", () => {
+    // waiting.length === 4, so index 4 is the first RECENT row (#44).
+    const frame = render(
+      <QueueView
+        snap={FULL}
+        scroll={0}
+        now={NOW}
+        height={30}
+        focused={false}
+        selectable
+        selectedRow={4}
+      />,
+    ).lastFrame()!;
+    const recLine = frame.split("\n").find((l) => l.includes("#44 exec"))!;
+    expect(recLine).toContain("▌");
+  });
+
+  it("counts render the full done/failed totals (LOCAL only; absent = no line)", () => {
+    const withCounts = render(
+      <QueueView
+        snap={FULL}
+        scroll={0}
+        now={NOW}
+        height={30}
+        focused={false}
+        selectable
+        selectedRow={0}
+        counts={{ done: 12, failed: 3 }}
+      />,
+    ).lastFrame()!;
+    expect(withCounts).toContain("DONE 12");
+    expect(withCounts).toContain("FAILED 3");
+    // Absent (GitHub `t`) → no totals line.
+    const noCounts = render(
+      <QueueView snap={FULL} scroll={0} now={NOW} height={30} focused={false} />,
+    ).lastFrame()!;
+    expect(noCounts).not.toContain("DONE 12");
+  });
+
+  it("cursor-following window keeps a selected row past the fold visible", () => {
+    // A WAITING list far larger than fits: with no scroll-follow the cursor
+    // would drop below the fold and highlight an off-screen row.
+    const many: QueueSnapshot = {
+      ...IDLE,
+      waiting: Array.from({ length: 20 }, (_, i) => ({
+        id: `wait-${i}`,
+        github: null,
+        kind: "pr" as const,
+        priority: "normal" as const,
+        retryCount: 0,
+        notBefore: null,
+        deferred: false,
+      })),
+    };
+    const frame = render(
+      <QueueView
+        snap={many}
+        scroll={0}
+        now={NOW}
+        height={10} // ~7 visible rows — the last waiting row is well past the fold
+        focused={false}
+        selectable
+        selectedRow={19} // last waiting row
+      />,
+    ).lastFrame()!;
+    // The highlighted row is inside the rendered window, carrying the cursor…
+    const selLine = frame.split("\n").find((l) => l.includes("wait-19"));
+    expect(selLine).toBeDefined();
+    expect(selLine!).toContain("▌");
+    // …and the window actually moved (a top row scrolled off).
+    expect(frame).not.toContain("wait-0 ");
+  });
 });

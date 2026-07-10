@@ -12,6 +12,7 @@ import type { DashIssue } from "../src/tui/state.js";
 import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import { until } from "./helpers/until.js";
 
 // Every App mount registers a `process.on("exit")` listener via useMouse; this
@@ -66,6 +67,31 @@ const QUEUE_SNAP: QueueSnapshot = {
   recent: [],
   error: null,
   outboxDepth: 4,
+};
+
+// LOCAL snapshot for the github-default App tests — the LOCAL surface is never
+// visited here, so a benign default keeps initialUiMode="github" frames intact.
+const LOCAL_CHEAP: LocalCheap = {
+  queue: QUEUE_SNAP,
+  counts: null,
+  outbox: { depth: QUEUE_SNAP.outboxDepth, dead: 0, ops: [], deadOps: [], error: null },
+  daemon: {
+    up: true,
+    pid: null,
+    uptimeSeconds: null,
+    endpointReachable: true,
+    healthHost: "127.0.0.1",
+    healthPort: 8787,
+    guardNudges: null,
+    guardKills: null,
+    tokensIn: null,
+    tokensOut: null,
+    tasksByStatus: {},
+    currentTickets: [],
+    progress: {},
+    error: null,
+  },
+  error: null,
 };
 
 function makeClient(
@@ -292,6 +318,12 @@ function renderApp(
       healthPollMs={999999}
       queuePollMs={999999}
       queueFn={queueFn}
+      localCheapFn={async () => LOCAL_CHEAP}
+      localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+      localCheapPollMs={999999}
+      localHeavyPollMs={999999}
+      initialUiMode="github"
+      githubEnabled
       runCliFn={runCliFn}
       // Medium layout: single body pane, so enter still opens the detail view
       // (the legacy flows the App-level tests exercise); wide-mode tests below
@@ -716,6 +748,12 @@ describe("App", () => {
           healthPollMs={999999}
           queuePollMs={999999}
           queueFn={async () => QUEUE_SNAP}
+          localCheapFn={async () => LOCAL_CHEAP}
+          localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+          localCheapPollMs={999999}
+          localHeavyPollMs={999999}
+          initialUiMode="github"
+          githubEnabled
           sizeOverride={{ columns: 130, rows: 30 }}
           onExit={() => {}}
         />,
@@ -758,6 +796,12 @@ describe("App", () => {
           healthPollMs={999999}
           queuePollMs={999999}
           queueFn={async () => QUEUE_SNAP}
+          localCheapFn={async () => LOCAL_CHEAP}
+          localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+          localCheapPollMs={999999}
+          localHeavyPollMs={999999}
+          initialUiMode="github"
+          githubEnabled
           sizeOverride={{ columns: 130, rows: 30 }}
           onExit={() => {}}
         />,
@@ -1398,6 +1442,12 @@ describe("assess hotkey (s/S)", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        localCheapFn={async () => LOCAL_CHEAP}
+        localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+        localCheapPollMs={999999}
+        localHeavyPollMs={999999}
+        initialUiMode="github"
+        githubEnabled
         runCliFn={runCliFn}
         sizeOverride={{ columns: 100, rows: 30 }}
         onExit={() => {}}
@@ -1925,6 +1975,12 @@ describe("workspace wide mode", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        localCheapFn={async () => LOCAL_CHEAP}
+        localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+        localCheapPollMs={999999}
+        localHeavyPollMs={999999}
+        initialUiMode="github"
+        githubEnabled
         sizeOverride={{ columns: 130, rows: 30 }}
         onExit={() => {}}
       />,
@@ -2023,6 +2079,12 @@ describe("workspace wide mode", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        localCheapFn={async () => LOCAL_CHEAP}
+        localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+        localCheapPollMs={999999}
+        localHeavyPollMs={999999}
+        initialUiMode="github"
+        githubEnabled
         sizeOverride={{ columns: 130, rows: 30 }}
         onExit={() => {}}
       />,
@@ -2204,6 +2266,12 @@ describe("workspace wide mode", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        localCheapFn={async () => LOCAL_CHEAP}
+        localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+        localCheapPollMs={999999}
+        localHeavyPollMs={999999}
+        initialUiMode="github"
+        githubEnabled
         sizeOverride={size}
         onExit={() => {}}
       />

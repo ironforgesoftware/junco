@@ -14,6 +14,8 @@ import {
   outboxPaths,
   enqueueOp,
   listOps,
+  listOpsFrom,
+  listDeadOps,
   outboxDepth,
   deadCount,
   flushOutbox,
@@ -888,5 +890,47 @@ describe("ensureFindingLabels", () => {
       "",
       "--force",
     ]);
+  });
+});
+
+describe("listOpsFrom / listDeadOps", () => {
+  it("listDeadOps returns [] when the dead dir has never been created", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obxdead-"));
+    expect(listDeadOps(cfgAt(root))).toEqual([]);
+  });
+
+  it("listDeadOps reads dead/ — sorted by filename, skipping unparseable & non-json", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obxdead2-"));
+    const cfg = cfgAt(root);
+    const dead = outboxPaths(cfg).dead;
+    mkdirSync(dead, { recursive: true });
+    const opA = {
+      id: "ignored-by-list", // listOpsFrom re-derives id from the filename stem
+      createdAt: "2026-07-07T00:00:00.000Z",
+      origin: "prflow" as const,
+      issueKey: "a/b#7",
+      attempts: 3,
+      lastError: "boom",
+      op: { ...LABELS },
+    };
+    writeFileSync(join(dead, "100-0001-aaaa-labels.json"), JSON.stringify(opA));
+    writeFileSync(
+      join(dead, "200-0002-bbbb-labels.json"),
+      JSON.stringify({ ...opA, lastError: "later" }),
+    );
+    writeFileSync(join(dead, "garbage.json"), "{ not json");
+    writeFileSync(join(dead, "ignore.txt"), "nope");
+    const ops = listDeadOps(cfg);
+    expect(ops.map((o) => o.id)).toEqual(["100-0001-aaaa-labels", "200-0002-bbbb-labels"]);
+    expect(ops[0].path).toBe(join(dead, "100-0001-aaaa-labels.json"));
+    expect(ops[1].lastError).toBe("later");
+  });
+
+  it("listOps delegates through listOpsFrom (live dir round-trips)", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obxlive-"));
+    const cfg = cfgAt(root);
+    const id = enqueueOp(cfg, "dashboard", { ...LABELS });
+    expect(listOpsFrom(outboxPaths(cfg).dir, {}).map((o) => o.id)).toEqual([id]);
+    expect(listOps(cfg).map((o) => o.id)).toEqual([id]);
   });
 });
