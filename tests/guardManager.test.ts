@@ -97,6 +97,18 @@ describe("GuardManager — output_budget", () => {
     if (d!.action === "kill") expect(d!.reason).toContain("output_budget");
   });
 
+  it("does not record a phantom nudge on the always-kill path (#126)", () => {
+    // The output_budget path always escalates to kill; it must NOT leave nudge
+    // bookkeeping behind. Otherwise the failure summary reads
+    // "nudges: output_budget=1" while metrics count a kill — the two
+    // observability surfaces disagree about whether a nudge ever happened.
+    const gm = new GuardManager({ outputBudgetPerTurn: 12000 });
+    const d = gm.observe(turnEnd(12001));
+    expect(d!.action).toBe("kill");
+    expect(d!.kind).toBe("output_budget");
+    expect(gm.supervisorSummary).toBe("no nudges issued");
+  });
+
   it("resets the per-turn counter on each turn boundary", () => {
     const gm = new GuardManager({ outputBudgetPerTurn: 12000 });
     // Two turns of 8000 each must NOT trip (each turn resets).

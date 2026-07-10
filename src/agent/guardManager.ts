@@ -299,22 +299,16 @@ export class GuardManager {
         }
       }
       if (outTokens > 0 && this.outputBudgetGuard.observeOutputTokens(outTokens)) {
-        const evt: GuardEvent = {
-          kind: "output_budget",
-          detail:
-            `turn=${this.turnIndex} output_tokens=${this.outputBudgetGuard.lastCount} ` +
-            `budget=${this.outputBudgetGuard.lastThreshold} commits=${this.outputBudgetGuard.commitsMade}`,
-          trippedGuard: {
-            lastName: this.outputBudgetGuard.lastName,
-            lastCount: this.outputBudgetGuard.lastCount,
-          },
-          turnIndex: this.turnIndex,
-        };
-        // Run the decision (for nudge bookkeeping / summary symmetry) but
-        // output_budget ALWAYS escalates to kill regardless of the action — a
-        // nudge can't unstick a turn already this deep into runaway thinking
-        // (mirrors Python exactly).
-        this.supervisor.decide(evt);
+        const detail =
+          `turn=${this.turnIndex} output_tokens=${this.outputBudgetGuard.lastCount} ` +
+          `budget=${this.outputBudgetGuard.lastThreshold} commits=${this.outputBudgetGuard.commitsMade}`;
+        // output_budget ALWAYS escalates to kill — a nudge can't unstick a turn
+        // already this deep into runaway thinking (mirrors Python). We
+        // deliberately do NOT call supervisor.decide() here: on this always-kill
+        // path decide() would record a nudge that is never injected, so the
+        // failure summary would read "nudges: output_budget=1" while metrics
+        // count a kill — the two observability surfaces would disagree (#126).
+        // Skipping decide() keeps them consistent: no phantom nudge, just the kill.
         decision = {
           action: "kill",
           reason:
@@ -322,8 +316,8 @@ export class GuardManager {
             `${this.outputBudgetGuard.lastThreshold} tokens in turn ${this.turnIndex} ` +
             `(commits=${this.outputBudgetGuard.commitsMade})`,
           kind: "output_budget",
-          detail: evt.detail,
-          turnIndex: evt.turnIndex,
+          detail,
+          turnIndex: this.turnIndex,
         };
       }
     }
