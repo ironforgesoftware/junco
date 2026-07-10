@@ -54,6 +54,11 @@ function writeJson(res: ServerResponse, statusCode: number, obj: unknown): void 
   res.end(body);
 }
 
+/** Bracket an IPv6 literal for use in a URL authority (`::1` → `[::1]`); pass others through. */
+function bracketHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
 async function safeProbe(probe: () => Promise<boolean>): Promise<boolean> {
   try {
     return await probe();
@@ -137,7 +142,7 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
 
       const addr = server.address() as AddressInfo;
       const boundPort = addr.port;
-      const url = `http://${addr.address}:${boundPort}`;
+      const url = `http://${bracketHost(addr.address)}:${boundPort}`;
 
       let closed = false;
 

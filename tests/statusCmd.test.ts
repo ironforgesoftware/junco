@@ -297,4 +297,18 @@ describe("runStatusCommand", () => {
     expect(code).toBe(0);
     expect(out.join("")).toMatch(/not responding \(lock held by pid 777/);
   });
+
+  it("brackets an IPv6 loopback host when composing the /health URL (#119)", async () => {
+    cfg.healthHost = "::1";
+    let seen = "";
+    const fetchFn = (async (url: string) => {
+      seen = url;
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const code = await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    expect(code).toBe(0);
+    // The bug composed http://::1:8787/health, which new URL() rejects → false "daemon down".
+    expect(seen).toBe("http://[::1]:8787/health");
+    expect(() => new URL(seen)).not.toThrow();
+  });
 });

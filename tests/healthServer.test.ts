@@ -81,6 +81,18 @@ describe("healthServer", () => {
     expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 
+  it("brackets an IPv6 bind address in handle.url and serves over it (#119)", async () => {
+    handle = await startHealthServer({
+      port: 0,
+      host: "::1",
+      metrics: makeFakeMetrics(),
+    });
+    // Bare `http://::1:<port>` is a malformed authority that fetch/new URL reject.
+    expect(handle.url).toBe(`http://[::1]:${handle.port}`);
+    const resp = await fetch(`${handle.url}/live`);
+    expect(resp.status).toBe(200);
+  });
+
   // -------------------------------------------------------------------------
   // GET /live
   // -------------------------------------------------------------------------
