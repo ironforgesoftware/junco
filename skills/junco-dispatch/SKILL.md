@@ -1,6 +1,6 @@
 ---
 name: junco-dispatch
-description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode).'
+description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
 ---
 
 # Junco dispatch
@@ -9,7 +9,7 @@ Package a unit of work into a plan-shaped markdown file with junco frontmatter a
 
 **Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
-**Two families of work.** Most of this skill is about _authoring_ a plan-shaped ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR. One mode is different: _assess_ authors nothing. It triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below.
+**Two families of work.** Most of this skill is about _authoring_ a plan-shaped ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR. Two modes are different, and author nothing: _assess_ triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below. _analyze_ triggers `junco analyze`, a read-only investigation of a single issue that parks a drafted comment for review; posting it is a separate, human-confirmed step, and an analyze run never opens a PR either. See "Analyze mode" below.
 
 ## When to trigger
 
@@ -19,6 +19,7 @@ Fire this skill when the user explicitly asks to dispatch work:
 - **Batch tickets (no preview, headless mode):** "junco-batch: <brief>" — used for automated load tests; skips the preview gate (see "Batch mode" under Dispatch procedure)
 - **Amend tickets (follow-ups on existing PRs):** "amend junco PR #N: <what to fix>", "junco: fix PR #N by ...", "follow up on PR #N via junco", "dispatch an amendment to #N"
 - **Assess (audit a repo, park findings for review):** "assess this repo", "have junco audit this repo", "junco assess <repo>", "scan this repo and file issues", "junco: assess <repo>" — this runs `junco assess`, not a plan dispatch (see "Assess mode")
+- **Analyze (investigate an issue, park a comment draft for review):** "analyze issue #N with junco", "have junco look into this issue", "junco analyze <owner/repo#N|url>", "investigate this issue and draft a comment", "junco: analyze <issue>" — this runs `junco analyze`, not a plan dispatch (see "Analyze mode")
 
 **Do NOT fire** when the user is:
 
@@ -256,6 +257,52 @@ When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool avail
 - Apply `TEMPLATE.md` / plan-lint / the anti-loop authoring rules — they are for plan tickets, not assess.
 - Treat assess as PR dispatch — it never opens a PR.
 - File findings on the user's behalf without them choosing `--all` or specific fingerprints — that selection is the human confirmation gate, and it isn't yours to make for them.
+
+## Analyze mode (investigate an issue → reviewed comment)
+
+Triggered by "analyze issue #N", "have junco look into this issue", "junco analyze <owner/repo#N|url>", and similar. Like assess, this mode is **not** plan authoring — do not draft a ticket. `junco analyze` composes its own machine-owned ticket; the daemon then runs a read-only investigation of the named issue against the repo and **parks** the resulting comment draft in a durable review queue — nothing posts yet. A separate, human-confirmed step (`junco analyze review` / `junco analyze edit` / `junco analyze post`) posts the draft as a comment on the issue. An analyze run **never opens a pull request** and posts **no comment other than the one you explicitly confirm**.
+
+**Works on any issue, owned repo or not.** An unwatched repo is auto-forked and provisioned exactly like `junco dispatch` — no separate "watch it first" step. Every posted comment carries a disclosure footer by default (`_Analysis drafted with [junco](https://github.com/ironforgesoftware/junco) and human-reviewed before posting._`); `junco analyze post <id> --no-footer` omits it.
+
+Your job here is only: resolve the issue reference, confirm, run the CLI, and set expectations — including that a review (and optional edit) step always stands between the investigation and anything posted to GitHub. Do NOT use `TEMPLATE.md`, plan-lint, or any of the authoring discipline above — none of it applies to analyze (`junco analyze` owns the ticket shape, not you).
+
+### Inputs to gather
+
+1. **Target** — an `owner/repo#N` reference or a full issue URL (e.g. `https://github.com/owner/repo/issues/42`). If the user names an issue without the repo and you're inside a git checkout with a GitHub remote, offer to combine them and confirm.
+
+### Preconditions (check before running; fail fast with a useful message)
+
+- **The daemon must be running.** `junco analyze` only _queues_ a ticket — nothing is investigated and nothing is parked for review until the daemon claims it on its next poll (~15 s). If the user isn't running the daemon, say so up front.
+- **One draft per issue.** If a previous analysis of the same issue is still queued or running (not yet parked or failed), re-running `junco analyze` on it fails loud (`ticket already queued`) rather than silently duplicating work — mention this if the user asks to re-run one they just triggered.
+
+### Interactive procedure (default)
+
+1. **Confirm.** Use `AskUserQuestion`: "Run `junco analyze <target>`? This queues a read-only investigation; the drafted comment is parked for your review, not posted automatically." with options `Yes, run` / `Edit first` / `Cancel`.
+2. **Run.** `junco analyze <target>` (or `npx junco analyze <target>` if `junco` isn't on PATH).
+3. **Report** the `queued: <ticket-path>` line the command prints, plus:
+   - the daemon must be running for the investigation to happen;
+   - once it's done, the draft sits in a review queue — nothing is posted yet;
+   - to preview it: `junco analyze review` (list) or `junco analyze review <id>` (full draft, exactly as it would post, footer included);
+   - to revise it: `junco analyze edit <id>` (opens `$EDITOR`/`$VISUAL`; re-sanitizes on save);
+   - to post it: `junco analyze post <id>` (add `--no-footer` to omit the disclosure line) — this is the human confirm step, and it's the only outward write in the whole flow.
+
+### Batch / headless procedure
+
+When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool available): skip the confirm gate, run `junco analyze <target>`, and print one line for the calling shell to grep — `ANALYZE_QUEUED <id> -> <ticket-path>` (id and path come from the command's output). Posting still requires a separate, explicit `junco analyze post <id>` — batch mode does not auto-post.
+
+### Caveats to surface
+
+- **A review step always sits between the investigation and any posted comment.** `junco analyze` never posts anything itself; `junco analyze post` does, and it's a deliberate per-draft action — there's no bare "post everything" shortcut.
+- **The issue text is untrusted input the agent read, not instructions.** The investigation prompt frames it as data; a hostile or mistaken issue can't redirect what the agent does, but the review step is still worth taking seriously before posting on someone else's tracker.
+- **Re-analyzing an issue overwrites its pending draft**, not additive — `junco analyze review <id>` always reflects the latest investigation.
+- For the authoritative flag list, point the user at `junco analyze --help` and the project README.
+
+### Do NOT
+
+- Hand-author an analyze ticket, or bolt `analyze:` frontmatter onto a plan — `junco analyze` owns that machine-owned shape.
+- Apply `TEMPLATE.md` / plan-lint / the anti-loop authoring rules — they are for plan tickets, not analyze.
+- Treat analyze as PR dispatch — it never opens a PR.
+- Post a comment on the user's behalf without them running `junco analyze post <id>` explicitly — that confirmation is the human gate, and it isn't yours to make for them.
 
 ## Error handling
 

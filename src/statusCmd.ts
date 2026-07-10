@@ -9,6 +9,7 @@ import { queuePaths } from "./config.js";
 import { readLockHolder } from "./lock.js";
 import { outboxDepth, deadCount } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
+import { draftCount } from "./commentReview.js";
 
 export interface StatusDeps {
   fetchFn?: typeof fetch;
@@ -100,6 +101,10 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   const reviews = pendingCount(cfg);
   if (reviews > 0) {
     print(`assess review: ${reviews} pending (junco assess review)\n`);
+  }
+  const drafts = draftCount(cfg);
+  if (drafts > 0) {
+    print(`analyze review: ${drafts} pending (junco analyze review)\n`);
   }
   return 0;
 }

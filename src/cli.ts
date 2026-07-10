@@ -97,6 +97,10 @@ Subcommands:
   assess <path|owner/repo> [--auto-plan]  audit a repo; findings await review (junco assess review)
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
+  analyze <owner/repo#N|url>          investigate an issue and park a comment draft for review
+  analyze review [<id>]                   list pending comment drafts, or preview one
+  analyze edit <id>                       edit a pending draft in $EDITOR
+  analyze post <id> [--no-footer]        post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
@@ -188,6 +192,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       json: { type: "boolean", default: false },
       human: { type: "boolean", default: false },
       "auto-plan": { type: "boolean", default: false },
+      "no-footer": { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -432,6 +437,40 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       { autoPlan: values["auto-plan"] === true },
       { printFn },
     );
+  }
+
+  // ------------------------------------------------------------
+  // analyze: compose + submit a machine-owned issue-investigation ticket
+  // (src/analyzeCmd.ts) — the daemon's analyzeFlow.ts investigates and parks
+  // a comment draft. review/edit read and refine a parked draft; post is the
+  // human-confirmed outward write, through the same outbox seam as assess.
+  // ------------------------------------------------------------
+  if (subcommand === "analyze") {
+    const cfg = loadConfigFn(configPath);
+    const sub = positionals[1];
+    if (sub === "review") {
+      const { runAnalyzeReviewCommand } = await import("./analyzeCmd.js");
+      return runAnalyzeReviewCommand(cfg, positionals[2], { printFn });
+    }
+    if (sub === "edit") {
+      if (positionals[2] === undefined) {
+        printFn(`Usage: junco analyze edit <id>\n`);
+        return 2;
+      }
+      const { runAnalyzeEditCommand } = await import("./analyzeCmd.js");
+      return runAnalyzeEditCommand(cfg, positionals[2], { printFn });
+    }
+    if (sub === "post") {
+      const { runAnalyzePostCommand } = await import("./analyzeCmd.js");
+      return runAnalyzePostCommand(
+        cfg,
+        positionals[2],
+        { noFooter: values["no-footer"] === true },
+        { printFn },
+      );
+    }
+    const { runAnalyzeCommand } = await import("./analyzeCmd.js");
+    return runAnalyzeCommand(cfg, positionals[1], { printFn });
   }
 
   // ------------------------------------------------------------

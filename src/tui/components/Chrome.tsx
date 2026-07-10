@@ -254,7 +254,8 @@ export function hintsFor(
         ["enter", "open/file"],
         ["space", "toggle"],
         ["a/n", "all/none"],
-        ["f", "file"],
+        ["f", "file/post"],
+        ["x", "discard"],
         ["esc", "back"],
       ];
     case "palette":
@@ -312,6 +313,7 @@ export function hintsFor(
     ["enter", "preview"],
     ["d", "dispatch"],
     ["a", "approve"],
+    ["c", "analyze"],
     ["/", "filter"],
     ["t", "queue"],
     ["p", "PRs"],

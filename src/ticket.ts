@@ -55,6 +55,14 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
     const a = assessRaw as Record<string, unknown>;
     assess = { autoPlan: a.auto_plan === true };
   }
+  const analyzeRaw = frontmatter.analyze;
+  let analyze: Ticket["analyze"] = null;
+  if (analyzeRaw !== null && typeof analyzeRaw === "object" && !Array.isArray(analyzeRaw)) {
+    const a = analyzeRaw as Record<string, unknown>;
+    if (typeof a.issue === "number" && Number.isInteger(a.issue)) {
+      analyze = { issue: a.issue, title: String(a.title ?? "") };
+    }
+  }
   return {
     path,
     id,
@@ -75,6 +83,7 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       : null,
     github,
     assess,
+    analyze,
     workdir:
       typeof frontmatter.workdir === "string" && frontmatter.workdir.trim() !== ""
         ? frontmatter.workdir

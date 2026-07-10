@@ -6,6 +6,7 @@ import { runDoctor, type DoctorDeps } from "../src/doctor.js";
 import { writeWatchlist } from "../src/watchlist.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
+import { writeDraft } from "../src/commentReview.js";
 import type { Config } from "../src/types.js";
 
 const okConfig = {
@@ -363,6 +364,39 @@ describe("runDoctor assess review checks", () => {
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the review count must still surface.
     expect(lines.join("")).toMatch(/✓ assess review — 1 pending \(junco assess review\)/);
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+});
+
+describe("runDoctor analyze review checks", () => {
+  it("no pending drafts → no analyze drafts line", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/analyze drafts/);
+  });
+
+  it("reports pending drafts as informational — not a warning, github disabled", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-draft-"));
+    writeDraft({ stateDir } as unknown as Config, {
+      id: "a",
+      nwo: "o/r",
+      issue: 1,
+      issueTitle: "Title",
+      external: true,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      draft: "draft body",
+      footer: true,
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    // okConfig has github.enabled = false — the draft count must still surface.
+    expect(lines.join("")).toMatch(/✓ analyze drafts — 1 pending \(junco analyze review\)/);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });

@@ -135,6 +135,10 @@ function makeClient(
     listReview: async () => okv([]),
     fileReview: async () =>
       okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+    listCommentDrafts: async () => okv([]),
+    postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+    discardCommentDraft: async () => okv(null),
+    analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -183,6 +187,10 @@ function makeSeqClient(sequence: DashIssue[][]) {
     listReview: async () => okv([]),
     fileReview: async () =>
       okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+    listCommentDrafts: async () => okv([]),
+    postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+    discardCommentDraft: async () => okv(null),
+    analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -234,6 +242,10 @@ function makePrSeqClient(sequence: DashPr[][]) {
     listReview: async () => okv([]),
     fileReview: async () =>
       okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+    listCommentDrafts: async () => okv([]),
+    postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+    discardCommentDraft: async () => okv(null),
+    analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -389,6 +401,35 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("planning")); // optimistic label applied
   });
 
+  it("c drafts an analysis comment for the selected issue", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const analyzed: [string, number][] = [];
+    client.analyzeIssue = async (nwo, num) => {
+      analyzed.push([nwo, num]);
+      return okv({ id: "gh-acme-api-7-analyze" });
+    };
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
+    r.stdin.write("\t"); // focus issues pane
+    await tick();
+    r.stdin.write("c");
+    await until(() => analyzed.length === 1);
+    expect(analyzed).toEqual([["acme/api", 7]]);
+    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-acme-api-7-analyze"));
+    expect(r.lastFrame()).toContain("v to review when parked");
+  });
+
+  it("c on the selected issue toasts an error when the client call fails", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    client.analyzeIssue = async () => ({ ok: false, error: "no unowned clone available" });
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("\t");
+    await tick();
+    r.stdin.write("c");
+    await until(() => (r.lastFrame() ?? "").includes("no unowned clone available"));
+  });
+
   it("approve is refused on a raw issue with a reason toast (no client call)", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl());
@@ -529,6 +570,10 @@ describe("App", () => {
       listReview: async () => okv([]),
       fileReview: async () =>
         okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+      listCommentDrafts: async () => okv([]),
+      postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+      discardCommentDraft: async () => okv(null),
+      analyzeIssue: async () => okv({ id: "x" }),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,
@@ -967,6 +1012,29 @@ describe("external-repo routing", () => {
     expect(dispatched[0]).toBe("up/stream#7");
     expect(actions).toHaveLength(0); // no label flow
     await until(() => (r.lastFrame() ?? "").includes("ticket queued: gh-up-stream-7"));
+  });
+
+  it("c on an external repo drafts an analysis comment too (no refusal)", async () => {
+    const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
+    const analyzed: string[] = [];
+    client.analyzeIssue = async (nwo, num) => {
+      analyzed.push(`${nwo}#${num}`);
+      return okv({ id: "gh-up-stream-7-analyze" });
+    };
+    const file = wle();
+    writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
+    const r = renderApp(client, file);
+    await tick();
+    r.stdin.write("j"); // select up/stream (pane 1, index 1)
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // its issue loaded
+    r.stdin.write("2"); // focus issues pane
+    await tick();
+    r.stdin.write("c");
+    await until(() => analyzed.length === 1);
+    expect(analyzed[0]).toBe("up/stream#7");
+    expect(actions).toHaveLength(0); // no label flow
+    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-up-stream-7-analyze"));
+    expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
   });
 
   it("D/a/R on an external repo explains instead of acting", async () => {
@@ -1460,6 +1528,18 @@ describe("review view (v)", () => {
     ],
   };
 
+  const commentDraft = {
+    id: "analyze-o-r-5",
+    nwo: "o/r",
+    issue: 5,
+    issueTitle: "Broken build",
+    external: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    draft: "This is the analysis.\nSecond line.",
+    footer: true,
+  };
+
   it("v opens the review view and enter drills into a batch's findings", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
@@ -1550,6 +1630,75 @@ describe("review view (v)", () => {
     expect(filed[0][1]).toEqual(["f1"]); // only f1 checked
     await until(() => (r.lastFrame() ?? "").includes("filed 1")); // toast
     // Optimistic removal: the batch is gone from the review view.
+    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+  });
+
+  it("v lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
+    (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
+      okv([commentDraft]);
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    // Both rows present: the batch (o/r + finding count) and the draft (o/r#5 + comment badge).
+    await until(
+      () => (r.lastFrame() ?? "").includes("o/r#5") && (r.lastFrame() ?? "").includes("comment"),
+    );
+    r.stdin.write("j"); // cursor past the batch onto the draft row
+    r.stdin.write("\r"); // enter → draft preview
+    await until(() => (r.lastFrame() ?? "").includes("Broken build")); // issueTitle: preview-only
+    expect(r.lastFrame()).toContain("This is the analysis.");
+  });
+
+  it("f posts the open draft, toasts success, and drops the row", async () => {
+    const posted: string[] = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
+      okv([commentDraft]);
+    (client as { postCommentDraft: (id: string) => Promise<unknown> }).postCommentDraft = async (
+      id,
+    ) => {
+      posted.push(id);
+      return okv({
+        outcome: "sent" as const,
+        url: "https://github.com/o/r/issues/5#issuecomment-1",
+      });
+    };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
+    r.stdin.write("\r"); // no batches → cursor 0 opens the draft preview
+    await until(() => (r.lastFrame() ?? "").includes("Broken build"));
+    r.stdin.write("f"); // post
+    await until(() => posted.length === 1);
+    expect(posted[0]).toBe(commentDraft.id);
+    await until(() => (r.lastFrame() ?? "").includes("posted")); // success toast
+    // Optimistic removal → combined empty state.
+    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+  });
+
+  it("x discards the open draft and drops the row", async () => {
+    const discarded: string[] = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
+      okv([commentDraft]);
+    (client as { discardCommentDraft: (id: string) => Promise<unknown> }).discardCommentDraft =
+      async (id) => {
+        discarded.push(id);
+        return okv(null);
+      };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
+    r.stdin.write("\r"); // → draft preview
+    await until(() => (r.lastFrame() ?? "").includes("Broken build"));
+    r.stdin.write("x"); // discard
+    await until(() => discarded.length === 1);
+    expect(discarded[0]).toBe(commentDraft.id);
+    await until(() => (r.lastFrame() ?? "").includes("discarded")); // toast
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
   });
 });

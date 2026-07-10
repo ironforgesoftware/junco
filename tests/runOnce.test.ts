@@ -14,7 +14,10 @@ import { execFileSync } from "node:child_process";
 import { runOnce, claimNextTask } from "../src/runOnce.js";
 import type { Config, Ticket } from "../src/types.js";
 import type { AssessFlowResult } from "../src/assessFlow.js";
+import type { AnalyzeFlowResult } from "../src/analyzeFlow.js";
 import { listPending } from "../src/assessReview.js";
+import { draftCount } from "../src/commentReview.js";
+import { makeGithubReporter } from "../src/githubReport.js";
 
 function cfg(root: string): Config {
   return {
@@ -892,5 +895,121 @@ esac
     const ghCalls = readFileSync(ghLog, "utf8").trim().split("\n");
     expect(ghCalls.some((l) => l.startsWith("issue create"))).toBe(false);
     expect(ghCalls.some((l) => l.startsWith("issue list"))).toBe(true);
+  });
+});
+
+describe("analyze routing", () => {
+  function fakeRunResult(finalText: string): AnalyzeFlowResult["result"] {
+    return {
+      finalText,
+      toolCalls: [],
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      stopReason: "stop",
+      errorMessage: null,
+      timedOut: false,
+      durationMs: 5,
+      abortedByGuard: false,
+    };
+  }
+
+  it("branch ordering: an analyze ticket (which also carries repo:) routes to the analyze flow, never PR/Q&A/assess", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    // A repo: a PR flow would accept, PLUS analyze: {issue,title}. If branch
+    // order regresses (hasRepo first), this routes into runPrFlow instead.
+    const repo = mkdtempSync(join(tmpdir(), "junco-analyze-repo-"));
+    const wtRoot = mkdtempSync(join(tmpdir(), "junco-analyze-wt-"));
+    writeFileSync(
+      join(j, "inbox", "a.md"),
+      `---\nid: analyze-1\nanalyze:\n  issue: 7\n  title: Look into it\nrepo: ${repo}\n---\n# Analyze\ninvestigate\n`,
+      "utf8",
+    );
+
+    const analyzeCalls: Array<{ cfg: Config; ticketId: string; claimedPath: string }> = [];
+    const fakeAnalyzeFlowFn = async (
+      passedCfg: Config,
+      ticket: Ticket,
+      claimedPath: string,
+    ): Promise<AnalyzeFlowResult> => {
+      analyzeCalls.push({ cfg: passedCfg, ticketId: ticket.id, claimedPath });
+      return {
+        dst: join(j, "done", "a.md"),
+        status: "completed",
+        requeued: false,
+        result: fakeRunResult("analyze done"),
+        parked: true,
+      };
+    };
+
+    let sessionFactoryCalls = 0;
+    // Real GitHub reporter with a gh SPY: the ticket's github is null, so
+    // onFinal must return before touching gh (githubReport.ts:166).
+    const ghCalls: string[][] = [];
+    const ghSpy = (async (_cfg: unknown, args: string[]) => {
+      ghCalls.push(args);
+      return { code: 0, stdout: "", stderr: "" };
+    }) as never;
+    const c: Config = { ...cfg(root), worktreeRoot: wtRoot };
+    const reporter = makeGithubReporter(c, { ghFn: ghSpy });
+
+    const handled = await runOnce(c, {
+      analyzeFlowFn: fakeAnalyzeFlowFn,
+      sessionFactoryFor: () => {
+        sessionFactoryCalls++;
+        return fakeFactory();
+      },
+      reporter,
+    });
+
+    expect(handled).toBe(true);
+    // The fake analyze flow was invoked with the right ticket — proves the
+    // analyze branch fired ahead of assess/hasRepo/Q&A.
+    expect(analyzeCalls).toHaveLength(1);
+    expect(analyzeCalls[0].ticketId).toBe("analyze-1");
+    // PR/Q&A flow was NOT entered: the shared session factory was never built,
+    // and the worktree root stayed empty.
+    expect(sessionFactoryCalls).toBe(0);
+    expect(readdirSync(wtRoot)).toHaveLength(0);
+    // Reporter no-op lock: a github-less ticket makes onFinal return before any
+    // gh call — the reporter never touched GitHub.
+    expect(ghCalls).toHaveLength(0);
+  });
+
+  it("requeue parity: a requeued analyze flow fires onRequeue, not onFinal", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    const repo = mkdtempSync(join(tmpdir(), "junco-analyze-repo-"));
+    writeFileSync(
+      join(j, "inbox", "a.md"),
+      `---\nid: analyze-2\nanalyze:\n  issue: 8\n  title: T\nrepo: ${repo}\n---\n# Analyze\ninvestigate\n`,
+      "utf8",
+    );
+
+    const fakeAnalyzeFlowFn = async (): Promise<AnalyzeFlowResult> => ({
+      dst: join(j, "inbox", "a.md"),
+      status: "requeued",
+      requeued: true,
+      result: fakeRunResult(""),
+      parked: false,
+    });
+
+    const calls: string[] = [];
+    const reporter = {
+      onStart: async (): Promise<void> => void calls.push("start"),
+      onRequeue: async (): Promise<void> => void calls.push("requeue"),
+      onFinal: async (): Promise<void> => void calls.push("final"),
+    };
+
+    const handled = await runOnce(cfg(root), { analyzeFlowFn: fakeAnalyzeFlowFn, reporter });
+
+    expect(handled).toBe(true);
+    expect(calls).toEqual(["start", "requeue"]);
+    expect(draftCount(cfg(root))).toBe(0);
   });
 });

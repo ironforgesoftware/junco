@@ -120,6 +120,7 @@ export function HelpModal({
           ["D", "dispatch as ask (read-only Q&A)"],
           ["a", "approve the posted plan"],
           ["R", "re-plan / re-cycle (by state)"],
+          ["c", "draft an analysis comment (review with v)"],
           ["o", "open in browser (repo from pane 1, PR from PR views)"],
         ]}
       />

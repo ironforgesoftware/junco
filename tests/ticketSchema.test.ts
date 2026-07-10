@@ -82,6 +82,7 @@ describe("describeTicketSchema()", () => {
       "github",
       "workdir",
       "assess",
+      "analyze",
     ];
     for (const field of expected) {
       expect(s).toContain(`"${field}"`);
@@ -125,6 +126,16 @@ describe("describeTicketSchema()", () => {
     expect(s.properties.assess.type).toBe("object");
     const assessProps = s.properties.assess.properties as Record<string, Record<string, unknown>>;
     expect(assessProps.auto_plan.type).toBe("boolean");
+  });
+
+  it("documents analyze with the right shape (object with issue integer, title string)", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.analyze.type).toBe("object");
+    const analyzeProps = s.properties.analyze.properties as Record<string, Record<string, unknown>>;
+    expect(analyzeProps.issue.type).toBe("integer");
+    expect(analyzeProps.title.type).toBe("string");
   });
 
   it("bounds timeout_minutes and amends_pr to the runtime-valid ranges (#52)", () => {

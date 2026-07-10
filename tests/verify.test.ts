@@ -100,6 +100,7 @@ function makeTicket(body: string): Ticket {
     tools: null,
     github: null,
     assess: null,
+    analyze: null,
     workdir: null,
   };
 }

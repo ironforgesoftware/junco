@@ -127,6 +127,10 @@ export const stubClient: DashboardClient = {
   listReview: async () => okv([]),
   fileReview: async () =>
     okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+  listCommentDrafts: async () => okv([]),
+  postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
+  discardCommentDraft: async () => okv(null),
+  analyzeIssue: async () => okv({ id: "analyze-x-y-1" }),
   health: async () => ({
     up: true,
     uptimeSeconds: 60,
