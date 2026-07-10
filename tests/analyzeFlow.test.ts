@@ -382,4 +382,30 @@ describe("runAnalyzeFlow", () => {
     const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
     expect(content).toMatch(/retry_count: 1/);
   });
+
+  it("transient-exhausted run (no fence) preserves the original errorMessage instead of clobbering it", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    // retry_count already at cfg.maxTransientRetries (2): requeueTicket refuses
+    // (budget exhausted), so the transient failure falls through to the no-fence
+    // finalize path instead of looping back to inbox/.
+    const content =
+      `---\nid: analyze-o-r-5\nrepo: ${JSON.stringify(repo)}\nretry_count: 2\n` +
+      `analyze:\n  issue: 5\n  title: ${JSON.stringify("Investigate the crash")}\n---\n` +
+      `# Analyze issue 5\ninvestigate\n`;
+    const { path, ticket } = claim(j, content);
+
+    const git = fakeGitCalls(originHttps);
+    const r = await runAnalyzeFlow(cfg(root), ticket, path, {
+      gitFn: git.gitFn,
+      sessionFactoryFor: () => throwingSession(),
+    });
+
+    expect(r.requeued).toBe(false);
+    expect(r.status).toBe("failed");
+    expect(r.parked).toBe(false);
+    // The finalized errorMessage must CONTAIN the original transient reason, not
+    // just the generic "no comment draft" phrase that would clobber it.
+    expect(r.result.errorMessage).toContain("fetch failed: ECONNREFUSED");
+  });
 });

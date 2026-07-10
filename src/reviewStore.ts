@@ -106,7 +106,7 @@ export function makeReviewStore<T extends { id: string }>(subdir: string): Revie
     try {
       return { entry: JSON.parse(raw) as T, error: null };
     } catch (e) {
-      return { entry: null, error: `pending batch is not valid JSON: ${(e as Error).message}` };
+      return { entry: null, error: `stored entry is not valid JSON: ${(e as Error).message}` };
     }
   }
 

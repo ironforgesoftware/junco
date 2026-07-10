@@ -248,10 +248,18 @@ export async function runAnalyzeFlow(
   // message would be dropped and the run would spuriously fail (#67 class —
   // mirror assessFlow.ts:299's allText ?? finalText). No complete fence (or an
   // all-whitespace one) means the agent produced nothing to review: finalize to
-  // failed/ with a clear reason, park nothing. ---
+  // failed/ with a clear reason, park nothing. When the run also carries a
+  // transient errorMessage (endpoint hiccup, truncated stream), fold it in — a
+  // truncated stream is exactly why there's no fence, and dropping the original
+  // reason makes an exhausted-retry failure look like the agent simply declined
+  // to comment. ---
+  const phaseError = agentResult.errorMessage
+    ? `analyze: no comment draft (${agentResult.errorMessage})`
+    : "analyze: agent produced no comment draft";
+
   const fence = extractLastFencedBlock(agentResult.allText ?? agentResult.finalText, COMMENT_FENCE);
   if (fence === null || fence.trim() === "") {
-    return finalizeAnalyze(agentResult, "analyze: agent produced no comment draft");
+    return finalizeAnalyze(agentResult, phaseError);
   }
 
   // --- Phase 6: Sanitize. sanitizeFindingText strips HTML comments (defeats a
@@ -260,7 +268,7 @@ export async function runAnalyzeFlow(
   // "nothing to review" failure as an empty fence. ---
   const draft = sanitizeFindingText(fence, MAX_DRAFT);
   if (draft === "") {
-    return finalizeAnalyze(agentResult, "analyze: agent produced no comment draft");
+    return finalizeAnalyze(agentResult, phaseError);
   }
 
   // --- Phase 7: Park the draft for human-confirmed posting. Keyed by ticket
