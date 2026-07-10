@@ -1,5 +1,5 @@
 /**
- * `junco assess <path|owner/repo> [--auto-plan]` — compose and submit a
+ * `junco assess <path|owner/repo|owner/repo#N> [--auto-plan]` — compose and submit a
  * machine-owned assessment ticket. This command's only job is target
  * resolution + ticket authoring; the daemon's normal claim/execute path
  * (src/assessFlow.ts) runs the actual audit and files issues.
@@ -109,7 +109,7 @@ export async function runAssessCommand(
   const nowFn = deps.nowFn ?? ((): Date => new Date());
 
   if (!target) {
-    print(`Usage: junco assess <path|owner/repo> [--auto-plan]\n`);
+    print(`Usage: junco assess <path|owner/repo|owner/repo#N> [--auto-plan]\n`);
     return 2;
   }
 
