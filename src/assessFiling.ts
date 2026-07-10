@@ -201,6 +201,15 @@ export async function fileFindings(
     deduped: result.deduped,
     failed: result.failed,
   });
-  removePending(cfg, batch.id);
+  // Archive only when nothing failed. A non-offline filing error (issues
+  // disabled, 403/422 — tryOrEnqueue rethrows it, the loop swallows it into
+  // result.failed) would otherwise sail past this unconditional archive and
+  // drop the findings out of `junco assess review` with no un-archive path. On
+  // any failure the batch stays parked for retry; the author-scoped dedup skips
+  // the already-filed/deduped subset on the next pass. Offline enqueues count as
+  // queuedOffline (success), so a fully-queued batch still archives. (#137)
+  if (result.failed === 0) {
+    removePending(cfg, batch.id);
+  }
   return result;
 }
