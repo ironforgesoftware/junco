@@ -60,7 +60,7 @@ When the execution ticket finalizes, Junco posts **one comment** — PR link plu
 
 ## External repos (fork-PR mode)
 
-The two-hop label loop above assumes you can **push to the repo and write its labels** — i.e. a repo you own or collaborate on. For a repo you _don't_ control (an upstream project you want to contribute a fix to), Junco has a **fork-PR mode**: it works the issue in a managed clone, pushes the branch to **your fork**, and opens a **draft pull request** against upstream. It never touches the upstream issue's labels or comments — you have no write access there, and it doesn't assume any.
+The two-hop label loop above assumes you can **push to the repo and write its labels** — i.e. a repo you own or collaborate on. For a repo you _don't_ control (an upstream project you want to contribute a fix to), Junco has a **fork-PR mode**: it works the issue in a managed clone, pushes the branch to **your fork**, and opens a **draft pull request** against upstream. It never touches the upstream issue's labels or comments — you have no write access there, and it doesn't assume any. (The one deliberate exception to "no comments" is `junco analyze`'s human-confirmed comment post — see the etiquette invariant below.)
 
 **How to dispatch:**
 

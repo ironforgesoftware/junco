@@ -69,11 +69,11 @@ Resolution (`resolveIssueTarget`, shared with `junco dispatch`) fetches the issu
 
 What gets printed:
 
-| Outcome                         | stdout                                                                                                                                                                                                                                     | Exit |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- |
-| No target given                 | `Usage: junco analyze <owner/repo#N\|url>`                                                                                                                                                                                                 | 2    |
-| Resolution or submission failed | `junco analyze: <error>` (e.g. `junco analyze: not a GitHub issue reference: "..." (expected owner/repo#N or an issue URL)`, or `junco analyze: ticket already queued: <path>` for a duplicate analysis of the same issue still in flight) | 1    |
-| Queued                          | `queued: <ticket-path>`, then `queued — the worker will investigate and park a comment draft; run 'junco analyze review' when it lands`                                                                                                    | 0    |
+| Outcome                         | stdout                                                                                                                                                                                                                                                                       | Exit |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| No target given                 | `Usage: junco analyze <owner/repo#N\|url>`                                                                                                                                                                                                                                   | 2    |
+| Resolution or submission failed | `junco analyze: <error>` (e.g. `junco analyze: not a GitHub issue reference: "..." (expected owner/repo#N or an issue URL)`, or `junco analyze: ticket already queued: <path>` when the same issue's ticket is still waiting in the inbox — see "One draft per issue" below) | 1    |
+| Queued                          | `queued: <ticket-path>`, then ``queued — the worker will investigate and park a comment draft; run `junco analyze review` when it lands``                                                                                                                                    | 0    |
 
 The command only resolves the target and submits the ticket. The actual investigation — the agent session, extraction, sanitization, and parking — runs later, whenever the daemon claims the ticket.
 
@@ -100,6 +100,7 @@ Opens the draft in `$VISUAL` (falling back to `$EDITOR`) as a temporary Markdown
 
 | Outcome                         | stdout                                                                                                                        | Exit |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---- |
+| No id given                     | `Usage: junco analyze edit <id>`                                                                                              | 2    |
 | Draft store read error          | `junco analyze edit: <error>`                                                                                                 | 1    |
 | No such draft                   | `junco analyze edit: no pending draft '<id>'`                                                                                 | 2    |
 | No `$EDITOR`/`$VISUAL` set      | `junco analyze edit: no $EDITOR (or $VISUAL) set — draft file: <path>`, then `set $EDITOR (or $VISUAL) to edit interactively` | 2    |
@@ -107,7 +108,7 @@ Opens the draft in `$VISUAL` (falling back to `$EDITOR`) as a temporary Markdown
 | Draft empty after re-sanitizing | `junco analyze edit: draft is empty after sanitize — unchanged`                                                               | 1    |
 | Saved                           | `draft updated — junco analyze review <id> to preview`                                                                        | 0    |
 
-With no editor configured, the command prints the draft file's path on disk instead of guessing — edit it directly and re-run `junco analyze review <id>` to confirm the sanitized result before posting (the file on disk is the raw, unsanitized copy; posting always re-reads the store, so a hand-edit to the file itself isn't picked up — use `junco analyze edit` again, or a real `$EDITOR`, to get sanitization applied).
+With no editor configured, the command prints the pending draft's JSON file path instead of guessing. That file **is** the store: a hand-edit to its `draft` field is picked up verbatim by `junco analyze review`/`post` — and it **skips the re-sanitization** `junco analyze edit` applies on save (your own input is trusted here, so this is a footgun to know about, not a security hole). Prefer setting `$EDITOR` and using `junco analyze edit`, which sanitizes on save.
 
 ### `junco analyze post <id> [--no-footer]` — the human confirm step
 
@@ -150,8 +151,9 @@ Posting goes through the same outbox as every other GitHub write junco makes. Wh
 
 A draft's id has no timestamp (`analyze-<owner>-<repo>-<n>`), so there is exactly one pending draft per issue at a time:
 
-- **Queuing while the same issue's ticket is still in flight** (queued or running, not yet parked) fails loud — `junco analyze: ticket already queued: <path>` — the same "don't silently clobber" guard every ticket submission gets.
-- **Re-analyzing an issue whose previous run already parked (or failed)** queues and runs cleanly, and when it parks, the new draft **overwrites** the old one in the review store — `junco analyze review <id>` always reflects the most recent investigation.
+- **Queuing while the same issue's ticket is still waiting in the inbox** fails loud — `junco analyze: ticket already queued: <path>` — the same "don't silently clobber" guard every ticket submission gets. This guard covers the inbox only: once the daemon claims the ticket into `processing/`, the inbox slot is free again.
+- **Queuing while the same issue's ticket is already running** succeeds: both runs execute, and the **last one to park wins** — its draft overwrites the other's in the review store. That's the designed semantics, not a race to guard against: the store is keyed by ticket id precisely so that re-analysis converges on one draft per issue.
+- **Re-analyzing an issue whose previous run already parked (or failed)** queues and runs cleanly, and when it parks, the new draft **overwrites** the old one — `junco analyze review <id>` always reflects the most recent investigation to finish.
 - **Posting twice on one issue** requires two full, deliberate cycles (analyze → review → post) — there's no way to post the same draft twice from one parked entry, since posting archives it.
 
 ## Etiquette
@@ -180,4 +182,4 @@ The issue body itself rides in the ticket **body**, framed as untrusted data, no
 
 ## Visibility
 
-`junco status` and `junco doctor` both print `analyze review: N pending (junco analyze review)` whenever the pending-draft store is non-empty, so a backlog of unreviewed drafts doesn't go unnoticed between investigations.
+Both status surfaces report the pending-draft count whenever the store is non-empty, so a backlog of unreviewed drafts doesn't go unnoticed between investigations: `junco status` prints `analyze review: N pending (junco analyze review)`, and `junco doctor` reports `✓ analyze drafts — N pending (junco analyze review)` (informational — a backlog is normal workflow state, not a health problem).
