@@ -6,6 +6,7 @@
  */
 
 import { mkdirSync, writeFileSync, linkSync, renameSync, unlinkSync, existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
@@ -70,7 +71,15 @@ export function submitTicket(
   // a concurrent submit could silently clobber the other's ticket. The temp
   // hardlink is always dropped: on success destPath keeps the inode; on
   // failure it must not linger.
-  const tmpPath = join(inbox, `.${slug}.md.tmp`);
+  //
+  // The temp name is unique per submit (pid + random suffix), NOT derived from
+  // the slug alone (issue #110): two concurrent submits of the same-slug ticket
+  // must never write through one shared `.slug.md.tmp` inode — otherwise the
+  // winner's inbox file could carry the loser's bytes, and a write into the
+  // shared inode during the link→unlink window could mutate the already-queued
+  // destination through the hardlink. Kept hidden + `.tmp` so the daemon's
+  // `*.md` glob never sees it.
+  const tmpPath = join(inbox, `.${slug}.md.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
   writeFileSync(tmpPath, sourceContent, "utf8");
   try {
     linkFn(tmpPath, destPath);

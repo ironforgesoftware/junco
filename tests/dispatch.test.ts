@@ -12,6 +12,8 @@ import {
   readFileSync,
   symlinkSync,
   lstatSync,
+  linkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -291,6 +293,31 @@ describe("submitTicket — clobber protection", () => {
       throw Object.assign(new Error("EACCES"), { code: "EACCES" });
     };
     expect(() => submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: eacces })).toThrow(/EACCES/);
+  });
+
+  it("uses a per-submit unique temp file, not a shared .slug.md.tmp, so concurrent same-slug submits never share an inode (issue #110)", () => {
+    const { cfg, vaultRoot } = freshVault();
+    const inbox = join(vaultRoot, "Junco", "inbox");
+    const tmpBasenames: string[] = [];
+    const spy = (existing: string, dest: string) => {
+      tmpBasenames.push(existing.split("/").at(-1)!);
+      linkSync(existing, dest); // real link; throws EEXIST on the duplicate dest
+    };
+    submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: spy });
+    expect(() => submitTicket(cfg, TICKET_WITH_ID, {}, { linkFn: spy })).toThrow(/already queued/);
+
+    expect(tmpBasenames).toHaveLength(2);
+    // Distinct temp inode per submit — never the old shared `.slug.md.tmp` name.
+    expect(tmpBasenames[0]).not.toBe(tmpBasenames[1]);
+    expect(tmpBasenames).not.toContain(".my-cool-task.md.tmp");
+    // Still hidden + non-.md so the daemon's *.md glob never sees a temp.
+    for (const t of tmpBasenames) {
+      expect(t.startsWith(".")).toBe(true);
+      expect(t.endsWith(".tmp")).toBe(true);
+      expect(t.endsWith(".md")).toBe(false);
+    }
+    // No leftover temp files after both submits.
+    expect(readdirSync(inbox).filter((n) => n.endsWith(".tmp"))).toHaveLength(0);
   });
 
   it("atomic placement: does not clobber an occupied slot the existence check can't see (issue #49)", () => {
