@@ -80,7 +80,16 @@ export function computePrStatus(
   prOutcome: PrOutcome | null,
   phaseError: string | null,
 ): string {
-  const pushed = Boolean(prOutcome && prOutcome.pushed);
+  // A soft-abort (timeout / guard-kill) that committed but then failed its push
+  // OFFLINE has its push→PR→comment sequence parked in the outbox (prQueued) —
+  // or, for an offline amend, only the push (pushQueued). The composite op WILL
+  // land the branch on reconnect, so the salvage-status decision treats a queued
+  // op as "pushed": the offline soft-abort routes to done/ (timeout_partial /
+  // aborted_partial) exactly like its online twin, instead of failed/ as bare
+  // `timeout` / `aborted_no_changes` with a false "no committed work" banner (#123).
+  const pushed = Boolean(
+    prOutcome && (prOutcome.pushed || prOutcome.prQueued || prOutcome.pushQueued),
+  );
   if (result.timedOut) return pushed ? "timeout_partial" : "timeout";
   if (phaseError) return "failed";
   if (result.errorMessage && !result.abortedByGuard) return "failed";

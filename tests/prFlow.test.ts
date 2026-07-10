@@ -851,6 +851,38 @@ esac
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0);
   });
 
+  it("offline TIMEOUT soft-abort with commits routes to done/ (timeout_partial), not failed/ (#123)", async () => {
+    // A timed-out session that committed continues to the phase-11 push. Offline,
+    // the composite push→PR→comment op is parked (prQueued) but pushed stays
+    // false. The ONLINE twin lands timeout_partial → done/; computePrStatus must
+    // treat the queued op as "pushed" so this offline salvage routes to done/ the
+    // same way — not to failed/ as bare `timeout`.
+    const cfg = makeConfig(h, { gitBin: gitFailShim("git-offtimeout.sh", "push", NET) });
+    const { task, path } = makeTicket(
+      h,
+      "offtimeout.md",
+      `---\nid: offtimeout\nrepo: ${h.work}\ntimeout_minutes: 0.005\n---\n# Slow\n\nDo a thing.\n`,
+    );
+    // Bridged ticket → the queued op carries a finalize block we can assert on.
+    task.github = { nwo: "owner/repo", issue: 11, kind: "pr", external: false };
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: timingOutFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.dst.startsWith(h.done)).toBe(true);
+    expect(flow.status).toBe("timeout_partial");
+    expect(flow.prQueued).toBe(true);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: timeout_partial");
+    expect(text).toContain("PR queued for offline push");
+    // The parked op carries the corrected (done-routing) status for its replay.
+    const op = listOps(cfg)[0].op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(op.finalize?.status).toBe("timeout_partial");
+    expect(op.pushed).toBe(false);
+  }, 20000);
+
   it("offline gh pr create (after successful push) checkpoints pushed:true", async () => {
     const { flow, cfg } = await runFlowWithOfflinePrCreate();
     expect(flow.prQueued).toBe(true);
