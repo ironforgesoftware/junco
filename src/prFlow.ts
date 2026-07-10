@@ -39,6 +39,7 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
 import { enqueueOp, isOffline } from "./githubOutbox.js";
 import { queuePaths } from "./config.js";
+import { transcriptPathFor } from "./slug.js";
 import { log } from "./logging.js";
 
 // ---------------------------------------------------------------------------
@@ -435,7 +436,7 @@ export async function runPrFlow(
     : undefined;
   // Per-ticket event transcript (worker + corrective append to one file).
   const transcriptPath = cfg.transcriptsEnabled
-    ? join(cfg.stateDir, "transcripts", `${task.id}.jsonl`)
+    ? transcriptPathFor(cfg.stateDir, task.id)
     : undefined;
   // A ticket-level `tools:` overrides the configured allowlist for THIS
   // ticket's sessions (worker + corrective). Everything else keeps cfg.

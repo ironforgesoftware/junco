@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 /**
  * Slugify a ticket id for safe use as a single filesystem path component.
  *
@@ -16,4 +18,19 @@
  */
 export function slugifyId(id: string): string {
   return id.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
+}
+
+/**
+ * The one construction site for a per-ticket event-transcript path.
+ *
+ * Every agent flow (PR: prFlow.ts, Q&A: runOnce.ts, assess: assessFlow.ts,
+ * analyze: analyzeFlow.ts) routes through this helper so the id can only ever
+ * reach the filesystem as a single `slugifyId`-collapsed path component — a raw
+ * `../..`-shaped id can never escape `<stateDir>/transcripts/`. Centralizing it
+ * is deliberate: the traversal hole (issue #32) regressed once (issue #94)
+ * precisely because the slugify step was duplicated per call site and one site
+ * was missed.
+ */
+export function transcriptPathFor(stateDir: string, id: string): string {
+  return join(stateDir, "transcripts", `${slugifyId(id)}.jsonl`);
 }
