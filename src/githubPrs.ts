@@ -55,7 +55,9 @@ interface RawPr {
   updatedAt: string;
   mergedAt: string | null;
   labels: { name: string }[];
-  author: { login: string };
+  // Nullable: GitHub's GraphQL author is null for a deleted account. Guarded
+  // before deref so one such PR can't throw and blank the whole repo (#135).
+  author: { login: string } | null;
 }
 
 export interface GithubPrsDeps {
@@ -83,30 +85,36 @@ export async function fetchJuncoPrs(
     { timeoutMs: GH_TIMEOUT, retryNetwork: true },
   );
   const raw = JSON.parse(r.stdout) as RawPr[];
-  return raw
-    .map(
-      (p): DashPr => ({
-        number: p.number,
-        title: p.title,
-        url: p.url,
-        headRefName: p.headRefName,
-        baseRefName: p.baseRefName,
-        isDraft: p.isDraft,
-        state: p.state,
-        reviewDecision: p.reviewDecision,
-        mergeable: p.mergeable,
-        mergeStateStatus: p.mergeStateStatus,
-        checks: reduceChecks(p.statusCheckRollup),
-        additions: p.additions,
-        deletions: p.deletions,
-        changedFiles: p.changedFiles,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-        mergedAt: p.mergedAt,
-        author: p.author.login,
-        labels: p.labels.map((l) => l.name),
-        nwo,
-      }),
-    )
-    .filter((p) => ticketSlugFromBranch(p.headRefName, cfg.branchPrefix) !== null);
+  return (
+    raw
+      // A deleted-account PR (null author) is treated as non-junco and skipped
+      // BEFORE the branch filter — the deref below would otherwise throw and drop
+      // every PR in this repo from `junco prs` and the dashboard (#135).
+      .filter((p): p is RawPr & { author: { login: string } } => p.author?.login != null)
+      .map(
+        (p): DashPr => ({
+          number: p.number,
+          title: p.title,
+          url: p.url,
+          headRefName: p.headRefName,
+          baseRefName: p.baseRefName,
+          isDraft: p.isDraft,
+          state: p.state,
+          reviewDecision: p.reviewDecision,
+          mergeable: p.mergeable,
+          mergeStateStatus: p.mergeStateStatus,
+          checks: reduceChecks(p.statusCheckRollup),
+          additions: p.additions,
+          deletions: p.deletions,
+          changedFiles: p.changedFiles,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+          mergedAt: p.mergedAt,
+          author: p.author.login,
+          labels: p.labels.map((l) => l.name),
+          nwo,
+        }),
+      )
+      .filter((p) => ticketSlugFromBranch(p.headRefName, cfg.branchPrefix) !== null)
+  );
 }

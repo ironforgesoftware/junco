@@ -1,6 +1,7 @@
 /**
  * `junco prs` — list junco-authored pull requests across every watched repo
- * (config `[[github.repos]]` ∪ dashboard watchlist, see watchlist.ts). Shares
+ * (config `[[github.repos]]` ∪ dashboard watchlist, INCLUDING external fork-PR
+ * repos — see `resolveWatchedReposForPrs` in watchlist.ts). Shares
  * its fetch+map+filter core with the dashboard's PRs view via
  * `fetchJuncoPrs` (src/githubPrs.ts) and its sort/lifecycle logic via
  * `sortPrs`/`derivePrState`/`prStateMeta` (src/tui/prState.ts) — the CLI and
@@ -9,7 +10,7 @@
 
 import type { Config } from "./types.js";
 import type { gh } from "./git.js";
-import { resolveWatchedRepos } from "./watchlist.js";
+import { resolveWatchedReposForPrs } from "./watchlist.js";
 import { fetchJuncoPrs } from "./githubPrs.js";
 import { derivePrState, prStateMeta, sortPrs, type DashPr } from "./tui/prState.js";
 
@@ -50,7 +51,10 @@ export interface PrsCmdDeps {
 
 export async function runPrsCommand(cfg: Config, deps: PrsCmdDeps = {}): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
-  const repos = resolveWatchedRepos(cfg);
+  // Include external (fork-PR) repos: their draft PRs are the review surface and
+  // must show here just like the dashboard (#131). Listing is read-only, so the
+  // bridge-poll exclusion in resolveWatchedRepos does not apply.
+  const repos = resolveWatchedReposForPrs(cfg);
   if (repos.length === 0) {
     print(
       "no watched repositories — add [[github.repos]] to config.toml or watch one from the dashboard\n",

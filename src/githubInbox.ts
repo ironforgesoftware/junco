@@ -9,6 +9,7 @@
  */
 
 import { readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import type { Config, GithubRepoMapping } from "./types.js";
 import { gh, git } from "./git.js";
 import { queuePaths } from "./config.js";
@@ -87,6 +88,20 @@ export function parseRepoInput(input: string): string | null {
   return /^[\w.-]+\/[\w.-]+$/.test(t) ? t : null;
 }
 
+/** Stable, collision-free ticket id for a GitHub issue. The slug keeps it
+ * human-recognizable; a short hash of the RAW `owner/repo` disambiguates the
+ * owner/name boundary the slug alone loses — `acme/api-x#5` and `acme-api/x#5`
+ * both slug to `gh-acme-api-x-5`, which cross-wired their tickets and stranded
+ * the second issue (#133). The hash is over the lowercased nwo so it agrees
+ * with the case-insensitive dedup used everywhere else. */
+export function githubTicketId(nwo: string, issueNumber: number, suffix?: string): string {
+  const [owner, name] = nwo.split("/");
+  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const hash = createHash("sha256").update(nwo.toLowerCase()).digest("hex").slice(0, 8);
+  const base = `gh-${slug(owner)}-${slug(name)}-${hash}-${issueNumber}`;
+  return suffix ? `${base}-${suffix}` : base;
+}
+
 /** Convert an eligible issue into a Junco ticket file (id + full content).
  * JSON.stringify produces valid YAML double-quoted scalars — titles and paths
  * with quotes/colons round-trip through parseTicket. */
@@ -96,9 +111,7 @@ export function issueToTicket(
   cfg: Config,
   parent: { title: string; body: string | null } | null,
 ): { id: string; content: string } {
-  const [owner, name] = repo.nwo.split("/");
-  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
-  const id = `gh-${slug(owner)}-${slug(name)}-${issue.number}`;
+  const id = githubTicketId(repo.nwo, issue.number);
   const kind = issue.labels.some((l) => l.name === cfg.github.askLabel) ? "ask" : "pr";
 
   const fm: string[] = ["---", `id: ${id}`];
@@ -139,9 +152,7 @@ export function buildPlanningTicket(
   repo: GithubRepoMapping,
   parent: { title: string; body: string | null } | null,
 ): { id: string; content: string } {
-  const [owner, name] = repo.nwo.split("/");
-  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
-  const id = `gh-${slug(owner)}-${slug(name)}-${issue.number}-plan`;
+  const id = githubTicketId(repo.nwo, issue.number, "plan");
   const fm = [
     "---",
     `id: ${id}`,
@@ -187,7 +198,11 @@ function longestBacktickRun(text: string): number {
  * frontmatter is machine-owned, model output and issue text can never set
  * repo:/workdir:/tools:. Null = no usable (complete) plan. */
 export function extractPlanBody(text: string): string | null {
-  const lines = text.split("\n");
+  // Normalize CRLF (and lone CR) to LF first: editing the plan comment in
+  // GitHub's web UI yields CRLF, and the fence match survives only via
+  // incidental `\s*` tolerance while interior `\r` would otherwise leak
+  // verbatim into the execution ticket and PR body (#134).
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const openRe = new RegExp("^(`{3,})" + PLAN_FENCE + "\\s*$");
   let last: string | null = null;
   for (let i = 0; i < lines.length; i++) {
@@ -436,6 +451,53 @@ async function fetchParent(
   }
 }
 
+/** The issue body's last-edit time (GraphQL `lastEditedAt`), in epoch ms, or
+ * null when the body was never edited. `verified: false` on any lookup failure
+ * OR an unparseable timestamp, so the body-vouching gate can fail closed — a
+ * body we cannot vet is never dispatched. lastEditedAt (a true body-edit
+ * timestamp, unlike the coarse `updatedAt`, which also bumps on comments, label
+ * changes, and the documented re-dispatch gesture) is the precise signal and is
+ * GraphQL-only — `gh issue list --json` does not expose it. */
+async function fetchIssueLastEdited(
+  cfg: Config,
+  nwo: string,
+  issueNumber: number,
+  ghFn: typeof gh,
+): Promise<{ verified: true; lastEditedMs: number | null } | { verified: false }> {
+  const [owner, name] = nwo.split("/");
+  try {
+    const r = await ghFn(
+      cfg,
+      [
+        "api",
+        "graphql",
+        "-f",
+        "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){lastEditedAt}}}",
+        "-f",
+        `owner=${owner}`,
+        "-f",
+        `name=${name}`,
+        "-F",
+        `number=${issueNumber}`,
+        "--jq",
+        ".data.repository.issue.lastEditedAt",
+      ],
+      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+    );
+    const out = r.stdout.trim();
+    if (!out || out === "null") return { verified: true, lastEditedMs: null };
+    const ms = Date.parse(out);
+    return Number.isFinite(ms) ? { verified: true, lastEditedMs: ms } : { verified: false };
+  } catch (e) {
+    log.warn("github bridge: issue lastEditedAt lookup failed; skipping this sweep", {
+      nwo,
+      issue: issueNumber,
+      error: errMsg(e),
+    });
+    return { verified: false };
+  }
+}
+
 async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Promise<string> {
   if (state.login === null) {
     const r = await ghFn(cfg, ["api", "user", "--jq", ".login"], {
@@ -527,9 +589,7 @@ export function buildExecutionTicket(
   repo: GithubRepoMapping,
   planBody: string,
 ): { id: string; content: string } {
-  const [owner, name] = repo.nwo.split("/");
-  const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, "-");
-  const id = `gh-${slug(owner)}-${slug(name)}-${issueNumber}`;
+  const id = githubTicketId(repo.nwo, issueNumber);
   const fm = [
     "---",
     `id: ${id}`,
@@ -745,6 +805,26 @@ export async function pollGithubInbox(
               nwo: repo.nwo,
               issue: issue.number,
             });
+            continue;
+          }
+          // The trigger label vouches the issue body AS IT WAS WHEN LABELED. A
+          // zero-permission author can edit the body between labeling and this
+          // sweep; the ask/plan dispatch below reads the CURRENT body, so an
+          // edit after the vouching label would auto-run (ask) or auto-post a
+          // plan (plan path) an un-approved instruction. Refuse if the body was
+          // edited after the label event — re-apply the trigger to re-vouch.
+          // Fail closed if we can't establish either timestamp. Mirrors the
+          // plan-comment postdate defense on the approval path above (#130).
+          const edited = await fetchIssueLastEdited(cfg, repo.nwo, issue.number, ghFn);
+          if (
+            !edited.verified ||
+            verdict.atMs === null ||
+            (edited.lastEditedMs !== null && edited.lastEditedMs > verdict.atMs)
+          ) {
+            log.warn(
+              "github bridge: issue body edited after the trigger label (or unverifiable); re-apply the label to re-vouch",
+              { nwo: repo.nwo, issue: issue.number },
+            );
             continue;
           }
           const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);

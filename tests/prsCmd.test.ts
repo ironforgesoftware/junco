@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runPrsCommand, formatPrLine } from "../src/prsCmd.js";
+import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { CmdResult, gh } from "../src/git.js";
 import type { DashPr } from "../src/tui/prState.js";
@@ -156,6 +157,24 @@ describe("runPrsCommand", () => {
     const code = await runPrsCommand(c, { printFn: (s) => out.push(s), ghFn });
     expect(code).toBe(0);
     expect(out.join("")).toBe("no junco PRs found\n");
+  });
+
+  it("includes external (fork-PR) repos' junco PRs — matching the dashboard (#131)", async () => {
+    // No config repos: the only watched repo is an external:true watchlist entry.
+    // The bridge never polls it (resolveWatchedRepos excludes it), but `junco prs`
+    // must still list its junco-authored draft PRs — the fork-PR review surface.
+    const c = cfg([]);
+    writeWatchlist(watchlistPath(c), [{ nwo: "up/stream", path: "/c/up", external: true }]);
+    const pr = rawPr({
+      number: 7,
+      headRefName: "junco/fork-fix",
+      url: "https://github.com/up/stream/pull/7",
+    });
+    const ghFn = fakeGh({ prsByRepo: { "up/stream": [pr] } });
+    const out: string[] = [];
+    const code = await runPrsCommand(c, { printFn: (s) => out.push(s), ghFn });
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("#   7");
   });
 
   it("one repo failing among successes still exits 0 (not every repo failed)", async () => {

@@ -11,6 +11,7 @@ import {
   newBridgeState,
   extractPlanBody,
   buildPlanComment,
+  githubTicketId,
   PLAN_COMMENT_MARKER,
   type GhIssue,
 } from "../src/githubInbox.js";
@@ -46,6 +47,11 @@ const issue = (labels: string[], over: Partial<GhIssue> = {}): GhIssue => ({
   labels: labels.map((name) => ({ name })),
   ...over,
 });
+
+// Real ids for the acme/api#42 fixtures — DERIVED, not hardcoded, so the #133
+// raw-nwo hash disambiguator (gh-acme-api-<hash>-42[-plan]) stays in sync.
+const EXEC_ID = githubTicketId("acme/api", 42);
+const PLAN_ID = githubTicketId("acme/api", 42, "plan");
 
 describe("lifecycleLabels", () => {
   it("derives all eight from the trigger", () => {
@@ -110,7 +116,7 @@ describe("nwoFromRemoteUrl", () => {
 describe("issueToTicket", () => {
   it("pr ticket: repo + pr_title + github block, round-trips through parseTicket", () => {
     const t = issueToTicket(issue(["junco"]), repo, cfg, null);
-    expect(t.id).toBe("gh-acme-api-42");
+    expect(t.id).toBe(EXEC_ID);
     const parsed = parseTicket(`/in/${t.id}.md`, t.content);
     expect(parsed.hasRepo).toBe(true);
     expect(parsed.frontmatter.repo).toBe("/home/u/code/api");
@@ -147,6 +153,16 @@ describe("issueToTicket", () => {
     expect(parsed.body.trim()).toBe("# Add rate limiting");
   });
 
+  it("disambiguates owner/repo slug collisions via a raw-nwo hash (#133)", () => {
+    // `acme/api-x` and `acme-api/x` both slug to `gh-acme-api-x-<n>` — a
+    // collision that cross-wires their tickets and strands the second issue.
+    const a = issueToTicket(issue(["junco"]), { nwo: "acme/api-x", path: "/p" }, cfg, null);
+    const b = issueToTicket(issue(["junco"]), { nwo: "acme-api/x", path: "/p" }, cfg, null);
+    expect(a.id).not.toBe(b.id);
+    // Still human-recognizable: the readable slug prefix is preserved.
+    expect(a.id.startsWith("gh-acme-api-x-")).toBe(true);
+  });
+
   it("appends parent context as a marked background section", () => {
     const t = issueToTicket(issue(["junco"]), repo, cfg, {
       title: "Uploads are slow",
@@ -170,6 +186,7 @@ describe("pollGithubInbox", () => {
     events?: string; // NDJSON lines from the --jq filter
     permission?: string;
     parent?: string; // "" | "null" | JSON
+    lastEditedAt?: string; // issue body last-edit time (GraphQL); "null" = never edited
     origin?: string;
     failList?: boolean;
     comments?: unknown[];
@@ -186,7 +203,13 @@ describe("pollGithubInbox", () => {
       if (args[0] === "label") return ok("");
       if (args[0] === "issue" && args[1] === "edit") return ok("");
       if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
-      if (args[0] === "api" && args[1] === "graphql") return ok(opts.parent ?? "null");
+      if (args[0] === "api" && args[1] === "graphql") {
+        // Two GraphQL queries share this argv shape — route by field: the
+        // body-vouching lookup (#130) vs. the sub-issue parent lookup.
+        const q = args.find((a) => a.startsWith("query=")) ?? "";
+        if (q.includes("lastEditedAt")) return ok(opts.lastEditedAt ?? "null");
+        return ok(opts.parent ?? "null");
+      }
       if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
         return ok((opts.comments ?? []).map((c) => JSON.stringify(c)).join("\n"));
       if (args[0] === "api" && String(args[2] ?? "").includes("/events"))
@@ -230,7 +253,7 @@ describe("pollGithubInbox", () => {
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
     expect(n).toBe(1);
     expect(f.submitted).toHaveLength(1);
-    expect(f.submitted[0].idHint).toBe("gh-acme-api-42-plan");
+    expect(f.submitted[0].idHint).toBe(PLAN_ID);
     expect(f.submitted[0].content).toContain("kind: plan");
     expect(f.submitted[0].content).toContain("workdir:");
     // Scoped to the machine-built frontmatter block (before the planner prompt body) —
@@ -248,7 +271,7 @@ describe("pollGithubInbox", () => {
     const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
     expect(n).toBe(1);
-    expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+    expect(f.submitted[0].idHint).toBe(EXEC_ID);
     expect(f.submitted[0].content).toContain("kind: ask");
     const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
     expect(edit).toContain("junco:queued");
@@ -263,6 +286,73 @@ describe("pollGithubInbox", () => {
     expect(edit).toContain("junco:denied");
   });
 
+  describe("issue-body vouching (#130)", () => {
+    // labeledEvent vouches the body at 2026-07-06T00:00:00Z.
+    it("refuses to dispatch when the body was edited AFTER the vouching label", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const f = makeFakes({
+          issues: [rawIssue],
+          events: labeledEvent,
+          permission: "write",
+          lastEditedAt: "2026-07-06T01:00:00Z", // edited an hour AFTER labeling
+        });
+        const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+        expect(n).toBe(0);
+        expect(f.submitted).toHaveLength(0);
+        expect(f.calls.find((c) => c[0] === "issue" && c[1] === "edit")).toBeUndefined();
+        expect(warnSpy.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/edited after/);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("dispatches when the body was last edited BEFORE the vouching label", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "2026-07-05T00:00:00Z", // edited BEFORE labeling → still vouched
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+    });
+
+    it("dispatches a never-edited body (lastEditedAt null)", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+    });
+
+    it("fails closed when lastEditedAt is unparseable (no submit)", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "not-a-real-date",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+    });
+
+    it("guards the ask path too: an edited ask-issue body does not auto-run", async () => {
+      const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
+      const f = makeFakes({
+        issues: [askIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "2026-07-06T01:00:00Z",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+    });
+  });
+
   it("fail-closed: no labeled event found → no submit, no label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: "", permission: "write" });
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
@@ -274,7 +364,7 @@ describe("pollGithubInbox", () => {
   it("duplicate submit still applies the queued label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: labeledEvent });
     const throwingSubmit = (): string => {
-      throw new Error("ticket already queued: /inbox/gh-acme-api-42-plan.md");
+      throw new Error(`ticket already queued: /inbox/${PLAN_ID}.md`);
     };
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), {
       ghFn: f.ghFn,
@@ -484,7 +574,7 @@ describe("pollGithubInbox", () => {
       });
       const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
       expect(n).toBe(1);
-      expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+      expect(f.submitted[0].idHint).toBe(EXEC_ID);
       expect(f.submitted[0].content).toContain("kind: pr");
       expect(f.submitted[0].content).toContain('repo: "/home/u/code/api"');
       expect(f.submitted[0].content).toContain("# The plan");
@@ -548,7 +638,7 @@ describe("pollGithubInbox", () => {
       });
       expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
       expect(f.submitted).toHaveLength(1);
-      expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+      expect(f.submitted[0].idHint).toBe(EXEC_ID);
     });
 
     it("plan comment with a missing or unparseable updated_at → no submit (fails closed)", async () => {
@@ -596,7 +686,7 @@ describe("pollGithubInbox", () => {
       };
       const f = makeFakes({ issues: [noApproval], comments: [planComment(fencedComment)] });
       expect(await pollGithubInbox(autoCfg, newBridgeState(), f as never)).toBe(1);
-      expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+      expect(f.submitted[0].idHint).toBe(EXEC_ID);
     });
 
     it("the LATEST own-authored plan comment wins", async () => {
@@ -664,7 +754,7 @@ describe("pollGithubInbox", () => {
       try {
         const done = join(root, "tickets", "done");
         mkdirSync(done, { recursive: true });
-        writeFileSync(join(done, "1710000000000__gh-acme-api-42.md"), "old run", "utf8");
+        writeFileSync(join(done, `1710000000000__${EXEC_ID}.md`), "old run", "utf8");
         const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
         const f = makeFakes({
           issues: [readyIssue],
@@ -675,7 +765,7 @@ describe("pollGithubInbox", () => {
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
         expect(n).toBe(1);
         expect(f.submitted).toHaveLength(1); // the fresh plan actually runs
-        expect(f.submitted[0].idHint).toBe("gh-acme-api-42");
+        expect(f.submitted[0].idHint).toBe(EXEC_ID);
         const edit = f.calls.find((c) => c[1] === "edit");
         expect(edit).toEqual(
           expect.arrayContaining([
@@ -695,8 +785,8 @@ describe("pollGithubInbox", () => {
       try {
         const processing = join(root, "tickets", "processing");
         mkdirSync(processing, { recursive: true });
-        // Claim-prefixed file for the exec-ticket id gh-acme-api-42.
-        writeFileSync(join(processing, "1720000000000__gh-acme-api-42.md"), "stub", "utf8");
+        // Claim-prefixed file for the exec-ticket id (gh-acme-api-<hash>-42).
+        writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
         const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
         const f = makeFakes({
           issues: [readyIssue],
@@ -734,8 +824,8 @@ describe("pollGithubInbox", () => {
       try {
         const processing = join(root, "tickets", "processing");
         mkdirSync(processing, { recursive: true });
-        // Claim-prefixed file for the planning-ticket id gh-acme-api-42-plan.
-        writeFileSync(join(processing, "1720000000000__gh-acme-api-42-plan.md"), "stub", "utf8");
+        // Claim-prefixed file for the planning-ticket id (gh-acme-api-<hash>-42-plan).
+        writeFileSync(join(processing, `1720000000000__${PLAN_ID}.md`), "stub", "utf8");
         const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
@@ -753,8 +843,8 @@ describe("pollGithubInbox", () => {
       try {
         const processing = join(root, "tickets", "processing");
         mkdirSync(processing, { recursive: true });
-        // Claim-prefixed file for the ask-ticket id gh-acme-api-42.
-        writeFileSync(join(processing, "1720000000000__gh-acme-api-42.md"), "stub", "utf8");
+        // Claim-prefixed file for the ask-ticket id (gh-acme-api-<hash>-42).
+        writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
         const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
         const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
         const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
@@ -773,7 +863,7 @@ describe("pollGithubInbox", () => {
       try {
         const inbox = join(root, "tickets", "inbox");
         mkdirSync(inbox, { recursive: true });
-        writeFileSync(join(inbox, "gh-acme-api-42-plan.md"), "stub", "utf8");
+        writeFileSync(join(inbox, `${PLAN_ID}.md`), "stub", "utf8");
         const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
@@ -847,6 +937,14 @@ describe("extractPlanBody", () => {
 
   it("ignores an unterminated fence (no complete block)", () => {
     expect(extractPlanBody("````junco-ticket\n# No closer")).toBeNull();
+  });
+
+  it("normalizes CRLF line endings from a web-UI comment edit — no \\r leaks (#134)", () => {
+    const plan = "# Title\r\n\r\n## Steps\r\n- do it";
+    const text = "chatter\r\n\r\n```junco-ticket\r\n" + plan + "\r\n```\r\n\r\ntrailing";
+    const out = extractPlanBody(text);
+    expect(out).toBe("# Title\n\n## Steps\n- do it");
+    expect(out).not.toContain("\r");
   });
 });
 

@@ -7,6 +7,7 @@ import {
   readWatchlist,
   writeWatchlist,
   resolveWatchedRepos,
+  resolveWatchedReposForPrs,
 } from "../src/watchlist.js";
 import type { Config } from "../src/types.js";
 
@@ -143,5 +144,33 @@ describe("resolveWatchedRepos", () => {
       { nwo: "own/repo", path: "/c/own" },
     ]);
     expect(resolveWatchedRepos(cfg)).toEqual([{ nwo: "own/repo", path: "/c/own" }]);
+  });
+});
+
+describe("resolveWatchedReposForPrs", () => {
+  it("INCLUDES external entries (PR listing wants fork-PR repos) (#131)", () => {
+    const dir = tmp();
+    const cfg = cfgWith(dir, []);
+    writeWatchlist(watchlistPath(cfg), [
+      { nwo: "up/stream", path: "/c/up", external: true },
+      { nwo: "own/repo", path: "/c/own" },
+    ]);
+    expect(resolveWatchedReposForPrs(cfg)).toEqual([
+      { nwo: "up/stream", path: "/c/up" },
+      { nwo: "own/repo", path: "/c/own" },
+    ]);
+  });
+
+  it("still unions config and watchlist, config wins on nwo (case-insensitive)", () => {
+    const dir = tmp();
+    const cfg = cfgWith(dir, [{ nwo: "acme/api", path: "/config/api" }]);
+    writeWatchlist(watchlistPath(cfg), [
+      { nwo: "ACME/api", path: "/wl/api" }, // conflict → config wins
+      { nwo: "alx/coral", path: "/wl/coral", external: true },
+    ]);
+    expect(resolveWatchedReposForPrs(cfg)).toEqual([
+      { nwo: "acme/api", path: "/config/api" },
+      { nwo: "alx/coral", path: "/wl/coral" },
+    ]);
   });
 });
