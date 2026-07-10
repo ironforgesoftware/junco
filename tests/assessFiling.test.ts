@@ -174,6 +174,51 @@ describe("fileFindings", () => {
     expect(res.created).toBe(1);
   });
 
+  it("does NOT archive the batch when every selected finding fails with a non-offline error", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    writePending(c, pending(true));
+    // Every issue-create throws a permission (non-offline) error: tryOrEnqueue
+    // rethrows, the loop swallows it into result.failed, and fileFindings does
+    // NOT throw. The batch must stay parked so `junco assess review`/`file` can
+    // retry — a fully-failed filing must not discard the review (#137).
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[0] === "issue" && args[1] === "create") throw PERM_ERR;
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+
+    const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn });
+    expect(res.failed).toBe(2);
+    expect(res.created).toBe(0);
+    expect(readPending(c, "assess-x-1").batch).not.toBeNull();
+  });
+
+  it("still archives when a filing partially succeeds and the rest queue offline", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    writePending(c, pending(true));
+    // f1 files live, f2 goes offline (queuedOffline, not failed). No non-offline
+    // failure → result.failed === 0 → the batch archives as before (queued =
+    // success). Guards #137's guard against over-preserving.
+    let n = 0;
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[0] === "issue" && args[1] === "create") {
+        n++;
+        if (n === 2) throw NET_ERR;
+        return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+
+    const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn });
+    expect(res.created).toBe(1);
+    expect(res.queuedOffline).toBe(1);
+    expect(res.failed).toBe(0);
+    expect(readPending(c, "assess-x-1").batch).toBeNull();
+  });
+
   // SP-3 Task 5: filed findings reference the scoping issue.
   it("threads batch.issue into the filed issue body as a **Context:** line", async () => {
     const dir = mkdtempSync(join(tmpdir(), "afl-"));
