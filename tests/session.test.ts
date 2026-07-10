@@ -204,31 +204,27 @@ describe("runAgent (observability hooks are best-effort — #78)", () => {
   });
 
   it("a transcript.write that throws synchronously degrades to a warning", async () => {
-    const throwing = {
-      on() {},
-      write() {
-        throw new Error("write boom");
-      },
-      end() {},
-    };
-    createWriteStreamOverride.current = () => throwing as any;
-    try {
-      const events = [
-        { type: "tool_execution_start", toolName: "read", args: {} },
-        { type: "agent_end", messages: [], willRetry: false },
-      ];
-      const session = fakeSession(events);
-      const result = await runAgent({
-        body: "x",
-        cwd: "/tmp",
-        timeoutMs: 1000,
-        createSession: async () => session as any,
-        transcriptPath: join(tmpdir(), "junco-throw-tx", "t.jsonl"),
-      });
-      expect(result.errorMessage).toBeNull();
-    } finally {
-      createWriteStreamOverride.current = null;
-    }
+    // The transcript sink is injectable (#128), so this needs no vi.mock: a
+    // sink whose write() throws must degrade to a warning, not wedge the run.
+    const events = [
+      { type: "tool_execution_start", toolName: "read", args: {} },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "x",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      transcriptPath: join(tmpdir(), "junco-throw-tx", "t.jsonl"),
+      transcriptSink: () => ({
+        write() {
+          throw new Error("write boom");
+        },
+        end() {},
+      }),
+    });
+    expect(result.errorMessage).toBeNull();
   });
 
   it("an onGuardDecision hook that throws still kills the run and does not wedge it", async () => {
@@ -751,6 +747,40 @@ describe("runAgent (transcript sidecar)", () => {
     expect(JSON.parse(lines[0]).type).toBe("tool_execution_start");
     expect(JSON.parse(lines[1]).type).toBe("turn_end");
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("routes transcript writes through an injected sink — no fs (#128)", async () => {
+    // The transcript I/O goes through an injectable seam like every other side
+    // effect (createSession/onProgress/onGuardDecision): a fake sink captures
+    // the JSONL lines and is flushed via end(), touching no filesystem.
+    const lines: string[] = [];
+    let ended = false;
+    const events = [
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x" } }, // skipped
+      { type: "tool_execution_start", toolName: "read", args: { path: "/a" } },
+      {
+        type: "turn_end",
+        message: { stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 } },
+      },
+    ];
+    const session = fakeSession(events);
+    await runAgent({
+      body: "x",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+      transcriptPath: join(tmpdir(), "junco-sink-seam", "t.jsonl"),
+      transcriptSink: () => ({
+        write: (line) => lines.push(line),
+        end: () => {
+          ended = true;
+        },
+      }),
+    });
+    const parsed = lines.map((l) => JSON.parse(l));
+    // The per-token delta is skipped; the tool start and turn end are written.
+    expect(parsed.map((p) => p.type)).toEqual(["tool_execution_start", "turn_end"]);
+    expect(ended).toBe(true);
   });
 
   it("an unwritable transcript path only warns — the run still completes", async () => {

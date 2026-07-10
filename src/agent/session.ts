@@ -35,6 +35,64 @@ export interface AgentSessionLike {
   abort(): Promise<void>;
 }
 
+/**
+ * Sink for the per-ticket transcript. `runAgent` writes one already-serialized
+ * JSON line per non-delta event (plus synthetic guard-decision records) through
+ * this seam — injectable so the fs writes sit behind a deps boundary like every
+ * other side effect (createSession/onProgress/onGuardDecision), instead of tests
+ * reaching for `vi.mock('node:fs')` (CLAUDE.md "every side effect behind an
+ * injectable deps seam"; #128).
+ */
+export interface TranscriptSink {
+  /** Append one line (caller includes the trailing newline). Best-effort — a
+   *  failed write must NOT throw up through the SDK's synchronous emit. */
+  write(line: string): void;
+  /** Flush/close. Best-effort. */
+  end(): void;
+}
+
+/**
+ * Builds a `TranscriptSink` for a path, or returns null when the sink could not
+ * be opened (the run continues without a transcript). Defaults to
+ * `defaultTranscriptSink` (real fs) so existing callers are unchanged.
+ */
+export type TranscriptSinkFactory = (path: string) => TranscriptSink | null;
+
+/**
+ * The default fs-backed transcript sink. Creates the parent dir and appends to
+ * the file; open/write failures degrade to a warning and drop the transcript
+ * (subsequent writes become no-ops) rather than crashing the ticket.
+ */
+export const defaultTranscriptSink: TranscriptSinkFactory = (path) => {
+  let stream: WriteStream | null;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    stream = createWriteStream(path, { flags: "a" });
+  } catch (e) {
+    log.warn("transcript disabled (path not writable)", {
+      path,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return null;
+  }
+  // createWriteStream opens the file ASYNCHRONOUSLY: open and write failures
+  // (EACCES, ENOSPC, ...) arrive as an 'error' event, never a throw — without a
+  // listener that event crashes the process mid-ticket. Degrade to a warning
+  // and drop the transcript (later writes become no-ops).
+  stream.on("error", (e: Error) => {
+    log.warn("transcript disabled (stream error)", { path, error: e.message });
+    stream = null;
+  });
+  return {
+    write(line: string): void {
+      stream?.write(line);
+    },
+    end(): void {
+      stream?.end();
+    },
+  };
+};
+
 export interface RunAgentOptions {
   body: string;
   cwd: string;
@@ -69,6 +127,12 @@ export interface RunAgentOptions {
    * failed runs. Parent dir is created; write failures only warn.
    */
   transcriptPath?: string;
+  /**
+   * Factory for the transcript sink (used only when `transcriptPath` is set).
+   * Injectable so the fs writes go through a deps seam like every other side
+   * effect; defaults to the real fs-backed `defaultTranscriptSink` (#128).
+   */
+  transcriptSink?: TranscriptSinkFactory;
   /**
    * Grace period (ms) to wait for the in-flight prompt() to actually settle
    * AFTER an abort is initiated, before treating the run as wedged and
@@ -163,28 +227,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     armAbortGrace();
   };
   opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
-  let transcript: WriteStream | null = null;
+  // Transcript writes go through an injectable sink (#128), defaulting to the
+  // real fs-backed sink. Sink-internal failures degrade to a warning and drop
+  // the transcript, so the write sites below stay best-effort.
+  let transcript: TranscriptSink | null = null;
   if (opts.transcriptPath) {
-    try {
-      mkdirSync(dirname(opts.transcriptPath), { recursive: true });
-      transcript = createWriteStream(opts.transcriptPath, { flags: "a" });
-      // createWriteStream opens the file ASYNCHRONOUSLY: open and write
-      // failures (EACCES, ENOSPC, ...) arrive as an 'error' event, never a
-      // throw — without a listener that event crashes the process mid-ticket.
-      // Degrade to a warning and drop the transcript, as promised above.
-      transcript.on("error", (e: Error) => {
-        log.warn("transcript disabled (stream error)", {
-          path: opts.transcriptPath,
-          error: e.message,
-        });
-        transcript = null;
-      });
-    } catch (e) {
-      log.warn("transcript disabled (path not writable)", {
-        path: opts.transcriptPath,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+    transcript = (opts.transcriptSink ?? defaultTranscriptSink)(opts.transcriptPath);
   }
   try {
     // Subscribe immediately before prompt() (so no startup events are missed),
