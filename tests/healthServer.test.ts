@@ -81,6 +81,18 @@ describe("healthServer", () => {
     expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 
+  it("brackets an IPv6 bind address in handle.url and serves over it (#119)", async () => {
+    handle = await startHealthServer({
+      port: 0,
+      host: "::1",
+      metrics: makeFakeMetrics(),
+    });
+    // Bare `http://::1:<port>` is a malformed authority that fetch/new URL reject.
+    expect(handle.url).toBe(`http://[::1]:${handle.port}`);
+    const resp = await fetch(`${handle.url}/live`);
+    expect(resp.status).toBe(200);
+  });
+
   // -------------------------------------------------------------------------
   // GET /live
   // -------------------------------------------------------------------------
@@ -277,6 +289,26 @@ describe("healthServer", () => {
   // -------------------------------------------------------------------------
   // close() idempotent
   // -------------------------------------------------------------------------
+
+  it("keeps a persistent error handler so a post-listen error does not crash (#121)", async () => {
+    const logs: string[] = [];
+    handle = await startHealthServer({
+      port: 0,
+      metrics: makeFakeMetrics(),
+      logFn: (m) => logs.push(m),
+    });
+
+    const server = handle.server!;
+    // Simulate an accept-time failure (e.g. EMFILE under fd exhaustion). With no
+    // 'error' listener, emit() throws — from Node's socket path that is an
+    // uncaughtException that kills the daemon. A persistent handler swallows it.
+    expect(() => server.emit("error", new Error("EMFILE"))).not.toThrow();
+    expect(logs.some((l) => l.includes("EMFILE"))).toBe(true);
+
+    // The server keeps serving after the error.
+    const resp = await fetch(`${handle.url}/live`);
+    expect(resp.status).toBe(200);
+  });
 
   it("close() is idempotent — second call resolves without throwing", async () => {
     handle = await startHealthServer({

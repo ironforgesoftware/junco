@@ -30,6 +30,12 @@ export interface HealthServerOpts {
    * A rejection is treated as "not ready" — it does NOT cause a 500.
    */
   readinessProbe?: () => Promise<boolean>;
+  /**
+   * Where to report a post-listen server error (an accept-time failure such as
+   * EMFILE under fd exhaustion). Defaults to `console.error`. The error is
+   * logged and swallowed so it can never crash the host process (#121).
+   */
+  logFn?: (msg: string) => void;
 }
 
 export interface HealthServerHandle {
@@ -37,6 +43,8 @@ export interface HealthServerHandle {
   port: number;
   /** Base URL, e.g. http://127.0.0.1:49152 */
   url: string;
+  /** The underlying HTTP server. Exposed for observability/tests; runtime consumers use port/url/close. */
+  server?: Server;
   /** Graceful close. Resolves when the server is fully closed. Idempotent. */
   close(): Promise<void>;
 }
@@ -54,6 +62,11 @@ function writeJson(res: ServerResponse, statusCode: number, obj: unknown): void 
   res.end(body);
 }
 
+/** Bracket an IPv6 literal for use in a URL authority (`::1` → `[::1]`); pass others through. */
+function bracketHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
 async function safeProbe(probe: () => Promise<boolean>): Promise<boolean> {
   try {
     return await probe();
@@ -69,6 +82,7 @@ async function safeProbe(probe: () => Promise<boolean>): Promise<boolean> {
 export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerHandle> {
   const host = opts.host ?? "127.0.0.1";
   const probe = opts.readinessProbe ?? (async () => true);
+  const logFn = opts.logFn ?? ((msg: string) => console.error(msg));
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -131,19 +145,26 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
     server.once("error", reject);
 
     server.listen(opts.port, host, () => {
-      // Remove the pre-listen error listener so normal runtime errors don't
-      // cause an unhandled rejection later.
+      // Swap the one-shot `reject` (which only guards listen-time failures like
+      // EADDRINUSE) for a persistent handler. Once we're listening, a later
+      // accept-time error (e.g. EMFILE under fd exhaustion) must be logged and
+      // swallowed — with no 'error' listener it would surface as an
+      // uncaughtException and kill the whole host process (#121).
       server.removeListener("error", reject);
+      server.on("error", (err: Error) => {
+        logFn(`health server error (continuing): ${err.message}`);
+      });
 
       const addr = server.address() as AddressInfo;
       const boundPort = addr.port;
-      const url = `http://${addr.address}:${boundPort}`;
+      const url = `http://${bracketHost(addr.address)}:${boundPort}`;
 
       let closed = false;
 
       const handle: HealthServerHandle = {
         port: boundPort,
         url,
+        server,
         close(): Promise<void> {
           if (closed) return Promise.resolve();
           closed = true;

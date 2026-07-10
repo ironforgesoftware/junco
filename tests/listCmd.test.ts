@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runListCommand, ticketStatusOf } from "../src/listCmd.js";
@@ -49,6 +49,19 @@ describe("runListCommand", () => {
     out = [];
     expect(await runListCommand(cfg, "nope", { printFn: (s) => out.push(s) })).toBe(2);
     expect(out.join("")).toMatch(/unknown box/);
+  });
+
+  it("skips an entry that vanishes between readdir and stat, not fatal (#120)", async () => {
+    // A dangling symlink is returned by readdir but statSync throws ENOENT —
+    // the same shape as a ticket the daemon renames out of the box mid-listing.
+    symlinkSync(join(root, "inbox", "gone-target.md"), join(root, "inbox", "ghost.md"));
+    const code = await runListCommand(cfg, "inbox", { printFn: (s) => out.push(s) });
+    expect(code).toBe(0);
+    const text = out.join("");
+    // The live ticket still lists; the vanished entry is silently skipped.
+    expect(text).toMatch(/i1\.md/);
+    expect(text).not.toMatch(/ghost\.md/);
+    expect(text).toMatch(/inbox \(1\)/);
   });
 
   it("caps each box at the limit and reports the remainder", async () => {

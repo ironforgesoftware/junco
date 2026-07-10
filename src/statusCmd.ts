@@ -27,6 +27,11 @@ export function fmtUptime(totalSeconds: number): string {
   return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }
 
+/** Bracket an IPv6 literal for use in a URL authority (`::1` → `[::1]`); pass others through. */
+function bracketHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
 function countMd(dir: string): number {
   try {
     return readdirSync(dir).filter((n) => n.endsWith(".md")).length;
@@ -46,7 +51,7 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? 1500);
   try {
-    const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`, {
+    const resp = await fetchFn(`http://${bracketHost(cfg.healthHost)}:${cfg.healthPort}/health`, {
       signal: controller.signal,
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
