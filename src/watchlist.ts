@@ -76,9 +76,11 @@ export function writeWatchlist(file: string, entries: WatchlistEntry[]): void {
   renameSync(tmp, file);
 }
 
-/** Config repos ∪ watchlist entries, deduped by nwo (case-insensitive),
- * config wins. Watchlist trouble degrades to config-only with a warn. */
-export function resolveWatchedRepos(cfg: Config): GithubRepoMapping[] {
+/** Config repos ∪ watchlist entries, deduped by nwo (case-insensitive), config
+ * wins. Watchlist trouble degrades to config-only with a warn. `includeExternal`
+ * decides whether fork-PR (external:true) entries survive — see the two exported
+ * wrappers for the security reasoning behind each choice. */
+function resolveWatched(cfg: Config, includeExternal: boolean): GithubRepoMapping[] {
   const out: GithubRepoMapping[] = [...cfg.github.repos];
   const seen = new Set(out.map((r) => r.nwo.toLowerCase()));
   const { entries, error } = readWatchlist(watchlistPath(cfg));
@@ -86,13 +88,26 @@ export function resolveWatchedRepos(cfg: Config): GithubRepoMapping[] {
     log.warn("github watchlist unreadable; using config repos only", { error });
   }
   for (const e of entries) {
-    // fork-PR repos: dashboard-only. The bridge must never poll them — an upstream
-    // maintainer (write access by definition) with their own trigger label would pass
-    // verifyLabelApplier and inject tickets.
-    if (e.external === true) continue;
+    if (e.external === true && !includeExternal) continue;
     if (seen.has(e.nwo.toLowerCase())) continue;
     seen.add(e.nwo.toLowerCase());
     out.push({ nwo: e.nwo, path: e.path });
   }
   return out;
+}
+
+/** Bridge-POLL repo set: fork-PR (external:true) entries EXCLUDED. The bridge
+ * must never poll them — an upstream maintainer (write access by definition)
+ * with their own trigger label would pass verifyLabelApplier and inject
+ * tickets. This exclusion is a polling-security rule; do not weaken it. */
+export function resolveWatchedRepos(cfg: Config): GithubRepoMapping[] {
+  return resolveWatched(cfg, false);
+}
+
+/** PR-LISTING repo set: fork-PR (external:true) entries INCLUDED. Listing
+ * junco-authored PRs is read-only, so the poll-injection risk above does not
+ * apply; fork-mode draft PRs — whose entire human checkpoint is that draft —
+ * must appear in `junco prs` exactly as they do in the dashboard (#131). */
+export function resolveWatchedReposForPrs(cfg: Config): GithubRepoMapping[] {
+  return resolveWatched(cfg, true);
 }
