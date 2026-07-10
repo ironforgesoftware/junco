@@ -443,7 +443,11 @@ function longestBacktickRun(text: string): number {
   return max;
 }
 
-function renderIssueBody(f: Finding, truncated: boolean): string {
+function renderIssueBody(
+  f: Finding,
+  truncated: boolean,
+  context?: { nwo: string; issue: number },
+): string {
   const sections: string[] = [];
 
   if (f.description) {
@@ -475,6 +479,10 @@ function renderIssueBody(f: Finding, truncated: boolean): string {
     sections.push(`## References\n\n${f.references.map((r) => `- ${r}`).join("\n")}`);
   }
 
+  if (context) {
+    sections.push(`**Context:** ${context.nwo}#${context.issue}`);
+  }
+
   // Dynamic fence: JSON.stringify does not escape backticks, so a description
   // containing ``` could close a fixed 3-backtick fence early (the
   // buildPlanComment lesson, src/githubInbox.ts:227).
@@ -500,8 +508,14 @@ function renderIssueBody(f: Finding, truncated: boolean): string {
 // is re-rendered once with a reduced finding (description re-capped to
 // 2_000 chars, evidence omitted) in both the human sections and the
 // embedded JSON, with a truncation notice appended before the marker.
-export function buildIssueBody(f: Finding): string {
-  const full = renderIssueBody(f, false);
+//
+// `context` (SP-3): when a batch was scoped by `junco assess owner/repo#N`,
+// the caller passes the scoping issue here and a `**Context:** <nwo>#<issue>`
+// line renders immediately before the machine-readable block — issue-body
+// metadata only, deliberately NOT folded into the embedded JSON (which stays
+// exactly `f`, for the round-trip test above) or the fingerprint input.
+export function buildIssueBody(f: Finding, context?: { nwo: string; issue: number }): string {
+  const full = renderIssueBody(f, false, context);
   if (full.length <= ISSUE_BODY_LIMIT) return full;
 
   const reduced: Finding = {
@@ -512,7 +526,7 @@ export function buildIssueBody(f: Finding): string {
         : f.description,
     evidence: undefined,
   };
-  return renderIssueBody(reduced, true);
+  return renderIssueBody(reduced, true, context);
 }
 
 // The label every junco-filed finding issue carries — also the dedup filter

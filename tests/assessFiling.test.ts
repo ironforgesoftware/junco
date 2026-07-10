@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileFindings } from "../src/assessFiling.js";
@@ -172,5 +172,47 @@ describe("fileFindings", () => {
     const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn });
     expect(res.deduped).toBe(1);
     expect(res.created).toBe(1);
+  });
+
+  // SP-3 Task 5: filed findings reference the scoping issue.
+  it("threads batch.issue into the filed issue body as a **Context:** line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    const batch = { ...pending(false), issue: 7 };
+    writePending(c, batch);
+    const bodies: string[] = [];
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[0] === "issue" && args[1] === "create") {
+        const idx = args.indexOf("--body-file");
+        bodies.push(readFileSync(args[idx + 1], "utf8"));
+        return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+
+    await fileFindings(c, batch, new Set(["f1"]), { ghFn });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("**Context:** o/r#7");
+  });
+
+  it("without batch.issue, the filed issue body has no **Context:** line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    writePending(c, pending(false));
+    const bodies: string[] = [];
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[0] === "issue" && args[1] === "create") {
+        const idx = args.indexOf("--body-file");
+        bodies.push(readFileSync(args[idx + 1], "utf8"));
+        return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+
+    await fileFindings(c, pending(false), new Set(["f1"]), { ghFn });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).not.toContain("**Context:**");
   });
 });

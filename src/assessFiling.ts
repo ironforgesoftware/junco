@@ -164,7 +164,10 @@ export async function fileFindings(
       continue;
     }
     const title = buildIssueTitle(f);
-    const bodyText = buildIssueBody(f);
+    const bodyText = buildIssueBody(
+      f,
+      batch.issue !== undefined ? { nwo: batch.nwo, issue: batch.issue } : undefined,
+    );
     const labels = labelsFor(f);
     const op: OutboxOp = {
       kind: "issue-create",
