@@ -292,6 +292,32 @@ describe("installSignalHandlers", () => {
     }
   });
 
+  it("a third signal triggers the hard-exit (130) path via the injected exit seam", () => {
+    // Belt-and-suspenders: never let a real process.exit tear down the runner,
+    // even if the seam were unwired.
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation(((_code?: number) => undefined) as never);
+    const exit = vi.fn();
+    const stop = new StopFlag();
+    const uninstall = installSignalHandlers(stop, { exit });
+    try {
+      process.emit("SIGTERM"); // 1st → graceful stop
+      expect(stop.requested).toBe(true);
+      process.emit("SIGTERM"); // 2nd → force stop
+      expect(stop.forceSignal.aborted).toBe(true);
+      expect(exit).not.toHaveBeenCalled();
+      process.emit("SIGTERM"); // 3rd → hard exit
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(130);
+      // With the seam injected, the real process.exit is never touched.
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("uninstall removes both SIGINT and SIGTERM listeners back to baseline", () => {
     const beforeInt = process.listenerCount("SIGINT");
     const beforeTerm = process.listenerCount("SIGTERM");
@@ -643,6 +669,32 @@ describe("runScheduler", () => {
     };
     await runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep });
     expect(finished).toBe(1); // drained, not abandoned
+  });
+
+  it("a claim-time throw drains in-flight work and does not propagate (no process-killing throw)", async () => {
+    // claimNextTask deliberately rethrows non-ENOENT fs errors. That throw must
+    // NOT escape runScheduler to cli.ts's process.exit(1) — which would
+    // hard-kill every in-flight session with no commit salvage. Instead it is
+    // caught and the in-flight set is drained, matching a SIGTERM's graceful
+    // drain.
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    let finished = 0;
+    let claims = 0;
+    const claimFn = async () => {
+      claims++;
+      if (claims === 1) return fakeWork("slow", null); // first: a long in-flight task
+      throw new Error("EIO: non-ENOENT fs error rethrown by claimNextTask");
+    };
+    const executeFn = async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      finished++;
+    };
+    // Must RESOLVE (not reject): a claim throw is caught, not propagated.
+    await expect(
+      runScheduler(cfg, stop, {}, { claimFn, executeFn, sleep: tickSleep }),
+    ).resolves.toBeUndefined();
+    expect(finished).toBe(1); // in-flight task drained to completion, not abandoned
   });
 
   it("once mode claims one task, drains it, and returns", async () => {
