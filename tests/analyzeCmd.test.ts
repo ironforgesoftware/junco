@@ -325,6 +325,31 @@ describe("runAnalyzeEditCommand", () => {
     expect(draft?.draft).not.toContain("junco:outbox");
   });
 
+  it("edited text that sanitizes to empty -> exit 1, store unchanged", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aedit-empty-"));
+    const c = cfg(dir);
+    writeDraft(c, comment("analyze-o-r-42", { draft: "Original body." }));
+
+    let out = "";
+    const code = await runAnalyzeEditCommand(c, "analyze-o-r-42", {
+      env: { EDITOR: "vim" },
+      spawnFn: (_cmd, args) => {
+        // An HTML comment plus whitespace: sanitizeFindingText strips both,
+        // leaving an empty string — the guard must refuse to store it.
+        writeFileSync(args[0] ?? "", "<!-- only a comment -->\n\n  ");
+        return { status: 0 };
+      },
+      printFn: (s) => {
+        out += s;
+      },
+    });
+
+    expect(code).toBe(1);
+    expect(out).toMatch(/empty after sanitize — unchanged/);
+    const { draft } = readDraft(c, "analyze-o-r-42");
+    expect(draft?.draft).toBe("Original body.");
+  });
+
   it("missing id -> exit 2; store read error -> exit 1", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aedit-missing-"));
     const c = cfg(dir);
