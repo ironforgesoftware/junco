@@ -14,6 +14,7 @@ function makeFakes(opts: {
   lockPids?: (number | null)[]; // successive lockHolderFn answers
   platform?: NodeJS.Platform;
   kickFails?: boolean;
+  restartBlocks?: boolean; // model a BLOCKING `systemctl restart` (no --no-block)
 }) {
   const calls: string[][] = [];
   const prints: string[] = [];
@@ -38,7 +39,15 @@ function makeFakes(opts: {
       if (cmd === "systemctl") {
         if (args.includes("list-unit-files")) return ok(Object.keys(opts.units ?? {}).join("\n"));
         if (args[1] === "cat") return ok(opts.units?.[args[2]] ?? "");
-        if (args[1] === "restart") return ok("");
+        if (args.includes("restart")) {
+          // A BLOCKING `systemctl restart` waits out TimeoutStopSec (minutes)
+          // and is killed by defaultExec's 15s budget → err.code=null → exit 1.
+          // Only the `--no-block` form returns promptly. (#117)
+          if (opts.restartBlocks && !args.includes("--no-block")) {
+            return { code: 1, stdout: "", stderr: "" };
+          }
+          return ok("");
+        }
       }
       throw new Error(`unhandled exec: ${cmd} ${args.join(" ")}`);
     },
@@ -148,8 +157,37 @@ describe("runRestartCommand", () => {
       lockPids: [null, 300],
     });
     expect(await runRestartCommand(CONFIG, f.deps)).toBe(0);
-    expect(f.calls).toContainEqual(["systemctl", "--user", "restart", "junco.service"]);
+    expect(f.calls).toContainEqual([
+      "systemctl",
+      "--user",
+      "--no-block",
+      "restart",
+      "junco.service",
+    ]);
     expect(f.prints.join("")).toContain("restarted: pid — → 300");
+  });
+
+  it("systemd restart is non-blocking → an async restart is not misreported as failed (#117)", async () => {
+    const f = makeFakes({
+      platform: "linux",
+      units: {
+        "junco.service": `ExecStart=/usr/bin/junco start --config ${CONFIG}`,
+      },
+      // Old holder lingers while it drains the in-flight ticket, then the new
+      // pid appears — i.e. the restart succeeds ASYNCHRONOUSLY.
+      lockPids: [100, 100, 400],
+      // A blocking `systemctl restart` would outlive the 15s exec budget → exit 1.
+      restartBlocks: true,
+    });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(0);
+    expect(f.calls).toContainEqual([
+      "systemctl",
+      "--user",
+      "--no-block",
+      "restart",
+      "junco.service",
+    ]);
+    expect(f.prints.join("")).toContain("restarted: pid 100 → 400");
   });
 });
 

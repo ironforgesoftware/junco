@@ -7,7 +7,15 @@
  */
 
 import { describe, it, expect, vi, type MockedFunction, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
@@ -385,6 +393,52 @@ describe("run(['service','--platform','launchd'])", () => {
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
     await run(["service", "--platform", "launchd", "--config", "/tmp/config.toml"], deps);
     expect(captured.join("")).toContain("<plist");
+  });
+});
+
+describe("run(['service']) — #118 stop-timeout sizing", () => {
+  it("sizes the stop-timeout to the largest QUEUED ticket timeout, not just the default", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-svc-"));
+    const inbox = join(dir, "inbox");
+    mkdirSync(inbox, { recursive: true });
+    // A ticket whose per-ticket override (180 min) far exceeds the 30-min default.
+    writeFileSync(join(inbox, "big.md"), "---\ntimeout_minutes: 180\n---\nbody\n");
+    const captured: string[] = [];
+    const cfg = {
+      vaultRoot: dir,
+      juncoSubdir: "",
+      defaultTimeoutMinutes: 30,
+    } as unknown as Config;
+    const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
+    try {
+      await run(["service", "--platform", "systemd", "--config", join(dir, "config.toml")], deps);
+      // 180-min ticket + 10-min drain margin = 190 min = 11400 s. The old
+      // default-only sizing (30+10 = 40 min → 2400 s) would SIGKILL it mid-drain.
+      expect(captured.join("")).toContain("TimeoutStopSec=11400");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the default when the queue holds nothing longer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-svc-"));
+    mkdirSync(join(dir, "inbox"), { recursive: true });
+    // A short ticket (10 min) must NOT shrink the window below the default.
+    writeFileSync(join(dir, "inbox", "small.md"), "---\ntimeout_minutes: 10\n---\nbody\n");
+    const captured: string[] = [];
+    const cfg = {
+      vaultRoot: dir,
+      juncoSubdir: "",
+      defaultTimeoutMinutes: 30,
+    } as unknown as Config;
+    const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
+    try {
+      await run(["service", "--platform", "systemd", "--config", join(dir, "config.toml")], deps);
+      // max(30, 10) + 10 = 40 min → 2400 s.
+      expect(captured.join("")).toContain("TimeoutStopSec=2400");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

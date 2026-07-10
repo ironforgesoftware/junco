@@ -19,13 +19,14 @@
 
 import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
-import { readFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, readdirSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./config.js";
+import { parseTicket } from "./ticket.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
 import { runOnce } from "./runOnce.js";
 import { makeGithubReporter } from "./githubReport.js";
@@ -73,6 +74,43 @@ export interface CliDeps {
   runRestartFn?: (configPath: string) => Promise<number>;
   /** Injected by tests: the dispatch core (default lazily used from externalDispatch.js). */
   dispatchIssueFn?: typeof import("./externalDispatch.js").dispatchIssue;
+  /** Largest ticket timeout (seconds) currently reachable in the queue, used to
+   *  size the `service` stop-timeout so a long ticket isn't SIGKILLed mid-drain
+   *  (#118). Default: a best-effort scan of inbox/ + processing/. */
+  maxQueuedTimeoutSecondsFn?: (cfg: Config) => number;
+}
+
+/**
+ * Largest per-ticket timeout (seconds) among tickets currently queued in
+ * inbox/ + processing/. Used to size the service stop-timeout to the maximum
+ * REACHABLE ticket timeout rather than just the default (#118): a per-ticket
+ * `timeout_minutes` override is uncapped, so sizing to `default+margin` alone
+ * would let the supervisor SIGKILL a longer-running ticket mid-drain. Returns
+ * 0 when the queue is empty/unreadable. Best-effort and defensive — a single
+ * bad ticket or a missing dir must never derail service rendering.
+ */
+function scanMaxQueuedTimeoutSeconds(cfg: Config): number {
+  const paths = queuePaths(cfg);
+  let max = 0;
+  for (const dir of [paths.inbox, paths.processing]) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue; // dir absent/unreadable — nothing to protect here
+    }
+    for (const name of entries) {
+      if (!name.endsWith(".md")) continue;
+      const p = join(dir, name);
+      try {
+        const t = parseTicket(p, readFileSync(p, "utf8"), cfg.defaultTimeoutMinutes);
+        if (t.timeoutSeconds > max) max = t.timeoutSeconds;
+      } catch {
+        continue; // unreadable/vanished ticket — skip, keep scanning
+      }
+    }
+  }
+  return max;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,14 +269,24 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // falling back to the binary field in package.json if unavailable.
     const cliEntry = resolve(process.argv[1] ?? "dist/cli.js");
 
-    // Best-effort config read: size the stop timeout to the ticket timeout
-    // (+10 min drain margin) and put launchd logs under the state dir. No
-    // config yet → renderService falls back to its own defaults.
+    // Best-effort config read: size the stop timeout to the MAXIMUM reachable
+    // ticket timeout (+10 min drain margin) and put launchd logs under the state
+    // dir. A per-ticket `timeout_minutes` override is uncapped, so sizing to the
+    // default alone would let the supervisor SIGKILL a longer ticket mid-drain
+    // (#118); we take the max of the default and the largest currently-queued
+    // ticket. (Tickets that arrive AFTER this render and exceed the sized window
+    // remain at risk — re-render the unit, or cap timeout_minutes at the source.)
+    // No config yet → renderService falls back to its own defaults.
+    const maxQueuedTimeoutSecondsFn = deps.maxQueuedTimeoutSecondsFn ?? scanMaxQueuedTimeoutSeconds;
     let stopTimeoutSeconds: number | undefined;
     let logDir: string | undefined;
     try {
       const cfg = loadConfigFn(configPath);
-      stopTimeoutSeconds = (cfg.defaultTimeoutMinutes + 10) * 60;
+      const timeoutSeconds = Math.max(
+        cfg.defaultTimeoutMinutes * 60,
+        maxQueuedTimeoutSecondsFn(cfg),
+      );
+      stopTimeoutSeconds = timeoutSeconds + 10 * 60;
       logDir = cfg.stateDir;
     } catch {
       /* fall back to renderer defaults */
