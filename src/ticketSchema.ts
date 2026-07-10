@@ -34,13 +34,15 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
     },
     base_branch: {
       type: "string",
+      pattern: "^[A-Za-z0-9._/-]+$",
       description:
-        "Base branch for the pull request. Defaults to the daemon's configured default_base_branch.",
+        "Base branch for the pull request. Defaults to the daemon's configured default_base_branch. Constrained to the git-ref charset so the value cannot smuggle a git option token.",
     },
     branch_name: {
       type: "string",
+      pattern: "^[A-Za-z0-9._/-]+$",
       description:
-        "Explicit name for the feature branch. Defaults to a generated slug from the ticket id.",
+        "Explicit name for the feature branch. Defaults to a generated slug from the ticket id. Constrained to the git-ref charset so the value cannot smuggle a git option token.",
     },
     pr_title: {
       type: "string",
@@ -125,6 +127,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
         },
         issue: {
           type: "integer",
+          minimum: 1,
           description:
             "Issue-scoped audit: the audit is steered to the code this issue implicates, and filed findings carry a Context reference to it. Set by `junco assess owner/repo#N`.",
         },
@@ -139,7 +142,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         "Presence of this mapping selects the analysis flavor: junco investigates the issue named here against the repository in `repo:` and parks a comment draft for review — it never posts without operator confirmation. Authored by `junco analyze`.",
       properties: {
-        issue: { type: "integer", description: "Issue number to investigate." },
+        issue: { type: "integer", minimum: 1, description: "Issue number to investigate." },
         title: { type: "string", description: "Issue title, for display/logging." },
       },
     },

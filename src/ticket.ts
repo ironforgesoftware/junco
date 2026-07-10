@@ -54,7 +54,9 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
   if (assessRaw !== null && typeof assessRaw === "object" && !Array.isArray(assessRaw)) {
     const a = assessRaw as Record<string, unknown>;
     assess = { autoPlan: a.auto_plan === true };
-    if (typeof a.issue === "number" && Number.isInteger(a.issue)) {
+    // Issue numbers are positive integers (parity with github.issue > 0); a
+    // #0/negative scope is malformed and simply drops the issue binding.
+    if (typeof a.issue === "number" && Number.isInteger(a.issue) && a.issue > 0) {
       assess.issue = a.issue;
       assess.issueTitle = String(a.issue_title ?? "");
     }
@@ -63,7 +65,9 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
   let analyze: Ticket["analyze"] = null;
   if (analyzeRaw !== null && typeof analyzeRaw === "object" && !Array.isArray(analyzeRaw)) {
     const a = analyzeRaw as Record<string, unknown>;
-    if (typeof a.issue === "number" && Number.isInteger(a.issue)) {
+    // Positive integer only (parity with github.issue > 0); a non-positive
+    // scope is malformed → the whole analyze mapping is rejected.
+    if (typeof a.issue === "number" && Number.isInteger(a.issue) && a.issue > 0) {
       analyze = { issue: a.issue, title: String(a.title ?? "") };
     }
   }

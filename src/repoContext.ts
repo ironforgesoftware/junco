@@ -40,6 +40,20 @@ export function deriveBranchName(taskId: string, prefix: string): string {
 }
 
 /**
+ * Guard a ticket-supplied git ref (branch_name / base_branch) before it flows
+ * verbatim into `git worktree add -b` / `branch -f` / `push` / `ls-remote`.
+ * Mirrors the option-injection rail push_remote enforces at repo.ts:311 — the
+ * first char may not be '-' (a leading '-' reads as a git option token), and
+ * the whole value is confined to the git-ref charset [A-Za-z0-9._/-] so it
+ * cannot smuggle whitespace or shell metacharacters. The JSON Schema `pattern`
+ * on both fields documents the charset for dispatchers; this is the runtime
+ * rail, because deriveRepoContext does not validate against the schema.
+ */
+export function isSafeGitRef(name: string): boolean {
+  return /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/.test(name);
+}
+
+/**
  * Port of worker.py `_as_str_list` (lines 349-356).
  * - string  → split on commas, trim, drop empties
  * - array   → map String() + trim, drop empties
@@ -86,12 +100,19 @@ export function deriveRepoContext(
 
   const repo = resolve(expandHome(String(rawRepo)));
 
+  // A ticket-supplied base_branch/branch_name is honored only when it passes the
+  // option-injection guard; a malformed value falls back to the safe default so
+  // an option token can never reach git (defense-in-depth for the dispatcher
+  // contract — the schema pattern is documentation, this is the enforced rail).
   const baseBranch =
-    typeof frontmatter.base_branch === "string" ? frontmatter.base_branch : opts.defaultBaseBranch;
+    typeof frontmatter.base_branch === "string" && isSafeGitRef(frontmatter.base_branch)
+      ? frontmatter.base_branch
+      : opts.defaultBaseBranch;
 
-  const branchName = frontmatter.branch_name
-    ? String(frontmatter.branch_name)
-    : deriveBranchName(taskId, opts.branchPrefix);
+  const branchName =
+    typeof frontmatter.branch_name === "string" && isSafeGitRef(frontmatter.branch_name)
+      ? frontmatter.branch_name
+      : deriveBranchName(taskId, opts.branchPrefix);
 
   const draftRaw = frontmatter.draft;
   const draft = typeof draftRaw === "boolean" ? draftRaw : opts.draftByDefault;

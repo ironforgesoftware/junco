@@ -137,6 +137,20 @@ describe("describeTicketSchema()", () => {
     expect(assessProps.issue_title.type).toBe("string");
   });
 
+  it("bounds assess.issue and analyze.issue to positive integers (#114, mirrors github.issue)", () => {
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<string, any>;
+    expect(props.assess.properties.issue.minimum).toBe(1);
+    expect(props.analyze.properties.issue.minimum).toBe(1);
+    // github.issue set the precedent this now mirrors.
+    expect(props.github.properties.issue.minimum).toBe(1);
+  });
+
+  it("patterns branch_name and base_branch against option injection (#124, mirrors push_remote)", () => {
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<string, any>;
+    expect(props.branch_name.pattern).toBe("^[A-Za-z0-9._/-]+$");
+    expect(props.base_branch.pattern).toBe("^[A-Za-z0-9._/-]+$");
+  });
+
   it("documents analyze with the right shape (object with issue integer, title string)", () => {
     const s = JSON.parse(describeTicketSchema()) as {
       properties: Record<string, Record<string, unknown>>;
