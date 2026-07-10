@@ -451,6 +451,53 @@ async function fetchParent(
   }
 }
 
+/** The issue body's last-edit time (GraphQL `lastEditedAt`), in epoch ms, or
+ * null when the body was never edited. `verified: false` on any lookup failure
+ * OR an unparseable timestamp, so the body-vouching gate can fail closed — a
+ * body we cannot vet is never dispatched. lastEditedAt (a true body-edit
+ * timestamp, unlike the coarse `updatedAt`, which also bumps on comments, label
+ * changes, and the documented re-dispatch gesture) is the precise signal and is
+ * GraphQL-only — `gh issue list --json` does not expose it. */
+async function fetchIssueLastEdited(
+  cfg: Config,
+  nwo: string,
+  issueNumber: number,
+  ghFn: typeof gh,
+): Promise<{ verified: true; lastEditedMs: number | null } | { verified: false }> {
+  const [owner, name] = nwo.split("/");
+  try {
+    const r = await ghFn(
+      cfg,
+      [
+        "api",
+        "graphql",
+        "-f",
+        "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){lastEditedAt}}}",
+        "-f",
+        `owner=${owner}`,
+        "-f",
+        `name=${name}`,
+        "-F",
+        `number=${issueNumber}`,
+        "--jq",
+        ".data.repository.issue.lastEditedAt",
+      ],
+      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+    );
+    const out = r.stdout.trim();
+    if (!out || out === "null") return { verified: true, lastEditedMs: null };
+    const ms = Date.parse(out);
+    return Number.isFinite(ms) ? { verified: true, lastEditedMs: ms } : { verified: false };
+  } catch (e) {
+    log.warn("github bridge: issue lastEditedAt lookup failed; skipping this sweep", {
+      nwo,
+      issue: issueNumber,
+      error: errMsg(e),
+    });
+    return { verified: false };
+  }
+}
+
 async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Promise<string> {
   if (state.login === null) {
     const r = await ghFn(cfg, ["api", "user", "--jq", ".login"], {
@@ -758,6 +805,26 @@ export async function pollGithubInbox(
               nwo: repo.nwo,
               issue: issue.number,
             });
+            continue;
+          }
+          // The trigger label vouches the issue body AS IT WAS WHEN LABELED. A
+          // zero-permission author can edit the body between labeling and this
+          // sweep; the ask/plan dispatch below reads the CURRENT body, so an
+          // edit after the vouching label would auto-run (ask) or auto-post a
+          // plan (plan path) an un-approved instruction. Refuse if the body was
+          // edited after the label event — re-apply the trigger to re-vouch.
+          // Fail closed if we can't establish either timestamp. Mirrors the
+          // plan-comment postdate defense on the approval path above (#130).
+          const edited = await fetchIssueLastEdited(cfg, repo.nwo, issue.number, ghFn);
+          if (
+            !edited.verified ||
+            verdict.atMs === null ||
+            (edited.lastEditedMs !== null && edited.lastEditedMs > verdict.atMs)
+          ) {
+            log.warn(
+              "github bridge: issue body edited after the trigger label (or unverifiable); re-apply the label to re-vouch",
+              { nwo: repo.nwo, issue: issue.number },
+            );
             continue;
           }
           const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);

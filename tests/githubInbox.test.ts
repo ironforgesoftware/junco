@@ -186,6 +186,7 @@ describe("pollGithubInbox", () => {
     events?: string; // NDJSON lines from the --jq filter
     permission?: string;
     parent?: string; // "" | "null" | JSON
+    lastEditedAt?: string; // issue body last-edit time (GraphQL); "null" = never edited
     origin?: string;
     failList?: boolean;
     comments?: unknown[];
@@ -202,7 +203,13 @@ describe("pollGithubInbox", () => {
       if (args[0] === "label") return ok("");
       if (args[0] === "issue" && args[1] === "edit") return ok("");
       if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
-      if (args[0] === "api" && args[1] === "graphql") return ok(opts.parent ?? "null");
+      if (args[0] === "api" && args[1] === "graphql") {
+        // Two GraphQL queries share this argv shape — route by field: the
+        // body-vouching lookup (#130) vs. the sub-issue parent lookup.
+        const q = args.find((a) => a.startsWith("query=")) ?? "";
+        if (q.includes("lastEditedAt")) return ok(opts.lastEditedAt ?? "null");
+        return ok(opts.parent ?? "null");
+      }
       if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
         return ok((opts.comments ?? []).map((c) => JSON.stringify(c)).join("\n"));
       if (args[0] === "api" && String(args[2] ?? "").includes("/events"))
@@ -277,6 +284,73 @@ describe("pollGithubInbox", () => {
     expect(f.submitted).toHaveLength(0);
     const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
     expect(edit).toContain("junco:denied");
+  });
+
+  describe("issue-body vouching (#130)", () => {
+    // labeledEvent vouches the body at 2026-07-06T00:00:00Z.
+    it("refuses to dispatch when the body was edited AFTER the vouching label", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const f = makeFakes({
+          issues: [rawIssue],
+          events: labeledEvent,
+          permission: "write",
+          lastEditedAt: "2026-07-06T01:00:00Z", // edited an hour AFTER labeling
+        });
+        const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+        expect(n).toBe(0);
+        expect(f.submitted).toHaveLength(0);
+        expect(f.calls.find((c) => c[0] === "issue" && c[1] === "edit")).toBeUndefined();
+        expect(warnSpy.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/edited after/);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("dispatches when the body was last edited BEFORE the vouching label", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "2026-07-05T00:00:00Z", // edited BEFORE labeling → still vouched
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+    });
+
+    it("dispatches a never-edited body (lastEditedAt null)", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+    });
+
+    it("fails closed when lastEditedAt is unparseable (no submit)", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "not-a-real-date",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+    });
+
+    it("guards the ask path too: an edited ask-issue body does not auto-run", async () => {
+      const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
+      const f = makeFakes({
+        issues: [askIssue],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "2026-07-06T01:00:00Z",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+    });
   });
 
   it("fail-closed: no labeled event found → no submit, no label", async () => {
