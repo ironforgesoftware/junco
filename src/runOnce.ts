@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type { Config, RunResult, Ticket } from "./types.js";
 import { PRIORITY_RANK } from "./types.js";
@@ -36,6 +36,25 @@ import { metrics } from "./metrics.js";
 // claimed ticket sitting in processing/ (PR-flow tickets in a worktree get the
 // full set in a later milestone).
 export const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+
+/**
+ * Canonicalize a lexically-resolved repo path into a stable per-repo
+ * serialization key (issue #113). `resolve()` alone is lexical: a symlink alias
+ * or a case-variant spelling on a case-insensitive filesystem (APFS) yields a
+ * DIFFERENT string, so two tickets targeting one repo would hash to two busy
+ * keys and run concurrent worktrees — defeating the same-repo serialization
+ * invariant. `realpathSync.native` resolves symlinks and normalizes the on-disk
+ * case so aliased spellings collapse to one key. Falls back to the lexical path
+ * when the repo doesn't exist on disk yet (realpath throws ENOENT) — a
+ * not-yet-cloned repo still serializes against itself by its lexical spelling.
+ */
+function canonicalizeRepoKey(resolved: string): string {
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
 
 export interface RunDeps {
   // Injection seam: returns a session factory for (cfg, cwd). Defaults to the real Pi SDK.
@@ -126,7 +145,7 @@ export async function claimNextTask(
   for (const t of eligible) {
     const repoKey =
       t.hasRepo && typeof t.frontmatter.repo === "string"
-        ? resolve(expandHome(t.frontmatter.repo))
+        ? canonicalizeRepoKey(resolve(expandHome(t.frontmatter.repo)))
         : null;
     if (repoKey && opts.skipRepoKeys?.has(repoKey)) continue; // repo busy — leave queued
     const claimed = claim(t.path, paths.processing);
