@@ -121,6 +121,7 @@ export function HelpModal({
           ["a", "approve the posted plan"],
           ["R", "re-plan / re-cycle (by state)"],
           ["c", "draft an analysis comment (review with v)"],
+          ["s", "assess scoped to this issue (findings reference it)"],
           ["o", "open in browser (repo from pane 1, PR from PR views)"],
         ]}
       />

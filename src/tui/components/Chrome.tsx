@@ -317,6 +317,7 @@ export function hintsFor(
     ["/", "filter"],
     ["t", "queue"],
     ["p", "PRs"],
+    ["s", "assess issue"],
     ["m", "local"],
     ["?", "help"],
     ["q", "quit"],
