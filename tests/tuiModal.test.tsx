@@ -37,4 +37,29 @@ describe("HelpModal", () => {
     expect(f).toContain("unpushed"); // outbox chip documented in the system section
     expect(f).toContain("PR tracking"); // p key documented in panes & views
   });
+
+  it("local-mode help lists the mode swap, section keys, and the action/safety table", () => {
+    const f = render(
+      <HelpModal
+        view="main"
+        pane={2}
+        mode="wide"
+        trigger="junco"
+        uiMode="local"
+        localSection="worktrees"
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("local mode");
+    expect(f).toContain("m"); // mode swap
+    expect(f).toContain("Shift+Tab");
+    expect(f).toContain("prune"); // worktrees action
+    expect(f).toContain("restart"); // daemon action
+    expect(f).toContain("[ / ]"); // daemon panel scroll
+  });
+
+  it("github help is unchanged when uiMode is absent", () => {
+    const f = render(<HelpModal view="main" pane={2} mode="wide" trigger="junco" />).lastFrame()!;
+    expect(f).toContain("act on issue");
+    expect(f).not.toContain("local mode");
+  });
 });

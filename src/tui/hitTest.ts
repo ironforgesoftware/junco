@@ -8,7 +8,14 @@
  */
 
 import type { Layout } from "./layout.js";
-import { LINK_LINE_ROW, PANE_CONTENT_ROW, listRowsHeight, railListHeight } from "./geometry.js";
+import {
+  LINK_LINE_ROW,
+  PANE_CONTENT_ROW,
+  listRowsHeight,
+  railListHeight,
+  headerTabBands,
+} from "./geometry.js";
+import type { UiMode } from "./geometry.js";
 
 export type HitTarget =
   | { type: "pane"; pane: 1 | 2 | 3 }
@@ -17,11 +24,15 @@ export type HitTarget =
   | { type: "prRow"; index: number }
   | { type: "pane3Row"; index: number }
   | { type: "linkLine" }
+  | { type: "modeTab"; mode: UiMode }
   | { type: "none" };
 
 export interface HitContext {
   layout: Layout;
   columns: number;
+  /** Two-mode App only: enables header-band resolution at y===0. Absent ⇒
+   * legacy single-surface, header row is dead. */
+  uiMode?: UiMode;
   /** The row-bearing views resolve rows; the two detail views resolve only
    * their ↗ metadata line. Other views never call this. */
   view: "main" | "prs" | "detail" | "prDetail";
@@ -43,6 +54,11 @@ export interface HitContext {
 export function hitTest(ctx: HitContext, x: number, y: number): HitTarget {
   const { layout, columns, view } = ctx;
   if (layout.mode === "tooSmall") return { type: "none" };
+  if (y === 0) {
+    if (ctx.uiMode === undefined) return { type: "none" };
+    const m = headerTabBands(columns).hit(x);
+    return m ? { type: "modeTab", mode: m } : { type: "none" };
+  }
   const r = y - 1; // pane-relative row: every pane spans the full body height
   if (r < 0 || r >= layout.bodyRows) return { type: "none" };
 

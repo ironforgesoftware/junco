@@ -7,6 +7,11 @@ import type { Config, Paths } from "./types.js";
 
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
+/** AbortController timeout (ms) for a single GET to the daemon's `/health`
+ * endpoint — shared by the dashboard snapshots (queueSnapshot + localSnapshot)
+ * and `junco worktree prune`'s currentTickets probe so the three agree. */
+export const HEALTH_TIMEOUT_MS = 1500;
+
 export function expandHome(p: string): string {
   if (p === "~" || p.startsWith("~/")) return join(homedir(), p.slice(1));
   return p;
