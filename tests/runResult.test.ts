@@ -93,6 +93,31 @@ describe("RunAccumulator", () => {
   });
 });
 
+describe("auto_retry_end — retry exhaustion surfaces into errorMessage (#129)", () => {
+  it("maps auto_retry_end.finalError onto errorMessage", () => {
+    const acc = new RunAccumulator();
+    acc.observe({
+      type: "auto_retry_end",
+      finalError: "model call failed after 5 retries: 503 Service Unavailable",
+    } as any);
+    expect(acc.result(0).errorMessage).toBe(
+      "model call failed after 5 retries: 503 Service Unavailable",
+    );
+  });
+
+  it("stringifies a non-string finalError", () => {
+    const acc = new RunAccumulator();
+    acc.observe({ type: "auto_retry_end", finalError: new Error("boom") } as any);
+    expect(acc.result(0).errorMessage).toBe("Error: boom");
+  });
+
+  it("leaves errorMessage null when auto_retry_end has no finalError", () => {
+    const acc = new RunAccumulator();
+    acc.observe({ type: "auto_retry_end", willRetry: true } as any);
+    expect(acc.result(0).errorMessage).toBeNull();
+  });
+});
+
 describe("finalText — last assistant message (#36)", () => {
   const msgStart = (role: string) => ({ type: "message_start", message: { role } }) as any;
   const delta = (t: string) =>

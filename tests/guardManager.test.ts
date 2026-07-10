@@ -97,6 +97,18 @@ describe("GuardManager — output_budget", () => {
     if (d!.action === "kill") expect(d!.reason).toContain("output_budget");
   });
 
+  it("does not record a phantom nudge on the always-kill path (#126)", () => {
+    // The output_budget path always escalates to kill; it must NOT leave nudge
+    // bookkeeping behind. Otherwise the failure summary reads
+    // "nudges: output_budget=1" while metrics count a kill — the two
+    // observability surfaces disagree about whether a nudge ever happened.
+    const gm = new GuardManager({ outputBudgetPerTurn: 12000 });
+    const d = gm.observe(turnEnd(12001));
+    expect(d!.action).toBe("kill");
+    expect(d!.kind).toBe("output_budget");
+    expect(gm.supervisorSummary).toBe("no nudges issued");
+  });
+
   it("resets the per-turn counter on each turn boundary", () => {
     const gm = new GuardManager({ outputBudgetPerTurn: 12000 });
     // Two turns of 8000 each must NOT trip (each turn resets).
@@ -193,6 +205,52 @@ describe("GuardManager — text repetition", () => {
     expect(second).not.toBeNull();
     expect(second!.action).toBe("kill");
     expect(second!.kind).toBe("text_rep");
+  });
+
+  it("kills a same-turn re-trip as runaway output, not 'nudge ignored' (#127)", () => {
+    // A steer nudge is delivered only AFTER the current turn's tool calls, so a
+    // hard single-message loop that re-trips ≥ minChars later at the SAME
+    // turnIndex was killed before the nudge was ever deliverable — the model
+    // never saw it. The kill is defensible, but must not claim the nudge was
+    // ignored (its turnIndex proves the nudge was not yet delivered).
+    const gm = new GuardManager();
+    let first = null as ReturnType<GuardManager["observe"]>;
+    for (let i = 0; i < 8 && first === null; i++) first = gm.observe(textDelta(REP_BLOCK));
+    expect(first!.action).toBe("nudge");
+    expect(first!.turnIndex).toBe(0);
+    // Re-trip within the SAME turn (no turn_end between).
+    let second = null as ReturnType<GuardManager["observe"]>;
+    for (let i = 0; i < 12 && second === null; i++) second = gm.observe(textDelta(REP_BLOCK));
+    expect(second).not.toBeNull();
+    expect(second!.action).toBe("kill");
+    expect(second!.kind).toBe("text_rep");
+    if (second!.action === "kill") {
+      expect(second!.turnIndex).toBe(0);
+      expect(second!.reason).not.toContain("nudge ignored");
+      expect(second!.reason).toContain("same turn");
+    }
+  });
+
+  it("escalates a LATER-turn re-trip to a genuine 'nudge ignored' kill (#127)", () => {
+    // Once a turn boundary has passed, the nudge issued at turn 0 was actually
+    // deliverable, so a fresh re-trip at turn 1 IS the model ignoring it — the
+    // supervisor's "nudge ignored" escalation is accurate here.
+    const gm = new GuardManager();
+    let first = null as ReturnType<GuardManager["observe"]>;
+    for (let i = 0; i < 8 && first === null; i++) first = gm.observe(textDelta(REP_BLOCK));
+    expect(first!.action).toBe("nudge");
+    expect(first!.turnIndex).toBe(0);
+    // Advance one turn (small output — does not trip the budget guard).
+    expect(gm.observe(turnEnd(10))).toBeNull();
+    let second = null as ReturnType<GuardManager["observe"]>;
+    for (let i = 0; i < 12 && second === null; i++) second = gm.observe(textDelta(REP_BLOCK));
+    expect(second).not.toBeNull();
+    expect(second!.action).toBe("kill");
+    expect(second!.kind).toBe("text_rep");
+    if (second!.action === "kill") {
+      expect(second!.turnIndex).toBe(1);
+      expect(second!.reason).toContain("nudge ignored");
+    }
   });
 
   it("clears the thinking buffer too when a thinking_rep nudge is issued", () => {
