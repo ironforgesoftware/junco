@@ -7,7 +7,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { gh, git, GitOpError } from "./git.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { log } from "./logging.js";
@@ -23,9 +23,33 @@ export interface ExternalRepoDeps {
   mkdirFn?: (d: string) => void;
 }
 
+/** Assert `p` resolves to a location strictly inside `resolve(root)`, returning
+ * the resolved path. The nwo regexes admit `..` and every reachable caller hits
+ * a `gh` gate first, but correctness must not rest on an external tool's input
+ * validation: a `..`-bearing nwo that slipped the gate could point a managed
+ * clone — or a destructive `syncExternalClone` reset — outside the operator's
+ * external_repos_root. `relative` (not a `startsWith` prefix) so `/ext-evil`
+ * cannot masquerade as being under `/ext`. */
+function assertContained(root: string, p: string, what: string): string {
+  const resolvedRoot = resolve(root);
+  const resolvedPath = resolve(p);
+  const rel = relative(resolvedRoot, resolvedPath);
+  // rel === ""  → equals the root (not strictly inside);
+  // rel === ".." / startsWith "../" → escapes upward;
+  // isAbsolute(rel) → a different filesystem root entirely.
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new GitOpError(
+      `${what} ${resolvedPath} is not contained within external_repos_root ${resolvedRoot}`,
+    );
+  }
+  return resolvedPath;
+}
+
 export function externalClonePath(cfg: Config, nwo: string): string {
   const [owner, name] = nwo.split("/");
-  return join(cfg.github.externalReposRoot, owner, name);
+  const path = join(cfg.github.externalReposRoot, owner, name);
+  assertContained(cfg.github.externalReposRoot, path, "clone path");
+  return path;
 }
 
 /** Ensure the operator has a fork of `nwo`; return the fork's nwo.

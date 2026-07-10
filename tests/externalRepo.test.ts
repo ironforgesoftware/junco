@@ -38,6 +38,16 @@ describe("externalClonePath", () => {
   it("nests owner/repo under the configured root", () => {
     expect(externalClonePath(cfg, "up/stream")).toBe(join("/ext", "up", "stream"));
   });
+
+  it("throws when a `..`-bearing nwo would escape external_repos_root", () => {
+    // The nwo regexes admit `..` and every reachable caller gates on `gh`
+    // today, but containment must not rest on an external tool's validation.
+    expect(() => externalClonePath(cfg, "../evil")).toThrow(/external_repos_root/);
+  });
+
+  it("throws when the nwo collapses back onto the root itself", () => {
+    expect(() => externalClonePath(cfg, "up/..")).toThrow(/external_repos_root/);
+  });
 });
 
 describe("ensureFork", () => {
