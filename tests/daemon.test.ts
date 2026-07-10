@@ -292,6 +292,32 @@ describe("installSignalHandlers", () => {
     }
   });
 
+  it("a third signal triggers the hard-exit (130) path via the injected exit seam", () => {
+    // Belt-and-suspenders: never let a real process.exit tear down the runner,
+    // even if the seam were unwired.
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation(((_code?: number) => undefined) as never);
+    const exit = vi.fn();
+    const stop = new StopFlag();
+    const uninstall = installSignalHandlers(stop, { exit });
+    try {
+      process.emit("SIGTERM"); // 1st → graceful stop
+      expect(stop.requested).toBe(true);
+      process.emit("SIGTERM"); // 2nd → force stop
+      expect(stop.forceSignal.aborted).toBe(true);
+      expect(exit).not.toHaveBeenCalled();
+      process.emit("SIGTERM"); // 3rd → hard exit
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(130);
+      // With the seam injected, the real process.exit is never touched.
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("uninstall removes both SIGINT and SIGTERM listeners back to baseline", () => {
     const beforeInt = process.listenerCount("SIGINT");
     const beforeTerm = process.listenerCount("SIGTERM");

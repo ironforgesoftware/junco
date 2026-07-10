@@ -115,6 +115,13 @@ export async function sleepInterruptible(
 // installSignalHandlers
 // ---------------------------------------------------------------------------
 
+export interface SignalHandlerDeps {
+  /** Process-exit seam for the third-signal hard-exit (130) path. Injectable
+   * so the escalation can be asserted without a test really tearing down the
+   * runner; defaults to a real process.exit. */
+  exit?: (code: number) => void;
+}
+
 /**
  * Register SIGTERM/SIGINT handlers with stop escalation: the first signal
  * requests a graceful stop (drain the in-flight task), the second force-stops
@@ -123,13 +130,17 @@ export async function sleepInterruptible(
  * references so removeListener matches), letting tests — and a clean
  * shutdown — detach them.
  */
-export function installSignalHandlers(stopFlag: StopFlag): () => void {
+export function installSignalHandlers(
+  stopFlag: StopFlag,
+  deps: SignalHandlerDeps = {},
+): () => void {
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
   let count = 0;
   const handler = (): void => {
     count++;
     if (count === 1) stopFlag.requestStop();
     else if (count === 2) stopFlag.requestForceStop();
-    else process.exit(130); // third signal: the operator really means it
+    else exit(130); // third signal: the operator really means it
   };
   process.on("SIGTERM", handler);
   process.on("SIGINT", handler);
