@@ -16,6 +16,8 @@ import type { DashPr } from "./prState.js";
 import { fetchJuncoPrs } from "../githubPrs.js";
 import { ensureExternalClone } from "../externalRepo.js";
 import { dispatchIssue } from "../externalDispatch.js";
+import { listPending, readPending, type PendingAssess } from "../assessReview.js";
+import { fileFindings, type FileResult } from "../assessFiling.js";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -139,6 +141,11 @@ export interface DashboardClient {
   prepareExternalRepo(nwo: string): Promise<Result<{ path: string; forkNwo: string }>>;
   /** Build + submit a ticket for `nwo#num` via the shared dispatch core. */
   dispatchTicket(nwo: string, num: number): Promise<Result<{ id: string; destPath: string }>>;
+  /** Parked `junco assess` batches awaiting human confirmation. */
+  listReview(): Promise<Result<PendingAssess[]>>;
+  /** File the selected findings (by fingerprint) from a parked batch; throws
+   * (surfacing as an error `Result`) if the batch is missing or corrupt. */
+  fileReview(id: string, fingerprints: string[]): Promise<Result<FileResult>>;
   health(): Promise<HealthInfo>;
 }
 
@@ -152,6 +159,9 @@ export interface GhClientDeps {
   mkdirFn?: (d: string) => void;
   ensureCloneFn?: typeof ensureExternalClone;
   dispatchIssueFn?: typeof dispatchIssue;
+  listPendingFn?: typeof listPending;
+  readPendingFn?: typeof readPending;
+  fileFindingsFn?: typeof fileFindings;
 }
 
 const GH_TIMEOUT = 30_000;
@@ -464,6 +474,19 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
           gitFn,
         });
         return { id: r.id, destPath: r.destPath };
+      });
+    },
+
+    listReview() {
+      return attempt(async () => (deps.listPendingFn ?? listPending)(cfg));
+    },
+
+    fileReview(id, fingerprints) {
+      return attempt(async () => {
+        const { batch, error } = (deps.readPendingFn ?? readPending)(cfg, id);
+        if (error) throw new Error(error);
+        if (!batch) throw new Error(`no pending review '${id}'`);
+        return (deps.fileFindingsFn ?? fileFindings)(cfg, batch, new Set(fingerprints), { ghFn });
       });
     },
 

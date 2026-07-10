@@ -30,6 +30,11 @@ draft PR against upstream. Support iterating on that PR after maintainer feedbac
 writes are the fork itself, pushes to that fork, and the PR. No lifecycle labels, no comments
 on the upstream issue tracker. All orchestration state stays local.
 
+> **Superseded (2026-07-09):** the "no comments/issues on the upstream tracker" clause is
+> lifted for `junco assess` under a human-confirmed review gate — see
+> `2026-07-09-assess-any-repo-review-queue-design.md`. Dispatch's fork/push/PR clauses still
+> stand.
+
 ## Decisions (made during brainstorming)
 
 | Decision         | Choice                                                                            |

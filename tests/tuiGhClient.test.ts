@@ -7,6 +7,8 @@ import { listOps } from "../src/githubOutbox.js";
 import type { Config } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
 import { GitOpError } from "../src/git.js";
+import type { PendingAssess } from "../src/assessReview.js";
+import type { FileResult } from "../src/assessFiling.js";
 
 const cfg = {
   ghBin: "gh",
@@ -635,5 +637,99 @@ describe("dispatchTicket", () => {
       dispatchIssueFn: dispatchSpy,
     }).dispatchTicket("up/stream", 7);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("listReview", () => {
+  it("returns the pending batches", async () => {
+    const batches: PendingAssess[] = [
+      {
+        id: "assess-x-1",
+        nwo: "o/r",
+        external: true,
+        autoPlan: false,
+        repoPath: "/x",
+        createdAt: "2026-07-09T00:00:00.000Z",
+        findings: [],
+      },
+    ];
+    const listPendingFn = vi.fn((_c: Config) => batches);
+    const client = makeGhDashboardClient(cfg, { ...fakes(), listPendingFn });
+    const r = await client.listReview();
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((b) => b.id)).toEqual(["assess-x-1"]);
+    expect(listPendingFn).toHaveBeenCalledWith(cfg);
+  });
+
+  it("gh-side failure surfaces as ok:false", async () => {
+    const listPendingFn = vi.fn((_c: Config) => {
+      throw new Error("readdir boom");
+    });
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), listPendingFn }).listReview();
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("fileReview", () => {
+  const batch: PendingAssess = {
+    id: "assess-x-1",
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    findings: [
+      {
+        fingerprint: "f1",
+        kind: "code",
+        severity: "high",
+        ruleId: "R",
+        title: "T",
+        description: "",
+        references: [],
+      },
+    ],
+  };
+
+  it("reads the batch and files the selected fingerprints", async () => {
+    let gotSelected: Set<string> | null = null;
+    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
+    const fileFindingsFn = vi.fn(
+      (_c: Config, _b: PendingAssess, selected: Set<string>): Promise<FileResult> => {
+        gotSelected = selected;
+        return Promise.resolve({
+          created: 1,
+          queuedOffline: 0,
+          deduped: 0,
+          failed: 0,
+          urls: [],
+          warnings: [],
+        });
+      },
+    );
+    const client = makeGhDashboardClient(cfg, { ...fakes(), readPendingFn, fileFindingsFn });
+    const r = await client.fileReview("assess-x-1", ["f1"]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.created).toBe(1);
+    expect([...(gotSelected ?? new Set())]).toEqual(["f1"]);
+    expect(readPendingFn).toHaveBeenCalledWith(cfg, "assess-x-1");
+  });
+
+  it("surfaces a missing batch (ENOENT) as an error Result", async () => {
+    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch: null, error: null }));
+    const client = makeGhDashboardClient(cfg, { ...fakes(), readPendingFn });
+    const r = await client.fileReview("nope", ["f1"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("surfaces a corrupt batch (readPending error) as an error Result", async () => {
+    const readPendingFn = vi.fn((_c: Config, _id: string) => ({
+      batch: null,
+      error: "pending batch is not valid JSON",
+    }));
+    const client = makeGhDashboardClient(cfg, { ...fakes(), readPendingFn });
+    const r = await client.fileReview("assess-x-1", ["f1"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("not valid JSON");
   });
 });

@@ -132,6 +132,7 @@ export function HelpModal({
           ["r", "refresh now"],
           ["s", "assess the selected repo (audit for vulnerabilities, file issues)"],
           ["S", "assess with --auto-plan (findings carry the trigger label)"],
+          ["v", "assess review queue"],
           ["t", "queue view"],
           ["p", "PR tracking — junco-authored PRs across watched repos"],
           [":", "command palette"],

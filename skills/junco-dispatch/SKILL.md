@@ -1,6 +1,6 @@
 ---
 name: junco-dispatch
-description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses).'
+description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode).'
 ---
 
 # Junco dispatch
@@ -9,6 +9,8 @@ Package a unit of work into a plan-shaped markdown file with junco frontmatter a
 
 **Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
+**Two families of work.** Most of this skill is about _authoring_ a plan-shaped ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR. One mode is different: _assess_ authors nothing. It triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below.
+
 ## When to trigger
 
 Fire this skill when the user explicitly asks to dispatch work:
@@ -16,10 +18,11 @@ Fire this skill when the user explicitly asks to dispatch work:
 - **Fresh tickets:** "dispatch this to junco", "send to junco", "junco this", "/junco", "junco: <brief>", "queue this for junco"
 - **Batch tickets (no preview, headless mode):** "junco-batch: <brief>" — used for automated load tests; skips the preview gate (see "Batch mode" under Dispatch procedure)
 - **Amend tickets (follow-ups on existing PRs):** "amend junco PR #N: <what to fix>", "junco: fix PR #N by ...", "follow up on PR #N via junco", "dispatch an amendment to #N"
+- **Assess (audit a repo, park findings for review):** "assess this repo", "have junco audit this repo", "junco assess <repo>", "scan this repo and file issues", "junco: assess <repo>" — this runs `junco assess`, not a plan dispatch (see "Assess mode")
 
 **Do NOT fire** when the user is:
 
-- debugging or configuring junco itself (e.g. "why did junco fail?", "fix the junco worker")
+- debugging or configuring junco itself (e.g. "why did junco fail?", "why did the assess run fail?", "fix the junco worker")
 - asking what junco is or how it works
 - discussing the `junco` skill in the abstract
 
@@ -105,7 +108,7 @@ The junco worker runs a deterministic linter on every ticket before claiming it.
 - The strict "Notes for the agent" block is present at the end
 - No forbidden phrases (`TBD`, `Similar to Step N`, `think carefully`, `consider all cases`)
 
-If you generate a ticket and lint rejects it, fix the specific rule cited and re-dispatch. The linter exists to catch known foot-guns *before* spawning a 5-minute agent run.
+If you generate a ticket and lint rejects it, fix the specific rule cited and re-dispatch. The linter exists to catch known foot-guns _before_ spawning a 5-minute agent run.
 
 ## Things to NEVER put in a plan
 
@@ -202,6 +205,57 @@ Use this when the user wants to fix / extend an open PR that junco originally op
 - PR is merged / closed — suggest a fresh ticket instead
 - Changes require rewriting history (squash/rebase) — tell the user the worker won't force-push; offer to do it manually or start fresh
 - The requested change is fundamentally different direction — recommend closing the PR and dispatching a fresh ticket
+
+## Assess mode (audit a repo → review → file)
+
+Triggered by "assess this repo", "have junco audit this repo", "junco assess <repo>", and similar. This mode is **not** plan authoring — do not draft a ticket. `junco assess` composes its own machine-owned ticket; the daemon then runs a read-only audit (a dependency scan plus a read-only agent audit) and **parks** the findings in a durable review queue — nothing is filed yet. A separate, human-confirmed step (`junco assess review` / `junco assess file`) files the findings you select as GitHub issues. An assess run **never opens a pull request**.
+
+**Works on any watched repo, owned or not.** On a repo you own, filed issues get `junco:finding` + `severity/<level>` labels (best-effort). On a repo you don't own, filed issues are label-free — junco never assumes triage rights it doesn't have on someone else's tracker; the severity and fingerprint still live in the issue title and a body marker.
+
+Your job here is only: resolve the target, decide whether to pass `--auto-plan`, confirm, run the CLI, and set expectations — including that a review step still stands between the audit and anything landing on GitHub. Do NOT use `TEMPLATE.md`, plan-lint, or any of the authoring discipline above — none of it applies to assess (`junco assess` owns the ticket shape, not you).
+
+### Inputs to gather
+
+1. **Target** — one of:
+   - an absolute (or `~`-relative) path to a local git checkout — default to the current working directory if it's a git repo, and confirm; or
+   - an `owner/repo` that junco already watches — a `[[github.repos]]` entry, one added from the dashboard, or an external (unowned) watchlist entry. An unwatched `owner/repo` is rejected by the CLI — surface that and offer a local path instead.
+2. **`--auto-plan`?** — off by default. It applies the GitHub trigger label to every issue filed from this batch so the bridge can plan them, but only takes effect on a repo you own — an unowned batch always forces it off, since junco doesn't queue plan/PR work against a repo it doesn't own. Only worth setting when the target repo is bridge-watched _and_ GitHub integration is enabled; otherwise the label just sits inert (see caveat). Ask if unsure; when in doubt, leave it off.
+
+### Preconditions (check before running; fail fast with a useful message)
+
+- **The daemon must be running.** `junco assess` only _queues_ a ticket — nothing is audited and nothing is parked for review until the daemon claims it on its next poll (~15 s). Unlike a dispatch there is no PR to watch; the payoff is a reviewable batch of findings appearing a little later. If the user isn't running the daemon, say so up front.
+- **The repo needs a GitHub `origin` remote.** The daemon resolves the destination repo from `origin`; a repo with no GitHub `origin` fails the run (any filed issues need a home). Pre-check with `git -C <path> remote -v` (or `gh repo view <path>`) before queuing.
+
+### Interactive procedure (default)
+
+1. **Confirm.** Use `AskUserQuestion`: "Run `junco assess <target> [--auto-plan]`? This queues a read-only audit; findings are parked for your review, not filed automatically." with options `Yes, run` / `Edit first` / `Cancel`.
+2. **Run.** `junco assess <target> [--auto-plan]` (or `npx junco assess <target> [--auto-plan]` if `junco` isn't on PATH).
+3. **Report** the `queued: <ticket-path>` line the command prints, plus:
+   - the daemon must be running for the audit to happen;
+   - once it's done, findings sit in a review queue — nothing is filed yet;
+   - to see what's pending: `junco assess review` (list) or `junco assess review <id>` (one batch's findings with fingerprints);
+   - to file the ones worth keeping: `junco assess file <id> --all` or `junco assess file <id> --only <fingerprint,…>`;
+   - on a repo the user owns, filed issues carry `junco:finding` + `severity/<level>` labels; on a repo they don't own, issues file label-free;
+   - with `--auto-plan` on an owned, bridge-watched repo, filed issues also carry the trigger label, taking them into the label → plan → approve → PR loop.
+
+### Batch / headless procedure
+
+When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool available): skip the confirm gate, run `junco assess <target> [--auto-plan]`, and print one line for the calling shell to grep — `ASSESS_QUEUED <id> -> <ticket-path>` (id and path come from the command's output). Filing still requires a separate, explicit `junco assess file <id> --all|--only <fp,…>` — batch mode does not auto-file.
+
+### Caveats to surface
+
+- **A review step always sits between the audit and any filed issue.** `junco assess` no longer files anything by itself; `junco assess file` does, and it requires an explicit `--all` or `--only <fingerprints>` — there's no bare default.
+- **`--auto-plan` is inert unless the repo is owned, bridge-watched, and GitHub integration is enabled.** The label lands on filed issues from that batch, but only a watched repo (with the bridge on) turns a labeled issue into a plan; an unowned repo never gets the label regardless of the flag.
+- **Closing a finding issue suppresses it forever.** Dedup scans your own most recent 500 issues on the repo (author-scoped, closed ones included) for the finding marker, so closing an issue (even as wontfix) stops that finding from ever re-filing — including a genuine future regression that hashes the same. To let it re-file, delete the issue or edit the `<!-- junco:finding:... -->` marker line out of its body.
+- **A parked-but-unreviewed finding is not suppressed** — it just re-parks on the next audit, since no issue exists yet.
+- For the authoritative flag list and config knobs (`[assess]`), point the user at `junco assess --help` and the project README.
+
+### Do NOT
+
+- Hand-author an assess ticket, or bolt `assess:` frontmatter onto a plan — `junco assess` owns that machine-owned shape.
+- Apply `TEMPLATE.md` / plan-lint / the anti-loop authoring rules — they are for plan tickets, not assess.
+- Treat assess as PR dispatch — it never opens a PR.
+- File findings on the user's behalf without them choosing `--all` or specific fingerprints — that selection is the human confirmation gate, and it isn't yours to make for them.
 
 ## Error handling
 

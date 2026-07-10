@@ -8,11 +8,11 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 
 ## Ticket flavors
 
-| Flavor                | Trigger                                            | What happens                                                                                                                                                         |
-| --------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Q&A ticket**        | No `repo:` field                                   | Agent answers in-place; result written back to the ticket file. No git.                                                                                              |
-| **PR-flow ticket**    | `repo: <absolute/path>`                            | Agent runs in an isolated git worktree; a draft PR is opened on success.                                                                                             |
-| **Assessment ticket** | `assess:` mapping present (checked before `repo:`) | `npm audit` + a read-only agent audit of the `repo:` target; findings file as GitHub issues instead of opening a PR. → [Vulnerability assessment guide](./assess.md) |
+| Flavor                | Trigger                                            | What happens                                                                                                                                                                                                                                               |
+| --------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Q&A ticket**        | No `repo:` field                                   | Agent answers in-place; result written back to the ticket file. No git.                                                                                                                                                                                    |
+| **PR-flow ticket**    | `repo: <absolute/path>`                            | Agent runs in an isolated git worktree; a draft PR is opened on success.                                                                                                                                                                                   |
+| **Assessment ticket** | `assess:` mapping present (checked before `repo:`) | `npm audit` + a read-only agent audit of the `repo:` target; findings are parked for review — `junco assess file` is the confirm step that actually files them as GitHub issues — instead of opening a PR. → [Vulnerability assessment guide](./assess.md) |
 
 ## Key frontmatter fields
 

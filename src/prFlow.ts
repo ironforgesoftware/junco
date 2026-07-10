@@ -105,6 +105,10 @@ export interface PrFlowResult {
   prUrl: string | null;
   commitCount: number;
   finalText: string; // agent's final message ("" when none)
+  /** Whole-run assistant text (all messages), vs finalText's LAST-message-only
+   * (#36). Optional/additive; threaded from the underlying RunResult so the
+   * reporter seam can recover a fence banked before the closing message (#86). */
+  allText?: string;
   phaseError: string | null; // phase error or agent errorMessage, when failed
   /** Mirrors PrOutcome.prQueued — the reporter uses this to skip the
    * finalize comment + label flip when the composite outbox op owns them. */
@@ -124,6 +128,7 @@ function flowResult(
     prUrl: prOutcome.prUrl,
     commitCount: prOutcome.commits.length,
     finalText: result.finalText,
+    allText: result.allText,
     phaseError: phaseError ?? result.errorMessage,
     prQueued: prOutcome.prQueued,
   };
@@ -137,6 +142,7 @@ function requeuedResult(dst: string, result: RunResult): PrFlowResult {
     prUrl: null,
     commitCount: 0,
     finalText: result.finalText,
+    allText: result.allText,
     phaseError: null,
     prQueued: false,
   };

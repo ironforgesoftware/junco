@@ -38,6 +38,7 @@ import { AddRepoForm } from "./components/AddRepoForm.js";
 import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
+import { ReviewView, type ReviewState } from "./components/ReviewView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
@@ -96,7 +97,8 @@ type View =
   | "cmdOutput"
   | "queue"
   | "prs"
-  | "prDetail";
+  | "prDetail"
+  | "review";
 
 /** LOCAL destructive-action gate: a `y/n` modal that owns input while open.
  * `onConfirm` fires the (already-composed) spawn on `y`/enter; `n`/esc drops it. */
@@ -244,6 +246,13 @@ export function App(props: AppProps): React.JSX.Element {
   const [view, setView] = useState<View>("main");
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [prDetail, setPrDetail] = useState<PrDetailState | null>(null);
+  const [reviewState, setReviewState] = useState<ReviewState>({
+    loading: false,
+    error: null,
+    batches: [],
+    cursor: 0,
+    open: null,
+  });
   const [scroll, setScroll] = useState(0);
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
@@ -941,14 +950,6 @@ export function App(props: AppProps): React.JSX.Element {
         showToast("error", "no repo selected");
         return;
       }
-      // External (fork-PR) repos: assess files finding ISSUES on the target
-      // repo — an upstream write the etiquette invariant forbids. assessCmd
-      // already fails closed (external entries are not "watched"), but gate
-      // here so the toast explains instead of suggesting a config change.
-      if (currentRepo?.external === true) {
-        showToast("error", "assess is not available for external repos — it files issues upstream");
-        return;
-      }
       const nwo = currentNwo;
       if (assessInFlightRef.current.has(nwo)) {
         showToast("info", "assess already running");
@@ -962,7 +963,10 @@ export function App(props: AppProps): React.JSX.Element {
         if (!aliveRef.current) return;
         const line = firstNonEmptyLine(r.output);
         if (r.code === 0) {
-          showToast("success", line ? `${nwo}: ${line}` : `assessed ${nwo}`);
+          showToast(
+            "success",
+            line ? `${nwo}: ${line} · v to review` : `assessed ${nwo} · v to review`,
+          );
         } else {
           // Nonzero exit: assessCmd's first line carries the reason ("not
           // watched", "already queued", etc.) — relay it as-is.
@@ -970,7 +974,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
       });
     },
-    [currentNwo, currentRepo, runCliFn, showToast],
+    [currentNwo, runCliFn, showToast],
   );
 
   const askConfirm = useCallback((state: ConfirmState) => setConfirm(state), []);
@@ -1527,6 +1531,116 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
+    if (view === "review") {
+      const rs = reviewState;
+      if (rs.open) {
+        const open = rs.open; // stable narrowed binding — survives closures below
+        const batch = rs.batches[open.batchIdx];
+        if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
+        if (input === "k" || key.upArrow) {
+          return void setReviewState((s) =>
+            s.open
+              ? { ...s, open: { ...s.open, findingCursor: Math.max(0, s.open.findingCursor - 1) } }
+              : s,
+          );
+        }
+        if (input === "j" || key.downArrow) {
+          return void setReviewState((s) =>
+            s.open && batch
+              ? {
+                  ...s,
+                  open: {
+                    ...s.open,
+                    findingCursor: Math.min(batch.findings.length - 1, s.open.findingCursor + 1),
+                  },
+                }
+              : s,
+          );
+        }
+        if (input === " ") {
+          return void setReviewState((s) => {
+            if (!s.open || !batch) return s;
+            const checked = new Set(s.open.checked);
+            const fp = batch.findings[s.open.findingCursor]?.fingerprint;
+            if (fp) {
+              if (checked.has(fp)) checked.delete(fp);
+              else checked.add(fp);
+            }
+            return { ...s, open: { ...s.open, checked } };
+          });
+        }
+        if (input === "a") {
+          return void setReviewState((s) =>
+            s.open && batch
+              ? {
+                  ...s,
+                  open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) },
+                }
+              : s,
+          );
+        }
+        if (input === "n") {
+          return void setReviewState((s) =>
+            s.open ? { ...s, open: { ...s.open, checked: new Set() } } : s,
+          );
+        }
+        if (input === "f" || key.return) {
+          if (!batch) return;
+          const fps = batch.findings.map((f) => f.fingerprint).filter((fp) => open.checked.has(fp));
+          if (fps.length === 0) return void showToast("info", "nothing selected");
+          const id = batch.id;
+          showToast("info", `filing ${fps.length} on ${batch.nwo}…`);
+          void client.fileReview(id, fps).then((res) => {
+            if (!aliveRef.current) return;
+            if (res.ok) {
+              const v = res.value;
+              showToast(
+                "success",
+                `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`,
+              );
+              setReviewState((s) => {
+                const batches = s.batches.filter((b) => b.id !== id); // optimistic removal
+                return {
+                  ...s,
+                  batches,
+                  open: null,
+                  cursor: Math.min(s.cursor, Math.max(0, batches.length - 1)),
+                };
+              });
+            } else {
+              showToast("error", res.error);
+            }
+          });
+          return;
+        }
+        return;
+      }
+      if (key.escape || input === "v") return void setView("main");
+      if (input === "k" || key.upArrow)
+        return void setReviewState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
+      if (input === "j" || key.downArrow) {
+        return void setReviewState((s) => ({
+          ...s,
+          cursor: Math.min(Math.max(0, s.batches.length - 1), s.cursor + 1),
+        }));
+      }
+      if (key.return) {
+        return void setReviewState((s) => {
+          const batch = s.batches[s.cursor];
+          if (!batch) return s;
+          return {
+            ...s,
+            open: {
+              batchIdx: s.cursor,
+              findingCursor: 0,
+              checked: new Set(batch.findings.map((f) => f.fingerprint)),
+            },
+          };
+        });
+      }
+      return;
+    }
+
     // ── main view ──
 
     // `/` filter typing mode captures all printable input.
@@ -1621,6 +1735,19 @@ export function App(props: AppProps): React.JSX.Element {
     // to the issues pane because they act on the selected ISSUE.
     if (input === "s") return void runAssess(false);
     if (input === "S") return void runAssess(true);
+    // `v` opens the assess review queue — parked batches awaiting human
+    // confirmation before findings become GitHub issues (Task 5 files them).
+    if (input === "v") {
+      setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
+      setView("review");
+      void client.listReview().then((res) => {
+        if (!aliveRef.current) return;
+        if (res.ok)
+          setReviewState((s) => ({ ...s, loading: false, batches: res.value, cursor: 0 }));
+        else setReviewState((s) => ({ ...s, loading: false, error: res.error }));
+      });
+      return;
+    }
 
     if (pane === 1) {
       if (input === "j" || key.downArrow) {
@@ -1717,7 +1844,7 @@ export function App(props: AppProps): React.JSX.Element {
     if (uiMode === "local") return; // the LOCAL body is keyboard-first in v1
 
     // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
-    if (view === "help" || view === "palette" || view === "addRepo") return;
+    if (view === "help" || view === "palette" || view === "addRepo" || view === "review") return;
     if (ev.kind === "release") return; // presses act on press, not release
     if (ev.kind === "press") dismissToast();
 
@@ -1913,6 +2040,8 @@ export function App(props: AppProps): React.JSX.Element {
           now={queueNow}
           refreshedAt={localRefreshedAt}
         />
+      ) : view === "review" ? (
+        <ReviewView state={reviewState} height={listHeight} focused />
       ) : (
         <>
           <Rail

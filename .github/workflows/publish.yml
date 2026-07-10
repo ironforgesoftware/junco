@@ -47,10 +47,19 @@ jobs:
           # belt for the "no cache in a publishing job" rule above: setup-node
           # auto-caches if package.json ever grows a packageManager field
           package-manager-cache: false
-      # Trusted publishing needs npm >= 11.5.1; node's bundled npm may lag.
-      # Exact-pinned (repo policy — same reason the actions above are SHA-pinned):
-      # this client holds the OIDC publish capability. Bump deliberately.
-      - run: npm install -g npm@12.0.0
+      # Publish with node's BUNDLED npm — no `npm install -g npm@X` here.
+      # Trusted publishing needs npm >= 11.5.1 (node 24.18 bundles 11.16.0,
+      # and the setup-node major is pinned above); v0.4.0 shipped exactly this
+      # way. Overlay-installing a different npm over the toolcache broke two
+      # v0.5.0 release runs in two different ways:
+      #   - npm@12.0.0 ships without the unscoped `sigstore` package its own
+      #     libnpmpublish/lib/provenance.js requires → MODULE_NOT_FOUND.
+      #   - npm@11.18.0 (delta-overlaid onto bundled 11.16.0) never attempted
+      #     the OIDC exchange → ENEEDAUTH, deterministic across a rerun.
+      # If a future npm floor forces an upgrade, verify a provenance publish
+      # end-to-end before pinning it.
+      - name: Record the publishing npm version
+        run: npm --version
       - name: Verify release tag matches package.json version
         run: |
           pkg="v$(node -p "require('./package.json').version")"
@@ -63,6 +72,10 @@ jobs:
       - run: npm run format:check
       - run: npm run typecheck
       # `npm publish` runs the prepublishOnly hook (npm run build && npm test)
-      # before publishing. --provenance stays explicit: npm docs say trusted
-      # publishing implies it, but that default has not held reliably.
-      - run: npm publish --provenance --access public
+      # before publishing. NO explicit --provenance: with trusted publishing
+      # the registry attaches provenance automatically, and the explicit flag
+      # front-loads an auth check that fires before the OIDC exchange —
+      # observed as ENEEDAUTH on every v0.5.0 attempt (npm 11.16/11.18).
+      # --loglevel http keeps the OIDC exchange visible in the run log so the
+      # next auth failure is diagnosable without another release cycle.
+      - run: npm publish --access public --loglevel http

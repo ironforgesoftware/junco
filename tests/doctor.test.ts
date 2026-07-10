@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runDoctor, type DoctorDeps } from "../src/doctor.js";
 import { writeWatchlist } from "../src/watchlist.js";
 import { outboxPaths } from "../src/githubOutbox.js";
+import { writePending } from "../src/assessReview.js";
 import type { Config } from "../src/types.js";
 
 const okConfig = {
@@ -332,5 +333,36 @@ describe("runDoctor outbox checks", () => {
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/⚠ outbox dead-letters/);
     expect(lines.join("")).toContain(dead);
+  });
+});
+
+describe("runDoctor assess review checks", () => {
+  it("no pending reviews → no assess review line", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/assess review/);
+  });
+
+  it("reports pending reviews as informational — not a warning, github disabled", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-review-"));
+    writePending({ stateDir } as unknown as Config, {
+      id: "a",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [],
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    // okConfig has github.enabled = false — the review count must still surface.
+    expect(lines.join("")).toMatch(/✓ assess review — 1 pending \(junco assess review\)/);
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });

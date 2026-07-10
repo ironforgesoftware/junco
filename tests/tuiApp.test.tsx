@@ -132,6 +132,9 @@ function makeClient(
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+    listReview: async () => okv([]),
+    fileReview: async () =>
+      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -177,6 +180,9 @@ function makeSeqClient(sequence: DashIssue[][]) {
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+    listReview: async () => okv([]),
+    fileReview: async () =>
+      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -225,6 +231,9 @@ function makePrSeqClient(sequence: DashPr[][]) {
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+    listReview: async () => okv([]),
+    fileReview: async () =>
+      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -517,6 +526,9 @@ describe("App", () => {
       prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
       dispatchTicket: async (nwo, num) =>
         okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
+      listReview: async () => okv([]),
+      fileReview: async () =>
+        okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,
@@ -814,6 +826,51 @@ describe("App", () => {
       r.stdin.write(click(30, 5)); // ↗ metadata row of the overlay card
       await until(() => prCalls.length === 1);
       expect(prCalls[0]).toEqual(["acme/api", 100]);
+    });
+
+    // The review view (v) is keyboard-driven (cursor-based, no scroll offset);
+    // a leaked click/wheel must never fall through to the main-layout hit-test
+    // (which would openDetail() and eject the operator into the issue overlay).
+    it("review view ignores mouse events: no eject into issue-detail, no stray scroll", async () => {
+      const { client } = makeClient({ "acme/api": [rawIssue] });
+      (client as { listReview: () => Promise<unknown> }).listReview = async () =>
+        okv([
+          {
+            id: "assess-x-1",
+            nwo: "o/r",
+            external: true,
+            autoPlan: false,
+            repoPath: "/x",
+            createdAt: "2026-07-09T00:00:00.000Z",
+            findings: [
+              {
+                fingerprint: "f1",
+                kind: "code" as const,
+                severity: "high" as const,
+                ruleId: "R",
+                title: "SQL injection",
+                description: "",
+                references: [],
+              },
+            ],
+          },
+        ]);
+      const r = renderApp(client, wl());
+      await until(() => (r.lastFrame() ?? "").includes("#7"));
+      r.stdin.write("v");
+      await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
+      // Same coordinates that, in the main view, focus pane 2 and (on a second
+      // click) open the issue-detail overlay — see "first click focuses pane 2
+      // + selects" above. Here they must be a total no-op.
+      r.stdin.write(click(30, 4));
+      r.stdin.write(click(30, 4));
+      r.stdin.write(wheelDown(30, 5));
+      await wait(50);
+      expect(r.lastFrame() ?? "").toContain("o/r"); // still the batch list
+      expect(r.lastFrame() ?? "").not.toContain("the body"); // never ejected into issue detail
+      // The view is still alive and keyboard-driven: Enter still drills in.
+      r.stdin.write("\r");
+      await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
     });
   });
 });
@@ -1360,6 +1417,140 @@ describe("assess hotkey (s/S)", () => {
     r.stdin.write("s"); // captured as filter text, not the assess hotkey
     await until(() => (r.lastFrame() ?? "").includes("/s")); // landed in the filter chip
     expect(runs).toHaveLength(0);
+  });
+
+  it("s submits an assess audit for an external repo (no refusal) and hints the review view", async () => {
+    const { client } = makeClient({ "acme/api": [], "up/stream": [] });
+    const { runs, runCliFn } = makeAssessRunner({ output: "queued: /x/inbox/assess-up-stream.md" });
+    const file = wl7();
+    writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
+    r.stdin.write("j"); // select up/stream (pane 1, index 1)
+    await tick();
+    r.stdin.write("s");
+    await until(() => runs.length === 1);
+    expect(runs).toEqual([["assess", ["up/stream"]]]);
+    await until(() => (r.lastFrame() ?? "").includes("up/stream: queued:"));
+    expect(r.lastFrame()).toContain("v to review");
+    expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
+  });
+});
+
+describe("review view (v)", () => {
+  const wl8 = () => join(mkdtempSync(join(tmpdir(), "junco-review-")), "wl.json");
+
+  const reviewBatch = {
+    id: "assess-x-1",
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    findings: [
+      {
+        fingerprint: "f1",
+        kind: "code" as const,
+        severity: "high" as const,
+        ruleId: "R",
+        title: "SQL injection",
+        description: "",
+        references: [],
+      },
+    ],
+  };
+
+  it("v opens the review view and enter drills into a batch's findings", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
+    r.stdin.write("\r"); // enter → checklist
+    await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
+    r.stdin.write(ESC); // esc → back to batch list
+    await until(
+      () =>
+        (r.lastFrame() ?? "").includes("o/r") && !(r.lastFrame() ?? "").includes("SQL injection"),
+    );
+  });
+
+  it("no pending batches: v shows the empty state; esc returns to main", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+    r.stdin.write(ESC);
+    await until(() => !(r.lastFrame() ?? "").includes("no pending assess reviews"));
+    expect(r.lastFrame()).toContain("acme/api");
+  });
+
+  it("toggling and pressing f files the selected fingerprints and drops the batch", async () => {
+    const batches = [
+      {
+        id: "assess-x-1",
+        nwo: "o/r",
+        external: true,
+        autoPlan: false,
+        repoPath: "/x",
+        createdAt: "2026-07-09T00:00:00.000Z",
+        findings: [
+          {
+            fingerprint: "f1",
+            kind: "code" as const,
+            severity: "high" as const,
+            ruleId: "R",
+            title: "SQL injection",
+            description: "",
+            references: [],
+          },
+          {
+            fingerprint: "f2",
+            kind: "code" as const,
+            severity: "low" as const,
+            ruleId: "R",
+            title: "stale dep",
+            description: "",
+            references: [],
+          },
+        ],
+      },
+    ];
+    const filed: Array<[string, string[]]> = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listReview: () => Promise<unknown> }).listReview = async () => okv(batches);
+    (client as { fileReview: (id: string, fps: string[]) => Promise<unknown> }).fileReview = async (
+      id,
+      fps,
+    ) => {
+      filed.push([id, fps]);
+      return okv({
+        created: fps.length,
+        queuedOffline: 0,
+        deduped: 0,
+        failed: 0,
+        urls: [],
+        warnings: [],
+      });
+    };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r"));
+    r.stdin.write("\r"); // open batch (all checked)
+    await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
+    r.stdin.write("j"); // cursor to f2
+    r.stdin.write(" "); // uncheck f2
+    await until(() => /\[ \].*stale dep/.test(r.lastFrame() ?? ""));
+    r.stdin.write("f"); // file
+    await until(() => filed.length === 1);
+    expect(filed[0][0]).toBe("assess-x-1");
+    expect(filed[0][1]).toEqual(["f1"]); // only f1 checked
+    await until(() => (r.lastFrame() ?? "").includes("filed 1")); // toast
+    // Optimistic removal: the batch is gone from the review view.
+    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
   });
 });
 
