@@ -205,11 +205,11 @@ enough to hold in your head.
 ```bash
 git clone https://github.com/ironforgesoftware/junco && cd junco
 npm install
-npm test          # vitest, ~1,650 tests, a few seconds
+npm test          # vitest, ~1,915 tests, a few seconds
 ```
 
 - Run the full gate before a PR:
-  `npm run lint && npm run format:check && npm run build && npm test`
+  `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test`
 - Development is test-first with a commit per unit of work; the suite is green at
   every commit. Conventional commit messages (`feat:`, `fix:`, …).
 - [ARCHITECTURE.md](ARCHITECTURE.md) is accurate and maintained — read it before

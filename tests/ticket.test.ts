@@ -179,6 +179,15 @@ describe("parseTicket", () => {
     expect(t.assess).toEqual({ autoPlan: false, issue: 7, issueTitle: "" });
   });
 
+  it("omits assess.issue when non-positive (#0 or negative rejected, mapping stays valid)", () => {
+    const zero = parseTicket("/q/a.md", `---\nid: x\nassess:\n  issue: 0\n---\nbody`);
+    expect(zero.assess).toEqual({ autoPlan: false });
+    expect(zero.assess?.issue).toBeUndefined();
+    const neg = parseTicket("/q/a.md", `---\nid: x\nassess:\n  issue: -3\n---\nbody`);
+    expect(neg.assess).toEqual({ autoPlan: false });
+    expect(neg.assess?.issue).toBeUndefined();
+  });
+
   it("parses analyze: { issue, title } round-trip", () => {
     const t = parseTicket(
       "/q/a.md",
@@ -198,6 +207,16 @@ describe("parseTicket", () => {
       `---\nid: x\nanalyze:\n  issue: "seven"\n  title: "Bug in x"\n---\nbody`,
     );
     expect(t.analyze).toBeNull();
+  });
+
+  it("defaults analyze to null when issue is non-positive (#0 or negative rejected)", () => {
+    expect(
+      parseTicket("/q/a.md", `---\nid: x\nanalyze:\n  issue: 0\n  title: "Bug"\n---\nbody`).analyze,
+    ).toBeNull();
+    expect(
+      parseTicket("/q/a.md", `---\nid: x\nanalyze:\n  issue: -5\n  title: "Bug"\n---\nbody`)
+        .analyze,
+    ).toBeNull();
   });
 
   it("rejects analyze as scalar or array (only object counts)", () => {

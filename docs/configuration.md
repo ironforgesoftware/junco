@@ -112,7 +112,7 @@ npm_bin = "npm"                   # Binary for the dependency scan (`<npm_bin> a
 
 | Knob                               | Effect                                                                                                                     |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `[model].id`                       | Which model the agent requests (provider-prefixed, e.g. `omlx/my-model`).                                                  |
+| `[model].id`                       | Which model the agent requests (provider-prefixed, e.g. `myprovider/my-model`).                                            |
 | `[model].models_json`              | Point at a Pi `models.json` to load the provider+model (api, compat, context window…) from that file.                      |
 | `[model].base_url` / `api`         | Switch inference backends — any OpenAI-compatible `/v1` endpoint, or another Pi `api` style (Anthropic, Google, Bedrock…). |
 | `[verify].block_on_fail`           | Set `true` to make verification failures block the PR open (strict mode).                                                  |

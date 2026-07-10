@@ -95,6 +95,16 @@ describe("deriveRepoContext — overrides honored", () => {
     expect(ctx!.baseBranch).toBe("develop");
   });
 
+  it("honors branch_name / base_branch with the full git-ref charset (. / _ -)", () => {
+    const ctx = deriveRepoContext(
+      { repo: "/tmp/x", branch_name: "feat/my.branch-2", base_branch: "release/1.0" },
+      "T04",
+      OPTS,
+    );
+    expect(ctx!.branchName).toBe("feat/my.branch-2");
+    expect(ctx!.baseBranch).toBe("release/1.0");
+  });
+
   it("pr_title override", () => {
     const ctx = deriveRepoContext({ repo: "/tmp/x", pr_title: "My PR Title" }, "T04", OPTS);
     expect(ctx!.prTitle).toBe("My PR Title");
@@ -214,6 +224,31 @@ describe("push_remote", () => {
   it("treats a blank push_remote as origin", () => {
     const ctx = deriveRepoContext({ repo: "/r", push_remote: "   " }, "t1", opts)!;
     expect(ctx.pushRemote).toBe("origin");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// branch_name / base_branch option-injection guard (#124)
+// ---------------------------------------------------------------------------
+describe("branch_name / base_branch option-injection guard", () => {
+  it("rejects a branch_name that starts with an option token (falls back to derived)", () => {
+    const ctx = deriveRepoContext({ repo: "/r", branch_name: "--delete" }, "T04", OPTS)!;
+    expect(ctx.branchName).toBe("junco/T04");
+  });
+
+  it("rejects a base_branch that starts with an option token (falls back to default)", () => {
+    const ctx = deriveRepoContext({ repo: "/r", base_branch: "--upload-pack=x" }, "T04", OPTS)!;
+    expect(ctx.baseBranch).toBe("main");
+  });
+
+  it("rejects a branch_name with a whitespace/interior injection char (falls back)", () => {
+    const ctx = deriveRepoContext({ repo: "/r", branch_name: "feat/x y" }, "T04", OPTS)!;
+    expect(ctx.branchName).toBe("junco/T04");
+  });
+
+  it("rejects a base_branch with a shell metacharacter (falls back to default)", () => {
+    const ctx = deriveRepoContext({ repo: "/r", base_branch: "main;rm" }, "T04", OPTS)!;
+    expect(ctx.baseBranch).toBe("main");
   });
 });
 
