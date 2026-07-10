@@ -290,6 +290,26 @@ describe("healthServer", () => {
   // close() idempotent
   // -------------------------------------------------------------------------
 
+  it("keeps a persistent error handler so a post-listen error does not crash (#121)", async () => {
+    const logs: string[] = [];
+    handle = await startHealthServer({
+      port: 0,
+      metrics: makeFakeMetrics(),
+      logFn: (m) => logs.push(m),
+    });
+
+    const server = handle.server!;
+    // Simulate an accept-time failure (e.g. EMFILE under fd exhaustion). With no
+    // 'error' listener, emit() throws — from Node's socket path that is an
+    // uncaughtException that kills the daemon. A persistent handler swallows it.
+    expect(() => server.emit("error", new Error("EMFILE"))).not.toThrow();
+    expect(logs.some((l) => l.includes("EMFILE"))).toBe(true);
+
+    // The server keeps serving after the error.
+    const resp = await fetch(`${handle.url}/live`);
+    expect(resp.status).toBe(200);
+  });
+
   it("close() is idempotent — second call resolves without throwing", async () => {
     handle = await startHealthServer({
       port: 0,
