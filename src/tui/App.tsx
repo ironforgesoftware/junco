@@ -226,6 +226,7 @@ export function App(props: AppProps): React.JSX.Element {
     loading: false,
     error: null,
     batches: [],
+    drafts: [],
     cursor: 0,
     open: null,
   });
@@ -1161,20 +1162,88 @@ export function App(props: AppProps): React.JSX.Element {
 
     if (view === "review") {
       const rs = reviewState;
-      if (rs.open) {
+      // Comment-draft preview mode: scroll, post (f/enter), discard (x), back.
+      if (rs.open && rs.open.kind === "draft") {
+        const draft = rs.drafts[rs.open.draftIdx];
+        if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
+        if (input === "k" || key.upArrow) {
+          return void setReviewState((s) =>
+            s.open && s.open.kind === "draft"
+              ? { ...s, open: { ...s.open, scroll: Math.max(0, s.open.scroll - 1) } }
+              : s,
+          );
+        }
+        if (input === "j" || key.downArrow) {
+          return void setReviewState((s) => {
+            if (!s.open || s.open.kind !== "draft") return s;
+            const d = s.drafts[s.open.draftIdx];
+            const max = d ? Math.max(0, d.draft.split("\n").length - 1) : 0;
+            return { ...s, open: { ...s.open, scroll: Math.min(max, s.open.scroll + 1) } };
+          });
+        }
+        // Optimistic removal shared by post and discard: drop the draft, close
+        // the preview, clamp the cursor to the (shrunk) combined list.
+        const dropDraft = (id: string): void => {
+          setReviewState((s) => {
+            const drafts = s.drafts.filter((d) => d.id !== id);
+            const total = s.batches.length + drafts.length;
+            return { ...s, drafts, open: null, cursor: Math.min(s.cursor, Math.max(0, total - 1)) };
+          });
+        };
+        if (input === "f" || key.return) {
+          if (!draft) return;
+          const id = draft.id;
+          showToast("info", `posting ${draft.nwo}#${draft.issue}…`);
+          void client.postCommentDraft(id).then((res) => {
+            if (!aliveRef.current) return;
+            if (res.ok) {
+              const { outcome, url } = res.value;
+              showToast(
+                "success",
+                outcome === "queued"
+                  ? "queued offline — will post on next flush"
+                  : url
+                    ? `posted ${url}`
+                    : "posted",
+              );
+              dropDraft(id);
+            } else {
+              showToast("error", res.error);
+            }
+          });
+          return;
+        }
+        if (input === "x") {
+          if (!draft) return;
+          const id = draft.id;
+          void client.discardCommentDraft(id).then((res) => {
+            if (!aliveRef.current) return;
+            if (res.ok) {
+              showToast("success", "discarded");
+              dropDraft(id);
+            } else {
+              showToast("error", res.error);
+            }
+          });
+          return;
+        }
+        return;
+      }
+      // Assess checklist mode.
+      if (rs.open && rs.open.kind === "batch") {
         const open = rs.open; // stable narrowed binding — survives closures below
         const batch = rs.batches[open.batchIdx];
         if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
         if (input === "k" || key.upArrow) {
           return void setReviewState((s) =>
-            s.open
+            s.open && s.open.kind === "batch"
               ? { ...s, open: { ...s.open, findingCursor: Math.max(0, s.open.findingCursor - 1) } }
               : s,
           );
         }
         if (input === "j" || key.downArrow) {
           return void setReviewState((s) =>
-            s.open && batch
+            s.open && s.open.kind === "batch" && batch
               ? {
                   ...s,
                   open: {
@@ -1187,7 +1256,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
         if (input === " ") {
           return void setReviewState((s) => {
-            if (!s.open || !batch) return s;
+            if (!s.open || s.open.kind !== "batch" || !batch) return s;
             const checked = new Set(s.open.checked);
             const fp = batch.findings[s.open.findingCursor]?.fingerprint;
             if (fp) {
@@ -1199,7 +1268,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
         if (input === "a") {
           return void setReviewState((s) =>
-            s.open && batch
+            s.open && s.open.kind === "batch" && batch
               ? {
                   ...s,
                   open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) },
@@ -1209,7 +1278,9 @@ export function App(props: AppProps): React.JSX.Element {
         }
         if (input === "n") {
           return void setReviewState((s) =>
-            s.open ? { ...s, open: { ...s.open, checked: new Set() } } : s,
+            s.open && s.open.kind === "batch"
+              ? { ...s, open: { ...s.open, checked: new Set() } }
+              : s,
           );
         }
         if (input === "f" || key.return) {
@@ -1228,11 +1299,12 @@ export function App(props: AppProps): React.JSX.Element {
               );
               setReviewState((s) => {
                 const batches = s.batches.filter((b) => b.id !== id); // optimistic removal
+                const total = batches.length + s.drafts.length;
                 return {
                   ...s,
                   batches,
                   open: null,
-                  cursor: Math.min(s.cursor, Math.max(0, batches.length - 1)),
+                  cursor: Math.min(s.cursor, Math.max(0, total - 1)),
                 };
               });
             } else {
@@ -1243,27 +1315,34 @@ export function App(props: AppProps): React.JSX.Element {
         }
         return;
       }
+      // Combined-list mode: cursor over batches then drafts; enter opens either.
       if (key.escape || input === "v") return void setView("main");
       if (input === "k" || key.upArrow)
         return void setReviewState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
       if (input === "j" || key.downArrow) {
         return void setReviewState((s) => ({
           ...s,
-          cursor: Math.min(Math.max(0, s.batches.length - 1), s.cursor + 1),
+          cursor: Math.min(Math.max(0, s.batches.length + s.drafts.length - 1), s.cursor + 1),
         }));
       }
       if (key.return) {
         return void setReviewState((s) => {
-          const batch = s.batches[s.cursor];
-          if (!batch) return s;
-          return {
-            ...s,
-            open: {
-              batchIdx: s.cursor,
-              findingCursor: 0,
-              checked: new Set(batch.findings.map((f) => f.fingerprint)),
-            },
-          };
+          if (s.cursor < s.batches.length) {
+            const batch = s.batches[s.cursor];
+            if (!batch) return s;
+            return {
+              ...s,
+              open: {
+                kind: "batch",
+                batchIdx: s.cursor,
+                findingCursor: 0,
+                checked: new Set(batch.findings.map((f) => f.fingerprint)),
+              },
+            };
+          }
+          const draftIdx = s.cursor - s.batches.length;
+          if (!s.drafts[draftIdx]) return s;
+          return { ...s, open: { kind: "draft", draftIdx, scroll: 0 } };
         });
       }
       return;
@@ -1363,16 +1442,27 @@ export function App(props: AppProps): React.JSX.Element {
     // to the issues pane because they act on the selected ISSUE.
     if (input === "s") return void runAssess(false);
     if (input === "S") return void runAssess(true);
-    // `v` opens the assess review queue — parked batches awaiting human
-    // confirmation before findings become GitHub issues (Task 5 files them).
+    // `v` opens the review queue — parked assess batches (findings awaiting
+    // human confirmation) AND parked comment drafts (analyze output awaiting a
+    // post/discard decision), fetched together.
     if (input === "v") {
       setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
       setView("review");
-      void client.listReview().then((res) => {
+      void Promise.all([client.listReview(), client.listCommentDrafts()]).then(([rev, drafts]) => {
         if (!aliveRef.current) return;
-        if (res.ok)
-          setReviewState((s) => ({ ...s, loading: false, batches: res.value, cursor: 0 }));
-        else setReviewState((s) => ({ ...s, loading: false, error: res.error }));
+        if (rev.ok && drafts.ok) {
+          setReviewState((s) => ({
+            ...s,
+            loading: false,
+            error: null,
+            batches: rev.value,
+            drafts: drafts.value,
+            cursor: 0,
+          }));
+        } else {
+          const error = !rev.ok ? rev.error : !drafts.ok ? drafts.error : "unknown error";
+          setReviewState((s) => ({ ...s, loading: false, error }));
+        }
       });
       return;
     }

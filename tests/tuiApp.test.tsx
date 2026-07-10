@@ -1426,6 +1426,18 @@ describe("review view (v)", () => {
     ],
   };
 
+  const commentDraft = {
+    id: "analyze-o-r-5",
+    nwo: "o/r",
+    issue: 5,
+    issueTitle: "Broken build",
+    external: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    draft: "This is the analysis.\nSecond line.",
+    footer: true,
+  };
+
   it("v opens the review view and enter drills into a batch's findings", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
@@ -1516,6 +1528,75 @@ describe("review view (v)", () => {
     expect(filed[0][1]).toEqual(["f1"]); // only f1 checked
     await until(() => (r.lastFrame() ?? "").includes("filed 1")); // toast
     // Optimistic removal: the batch is gone from the review view.
+    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+  });
+
+  it("v lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
+    (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
+      okv([commentDraft]);
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    // Both rows present: the batch (o/r + finding count) and the draft (o/r#5 + comment badge).
+    await until(
+      () => (r.lastFrame() ?? "").includes("o/r#5") && (r.lastFrame() ?? "").includes("comment"),
+    );
+    r.stdin.write("j"); // cursor past the batch onto the draft row
+    r.stdin.write("\r"); // enter → draft preview
+    await until(() => (r.lastFrame() ?? "").includes("Broken build")); // issueTitle: preview-only
+    expect(r.lastFrame()).toContain("This is the analysis.");
+  });
+
+  it("f posts the open draft, toasts success, and drops the row", async () => {
+    const posted: string[] = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
+      okv([commentDraft]);
+    (client as { postCommentDraft: (id: string) => Promise<unknown> }).postCommentDraft = async (
+      id,
+    ) => {
+      posted.push(id);
+      return okv({
+        outcome: "sent" as const,
+        url: "https://github.com/o/r/issues/5#issuecomment-1",
+      });
+    };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
+    r.stdin.write("\r"); // no batches → cursor 0 opens the draft preview
+    await until(() => (r.lastFrame() ?? "").includes("Broken build"));
+    r.stdin.write("f"); // post
+    await until(() => posted.length === 1);
+    expect(posted[0]).toBe(commentDraft.id);
+    await until(() => (r.lastFrame() ?? "").includes("posted")); // success toast
+    // Optimistic removal → combined empty state.
+    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+  });
+
+  it("x discards the open draft and drops the row", async () => {
+    const discarded: string[] = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
+      okv([commentDraft]);
+    (client as { discardCommentDraft: (id: string) => Promise<unknown> }).discardCommentDraft =
+      async (id) => {
+        discarded.push(id);
+        return okv(null);
+      };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
+    r.stdin.write("\r"); // → draft preview
+    await until(() => (r.lastFrame() ?? "").includes("Broken build"));
+    r.stdin.write("x"); // discard
+    await until(() => discarded.length === 1);
+    expect(discarded[0]).toBe(commentDraft.id);
+    await until(() => (r.lastFrame() ?? "").includes("discarded")); // toast
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
   });
 });
