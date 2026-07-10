@@ -152,4 +152,35 @@ describe("parseTicket", () => {
     const t = parseTicket("/q/a.md", "---\nid: x\n---\nbody");
     expect(t.assess).toBeNull();
   });
+
+  it("parses analyze: { issue, title } round-trip", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\nanalyze:\n  issue: 7\n  title: "Bug in x"\n---\nbody`,
+    );
+    expect(t.analyze).toEqual({ issue: 7, title: "Bug in x" });
+  });
+
+  it("defaults analyze to null when absent", () => {
+    const t = parseTicket("/q/a.md", "---\nid: x\n---\nbody");
+    expect(t.analyze).toBeNull();
+  });
+
+  it("defaults analyze to null when malformed (non-numeric issue)", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\nanalyze:\n  issue: "seven"\n  title: "Bug in x"\n---\nbody`,
+    );
+    expect(t.analyze).toBeNull();
+  });
+
+  it("rejects analyze as scalar or array (only object counts)", () => {
+    expect(parseTicket("/q/a.md", `---\nid: x\nanalyze: "yes"\n---\nbody`).analyze).toBeNull();
+    expect(parseTicket("/q/a.md", `---\nid: x\nanalyze: [1]\n---\nbody`).analyze).toBeNull();
+  });
+
+  it("defaults analyze.title to empty string when omitted", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\nanalyze:\n  issue: 3\n---\nbody`);
+    expect(t.analyze).toEqual({ issue: 3, title: "" });
+  });
 });

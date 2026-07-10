@@ -21,6 +21,7 @@ const ticket = (github: Ticket["github"]): Ticket => ({
   tools: null,
   github,
   assess: null,
+  analyze: null,
   workdir: null,
 });
 const gt = { nwo: "acme/api", issue: 42, kind: "pr" as const, external: false };

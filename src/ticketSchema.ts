@@ -125,6 +125,15 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
         },
       },
     },
+    analyze: {
+      type: "object",
+      description:
+        "Presence of this mapping selects the analysis flavor: junco investigates the issue named here against the repository in `repo:` and parks a comment draft for review — it never posts without operator confirmation. Authored by `junco analyze`.",
+      properties: {
+        issue: { type: "integer", description: "Issue number to investigate." },
+        title: { type: "string", description: "Issue title, for display/logging." },
+      },
+    },
   },
   required: [],
 };
