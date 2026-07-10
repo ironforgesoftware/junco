@@ -29,7 +29,7 @@ import {
 import { sanitizeFindingText } from "./findings.js";
 import { slugifyId } from "./slug.js";
 import { gh, GitOpError } from "./git.js";
-import { tryOrEnqueue, type OutboxOp } from "./githubOutbox.js";
+import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
 
 /** Same slug rule buildExternalTicket applies to compose its ticket id
  * (externalDispatch.ts) — mirrored here since this builds a distinct
@@ -266,7 +266,9 @@ function describeError(e: unknown): string {
 
 /** Post ONE comment live; return the URL gh prints, or null (a comment post
  * can legitimately produce no scrapeable URL). Mirrors createIssueLive's
- * tmpdir + --body-file + reverse-scan shape (assessFiling.ts). */
+ * tmpdir + --body-file + reverse-scan shape (assessFiling.ts). The body carries
+ * the outbox idempotency marker (withCommentMarker) so a lost-ack replay is
+ * deduped by the next flush's scan and never double-posted (#132). */
 async function postCommentLive(
   cfg: Config,
   nwo: string,
@@ -276,7 +278,7 @@ async function postCommentLive(
 ): Promise<string | null> {
   const dir = mkdtempSync(join(tmpdir(), "junco-analyze-post-"));
   const file = join(dir, "comment.md");
-  writeFileSync(file, body, "utf8");
+  writeFileSync(file, withCommentMarker(nwo, issue, body), "utf8");
   try {
     const out = await ghFn(
       cfg,
