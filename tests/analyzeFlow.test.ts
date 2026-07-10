@@ -157,6 +157,37 @@ function fakeSession(finalText: string) {
   });
 }
 
+/** A scriptable AgentSessionLike that emits each of `messages` as its own
+ * assistant message (message_start + text_delta), reproducing #36's
+ * finalText = last-message-only while allText keeps the whole run —
+ * the same fixture as tests/assessFlow.test.ts's fakeMultiMessageSession. */
+function fakeMultiMessageSession(messages: string[]) {
+  return async () => ({
+    subscribe(l: (e: any) => void) {
+      queueMicrotask(() => {
+        for (const m of messages) {
+          l({ type: "message_start", message: { role: "assistant" } });
+          l({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: m } });
+        }
+        l({
+          type: "turn_end",
+          message: {
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+          },
+        });
+        l({ type: "agent_end", messages: [], willRetry: false });
+      });
+      return () => {};
+    },
+    async prompt() {
+      await new Promise((r) => setTimeout(r, 1));
+    },
+    dispose() {},
+    abort: async () => {},
+  });
+}
+
 /** A session whose prompt() throws — the Q&A transient-failure signature. */
 function throwingSession() {
   return async () => ({
@@ -266,6 +297,31 @@ describe("runAnalyzeFlow", () => {
     const body = readFileSync(join(j, "failed", failed[0]), "utf8");
     expect(body).toContain("status: failed");
     expect(body.toLowerCase()).toContain("no comment draft");
+  });
+
+  it("parks the draft when the fence precedes a trailing assistant message (#67 class)", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path, ticket } = claim(j, ticketContent(repo));
+
+    const git = fakeGitCalls(originHttps);
+    // The agent banks its comment fence, THEN emits a closing verification
+    // message. Under #36 (finalText = last message only) the fence survives
+    // only in allText — extraction must read allText ?? finalText, mirroring
+    // assessFlow.ts:299.
+    const r = await runAnalyzeFlow(cfg(root), ticket, path, {
+      gitFn: git.gitFn,
+      sessionFactoryFor: () =>
+        fakeMultiMessageSession([
+          commentFence("The regression was introduced in commit abc123."),
+          "Double-checked the blame output; the analysis above stands.",
+        ]),
+    });
+
+    expect(r.parked).toBe(true);
+    expect(r.status).toBe("completed");
+    const [d] = listDrafts(cfg(root));
+    expect(d.draft).toContain("commit abc123");
   });
 
   it("external clone (under externalReposRoot) is fetched + hard-reset before analysis", async () => {

@@ -242,10 +242,14 @@ export async function runAnalyzeFlow(
   }
 
   // --- Phase 5: Extract the comment draft. A timeout or guard-abort does NOT
-  // short-circuit — we still try to salvage a draft. No complete fence (or an
+  // short-circuit — we still try to salvage a draft. Extract from the WHOLE
+  // run, not just the last message: #36 redefined finalText as the last
+  // assistant message only, so a fence banked before a trailing closing
+  // message would be dropped and the run would spuriously fail (#67 class —
+  // mirror assessFlow.ts:299's allText ?? finalText). No complete fence (or an
   // all-whitespace one) means the agent produced nothing to review: finalize to
   // failed/ with a clear reason, park nothing. ---
-  const fence = extractLastFencedBlock(agentResult.finalText, COMMENT_FENCE);
+  const fence = extractLastFencedBlock(agentResult.allText ?? agentResult.finalText, COMMENT_FENCE);
   if (fence === null || fence.trim() === "") {
     return finalizeAnalyze(agentResult, "analyze: agent produced no comment draft");
   }
