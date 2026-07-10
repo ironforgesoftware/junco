@@ -182,7 +182,7 @@ repo: <absolute path to the audit target>
 assess:
   auto_plan: true # only present with --auto-plan
   issue: 42 # only present when scoped via `junco assess owner/repo#N`
-  issue_title: "..." # machine-built, sanitized, display-only; travels with `issue`
+  issue_title: "..." # machine-built, display-only; travels with `issue`
 # `assess: {}` when neither --auto-plan nor an issue scope applies
 ---
 ```

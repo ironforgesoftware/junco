@@ -101,8 +101,8 @@ $ junco logs -f
 
 ## It audits, you decide what to file
 
-`junco assess <path|owner/repo>` audits a repo — `npm audit` for the dependency
-tree plus a read-only agent pass over the code — and **parks** the findings for
+`junco assess <path|owner/repo|owner/repo#N>` audits a repo — `npm audit` for the
+dependency tree plus a read-only agent pass over the code — and **parks** the findings for
 review instead of filing them right away. `junco assess review` lists what's
 pending; `junco assess review <id>` shows each finding's fingerprint, severity,
 and title; `junco assess file <id> --all` (or `--only <fingerprint,…>`) files the
