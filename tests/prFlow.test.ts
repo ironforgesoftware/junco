@@ -639,6 +639,47 @@ exit 1
     };
   }
 
+  /**
+   * Session that (optionally) commits, then trips the supplied AbortController —
+   * an operator force-stop, which session.ts treats with guard-kill semantics and
+   * so returns an `abortedByGuard: true` RunResult (the SOFT-abort salvage path).
+   * Hangs on a promise resolved by runAgent's abort(). The fixtures keep the
+   * supervisor disabled, so the force-stop signal is how we drive a guard abort
+   * end-to-end (issue #125).
+   */
+  function guardAbortingFactory(
+    controller: AbortController,
+    opts: { commit?: boolean } = {},
+  ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    const { commit = true } = opts;
+    return (_cfg, cwd) => async () => {
+      let resolveHang: (() => void) | null = null;
+      return {
+        subscribe() {
+          return () => {};
+        },
+        async prompt() {
+          if (commit) {
+            writeFileSync(join(cwd, "salvage.txt"), "work before the kill\n", "utf8");
+            run(["git", "-C", cwd, "add", "-A"]);
+            run(["git", "-C", cwd, "commit", "-m", "feat: salvage"]);
+          }
+          // Arm the hang BEFORE tripping the signal: abort() fires synchronously
+          // and resolves this promise, so resolveHang must already be set.
+          const hang = new Promise<void>((r) => {
+            resolveHang = r;
+          });
+          controller.abort(); // operator force-stop → guard-kill salvage semantics
+          await hang;
+        },
+        dispose() {},
+        abort: async () => {
+          resolveHang?.();
+        },
+      };
+    };
+  }
+
   it("a timed-out session with commits is salvaged: pushed, PR opened, timeout_partial → done/", async () => {
     const cfg = makeConfig(h);
     // timeout_minutes 0.005 → 300ms; the fake commits synchronously, then hangs.
@@ -690,6 +731,71 @@ exit 1
     expect(text).toContain("status: timeout");
     expect(text).toContain("ticket timeout with no commits");
     expect(text).toContain("Worktree preserved");
+  }, 20000);
+
+  // -------------------------------------------------------------------------
+  // Guard-abort salvage (issue #125) — the SOFT-abort twin of timeout salvage,
+  // never previously driven end-to-end through runPrFlow.
+  // -------------------------------------------------------------------------
+
+  it("a guard-aborted session with commits is salvaged: pushed, PR opened, aborted_partial → done/ (#125)", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "guardkill.md",
+      `---\nid: guardkill\nrepo: ${h.work}\n---\n# Kill\n\nDo a thing then loop.\n`,
+    );
+    const controller = new AbortController();
+
+    const { dst, status } = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: guardAbortingFactory(controller, { commit: true }),
+      abortSignal: controller.signal,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    expect(status).toBe("aborted_partial");
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: aborted_partial");
+    expect(text).toContain("pushed: true");
+    expect(text).toContain("Partial run — aborted by the loop guard");
+    // The branch really landed on the remote.
+    expect(
+      run(["git", "-C", h.work, "ls-remote", "--heads", "origin", "junco/guardkill"]),
+    ).toContain("junco/guardkill");
+  }, 20000);
+
+  it("offline GUARD-abort with commits routes to done/ (aborted_partial), no false 'no committed work' banner (#123/#125)", async () => {
+    const cfg = makeConfig(h, { gitBin: gitFailShim("git-offkill.sh", "push", NET) });
+    const { task, path } = makeTicket(
+      h,
+      "offkill.md",
+      `---\nid: offkill\nrepo: ${h.work}\n---\n# Kill offline\n\nDo a thing then loop.\n`,
+    );
+    // Bridged ticket → the queued op carries a finalize block we can assert on.
+    task.github = { nwo: "owner/repo", issue: 12, kind: "pr", external: false };
+    const controller = new AbortController();
+
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: guardAbortingFactory(controller, { commit: true }),
+      abortSignal: controller.signal,
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.dst.startsWith(h.done)).toBe(true);
+    expect(flow.status).toBe("aborted_partial");
+    expect(flow.prQueued).toBe(true);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: aborted_partial");
+    expect(text).toContain("PR queued for offline push");
+    expect(text).toContain("Partial run — aborted by the loop guard");
+    // The false banner from the pre-#123 misroute must NOT appear.
+    expect(text).not.toContain("with no committed work");
+    // The parked op carries the corrected done-routing status for its replay.
+    const op = listOps(cfg)[0].op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(op.finalize?.status).toBe("aborted_partial");
+    expect(op.pushed).toBe(false);
   }, 20000);
 
   it("a requeued ticket can be re-claimed and run to done/ (no branch collision)", async () => {
@@ -850,6 +956,38 @@ esac
     // Worktree preserved (never cleaned on an offline branch).
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0);
   });
+
+  it("offline TIMEOUT soft-abort with commits routes to done/ (timeout_partial), not failed/ (#123)", async () => {
+    // A timed-out session that committed continues to the phase-11 push. Offline,
+    // the composite push→PR→comment op is parked (prQueued) but pushed stays
+    // false. The ONLINE twin lands timeout_partial → done/; computePrStatus must
+    // treat the queued op as "pushed" so this offline salvage routes to done/ the
+    // same way — not to failed/ as bare `timeout`.
+    const cfg = makeConfig(h, { gitBin: gitFailShim("git-offtimeout.sh", "push", NET) });
+    const { task, path } = makeTicket(
+      h,
+      "offtimeout.md",
+      `---\nid: offtimeout\nrepo: ${h.work}\ntimeout_minutes: 0.005\n---\n# Slow\n\nDo a thing.\n`,
+    );
+    // Bridged ticket → the queued op carries a finalize block we can assert on.
+    task.github = { nwo: "owner/repo", issue: 11, kind: "pr", external: false };
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: timingOutFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.dst.startsWith(h.done)).toBe(true);
+    expect(flow.status).toBe("timeout_partial");
+    expect(flow.prQueued).toBe(true);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: timeout_partial");
+    expect(text).toContain("PR queued for offline push");
+    // The parked op carries the corrected (done-routing) status for its replay.
+    const op = listOps(cfg)[0].op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(op.finalize?.status).toBe("timeout_partial");
+    expect(op.pushed).toBe(false);
+  }, 20000);
 
   it("offline gh pr create (after successful push) checkpoints pushed:true", async () => {
     const { flow, cfg } = await runFlowWithOfflinePrCreate();

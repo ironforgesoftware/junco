@@ -144,6 +144,51 @@ describe("computePrStatus (timeout salvage)", () => {
     expect(computePrStatus({ ...ok, timedOut: true }, emptyOutcome(), null)).toBe("timeout");
     expect(computePrStatus({ ...ok, timedOut: true }, null, null)).toBe("timeout");
   });
+
+  // Guard-abort branches (issue #125): the SOFT-abort twin of the timeout ones.
+  it("guard abort with pushed commits → aborted_partial (done/ routing)", () => {
+    expect(
+      computePrStatus({ ...ok, abortedByGuard: true }, emptyOutcome({ pushed: true }), null),
+    ).toBe("aborted_partial");
+  });
+
+  it("guard abort without a push → aborted_no_changes (failed/ routing)", () => {
+    expect(computePrStatus({ ...ok, abortedByGuard: true }, emptyOutcome(), null)).toBe(
+      "aborted_no_changes",
+    );
+    expect(computePrStatus({ ...ok, abortedByGuard: true }, null, null)).toBe("aborted_no_changes");
+  });
+
+  // Offline soft-abort salvage (issue #123): the push never landed (pushed:false)
+  // but the composite op is parked in the outbox (prQueued) — or, for an amend,
+  // only the push (pushQueued). The queued op WILL land the branch, so the status
+  // must route to done/ (*_partial) exactly like the online twin, not failed/.
+  it("offline timeout salvage (prQueued, pushed:false) → timeout_partial", () => {
+    expect(computePrStatus({ ...ok, timedOut: true }, emptyOutcome({ prQueued: true }), null)).toBe(
+      "timeout_partial",
+    );
+  });
+
+  it("offline guard-abort salvage (prQueued, pushed:false) → aborted_partial", () => {
+    expect(
+      computePrStatus({ ...ok, abortedByGuard: true }, emptyOutcome({ prQueued: true }), null),
+    ).toBe("aborted_partial");
+  });
+
+  it("offline amend soft-abort (pushQueued, pushed:false) → *_partial", () => {
+    expect(
+      computePrStatus({ ...ok, timedOut: true }, emptyOutcome({ pushQueued: true }), null),
+    ).toBe("timeout_partial");
+    expect(
+      computePrStatus({ ...ok, abortedByGuard: true }, emptyOutcome({ pushQueued: true }), null),
+    ).toBe("aborted_partial");
+  });
+
+  // A normal (non-soft-abort) offline run stays `completed` — the queued-op
+  // treatment only flips the timeout/guard branches, never the happy path.
+  it("normal offline run (prQueued, not timed-out/aborted) stays completed", () => {
+    expect(computePrStatus(ok, emptyOutcome({ prQueued: true }), null)).toBe("completed");
+  });
 });
 
 describe("finalizePr offline note", () => {

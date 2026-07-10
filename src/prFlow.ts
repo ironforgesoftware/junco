@@ -709,9 +709,13 @@ export async function runPrFlow(
       // Offline fresh-PR endgame: the branch never pushed — park the whole
       // push → PR → comment → labels sequence in one composite op. The work is
       // DONE locally, so the ticket finalizes as it earned (no phaseError).
-      const opId = queueOfflinePr(false /* pushed */);
+      // Mark the op queued BEFORE deriving its finalize status so a soft-abort
+      // (timeout / guard-kill) salvage stamps the queued op with its done-routing
+      // status (timeout_partial / aborted_partial) — matching the in-line finalize
+      // below, so the outbox replay routes to done/ too rather than failed/ (#123).
       prOutcome.prQueued = true;
       prOutcome.worktreePreserved = true;
+      const opId = queueOfflinePr(false /* pushed */);
       log.info(`github unreachable — PR queued to outbox (${opId})`);
       return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
     }
