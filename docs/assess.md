@@ -91,6 +91,8 @@ The command only composes and submits the ticket. The actual audit — `npm audi
 
 ### `junco assess review [<id>]` — list / inspect pending findings
 
+The same review can also be done without leaving the dashboard: press `v` there to open the in-dashboard review view, a per-finding checklist with the same select/confirm-to-file flow described below.
+
 ```bash
 junco assess review              # list every pending batch
 junco assess review <id>         # show one batch's findings

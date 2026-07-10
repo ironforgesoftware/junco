@@ -16,7 +16,8 @@ export type HintView =
   | "cmdOutput"
   | "queue"
   | "prs"
-  | "prDetail";
+  | "prDetail"
+  | "review";
 
 function fmtUp(s: number | null): string {
   if (s === null) return "";
@@ -210,6 +211,15 @@ export function hintsFor(
       return [
         ["esc", "back"],
         ["o", "browser"],
+      ];
+    case "review":
+      return [
+        ["↑/↓", "move"],
+        ["enter", "open/file"],
+        ["space", "toggle"],
+        ["a/n", "all/none"],
+        ["f", "file"],
+        ["esc", "back"],
       ];
     case "palette":
       return [
