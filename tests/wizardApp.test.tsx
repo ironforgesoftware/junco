@@ -183,6 +183,9 @@ describe("WizardApp", () => {
     await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);
     await press(stdin, ENTER); // Write config
     await until(() => (lastFrame() ?? "").includes("The nest is ready"), LONG_TRIES);
+    expect(lastFrame()).toContain("✓ Review");
+    expect(lastFrame()).toContain("✓ Welcome");
+    expect(lastFrame()).not.toContain("▶");
     await press(stdin, ENTER); // finish
     await until(() => outcome === "written", LONG_TRIES);
     expect(writes.length).toBe(1);
