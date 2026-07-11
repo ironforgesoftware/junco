@@ -22,7 +22,7 @@ const BACKSPACE = "\x7f";
 // stale-closure race at all in this Ink version; meta+Space ("\x1b ") is
 // parsed as its own atomic escaped-codepoint event whose `input` is
 // stripped down to a plain " " by the time useInput's handler sees it
-// (ink/build/components/App.js strips a leading ESC), while still forcing
+// (ink/build/hooks/use-input.js's handleData strips a leading ESC), while still forcing
 // the parser to emit Enter as a separate trailing event. That reproduces
 // the real two-events-in-one-chunk dispatch the fix must survive.
 const META_SPACE = "\x1b ";
