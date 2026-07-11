@@ -24,6 +24,9 @@ export interface BashOpsDeps {
   spawnFn?: typeof realSpawn;
   /** Source env before scrubbing; defaults to process.env. Injectable for tests. */
   env?: () => Record<string, string | undefined>;
+  /** Process-group kill seam (defaults to process.kill). Injectable so the
+   *  reap can be asserted without signalling a real pid in tests. */
+  killFn?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
 /**
@@ -39,6 +42,8 @@ export function makeSandboxedBashOperations(
 ): BashOperationsLike {
   const spawnFn = deps.spawnFn ?? realSpawn;
   const envSource = deps.env ?? (() => process.env);
+  const killFn =
+    deps.killFn ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
 
   return {
     exec(command, cwd, options) {
@@ -46,28 +51,54 @@ export function makeSandboxedBashOperations(
       const env = { ...scrubEnv(envSource()), TMPDIR: policy.scratchDir };
 
       return new Promise<{ exitCode: number | null }>((resolve) => {
-        const proc = spawnFn(bin, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
+        // detached → own process group, so `kill(-pid)` reaps the whole group.
+        const proc = spawnFn(bin, args, {
+          cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+          env,
+          detached: true,
+        });
+
+        // Kill the whole process GROUP (negative pid) so a backgrounded child
+        // (`ln -s … &`) can't survive this bash call to race the fs-tool path
+        // jail (#159). On Linux, bwrap's --unshare-pid/--die-with-parent already
+        // reap the namespace; this covers seatbelt/none on macOS. Residual: a
+        // setsid-escaping child on macOS survives — closed only by the native
+        // *at resolver (deferred, #159).
+        const reap = (): void => {
+          if (proc.pid !== undefined) {
+            try {
+              killFn(-proc.pid, "SIGKILL");
+              return;
+            } catch {
+              /* group already gone */
+            }
+          }
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            /* already dead */
+          }
+        };
+
         let settled = false;
         const finish = (exitCode: number | null): void => {
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
           if (options.signal) options.signal.removeEventListener("abort", onAbort);
+          reap(); // sweep any surviving group members before resolving
           resolve({ exitCode });
         };
 
         proc.stdout?.on("data", (c: Buffer) => options.onData(c));
         proc.stderr?.on("data", (c: Buffer) => options.onData(c));
 
-        const timer = options.timeout
-          ? setTimeout(() => proc.kill("SIGKILL"), options.timeout)
-          : undefined;
+        const timer = options.timeout ? setTimeout(reap, options.timeout) : undefined;
 
-        const onAbort = (): void => {
-          proc.kill("SIGKILL");
-        };
+        const onAbort = (): void => reap();
         if (options.signal) {
-          if (options.signal.aborted) proc.kill("SIGKILL");
+          if (options.signal.aborted) reap();
           else options.signal.addEventListener("abort", onAbort);
         }
 
