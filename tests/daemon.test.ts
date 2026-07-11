@@ -23,6 +23,7 @@ import {
   installSignalHandlers,
   mainLoop,
   runScheduler,
+  overlayFrozenRestartFields,
   type MainLoopDeps,
 } from "../src/daemon.js";
 
@@ -340,6 +341,63 @@ describe("installSignalHandlers", () => {
 });
 
 // ---------------------------------------------------------------------------
+// overlayFrozenRestartFields
+// ---------------------------------------------------------------------------
+
+describe("overlayFrozenRestartFields", () => {
+  it('pins every reload:"restart" lever to frozen; passes live-kind fields through', () => {
+    const frozen = makeConfig({
+      vaultRoot: "/frozen/vault",
+      juncoSubdir: "FrozenJunco",
+      maxConcurrent: 1,
+      healthEnabled: false,
+      healthHost: "127.0.0.1",
+      healthPort: 8787,
+      stateDir: "/frozen/state",
+      logToFile: false,
+      transcriptsEnabled: false,
+      pollIntervalSeconds: 15,
+      github: { ...makeConfig().github, enabled: false, triggerLabel: "frozen-trigger" },
+    });
+    const live = makeConfig({
+      vaultRoot: "/live/vault",
+      juncoSubdir: "LiveJunco",
+      maxConcurrent: 10,
+      healthEnabled: true,
+      healthHost: "0.0.0.0",
+      healthPort: 9999,
+      stateDir: "/live/state",
+      logToFile: true,
+      transcriptsEnabled: true,
+      pollIntervalSeconds: 42,
+      model: { ...makeConfig().model, id: "model-v2" },
+      github: { ...makeConfig().github, enabled: true, triggerLabel: "live-trigger" },
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    // Restart-kind flat fields: pinned to frozen, never the live edit.
+    expect(result.vaultRoot).toBe(frozen.vaultRoot);
+    expect(result.juncoSubdir).toBe(frozen.juncoSubdir);
+    expect(result.maxConcurrent).toBe(frozen.maxConcurrent);
+    expect(result.healthEnabled).toBe(frozen.healthEnabled);
+    expect(result.healthHost).toBe(frozen.healthHost);
+    expect(result.healthPort).toBe(frozen.healthPort);
+    expect(result.stateDir).toBe(frozen.stateDir);
+    expect(result.logToFile).toBe(frozen.logToFile);
+    expect(result.transcriptsEnabled).toBe(frozen.transcriptsEnabled);
+    expect(result.github.enabled).toBe(frozen.github.enabled);
+
+    // Live-kind fields: pass through from live, including a NESTED github
+    // field that is not restart-kind (triggerLabel stays live per the
+    // follow-up note in the daemon.ts helper's doc comment).
+    expect(result.pollIntervalSeconds).toBe(live.pollIntervalSeconds);
+    expect(result.model.id).toBe(live.model.id);
+    expect(result.github.triggerLabel).toBe(live.github.triggerLabel);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // mainLoop
 // ---------------------------------------------------------------------------
 
@@ -642,6 +700,55 @@ describe("mainLoop — observability", () => {
       },
     );
     expect(seen).toEqual([1, 99]);
+  });
+
+  it("mainLoop hot-applies a live lever edit but pins a restart-kind lever to the frozen startup cfg", async () => {
+    // A live edit to model.id (reload:"live") must reach the very next
+    // runOnceFn; a simultaneous edit to vaultRoot (reload:"restart") must
+    // NEVER reach it — runOnce derives queue paths from cfg.vaultRoot, so a
+    // hot-applied edit there would silently move the daemon onto a different
+    // (likely nonexistent) queue mid-run.
+    const startCfg = makeConfig({ vaultRoot: "/frozen/vault", pollIntervalSeconds: 1 });
+    const holder = makeConfigHolder(startCfg);
+    const stop = new StopFlag();
+    const seenVaultRoots: string[] = [];
+    const seenModelIds: string[] = [];
+    let n = 0;
+    const runOnceFn = async (c: Config) => {
+      seenVaultRoots.push(c.vaultRoot);
+      seenModelIds.push(c.model.id);
+      if (n === 0) {
+        holder.current = {
+          ...holder.current,
+          vaultRoot: "/live/vault", // restart-kind — must NOT reach the next runOnceFn
+          model: { ...holder.current.model, id: "model-v2" }, // live-kind — must
+        };
+      }
+      if (++n >= 2) stop.requestStop();
+      return true; // handled → loop continues without sleeping to idle
+    };
+    await mainLoop(
+      startCfg,
+      stop,
+      {},
+      {
+        configHolder: holder,
+        runOnceFn,
+        // Real macrotask tick — an instant-resolve fake sleep starves the
+        // scheduler's setTimeout-based waits in other suites; mirrored here
+        // for consistency even though this loop never reaches idle sleep.
+        sleep: async () => {
+          await new Promise((r) => setTimeout(r, 1));
+        },
+        recoverOrphansFn: () => {},
+        pruneFn: () => {},
+        waitForEndpointFn: async () => {},
+        mkdirs: () => {},
+        startHealthServerFn: async () => null as unknown as HealthServerHandle,
+      },
+    );
+    expect(seenModelIds).toEqual([startCfg.model.id, "model-v2"]);
+    expect(seenVaultRoots).toEqual([startCfg.vaultRoot, startCfg.vaultRoot]);
   });
 });
 

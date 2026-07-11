@@ -1455,6 +1455,21 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
+    // layer 3b — `,` opens the in-dashboard config editor. Mode-agnostic (it
+    // is hoisted ahead of the LOCAL dispatch below) so a github-disabled user
+    // — who starts in local mode and can never reach the github cascade that
+    // used to own this binding — isn't left with no way to open settings.
+    // Gated the same way the mode toggle above is: not while typing a filter,
+    // not while the LOCAL confirm modal owns input, and only from the main
+    // view (never stealing the key from help/detail/queue/prs/palette/etc.,
+    // which in LOCAL mode is moot since local never routes view away from
+    // "main"/"help").
+    if (input === "," && view === "main" && !filtering && confirm === null) {
+      dismissToast();
+      setView("config");
+      return;
+    }
+
     // layer 4 — LOCAL surface owns everything else while it is the active mode.
     if (uiMode === "local") {
       dismissToast();
@@ -1777,12 +1792,9 @@ export function App(props: AppProps): React.JSX.Element {
       setView("queue");
       return;
     }
-    // `,` opens the in-dashboard config editor — the settings idiom, and free
-    // (confirmed via `grep -n 'input === ' src/tui/App.tsx`).
-    if (input === ",") {
-      setView("config");
-      return;
-    }
+    // `,` (open config) is handled mode-agnostically by layer 3b above, ahead
+    // of this cascade — the settings idiom, free per
+    // `grep -n 'input === ' src/tui/App.tsx`.
     if (input === "p") {
       setScroll(0);
       setView("prs");
@@ -2101,9 +2113,14 @@ export function App(props: AppProps): React.JSX.Element {
   useMouse(onMouseEvent);
 
   const hints =
-    uiMode === "local"
-      ? localHintsFor(localSection, localFocus)
-      : hintsFor(view as HintView, pane, layout.mode, filtering);
+    view === "config"
+      ? // Mode-agnostic, like the view === "config" render branch above: the
+        // config editor's own hints apply regardless of which surface opened
+        // it, not LOCAL's section-rail hints.
+        hintsFor("config", pane, layout.mode, filtering)
+      : uiMode === "local"
+        ? localHintsFor(localSection, localFocus)
+        : hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
   const paletteProps = {
     commands: PALETTE_COMMANDS,
@@ -2178,7 +2195,12 @@ export function App(props: AppProps): React.JSX.Element {
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}
     >
-      {uiMode === "local" ? (
+      {view === "config" ? (
+        // Mode-agnostic: `,` (layer 3b) can set view="config" from either
+        // surface, so this must be checked ahead of the uiMode branch below
+        // or a LOCAL-mode config view would render LocalDashboard instead.
+        <ConfigView configPath={configPath} onExit={() => setView("main")} />
+      ) : uiMode === "local" ? (
         <LocalDashboard
           cheap={localCheap}
           heavy={localHeavy}
@@ -2192,8 +2214,6 @@ export function App(props: AppProps): React.JSX.Element {
         />
       ) : view === "review" ? (
         <ReviewView state={reviewState} height={listHeight} focused />
-      ) : view === "config" ? (
-        <ConfigView configPath={configPath} onExit={() => setView("main")} />
       ) : (
         <>
           <Rail

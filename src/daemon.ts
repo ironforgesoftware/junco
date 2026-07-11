@@ -152,6 +152,34 @@ export function installSignalHandlers(
 }
 
 // ---------------------------------------------------------------------------
+// Restart-kind lever freeze
+// ---------------------------------------------------------------------------
+
+// Restart-kind levers (configLevers reload:"restart") must never hot-apply — even
+// read via the holder they stay at startup values, so a live edit can't move the
+// queue/state dir or rebind the health socket mid-run. Live-kind fields come from
+// the holder; restart-kind fields are pinned to the frozen startup cfg. Keep this
+// list in sync with the reload:"restart" entries in src/configLevers.ts.
+export function overlayFrozenRestartFields(frozen: Config, live: Config): Config {
+  return {
+    ...live,
+    vaultRoot: frozen.vaultRoot,
+    juncoSubdir: frozen.juncoSubdir,
+    maxConcurrent: frozen.maxConcurrent,
+    healthEnabled: frozen.healthEnabled,
+    healthHost: frozen.healthHost,
+    healthPort: frozen.healthPort,
+    stateDir: frozen.stateDir,
+    logToFile: frozen.logToFile,
+    transcriptsEnabled: frozen.transcriptsEnabled,
+    github: {
+      ...live.github,
+      enabled: frozen.github.enabled,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // mainLoop
 // ---------------------------------------------------------------------------
 
@@ -236,7 +264,10 @@ export async function runScheduler(
   const sleep = deps.sleep ?? sleepInterruptible;
   // Live-reload seam (Task 6): falls back to the `cfg` this scheduler was
   // invoked with when no holder is wired (existing callers/tests unaffected).
-  const activeCfg = (): Config => deps.configHolder?.current ?? cfg;
+  // Restart-kind fields are always pinned to the frozen `cfg` this scheduler
+  // was invoked with — see overlayFrozenRestartFields.
+  const activeCfg = (): Config =>
+    deps.configHolder ? overlayFrozenRestartFields(cfg, deps.configHolder.current) : cfg;
 
   const inflight = new Set<Promise<void>>();
   const busyRepos = new Set<string>();
@@ -392,7 +423,10 @@ export async function mainLoop(
   // (mkdirs, recoverOrphans, pruneFn, waitForEndpoint, the health server's
   // host/port, "worker online") is intentionally restart-kind — it stays on
   // the initial `cfg`, matching the existing lever-reload classification.
-  const activeCfg = (): Config => deps.configHolder?.current ?? cfg;
+  // Restart-kind fields are pinned to that frozen `cfg` even when read through
+  // the holder below — see overlayFrozenRestartFields.
+  const activeCfg = (): Config =>
+    deps.configHolder ? overlayFrozenRestartFields(cfg, deps.configHolder.current) : cfg;
 
   mkdirs(cfg);
   // Stamp the start time once the queue dirs exist; the health server reports
