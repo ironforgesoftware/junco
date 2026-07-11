@@ -481,7 +481,17 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
     },
 
     prepareExternalRepo(nwo) {
-      return attempt(() => (deps.ensureCloneFn ?? ensureExternalClone)(cfg, nwo, { ghFn, gitFn }));
+      return attempt(async () => {
+        // This call never opts out of forking (unlike assess's read-only path,
+        // #105) — the dashboard's watch flow always needs a push target, so a
+        // null forkNwo here means ensureExternalClone's fork step was skipped
+        // unexpectedly. Fail loud rather than silently widen the return type.
+        const r = await (deps.ensureCloneFn ?? ensureExternalClone)(cfg, nwo, { ghFn, gitFn });
+        if (r.forkNwo === null) {
+          throw new Error(`${nwo}: expected a fork to be provisioned but got none`);
+        }
+        return { path: r.path, forkNwo: r.forkNwo };
+      });
     },
 
     dispatchTicket(nwo, num) {
@@ -526,7 +536,9 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
 
     analyzeIssue(nwo, num) {
       return attempt(async () => {
-        const r = await (deps.analyzeCoreFn ?? analyzeIssueCore)(cfg, `${nwo}#${num}`);
+        const r = await (deps.analyzeCoreFn ?? analyzeIssueCore)(cfg, `${nwo}#${num}`, {
+          resolveDeps: { ghFn, gitFn },
+        });
         return { id: r.id };
       });
     },

@@ -4,8 +4,10 @@
  * comment drafts, SP-2) can reuse the same durable-queue pattern: one JSON
  * file per entry under <state_dir>/<subdir>/ (atomic tmp+rename,
  * watchlist/outbox pattern). Never throws on read: missing → empty/null,
- * corrupt → skipped (list) / `error` (read). Removed entries archive into a
- * caller-named subdirectory (e.g. "filed", "posted").
+ * corrupt or shape-invalid (missing required fields — see requiredFields
+ * below) → skipped (list) / `error` (read). Removed entries archive into a
+ * caller-named subdirectory (e.g. "filed", "posted"); archiving an id that's
+ * already gone is a no-op (`remove` returns false), never a raw ENOENT throw.
  */
 import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -27,7 +29,9 @@ export interface ReviewStore<T extends { id: string }> {
   write(cfg: Config, entry: T, deps?: ReviewStoreDeps): string;
   list(cfg: Config, deps?: ReviewStoreDeps): T[];
   read(cfg: Config, id: string, deps?: ReviewStoreDeps): { entry: T | null; error: string | null };
-  remove(cfg: Config, id: string, archiveSub: string, deps?: ReviewStoreDeps): void;
+  /** true → archived; false → nothing to archive (id already gone: ENOENT is
+   * not an error here, matching the store's never-throw-on-read ethos). */
+  remove(cfg: Config, id: string, archiveSub: string, deps?: ReviewStoreDeps): boolean;
   count(cfg: Config, deps?: ReviewStoreDeps): number;
 }
 
@@ -40,7 +44,24 @@ function entryFileName(id: string): string {
   return `${slugifyId(id)}.json`;
 }
 
-export function makeReviewStore<T extends { id: string }>(subdir: string): ReviewStore<T> {
+/**
+ * Field-presence check applied to parsed JSON before it is trusted as T: a
+ * hand-tampered or truncated file (e.g. `{}`) parses cleanly but is missing
+ * fields downstream code dereferences unconditionally (e.g. `batch.findings
+ * .length`). Only presence is checked (not deep types) — cheap, generic
+ * across every store built on top of this factory, and enough to turn a
+ * silent `undefined` deref into a loud skip/error at the read boundary.
+ */
+function hasRequiredFields(v: unknown, requiredFields: readonly string[]): boolean {
+  if (v === null || typeof v !== "object") return false;
+  const rec = v as Record<string, unknown>;
+  return requiredFields.every((k) => rec[k] !== undefined);
+}
+
+export function makeReviewStore<T extends { id: string }>(
+  subdir: string,
+  requiredFields: readonly string[] = ["id"],
+): ReviewStore<T> {
   function dir(cfg: Config): string {
     return join(cfg.stateDir, subdir);
   }
@@ -76,8 +97,9 @@ export function makeReviewStore<T extends { id: string }>(subdir: string): Revie
       .filter((n) => n.endsWith(".json"))
       .sort()
       .flatMap((n) => {
+        let parsed: unknown;
         try {
-          return [JSON.parse(readFileFn(join(d, n))) as T];
+          parsed = JSON.parse(readFileFn(join(d, n)));
         } catch (e) {
           log.warn("skipping unparseable review-store entry", {
             subdir,
@@ -86,6 +108,15 @@ export function makeReviewStore<T extends { id: string }>(subdir: string): Revie
           });
           return [];
         }
+        if (!hasRequiredFields(parsed, requiredFields)) {
+          log.warn("skipping malformed review-store entry (missing required fields)", {
+            subdir,
+            name: n,
+            requiredFields,
+          });
+          return [];
+        }
+        return [parsed as T];
       });
   }
 
@@ -103,20 +134,39 @@ export function makeReviewStore<T extends { id: string }>(subdir: string): Revie
       if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return { entry: null, error: null };
       return { entry: null, error: e instanceof Error ? e.message : String(e) };
     }
+    let parsed: unknown;
     try {
-      return { entry: JSON.parse(raw) as T, error: null };
+      parsed = JSON.parse(raw);
     } catch (e) {
       return { entry: null, error: `stored entry is not valid JSON: ${(e as Error).message}` };
     }
+    if (!hasRequiredFields(parsed, requiredFields)) {
+      return { entry: null, error: "stored entry is missing required fields" };
+    }
+    return { entry: parsed as T, error: null };
   }
 
-  function remove(cfg: Config, id: string, archiveSub: string, deps: ReviewStoreDeps = {}): void {
+  function remove(
+    cfg: Config,
+    id: string,
+    archiveSub: string,
+    deps: ReviewStoreDeps = {},
+  ): boolean {
     const renameFn = deps.renameFn ?? renameSync;
     const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
     const d = dir(cfg);
     const archive = archiveDir(cfg, archiveSub);
     mkdirFn(archive);
-    renameFn(join(d, entryFileName(id)), join(archive, entryFileName(id)));
+    try {
+      renameFn(join(d, entryFileName(id)), join(archive, entryFileName(id)));
+      return true;
+    } catch (e) {
+      // Archiving an id that's already archived (or was never written) is not
+      // an error — matches the store's never-throw-on-read ethos rather than
+      // raising a raw ENOENT to callers that just want "is it gone now?".
+      if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+      throw e;
+    }
   }
 
   function count(cfg: Config, deps: ReviewStoreDeps = {}): number {

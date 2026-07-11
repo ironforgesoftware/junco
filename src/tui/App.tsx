@@ -1943,6 +1943,7 @@ export function App(props: AppProps): React.JSX.Element {
       const num = currentIssue.number;
       showToast("info", `dispatching ${currentNwo}#${num}…`);
       void client.dispatchTicket(currentNwo, num).then((res) => {
+        if (!aliveRef.current) return;
         if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
         else showToast("error", res.error);
       });

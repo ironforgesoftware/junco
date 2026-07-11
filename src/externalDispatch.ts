@@ -83,11 +83,16 @@ export interface IssueTarget {
 /** Parse an issue ref, fetch it via `gh`, and resolve it to a local clone —
  * owned repos (config ∪ non-external watchlist) resolve directly; unowned
  * repos are provisioned via `ensureCloneFn` and added to the watchlist.
- * Shared by `dispatchIssue`, `junco analyze`, and `junco assess`. */
+ * Shared by `dispatchIssue`, `junco analyze`, and `junco assess`. `opts.fork`
+ * (default true) is forwarded to `ensureCloneFn` for the provisioning branch —
+ * `junco assess`'s read-only path passes `{ fork: false }` so it doesn't leave
+ * an unused fork on the operator's account (#105); dispatch/analyze keep the
+ * default (they need the fork as a push target). */
 export async function resolveIssueTarget(
   cfg: Config,
   input: string,
   deps: ExternalDispatchDeps = {},
+  opts: { fork?: boolean } = {},
 ): Promise<IssueTarget> {
   const ghFn = deps.ghFn ?? gh;
   const ensureCloneFn = deps.ensureCloneFn ?? ensureExternalClone;
@@ -116,7 +121,7 @@ export async function resolveIssueTarget(
   if (owned !== undefined) {
     clonePath = owned.path;
   } else {
-    const provisioned = await ensureCloneFn(cfg, ref.nwo, deps);
+    const provisioned = await ensureCloneFn(cfg, ref.nwo, deps, opts);
     clonePath = provisioned.path;
     forkNwo = provisioned.forkNwo;
     const file = watchlistPath(cfg);

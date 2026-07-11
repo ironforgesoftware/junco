@@ -127,7 +127,9 @@ export async function runAssessCommand(
     const resolveFn = deps.resolveFn ?? resolveIssueTarget;
     let t: IssueTarget;
     try {
-      t = await resolveFn(cfg, target, deps.resolveDeps ?? {});
+      // assess is read-only — never a push target — so it provisions fork-less
+      // (skip `gh repo fork`) when the repo isn't already watched (#105).
+      t = await resolveFn(cfg, target, deps.resolveDeps ?? {}, { fork: false });
     } catch (e) {
       print(`junco assess: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;

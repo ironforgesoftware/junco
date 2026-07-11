@@ -89,7 +89,9 @@ export function ReviewView({
     const lines = draft.draft.split("\n");
     // Reserve rows: header (1), the footer line when present (1), hint (1).
     const bodyRows = Math.max(1, rows - (draft.footer ? 3 : 2));
-    const w = windowRange(lines.length, state.open.scroll, bodyRows);
+    // Top-anchored: the window starts exactly at `scroll`, so `j`/`k` move
+    // the visible lines by one immediately — no cursor-centering dead-zone.
+    const scroll = state.open.scroll;
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text wrap="truncate-end">
@@ -98,8 +100,8 @@ export function ReviewView({
             dimColor
           >{` · ${draft.issueTitle} · ${draft.external ? "external" : "owned"}`}</Text>
         </Text>
-        {lines.slice(w.start, w.end).map((line, i) => (
-          <Text key={w.start + i} wrap="truncate-end">
+        {lines.slice(scroll, scroll + bodyRows).map((line, i) => (
+          <Text key={scroll + i} wrap="truncate-end">
             {line.length > 0 ? line : " "}
           </Text>
         ))}
@@ -208,12 +210,12 @@ export function ReviewView({
           >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             <Text dimColor={!sel}>{`${d.nwo}#${d.issue}`}</Text>
-            <Text dimColor>comment</Text>
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate" dimColor={!sel}>
                 {firstDraftLine(d.draft)}
               </Text>
             </Box>
+            <Text dimColor>comment</Text>
           </Box>
         );
       })}

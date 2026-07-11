@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, existsSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -99,5 +99,36 @@ describe("assessReview store", () => {
     const filedNames = readdirSync(filed);
     expect(filedNames).toHaveLength(1);
     expect(filedNames[0]).not.toMatch(/[\\/]/);
+  });
+
+  it("a hand-tampered `{}` batch is skipped by listPending and errors from readPending (#106)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-"));
+    const c = cfg(dir);
+    writePending(c, batch("good"));
+    const { dir: reviewDir } = assessReviewPaths(c);
+    mkdirSync(reviewDir, { recursive: true });
+    // Simulate a hand-tampered/truncated file: valid JSON, but none of the
+    // fields downstream code (e.g. `batch.findings.length`) relies on.
+    writeFileSync(join(reviewDir, "corrupt.json"), "{}");
+
+    // list() never yields an entry with undefined fields for downstream code
+    // to dereference — the malformed batch is skipped, not returned.
+    expect(listPending(c).map((b) => b.id)).toEqual(["good"]);
+    const { batch: read, error } = readPending(c, "corrupt");
+    expect(read).toBeNull();
+    expect(error).toMatch(/missing required fields/);
+  });
+
+  it("removePending on an already-archived id is ENOENT-safe: returns false, never throws", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-"));
+    const c = cfg(dir);
+    writePending(c, batch("assess-x-1"));
+    expect(removePending(c, "assess-x-1")).toBe(true);
+    expect(pendingCount(c)).toBe(0);
+    // archiving the same (now-gone) id again must not throw a raw ENOENT
+    expect(() => removePending(c, "assess-x-1")).not.toThrow();
+    expect(removePending(c, "assess-x-1")).toBe(false);
+    // an id that was never written is the same no-op case
+    expect(removePending(c, "never-written")).toBe(false);
   });
 });

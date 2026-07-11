@@ -163,12 +163,13 @@ describe("parseTicket", () => {
     expect(t.assess).toBeNull();
   });
 
-  it("parses assess.issue + assess.issue_title round-trip", () => {
+  it("parses assess.issue (assess.issue_title is frontmatter-only, not parsed through — #104)", () => {
     const t = parseTicket(
       "/q/a.md",
       `---\nid: x\nassess:\n  auto_plan: true\n  issue: 7\n  issue_title: "Bug"\n---\nbody`,
     );
-    expect(t.assess).toEqual({ autoPlan: true, issue: 7, issueTitle: "Bug" });
+    expect(t.assess).toEqual({ autoPlan: true, issue: 7 });
+    expect(t.assess).not.toHaveProperty("issueTitle");
   });
 
   it("omits assess.issue when absent (mapping stays valid)", () => {
@@ -184,9 +185,9 @@ describe("parseTicket", () => {
     expect(t.assess?.issue).toBeUndefined();
   });
 
-  it("defaults assess.issueTitle to empty string when issue is set but issue_title is omitted", () => {
+  it("assess.issue parses fine with issue_title omitted (no issueTitle field either way)", () => {
     const t = parseTicket("/q/a.md", `---\nid: x\nassess:\n  issue: 7\n---\nbody`);
-    expect(t.assess).toEqual({ autoPlan: false, issue: 7, issueTitle: "" });
+    expect(t.assess).toEqual({ autoPlan: false, issue: 7 });
   });
 
   it("omits assess.issue when non-positive (#0 or negative rejected, mapping stays valid)", () => {

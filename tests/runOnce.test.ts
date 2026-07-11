@@ -431,6 +431,21 @@ describe("executeClaimed crash containment", () => {
   });
 });
 
+/** Transcript writes go through an async createWriteStream (agent/session.ts),
+ * so a single synchronous readdirSync right after the run can beat the first
+ * flush on a fast/slow CI runner (issue #157). Loop-until-condition with a
+ * bounded retry instead, per the repo's async-race guidance. */
+async function untilTranscriptWritten(dir: string, name: string, ms = 3000): Promise<string[]> {
+  const start = Date.now();
+  let entries: string[] = [];
+  while (Date.now() - start < ms) {
+    entries = existsSync(dir) ? readdirSync(dir) : [];
+    if (entries.includes(name)) return entries;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return entries;
+}
+
 describe("transcript path sanitization (issue #32)", () => {
   it("slugifies a path-traversal frontmatter id before building the transcript path", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
@@ -450,10 +465,13 @@ describe("transcript path sanitization (issue #32)", () => {
     await runOnce(c, { sessionFactoryFor: () => fakeFactory() });
 
     // The transcript must live inside stateDir/transcripts/ as a single inert
-    // filename — never at the traversal target.
+    // filename — never at the traversal target. Poll until the async stream
+    // flushes it rather than asserting on a single synchronous readdirSync
+    // (issue #157).
     const transcriptsDir = join(stateDir, "transcripts");
-    const written = readdirSync(transcriptsDir);
-    expect(written).toContain("..-..-..-..-pwned.jsonl");
+    const expectedName = "..-..-..-..-pwned.jsonl";
+    const written = await untilTranscriptWritten(transcriptsDir, expectedName);
+    expect(written).toContain(expectedName);
     // The traversal target (root/pwned.jsonl) must NOT exist.
     expect(existsSync(join(root, "pwned.jsonl"))).toBe(false);
   });
@@ -1096,5 +1114,46 @@ describe("analyze routing", () => {
     expect(handled).toBe(true);
     expect(calls).toEqual(["start", "requeue"]);
     expect(draftCount(cfg(root))).toBe(0);
+  });
+
+  // Issue #103: "analyze never posts" must not rest on the reporter's own
+  // `if (!t.github …) return` guard — a hand-authored ticket carrying BOTH
+  // `analyze:` and `github:` must still get zero outward writes, because
+  // runOnce routes the analyze branch's terminal disposition through a
+  // hard-coded no-op reporter regardless of what's injected.
+  it("a hand-authored analyze:+github: ticket never reaches the reporter's onFinal (#103)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    const repo = mkdtempSync(join(tmpdir(), "junco-analyze-repo-"));
+    writeFileSync(
+      join(j, "inbox", "a.md"),
+      `---\nid: analyze-3\nanalyze:\n  issue: 9\n  title: T\nrepo: ${repo}\ngithub:\n  nwo: a/b\n  issue: 9\n  kind: ask\n---\n# Analyze\ninvestigate\n`,
+      "utf8",
+    );
+
+    const fakeAnalyzeFlowFn = async (): Promise<AnalyzeFlowResult> => ({
+      dst: join(j, "done", "a.md"),
+      status: "completed",
+      requeued: false,
+      result: fakeRunResult("analyze done"),
+      parked: true,
+    });
+
+    const calls: string[] = [];
+    const reporter = {
+      onStart: async (): Promise<void> => void calls.push("start"),
+      onRequeue: async (): Promise<void> => void calls.push("requeue"),
+      onFinal: async (): Promise<void> => void calls.push("final"),
+    };
+
+    const handled = await runOnce(cfg(root), { analyzeFlowFn: fakeAnalyzeFlowFn, reporter });
+
+    expect(handled).toBe(true);
+    // onFinal — the call that would post an outward comment — must never
+    // reach the injected reporter on the analyze path, `github:` block or not.
+    expect(calls).not.toContain("final");
   });
 });

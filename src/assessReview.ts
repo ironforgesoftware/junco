@@ -25,7 +25,18 @@ export interface PendingAssess {
 
 export type AssessReviewDeps = ReviewStoreDeps;
 
-const store = makeReviewStore<PendingAssess>("assess-review");
+// `issue` is the one optional PendingAssess field (scoping context, not
+// always present) — every other field is required for a batch to be usable
+// downstream (e.g. runAssessReviewCommand's `batch.findings.length`).
+const store = makeReviewStore<PendingAssess>("assess-review", [
+  "id",
+  "nwo",
+  "external",
+  "autoPlan",
+  "repoPath",
+  "createdAt",
+  "findings",
+]);
 
 export function assessReviewPaths(cfg: Config): { dir: string; filed: string } {
   return { dir: store.dir(cfg), filed: store.archiveDir(cfg, "filed") };
@@ -52,8 +63,10 @@ export function readPending(
   return { batch: entry, error }; // preserve the existing {batch,error} shape
 }
 
-export function removePending(cfg: Config, id: string, deps: AssessReviewDeps = {}): void {
-  store.remove(cfg, id, "filed", deps);
+/** true → archived; false → the batch was already archived/gone (ENOENT-safe:
+ * archiving an id twice is a no-op, not a throw). */
+export function removePending(cfg: Config, id: string, deps: AssessReviewDeps = {}): boolean {
+  return store.remove(cfg, id, "filed", deps);
 }
 
 export function pendingCount(cfg: Config, deps: AssessReviewDeps = {}): number {

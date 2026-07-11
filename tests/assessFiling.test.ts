@@ -241,6 +241,46 @@ describe("fileFindings", () => {
     expect(bodies[0]).toContain("**Context:** o/r#7");
   });
 
+  it("empty/no-match selection returns zeroed counts and does NOT archive the batch (defense-in-depth for the --only-typo fix, #106)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    writePending(c, pending(false));
+    const calls: string[][] = [];
+    // Nothing selected: this is the case the CLI-level --only guard in
+    // runAssessFileCommand already rejects, but fileFindings must independently
+    // refuse to file or archive on an empty selection — belt-and-suspenders so
+    // no future caller of fileFindings can slip an empty set past the guard.
+    const res = await fileFindings(c, pending(false), new Set(), { ghFn: ghFake(calls) });
+
+    expect(res).toEqual({
+      created: 0,
+      queuedOffline: 0,
+      deduped: 0,
+      failed: 0,
+      urls: [],
+      warnings: [],
+    });
+    // no gh calls at all — not even the dedup list fetch
+    expect(calls).toHaveLength(0);
+    // the batch is still parked, not archived
+    expect(readPending(c, "assess-x-1").batch).not.toBeNull();
+  });
+
+  it("a selection matching no known fingerprints behaves the same as an empty selection", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    writePending(c, pending(false));
+    const calls: string[][] = [];
+    const res = await fileFindings(c, pending(false), new Set(["no-such-fingerprint"]), {
+      ghFn: ghFake(calls),
+    });
+
+    expect(res.created).toBe(0);
+    expect(res.failed).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(readPending(c, "assess-x-1").batch).not.toBeNull();
+  });
+
   it("without batch.issue, the filed issue body has no **Context:** line", async () => {
     const dir = mkdtempSync(join(tmpdir(), "afl-"));
     const c = cfg(dir);
