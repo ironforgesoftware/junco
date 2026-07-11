@@ -76,17 +76,23 @@ export function watchConfig(
 
   const reload = (): void => {
     // Single read: parse the file once, then assemble the flat Config from that
-    // parsed object (no second readFileSync via loadConfig).
+    // parsed object (no second readFileSync via loadConfig). assembleFn can
+    // throw too — it calls resolveApiKey, which throws on an unset $VAR
+    // reference or a "!command" value — so it stays inside this try alongside
+    // parseFn: either failure logs and keeps serving the previous config
+    // rather than throwing out of this debounced setTimeout callback (which
+    // would crash the daemon).
     let nextParsed: ConfigParsed;
+    let nextConfig: Config;
     try {
       nextParsed = parseFn(configPath);
+      nextConfig = assembleFn(nextParsed);
     } catch (e) {
       logger.error("config reload failed; keeping previous config", {
         error: e instanceof Error ? e.message : String(e),
       });
       return;
     }
-    const nextConfig = assembleFn(nextParsed);
     // Re-apply the log threshold only when it actually changed (setLogLevel is a
     // cheap idempotent global, but "only if changed" matches the spec).
     const prevLogLevel = holder.current.logLevel;

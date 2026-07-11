@@ -553,6 +553,17 @@ describe("resolveApiKey", () => {
     expect(() => resolveApiKey("!op read secret", {})).toThrow(/config: model\.apiKey.*!command/);
   });
 
+  it('schema-level: rejects a "!command" apiKey at parse time, env-independent', () => {
+    // Defense in depth (item 2): resolveApiKey's own throw only fires at
+    // assembly time (needs the daemon env); the schema rejects the shape at
+    // WRITE time too, so `junco config set` / the TUI editor / any
+    // validateConfigObject caller fails loud before the value ever reaches
+    // disk.
+    expect(() =>
+      loadConfig(writeJson({ vaultRoot: "/v", model: { apiKey: "!op read secret" } })),
+    ).toThrow(/model\.apiKey.*!command/);
+  });
+
   it("treats a non-env-shaped $ string as a literal", () => {
     expect(resolveApiKey("$not-an-env-ref", {})).toBe("$not-an-env-ref");
   });

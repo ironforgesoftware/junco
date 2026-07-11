@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { makeConfigHolder, watchConfig } from "../src/configWatcher.js";
 
-type Snap = { parsed: any; config: any } | Error;
+type Snap = { parsed: any; config: any } | { parsed: any; assembleError: Error } | Error;
 const baseConfig = { vaultRoot: "/v", logLevel: "info", healthPort: 8787 } as any;
 const baseline: Snap = {
   parsed: { vaultRoot: "/v", observability: { logLevel: "info", healthPort: 8787 } },
@@ -14,7 +14,10 @@ function harness(initial: Snap, events: Snap[]) {
   let idx = -1; // -1 = construction/baseline; 0.. = events
   const setLog = vi.fn();
   const restart = vi.fn();
-  const holder = makeConfigHolder(initial instanceof Error ? baseConfig : initial.config);
+  const logError = vi.fn();
+  const initialConfig =
+    initial instanceof Error || "assembleError" in initial ? baseConfig : initial.config;
+  const holder = makeConfigHolder(initialConfig);
   const cur = (): Snap => (idx < 0 ? initial : events[idx]);
   const handle = watchConfig("/dir/config.json", holder, {
     watchFn: (_dir, listener) => {
@@ -33,10 +36,12 @@ function harness(initial: Snap, events: Snap[]) {
     assembleFn: () => {
       const s = cur();
       if (s instanceof Error) throw s;
+      if ("assembleError" in s) throw s.assembleError;
       return s.config;
     },
     setLogLevelFn: setLog,
     onRestartFields: restart,
+    logFn: { warn: vi.fn(), error: logError },
   });
   return {
     fire: () => {
@@ -46,6 +51,7 @@ function harness(initial: Snap, events: Snap[]) {
     holder,
     setLog,
     restart,
+    logError,
     handle,
   };
 }
@@ -110,5 +116,29 @@ describe("configWatcher", () => {
     const before = h.holder.current;
     h.fire();
     expect(h.holder.current).toBe(before);
+  });
+
+  it("keeps the previous config and logs when assembly throws (bad apiKey, #CRIT-1)", () => {
+    // assembleConfig can throw even when parsing succeeds — e.g. resolveApiKey
+    // rejects an unset "$VAR" reference or a "!command" value. A schema-valid
+    // config.json (parse succeeds) can still fail assembly; the watcher must
+    // not let that escape the debounced setTimeout callback and crash the
+    // daemon.
+    const assembleError = new Error(
+      "config: model.apiKey references $MISSING_KEY, but MISSING_KEY is not set in the daemon environment.",
+    );
+    const h = harness(baseline, [
+      {
+        parsed: { vaultRoot: "/v", observability: { logLevel: "info", healthPort: 8787 } },
+        assembleError,
+      },
+    ]);
+    const before = h.holder.current;
+    expect(() => h.fire()).not.toThrow();
+    expect(h.holder.current).toBe(before);
+    expect(h.logError).toHaveBeenCalledWith(
+      "config reload failed; keeping previous config",
+      expect.objectContaining({ error: expect.stringContaining("MISSING_KEY") }),
+    );
   });
 });

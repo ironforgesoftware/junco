@@ -131,7 +131,20 @@ export const ConfigSchema = z.object({
       modelsJson: z.string().optional(),
       api: z.string().default("openai-completions"),
       baseUrl: z.string().optional(),
-      apiKey: z.string().optional(),
+      // Env-independent mirror of resolveApiKey's own "!command" rejection
+      // (defense in depth): reject the shape at WRITE time — `config set` /
+      // the TUI editor / validateConfigObject — rather than only discovering
+      // it at daemon-env-dependent assembly time. $VAR interpolation stays a
+      // resolveApiKey concern (it needs the daemon environment, unavailable
+      // here).
+      apiKey: z
+        .string()
+        .optional()
+        .refine((v) => v === undefined || !v.startsWith("!"), {
+          message:
+            'config: model.apiKey must not be a "!command" value — junco does not execute ' +
+            "shell commands from config.json.",
+        }),
       retry: z
         .object({
           maxRetries: z.number().int().min(0).optional(),
