@@ -121,12 +121,18 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         const ok = await backend.isAvailable((c, a) =>
           execFn(c, a).then((r) => ({ code: r.code })),
         );
+        // On failure, tell the operator exactly how to satisfy the system
+        // prerequisite (bwrap is a distro package, like git/gh — not an npm dep).
+        const installHint =
+          backend.name === "bwrap"
+            ? "install bubblewrap (apt install bubblewrap / dnf install bubblewrap / apk add bubblewrap)"
+            : "install the backend or set sandbox.backend=none";
         report(
           ok ? "ok" : "fail",
           "sandbox",
           ok
             ? `${backend.name} available`
-            : `${backend.name} unavailable — tickets fail closed (install it or set backend=none)`,
+            : `${backend.name} unavailable — tickets fail closed. ${installHint}, or set sandbox.enabled=false`,
         );
       }
     }

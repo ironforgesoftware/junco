@@ -140,7 +140,7 @@ auto-forked and provisioned the same way `junco dispatch` does.
 
 ## Sixty seconds to a running worker
 
-Requires **Node ≥ 22.19**, plus `git` and an authenticated `gh` for PR flows.
+Requires **Node ≥ 22.19**, plus `git` and an authenticated `gh` for PR flows. The execution sandbox is on by default: macOS uses the built-in Seatbelt (nothing to install); **Linux needs `bubblewrap`** (`apt install bubblewrap` / `dnf install bubblewrap`) — or set `sandbox.backend: "none"` / `sandbox.enabled: false`.
 
 ```bash
 npx @ironforgesoftware/junco   # first run → setup wizard; afterwards → starts the daemon
