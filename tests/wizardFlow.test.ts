@@ -10,6 +10,7 @@ import {
   answersFromConfig,
   diffAnswers,
   applyAnswers,
+  COVERED_LEVER_COUNT,
   type WizardAnswers,
 } from "../src/wizard/flow.js";
 import { loadConfig, queuePaths } from "../src/config.js";
@@ -163,5 +164,19 @@ describe("re-run mode", () => {
     const out = applyAnswers(mjRaw, a);
     expect(JSON.stringify(out)).not.toContain("modelsJson");
     expect((out.model as { baseUrl: string }).baseUrl).toBe("http://h:1/v1");
+  });
+
+  it("COVERED_LEVER_COUNT is mode-independent and matches the covered surface", () => {
+    expect(COVERED_LEVER_COUNT).toBe(13);
+    const inline = defaultAnswers();
+    const mj = {
+      ...defaultAnswers(),
+      mode: "models_json" as const,
+      modelsJson: "/mj.json",
+    };
+    // Same number of covered paths in both modes: a full diff against an empty
+    // raw config reports at most COVERED_LEVER_COUNT entries.
+    expect(diffAnswers({}, inline).length).toBeLessThanOrEqual(COVERED_LEVER_COUNT);
+    expect(diffAnswers({}, mj).length).toBeLessThanOrEqual(COVERED_LEVER_COUNT);
   });
 });

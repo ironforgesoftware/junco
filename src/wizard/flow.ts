@@ -118,6 +118,12 @@ function coveredPaths(a: WizardAnswers): { path: string; value: unknown }[] {
   ];
 }
 
+/** Number of lever paths the walkthrough covers — kept derived so the Review
+ * chapter's "N more levers keep their safe defaults" count can never drift
+ * from coveredPaths(). The count is mode-independent (the model trio is
+ * always three entries). */
+export const COVERED_LEVER_COUNT = coveredPaths(defaultAnswers()).length;
+
 /** Prefill answers from a raw parsed config.json (re-run mode). Missing keys
  * fall back to the schema defaults the fresh wizard uses. */
 export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {

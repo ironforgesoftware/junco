@@ -8,7 +8,9 @@ import { Workspace } from "../src/tui/wizard/chapters/Workspace.js";
 import { Model } from "../src/tui/wizard/chapters/Model.js";
 import { RepoSafety } from "../src/tui/wizard/chapters/RepoSafety.js";
 import { Github } from "../src/tui/wizard/chapters/Github.js";
-import { defaultAnswers } from "../src/wizard/flow.js";
+import { Extras } from "../src/tui/wizard/chapters/Extras.js";
+import { Review } from "../src/tui/wizard/chapters/Review.js";
+import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
 afterEach(cleanup);
@@ -565,5 +567,91 @@ describe("Github chapter", () => {
     await press(stdin, ENTER);
     await until(() => advanced);
     expect(answers.github.repos).toEqual([{ nwo: "acme/api", path: "/tmp/acme" }]);
+  });
+});
+
+describe("Extras chapter", () => {
+  it("pre-checks the recommended set, shows the focused description, unchecking persists", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Extras
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo()}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("OS sandbox"));
+    // focused row's LEVERS description shows below the list
+    expect(lastFrame()).toContain("Wrap agent tool subprocesses");
+    await press(stdin, SPACE); // uncheck sandbox (first row)
+    await press(stdin, ENTER);
+    await until(() => advanced);
+    expect(answers.extras).toEqual({
+      sandbox: false,
+      verify: true,
+      health: true,
+      transcripts: true,
+    });
+  });
+});
+
+describe("Review chapter", () => {
+  it("fresh mode shows the exact JSON and writes on confirm", async () => {
+    let wrote = false;
+    const { lastFrame, stdin } = render(
+      <Review
+        {...noopChapter}
+        answers={defaultAnswers()}
+        patch={() => {}}
+        io={fakeIo()}
+        onNext={() => {}}
+        onWrite={() => {
+          wrote = true;
+        }}
+        onCancel={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    expect(lastFrame()).toContain("junco config list");
+    await press(stdin, ENTER); // "Write config" is the first option
+    await until(() => wrote);
+  });
+
+  it("rerun mode shows a diff, or the untouched note when nothing changed", async () => {
+    const raw = { vaultRoot: "/v", model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" } };
+    const changed = { ...answersFromConfig(raw), vaultRoot: "/v2" };
+    const { lastFrame } = render(
+      <Review
+        {...noopChapter}
+        answers={changed}
+        patch={() => {}}
+        io={fakeIo({ mode: "rerun", currentRaw: raw })}
+        onNext={() => {}}
+        onWrite={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("vaultRoot"));
+    expect(lastFrame()).toContain("/v → /v2");
+
+    const same = render(
+      <Review
+        {...noopChapter}
+        answers={answersFromConfig(raw)}
+        patch={() => {}}
+        io={fakeIo({ mode: "rerun", currentRaw: raw })}
+        onNext={() => {}}
+        onWrite={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await until(() => (same.lastFrame() ?? "").includes("Nothing changed"));
   });
 });
