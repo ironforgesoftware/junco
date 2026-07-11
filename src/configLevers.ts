@@ -255,8 +255,9 @@ export const LEVERS: Lever[] = [
     default: 1,
     min: 1,
     editable: true,
-    reload: "live",
-    description: "Parallel ticket slots; same-repo tickets always serialize.",
+    reload: "restart",
+    description:
+      "Parallel ticket slots; same-repo tickets always serialize (restart to apply — the serial-vs-scheduler mode fork is chosen once at startup).",
   },
   {
     path: "worker.commitLeftovers",

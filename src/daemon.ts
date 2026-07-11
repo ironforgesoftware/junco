@@ -248,13 +248,18 @@ export async function runScheduler(
       metrics.recordPoll();
       if (deps.maybeBridgeSweepFn) await deps.maybeBridgeSweepFn();
       let claimedThisPoll = 0;
-      while (inflight.size < activeCfg().maxConcurrent && !stopFlag.requested) {
-        const work = await claimFn(cfg, { skipRepoKeys: busyRepos, readyFn: deps.readyFn });
+      // maxConcurrent is restart-kind (Task 6/Fix C): read the FROZEN `cfg`
+      // here, not activeCfg() — a live edit must never silently change the
+      // concurrency limit mid-run while configWatcher tells the operator to
+      // restart to apply it. claim/execute below still use activeCfg() so an
+      // in-flight/newly-claimed ticket picks up other, live-kind levers.
+      while (inflight.size < cfg.maxConcurrent && !stopFlag.requested) {
+        const work = await claimFn(activeCfg(), { skipRepoKeys: busyRepos, readyFn: deps.readyFn });
         if (!work) break;
         claimedThisPoll++;
         idleAnnounced = false;
         if (work.repoKey) busyRepos.add(work.repoKey);
-        const p: Promise<void> = executeFn(cfg, work)
+        const p: Promise<void> = executeFn(activeCfg(), work)
           .catch((e) =>
             log.error("task execution crashed", {
               id: work.ticket.id,

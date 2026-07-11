@@ -393,8 +393,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // Live-reload (Task 6): the holder starts seeded with the config we just
     // loaded; the watcher re-parses config.toml on change and swaps in a new
     // Config, which mainLoop's per-iteration reads pick up without a restart.
+    // Hot-reload is optional — a watch-start failure (EMFILE/ENOSPC/EACCES/
+    // unsupported FS) must NOT crash the daemon, matching the health server's
+    // graceful-degrade pattern below: log a warning and continue with the
+    // holder seeded but never updated (hot-reload disabled until restart).
     const holder = makeConfigHolder(cfg);
-    const watcher = watchConfigFn(configPath, holder);
+    let watcher: { close(): void } | null = null;
+    try {
+      watcher = watchConfigFn(configPath, holder);
+    } catch (e) {
+      log.warn("config watcher failed to start; hot-reload disabled until restart", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
 
     try {
       await mainLoopFn(cfg, stopFlag, { once: values.once as boolean }, { configHolder: holder });
@@ -405,7 +416,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       });
       return 1;
     } finally {
-      watcher.close();
+      if (watcher) watcher.close();
       uninstall();
       lock.release();
       teardownLogs();
