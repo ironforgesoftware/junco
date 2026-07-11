@@ -61,6 +61,46 @@ export interface RequeueOutcome {
 }
 
 /**
+ * Atomically move a claimed ticket back to inbox/: `content` (already
+ * frontmatter-mutated by the caller) is written in place inside processing/
+ * (tmp+rename), then renamed into inbox/ — no duplicate-visible window. If
+ * the inbox already holds a same-named ticket, a `-r{n}` suffix is appended,
+ * starting at `suffixSeed` and incrementing past any already-queued retry
+ * (#112) so a collision never clobbers a pending ticket. Shared by both
+ * requeueTicket (seeds with the bumped attempt number) and
+ * requeueTicketKeepBudget (seeds with 1 — this path has no attempt counter).
+ */
+function moveBackToInbox(
+  cfg: Config,
+  claimedPath: string,
+  content: string,
+  suffixSeed: number,
+): string {
+  const tmp = claimedPath + ".tmp";
+  writeFileSync(tmp, content, "utf8");
+  renameSync(tmp, claimedPath);
+
+  const inbox = queuePaths(cfg).inbox;
+  mkdirSync(inbox, { recursive: true }); // defensive — survives a deleted inbox
+  let name = basename(claimedPath).replace(CLAIM_PREFIX_RE, "");
+  if (existsSync(join(inbox, name))) {
+    // #112: the -r{n} suffix must not clobber an already-queued retry (e.g. an
+    // existing t1-r1.md). Loop until a free name is found; the first candidate
+    // stays -r{suffixSeed} so single-collision behavior is unchanged.
+    let n = suffixSeed;
+    let candidate = name.replace(/\.md$/, `-r${n}.md`);
+    while (existsSync(join(inbox, candidate))) {
+      n += 1;
+      candidate = name.replace(/\.md$/, `-r${n}.md`);
+    }
+    name = candidate;
+  }
+  const dst = join(inbox, name);
+  renameSync(claimedPath, dst);
+  return dst;
+}
+
+/**
  * Move a claimed ticket back to inbox/ for another attempt. Returns
  * {requeued:false} (file untouched) when the retry budget is exhausted.
  * The move is atomic: content is updated in place (tmp+rename inside
@@ -96,30 +136,11 @@ export function requeueTicket(
     return { requeued: false, malformed: true };
   }
 
-  const tmp = claimedPath + ".tmp";
-  writeFileSync(tmp, content, "utf8");
-  renameSync(tmp, claimedPath);
-
-  const inbox = queuePaths(cfg).inbox;
-  mkdirSync(inbox, { recursive: true }); // defensive — survives a deleted inbox
-  let name = basename(claimedPath).replace(CLAIM_PREFIX_RE, "");
-  if (existsSync(join(inbox, name))) {
-    // #112: the -r{n} suffix must not clobber an already-queued retry (e.g. an
-    // existing t1-r1.md). Loop until a free name is found; the first candidate
-    // stays -r{attempt} so single-collision behavior is unchanged.
-    let n = attempt;
-    let candidate = name.replace(/\.md$/, `-r${n}.md`);
-    while (existsSync(join(inbox, candidate))) {
-      n += 1;
-      candidate = name.replace(/\.md$/, `-r${n}.md`);
-    }
-    name = candidate;
-  }
-  const dst = join(inbox, name);
-  renameSync(claimedPath, dst);
+  const dst = moveBackToInbox(cfg, claimedPath, content, attempt);
   // The single chokepoint every requeue path funnels through (Q&A/PR/assess
-  // transient, #64 crash containment, orphan recovery) — count it here so a
-  // fails-and-retries ticket is visible in /health and `junco status` (#37).
+  // transient, #64 crash containment, orphan recovery, and the count-free
+  // requeueTicketKeepBudget below) — count it here so a fails-and-retries
+  // ticket is visible in /health and `junco status` (#37).
   metrics.recordRequeue();
   log.warn("transient failure — requeued for retry", {
     dst,
@@ -129,4 +150,49 @@ export function requeueTicket(
     notBefore,
   });
   return { requeued: true, dst, attempt };
+}
+
+/**
+ * Move a claimed ticket back to inbox/ for a gate-class infrastructure
+ * failure (e.g. a latched provider outage, see ProviderGate) — unlike
+ * requeueTicket, this NEVER touches retry_count (absent stays absent, a
+ * present value is preserved verbatim) and has no budget check: it always
+ * requeues, even at an exhausted count. That's safe here because the caller
+ * is gated (claiming stays blocked until the gate clears), so there is no
+ * budget-burning hot loop to guard against the way there is on the
+ * transient-failure path — see the #108 comment on requeueTicket above.
+ */
+export function requeueTicketKeepBudget(
+  cfg: Config,
+  claimedPath: string,
+  notBeforeIso: string,
+  reason: string,
+): { requeued: true; dst: string } {
+  let content = readFileSync(claimedPath, "utf8");
+  content = upsertFrontmatterKey(content, "not_before", JSON.stringify(notBeforeIso));
+
+  // Best-effort verification only (contrast with requeueTicket's #108 decline
+  // above): if the frontmatter is malformed and not_before can't be made to
+  // persist, log a warning but requeue anyway — the gate, not the budget,
+  // prevents a hot loop on this path, so declining here would just strand the
+  // ticket in processing/ for no safety benefit.
+  const verify = parseTicket(claimedPath, content);
+  if (verify.notBefore === null) {
+    log.warn(
+      "malformed frontmatter — not_before may not persist; requeuing anyway (gate-protected)",
+      {
+        path: claimedPath,
+        reason,
+      },
+    );
+  }
+
+  const dst = moveBackToInbox(cfg, claimedPath, content, 1);
+  metrics.recordRequeue();
+  log.warn("infrastructure failure — requeued without consuming retry budget", {
+    dst,
+    reason,
+    notBefore: notBeforeIso,
+  });
+  return { requeued: true, dst };
 }

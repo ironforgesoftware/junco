@@ -6,6 +6,7 @@ import {
   isTransientFailure,
   upsertFrontmatterKey,
   requeueTicket,
+  requeueTicketKeepBudget,
   CLAIM_PREFIX_RE,
 } from "../src/requeue.js";
 import { parseTicket } from "../src/ticket.js";
@@ -168,6 +169,95 @@ describe("requeueTicket", () => {
     // Budget exhausted → no move, no count.
     const declined = claimedFile("---\nid: t2\nretry_count: 2\n---\nx", "2026-06-10T1200Z__t2.md");
     requeueTicket(cfg, declined, parseTicket(declined, readFileSync(declined, "utf8")), "r");
+    expect(metrics.snapshot().requeues).toBe(before + 1);
+  });
+});
+
+describe("requeueTicketKeepBudget", () => {
+  let root: string;
+  let cfg: Config;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "junco-rqkb-"));
+    mkdirSync(join(root, "inbox"), { recursive: true });
+    mkdirSync(join(root, "processing"), { recursive: true });
+    cfg = {
+      vaultRoot: root,
+      juncoSubdir: "",
+      maxTransientRetries: 2,
+      retryBackoffSeconds: 60,
+    } as unknown as Config;
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const claimedFile = (content: string, name = "2026-06-10T1200Z__t1.md"): string => {
+    const p = join(root, "processing", name);
+    writeFileSync(p, content, "utf8");
+    return p;
+  };
+
+  const future = () => new Date(Date.now() + 60_000).toISOString();
+
+  it("stamps not_before only — retry_count line is absent when it was absent", () => {
+    const p = claimedFile("---\nid: t1\n---\ndo it\n");
+    const notBefore = future();
+    const out = requeueTicketKeepBudget(cfg, p, notBefore, "gate=provider_outage");
+    expect(out.requeued).toBe(true);
+    expect(out.dst).toBe(join(root, "inbox", "t1.md"));
+    expect(existsSync(p)).toBe(false);
+    const moved = readFileSync(out.dst, "utf8");
+    expect(moved).not.toMatch(/retry_count/);
+    const parsed = parseTicket(out.dst, moved);
+    expect(parsed.notBefore).toBe(notBefore);
+    expect(parsed.retryCount).toBe(0); // absent stays absent
+    expect(moved).toMatch(/do it/); // body intact
+  });
+
+  it("preserves an existing retry_count verbatim", () => {
+    const p = claimedFile("---\nid: t1\nretry_count: 5\n---\nx");
+    const notBefore = future();
+    const out = requeueTicketKeepBudget(cfg, p, notBefore, "gate=provider_outage");
+    const moved = readFileSync(out.dst, "utf8");
+    expect(moved).toMatch(/retry_count: 5/);
+    expect(moved.match(/retry_count:/g)).toHaveLength(1); // not duplicated
+    expect(parseTicket(out.dst, moved).retryCount).toBe(5);
+  });
+
+  it("requeues even at an exhausted budget (retry_count: 99) — no budget check", () => {
+    const p = claimedFile("---\nid: t1\nretry_count: 99\n---\nx");
+    const out = requeueTicketKeepBudget(cfg, p, future(), "gate=provider_outage");
+    expect(out.requeued).toBe(true);
+    const moved = readFileSync(out.dst, "utf8");
+    expect(moved).toMatch(/retry_count: 99/);
+  });
+
+  it("suffixes the name when the inbox already holds a same-named ticket", () => {
+    writeFileSync(join(root, "inbox", "t1.md"), "occupied", "utf8");
+    const p = claimedFile("---\nid: t1\n---\nx");
+    const out = requeueTicketKeepBudget(cfg, p, future(), "r");
+    expect(out.dst).toBe(join(root, "inbox", "t1-r1.md"));
+  });
+
+  it("loops the -r{n} suffix past an already-queued retry (#112)", () => {
+    writeFileSync(join(root, "inbox", "t1.md"), "occupied", "utf8");
+    writeFileSync(join(root, "inbox", "t1-r1.md"), "already queued", "utf8");
+    const p = claimedFile("---\nid: t1\n---\nx");
+    const out = requeueTicketKeepBudget(cfg, p, future(), "r");
+    expect(out.dst).toBe(join(root, "inbox", "t1-r2.md")); // bumped past the collision
+    expect(readFileSync(join(root, "inbox", "t1-r1.md"), "utf8")).toBe("already queued"); // untouched
+  });
+
+  it("malformed frontmatter: logs a warning but requeues anyway (gate prevents hot loop)", () => {
+    const p = claimedFile("---\nid: t1\nfoo: [1, 2\n---\ndo it\n");
+    const out = requeueTicketKeepBudget(cfg, p, future(), "gate=provider_outage");
+    expect(out.requeued).toBe(true);
+    expect(existsSync(p)).toBe(false);
+    expect(existsSync(out.dst)).toBe(true);
+  });
+
+  it("calls metrics.recordRequeue() — the shared requeue chokepoint", () => {
+    const before = metrics.snapshot().requeues;
+    const p = claimedFile("---\nid: t1\n---\nx");
+    requeueTicketKeepBudget(cfg, p, future(), "r");
     expect(metrics.snapshot().requeues).toBe(before + 1);
   });
 });
