@@ -800,6 +800,84 @@ describe("runScheduler", () => {
     expect(inbox).toHaveLength(1);
     expect(readFileSync(join(j, "inbox", inbox[0]), "utf8")).toMatch(/retry_count: 1/);
   });
+
+  it("live per-ticket cfg reaches newly-claimed tickets while the concurrency ceiling stays frozen (Fix B + Fix C)", async () => {
+    // Fix B: claimFn/executeFn read `configHolder.current` each dispatch, so a
+    // mid-run edit (e.g. model.id) reaches the very next claim/execute — not
+    // just tickets claimed after a fresh runScheduler() call.
+    // Fix C: the inner while's concurrency ceiling reads the FROZEN `cfg`
+    // this scheduler was invoked with, never `configHolder.current` — a live
+    // edit to worker.max_concurrent (a `reload:"restart"` lever) must NOT
+    // silently widen the pool mid-run.
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const holder = makeConfigHolder(cfg);
+    const stop = new StopFlag();
+    const queue = [
+      fakeWork("a", null),
+      fakeWork("b", null),
+      fakeWork("c", null),
+      fakeWork("d", null),
+      fakeWork("e", null),
+    ];
+    let running = 0;
+    let peak = 0;
+    let finished = 0;
+    let mutated = false;
+    const claimedModelIds: string[] = [];
+    const executedModelIds: string[] = [];
+
+    const claimFn = async (c: Config) => {
+      const w = queue.shift();
+      if (!w) {
+        if (queue.length === 0 && running === 0) stop.requestStop();
+        return null;
+      }
+      claimedModelIds.push(c.model.id);
+      return w;
+    };
+    const executeFn = async (c: Config, w: ClaimedWork) => {
+      executedModelIds.push(c.model.id);
+      running++;
+      peak = Math.max(peak, running);
+      if (w.ticket.id === "a" && !mutated) {
+        mutated = true;
+        // Bump BOTH a live lever (model.id) and the restart-kind lever
+        // (maxConcurrent) in the same edit — Fix B says the former must
+        // reach the next dispatch; Fix C says the latter must not.
+        holder.current = {
+          ...holder.current,
+          maxConcurrent: 10,
+          model: { ...holder.current.model, id: "model-v2" },
+        };
+      }
+      await new Promise((r) => setTimeout(r, w.ticket.id === "a" ? 30 : 5));
+      running--;
+      finished++;
+    };
+
+    await runScheduler(
+      cfg,
+      stop,
+      {},
+      { claimFn, executeFn, sleep: tickSleep, configHolder: holder },
+    );
+
+    expect(finished).toBe(5);
+    expect(claimedModelIds).toHaveLength(5);
+    expect(executedModelIds).toHaveLength(5);
+    // Fix B: only ticket "a" (claimed/executed before the edit) saw the
+    // original model id — every ticket claimed/executed after it picked up
+    // the LIVE value, including "b", which was already in flight in the same
+    // dispatch burst as the edit.
+    expect(claimedModelIds[0]).toBe(cfg.model.id);
+    expect(executedModelIds[0]).toBe(cfg.model.id);
+    expect(claimedModelIds.slice(1).every((id) => id === "model-v2")).toBe(true);
+    expect(executedModelIds.slice(1).every((id) => id === "model-v2")).toBe(true);
+    // Fix C: holder.current.maxConcurrent became 10 mid-run, but the pool
+    // never grew past the FROZEN cfg.maxConcurrent (2) runScheduler started
+    // with — never more than 2 tasks ran at once.
+    expect(peak).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

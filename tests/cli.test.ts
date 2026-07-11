@@ -241,6 +241,65 @@ describe("run(['start']) — mainLoop throws", () => {
 });
 
 // ---------------------------------------------------------------------------
+// start — watchConfigFn throws (Fix A: guarded watcher startup, Task 6)
+// ---------------------------------------------------------------------------
+
+describe("run(['start']) — watchConfigFn throws (Fix A)", () => {
+  // Previously an unguarded `watcher = watchConfigFn(configPath, holder)` let
+  // a throw (EMFILE/ENOSPC/EACCES/unsupported FS) escape straight out of
+  // run(): mainLoop never ran, and none of uninstall()/lock.release()/
+  // teardownLogs() fired. The fix wraps the call in try/catch so a throw just
+  // disables hot-reload (holder stays seeded, never updated) and startup
+  // continues normally.
+  it("does not crash startup — mainLoop still runs and start still returns 0", async () => {
+    const deps = makeDeps({
+      watchConfigFn: vi.fn(() => {
+        throw new Error("EMFILE: too many open files");
+      }),
+    });
+    const code = await run(["start"], deps);
+    expect(code).toBe(0);
+    expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("still tears down: lock.release() and the signal-handler uninstall both run", async () => {
+    const fakeLock = makeFakeLock();
+    const uninstallSpy = vi.fn();
+    const deps = makeDeps({
+      acquireLockFn: vi.fn(() => fakeLock),
+      installSignalHandlersFn: vi.fn(() => uninstallSpy),
+      watchConfigFn: vi.fn(() => {
+        throw new Error("EMFILE: too many open files");
+      }),
+    });
+    await run(["start"], deps);
+    expect(fakeLock.release).toHaveBeenCalledTimes(1);
+    expect(uninstallSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs a warning naming the failure instead of propagating it", async () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    const deps = makeDeps({
+      watchConfigFn: vi.fn(() => {
+        throw new Error("EMFILE: too many open files");
+      }),
+    });
+    try {
+      await run(["start"], deps);
+    } finally {
+      spy.mockRestore();
+    }
+    const out = lines.join("");
+    expect(out).toMatch(/watcher/i);
+    expect(out).toContain("EMFILE");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // bare invocation → defaults to start
 // ---------------------------------------------------------------------------
 
