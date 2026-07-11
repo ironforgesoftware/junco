@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runInitWizard } from "../src/wizard.js";
+import { loadConfig } from "../src/config.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
@@ -99,6 +100,72 @@ describe("runInitWizard interactive (collectFn seam)", () => {
     expect(code).toBe(0);
     expect(readFileSync(cp, "utf8")).toBe(before);
     expect(existsSync(join(dir, "vault", "inbox"))).toBe(true); // dirs still ensured
+  });
+
+  it("cancel after a successful write reports the config WAS written (truthful exit)", async () => {
+    // Regression for #174: io.write can succeed (file renamed into place) and
+    // *then* throw further down the same call (ensureDirs -> loadConfigFn) —
+    // e.g. a corrupt/unreadable config surfacing only once queuePaths reads
+    // it back. The collectFn swallows that throw and reports "cancelled", so
+    // the exit message must not lie about nothing being on disk.
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const prints: string[] = [];
+    let calls = 0;
+    const code = await runInitWizard(cp, {
+      printFn: (s) => prints.push(s),
+      loadConfigFn: (p) => {
+        calls++;
+        if (calls > 1) throw new Error("boom: unreadable after write");
+        return loadConfig(p);
+      },
+      collectFn: async (io: WizardIO) => {
+        try {
+          io.write(io.initialAnswers);
+        } catch {
+          // swallowed by the interactive layer, same as a real WizardApp
+          // catching io.write and then the user quitting from Review.
+        }
+        return "cancelled";
+      },
+    });
+    expect(code).toBe(130);
+    expect(existsSync(cp)).toBe(true); // the write itself landed
+    expect(prints.join("")).toContain("config WAS written");
+    expect(prints.join("")).toContain(cp);
+    expect(prints.join("")).toContain("junco doctor");
+  });
+
+  it("rename failure cleans up the PID-suffixed temp file and rethrows", async () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    writeFileSync(
+      cp,
+      JSON.stringify({ vaultRoot: join(dir, "vault"), juncoSubdir: "", model: { id: "p/m" } }),
+      "utf8",
+    );
+    const unlinked: string[] = [];
+    let thrown: unknown;
+    const code = await runInitWizard(cp, {
+      renameFn: () => {
+        throw new Error("EPERM: rename blocked");
+      },
+      unlinkFn: (p) => unlinked.push(p),
+      collectFn: async (io: WizardIO) => {
+        try {
+          io.write({ ...io.initialAnswers, modelId: "p/m2" }); // real diff → write attempted
+        } catch (e) {
+          thrown = e;
+        }
+        return "cancelled";
+      },
+    });
+    expect(code).toBe(130);
+    expect(unlinked.length).toBe(1);
+    expect(unlinked[0]).toMatch(/\.config\.json\.tmp-\d+$/);
+    expect(unlinked[0]).toContain(String(process.pid));
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/EPERM/);
   });
 
   it("corrupt (non-JSON) existing config prints guidance, exits 1, never invokes collectFn", async () => {

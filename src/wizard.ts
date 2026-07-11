@@ -8,7 +8,14 @@
  * Exit codes: 0 written/unchanged · 130 cancelled · 1 no raw-mode terminal.
  */
 
-import { writeFileSync, readFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
+import {
+  writeFileSync,
+  readFileSync,
+  renameSync,
+  mkdirSync,
+  existsSync,
+  unlinkSync,
+} from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import type { Config } from "./types.js";
 import {
@@ -43,6 +50,9 @@ export interface WizardDeps {
   parseModelsJsonFn?: typeof parseModelsJson;
   writeFileFn?: (path: string, content: string) => void;
   renameFn?: (from: string, to: string) => void;
+  /** Best-effort cleanup of the PID-suffixed temp file when renameFn throws
+   * after the temp write succeeded. */
+  unlinkFn?: (p: string) => void;
   readFileFn?: (path: string) => string;
   existsFn?: (path: string) => boolean;
   loadConfigFn?: (path: string) => Config;
@@ -96,7 +106,13 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
   const writeFileFn = deps.writeFileFn ?? ((p, c) => writeFileSync(p, c, "utf8"));
   const readFileFn = deps.readFileFn ?? ((p) => readFileSync(p, "utf8"));
   const renameFn = deps.renameFn ?? renameSync;
+  const unlinkFn = deps.unlinkFn ?? unlinkSync;
   const loadConfigFn = deps.loadConfigFn ?? loadConfig;
+  // Set the instant the rename lands (both write branches below) so a later
+  // throw in the same io.write call (e.g. ensureDirs re-reading a config that
+  // turns out unreadable) doesn't make the cancel path lie about nothing
+  // being on disk.
+  let wroteFile = false;
 
   const ensureDirs = (cfg: Config): string => {
     const paths = queuePaths(cfg);
@@ -164,28 +180,44 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
     write: (a: WizardAnswers) => {
       let written = false;
       let changes: AnswerDiff[] = [];
+      // Atomic temp+rename, PID-suffixed (ConfigView/configCmd pattern) — a
+      // crash mid-write must never leave a truncated config.json where a
+      // full one used to not exist. If the rename itself throws (e.g. EPERM
+      // on the destination) after the temp write already succeeded, don't
+      // leave the temp file behind — best-effort unlink, then rethrow so the
+      // caller still sees the original failure.
+      const renameOrCleanup = (tmp: string, dest: string): void => {
+        try {
+          renameFn(tmp, dest);
+        } catch (e) {
+          try {
+            unlinkFn(tmp);
+          } catch {
+            /* best effort */
+          }
+          throw e;
+        }
+      };
       if (mode === "fresh") {
         // Validate before touching disk — mirrors rerun mode's ordering
         // below, so a schema-invalid answer set never leaves a half-written
         // file (or none at all) for the caller to trip over.
         validateConfigObject(buildConfigObject(a));
         mkdirFn(dirname(resolved));
-        // Atomic temp+rename, PID-suffixed (same ConfigView/configCmd pattern
-        // as the rerun branch below) — a crash mid-write must never leave a
-        // truncated config.json where a full one used to not exist.
         const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
         writeFileFn(tmp, renderConfigJson(a));
-        renameFn(tmp, resolved);
+        renameOrCleanup(tmp, resolved);
+        wroteFile = true;
         written = true;
       } else {
         changes = diffAnswers(raw as Record<string, unknown>, a);
         if (changes.length > 0) {
           const next = applyAnswers(raw as Record<string, unknown>, a);
           validateConfigObject(next);
-          // Atomic temp+rename, PID-suffixed (ConfigView/configCmd pattern).
           const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
           writeFileFn(tmp, JSON.stringify(next, null, 2) + "\n");
-          renameFn(tmp, resolved);
+          renameOrCleanup(tmp, resolved);
+          wroteFile = true;
           written = true;
         }
       }
@@ -197,7 +229,12 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
 
   const outcome = await (deps.collectFn ?? inkCollect)(io);
   if (outcome === "cancelled") {
-    printFn("Setup cancelled — nothing written.\n");
+    printFn(
+      wroteFile
+        ? `Setup did not finish — but the config WAS written to ${resolved}.\n` +
+            `  Run junco doctor to verify the rest.\n`
+        : "Setup cancelled — nothing written.\n",
+    );
     return 130;
   }
   // The alt-screen UI vanished on exit — leave a durable transcript.

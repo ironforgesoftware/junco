@@ -66,7 +66,14 @@ export function WizardApp({
     try {
       setResult(io.write(answers));
     } catch (e) {
-      setWriteError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      // validateConfigObject throws a raw ZodError whose .message is a
+      // multi-line JSON blob (src/config.ts) — the banner is a one-line
+      // summary, so take the first line and cap it; the full message isn't
+      // needed anywhere else (this banner is its only consumer).
+      const firstLine = msg.split("\n")[0] ?? "";
+      const brief = firstLine.length > 120 ? `${firstLine.slice(0, 120)}…` : firstLine;
+      setWriteError(brief);
     }
   };
   const done = (): void => finishWith(result?.written ? "written" : "unchanged");

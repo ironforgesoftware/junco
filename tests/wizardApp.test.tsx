@@ -290,6 +290,57 @@ describe("WizardApp", () => {
     await until(() => outcome === "cancelled", LONG_TRIES);
   }, 60000);
 
+  it("write error banner shows only the first line of a multi-line message", async () => {
+    // Regression for #174: validateConfigObject throws a raw ZodError whose
+    // .message is a multi-line JSON blob (src/config.ts). The banner is a
+    // one-line summary — the rest must not leak into the frame.
+    let outcome = "";
+    const io = fakeIo({
+      write: () => {
+        throw new Error("first line\nsecond line");
+      },
+    });
+    const { lastFrame, stdin } = render(
+      <WizardApp io={io} onOutcome={(o) => (outcome = o)} sizeOverride={SIZE} revealMs={0} />,
+    );
+    await driveToReview(stdin, lastFrame);
+    await press(stdin, ENTER); // Write config → io.write throws
+    await until(() => (lastFrame() ?? "").includes("Write failed"), LONG_TRIES);
+    expect(lastFrame()).toContain("first line");
+    expect(lastFrame()).not.toContain("second line");
+    await press(stdin, "q");
+    await until(() => outcome === "cancelled", LONG_TRIES);
+  }, 60000);
+
+  it("write error banner truncates a long single-line message with an ellipsis", async () => {
+    // Ink's fake test stdout is a fixed 100 columns (ink-testing-library
+    // hardcodes it — sizeOverride only drives WizardApp's own narrow/rail
+    // layout, not the real wrap width), so a 120-char banner always wraps
+    // across several rendered rows interleaved with the rail column text.
+    // Asserting a single contiguous substring is therefore not reliable;
+    // instead count the filler character (one not used anywhere else in the
+    // chrome — rail marks, box-drawing, JSON preview) to confirm exactly the
+    // capped length made it to the frame, not the full message.
+    let outcome = "";
+    const longMsg = "*".repeat(200);
+    const io = fakeIo({
+      write: () => {
+        throw new Error(longMsg);
+      },
+    });
+    const { lastFrame, stdin } = render(
+      <WizardApp io={io} onOutcome={(o) => (outcome = o)} sizeOverride={SIZE} revealMs={0} />,
+    );
+    await driveToReview(stdin, lastFrame);
+    await press(stdin, ENTER); // Write config → io.write throws
+    await until(() => (lastFrame() ?? "").includes("Write failed"), LONG_TRIES);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("…");
+    expect((frame.match(/\*/g) ?? []).length).toBe(120);
+    await press(stdin, "q");
+    await until(() => outcome === "cancelled", LONG_TRIES);
+  }, 60000);
+
   it("re-run mode: Enter-through every chapter is a no-op (Selects honor the prefilled config)", async () => {
     // Regression test: before Select's `initial` prop was wired up, every
     // Select in a re-run always rendered pre-selected on option 0 regardless
