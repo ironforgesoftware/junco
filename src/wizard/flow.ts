@@ -8,6 +8,9 @@
 
 import { getAtPath, setAtPath } from "../configLevers.js";
 
+/** Repeated across buildConfigObject/coveredPaths for models_json mode. */
+const DEFAULT_MODELS_JSON = "~/.pi/agent/models.json";
+
 export interface WatchedRepoAnswer {
   nwo: string;
   path: string;
@@ -55,11 +58,15 @@ export function defaultAnswers(): WizardAnswers {
 /** Fresh-mode config: minimal — required fields plus only answers that differ
  * from schema defaults, so the file stays small and hand-editable. */
 export function buildConfigObject(a: WizardAnswers): Record<string, unknown> {
+  const d = defaultAnswers();
   const model: Record<string, unknown> = { id: a.modelId };
   if (a.mode === "models_json") {
-    model.modelsJson = a.modelsJson ?? "~/.pi/agent/models.json";
+    model.modelsJson = a.modelsJson ?? DEFAULT_MODELS_JSON;
   } else {
-    model.baseUrl = a.baseUrl ?? "http://127.0.0.1:1234/v1";
+    model.baseUrl = a.baseUrl ?? d.baseUrl!;
+    // apiKey fallback stays "" — NOT d.apiKey ("1234", the wizard's inline
+    // placeholder credential). A fresh config with no key entered should
+    // write an empty string; consolidating this one would change behavior.
     model.apiKey = a.apiKey ?? "";
   }
   const obj: Record<string, unknown> = { vaultRoot: a.vaultRoot, juncoSubdir: "", model };
@@ -91,16 +98,18 @@ export function renderConfigJson(a: WizardAnswers): string {
  * which is what makes re-run writes preserving: everything else in the raw
  * object is never touched. */
 function coveredPaths(a: WizardAnswers): { path: string; value: unknown }[] {
+  const d = defaultAnswers();
   const model: { path: string; value: unknown }[] =
     a.mode === "models_json"
       ? [
-          { path: "model.modelsJson", value: a.modelsJson ?? "~/.pi/agent/models.json" },
+          { path: "model.modelsJson", value: a.modelsJson ?? DEFAULT_MODELS_JSON },
           { path: "model.baseUrl", value: undefined },
           { path: "model.apiKey", value: undefined },
         ]
       : [
           { path: "model.modelsJson", value: undefined },
-          { path: "model.baseUrl", value: a.baseUrl ?? "http://127.0.0.1:1234/v1" },
+          { path: "model.baseUrl", value: a.baseUrl ?? d.baseUrl! },
+          // apiKey fallback stays "" (see buildConfigObject) — not d.apiKey.
           { path: "model.apiKey", value: a.apiKey ?? "" },
         ];
   return [
@@ -139,15 +148,15 @@ export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {
     modelsJson: g("model.modelsJson") as string | undefined,
     repoRoots: (g("git.allowedRepoRoots") as string[]) ?? [],
     github: {
-      enabled: (g("github.enabled") as boolean) ?? false,
-      repos: (g("github.repos") as WatchedRepoAnswer[]) ?? [],
-      requireApproval: (g("github.requireApproval") as boolean) ?? true,
+      enabled: (g("github.enabled") as boolean) ?? d.github.enabled,
+      repos: (g("github.repos") as WatchedRepoAnswer[]) ?? d.github.repos,
+      requireApproval: (g("github.requireApproval") as boolean) ?? d.github.requireApproval,
     },
     extras: {
-      sandbox: (g("sandbox.enabled") as boolean) ?? true,
-      verify: (g("verify.enabled") as boolean) ?? true,
-      health: (g("observability.healthEnabled") as boolean) ?? true,
-      transcripts: (g("observability.transcripts") as boolean) ?? true,
+      sandbox: (g("sandbox.enabled") as boolean) ?? d.extras.sandbox,
+      verify: (g("verify.enabled") as boolean) ?? d.extras.verify,
+      health: (g("observability.healthEnabled") as boolean) ?? d.extras.health,
+      transcripts: (g("observability.transcripts") as boolean) ?? d.extras.transcripts,
     },
   };
 }

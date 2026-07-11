@@ -4,8 +4,6 @@
  * ✓ pass · ⚠ warning (degraded but workable) · ✗ failure (exit 1).
  */
 
-import { execFile } from "node:child_process";
-import { accessSync, constants, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import { loadConfig, queuePaths, isLoopbackHost } from "./config.js";
@@ -20,6 +18,7 @@ import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
 import { draftCount } from "./commentReview.js";
+import { defaultExec, defaultAccessOk } from "./execProbe.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -33,28 +32,6 @@ export interface DoctorDeps {
   lockHolderFn?: (lockPath: string) => number | null;
   readTemplateFn?: () => string;
   printFn?: (s: string) => void;
-}
-
-function defaultExec(
-  cmd: string,
-  args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 10_000 }, (err, stdout, stderr) => {
-      const code = err ? ((err as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1) : 0;
-      resolve({ code, stdout: String(stdout), stderr: String(stderr) });
-    });
-  });
-}
-
-function defaultAccessOk(dir: string): boolean {
-  try {
-    mkdirSync(dir, { recursive: true });
-    accessSync(dir, constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 type Verdict = "ok" | "warn" | "fail";

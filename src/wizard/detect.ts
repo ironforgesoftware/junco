@@ -5,8 +5,6 @@
  * walkthrough shows; `junco doctor` remains the exhaustive standalone check.
  */
 
-import { execFile } from "node:child_process";
-import { accessSync, constants, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "../types.js";
 import { queuePaths } from "../config.js";
@@ -14,6 +12,7 @@ import { endpointReachable } from "../health.js";
 import { fetchModels } from "./models.js";
 import { splitModelId } from "../agent/modelSetup.js";
 import { selectBackend, classifyAvailability } from "../agent/sandbox/backend.js";
+import { defaultExec, defaultAccessOk } from "../execProbe.js";
 
 export interface CheckResult {
   verdict: "ok" | "warn" | "fail";
@@ -31,28 +30,6 @@ export interface DetectDeps {
   accessOkFn?: (dir: string) => boolean;
   nodeVersion?: string;
   platform?: NodeJS.Platform;
-}
-
-function defaultExec(
-  cmd: string,
-  args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((res) => {
-    execFile(cmd, args, { timeout: 10_000 }, (err, stdout, stderr) => {
-      const code = err ? ((err as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1) : 0;
-      res({ code, stdout: String(stdout), stderr: String(stderr) });
-    });
-  });
-}
-
-function defaultAccessOk(dir: string): boolean {
-  try {
-    mkdirSync(dir, { recursive: true });
-    accessSync(dir, constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** First name from `git config user.name`, "friend" when unset/unavailable. */
