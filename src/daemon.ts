@@ -16,6 +16,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./types.js";
+import type { ConfigHolder } from "./configWatcher.js";
 import { queuePaths } from "./config.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
@@ -179,6 +180,11 @@ export interface MainLoopDeps {
    * behavior), so a second flusher here would be redundant. Defaults to the
    * real flushOutbox. */
   outboxDrainFn?: (cfg: Config) => Promise<FlushResult>;
+  /** Live-reload seam (Task 6): when set, per-iteration config reads prefer
+   * `configHolder.current` over the `cfg` this loop was started with. Setup
+   * (restart-kind) collaborators above intentionally keep reading the
+   * initial `cfg` — see the "Do NOT change" list in mainLoop's body. */
+  configHolder?: ConfigHolder;
 }
 
 function defaultMkdirs(cfg: Config): void {
@@ -200,6 +206,10 @@ export interface SchedulerDeps {
   maybeBridgeSweepFn?: () => Promise<void>;
   /** Lifecycle reporter threaded into the default executeFn. */
   reporter?: TicketReporter;
+  /** Live-reload seam (Task 6): when set, per-dispatch reads (maxConcurrent,
+   * poll sleep) prefer `configHolder.current` over the `cfg` this scheduler
+   * was invoked with. */
+  configHolder?: ConfigHolder;
 }
 
 /**
@@ -224,6 +234,9 @@ export async function runScheduler(
     ((c: Config, w: ClaimedWork) =>
       executeClaimed(c, w, { abortSignal: stopFlag.forceSignal, reporter: deps.reporter }));
   const sleep = deps.sleep ?? sleepInterruptible;
+  // Live-reload seam (Task 6): falls back to the `cfg` this scheduler was
+  // invoked with when no holder is wired (existing callers/tests unaffected).
+  const activeCfg = (): Config => deps.configHolder?.current ?? cfg;
 
   const inflight = new Set<Promise<void>>();
   const busyRepos = new Set<string>();
@@ -235,7 +248,7 @@ export async function runScheduler(
       metrics.recordPoll();
       if (deps.maybeBridgeSweepFn) await deps.maybeBridgeSweepFn();
       let claimedThisPoll = 0;
-      while (inflight.size < cfg.maxConcurrent && !stopFlag.requested) {
+      while (inflight.size < activeCfg().maxConcurrent && !stopFlag.requested) {
         const work = await claimFn(cfg, { skipRepoKeys: busyRepos, readyFn: deps.readyFn });
         if (!work) break;
         claimedThisPoll++;
@@ -263,11 +276,11 @@ export async function runScheduler(
           log.info("idle");
           idleAnnounced = true;
         }
-        await sleep(cfg.pollIntervalSeconds, stopFlag);
+        await sleep(activeCfg().pollIntervalSeconds, stopFlag);
       } else {
         // Wake on the next settle OR the next poll tick, whichever first — a
         // freed slot tops up immediately; a busy-but-not-full pool still polls.
-        await Promise.race([sleep(cfg.pollIntervalSeconds, stopFlag), ...inflight]);
+        await Promise.race([sleep(activeCfg().pollIntervalSeconds, stopFlag), ...inflight]);
       }
     }
   } catch (e) {
@@ -314,10 +327,10 @@ export async function mainLoop(
   const monoMs = (): number => Number(process.hrtime.bigint() / 1_000_000n);
   const maybeBridgeSweep = async (): Promise<void> => {
     if (!bridgeSweepFn) return;
-    if (monoMs() - lastSweepMs < cfg.github.pollIntervalSeconds * 1000) return;
+    if (monoMs() - lastSweepMs < activeCfg().github.pollIntervalSeconds * 1000) return;
     lastSweepMs = monoMs();
     try {
-      metrics.recordBridgeSweep(await bridgeSweepFn(cfg));
+      metrics.recordBridgeSweep(await bridgeSweepFn(activeCfg()));
     } catch (e) {
       metrics.recordBridgeError();
       log.warn("github bridge sweep failed; queue unaffected", {
@@ -339,12 +352,12 @@ export async function mainLoop(
   let lastDrainMs = -Infinity;
   const maybeOutboxDrain = async (): Promise<void> => {
     if (!outboxDrainFn) return;
-    if (monoMs() - lastDrainMs < cfg.github.pollIntervalSeconds * 1000) return;
+    if (monoMs() - lastDrainMs < activeCfg().github.pollIntervalSeconds * 1000) return;
     lastDrainMs = monoMs();
-    if (outboxDepth(cfg) <= 0) return;
+    if (outboxDepth(activeCfg()) <= 0) return;
     try {
-      const result = await outboxDrainFn(cfg);
-      metrics.recordOutboxFlush(result, outboxDepth(cfg));
+      const result = await outboxDrainFn(activeCfg());
+      metrics.recordOutboxFlush(result, outboxDepth(activeCfg()));
     } catch (e) {
       log.warn("outbox drain failed; queue unaffected", {
         error: e instanceof Error ? e.message : String(e),
@@ -369,6 +382,12 @@ export async function mainLoop(
   const sleep = deps.sleep ?? sleepInterruptible;
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
+  // Live-reload seam (Task 6): per-iteration reads below prefer the holder's
+  // current config over the `cfg` this loop was started with. Setup below
+  // (mkdirs, recoverOrphans, pruneFn, waitForEndpoint, the health server's
+  // host/port, "worker online") is intentionally restart-kind — it stays on
+  // the initial `cfg`, matching the existing lever-reload classification.
+  const activeCfg = (): Config => deps.configHolder?.current ?? cfg;
 
   mkdirs(cfg);
   // Stamp the start time once the queue dirs exist; the health server reports
@@ -394,7 +413,7 @@ export async function mainLoop(
         host: cfg.healthHost,
         port: cfg.healthPort,
         metrics,
-        readinessProbe: () => endpointReachable(cfg),
+        readinessProbe: () => endpointReachable(activeCfg()),
       });
       log.info("health endpoint listening", { url: health.url });
     } catch (e) {
@@ -408,11 +427,12 @@ export async function mainLoop(
 
   try {
     if (cfg.maxConcurrent > 1) {
-      await runScheduler(cfg, stopFlag, opts, {
+      await runScheduler(activeCfg(), stopFlag, opts, {
         claimFn: deps.claimFn,
         executeFn: deps.executeFn,
         sleep: deps.sleep,
-        readyFn: () => endpointReachable(cfg),
+        configHolder: deps.configHolder,
+        readyFn: () => endpointReachable(activeCfg()),
         maybeBridgeSweepFn: async () => {
           await maybeBridgeSweep();
           await maybeOutboxDrain();
@@ -430,7 +450,7 @@ export async function mainLoop(
         // work, mirroring the scheduler's per-claim check above. Without this
         // a post-signal claim starts up to timeout_minutes of new work.
         if (stopFlag.requested) break;
-        const handled = await runOnceFn(cfg);
+        const handled = await runOnceFn(activeCfg());
         if (handled) {
           idleAnnounced = false;
           if (opts.once) break;
@@ -440,7 +460,7 @@ export async function mainLoop(
           log.info("idle");
           idleAnnounced = true;
         }
-        await sleep(cfg.pollIntervalSeconds, stopFlag);
+        await sleep(activeCfg().pollIntervalSeconds, stopFlag);
       }
     }
   } finally {

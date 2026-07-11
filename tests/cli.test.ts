@@ -60,6 +60,8 @@ function makeDeps(
     installSignalHandlersFn: vi.fn(() => uninstallSpy),
     mainLoopFn: vi.fn(async () => {}),
     runOnceFn: vi.fn(async () => true),
+    // Never touch a real fs.watch — the stub config path may not exist on disk.
+    watchConfigFn: vi.fn(() => ({ close: vi.fn() })),
     ...overrides,
   };
 }

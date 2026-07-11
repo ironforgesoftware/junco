@@ -16,6 +16,7 @@ import { executeClaimed, type ClaimedWork } from "../src/runOnce.js";
 import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
+import { makeConfigHolder } from "../src/configWatcher.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -115,11 +116,18 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
  * default sleep resolves immediately so the poll loop never blocks on real
  * timers.  Callers override `runOnceFn` / `sleep` to drive the loop and reach
  * the stop condition.
+ *
+ * `configHolder` stays optional (unlike every other field) — it's the Task 6
+ * live-reload seam, and most tests exercise the no-holder fallback path (see
+ * "mainLoop reads the holder each iteration" for the holder-set case).
  */
+type StubMainLoopDeps = Required<Omit<MainLoopDeps, "configHolder">> &
+  Pick<MainLoopDeps, "configHolder">;
+
 function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
-  deps: Required<MainLoopDeps>;
+  deps: StubMainLoopDeps;
 } {
-  const deps: Required<MainLoopDeps> = {
+  const deps: StubMainLoopDeps = {
     runOnceFn: vi.fn(async () => false),
     claimFn: vi.fn(async () => null),
     executeFn: vi.fn(async () => {}),
@@ -603,6 +611,37 @@ describe("mainLoop — observability", () => {
     await expect(mainLoop(cfg, stop, {}, deps)).rejects.toBe(boom);
     expect(startHealthServerFn).toHaveBeenCalledTimes(1);
     expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("mainLoop reads the holder each iteration (live reload reaches next runOnce)", async () => {
+    const seen: number[] = [];
+    const holder = makeConfigHolder({ ...makeConfig(), pollIntervalSeconds: 1 });
+    const stop = new StopFlag();
+    let n = 0;
+    const runOnceFn = async (c: Config) => {
+      seen.push(c.pollIntervalSeconds);
+      if (n === 0) holder.current = { ...holder.current, pollIntervalSeconds: 99 };
+      if (++n >= 2) stop.requestStop();
+      return true; // handled → loop continues without sleeping to idle
+    };
+    await mainLoop(
+      holder.current,
+      stop,
+      {},
+      {
+        configHolder: holder,
+        runOnceFn,
+        sleep: async () => {
+          await new Promise((r) => setTimeout(r, 1));
+        },
+        recoverOrphansFn: () => {},
+        pruneFn: () => {},
+        waitForEndpointFn: async () => {},
+        mkdirs: () => {},
+        startHealthServerFn: async () => null as unknown as HealthServerHandle,
+      },
+    );
+    expect(seen).toEqual([1, 99]);
   });
 });
 

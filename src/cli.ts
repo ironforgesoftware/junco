@@ -27,7 +27,8 @@ import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock, readLockHolder } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./config.js";
 import { parseTicket } from "./ticket.js";
-import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
+import { StopFlag, installSignalHandlers, mainLoop, type MainLoopDeps } from "./daemon.js";
+import { makeConfigHolder, watchConfig, type ConfigHolder } from "./configWatcher.js";
 import { runOnce } from "./runOnce.js";
 import { makeGithubReporter } from "./githubReport.js";
 import {
@@ -57,8 +58,17 @@ export interface CliDeps {
   loadConfigFn?: (path: string) => Config;
   acquireLockFn?: (lockPath: string) => SingletonLock | null;
   installSignalHandlersFn?: (stopFlag: StopFlag) => () => void;
-  mainLoopFn?: (cfg: Config, stopFlag: StopFlag, opts: { once?: boolean }) => Promise<void>;
+  mainLoopFn?: (
+    cfg: Config,
+    stopFlag: StopFlag,
+    opts: { once?: boolean },
+    deps?: MainLoopDeps,
+  ) => Promise<void>;
   runOnceFn?: (cfg: Config) => Promise<boolean>;
+  /** Config hot-reload watcher for `start` (Task 6). Injected so tests never
+   * touch a real fs.watch on a config path that may not exist on disk.
+   * Default: the real watchConfig. */
+  watchConfigFn?: (configPath: string, holder: ConfigHolder) => { close(): void };
   /** Output function for the `service`, `inbox-path`, `schema`, `submit`, `init` subcommands. Default: process.stdout.write. */
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
@@ -209,6 +219,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const acquireLockFn = deps.acquireLockFn ?? acquireSingletonLock;
   const installSignalHandlersFn = deps.installSignalHandlersFn ?? installSignalHandlers;
   const mainLoopFn = deps.mainLoopFn ?? mainLoop;
+  const watchConfigFn = deps.watchConfigFn ?? watchConfig;
   // The manual run-once poke reports back to GitHub too when the bridge is on
   // (a daemon-claimed bridged ticket would otherwise leave its issue stale).
   const runOnceFn =
@@ -379,8 +390,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const stopFlag = new StopFlag();
     const uninstall = installSignalHandlersFn(stopFlag);
 
+    // Live-reload (Task 6): the holder starts seeded with the config we just
+    // loaded; the watcher re-parses config.toml on change and swaps in a new
+    // Config, which mainLoop's per-iteration reads pick up without a restart.
+    const holder = makeConfigHolder(cfg);
+    const watcher = watchConfigFn(configPath, holder);
+
     try {
-      await mainLoopFn(cfg, stopFlag, { once: values.once as boolean });
+      await mainLoopFn(cfg, stopFlag, { once: values.once as boolean }, { configHolder: holder });
       return 0;
     } catch (e) {
       log.error("fatal error in main loop", {
@@ -388,6 +405,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       });
       return 1;
     } finally {
+      watcher.close();
       uninstall();
       lock.release();
       teardownLogs();
