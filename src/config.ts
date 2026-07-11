@@ -82,7 +82,7 @@ const DEFAULT_COMPAT: Record<string, unknown> = {
   thinkingFormat: "qwen-chat-template",
 };
 
-const ConfigSchema = z.object({
+export const ConfigSchema = z.object({
   vaultRoot: z.string({ required_error: "config: vaultRoot is required" }),
   juncoSubdir: z.string().default("Junco"),
   tools: z.array(z.string()).default(DEFAULT_TOOLS),
