@@ -26,10 +26,12 @@ export interface WatchConfigDeps {
   debounceMs?: number;
 }
 
-// getAtPath is null-safe (a null/undefined root short-circuits every segment
-// to `undefined`), so a `prev` of `null` naturally diffs as "every
-// currently-set path changed" — no special-casing needed here.
+// A null `prev` means the construction-time seed failed (unexpected — the
+// daemon loaded the config moments ago). Treat the first successful reload as
+// the baseline: report nothing, just adopt it. With a seeded `prev`, a genuine
+// edit diffs at lever-path granularity and reports only what actually changed.
 function changedLeverPaths(prev: ConfigParsed | null, next: ConfigParsed): string[] {
+  if (!prev) return [];
   return LEVERS.filter(
     (l) => JSON.stringify(getAtPath(prev, l.path)) !== JSON.stringify(getAtPath(next, l.path)),
   ).map((l) => l.path);
@@ -59,11 +61,17 @@ export function watchConfig(
     });
   const debounceMs = deps.debounceMs ?? 200;
 
-  // No eager parse here: `prevParsed` seeds from the FIRST successful reload
-  // (below), not from a construction-time read. A watcher observes changes
-  // relative to the config as it stood at watch-start; the first reload after
-  // that establishes the baseline every later diff compares against.
+  // Seed the baseline from the config as it stands at watch-start (the daemon
+  // just loaded it), so the first edit diffs against the real prior values and
+  // reports ONLY genuinely-changed restart-kind levers. If this parse throws
+  // (unexpected), fall back to null and let the first successful reload adopt
+  // the baseline silently (see changedLeverPaths).
   let prevParsed: ConfigParsed | null = null;
+  try {
+    prevParsed = parseFn(configPath);
+  } catch {
+    prevParsed = null;
+  }
   let pending: { cancel(): void } | null = null;
 
   const reload = (): void => {

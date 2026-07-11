@@ -1,14 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
 import { makeConfigHolder, watchConfig } from "../src/configWatcher.js";
 
+type Snap = { parsed: any; config: any } | Error;
 const baseConfig = { vaultRoot: "/v", logLevel: "info", healthPort: 8787 } as any;
+const baseline: Snap = {
+  parsed: { vaultRoot: "/v", observability: { logLevel: "info", healthPort: 8787 } },
+  config: baseConfig,
+};
 
-function harness(seq: { parsed: any; config: any }[] | Error[]) {
+// initial seeds the baseline at construction; events are delivered one per fire().
+function harness(initial: Snap, events: Snap[]) {
   let fire: () => void = () => {};
-  let i = 0;
+  let idx = -1; // -1 = construction/baseline; 0.. = events
   const setLog = vi.fn();
   const restart = vi.fn();
-  const holder = makeConfigHolder(baseConfig);
+  const holder = makeConfigHolder(initial instanceof Error ? baseConfig : initial.config);
+  const cur = (): Snap => (idx < 0 ? initial : events[idx]);
   const handle = watchConfig("/dir/config.json", holder, {
     watchFn: (_dir, listener) => {
       fire = listener;
@@ -19,24 +26,33 @@ function harness(seq: { parsed: any; config: any }[] | Error[]) {
       return { cancel() {} };
     },
     parseFn: () => {
-      const s = seq[i];
+      const s = cur();
       if (s instanceof Error) throw s;
-      return (s as any).parsed;
+      return s.parsed;
     },
     loadFn: () => {
-      const s = seq[i++];
+      const s = cur();
       if (s instanceof Error) throw s;
-      return (s as any).config;
+      return s.config;
     },
     setLogLevelFn: setLog,
     onRestartFields: restart,
   });
-  return { fire: () => fire(), holder, setLog, restart, handle };
+  return {
+    fire: () => {
+      idx++;
+      fire();
+    },
+    holder,
+    setLog,
+    restart,
+    handle,
+  };
 }
 
 describe("configWatcher", () => {
   it("updates the holder and re-applies logLevel on a valid change", () => {
-    const h = harness([
+    const h = harness(baseline, [
       {
         parsed: { vaultRoot: "/v", observability: { logLevel: "debug", healthPort: 8787 } },
         config: { ...baseConfig, logLevel: "debug" },
@@ -47,11 +63,10 @@ describe("configWatcher", () => {
     expect(h.setLog).toHaveBeenCalledWith("debug");
   });
 
-  it("records restart-kind changes but not live ones", () => {
-    // Watcher diffs the parsed file object at lever-path granularity.
-    const h = harness([
+  it("reports a changed restart-kind lever", () => {
+    const h = harness(baseline, [
       {
-        parsed: { vaultRoot: "/v", observability: { healthPort: 9000 } },
+        parsed: { vaultRoot: "/v", observability: { logLevel: "info", healthPort: 9000 } },
         config: { ...baseConfig, healthPort: 9000 },
       },
     ]);
@@ -59,8 +74,23 @@ describe("configWatcher", () => {
     expect(h.restart).toHaveBeenCalledWith(expect.arrayContaining(["observability.healthPort"]));
   });
 
+  it("does NOT report a restart when only a live lever changed", () => {
+    const h = harness(baseline, [
+      {
+        parsed: {
+          vaultRoot: "/v",
+          observability: { logLevel: "info", healthPort: 8787 },
+          worker: { pollIntervalSeconds: 20 },
+        },
+        config: { ...baseConfig },
+      },
+    ]);
+    h.fire();
+    expect(h.restart).not.toHaveBeenCalled();
+  });
+
   it("keeps the last-good config when a reload fails", () => {
-    const h = harness([new Error("bad json")]);
+    const h = harness(baseline, [new Error("bad json")]);
     const before = h.holder.current;
     h.fire();
     expect(h.holder.current).toBe(before);
