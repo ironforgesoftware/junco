@@ -7,6 +7,9 @@ import {
   defaultAnswers,
   buildConfigObject,
   renderConfigJson,
+  answersFromConfig,
+  diffAnswers,
+  applyAnswers,
   type WizardAnswers,
 } from "../src/wizard/flow.js";
 import { loadConfig, queuePaths } from "../src/config.js";
@@ -97,5 +100,68 @@ describe("buildConfigObject / renderConfigJson", () => {
   it("escapes JSON-hostile strings", () => {
     const a = { ...defaultAnswers(), vaultRoot: '/tmp/we"ird\\path' };
     expect(loadRendered(a).vaultRoot).toBe('/tmp/we"ird\\path');
+  });
+});
+
+describe("re-run mode", () => {
+  const raw = {
+    vaultRoot: "/v",
+    juncoSubdir: "",
+    model: { id: "prov/m", baseUrl: "http://h:1/v1", apiKey: "k" },
+    worker: { maxConcurrent: 3 }, // NOT wizard-covered — must survive untouched
+    git: { allowedRepoRoots: ["/code"], branchPrefix: "junco/" },
+    sandbox: { enabled: false },
+  };
+
+  it("answersFromConfig prefills covered levers and defaults the rest", () => {
+    const a = answersFromConfig(raw);
+    expect(a.vaultRoot).toBe("/v");
+    expect(a.mode).toBe("inline");
+    expect(a.modelId).toBe("prov/m");
+    expect(a.repoRoots).toEqual(["/code"]);
+    expect(a.extras.sandbox).toBe(false);
+    expect(a.extras.verify).toBe(true); // schema default
+    expect(a.github.enabled).toBe(false);
+  });
+
+  it("prefers models_json mode when the file sets it", () => {
+    const a = answersFromConfig({ model: { id: "p/m", modelsJson: "/mj.json" } });
+    expect(a.mode).toBe("models_json");
+    expect(a.modelsJson).toBe("/mj.json");
+  });
+
+  it("diffAnswers reports only changed paths", () => {
+    const a = answersFromConfig(raw);
+    a.vaultRoot = "/v2";
+    a.extras.sandbox = true;
+    const d = diffAnswers(raw, a);
+    expect(d).toContainEqual({ path: "vaultRoot", from: "/v", to: "/v2" });
+    expect(d).toContainEqual({ path: "sandbox.enabled", from: false, to: true });
+    expect(d.length).toBe(2);
+  });
+
+  it("diffAnswers is empty when nothing changed", () => {
+    expect(diffAnswers(raw, answersFromConfig(raw))).toEqual([]);
+  });
+
+  it("applyAnswers preserves uncovered keys verbatim and does not mutate input", () => {
+    const a = answersFromConfig(raw);
+    a.vaultRoot = "/v2";
+    const out = applyAnswers(raw, a);
+    expect(out.vaultRoot).toBe("/v2");
+    expect((out.worker as { maxConcurrent: number }).maxConcurrent).toBe(3);
+    expect((out.git as { branchPrefix: string }).branchPrefix).toBe("junco/");
+    expect(raw.vaultRoot).toBe("/v"); // input untouched
+  });
+
+  it("switching models_json → inline clears model.modelsJson in the output", () => {
+    const mjRaw = { vaultRoot: "/v", model: { id: "p/m", modelsJson: "/mj.json" } };
+    const a = answersFromConfig(mjRaw);
+    a.mode = "inline";
+    a.baseUrl = "http://h:1/v1";
+    a.apiKey = "k";
+    const out = applyAnswers(mjRaw, a);
+    expect(JSON.stringify(out)).not.toContain("modelsJson");
+    expect((out.model as { baseUrl: string }).baseUrl).toBe("http://h:1/v1");
   });
 });
