@@ -26,6 +26,27 @@ Junco is configured via a JSON file — `./config.json` if present, else `~/.con
 
 `vaultRoot` is required — the queue lives at `<vaultRoot>/<juncoSubdir>/{inbox,processing,done,failed}`. `tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `assess` — is a sectioned object with sensible defaults; set only the keys you want to override.
 
+## Model resolution
+
+| Field                     | Default            | Description                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.id`                | `"local/my-model"` | Provider-prefixed model id, e.g. `anthropic/claude-sonnet-4-5`. The text before the first `/` is the provider; a bare id with no `/` is provider `local`.                                                                                                                                                                                                                  |
+| `model.source`            | `"auto"`           | `"auto"`: a non-`local` provider prefix with no explicit `model.baseUrl` resolves from the embedded SDK's builtin hosted-provider catalog (real endpoint, cost, and context-window metadata); otherwise the inline fields below apply. `"catalog"` / `"inline"` pin the behavior explicitly.                                                                               |
+| `model.baseUrl`           | unset              | OpenAI-compatible `/v1` endpoint for inline resolution. Unset defaults to the local endpoint (`http://127.0.0.1:1234/v1`); setting it explicitly forces inline resolution even for a provider-prefixed id — an explicit endpoint means a deliberate proxy/override.                                                                                                        |
+| `model.apiKey`            | unset              | A literal key, an `"$ENV_VAR"` reference (read from the daemon's own environment), or unset. Unset on a catalog-resolved model defers to the provider's environment variable at request time (e.g. `ANTHROPIC_API_KEY`); unset on an inline model falls back to a placeholder. `"!command"` values are rejected — junco does not shell out for secrets from `config.json`. |
+| `model.retry.maxRetries`  | unset              | SDK auto-retry attempts on transient provider errors; unset uses the SDK default (3).                                                                                                                                                                                                                                                                                      |
+| `model.retry.baseDelayMs` | unset              | Base delay (ms) for the SDK's auto-retry backoff; unset uses the SDK default (2000).                                                                                                                                                                                                                                                                                       |
+
+Endpoint probing — the daemon's startup readiness wait, `/health` and dashboard reachability checks, and `junco doctor`'s endpoint check — is skipped for a catalog-resolved model (no local server to wait for, and probing a metered API on every poll/dashboard tick is billed traffic). A configured `model.modelsJson` still probes, since the provider `baseUrl` it declares may be local.
+
+```json
+{
+  "model": { "id": "anthropic/claude-sonnet-4-5" }
+}
+```
+
+With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog and the key comes from `ANTHROPIC_API_KEY` in the daemon environment.
+
 ## The full reference
 
 The full, always-current annotated reference is `junco config list` — every lever with its default, type, and one-line explanation:
