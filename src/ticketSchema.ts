@@ -100,6 +100,11 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         "Q&A tickets only: directory the session runs in (read-only tools). Defaults to the worker's processing directory.",
     },
+    network: {
+      type: "boolean",
+      description:
+        "Sandbox egress opt-in for this ticket's agent session. Defaults to the configured [sandbox].network policy (deny). Set true to allow network (e.g. installing a new dependency); only widens this one ticket.",
+    },
     github: {
       type: "object",
       description:

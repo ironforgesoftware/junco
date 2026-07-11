@@ -109,6 +109,7 @@ function makeTicket(body: string): Ticket {
     assess: null,
     analyze: null,
     workdir: null,
+    network: null,
   };
 }
 

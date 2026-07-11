@@ -92,6 +92,7 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
     github,
     assess,
     analyze,
+    network: typeof frontmatter.network === "boolean" ? frontmatter.network : null,
     workdir:
       typeof frontmatter.workdir === "string" && frontmatter.workdir.trim() !== ""
         ? frontmatter.workdir

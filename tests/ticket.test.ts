@@ -27,6 +27,16 @@ describe("parseTicket", () => {
     expect(parseTicket("/in/p1.md", PR).hasRepo).toBe(true);
   });
 
+  it("parses network:true frontmatter as a boolean opt-in", () => {
+    const md = `---\nid: t1\nrepo: /x\nnetwork: true\n---\nbody`;
+    expect(parseTicket("/in/t1.md", md).network).toBe(true);
+  });
+
+  it("defaults network to null when absent, and ignores a non-boolean", () => {
+    expect(parseTicket("/in/t2.md", `---\nid: t2\nrepo: /x\n---\nbody`).network).toBeNull();
+    expect(parseTicket("/in/t3.md", `---\nid: t3\nnetwork: "yes"\n---\nb`).network).toBeNull();
+  });
+
   it("does not throw on malformed YAML frontmatter", () => {
     const t = parseTicket("/in/bad.md", "---\n: invalid: yaml: [\n---\nbody");
     expect(t.id).toBe("bad");
