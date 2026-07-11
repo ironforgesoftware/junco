@@ -156,7 +156,10 @@ export const ConfigSchema = z.object({
     .default({}),
   sandbox: z
     .object({
-      enabled: z.boolean().default(false),
+      // On by default: agent tool execution is confined unless explicitly
+      // disabled. Fails closed if the OS backend is unavailable (junco doctor
+      // preflights it) — set enabled:false or backend:"none" to opt out.
+      enabled: z.boolean().default(true),
       backend: z.enum(["auto", "seatbelt", "bwrap", "none"]).default("auto"),
       network: z.enum(["deny", "allow"]).default("deny"),
       extraDenyRead: z.array(z.string()).default([]),

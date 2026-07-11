@@ -96,6 +96,29 @@ export const noneBackend: SandboxBackend = {
   },
 };
 
+/** What to do about the selected backend once its availability is known. */
+export type SandboxOutcome = "ok" | "degrade" | "fail-closed";
+
+/**
+ * Decide the outcome when the selected backend may be unavailable:
+ * - `none` is always OK (no OS isolation by design).
+ * - available → OK.
+ * - unavailable + configured `"auto"` → **degrade**: `auto` means "best
+ *   available", so fall back to `none` (env scrub + filesystem tool-jail still
+ *   apply; agent bash is not OS-confined) rather than failing the ticket.
+ * - unavailable + an EXPLICIT backend → **fail-closed**: honor the operator's
+ *   explicit choice; never silently downgrade what they demanded.
+ */
+export function classifyAvailability(
+  configured: "auto" | "seatbelt" | "bwrap" | "none",
+  selected: SandboxBackend["name"],
+  available: boolean,
+): SandboxOutcome {
+  if (selected === "none") return "ok";
+  if (available) return "ok";
+  return configured === "auto" ? "degrade" : "fail-closed";
+}
+
 export function selectBackend(
   backend: "auto" | "seatbelt" | "bwrap" | "none",
   platform: NodeJS.Platform,

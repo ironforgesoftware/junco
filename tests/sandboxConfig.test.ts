@@ -22,10 +22,10 @@ const BASE = {
 };
 
 describe("sandbox config", () => {
-  it("defaults: disabled, auto backend, network deny, empty lists", () => {
+  it("defaults: enabled, auto backend, network deny, empty lists", () => {
     const cfg = loadConfig(writeConfig(BASE));
     expect(cfg.sandbox).toEqual({
-      enabled: false,
+      enabled: true,
       backend: "auto",
       network: "deny",
       extraDenyRead: [],

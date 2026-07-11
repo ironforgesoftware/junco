@@ -56,13 +56,26 @@ describe("resolveSandbox", () => {
     expect(r?.policy.network).toBe(true);
   });
 
-  it("fails closed when a required backend is unavailable", async () => {
+  it("fails closed when an EXPLICIT backend is unavailable", async () => {
     await expect(
       resolveSandbox(cfgWith({ backend: "bwrap" }), "/work", undefined, {
         ...okDeps,
         probe: async () => ({ code: 127 }),
       }),
     ).rejects.toBeInstanceOf(SandboxUnavailableError);
+  });
+
+  it("backend=auto degrades to none (not fail-closed) when no OS backend is available", async () => {
+    const r = await resolveSandbox(cfgWith({ backend: "auto" }), "/sbxroot/work", undefined, {
+      ...okDeps,
+      platform: "linux", // auto → bwrap
+      probe: async () => ({ code: 127 }), // bwrap unavailable
+    });
+    // Degraded, not thrown: still returns a sandbox, but with the none backend.
+    expect(r).not.toBeNull();
+    expect(r?.backend.name).toBe("none");
+    // The policy (env scrub + fs jail) is still built.
+    expect(r?.policy.writableRoots).toContain("/sbxroot/work");
   });
 
   it("backend=none never fails closed even if a probe would fail", async () => {
