@@ -649,26 +649,38 @@ describe("Github chapter", () => {
     await until(() => (lastFrame() ?? "").includes("GitHub bridge"));
     await press(stdin, DOWN, ENTER); // On
     rerender(<Github {...props()} />);
-    for (let i = 0; i < 2; i++) {
-      await until(() => (lastFrame() ?? "").includes("owner/repo"));
-      stdin.write("acme/api");
-      await tick();
-      rerender(<Github {...props()} />);
-      await press(stdin, ENTER);
-      rerender(<Github {...props()} />);
-      await until(() => (lastFrame() ?? "").includes("local clone path"));
-      stdin.write("/tmp/acme");
-      await tick();
-      rerender(<Github {...props()} />);
-      await press(stdin, ENTER);
-      rerender(<Github {...props()} />);
-    }
+    // First entry: acme/api → /tmp/acme
+    await until(() => (lastFrame() ?? "").includes("owner/repo"));
+    stdin.write("acme/api");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("local clone path"));
+    stdin.write("/tmp/acme");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
+    // Second entry: same nwo, different path
+    await until(() => (lastFrame() ?? "").includes("owner/repo"));
+    stdin.write("acme/api");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("local clone path"));
+    stdin.write("/tmp/acme-updated");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
     await press(stdin, ENTER); // empty nwo → done adding
     rerender(<Github {...props()} />);
     await until(() => (lastFrame() ?? "").includes("approval"));
     await press(stdin, ENTER);
     await until(() => advanced);
-    expect(answers.github.repos).toEqual([{ nwo: "acme/api", path: "/tmp/acme" }]);
+    expect(answers.github.repos).toEqual([{ nwo: "acme/api", path: "/tmp/acme-updated" }]);
   });
 });
 

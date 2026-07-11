@@ -93,7 +93,15 @@ export function Github({
             () => {
               const entry = { nwo: nwo.trim(), path: path.trim() };
               if (entry.path === "") return;
-              if (!answers.github.repos.some((r) => r.nwo === entry.nwo)) {
+              const existing = answers.github.repos.some((r) => r.nwo === entry.nwo);
+              if (existing) {
+                patch({
+                  github: {
+                    ...answers.github,
+                    repos: answers.github.repos.map((r) => (r.nwo === entry.nwo ? entry : r)),
+                  },
+                });
+              } else {
                 patch({ github: { ...answers.github, repos: [...answers.github.repos, entry] } });
               }
               setNwo("");
