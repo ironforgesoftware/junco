@@ -21,6 +21,25 @@ export function splitModelId(full: string): { provider: string; modelId: string 
   return { provider: full.slice(0, slash), modelId: full.slice(slash + 1) };
 }
 
+/** The fields the source rule needs — ModelConfig satisfies this structurally. */
+export interface ModelSourceFields {
+  source: "auto" | "catalog" | "inline";
+  id: string;
+  baseUrlExplicit: boolean;
+}
+
+/**
+ * Should this model resolve from the SDK's builtin hosted catalog?  Explicit
+ * `model.source` always wins; under "auto" a non-`local` provider prefix opts
+ * in unless the user explicitly set `model.baseUrl` (an explicit endpoint
+ * means a deliberate proxy/override → inline).
+ */
+export function catalogEligible(m: ModelSourceFields): boolean {
+  if (m.source === "catalog") return true;
+  if (m.source === "inline") return false;
+  return splitModelId(m.id).provider !== "local" && !m.baseUrlExplicit;
+}
+
 /**
  * Derive the OpenAI-compatible API base from a configured endpoint URL. A
  * config's base_url may point at the list-models endpoint (`.../v1/models`),

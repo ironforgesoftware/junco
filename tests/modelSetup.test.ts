@@ -7,6 +7,7 @@ import {
   apiBaseUrl,
   buildInlineProviderConfig,
   resolveProbeBaseUrl,
+  catalogEligible,
 } from "../src/agent/modelSetup.js";
 import type { Config, ModelConfig } from "../src/types.js";
 
@@ -118,5 +119,39 @@ describe("resolveProbeBaseUrl", () => {
   it("file mode: falls back to base_url when the file is missing/unreadable", () => {
     const cfg = mkCfg({ modelsJson: "/no/such/models.json", baseUrl: "http://fallback/v1" });
     expect(resolveProbeBaseUrl(cfg)).toBe("http://fallback/v1");
+  });
+});
+
+describe("catalogEligible", () => {
+  it("auto + non-local provider + no explicit baseUrl → eligible", () => {
+    expect(
+      catalogEligible({
+        source: "auto",
+        id: "anthropic/claude-sonnet-4-5",
+        baseUrlExplicit: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("auto + explicit baseUrl → inline (deliberate proxy/override)", () => {
+    expect(
+      catalogEligible({ source: "auto", id: "anthropic/claude-sonnet-4-5", baseUrlExplicit: true }),
+    ).toBe(false);
+  });
+
+  it("auto + local provider (bare or prefixed) → never eligible", () => {
+    expect(catalogEligible({ source: "auto", id: "my-model", baseUrlExplicit: false })).toBe(false);
+    expect(catalogEligible({ source: "auto", id: "local/my-model", baseUrlExplicit: false })).toBe(
+      false,
+    );
+  });
+
+  it("explicit source wins over the heuristic in both directions", () => {
+    expect(catalogEligible({ source: "catalog", id: "openai/gpt-x", baseUrlExplicit: true })).toBe(
+      true,
+    );
+    expect(catalogEligible({ source: "inline", id: "openai/gpt-x", baseUrlExplicit: false })).toBe(
+      false,
+    );
   });
 });
