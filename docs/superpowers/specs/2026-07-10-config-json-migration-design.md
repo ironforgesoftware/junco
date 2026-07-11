@@ -27,6 +27,8 @@ as a deliberate maintainer-confirmed rollout step (never by the shipped code).
 - `junco config {path,list,get,set}` CLI family.
 - A dashboard **Config view** that edits every scalar lever inline (bool/number/enum/string +
   masked secret), with structured fields shown read-only.
+- **Daemon hot-reload**: a running daemon file-watches `config.json` and applies live-safe
+  levers at the next poll boundary (never mid-ticket); structural levers warn "restart to apply".
 - No residual TOML: dependency, format, docs, and (post-merge, maintainer-confirmed) the live
   file itself.
 
@@ -45,13 +47,20 @@ as a deliberate maintainer-confirmed rollout step (never by the shipped code).
    pointer; `model.apiKey` is a masked-but-editable secret.
 5. **Explanation source = explicit lever registry + drift test** (not Zod introspection, not
    hardcoded-in-TUI).
-6. **`config set` while the daemon runs = warn and proceed** (matches the watchlist writer; the
-   daemon reads config only at startup, so a mid-run write is harmless — the warning says
-   "restart to apply").
+6. **`config set` while the daemon runs = warn and proceed** (matches the watchlist writer). With
+   hot-reload (decision 7) a running daemon picks up live levers on its own; `set`/TUI only warn
+   "restart to apply" for `restart`-kind levers.
+7. **Daemon hot-reload = file-watched live subset + restart-warn** (chosen over rebind-everything
+   and TUI-only IPC). The daemon `fs.watch`es `config.json`; a valid edit applies the live-safe
+   levers at the next poll boundary; structural levers warn instead of rebinding. File-watch, so
+   TUI edits, `config set`, and hand-edits all reload uniformly.
 
 ## Non-goals
 
-- **Config hot-reload.** Changes take effect on daemon restart. No SIGHUP/reload path.
+- **Live rebind/rewire.** Hot-reload never rebinds the health socket, moves the queue/state dir,
+  or re-wires the GitHub bridge on the fly — those levers are `restart`-kind (warn, keep running
+  value). No mid-ticket application either: an in-flight ticket keeps the config snapshot it
+  started with.
 - **`config edit` ($EDITOR).** `set` + the TUI cover it; $EDITOR plumbing isn't worth the surface.
 - **Structured-field editors in the TUI** (string-array add/remove, repos editor). Read-only in v1.
 - **Any change to the flat `Config` type** or to `ticketSchema.ts`. Out of scope.
@@ -129,6 +138,7 @@ export interface Lever {
   type: "boolean" | "number" | "enum" | "string" | "secret" | "structured";
   default: unknown;             // deep-equals the schema default (drift test)
   editable: boolean;            // false for structured
+  reload: "live" | "restart";   // live = applied at next poll boundary; restart = needs a restart
   description: string;          // the explanation (only hand-authored content)
   enumValues?: string[];        // enum only
   min?: number; max?: number;   // number bounds, mirror zod
@@ -138,7 +148,12 @@ export const LEVERS: Lever[];   // ~60 entries, in section order
 
 Type assignment: `model.apiKey` → `secret`; `tools`, `defaultLabels`, `allowedRepoRoots`,
 `model.input`, `github.repos`, `model.compat`, `model.cost` → `structured` (`editable:false`);
-everything else → its scalar type (`editable:true`). Consumed by the TUI and `config list`.
+everything else → its scalar type (`editable:true`).
+
+`reload` assignment (the hot-reload partition — see the Daemon hot-reload section): `restart` for
+levers baked into a bound resource or setup-captured wiring — `vaultRoot`, `juncoSubdir`, the whole
+`observability` section (health socket + `stateDir` + log sinks), and `github.enabled`; `live` for
+everything else (per-ticket/per-poll knobs). Consumed by the TUI and `config list`.
 `junco config list` becomes the **canonical annotated reference**; `docs/configuration.md` shrinks
 to a JSON skeleton + a pointer to `config list` rather than duplicating per-field prose (no
 generator script — the registry is the one home for explanations).
@@ -146,8 +161,9 @@ generator script — the registry is the one home for explanations).
 ### Drift test — `tests/configLevers.test.ts`
 Walk the zod schema's leaf paths; assert a **bijection** with `LEVERS`: every schema leaf has
 exactly one lever (no missing, no orphan); each lever's `default` deep-equals the schema default;
-each lever's `type`/`enumValues`/`min`/`max` matches its schema node. Descriptions are the only
-thing hand-maintained; types/defaults can never silently drift.
+each lever's `type`/`enumValues`/`min`/`max` matches its schema node; and every lever carries a
+`reload` value. Descriptions + the `reload` partition are the only hand-maintained fields;
+types/defaults can never silently drift.
 
 ## CLI — `src/configCmd.ts`, wired in `src/cli.ts`
 
@@ -156,7 +172,7 @@ thing hand-maintained; types/defaults can never silently drift.
 | `junco config path` | Print the resolved `config.json` path. |
 | `junco config list` | Levers grouped by section: path · current value · default · type/allowed · description. Secrets masked. The annotated reference, now in-tool. |
 | `junco config get <path>` | Print the current effective value (raw if set, else default) as JSON. `get model.apiKey` prints the secret (explicit ask). |
-| `junco config set <path> <value>` | Coerce per lever `type` (bool / number+bounds / enum-membership / string); reject non-editable structured paths → "edit config.json directly"; validate the whole config; **atomic write** (temp+rename); print `old → new`; warn "restart the daemon to apply" if one is running. |
+| `junco config set <path> <value>` | Coerce per lever `type` (bool / number+bounds / enum-membership / string); reject non-editable structured paths → "edit config.json directly"; validate the whole config; **atomic write** (temp+rename); print `old → new`; if the lever is `restart`-kind, warn "restart the daemon to apply" (live levers reload on their own via the watcher). |
 
 - **Edits mutate the raw parsed JSON**, not the defaulted object → the file stays sparse (`set`
   only ever adds the touched key). Validation runs on a defaulted *copy*; the raw+edit is written.
@@ -177,10 +193,53 @@ thing hand-maintained; types/defaults can never silently drift.
   against `min`/`max`; string → inline input; `apiKey` → masked `••••` + masked input;
   **structured → dim, non-editable, "edit config.json" hint.**
 - **Save:** commit → mutate raw JSON → validate whole config → success = atomic write (temp+rename)
-  → failure = error toast + revert the field. "Saved — `junco restart` to apply" toast when a
-  daemon is up.
+  → failure = error toast + revert the field. Success toast is per the edited lever's `reload`:
+  "Saved — applies live" vs "Saved — `junco restart` to apply" (see Surfacing).
 - Reuses `tui/theme` + existing components and the `ghClient.ts` atomic-write pattern; writes
   directly (no `cliRunner` shell-out).
+
+## Daemon hot-reload
+
+The daemon and the editor (TUI or `config set`) are **separate processes**, so reload is
+file-driven: the daemon watches `config.json` and re-loads on change. The architecture makes the
+live subset cheap — `runOnce`/`runScheduler`/`execute`/`bridgeSweep` already take `cfg` **by
+parameter**, so re-reading at the loop top applies new values to the *next* unit of work while an
+in-flight ticket keeps the snapshot it was called with.
+
+### `ConfigHolder` (`src/config.ts` or `src/configHolder.ts`)
+A tiny mutable box — `{ current: Config }` with a guarded `set`. Created in the `start` handler,
+initialized from `loadConfig`. `mainLoop` reads `holder.current` at the top of each iteration and
+passes *that* to the worker entry points. **"live" means read from the holder at use-time** —
+so the per-sweep GitHub/outbox throttle closures and the scheduler must consult `holder.current`
+rather than a setup-captured `cfg` (the plan threads the holder into those closures; any consumer
+that can't is reclassified `restart`).
+
+### Config watcher (`src/configWatcher.ts`, behind a `watchFn` deps seam)
+- **Watches the config's *directory*, filtered to the basename** — not the file. The atomic
+  temp+rename write (used by TUI + CLI) swaps the inode, which staleifies a direct file-watch;
+  a directory watch survives it. Events are **debounced** (~200ms) to collapse rename churn.
+- On event: re-run `loadConfig` in try/catch.
+  - **Success** → diff old vs new; `holder.set(new)`; if `logLevel` changed, call `setLogLevel`
+    immediately (cheap global, safe live); classify every changed leaf via its lever's `reload`;
+    record the set of changed `restart`-kind paths into `metrics.pendingRestartFields` and
+    `log.warn("config changed; restart to apply", { fields })`.
+  - **Failure** (bad JSON / schema) → `log.error`, keep the old config, keep running. A broken
+    save never takes down the daemon.
+- Started in the `start` handler alongside the loop; torn down in its `finally`.
+
+### Restart-kind levers (not hot-applied)
+The `observability` section (health server is bound to `healthHost`/`healthPort`; `stateDir` +
+log sinks are opened once), `vaultRoot`/`juncoSubdir` (queue dirs are `mkdir`'d once and an
+in-flight worktree references them), and `github.enabled` (reporter/bridge/outbox wiring is
+captured at `mainLoop` setup). Changing these updates the on-disk file and the holder but does
+**not** reconfigure the running daemon — `junco status` + `/health` list `pendingRestartFields`
+so the operator knows a restart is owed.
+
+### Surfacing
+- `/health` JSON + `junco status` gain `pendingRestartFields: string[]`.
+- TUI `ConfigView` renders a `↻ restart to apply` marker on `restart`-kind levers; on save it
+  toasts "applies live" vs "restart to apply" per the edited lever's `reload`.
+- `junco config set` warns "restart to apply" **only** when the target lever is `restart`-kind.
 
 ## Migration & rollout
 
@@ -212,8 +271,18 @@ thing hand-maintained; types/defaults can never silently drift.
   only the touched key).
 - **wizard:** `renderConfigJson` round-trips through `loadConfig`.
 - **ConfigView (Ink):** renders sections/fields/descriptions; edits of each scalar type write;
-  structured read-only; invalid edit → toast + no write; `apiKey` masked. Loop-until-condition
-  per the Ink-flake gotcha (never a fixed `setTimeout` tick).
+  structured read-only; invalid edit → toast + no write; `apiKey` masked; `↻ restart to apply`
+  marker on `restart`-kind levers. Loop-until-condition per the Ink-flake gotcha (never a fixed
+  `setTimeout` tick).
+- **Config watcher (`watchFn` seam):** valid edit → holder updated + `logLevel` re-applied +
+  `restart`-kind changes recorded to `pendingRestartFields`; malformed edit → holder unchanged, no
+  crash; debounce collapses a rename burst to one reload; a directory-watch survives an atomic
+  temp+rename (inode swap). Fake timers/injected `watchFn` — no real fs events.
+- **Poll-boundary application:** `mainLoop` reads `holder.current` each iteration → a live edit
+  reaches the next `runOnce`; an in-flight ticket keeps its param snapshot. Use the daemon-test
+  real-tick yield (`await new Promise((r) => setTimeout(r, 1))`) so the instant fake `sleep`
+  doesn't starve the macrotask queue.
+- **status/health:** `pendingRestartFields` surfaces after a `restart`-kind change.
 - **Regression:** existing `makeConfig`/`cfg()` fixtures are unaffected (flat `Config` unchanged);
   confirm `npm run typecheck` + full gate stay green.
 
@@ -223,6 +292,13 @@ thing hand-maintained; types/defaults can never silently drift.
   actionable message; conversion is an explicit, `.bak`-protected rollout step.
 - **Registry/schema drift** → the bijection test fails CI on any mismatch.
 - **`set` clobbering a concurrently-edited file** → re-read at write time (watchlist pattern).
+- **`fs.watch` unreliability** (macOS FSEvents vs Linux inotify; inode swap on atomic rename) →
+  watch the *directory* not the file, debounce, and re-`loadConfig`+diff on every event so a
+  spurious or coalesced event is a harmless no-op. `watchFn` is injectable for deterministic tests.
+- **Reload applied mid-ticket** → prevented by construction: in-flight work holds its `cfg`
+  parameter snapshot; the holder is only re-read at the loop top / next dispatch.
+- **Malformed save crashes the daemon** → the watcher keeps the last-good config on any
+  parse/validate failure; only a successful `loadConfig` swaps the holder.
 - **Breaking external dispatchers** → config is *not* `ticketSchema.ts`; dispatchers generate
   tickets, not config, so the stable-contract rule is not implicated. Still a breaking change for
   humans, documented in CHANGELOG.
