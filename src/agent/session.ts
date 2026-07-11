@@ -10,6 +10,8 @@ import { buildInlineProviderConfig, splitModelId, apiBaseUrl } from "./modelSetu
 import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
 import {
   selectBackend,
+  classifyAvailability,
+  noneBackend,
   defaultExecProbe,
   type SandboxBackend,
   type ExecProbe,
@@ -451,12 +453,28 @@ export async function resolveSandbox(
   const home = deps.home ?? homedir();
   const makeScratch = deps.makeScratch ?? (() => mkdtempSync(join(tmpdir(), "junco-sbx-")));
 
-  const backend = selectBackend(cfg.sandbox.backend, platform);
-  if (backend.name !== "none" && !(await backend.isAvailable(probe))) {
+  let backend = selectBackend(cfg.sandbox.backend, platform);
+  const available = backend.name === "none" ? true : await backend.isAvailable(probe);
+  const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, available);
+  if (outcome === "fail-closed") {
+    // Explicit backend the operator demanded is unavailable — never silently
+    // run less-sandboxed than they asked. (auto degrades instead; see below.)
     throw new SandboxUnavailableError(
       `sandbox backend "${backend.name}" unavailable (binary missing or non-functional). ` +
-        `Set [sandbox].enabled=false to opt out, or backend="none" to skip OS isolation.`,
+        `Install it, or set sandbox.backend="none" / sandbox.enabled=false.`,
     );
+  }
+  if (outcome === "degrade") {
+    // backend="auto" means "best available"; with no OS backend, fall back to
+    // none (env scrub + filesystem tool-jail still apply, but agent bash is NOT
+    // OS-confined — reads/network unrestricted) rather than failing the ticket.
+    log.warn(
+      `sandbox: no OS backend available (${backend.name}); degrading to backend=none — ` +
+        `env scrub + filesystem tool-jail still apply, but agent bash is not OS-confined. ` +
+        `Install the backend (e.g. bubblewrap on Linux) for full isolation.`,
+      { platform, configured: cfg.sandbox.backend },
+    );
+    backend = noneBackend;
   }
   const network = overrides?.network ?? cfg.sandbox.network === "allow";
   const scratchDir = makeScratch();

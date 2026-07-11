@@ -119,6 +119,36 @@ describe("runDoctor", () => {
     expect(lines.join("")).toMatch(/✗ sandbox/);
   });
 
+  it("reports ⚠ (not ✗) and stays green when backend=auto has no OS backend", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      sandbox: {
+        enabled: true,
+        backend: "auto",
+        network: "deny",
+        extraDenyRead: [],
+        extraAllowWrite: [],
+      },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        // The auto-selected OS backend probe fails (seatbelt on macOS / bwrap on
+        // Linux); everything else passes. auto → degrade, not fail-closed.
+        execFn: async (cmd: string) =>
+          cmd === "bwrap" || cmd === "sandbox-exec"
+            ? { code: 127, stdout: "", stderr: "not found" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0); // degrade does not fail the preflight
+    expect(lines.join("")).toMatch(/⚠ sandbox/);
+    expect(lines.join("")).toMatch(/degrading to none/);
+  });
+
   it("missing gh is a warning, not a failure (Q&A-only setups are valid)", async () => {
     const lines: string[] = [];
     const code = await runDoctor(

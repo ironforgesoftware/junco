@@ -6,6 +6,7 @@ import {
   bwrapBackend,
   noneBackend,
   selectBackend,
+  classifyAvailability,
 } from "../src/agent/sandbox/backend.js";
 import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 
@@ -92,5 +93,24 @@ describe("isAvailable", () => {
   it("seatbelt available when probe exits 0", async () => {
     expect(await seatbeltBackend.isAvailable(async () => ({ code: 0 }))).toBe(true);
     expect(await seatbeltBackend.isAvailable(async () => ({ code: 127 }))).toBe(false);
+  });
+});
+
+describe("classifyAvailability", () => {
+  it("none is always ok (no OS isolation by design)", () => {
+    expect(classifyAvailability("none", "none", false)).toBe("ok");
+    expect(classifyAvailability("auto", "none", false)).toBe("ok"); // auto on an unsupported platform
+  });
+  it("available backend is ok", () => {
+    expect(classifyAvailability("bwrap", "bwrap", true)).toBe("ok");
+    expect(classifyAvailability("auto", "seatbelt", true)).toBe("ok");
+  });
+  it("auto + unavailable degrades (best-available → none)", () => {
+    expect(classifyAvailability("auto", "bwrap", false)).toBe("degrade");
+    expect(classifyAvailability("auto", "seatbelt", false)).toBe("degrade");
+  });
+  it("an explicit backend + unavailable fails closed", () => {
+    expect(classifyAvailability("bwrap", "bwrap", false)).toBe("fail-closed");
+    expect(classifyAvailability("seatbelt", "seatbelt", false)).toBe("fail-closed");
   });
 });

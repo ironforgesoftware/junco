@@ -14,7 +14,7 @@ import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
-import { selectBackend } from "./agent/sandbox/backend.js";
+import { selectBackend, classifyAvailability } from "./agent/sandbox/backend.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
 import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
@@ -121,19 +121,31 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         const ok = await backend.isAvailable((c, a) =>
           execFn(c, a).then((r) => ({ code: r.code })),
         );
-        // On failure, tell the operator exactly how to satisfy the system
+        const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, ok);
+        // On trouble, tell the operator exactly how to satisfy the system
         // prerequisite (bwrap is a distro package, like git/gh — not an npm dep).
         const installHint =
           backend.name === "bwrap"
             ? "install bubblewrap (apt install bubblewrap / dnf install bubblewrap / apk add bubblewrap)"
-            : "install the backend or set sandbox.backend=none";
-        report(
-          ok ? "ok" : "fail",
-          "sandbox",
-          ok
-            ? `${backend.name} available`
-            : `${backend.name} unavailable — tickets fail closed. ${installHint}, or set sandbox.enabled=false`,
-        );
+            : "install the backend";
+        if (outcome === "ok") {
+          report("ok", "sandbox", `${backend.name} available`);
+        } else if (outcome === "degrade") {
+          // backend="auto": won't fail tickets, but silently gives less than
+          // full OS isolation — surface it as a warning, not a pass.
+          report(
+            "warn",
+            "sandbox",
+            `${backend.name} unavailable — auto-degrading to none (env scrub + fs jail only, ` +
+              `bash not OS-confined); ${installHint} for full isolation`,
+          );
+        } else {
+          report(
+            "fail",
+            "sandbox",
+            `${backend.name} unavailable — tickets fail closed. ${installHint}, or set sandbox.enabled=false`,
+          );
+        }
       }
     }
 
