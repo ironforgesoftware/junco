@@ -154,6 +154,15 @@ export const ConfigSchema = z.object({
       blockOnFail: z.boolean().default(false),
     })
     .default({}),
+  sandbox: z
+    .object({
+      enabled: z.boolean().default(false),
+      backend: z.enum(["auto", "seatbelt", "bwrap", "none"]).default("auto"),
+      network: z.enum(["deny", "allow"]).default("deny"),
+      extraDenyRead: z.array(z.string()).default([]),
+      extraAllowWrite: z.array(z.string()).default([]),
+    })
+    .default({}),
   critic: z
     .object({
       enabled: z.boolean().default(true),
@@ -330,6 +339,13 @@ export function assembleConfig(d: ConfigParsed): Config {
       maxIssuesPerRun: d.assess.maxIssuesPerRun,
       minSeverity: d.assess.minSeverity,
       npmBin: d.assess.npmBin,
+    },
+    sandbox: {
+      enabled: d.sandbox.enabled,
+      backend: d.sandbox.backend,
+      network: d.sandbox.network,
+      extraDenyRead: d.sandbox.extraDenyRead.map(expandHome),
+      extraAllowWrite: d.sandbox.extraAllowWrite.map(expandHome),
     },
   };
 }

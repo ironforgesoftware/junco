@@ -7,7 +7,7 @@
  *
  * The planner emits the ticket BODY ONLY inside a ```junco-ticket fence —
  * frontmatter is machine-built by the bridge (security boundary: model
- * output can never set repo:/workdir:/tools:).
+ * output can never set repo:/workdir:/tools:/network:).
  */
 
 import { readFileSync } from "node:fs";

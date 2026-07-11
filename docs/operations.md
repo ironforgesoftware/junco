@@ -101,6 +101,14 @@ The inbox is a **code-execution boundary**. Junco runs a coding agent with bash/
 
 (`[]`, the default, means any path on disk.)
 
+### Sandboxing the agent + a dedicated identity
+
+Two defenses harden the code-execution boundary above. They are independent — use either or both.
+
+**1. Native execution sandbox (`sandbox`).** Set `sandbox.enabled: true` to confine agent tool execution with OS-level isolation (Seatbelt on macOS, bubblewrap on Linux; no container, works offline). Writes are restricted to the worktree, network is denied by default, and credentials/API keys are scrubbed from the agent's environment. It **fails closed** if the backend binary is missing (`junco doctor` preflights it). Run `junco config list` (the `sandbox.*` levers) for the full policy, and use the per-ticket `network: true` frontmatter opt-in to widen egress for one ticket.
+
+**2. Dedicated GitHub identity.** Junco performs every `git push` / `gh pr create` itself; the agent never needs a token. Authenticate the **daemon** as a dedicated machine GitHub account (or a fine-grained PAT under one) scoped to only the repos junco may touch, with only `contents:write` + `pull_requests:write`. Combined with the sandbox's env scrub (which keeps the token off the agent plane entirely), a prompt-injected or runaway agent cannot exfiltrate a reusable credential or act as your personal account.
+
 ## Troubleshooting
 
 ### Inference endpoint unreachable at boot

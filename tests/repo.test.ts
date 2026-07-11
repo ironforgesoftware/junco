@@ -163,6 +163,13 @@ function makeConfig(work: string, ghBin: string): Config {
       externalReposRoot: "/tmp/junco-test-external",
     },
     assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
+    sandbox: {
+      enabled: false,
+      backend: "auto",
+      network: "deny",
+      extraDenyRead: [],
+      extraAllowWrite: [],
+    },
     stateDir: "/tmp/junco-repo-test-state",
     logToFile: false,
     transcriptsEnabled: false,

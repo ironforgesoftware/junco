@@ -603,6 +603,13 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     externalReposRoot: "/tmp/junco-test-external",
   },
   assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
+  sandbox: {
+    enabled: false,
+    backend: "auto",
+    network: "deny",
+    extraDenyRead: [],
+    extraAllowWrite: [],
+  },
 };
 
 let dispatchTmpDirs: string[] = [];

@@ -23,6 +23,7 @@ const ticket = (github: Ticket["github"]): Ticket => ({
   assess: null,
   analyze: null,
   workdir: null,
+  network: null,
 });
 const gt = { nwo: "acme/api", issue: 42, kind: "pr" as const, external: false };
 const out = (o: Partial<TicketOutcome>): TicketOutcome => ({

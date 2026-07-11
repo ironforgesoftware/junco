@@ -66,6 +66,59 @@ describe("runDoctor", () => {
     expect(lines.join("")).toMatch(/NOT ready/);
   });
 
+  it("does not report sandbox when disabled (default)", async () => {
+    const lines: string[] = [];
+    await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    expect(lines.join("")).not.toMatch(/sandbox/i);
+  });
+
+  it("reports ✓ when the enabled sandbox backend is available", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      sandbox: {
+        enabled: true,
+        backend: "bwrap",
+        network: "deny",
+        extraDenyRead: [],
+        extraAllowWrite: [],
+      },
+    } as unknown as Config;
+    await runDoctor(
+      "/x/config.toml",
+      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+    );
+    expect(lines.join("")).toMatch(/✓ sandbox/);
+  });
+
+  it("reports ✗ and fails when the enabled sandbox backend is unavailable", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      sandbox: {
+        enabled: true,
+        backend: "bwrap",
+        network: "deny",
+        extraDenyRead: [],
+        extraAllowWrite: [],
+      },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () => cfg,
+        // bwrap probe fails (127); other checks pass.
+        execFn: async (cmd: string) =>
+          cmd === "bwrap"
+            ? { code: 127, stdout: "", stderr: "not found" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("")).toMatch(/✗ sandbox/);
+  });
+
   it("missing gh is a warning, not a failure (Q&A-only setups are valid)", async () => {
     const lines: string[] = [];
     const code = await runDoctor(

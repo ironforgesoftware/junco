@@ -414,6 +414,53 @@ export const LEVERS: Lever[] = [
     description: "Block PR creation when verify fails (vs. warn and continue).",
   },
 
+  // --- sandbox.* ---
+  {
+    path: "sandbox.enabled",
+    type: "boolean",
+    default: false,
+    editable: true,
+    reload: "live",
+    description: "Wrap agent tool subprocesses in an OS sandbox (env scrub + path jail).",
+  },
+  {
+    path: "sandbox.backend",
+    type: "enum",
+    enumValues: ["auto", "seatbelt", "bwrap", "none"],
+    default: "auto",
+    editable: true,
+    reload: "live",
+    description:
+      "Sandbox backend: auto (seatbelt on macOS, bwrap on Linux), a forced one, or none.",
+  },
+  {
+    path: "sandbox.network",
+    type: "enum",
+    enumValues: ["deny", "allow"],
+    default: "deny",
+    editable: true,
+    reload: "live",
+    description:
+      "Default network egress for agent tool subprocesses (per-ticket network:true widens it).",
+  },
+  {
+    path: "sandbox.extraDenyRead",
+    type: "structured",
+    default: [],
+    editable: false,
+    reload: "live",
+    description:
+      "Extra absolute paths whose reads are denied (added to the built-in secret deny-list).",
+  },
+  {
+    path: "sandbox.extraAllowWrite",
+    type: "structured",
+    default: [],
+    editable: false,
+    reload: "live",
+    description: "Extra absolute paths where writes are permitted (added to worktree + scratch).",
+  },
+
   // --- critic.* ---
   {
     path: "critic.enabled",

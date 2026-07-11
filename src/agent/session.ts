@@ -1,11 +1,20 @@
-import { existsSync, mkdirSync, createWriteStream, type WriteStream } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, createWriteStream, mkdtempSync, type WriteStream } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir, homedir } from "node:os";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Config, RunResult } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
 import { GuardManager, type GuardDecision } from "./guardManager.js";
 import { log } from "../logging.js";
 import { buildInlineProviderConfig, splitModelId, apiBaseUrl } from "./modelSetup.js";
+import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
+import {
+  selectBackend,
+  defaultExecProbe,
+  type SandboxBackend,
+  type ExecProbe,
+} from "./sandbox/backend.js";
+import { buildSandbox, SandboxUnavailableError, type SdkToolFactories } from "./sandbox/index.js";
 
 // Re-exported for back-compat: these helpers moved to ./modelSetup.js.
 export { splitModelId, apiBaseUrl } from "./modelSetup.js";
@@ -408,6 +417,58 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export interface SessionOverrides {
   tools?: string[];
   thinkingLevel?: ThinkingLevel | string;
+  /** Per-ticket egress opt-in; overrides cfg.sandbox.network for this session. */
+  network?: boolean;
+}
+
+export interface ResolveSandboxDeps {
+  probe?: ExecProbe;
+  makeScratch?: () => string;
+  platform?: NodeJS.Platform;
+  home?: string;
+}
+
+export interface ResolvedSandbox {
+  backend: SandboxBackend;
+  policy: SandboxPolicy;
+}
+
+/**
+ * Decide sandbox backend + policy for a session, failing closed when a required
+ * OS backend is unavailable. Returns null when sandboxing is disabled (the
+ * factory then behaves exactly as before). Side effects (probe, scratch dir,
+ * platform, home) are injectable so the decision is unit-testable.
+ */
+export async function resolveSandbox(
+  cfg: Config,
+  cwd: string,
+  overrides: SessionOverrides | undefined,
+  deps: ResolveSandboxDeps = {},
+): Promise<ResolvedSandbox | null> {
+  if (!cfg.sandbox.enabled) return null;
+  const probe = deps.probe ?? defaultExecProbe;
+  const platform = deps.platform ?? process.platform;
+  const home = deps.home ?? homedir();
+  const makeScratch = deps.makeScratch ?? (() => mkdtempSync(join(tmpdir(), "junco-sbx-")));
+
+  const backend = selectBackend(cfg.sandbox.backend, platform);
+  if (backend.name !== "none" && !(await backend.isAvailable(probe))) {
+    throw new SandboxUnavailableError(
+      `sandbox backend "${backend.name}" unavailable (binary missing or non-functional). ` +
+        `Set [sandbox].enabled=false to opt out, or backend="none" to skip OS isolation.`,
+    );
+  }
+  const network = overrides?.network ?? cfg.sandbox.network === "allow";
+  const scratchDir = makeScratch();
+  const policy = buildPolicy({
+    cfg: cfg.sandbox,
+    cwd,
+    scratchDir,
+    home,
+    stateDir: cfg.stateDir,
+    network,
+  });
+  return { backend, policy };
 }
 
 export function makePiSessionFactory(
@@ -453,6 +514,29 @@ export function makePiSessionFactory(
       );
     }
 
+    // Sandbox (opt-in): replace built-in tools with sandboxed operations and
+    // freeze ambient extension loading. Inert when [sandbox].enabled is false —
+    // resolveSandbox returns null and the session is built exactly as before.
+    let sandboxTools: unknown[] | undefined;
+    let sandboxLoader: unknown;
+    const resolved = await resolveSandbox(cfg, cwd, overrides);
+    if (resolved) {
+      // The per-tool create<X>ToolDefinition factories + DefaultResourceLoader
+      // are the root-exported symbols the sandbox glue needs (the generic
+      // createToolDefinition is not root-exported; the deep import is blocked by
+      // the SDK exports map — see tests/sdkImportSurface.test.ts).
+      const sdk = (await import("@earendil-works/pi-coding-agent")) as unknown as SdkToolFactories;
+      const built = buildSandbox(sdk, {
+        cwd,
+        toolNames: overrides?.tools ?? cfg.tools,
+        backend: resolved.backend,
+        policy: resolved.policy,
+        home: homedir(),
+      });
+      sandboxTools = built.customTools;
+      sandboxLoader = built.resourceLoader;
+    }
+
     const { session } = await createAgentSession({
       cwd,
       model,
@@ -464,6 +548,12 @@ export function makePiSessionFactory(
       // default is the configured worker allowlist.
       tools: overrides?.tools ?? cfg.tools,
       sessionManager: SessionManager.inMemory(cwd),
+      // Sandboxed tool set + no-extensions loader (only when enabled). The
+      // sandbox glue is intentionally SDK-free (returns unknown[]); cast here at
+      // the single SDK boundary. Shapes are validated by tests/sandboxBuild +
+      // the platform-gated integration suite.
+      ...(sandboxTools ? { customTools: sandboxTools as never } : {}),
+      ...(sandboxLoader ? { resourceLoader: sandboxLoader as never } : {}),
     });
     return session;
   };

@@ -299,7 +299,11 @@ export function buildPrBody(
 
 export interface PrFlowDeps {
   /** Inject the worker agent session factory (tests pass a fake that commits). */
-  sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
+  sessionFactoryFor?: (
+    cfg: Config,
+    cwd: string,
+    overrides?: { network?: boolean },
+  ) => () => Promise<AgentSessionLike>;
   /** Inject the critic session factory (tests control the PASS/MISSING verdict). */
   criticSessionFactory?: () => Promise<AgentSessionLike>;
   /** Terminal dirs override (tests). Defaults to queuePaths(cfg). */
@@ -441,7 +445,9 @@ export async function runPrFlow(
   // A ticket-level `tools:` overrides the configured allowlist for THIS
   // ticket's sessions (worker + corrective). Everything else keeps cfg.
   const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath);
+  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
+    network: task.network ?? undefined,
+  });
   const result = await runAgent({
     body: prompt,
     cwd: wtPath,
@@ -637,7 +643,13 @@ export async function runPrFlow(
         log.info(
           `critic: MISSING ${critic.findings.slice(0, 120)} — re-dispatching one corrective worker turn`,
         );
-        const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath);
+        const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(
+          flowCfg,
+          wtPath,
+          {
+            network: task.network ?? undefined,
+          },
+        );
         const corrective = await runAgent({
           body: buildCorrectivePrompt(task, critic.findings),
           cwd: wtPath,

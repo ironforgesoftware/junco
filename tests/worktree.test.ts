@@ -156,6 +156,13 @@ function makeConfig(work: string, wtsRoot: string): Config {
       externalReposRoot: "/tmp/junco-test-external",
     },
     assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
+    sandbox: {
+      enabled: false,
+      backend: "auto",
+      network: "deny",
+      extraDenyRead: [],
+      extraAllowWrite: [],
+    },
   };
 }
 

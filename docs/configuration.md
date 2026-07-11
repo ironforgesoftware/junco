@@ -24,7 +24,7 @@ Junco is configured via a JSON file — `./config.json` if present, else `~/.con
 }
 ```
 
-`vaultRoot` is required — the queue lives at `<vaultRoot>/<juncoSubdir>/{inbox,processing,done,failed}`. `tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `critic`, `planLint`, `observability`, `github`, `assess` — is a sectioned object with sensible defaults; set only the keys you want to override.
+`vaultRoot` is required — the queue lives at `<vaultRoot>/<juncoSubdir>/{inbox,processing,done,failed}`. `tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `assess` — is a sectioned object with sensible defaults; set only the keys you want to override.
 
 ## The full reference
 
