@@ -14,6 +14,7 @@ import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
+import { selectBackend } from "./agent/sandbox/backend.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
 import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
@@ -105,6 +106,29 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         "gh",
         auth.code === 0 ? "authenticated" : "installed but not authenticated (run: gh auth login)",
       );
+    }
+
+    // 4a. sandbox backend (only when enabled)
+    if (cfg.sandbox?.enabled) {
+      const backend = selectBackend(cfg.sandbox.backend, process.platform);
+      if (backend.name === "none") {
+        report(
+          "warn",
+          "sandbox",
+          "enabled with backend=none — env scrub + fs jail only, no OS isolation",
+        );
+      } else {
+        const ok = await backend.isAvailable((c, a) =>
+          execFn(c, a).then((r) => ({ code: r.code })),
+        );
+        report(
+          ok ? "ok" : "fail",
+          "sandbox",
+          ok
+            ? `${backend.name} available`
+            : `${backend.name} unavailable — tickets fail closed (install it or set backend=none)`,
+        );
+      }
     }
 
     // 5. endpoint
