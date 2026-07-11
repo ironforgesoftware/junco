@@ -39,5 +39,6 @@ build/
 node_modules/
 *.tsbuildinfo
 
-# Personal runtime config (machine-specific). The shipped template is examples/config.toml.
+# Personal runtime config (machine-specific). The shipped template is examples/config.json.
+/config.json
 /config.toml

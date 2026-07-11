@@ -14,7 +14,7 @@ npm pack --pack-destination "$TMP" >/dev/null
 npm install -g --prefix "$TMP/prefix" "$TMP"/ironforgesoftware-junco-*.tgz >/dev/null
 JUNCO="$TMP/prefix/bin/junco"
 
-# Sandbox: config resolution prefers ./config.toml then XDG — point both at TMP
+# Sandbox: config resolution prefers ./config.json then XDG — point both at TMP
 # so the smoke run can never touch a real setup.
 SB="$TMP/sandbox"
 mkdir -p "$SB"
@@ -25,7 +25,7 @@ export XDG_CONFIG_HOME="$SB/.config"
 "$JUNCO" --help >/dev/null
 
 "$JUNCO" init --yes
-CONFIG="$SB/.config/junco/config.toml"
+CONFIG="$SB/.config/junco/config.json"
 [ -f "$CONFIG" ] || { echo "FAIL: init --yes did not write $CONFIG"; exit 1; }
 
 "$JUNCO" schema | node -e "JSON.parse(require('node:fs').readFileSync(0, 'utf8'))" \
