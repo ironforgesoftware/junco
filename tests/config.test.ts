@@ -10,51 +10,102 @@ import {
   isLoopbackHost,
 } from "../src/config.js";
 
-function writeToml(body: string): string {
+function writeJson(obj: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "junco-cfg-"));
-  const p = join(dir, "config.toml");
+  const p = join(dir, "config.json");
+  writeFileSync(p, JSON.stringify(obj), "utf8");
+  return p;
+}
+function writeRaw(basename: string, body: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "junco-cfg-"));
+  const p = join(dir, basename);
   writeFileSync(p, body, "utf8");
   return p;
 }
 
-describe("loadConfig", () => {
-  it("parses a minimal config with defaults", () => {
-    const p = writeToml(
-      `vault_root = "/tmp/vault"\n[pi]\nmodel_id = "omlx/m"\n[oMLX]\nurl = "http://127.0.0.1:1234/v1"\napi_key = "k"\n`,
-    );
-    const cfg = loadConfig(p);
+describe("loadConfig (JSON)", () => {
+  it("parses a minimal config and fills defaults", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/vault" }));
     expect(cfg.vaultRoot).toBe("/tmp/vault");
     expect(cfg.juncoSubdir).toBe("Junco");
-    // [pi].model_id and [oMLX] fall back into the resolved model config.
-    expect(cfg.model.id).toBe("omlx/m");
+    expect(cfg.model.id).toBe("local/my-model");
     expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
+    expect(cfg.model.api).toBe("openai-completions");
     expect(cfg.defaultTimeoutMinutes).toBe(30);
     expect(cfg.tools).toContain("read");
+    expect(cfg.commitLeftoversEnabled).toBe(false);
   });
 
-  it("throws a clear error when vault_root is missing", () => {
-    const p = writeToml(`[oMLX]\nurl = "u"\napi_key = "k"\n`);
-    expect(() => loadConfig(p)).toThrow(/vault_root/);
-  });
-
-  it("derives queue paths under vaultRoot/juncoSubdir", () => {
-    const paths = queuePaths({ vaultRoot: "/v", juncoSubdir: "Junco" } as any);
-    expect(paths.inbox).toBe("/v/Junco/inbox");
-    expect(paths.failed).toBe("/v/Junco/failed");
-  });
-
-  it("accepts a lowercase [omlx] section (Python parity)", () => {
-    const p = writeToml(
-      `vault_root = "/tmp/vault"\n[omlx]\nurl = "http://host:9/v1"\napi_key = "low"\n`,
+  it("reads promoted first-class fields (tools, worker.commitLeftovers)", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        tools: ["read", "bash"],
+        worker: { commitLeftovers: true, maxConcurrent: 3 },
+      }),
     );
-    const cfg = loadConfig(p);
-    expect(cfg.model.baseUrl).toBe("http://host:9/v1");
-    expect(cfg.model.apiKey).toBe("low");
+    expect(cfg.tools).toEqual(["read", "bash"]);
+    expect(cfg.commitLeftoversEnabled).toBe(true);
+    expect(cfg.maxConcurrent).toBe(3);
+  });
+
+  it("reads camelCase model + observability fields", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        model: { id: "p/m", baseUrl: "http://h:9/v1", apiKey: "k", contextWindow: 4096 },
+        observability: { healthPort: 9999, logLevel: "debug" },
+      }),
+    );
+    expect(cfg.model.id).toBe("p/m");
+    expect(cfg.model.contextWindow).toBe(4096);
+    expect(cfg.healthPort).toBe(9999);
+    expect(cfg.logLevel).toBe("debug");
+  });
+
+  it("merges model.compat onto DEFAULT_COMPAT (camelCase keys, no camelization)", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        model: { compat: { supportsDeveloperRole: true, customKey: 1 } },
+      }),
+    );
+    expect(cfg.model.compat.supportsDeveloperRole).toBe(true);
+    expect((cfg.model.compat as Record<string, unknown>).customKey).toBe(1);
+    expect(cfg.model.compat.maxTokensField).toBe("max_tokens"); // default preserved
+  });
+
+  it("expands ~ in path fields and derives github cross-field defaults", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "~/Junco",
+        observability: { stateDir: "/state" },
+        github: { enabled: true, triggerLabel: "bot" },
+      }),
+    );
+    expect(cfg.vaultRoot).not.toContain("~");
+    expect(cfg.github.askLabel).toBe("bot:ask");
+    expect(cfg.github.externalReposRoot).toBe("/state/external");
+    expect(cfg.github.plannerModelId).toBeNull();
+  });
+
+  it("throws a clear error when vaultRoot is missing", () => {
+    expect(() => loadConfig(writeJson({ model: { id: "x" } }))).toThrow(/vaultRoot/);
+  });
+
+  it("throws a friendly error on malformed JSON", () => {
+    const p = writeRaw("config.json", "{ not json");
+    expect(() => loadConfig(p)).toThrow(/not valid JSON/);
+  });
+
+  it("guards a leftover config.toml where config.json is expected", () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-cfg-"));
+    writeFileSync(join(dir, "config.toml"), 'vault_root = "/v"\n', "utf8");
+    expect(() => loadConfig(join(dir, "config.json"))).toThrow(/TOML config was removed/);
   });
 
   it("[model] defaults reproduce the previously-hardcoded values", () => {
-    const p = writeToml(`vault_root = "/tmp/vault"\n`);
-    const cfg = loadConfig(p);
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/vault" }));
     expect(cfg.model.id).toBe("local/my-model");
     expect(cfg.model.modelsJson).toBeNull();
     expect(cfg.model.api).toBe("openai-completions");
@@ -68,19 +119,24 @@ describe("loadConfig", () => {
     expect(cfg.model.compat.thinkingFormat).toBe("qwen-chat-template");
   });
 
-  it("[model] fields override the defaults and the legacy fallbacks; compat keys camelize", () => {
-    const p = writeToml(
-      `vault_root = "/tmp/vault"\n` +
-        `[pi]\nmodel_id = "legacy/should-be-overridden"\n` +
-        `[oMLX]\nurl = "http://legacy:1/v1"\n` +
-        `[model]\n` +
-        `id = "anthropic/claude"\napi = "anthropic-messages"\n` +
-        `base_url = "https://api.example.com/v1"\napi_key = "sk-x"\n` +
-        `context_window = 200000\nmax_tokens = 8192\nreasoning = false\nthinking_level = "high"\n` +
-        `models_json = "~/models.json"\n` +
-        `[model.compat]\nthinking_format = "anthropic"\nmax_tokens_field = "max_completion_tokens"\n`,
+  it("[model] fields override the defaults; compat keys pass through verbatim", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: {
+          id: "anthropic/claude",
+          api: "anthropic-messages",
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "sk-x",
+          contextWindow: 200000,
+          maxTokens: 8192,
+          reasoning: false,
+          thinkingLevel: "high",
+          modelsJson: "~/models.json",
+          compat: { thinkingFormat: "anthropic", maxTokensField: "max_completion_tokens" },
+        },
+      }),
     );
-    const cfg = loadConfig(p);
     expect(cfg.model.id).toBe("anthropic/claude");
     expect(cfg.model.api).toBe("anthropic-messages");
     expect(cfg.model.baseUrl).toBe("https://api.example.com/v1");
@@ -90,33 +146,19 @@ describe("loadConfig", () => {
     expect(cfg.model.reasoning).toBe(false);
     expect(cfg.model.thinkingLevel).toBe("high");
     expect(cfg.model.modelsJson).toBe(join(homedir(), "models.json"));
-    // snake_case TOML keys camelized; defaults still present for unset keys.
     expect(cfg.model.compat.thinkingFormat).toBe("anthropic");
     expect(cfg.model.compat.maxTokensField).toBe("max_completion_tokens");
     expect(cfg.model.compat.supportsUsageInStreaming).toBe(true);
   });
 
-  it("expands a leading ~ in vault_root to the home dir", () => {
-    const p = writeToml(`vault_root = "~/vault"\n[oMLX]\nurl = "u"\napi_key = "k"\n`);
-    const cfg = loadConfig(p);
+  it("expands a leading ~ in vaultRoot to the home dir", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "~/vault" }));
     expect(cfg.vaultRoot).not.toContain("~");
     expect(cfg.vaultRoot).toBe(join(homedir(), "vault"));
   });
 
-  it("reads the tool allowlist from [pi].extra_args --tools", () => {
-    const p = writeToml(`vault_root = "/v"\n[pi]\nextra_args = ["--tools", "read,bash,grep"]\n`);
-    expect(loadConfig(p).tools).toEqual(["read", "bash", "grep"]);
-  });
-
-  it("falls back to default tools when extra_args has no --tools", () => {
-    const p = writeToml(`vault_root = "/v"\n[pi]\nextra_args = ["--model", "x"]\n`);
-    expect(loadConfig(p).tools).toContain("read");
-    expect(loadConfig(p).tools).toContain("write");
-  });
-
-  it("applies supervisor defaults when [supervisor] is absent", () => {
-    const p = writeToml(`vault_root = "/v"\n`);
-    const cfg = loadConfig(p);
+  it("applies supervisor defaults when supervisor is absent", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
     expect(cfg.supervisorEnabled).toBe(true);
     expect(cfg.supervisorBudgetPerKind).toBe(1);
     expect(cfg.supervisorEscalationWindow).toBe(3);
@@ -124,12 +166,19 @@ describe("loadConfig", () => {
     expect(cfg.supervisorOutputBudgetPostCommit).toBe(24000);
   });
 
-  it("reads the [supervisor] knobs from config.toml", () => {
-    const p = writeToml(
-      `vault_root = "/v"\n[supervisor]\nenabled = false\nbudget_per_kind = 2\n` +
-        `escalation_window_turns = 5\noutput_budget_per_turn = 8000\noutput_budget_post_commit = 16000\n`,
+  it("reads the supervisor knobs from config.json", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        supervisor: {
+          enabled: false,
+          budgetPerKind: 2,
+          escalationWindowTurns: 5,
+          outputBudgetPerTurn: 8000,
+          outputBudgetPostCommit: 16000,
+        },
+      }),
     );
-    const cfg = loadConfig(p);
     expect(cfg.supervisorEnabled).toBe(false);
     expect(cfg.supervisorBudgetPerKind).toBe(2);
     expect(cfg.supervisorEscalationWindow).toBe(5);
@@ -137,92 +186,97 @@ describe("loadConfig", () => {
     expect(cfg.supervisorOutputBudgetPostCommit).toBe(16000);
   });
 
-  it("applies critic defaults when [critic] is absent", () => {
-    const p = writeToml(`vault_root = "/v"\n`);
-    const cfg = loadConfig(p);
+  it("applies critic defaults when critic is absent", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
     expect(cfg.criticEnabled).toBe(true);
     expect(cfg.criticMaxRetries).toBe(1);
     expect(cfg.criticThinking).toBe("minimal");
   });
 
-  it("reads the [critic] knobs from config.toml", () => {
-    const p = writeToml(
-      `vault_root = "/v"\n[critic]\nenabled = false\nmax_retries = 2\nthinking = "high"\n`,
+  it("reads the critic knobs from config.json", () => {
+    const cfg = loadConfig(
+      writeJson({ vaultRoot: "/v", critic: { enabled: false, maxRetries: 2, thinking: "high" } }),
     );
-    const cfg = loadConfig(p);
     expect(cfg.criticEnabled).toBe(false);
     expect(cfg.criticMaxRetries).toBe(2);
     expect(cfg.criticThinking).toBe("high");
   });
 
-  it("applies plan-lint + commit_leftovers defaults when sections are absent", () => {
-    const p = writeToml(`vault_root = "/v"\n`);
-    const cfg = loadConfig(p);
+  it("applies plan-lint + commitLeftovers defaults when sections are absent", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
     expect(cfg.planLintEnabled).toBe(true);
     expect(cfg.planLintBlockOnError).toBe(true);
     expect(cfg.planLintCheckLabels).toBe(true);
     expect(cfg.commitLeftoversEnabled).toBe(false);
   });
 
-  it("reads the [plan_lint] knobs and [pi].commit_leftovers from config.toml", () => {
-    const p = writeToml(
-      `vault_root = "/v"\n[pi]\ncommit_leftovers = true\n[plan_lint]\nenabled = false\nblock_on_error = false\ncheck_labels = false\n`,
+  it("reads the planLint knobs and worker.commitLeftovers from config.json", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        worker: { commitLeftovers: true },
+        planLint: { enabled: false, blockOnError: false, checkLabels: false },
+      }),
     );
-    const cfg = loadConfig(p);
     expect(cfg.planLintEnabled).toBe(false);
     expect(cfg.planLintBlockOnError).toBe(false);
     expect(cfg.planLintCheckLabels).toBe(false);
     expect(cfg.commitLeftoversEnabled).toBe(true);
   });
 
-  it("applies [observability] defaults when the section is absent", () => {
-    const p = writeToml(`vault_root = "/v"\n`);
-    const cfg = loadConfig(p);
+  it("applies observability defaults when the section is absent", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
     expect(cfg.healthEnabled).toBe(true);
     expect(cfg.healthHost).toBe("127.0.0.1");
     expect(cfg.healthPort).toBe(8787);
     expect(cfg.logLevel).toBe("info");
   });
 
-  it("reads the [observability] knobs from config.toml", () => {
-    const p = writeToml(
-      `vault_root = "/v"\n[observability]\nhealth_enabled = false\nhealth_host = "0.0.0.0"\n` +
-        `health_port = 9999\nlog_level = "warn"\n`,
+  it("reads the observability knobs from config.json", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        observability: {
+          healthEnabled: false,
+          healthHost: "0.0.0.0",
+          healthPort: 9999,
+          logLevel: "warn",
+        },
+      }),
     );
-    const cfg = loadConfig(p);
     expect(cfg.healthEnabled).toBe(false);
     expect(cfg.healthHost).toBe("0.0.0.0");
     expect(cfg.healthPort).toBe(9999);
     expect(cfg.logLevel).toBe("warn");
   });
 
-  it("normalizes an empty health_host to loopback (#71)", () => {
+  it("normalizes an empty healthHost to loopback (#71)", () => {
     // "" passes zod's z.string() but server.listen(port, "") binds ALL
     // interfaces — the most-exposed config. Normalize it to loopback.
-    const cfg = loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_host = ""\n`));
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v", observability: { healthHost: "" } }));
     expect(cfg.healthHost).toBe("127.0.0.1");
   });
 
-  it("normalizes a whitespace-only health_host to loopback (#71)", () => {
-    const cfg = loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_host = "   "\n`));
+  it("normalizes a whitespace-only healthHost to loopback (#71)", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v", observability: { healthHost: "   " } }));
     expect(cfg.healthHost).toBe("127.0.0.1");
   });
 
-  it("keeps a real non-loopback health_host verbatim (#71)", () => {
+  it("keeps a real non-loopback healthHost verbatim (#71)", () => {
     const cfg = loadConfig(
-      writeToml(`vault_root = "/v"\n[observability]\nhealth_host = "0.0.0.0"\n`),
+      writeJson({ vaultRoot: "/v", observability: { healthHost: "0.0.0.0" } }),
     );
     expect(cfg.healthHost).toBe("0.0.0.0");
   });
 
-  it("rejects an out-of-range [observability].log_level", () => {
-    const p = writeToml(`vault_root = "/v"\n[observability]\nlog_level = "verbose"\n`);
-    expect(() => loadConfig(p)).toThrow();
+  it("rejects an out-of-range observability.logLevel", () => {
+    expect(() =>
+      loadConfig(writeJson({ vaultRoot: "/v", observability: { logLevel: "verbose" } })),
+    ).toThrow();
   });
 
   it("resilience + observability + concurrency defaults", () => {
-    const p = writeToml(`vault_root = "/v"\n`);
-    const cfg = loadConfig(p);
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
     expect(cfg.maxTransientRetries).toBe(2);
     expect(cfg.retryBackoffSeconds).toBe(60);
     expect(cfg.maxConcurrent).toBe(1);
@@ -233,13 +287,14 @@ describe("loadConfig", () => {
   });
 
   it("resilience keys are configurable", () => {
-    const p = writeToml(
-      `vault_root = "/v"\n` +
-        `[worker]\nmax_transient_retries = 0\nretry_backoff_seconds = 5\nmax_concurrent = 3\n` +
-        `[observability]\nstate_dir = "~/x"\nlog_to_file = false\ntranscripts = false\n` +
-        `[git]\nallowed_repo_roots = ["~/code"]\n`,
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        worker: { maxTransientRetries: 0, retryBackoffSeconds: 5, maxConcurrent: 3 },
+        observability: { stateDir: "~/x", logToFile: false, transcripts: false },
+        git: { allowedRepoRoots: ["~/code"] },
+      }),
     );
-    const cfg = loadConfig(p);
     expect(cfg.maxTransientRetries).toBe(0);
     expect(cfg.retryBackoffSeconds).toBe(5);
     expect(cfg.maxConcurrent).toBe(3);
@@ -249,52 +304,52 @@ describe("loadConfig", () => {
     expect(cfg.allowedRepoRoots).toEqual([join(homedir(), "code")]);
   });
 
-  it("rejects max_concurrent < 1 and negative retry knobs", () => {
+  it("rejects maxConcurrent < 1 and negative retry knobs", () => {
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[worker]\nmax_concurrent = 0\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { maxConcurrent: 0 } })),
     ).toThrow();
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[worker]\nmax_transient_retries = -1\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { maxTransientRetries: -1 } })),
     ).toThrow();
   });
 
   it("rejects non-positive timeouts and poll intervals (#30)", () => {
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[worker]\ndefault_timeout_minutes = 0\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { defaultTimeoutMinutes: 0 } })),
     ).toThrow();
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[worker]\ndefault_timeout_minutes = -5\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { defaultTimeoutMinutes: -5 } })),
     ).toThrow();
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[worker]\npoll_interval_seconds = 0\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { pollIntervalSeconds: 0 } })),
     ).toThrow();
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[worker]\nstartup_poll_seconds = -1\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { startupPollSeconds: -1 } })),
     ).toThrow();
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[verify]\ncommand_timeout = 0\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", verify: { commandTimeout: 0 } })),
     ).toThrow();
   });
 
-  it("constrains health_port to an integer TCP port (1-65535) (#30)", () => {
+  it("constrains healthPort to an integer TCP port (1-65535) (#30)", () => {
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 0\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", observability: { healthPort: 0 } })),
     ).toThrow();
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 65536\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", observability: { healthPort: 65536 } })),
     ).toThrow();
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 8080.5\n`)),
+      loadConfig(writeJson({ vaultRoot: "/v", observability: { healthPort: 8080.5 } })),
     ).toThrow();
     expect(
-      loadConfig(writeToml(`vault_root = "/v"\n[observability]\nhealth_port = 65535\n`)).healthPort,
+      loadConfig(writeJson({ vaultRoot: "/v", observability: { healthPort: 65535 } })).healthPort,
     ).toBe(65535);
   });
 });
 
 describe("[github] config section", () => {
   it("defaults: disabled, junco labels, 60s poll, no repos", () => {
-    const cfg = loadConfig(writeToml(`vault_root = "/tmp/v"\n`));
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/v" }));
     expect(cfg.github).toEqual({
       enabled: false,
       triggerLabel: "junco",
@@ -307,28 +362,33 @@ describe("[github] config section", () => {
     });
   });
 
-  it("parses require_approval and planner_model_id", () => {
+  it("parses requireApproval and plannerModelId", () => {
     const cfg = loadConfig(
-      writeToml(
-        `vault_root = "/tmp/v"\n[github]\nrequire_approval = false\nplanner_model_id = "prov/big"\n`,
-      ),
+      writeJson({
+        vaultRoot: "/tmp/v",
+        github: { requireApproval: false, plannerModelId: "prov/big" },
+      }),
     );
     expect(cfg.github.requireApproval).toBe(false);
     expect(cfg.github.plannerModelId).toBe("prov/big");
   });
 
-  it("rejects an empty planner_model_id", () => {
+  it("rejects an empty plannerModelId", () => {
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/tmp/v"\n[github]\nplanner_model_id = ""\n`)),
+      loadConfig(writeJson({ vaultRoot: "/tmp/v", github: { plannerModelId: "" } })),
     ).toThrow();
   });
 
-  it("parses repos and derives ask_label from a custom trigger", () => {
+  it("parses repos and derives askLabel from a custom trigger", () => {
     const cfg = loadConfig(
-      writeToml(
-        `vault_root = "/tmp/v"\n[github]\nenabled = true\ntrigger_label = "bot"\n` +
-          `[[github.repos]]\nnwo = "acme/api"\npath = "~/code/api"\n`,
-      ),
+      writeJson({
+        vaultRoot: "/tmp/v",
+        github: {
+          enabled: true,
+          triggerLabel: "bot",
+          repos: [{ nwo: "acme/api", path: "~/code/api" }],
+        },
+      }),
     );
     expect(cfg.github.enabled).toBe(true);
     expect(cfg.github.askLabel).toBe("bot:ask");
@@ -337,33 +397,31 @@ describe("[github] config section", () => {
     expect(cfg.github.repos[0].path).toBe(join(homedir(), "code/api")); // ~ expanded
   });
 
-  it("an explicit ask_label overrides the derived one", () => {
-    const cfg = loadConfig(writeToml(`vault_root = "/tmp/v"\n[github]\nask_label = "question"\n`));
+  it("an explicit askLabel overrides the derived one", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/v", github: { askLabel: "question" } }));
     expect(cfg.github.askLabel).toBe("question");
   });
 
   it("rejects a malformed nwo", () => {
     expect(() =>
       loadConfig(
-        writeToml(
-          `vault_root = "/tmp/v"\n[github]\n[[github.repos]]\nnwo = "no-slash"\npath = "/x"\n`,
-        ),
+        writeJson({ vaultRoot: "/tmp/v", github: { repos: [{ nwo: "no-slash", path: "/x" }] } }),
       ),
     ).toThrow(/owner\/repo/);
   });
 });
 
-describe("github.external_repos_root", () => {
-  it("defaults to <state_dir>/external", () => {
+describe("github.externalReposRoot", () => {
+  it("defaults to <stateDir>/external", () => {
     const cfg = loadConfig(
-      writeToml(`vault_root = "/tmp/vault"\n[observability]\nstate_dir = "/tmp/junco-state"\n`),
+      writeJson({ vaultRoot: "/tmp/vault", observability: { stateDir: "/tmp/junco-state" } }),
     );
     expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/external");
   });
 
   it("expands ~ in an explicit value", () => {
     const cfg = loadConfig(
-      writeToml(`vault_root = "/tmp/vault"\n[github]\nexternal_repos_root = "~/ext-clones"\n`),
+      writeJson({ vaultRoot: "/tmp/vault", github: { externalReposRoot: "~/ext-clones" } }),
     );
     expect(cfg.github.externalReposRoot).toBe(join(homedir(), "ext-clones"));
   });
@@ -371,7 +429,7 @@ describe("github.external_repos_root", () => {
 
 describe("[assess] config section", () => {
   it("defaults: maxIssuesPerRun 20, minSeverity low, npmBin npm", () => {
-    const cfg = loadConfig(writeToml(`vault_root = "/tmp/v"\n`));
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/v" }));
     expect(cfg.assess).toEqual({
       maxIssuesPerRun: 20,
       minSeverity: "low",
@@ -379,11 +437,12 @@ describe("[assess] config section", () => {
     });
   });
 
-  it("parses explicit [assess] values and maps to camelCase", () => {
+  it("parses explicit assess values", () => {
     const cfg = loadConfig(
-      writeToml(
-        `vault_root = "/tmp/v"\n[assess]\nmax_issues_per_run = 5\nmin_severity = "high"\nnpm_bin = "pnpm"\n`,
-      ),
+      writeJson({
+        vaultRoot: "/tmp/v",
+        assess: { maxIssuesPerRun: 5, minSeverity: "high", npmBin: "pnpm" },
+      }),
     );
     expect(cfg.assess).toEqual({
       maxIssuesPerRun: 5,
@@ -392,15 +451,15 @@ describe("[assess] config section", () => {
     });
   });
 
-  it("rejects max_issues_per_run = 0 (min(1))", () => {
+  it("rejects maxIssuesPerRun = 0 (min(1))", () => {
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/tmp/v"\n[assess]\nmax_issues_per_run = 0\n`)),
+      loadConfig(writeJson({ vaultRoot: "/tmp/v", assess: { maxIssuesPerRun: 0 } })),
     ).toThrow();
   });
 
-  it("rejects min_severity = extreme (enum validation)", () => {
+  it("rejects minSeverity = extreme (enum validation)", () => {
     expect(() =>
-      loadConfig(writeToml(`vault_root = "/tmp/v"\n[assess]\nmin_severity = "extreme"\n`)),
+      loadConfig(writeJson({ vaultRoot: "/tmp/v", assess: { minSeverity: "extreme" } })),
     ).toThrow();
   });
 });
@@ -426,18 +485,23 @@ describe("isLoopbackHost (#44)", () => {
   });
 });
 
-describe("resolveConfigPath", () => {
-  it("explicit path wins, resolved against cwd", () => {
-    expect(resolveConfigPath("rel/c.toml", { cwd: () => "/base" })).toBe("/base/rel/c.toml");
-    expect(resolveConfigPath("/abs/c.toml", { cwd: () => "/base" })).toBe("/abs/c.toml");
+describe("resolveConfigPath / defaultUserConfigPath", () => {
+  it("defaults to config.json under XDG", () => {
+    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
   });
 
-  it("falls back to ./config.toml when it exists", () => {
-    const p = resolveConfigPath(undefined, {
-      cwd: () => "/base",
-      existsFn: (x) => x === "/base/config.toml",
-    });
-    expect(p).toBe("/base/config.toml");
+  it("prefers ./config.json when present", () => {
+    expect(
+      resolveConfigPath(undefined, {
+        existsFn: (p) => p.endsWith("config.json"),
+        cwd: () => "/w",
+      }),
+    ).toBe("/w/config.json");
+  });
+
+  it("explicit path wins, resolved against cwd", () => {
+    expect(resolveConfigPath("rel/c.json", { cwd: () => "/base" })).toBe("/base/rel/c.json");
+    expect(resolveConfigPath("/abs/c.json", { cwd: () => "/base" })).toBe("/abs/c.json");
   });
 
   it("otherwise resolves the XDG user path", () => {
@@ -446,14 +510,22 @@ describe("resolveConfigPath", () => {
       existsFn: () => false,
       env: { XDG_CONFIG_HOME: "/xdg" },
     });
-    expect(p).toBe("/xdg/junco/config.toml");
+    expect(p).toBe("/xdg/junco/config.json");
   });
 
   it("defaultUserConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {
-    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.toml");
-    expect(defaultUserConfigPath({})).toBe(join(homedir(), ".config/junco/config.toml"));
+    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
+    expect(defaultUserConfigPath({})).toBe(join(homedir(), ".config/junco/config.json"));
     expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "  " })).toBe(
-      join(homedir(), ".config/junco/config.toml"),
+      join(homedir(), ".config/junco/config.json"),
     );
+  });
+});
+
+describe("queuePaths", () => {
+  it("derives queue paths under vaultRoot/juncoSubdir", () => {
+    const paths = queuePaths({ vaultRoot: "/v", juncoSubdir: "Junco" } as any);
+    expect(paths.inbox).toBe("/v/Junco/inbox");
+    expect(paths.failed).toBe("/v/Junco/failed");
   });
 });

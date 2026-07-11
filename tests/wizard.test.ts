@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  renderConfigToml,
+  renderConfigJson,
   collectAnswers,
   defaultAnswers,
   runInitWizard,
@@ -32,21 +32,40 @@ function scriptedPrompter(a: { text?: string[]; select?: string[] } = {}): Promp
   };
 }
 
-describe("renderConfigToml — round-trips through loadConfig", () => {
+describe("renderConfigJson — round-trips through loadConfig", () => {
   let dir: string | null = null;
   afterEach(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
     dir = null;
   });
 
-  function parse(toml: string) {
+  function parse(json: string) {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-"));
-    const p = join(dir, "config.toml");
-    writeFileSync(p, toml);
+    const p = join(dir, "config.json");
+    writeFileSync(p, json);
     return loadConfig(p);
   }
 
-  it("inline mode — queue directly under vault_root (no /Junco)", () => {
+  it("renders a config.json that round-trips through loadConfig", () => {
+    const a: WizardAnswers = {
+      vaultRoot: "/v",
+      mode: "inline",
+      modelId: "p/m",
+      baseUrl: "http://h/v1",
+      apiKey: "k",
+    };
+    const json = renderConfigJson(a);
+    const parsed = JSON.parse(json);
+    expect(parsed).toMatchObject({
+      vaultRoot: "/v",
+      juncoSubdir: "",
+      model: { id: "p/m", baseUrl: "http://h/v1" },
+    });
+    const cfg = parse(json);
+    expect(cfg.model.id).toBe("p/m");
+  });
+
+  it("inline mode — queue directly under vaultRoot (no /Junco)", () => {
     const a: WizardAnswers = {
       vaultRoot: "/tmp/jv",
       mode: "inline",
@@ -54,7 +73,7 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
       baseUrl: "http://h:1/v1",
       apiKey: "k",
     };
-    const cfg = parse(renderConfigToml(a));
+    const cfg = parse(renderConfigJson(a));
     expect(cfg.model.id).toBe("prov/m");
     expect(cfg.model.baseUrl).toBe("http://h:1/v1");
     expect(cfg.model.apiKey).toBe("k");
@@ -70,12 +89,12 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
       modelId: "omlx/x",
       modelsJson: "~/.pi/agent/models.json",
     };
-    const cfg = parse(renderConfigToml(a));
+    const cfg = parse(renderConfigJson(a));
     expect(cfg.model.id).toBe("omlx/x");
     expect(cfg.model.modelsJson).toContain("models.json");
   });
 
-  it("escapes quotes/backslashes in values", () => {
+  it("handles quotes/backslashes in values (valid JSON string escaping)", () => {
     const a: WizardAnswers = {
       vaultRoot: '/path/with "quote"',
       mode: "inline",
@@ -83,26 +102,9 @@ describe("renderConfigToml — round-trips through loadConfig", () => {
       baseUrl: "http://h/v1",
       apiKey: "a\\b",
     };
-    const cfg = parse(renderConfigToml(a)); // must not throw on parse
+    const cfg = parse(renderConfigJson(a)); // must not throw on parse
     expect(cfg.model.apiKey).toBe("a\\b");
-  });
-
-  it("includes a commented [github] example block", () => {
-    const a: WizardAnswers = {
-      vaultRoot: "/tmp/jv",
-      mode: "inline",
-      modelId: "p/m",
-      baseUrl: "http://h/v1",
-      apiKey: "k",
-    };
-    const toml = renderConfigToml(a);
-    expect(toml).toContain("# [github]");
-    expect(toml).toContain('# trigger_label = "junco"');
-    expect(toml).toContain("# require_approval = true");
-    expect(toml).toContain("# [[github.repos]]");
-    // Still parses cleanly (the block is fully commented out).
-    const cfg = parse(toml);
-    expect(cfg.github.enabled).toBe(false);
+    expect(cfg.vaultRoot).toBe('/path/with "quote"');
   });
 });
 
@@ -176,7 +178,7 @@ describe("runInitWizard", () => {
 
   it("writes config + requests the queue dirs", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-run-"));
-    const cfgPath = join(dir, "config.toml");
+    const cfgPath = join(dir, "config.json");
     const printed: string[] = [];
     const made: string[] = [];
     const code = await runInitWizard(cfgPath, {
@@ -201,17 +203,17 @@ describe("runInitWizard", () => {
 
   it("--yes scaffolds a valid config with no prompts", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-yes-"));
-    const cfgPath = join(dir, "config.toml");
+    const cfgPath = join(dir, "config.json");
     const code = await runInitWizard(cfgPath, { yes: true, mkdirFn: () => {}, printFn: () => {} });
     expect(code).toBe(0);
     const cfg = loadConfig(cfgPath); // parses → valid
     expect(cfg.model.id).toBe("local/my-model");
-    expect(readFileSync(cfgPath, "utf8")).toMatch(/\[model\]/);
+    expect(JSON.parse(readFileSync(cfgPath, "utf8")).model).toBeTruthy();
   });
 
   it("returns 130 on cancel and writes nothing", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-cancel-"));
-    const cfgPath = join(dir, "config.toml");
+    const cfgPath = join(dir, "config.json");
     const written: string[] = [];
     const cancelling: Prompter = {
       ...scriptedPrompter(),

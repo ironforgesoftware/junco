@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { discoverService, runRestartCommand, type RestartDeps } from "../src/restartCmd.js";
 
-const CONFIG = "/Users/u/junco/config.toml";
+const CONFIG = "/Users/u/junco/config.json";
 
 type Exec = { code: number; stdout: string; stderr: string };
 const ok = (stdout: string): Exec => ({ code: 0, stdout, stderr: "" });

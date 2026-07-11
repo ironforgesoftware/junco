@@ -349,7 +349,7 @@ describe("run(['service','--platform','systemd'])", () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
     const code = await run(
-      ["service", "--platform", "systemd", "--config", "/tmp/config.toml"],
+      ["service", "--platform", "systemd", "--config", "/tmp/config.json"],
       deps,
     );
     expect(code).toBe(0);
@@ -358,21 +358,21 @@ describe("run(['service','--platform','systemd'])", () => {
   it("captured output contains [Unit]", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "systemd", "--config", "/tmp/config.toml"], deps);
+    await run(["service", "--platform", "systemd", "--config", "/tmp/config.json"], deps);
     expect(captured.join("")).toContain("[Unit]");
   });
 
   it("captured output contains ExecStart=", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "systemd", "--config", "/tmp/config.toml"], deps);
+    await run(["service", "--platform", "systemd", "--config", "/tmp/config.json"], deps);
     expect(captured.join("")).toContain("ExecStart=");
   });
 
   it("does NOT call mainLoopFn", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "systemd", "--config", "/tmp/config.toml"], deps);
+    await run(["service", "--platform", "systemd", "--config", "/tmp/config.json"], deps);
     expect(deps.mainLoopFn).not.toHaveBeenCalled();
   });
 });
@@ -382,7 +382,7 @@ describe("run(['service','--platform','launchd'])", () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
     const code = await run(
-      ["service", "--platform", "launchd", "--config", "/tmp/config.toml"],
+      ["service", "--platform", "launchd", "--config", "/tmp/config.json"],
       deps,
     );
     expect(code).toBe(0);
@@ -391,7 +391,7 @@ describe("run(['service','--platform','launchd'])", () => {
   it("captured output contains <plist", async () => {
     const captured: string[] = [];
     const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "launchd", "--config", "/tmp/config.toml"], deps);
+    await run(["service", "--platform", "launchd", "--config", "/tmp/config.json"], deps);
     expect(captured.join("")).toContain("<plist");
   });
 });
@@ -411,7 +411,7 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
     } as unknown as Config;
     const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
     try {
-      await run(["service", "--platform", "systemd", "--config", join(dir, "config.toml")], deps);
+      await run(["service", "--platform", "systemd", "--config", join(dir, "config.json")], deps);
       // 180-min ticket + 10-min drain margin = 190 min = 11400 s. The old
       // default-only sizing (30+10 = 40 min → 2400 s) would SIGKILL it mid-drain.
       expect(captured.join("")).toContain("TimeoutStopSec=11400");
@@ -433,7 +433,7 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
     } as unknown as Config;
     const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
     try {
-      await run(["service", "--platform", "systemd", "--config", join(dir, "config.toml")], deps);
+      await run(["service", "--platform", "systemd", "--config", join(dir, "config.json")], deps);
       // max(30, 10) + 10 = 40 min → 2400 s.
       expect(captured.join("")).toContain("TimeoutStopSec=2400");
     } finally {
@@ -453,12 +453,12 @@ describe("lock path derivation", () => {
       acquireLockFn,
       loadConfigFn: vi.fn(() => stubConfig()),
     });
-    await run(["start", "--config", "/tmp/foo/config.toml"], deps);
+    await run(["start", "--config", "/tmp/foo/config.json"], deps);
     expect(acquireLockFn).toHaveBeenCalledWith("/tmp/foo/worker.lock");
   });
 
-  it("uses config file directory (default config.toml → cwd/worker.lock)", async () => {
-    // With the default "config.toml" relative path, the resolved directory
+  it("uses config file directory (default config.json → cwd/worker.lock)", async () => {
+    // With the default "config.json" relative path, the resolved directory
     // must contain worker.lock at the end.
     const acquireLockFn = vi.fn(() => makeFakeLock());
     const deps = makeDeps({ acquireLockFn });
@@ -550,9 +550,9 @@ function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: str
   const vaultRoot = mkdtempSync(join(tmpdir(), "junco-cli-dispatch-"));
   dispatchTmpDirs.push(vaultRoot);
   const cfg: Config = { ...DISPATCH_CONFIG_BASE, vaultRoot };
-  // write a real config.toml so loadConfig can load it
-  const configPath = join(vaultRoot, "config.toml");
-  writeFileSync(configPath, `vault_root = "${vaultRoot}"\njunco_subdir = "Junco"\n`, "utf8");
+  // write a real config.json so loadConfig can load it
+  const configPath = join(vaultRoot, "config.json");
+  writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
   return { cfg, vaultRoot, configPath };
 }
 
@@ -709,7 +709,7 @@ describe("run(['init', '--config', p])", () => {
 describe("run(['init']) — wizard routing", () => {
   it("runs the wizard when no config exists (and passes yes:false)", async () => {
     const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
-    const code = await run(["init", "--config", "/nope/config.toml"], {
+    const code = await run(["init", "--config", "/nope/config.json"], {
       existsFn: () => false,
       runInitWizardFn: wizard,
       printFn: () => {},
@@ -721,7 +721,7 @@ describe("run(['init']) — wizard routing", () => {
 
   it("passes --yes through to the wizard", async () => {
     const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
-    await run(["init", "--yes", "--config", "/nope/config.toml"], {
+    await run(["init", "--yes", "--config", "/nope/config.json"], {
       existsFn: () => false,
       runInitWizardFn: wizard,
       printFn: () => {},
@@ -747,7 +747,7 @@ describe("run(['init']) — wizard routing", () => {
     const origTTY = process.stdin.isTTY;
     Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
     try {
-      const code = await run(["init", "--config", "/nope/config.toml"], {
+      const code = await run(["init", "--config", "/nope/config.json"], {
         existsFn: () => false,
         printFn: () => {},
       });
@@ -762,7 +762,7 @@ describe("run(['dashboard']) — routing", () => {
   it("routes `dashboard` to runDashboardFn with the loaded config", async () => {
     const { cfg } = freshDispatchVault(); // the file's existing full-Config helper
     let got: Config | null = null;
-    const code = await run(["dashboard", "--config", "/x/config.toml"], {
+    const code = await run(["dashboard", "--config", "/x/config.json"], {
       loadConfigFn: () => cfg,
       runDashboardFn: async (c) => {
         got = c;
@@ -855,7 +855,7 @@ describe("run(['restart']) — routing", () => {
     const { cfg } = freshDispatchVault();
     let gotPath: string | null = null;
     let loaded = false;
-    const code = await run(["restart", "--config", "/x/config.toml"], {
+    const code = await run(["restart", "--config", "/x/config.json"], {
       loadConfigFn: () => {
         loaded = true;
         return cfg;
@@ -867,12 +867,12 @@ describe("run(['restart']) — routing", () => {
     });
     expect(code).toBe(0);
     expect(loaded).toBe(true); // broken config fails fast before any kick
-    expect(gotPath).toBe("/x/config.toml");
+    expect(gotPath).toBe("/x/config.json");
   });
 
   it("a broken config aborts before the restart fn runs", async () => {
     let ran = false;
-    const code = await run(["restart", "--config", "/x/config.toml"], {
+    const code = await run(["restart", "--config", "/x/config.json"], {
       loadConfigFn: () => {
         throw new Error("bad toml");
       },
