@@ -797,11 +797,26 @@ describe("run(['init']) — wizard routing", () => {
     expect(wizard.mock.calls[0][1]).toEqual({ yes: true });
   });
 
-  it("does NOT overwrite an existing config (ensure-dirs only)", async () => {
+  it("init with existing config routes into the wizard (re-run mode)", async () => {
+    const { configPath } = freshDispatchVault(); // config present
+    const calls: Array<{ cp: string; yes?: boolean }> = [];
+    const code = await run(["init", "--config", configPath], {
+      runInitWizardFn: async (cp, o) => {
+        calls.push({ cp, yes: o.yes });
+        return 0;
+      },
+      printFn: () => {},
+    });
+    expect(code).toBe(0);
+    expect(calls.length).toBe(1);
+    expect(calls[0].yes).toBeFalsy();
+  });
+
+  it("init --yes with existing config repairs dirs and does NOT run the wizard", async () => {
     const { configPath, vaultRoot } = freshDispatchVault(); // config present
     const before = readFileSync(configPath, "utf8");
     const wizard = vi.fn(async () => 0);
-    const code = await run(["init", "--config", configPath], {
+    const code = await run(["init", "--yes", "--config", configPath], {
       runInitWizardFn: wizard,
       printFn: () => {},
     });
