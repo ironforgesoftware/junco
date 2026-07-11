@@ -3,11 +3,16 @@ import React from "react";
 import { render, cleanup } from "ink-testing-library";
 import { until } from "./helpers/until.js";
 import { Tip, ReceiptList, Select, MultiSelect } from "../src/tui/wizard/controls.js";
+import { Welcome } from "../src/tui/wizard/chapters/Welcome.js";
+import { Workspace } from "../src/tui/wizard/chapters/Workspace.js";
+import { defaultAnswers } from "../src/wizard/flow.js";
+import type { WizardIO } from "../src/wizard/io.js";
 
 afterEach(cleanup);
 const DOWN = "\x1b[B";
 const ENTER = "\r";
 const SPACE = " ";
+const BACKSPACE = "\x7f";
 // Ink's input-parser (input-parser.js) only splits a stdin chunk into
 // multiple key events at an escape boundary (or a backspace byte) — two
 // adjacent PLAIN characters like " " + "\r" are coalesced into a single
@@ -137,5 +142,124 @@ describe("controls", () => {
     stdin.write(META_SPACE + ENTER);
     await until(() => result !== null);
     expect(result).toEqual(["verify"]);
+  });
+});
+
+function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
+  return {
+    mode: "fresh",
+    configPath: "/tmp/config.json",
+    initialAnswers: defaultAnswers(),
+    currentRaw: null,
+    greetName: async () => "Ada",
+    preflight: async () => [{ verdict: "ok", label: "git", detail: "2.44" }],
+    discoverModels: async () => ["m-fast", "m-big"],
+    listModelsJson: () => [],
+    write: () => ({
+      written: true,
+      configPath: "/tmp/config.json",
+      queueRoot: "/tmp/q",
+      changes: [],
+    }),
+    flightCheck: async () => [],
+    ...over,
+  };
+}
+
+const noopChapter = {
+  patch: () => {},
+  onBack: () => {},
+  setTextEditing: () => {},
+};
+
+describe("Welcome", () => {
+  it("greets by name, shows preflight receipts, and advances on enter", async () => {
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Welcome
+        {...noopChapter}
+        answers={defaultAnswers()}
+        io={fakeIo()}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Ada"));
+    await until(() => (lastFrame() ?? "").includes("✓ git"));
+    expect(lastFrame()).toContain("🐦");
+    await press(stdin, ENTER);
+    await until(() => advanced);
+  });
+
+  it("rerun mode names the config being tuned", async () => {
+    const { lastFrame } = render(
+      <Welcome
+        {...noopChapter}
+        answers={defaultAnswers()}
+        io={fakeIo({ mode: "rerun", configPath: "/etc/junco.json" })}
+        onNext={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("/etc/junco.json"));
+    expect(lastFrame()).toContain("tune");
+  });
+});
+
+describe("Workspace", () => {
+  it("edits vaultRoot and advances on enter, refusing empty", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const view = (
+      <Workspace
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo()}
+        onNext={() => {
+          advanced = true;
+        }}
+      />
+    );
+    const { stdin, rerender } = render(view);
+    // wipe the default then type a path
+    for (let i = 0; i < "~/Junco".length; i++) {
+      await press(stdin, BACKSPACE);
+      rerender(
+        <Workspace
+          {...noopChapter}
+          answers={answers}
+          patch={(p) => {
+            answers = { ...answers, ...p };
+          }}
+          io={fakeIo()}
+          onNext={() => {
+            advanced = true;
+          }}
+        />,
+      );
+    }
+    await press(stdin, ENTER); // empty → must NOT advance
+    expect(advanced).toBe(false);
+    stdin.write("/tmp/nest");
+    await tick();
+    rerender(
+      <Workspace
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo()}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await press(stdin, ENTER);
+    await until(() => advanced);
+    expect(answers.vaultRoot).toBe("/tmp/nest");
   });
 });
