@@ -872,7 +872,7 @@ describe("run(['prs'])", () => {
     });
     expect(code).toBe(0);
     expect(captured.join("")).toBe(
-      "no watched repositories — add [[github.repos]] to config.toml or watch one from the dashboard\n",
+      "no watched repositories — add github.repos to config.json or watch one from the dashboard\n",
     );
   });
 });

@@ -6,18 +6,19 @@ Dispatch and review work from GitHub issues — the plan → approve → PR loop
 
 Junco can use **GitHub Issues as a dispatch surface**: label an issue and the daemon drafts an execution plan, posts it for review, and — once approved — works it in a worktree, opens a PR, and reports back on the issue thread. Junco never executes a raw issue directly; it always plans first. The local inbox keeps working exactly as before — both surfaces feed the same queue, and with `enabled = false` (the default) Junco makes zero GitHub calls.
 
-```toml
-[github]
-enabled = true
-trigger_label = "junco"        # the approval marker
-poll_interval_seconds = 60     # bridge sweep cadence
-require_approval = true        # a write+ collaborator must apply junco:approved before a plan executes
-# planner_model_id = "provider/small-model"   # optional: plan with a different model than execution
-
-[[github.repos]]
-nwo  = "owner/repo"            # repo to watch
-path = "~/code/repo"           # its local clone (origin must point at nwo)
+```json
+{
+  "github": {
+    "enabled": true,
+    "triggerLabel": "junco",
+    "pollIntervalSeconds": 60,
+    "requireApproval": true,
+    "repos": [{ "nwo": "owner/repo", "path": "~/code/repo" }]
+  }
+}
 ```
+
+`triggerLabel` is the approval marker (default `"junco"`); `pollIntervalSeconds` sets the bridge sweep cadence; `requireApproval` gates execution on a write+ collaborator applying `junco:approved`; optionally set `github.plannerModelId` to plan with a different (e.g. cheaper) model than the one that executes. Each `github.repos[]` entry needs `nwo` (the repo to watch) and `path` (its local clone — origin must point at `nwo`).
 
 **The two-hop loop.** Every sweep, Junco lists open issues carrying the trigger label in each watched repo.
 

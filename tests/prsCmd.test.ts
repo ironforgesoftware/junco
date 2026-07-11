@@ -77,7 +77,7 @@ describe("runPrsCommand", () => {
     const code = await runPrsCommand(c, { printFn: (s) => out.push(s) });
     expect(code).toBe(0);
     expect(out.join("")).toBe(
-      "no watched repositories — add [[github.repos]] to config.toml or watch one from the dashboard\n",
+      "no watched repositories — add github.repos to config.json or watch one from the dashboard\n",
     );
   });
 

@@ -29,7 +29,7 @@ export interface ServiceOpts {
   nodeBin?: string;
   /** Absolute path to the junco CLI entry (dist/cli.js). Required. */
   cliEntry: string;
-  /** Absolute path to config.toml. Required. */
+  /** Absolute path to config.json. Required. */
   configPath: string;
   /** Dir for stdout/stderr log files (launchd). Default: dirname(resolve(configPath)). */
   logDir?: string;
@@ -132,7 +132,7 @@ export function renderSystemdUnit(opts: ServiceOpts): string {
   // systemd unit lines are INI-style, not XML — no XML escaping. systemd splits
   // ExecStart on unquoted whitespace, so every interpolated value (the node
   // binary, the CLI entry, and the config path — all user-controlled) is
-  // double-quoted; a path like "/home/john doe/config.toml" then survives as a
+  // double-quoted; a path like "/home/john doe/config.json" then survives as a
   // single argument instead of two. systemd also honors "..." quoting in
   // Environment= values. Backslashes and embedded double-quotes are escaped so
   // the quoting can't be broken out of. (#43)

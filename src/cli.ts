@@ -131,7 +131,7 @@ const USAGE = `\
 Usage: junco <subcommand> [options]
 
 Subcommands:
-  init         Interactive setup wizard — writes config.toml + creates the queue
+  init         Interactive setup wizard — writes config.json + creates the queue
   start        Start the daemon
   run-once     Process one task and exit (dev/cron convenience; no lock)
   service      Render a service file to stdout (launchd plist or systemd unit)
@@ -164,8 +164,8 @@ Subcommands:
                     otherwise starts the daemon.
 
 Options:
-  --config <path>       Path to config.toml
-                        [default: ./config.toml if present, else ~/.config/junco/config.toml]
+  --config <path>       Path to config.json
+                        [default: ./config.json if present, else ~/.config/junco/config.json]
   --yes, -y             (init) Scaffold a default config without prompting
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
@@ -255,8 +255,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   const existsFn = deps.existsFn ?? ((p: string) => existsSync(p));
-  // Resolve the config path ONCE: explicit --config → ./config.toml when
-  // present → the user-level default (~/.config/junco/config.toml).
+  // Resolve the config path ONCE: explicit --config → ./config.json when
+  // present → the user-level default (~/.config/junco/config.json).
   const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
   // First-run aware: a bare invocation runs the setup wizard when there's no
   // config yet, and starts the daemon once one exists.
@@ -391,7 +391,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const uninstall = installSignalHandlersFn(stopFlag);
 
     // Live-reload (Task 6): the holder starts seeded with the config we just
-    // loaded; the watcher re-parses config.toml on change and swaps in a new
+    // loaded; the watcher re-parses config.json on change and swaps in a new
     // Config, which mainLoop's per-iteration reads pick up without a restart.
     // Hot-reload is optional — a watch-start failure (EMFILE/ENOSPC/EACCES/
     // unsupported FS) must NOT crash the daemon, matching the health server's
@@ -741,7 +741,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       if (!wantYes && !deps.runInitWizardFn && !process.stdin.isTTY) {
         process.stderr.write(
           `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
-            `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.toml.\n`,
+            `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.json.\n`,
         );
         return 1;
       }

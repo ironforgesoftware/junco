@@ -1086,7 +1086,7 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (mapping.fromConfig) {
-        showToast("info", `${mapping.nwo} is defined in config.toml`);
+        showToast("info", `${mapping.nwo} is defined in config.json`);
         return;
       }
       if (watchlistError) {

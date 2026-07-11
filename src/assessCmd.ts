@@ -147,7 +147,7 @@ export async function runAssessCommand(
     const match = fromConfig ?? fromWatch;
     if (!match) {
       print(
-        `junco assess: '${target}' is not watched — add it under [[github.repos]] in config.toml, or watch it from the dashboard, then retry\n`,
+        `junco assess: '${target}' is not watched — add it under github.repos in config.json, or watch it from the dashboard, then retry\n`,
       );
       return 2;
     }

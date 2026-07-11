@@ -8,11 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `junco config path|list|get|set` and an in-dashboard config editor (press `,`).
+- Daemon hot-reload: live-safe settings apply at the next poll; structural changes surface `pendingRestartFields` in `junco status` / `/health`.
 - **Two-phase assess with a review queue.** `junco assess` no longer files issues straight from the audit — the daemon **parks** every finding for review, and nothing lands on a tracker until a human confirms the batch (`junco assess review` to inspect, `junco assess file <id> --all | --only <fingerprints>` to file). Filing runs under your own `gh` auth and works on **any watched repo, owned or not** — owned repos get `junco:finding` + `severity/<level>` labels best-effort; repos you don't own get label-free issues. An authoritative dedup re-runs at file time so a finding filed by hand in the interim is skipped, not duplicated (#95).
 - **Dashboard assess review view.** Press `v` in the dashboard to open a per-finding checklist with the same select-and-confirm-to-file flow as the CLI (#96).
 - **`junco analyze owner/repo#N`** — a read-only issue investigation that parks a comment draft for review and **never posts without operator confirmation**. Shares the issue-target resolution (`gh issue view`, then watched-repo lookup or auto-provision) that dispatch uses (#98).
 - **Issue-scoped assess: `junco assess owner/repo#N`.** Steers the audit to the code an issue implicates, auto-provisions an unwatched repo (fork, clone, watchlist add), and stamps each filed finding's body with a `Context: owner/repo#N` cross-reference so it shows up on the original issue's timeline. Dedup stays shared, not scoped — an issue-scoped run and a whole-repo run never double-file the same defect (#99).
 - **Two-mode dashboard** with an actionable LOCAL runtime-visibility mode alongside the GitHub-integrated view (#97).
+
+### Changed
+
+- **BREAKING:** configuration is now `config.json` (camelCase) instead of `config.toml`; the `smol-toml` dependency is removed. Convert existing `config.toml` files by hand (see docs/configuration.md); junco errors with a pointer if it finds a leftover `config.toml`. Legacy `[pi]`/`[oMLX]` sections are gone — set `model.*` directly; the tool allowlist is now top-level `tools`, and `commit_leftovers` is `worker.commitLeftovers`.
 
 ### Fixed
 

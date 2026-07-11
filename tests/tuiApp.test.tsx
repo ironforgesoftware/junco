@@ -561,7 +561,7 @@ describe("App", () => {
     const r = renderApp(client, file);
     await tick();
     r.stdin.write("x"); // selected = acme/api (config)
-    await until(() => (r.lastFrame() ?? "").includes("config.toml"));
+    await until(() => (r.lastFrame() ?? "").includes("config.json"));
     r.stdin.write("j"); // select alx/coral
     await tick();
     r.stdin.write("x");

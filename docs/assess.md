@@ -72,9 +72,9 @@ junco assess <path|owner/repo|owner/repo#N> [--auto-plan]
 ```
 
 - **`<path>`** — an absolute or `~`-relative filesystem path to a local git checkout.
-- **`<owner/repo>`** — matched case-insensitively against the watched repo list: `[[github.repos]]` entries, anything added from the dashboard, **and external (unowned, fork-managed) watchlist entries**. The target must already be watched — if not, the command errors instead of guessing a clone path.
+- **`<owner/repo>`** — matched case-insensitively against the watched repo list: `github.repos` entries, anything added from the dashboard, **and external (unowned, fork-managed) watchlist entries**. The target must already be watched — if not, the command errors instead of guessing a clone path.
 - **`owner/repo#N`** (or an issue URL) — scopes the audit to one issue instead of a whole-repo sweep, and **auto-provisions** an unwatched repo (fork, clone, watchlist add) instead of requiring it be watched already. See [Issue-scoped assess](#issue-scoped-assess) below.
-- **`--auto-plan`** — apply the configured GitHub trigger label (`[github].trigger_label`, default `junco`) to every issue filed from this batch, so the bridge can pick each one up. Only takes effect on owned repos filed via Phase B below — an external batch always forces `autoPlan` off, regardless of this flag. See the caveat below.
+- **`--auto-plan`** — apply the configured GitHub trigger label (`github.triggerLabel`, default `junco`) to every issue filed from this batch, so the bridge can pick each one up. Only takes effect on owned repos filed via Phase B below — an external batch always forces `autoPlan` off, regardless of this flag. See the caveat below.
 
 A target that looks like `owner/repo#N` (or an issue URL) is resolved as an issue reference first. Otherwise, a target that looks like `owner/repo` (word characters either side of one slash) is treated as a watched-repo lookup unless a local directory by that literal name exists, in which case it's treated as a path instead.
 
@@ -83,7 +83,7 @@ What gets printed:
 | Outcome                  | stdout                                                                                                                                                                                                                                      | Exit |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
 | No target given          | `Usage: junco assess <path\|owner/repo\|owner/repo#N> [--auto-plan]`                                                                                                                                                                        | 2    |
-| `owner/repo` not watched | `junco assess: '<target>' is not watched — add it under [[github.repos]] in config.toml, or watch it from the dashboard, then retry`                                                                                                        | 2    |
+| `owner/repo` not watched | `junco assess: '<target>' is not watched — add it under github.repos in config.json, or watch it from the dashboard, then retry`                                                                                                            | 2    |
 | Path is not a directory  | `junco assess: not a directory: <resolved-path>`                                                                                                                                                                                            | 2    |
 | Ticket submission failed | `junco assess: <error>`                                                                                                                                                                                                                     | 1    |
 | Queued                   | `queued: <ticket-path>`, then `queued — the worker will audit the repo and park findings for review on its next claim; run 'junco assess review' then 'junco assess file <id>' to file them` (plus a third line when `--auto-plan` was set) | 0    |
@@ -159,7 +159,7 @@ Each filed finding becomes one GitHub issue:
 
 ## `--auto-plan` caveat
 
-`--auto-plan` only gets a finding as far as the trigger label, and only on an **owned** repo — an external batch forces `autoPlan` off no matter what the flag said at audit time, since junco doesn't queue plan/PR work against a repo it doesn't own. On an owned repo, the label lands on every issue the batch files (once you confirm with `junco assess file`) either way, but it's the bridge that turns a labeled issue into a plan — and the bridge only sweeps repos it's watching, and only when `[github].enabled = true`. If the target repo isn't bridge-watched (or the bridge is disabled), the issues still file, but the label sits there inert until the repo is watched.
+`--auto-plan` only gets a finding as far as the trigger label, and only on an **owned** repo — an external batch forces `autoPlan` off no matter what the flag said at audit time, since junco doesn't queue plan/PR work against a repo it doesn't own. On an owned repo, the label lands on every issue the batch files (once you confirm with `junco assess file`) either way, but it's the bridge that turns a labeled issue into a plan — and the bridge only sweeps repos it's watching, and only when `github.enabled = true`. If the target repo isn't bridge-watched (or the bridge is disabled), the issues still file, but the label sits there inert until the repo is watched.
 
 ## Config
 
