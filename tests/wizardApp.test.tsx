@@ -62,12 +62,14 @@ const SIZE = { columns: 100, rows: 32 };
 const LONG_TRIES = 500; // 500 * 20ms = 10s ceiling per until()
 
 /**
- * Same Enter-through choreography as the walkthrough test below, stopping the
- * instant the finale's "The nest is ready" marker shows (config already
- * written to the fake io by that point). Shared so the Ctrl-C-after-write
- * regression test doesn't have to re-derive the chapter sequence.
+ * Enter-through choreography from the Welcome greeting up to (and including)
+ * the Review chapter's config preview, stopping just short of pressing Enter
+ * on "Write config" — the one keystroke every caller below wants to control
+ * itself (either to reach the finale, or to exercise a write failure without
+ * ever leaving Review). Shared so neither caller has to re-derive the
+ * chapter sequence.
  */
-async function driveToFinale(
+async function driveToReview(
   stdin: { write: (s: string) => void },
   lastFrame: () => string | undefined,
 ): Promise<void> {
@@ -97,6 +99,19 @@ async function driveToFinale(
   await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
   await press(stdin, ENTER); // keep recommended set
   await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);
+}
+
+/**
+ * Same Enter-through choreography as the walkthrough test below, stopping the
+ * instant the finale's "The nest is ready" marker shows (config already
+ * written to the fake io by that point). Shared so the Ctrl-C-after-write
+ * regression test doesn't have to re-derive the chapter sequence.
+ */
+async function driveToFinale(
+  stdin: { write: (s: string) => void },
+  lastFrame: () => string | undefined,
+): Promise<void> {
+  await driveToReview(stdin, lastFrame);
   await press(stdin, ENTER); // Write config
   await until(() => (lastFrame() ?? "").includes("The nest is ready"), LONG_TRIES);
 }
@@ -245,5 +260,33 @@ describe("WizardApp", () => {
     await driveToFinale(stdin, lastFrame);
     await press(stdin, "\x03"); // Ctrl-C from the finale — config already written
     await until(() => outcome === "written", LONG_TRIES);
+  }, 60000);
+
+  it("a throwing io.write surfaces an error banner instead of crashing", async () => {
+    // Regression test: io.write can throw (schema-invalid config on a
+    // zero-diff rerun, EACCES, etc.) inside the live Ink alt-screen session.
+    // Before the fix, WizardApp.write() called setResult(io.write(answers))
+    // with no try/catch — the exception would escape Select's useInput
+    // handler with no handler above it, leaving a raw stack trace and the
+    // terminal stuck in raw mode. The fix must keep the Review chapter alive
+    // (result stays null) so the user can retry, go back, or quit.
+    let outcome = "";
+    const io = fakeIo({
+      write: () => {
+        throw new Error("EACCES: permission denied");
+      },
+    });
+    const { lastFrame, stdin } = render(
+      <WizardApp io={io} onOutcome={(o) => (outcome = o)} sizeOverride={SIZE} revealMs={0} />,
+    );
+    await driveToReview(stdin, lastFrame);
+    await press(stdin, ENTER); // Write config → io.write throws
+    await until(() => (lastFrame() ?? "").includes("Write failed"), LONG_TRIES);
+    expect(lastFrame()).toContain("EACCES: permission denied");
+    // Still alive on Review, not crashed: the Select options are still there.
+    expect(lastFrame()).toContain("Write config");
+    expect(lastFrame()).toContain("Quit without writing");
+    await press(stdin, "q");
+    await until(() => outcome === "cancelled", LONG_TRIES);
   }, 60000);
 });

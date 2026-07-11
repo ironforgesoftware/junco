@@ -1,5 +1,5 @@
 /** Chapter 2 — the inference endpoint + model. Same discovery/prefix rules as
- * the old clack wizard: probe <base>/models, bare ids get inferProvider()'s
+ * the original wizard: probe <base>/models, bare ids get inferProvider()'s
  * prefix, ids with "/" are kept verbatim; unreachable endpoints warn and fall
  * through to manual entry (never a dead end — the finale re-probes). */
 import React, { useEffect, useState } from "react";

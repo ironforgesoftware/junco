@@ -38,6 +38,7 @@ export function WizardApp({
   const [answers, setAnswers] = useState<WizardAnswers>(io.initialAnswers);
   const [idx, setIdx] = useState(0);
   const [result, setResult] = useState<WriteResult | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
   const textEditing = useRef(false);
   const reported = useRef(false);
 
@@ -54,7 +55,20 @@ export function WizardApp({
   };
   const next = (): void => setIdx((i) => Math.min(CHAPTERS.length - 1, i + 1));
   const back = (): void => setIdx((i) => Math.max(0, i - 1));
-  const write = (): void => setResult(io.write(answers));
+  // io.write can throw — a schema-invalid config on a zero-diff rerun, an
+  // EACCES on a read-only config dir, a fresh-mode validation gap. Uncaught,
+  // that exception would escape straight through Select's useInput handler
+  // with nothing above it to catch it: a raw stack trace inside the live Ink
+  // alt-screen session, terminal left in raw mode. Catch it here and stay on
+  // Review (result stays null) so the user can retry, go back, or quit.
+  const write = (): void => {
+    setWriteError(null);
+    try {
+      setResult(io.write(answers));
+    } catch (e) {
+      setWriteError(e instanceof Error ? e.message : String(e));
+    }
+  };
   const done = (): void => finishWith(result?.written ? "written" : "unchanged");
 
   useInput((input, key) => {
@@ -116,6 +130,12 @@ export function WizardApp({
             <Text dimColor>
               {result !== null ? "done" : `${idx + 1}/${CHAPTERS.length} · ${CHAPTERS[idx]}`}
             </Text>
+          )}
+          {writeError !== null && result === null && (
+            <Box flexDirection="column" marginBottom={1}>
+              <Text color={theme.error}>✗ Write failed: {writeError}</Text>
+              <Text dimColor>fix the problem, then Write again — or Quit without writing</Text>
+            </Box>
           )}
           {body}
         </Box>
