@@ -14,6 +14,7 @@ export type HintView =
   | "detail"
   | "help"
   | "addRepo"
+  | "config"
   | "palette"
   | "cmdOutput"
   | "queue"
@@ -276,6 +277,13 @@ export function hintsFor(
         ["enter", "next/submit"],
         ["esc", "cancel"],
       ];
+    case "config":
+      return [
+        ["↑/↓", "field"],
+        ["←/→", "section"],
+        ["enter", "edit/toggle"],
+        ["esc", "close"],
+      ];
     case "help":
       return [["any key", "close"]];
     case "main":
@@ -318,6 +326,7 @@ export function hintsFor(
     ["t", "queue"],
     ["p", "PRs"],
     ["s", "assess issue"],
+    [",", "config"],
     ["m", "local"],
     ["?", "help"],
     ["q", "quit"],

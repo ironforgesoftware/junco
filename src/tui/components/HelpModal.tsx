@@ -137,6 +137,7 @@ export function HelpModal({
           ["v", "assess review queue"],
           ["t", "queue view"],
           ["p", "PR tracking — junco-authored PRs across watched repos"],
+          [",", "config editor — edit live settings, per-lever descriptions"],
           [":", "command palette"],
         ]}
       />

@@ -39,6 +39,7 @@ import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
 import { ReviewView, type ReviewState } from "./components/ReviewView.js";
+import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
@@ -93,6 +94,7 @@ type View =
   | "detail"
   | "help"
   | "addRepo"
+  | "config"
   | "palette"
   | "cmdOutput"
   | "queue"
@@ -1297,7 +1299,7 @@ export function App(props: AppProps): React.JSX.Element {
   // The mode toggle is inert while a text field (filter / add-repo / palette)
   // or the confirm modal owns input — so `m` can never eat a typed character.
   const canToggleMode = (): boolean =>
-    !filtering && view !== "addRepo" && view !== "palette" && confirm === null;
+    !filtering && view !== "addRepo" && view !== "config" && view !== "palette" && confirm === null;
   // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
@@ -1432,6 +1434,11 @@ export function App(props: AppProps): React.JSX.Element {
 
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return; // layer 2 (text field owns input)
+
+    // ConfigView owns all input while open (own useInput + onExit, mirroring
+    // addRepo above) — kept ahead of the mode toggle and LOCAL dispatch so
+    // neither `m` nor a LOCAL-mode key ever leaks past it mid-edit.
+    if (view === "config") return; // layer 2b
 
     // layer 3 — the global mode toggle (`m` / Shift+Tab), hoisted above the
     // github cascade so `m` never eats a typed char (canToggleMode is false
@@ -1770,6 +1777,12 @@ export function App(props: AppProps): React.JSX.Element {
       setView("queue");
       return;
     }
+    // `,` opens the in-dashboard config editor — the settings idiom, and free
+    // (confirmed via `grep -n 'input === ' src/tui/App.tsx`).
+    if (input === ",") {
+      setView("config");
+      return;
+    }
     if (input === "p") {
       setScroll(0);
       setView("prs");
@@ -1974,7 +1987,14 @@ export function App(props: AppProps): React.JSX.Element {
     if (uiMode === "local") return; // the LOCAL body is keyboard-first in v1
 
     // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
-    if (view === "help" || view === "palette" || view === "addRepo" || view === "review") return;
+    if (
+      view === "help" ||
+      view === "palette" ||
+      view === "addRepo" ||
+      view === "review" ||
+      view === "config"
+    )
+      return;
     if (ev.kind === "release") return; // presses act on press, not release
     if (ev.kind === "press") dismissToast();
 
@@ -2172,6 +2192,8 @@ export function App(props: AppProps): React.JSX.Element {
         />
       ) : view === "review" ? (
         <ReviewView state={reviewState} height={listHeight} focused />
+      ) : view === "config" ? (
+        <ConfigView configPath={configPath} onExit={() => setView("main")} />
       ) : (
         <>
           <Rail
