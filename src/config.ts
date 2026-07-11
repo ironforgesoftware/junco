@@ -209,6 +209,15 @@ const TomlSchema = z.object({
       block_on_fail: z.boolean().default(false),
     })
     .default({}),
+  sandbox: z
+    .object({
+      enabled: z.boolean().default(false),
+      backend: z.enum(["auto", "seatbelt", "bwrap", "none"]).default("auto"),
+      network: z.enum(["deny", "allow"]).default("deny"),
+      extra_deny_read: z.array(z.string()).default([]),
+      extra_allow_write: z.array(z.string()).default([]),
+    })
+    .default({}),
   critic: z
     .object({
       enabled: z.boolean().default(true),
@@ -355,6 +364,13 @@ export function loadConfig(path: string): Config {
       maxIssuesPerRun: d.assess.max_issues_per_run,
       minSeverity: d.assess.min_severity,
       npmBin: d.assess.npm_bin,
+    },
+    sandbox: {
+      enabled: d.sandbox.enabled,
+      backend: d.sandbox.backend,
+      network: d.sandbox.network,
+      extraDenyRead: d.sandbox.extra_deny_read.map(expandHome),
+      extraAllowWrite: d.sandbox.extra_allow_write.map(expandHome),
     },
   };
 }

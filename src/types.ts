@@ -56,6 +56,21 @@ export interface AssessConfig {
   minSeverity: "critical" | "high" | "medium" | "low"; // findings below this are dropped
   npmBin: string; // binary for the dependency scan (`npm audit --json`)
 }
+export interface SandboxConfig {
+  // Master switch. false = current behavior (no sandbox, full env, no jail).
+  enabled: boolean;
+  // auto → seatbelt on darwin, bwrap on linux. none = no OS wrapping (env
+  // scrub + JS path-jail still apply; bash keeps network + can read anywhere).
+  backend: "auto" | "seatbelt" | "bwrap" | "none";
+  // Default egress for agent tool subprocesses. Per-ticket `network: true`
+  // frontmatter overrides to allow for one ticket.
+  network: "deny" | "allow";
+  // Extra absolute paths whose reads are denied (added to the built-in secret
+  // deny-list). Expanded at load.
+  extraDenyRead: string[];
+  // Extra absolute paths where writes are permitted (added to worktree+scratch).
+  extraAllowWrite: string[];
+}
 export interface Config {
   vaultRoot: string;
   juncoSubdir: string;
@@ -116,6 +131,8 @@ export interface Config {
   github: GithubConfig;
   // Vulnerability assessment knobs (junco assess flow).
   assess: AssessConfig;
+  // Agent execution sandbox (native OS isolation of tool subprocesses).
+  sandbox: SandboxConfig;
 }
 export interface Paths {
   inbox: string;

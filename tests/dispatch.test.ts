@@ -89,6 +89,13 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
     externalReposRoot: "/tmp/junco-test-external",
   },
   assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
+  sandbox: {
+    enabled: false,
+    backend: "auto",
+    network: "deny",
+    extraDenyRead: [],
+    extraAllowWrite: [],
+  },
 };
 
 function makeConfig(vaultRoot: string): Config {
