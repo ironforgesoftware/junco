@@ -942,7 +942,7 @@ describe("run(['restart']) — routing", () => {
     let ran = false;
     const code = await run(["restart", "--config", "/x/config.json"], {
       loadConfigFn: () => {
-        throw new Error("bad toml");
+        throw new Error("bad config");
       },
       runRestartFn: async () => {
         ran = true;

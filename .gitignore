@@ -41,4 +41,3 @@ node_modules/
 
 # Personal runtime config (machine-specific). The shipped template is examples/config.json.
 /config.json
-/config.toml
