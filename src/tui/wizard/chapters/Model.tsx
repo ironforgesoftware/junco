@@ -9,6 +9,7 @@ import { TextField } from "../../components/TextField.js";
 import { Spinner } from "../../components/Spinner.js";
 import { TIPS } from "../../../wizard/tips.js";
 import { inferProvider } from "../../../wizard/models.js";
+import { splitModelId } from "../../../agent/modelSetup.js";
 import { theme } from "../../theme.js";
 
 type Step = "source" | "url" | "key" | "probe" | "pick" | "manual" | "mjPath";
@@ -76,6 +77,7 @@ export function Model({
           <Box marginTop={1}>
             <Select
               focus
+              initial={answers.mode === "models_json" ? 1 : 0}
               options={[
                 {
                   value: "inline",
@@ -143,6 +145,12 @@ export function Model({
           <Box marginTop={1}>
             <Select
               focus
+              initial={Math.max(
+                0,
+                ids.findIndex(
+                  (id) => id === splitModelId(answers.modelId).modelId || id === answers.modelId,
+                ),
+              )}
               options={[
                 ...ids.map((id) => ({ value: id, label: id })),
                 { value: MANUAL, label: "✏️  Enter manually…" },

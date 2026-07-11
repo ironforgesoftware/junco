@@ -15,6 +15,7 @@ describe("wizard copy registry", () => {
       "model",
       "repoSafety",
       "githubOff",
+      "githubOn",
       "githubApproval",
       "extras",
       "review",

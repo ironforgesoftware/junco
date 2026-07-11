@@ -170,7 +170,12 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
         // file (or none at all) for the caller to trip over.
         validateConfigObject(buildConfigObject(a));
         mkdirFn(dirname(resolved));
-        writeFileFn(resolved, renderConfigJson(a));
+        // Atomic temp+rename, PID-suffixed (same ConfigView/configCmd pattern
+        // as the rerun branch below) — a crash mid-write must never leave a
+        // truncated config.json where a full one used to not exist.
+        const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
+        writeFileFn(tmp, renderConfigJson(a));
+        renameFn(tmp, resolved);
         written = true;
       } else {
         changes = diffAnswers(raw as Record<string, unknown>, a);

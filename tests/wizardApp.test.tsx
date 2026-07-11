@@ -3,7 +3,7 @@ import React from "react";
 import { render, cleanup } from "ink-testing-library";
 import { until } from "./helpers/until.js";
 import { WizardApp } from "../src/tui/wizard/WizardApp.js";
-import { defaultAnswers } from "../src/wizard/flow.js";
+import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 import type { WizardAnswers } from "../src/wizard/flow.js";
 
@@ -288,5 +288,76 @@ describe("WizardApp", () => {
     expect(lastFrame()).toContain("Quit without writing");
     await press(stdin, "q");
     await until(() => outcome === "cancelled", LONG_TRIES);
+  }, 60000);
+
+  it("re-run mode: Enter-through every chapter is a no-op (Selects honor the prefilled config)", async () => {
+    // Regression test: before Select's `initial` prop was wired up, every
+    // Select in a re-run always rendered pre-selected on option 0 regardless
+    // of the current config — so an operator who just wanted to glance at
+    // `junco init`'s recap and hit Enter through it would silently flip
+    // github.enabled back off (option 0 is "Off") and requireApproval to
+    // whatever option 0 happened to be, even though nothing in the on-disk
+    // config actually needed to change. A pure tune-up run must be a true
+    // no-op: Enter through every chapter, land on "Nothing changed."
+    const raw = {
+      vaultRoot: "/v",
+      model: { id: "local/m-fast", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "k" },
+      github: {
+        enabled: true,
+        repos: [{ nwo: "acme/api", path: "/tmp/acme" }],
+        requireApproval: true,
+      },
+    };
+    let writeCalls = 0;
+    let outcome = "";
+    const io = fakeIo({
+      mode: "rerun",
+      currentRaw: raw,
+      initialAnswers: answersFromConfig(raw),
+      discoverModels: async () => ["m-fast", "m-big"],
+      write: () => {
+        writeCalls++;
+        return { written: false, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };
+      },
+    });
+    const { lastFrame, stdin } = render(
+      <WizardApp io={io} onOutcome={(o) => (outcome = o)} sizeOverride={SIZE} revealMs={0} />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Ada"), LONG_TRIES);
+    await press(stdin, ENTER); // begin
+    await until(() => (lastFrame() ?? "").includes("Where should junco"), LONG_TRIES);
+    await press(stdin, ENTER); // vaultRoot unchanged
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"), LONG_TRIES);
+    await press(stdin, ENTER); // source: inline, preselected from mode
+    await until(() => (lastFrame() ?? "").includes("Inference endpoint base URL"), LONG_TRIES);
+    await press(stdin, ENTER); // url unchanged
+    await until(() => (lastFrame() ?? "").includes("API key for the endpoint?"), LONG_TRIES);
+    await press(stdin, ENTER); // key unchanged
+    await until(() => (lastFrame() ?? "").includes("models found"), LONG_TRIES);
+    // See pressUntilAdvanced's doc comment: the "pick" step mounts from an
+    // async Promise callback, not a keystroke.
+    await pressUntilAdvanced(stdin, ENTER, lastFrame, "models found", "Which folders", LONG_TRIES);
+    await press(stdin, ENTER); // empty roots → continue
+    await until(
+      () =>
+        (lastFrame() ?? "").includes("GitHub bridge") ||
+        (lastFrame() ?? "").includes("Enable the GitHub"),
+      LONG_TRIES,
+    );
+    await press(stdin, ENTER); // toggle preselected On (github.enabled: true)
+    await until(() => (lastFrame() ?? "").includes("owner/repo"), LONG_TRIES);
+    expect(lastFrame()).toContain("acme/api"); // existing repo already listed
+    await press(stdin, ENTER); // empty nwo field → skip straight to approval
+    await until(() => (lastFrame() ?? "").includes("approval"), LONG_TRIES);
+    await press(stdin, ENTER); // approval preselected Yes (requireApproval: true)
+    await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
+    await press(stdin, ENTER); // recommended set unchanged
+    await until(() => (lastFrame() ?? "").includes("Nothing changed"), LONG_TRIES);
+    expect(lastFrame()).toContain("Nothing changed — config untouched.");
+    await press(stdin, ENTER); // Finish
+    await until(() => (lastFrame() ?? "").includes("Config untouched"), LONG_TRIES);
+    await press(stdin, ENTER); // finish
+    await until(() => outcome === "unchanged", LONG_TRIES);
+    expect(writeCalls).toBe(1); // io.write called — dirs still ensured
   }, 60000);
 });

@@ -48,6 +48,7 @@ export function Github({
           <Box marginTop={1}>
             <Select
               focus
+              initial={answers.github.enabled ? 1 : 0}
               options={[
                 { value: "off", label: "Off — stay fully local", hint: "recommended to start" },
                 { value: "on", label: "On — watch repos for labeled issues" },
@@ -109,6 +110,7 @@ export function Github({
           <Box marginTop={1}>
             <Select
               focus
+              initial={answers.github.requireApproval ? 0 : 1}
               options={[
                 { value: "yes", label: "Yes — plans wait for me", hint: "recommended" },
                 { value: "no", label: "No — plan-ready tickets auto-execute" },
@@ -124,7 +126,7 @@ export function Github({
           <Tip>{TIPS.githubApproval}</Tip>
         </>
       )}
-      {step !== "toggle" && step !== "approval" && <Tip>{TIPS.githubOff}</Tip>}
+      {step !== "toggle" && step !== "approval" && <Tip>{TIPS.githubOn}</Tip>}
     </Box>
   );
 }

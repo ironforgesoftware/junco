@@ -25,6 +25,7 @@ export type TipKey =
   | "model"
   | "repoSafety"
   | "githubOff"
+  | "githubOn"
   | "githubApproval"
   | "extras"
   | "review"
@@ -40,6 +41,8 @@ export const TIPS: Record<TipKey, string> = {
     "junco only works in throwaway worktrees and opens pull requests — it never commits to your branches. Folders you list here are the only places a ticket can point it. Leave the list empty to allow any repo path.",
   githubOff:
     "Off means zero gh calls — junco stays fully local. Flip it later with `junco config set github.enabled true`.",
+  githubOn:
+    "Adding no repos now is fine — `junco doctor` will remind you, and the dashboard's `a` key adds them later.",
   githubApproval:
     "With approval required, a plan-ready ticket waits for you; without it, plans auto-execute on the next sweep.",
   extras:
