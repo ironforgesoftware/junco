@@ -130,6 +130,28 @@ describe("ProviderGate", () => {
       ]);
     });
 
+    it("reportFailure itself routes through expiry — a report after `until` with NO intervening read starts a fresh episode", () => {
+      gate.reportFailure("rate_limit", "429 first"); // until = 60_000
+      t = 100_000; // well past until — and crucially, no status()/claimBlockReason() read here
+      gate.reportFailure("rate_limit", "429 second");
+      // The stale rate_limited must expire inside reportFailure, so the pair fires...
+      expect(transitions).toEqual([
+        ["ok", "rate_limited"],
+        ["rate_limited", "ok"],
+        ["ok", "rate_limited"],
+      ]);
+      // ...and `since` reflects the second report's time, not the first episode's.
+      expect(gate.status().since).toBe(new Date(100_000).toISOString());
+    });
+
+    it("streak survives auto-expiry — doubling continues across an expired episode (only success/clear reset it)", () => {
+      gate.reportFailure("rate_limit", "429"); // streak 1 -> until = 60_000
+      t = 100_000;
+      expect(gate.status().state).toBe("ok"); // auto-expired on read
+      gate.reportFailure("rate_limit", "429 again"); // streak 2 -> 120s, NOT back to 60s
+      expect(gate.status().until).toBe(new Date(100_000 + 120 * 1000).toISOString());
+    });
+
     it("does not re-fire onTransition on a second read after expiry", () => {
       gate.reportFailure("rate_limit", "429");
       t = 60_000;

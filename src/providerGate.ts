@@ -60,6 +60,8 @@ export class ProviderGate {
   private readonly onTransitionCb: ((from: GateStateKind, to: GateStateKind) => void) | undefined;
 
   private state: InternalState = OK_STATE;
+  // Deliberately survives auto-expiry: only reportSuccess()/clearLatched()
+  // reset it, so doubling continues across expired rate-limit episodes.
   private streak = 0;
 
   constructor(opts: ProviderGateOpts) {
@@ -69,6 +71,13 @@ export class ProviderGate {
   }
 
   reportFailure(cls: ProviderFailureClass, reason: string): void {
+    // Route through the shared expiry gate first, like every read path: a
+    // stale until-based state must lapse to ok BEFORE we branch, so a report
+    // arriving after `until` (with no intervening read) starts a fresh
+    // episode — fresh `since`, and the expired→ok→non-ok transition pair
+    // actually reaches onTransition instead of collapsing into the
+    // same-kind no-fire branch.
+    this.currentState();
     switch (cls) {
       case "auth":
         this.transitionTo("auth_error", reason, null);
