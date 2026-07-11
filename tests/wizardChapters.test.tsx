@@ -10,6 +10,7 @@ import { RepoSafety } from "../src/tui/wizard/chapters/RepoSafety.js";
 import { Github } from "../src/tui/wizard/chapters/Github.js";
 import { Extras } from "../src/tui/wizard/chapters/Extras.js";
 import { Review } from "../src/tui/wizard/chapters/Review.js";
+import { Finale } from "../src/tui/wizard/chapters/Finale.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
@@ -653,5 +654,44 @@ describe("Review chapter", () => {
       />,
     );
     await until(() => (same.lastFrame() ?? "").includes("Nothing changed"));
+  });
+});
+
+describe("Finale", () => {
+  it("shows write receipts, flight-check results, staged next steps, sign-off", async () => {
+    let done = false;
+    const io = fakeIo({
+      flightCheck: async () => [
+        { verdict: "ok", label: "inference endpoint", detail: "http://h:1/v1" },
+      ],
+    });
+    const { lastFrame, stdin } = render(
+      <Finale
+        result={{ written: true, configPath: "/tmp/c.json", queueRoot: "/tmp/q", changes: [] }}
+        io={io}
+        onDone={() => {
+          done = true;
+        }}
+        revealMs={0}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("✓ Wrote config"));
+    await until(() => (lastFrame() ?? "").includes("inference endpoint"));
+    await until(() => (lastFrame() ?? "").includes("junco start"));
+    await until(() => (lastFrame() ?? "").includes("The nest is ready"));
+    await press(stdin, ENTER);
+    await until(() => done);
+  });
+
+  it("zero-diff rerun says the config was untouched", async () => {
+    const { lastFrame } = render(
+      <Finale
+        result={{ written: false, configPath: "/tmp/c.json", queueRoot: "/tmp/q", changes: [] }}
+        io={fakeIo()}
+        onDone={() => {}}
+        revealMs={0}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Config untouched"));
   });
 });
