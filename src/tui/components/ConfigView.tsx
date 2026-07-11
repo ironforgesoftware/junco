@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { theme } from "../theme.js";
 import { TextField } from "./TextField.js";
 import { LEVERS, getAtPath, setAtPath, coerceLever, type Lever } from "../../configLevers.js";
@@ -108,6 +108,31 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Chrome budget (title + border × 2 + footer description + toast + hint,
+ * with a little slack for the ↑/↓ "more" indicators) subtracted from the
+ * terminal height to size the right-pane viewport; clamped to a minimum so a
+ * tiny or unknown terminal still shows something usable. */
+const CHROME_ROWS = 8;
+const MIN_VISIBLE_ROWS = 5;
+
+/** Standard "scroll into view" clamp: nudge `offset` just far enough that
+ * `focusIdx` re-enters the `[offset, offset + visibleCount)` window, then
+ * clamp the result to the list's valid offset range. Pure function of the
+ * previous offset (not just the focus index) so scrolling one lever past the
+ * bottom shifts by one row rather than re-paging to a fixed grid. */
+function clampScrollOffset(
+  offset: number,
+  focusIdx: number,
+  visibleCount: number,
+  total: number,
+): number {
+  let next = offset;
+  if (focusIdx < next) next = focusIdx;
+  if (focusIdx >= next + visibleCount) next = focusIdx - visibleCount + 1;
+  const maxOffset = Math.max(0, total - visibleCount);
+  return Math.min(Math.max(next, 0), maxOffset);
+}
+
 /** Parses the config file; `null` on a missing/corrupt file so callers can
  * fall back (mount: to `{}`; a mid-session re-read: to the last-known state
  * — never let a transient read hiccup zero out the write). */
@@ -131,13 +156,23 @@ function writeRaw(configPath: string, obj: Record<string, unknown>): void {
 export function ConfigView({
   configPath,
   onExit,
+  visibleRows,
 }: {
   configPath: string;
   onExit: () => void;
+  /** Override for the right pane's lever-row viewport height. Defaults to
+   * the terminal height minus `CHROME_ROWS`; exposed so tests can force a
+   * small deterministic window instead of depending on the terminal size
+   * ink-testing-library reports (it has no `rows` at all). */
+  visibleRows?: number;
 }): React.JSX.Element {
+  const { stdout } = useStdout();
+  const terminalRows = stdout?.rows ?? 24;
+  const visibleCount = visibleRows ?? Math.max(MIN_VISIBLE_ROWS, terminalRows - CHROME_ROWS);
   const [raw, setRaw] = useState<Record<string, unknown>>(() => tryReadRaw(configPath) ?? {});
   const [sectionIdx, setSectionIdx] = useState(0);
   const [fieldIdx, setFieldIdx] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   // null = not editing; otherwise the live text buffer for the focused
   // number/string/secret lever (booleans toggle and enums cycle immediately,
   // with no intermediate buffer).
@@ -162,6 +197,19 @@ export function ConfigView({
   const fields = section.levers;
   const fieldIdxSafe = Math.max(0, Math.min(fieldIdx, fields.length - 1));
   const lever = fields[fieldIdxSafe];
+
+  // Re-derive (rather than trust the raw state value) so the initial mount,
+  // a shrunk `visibleRows` prop, or a section swap that hasn't gone through
+  // the left/right handlers yet can't leave the offset out of range.
+  const scrollOffsetSafe = clampScrollOffset(
+    scrollOffset,
+    fieldIdxSafe,
+    visibleCount,
+    fields.length,
+  );
+  const visibleFields = fields.slice(scrollOffsetSafe, scrollOffsetSafe + visibleCount);
+  const hiddenAbove = scrollOffsetSafe;
+  const hiddenBelow = Math.max(0, fields.length - (scrollOffsetSafe + visibleCount));
 
   /** Save path shared by toggle/cycle (immediate) and inline-edit commit:
    * re-read the file at write time (never mutate a stale in-memory copy —
@@ -226,21 +274,27 @@ export function ConfigView({
       return;
     }
     if (key.upArrow) {
-      setFieldIdx((i) => Math.max(0, i - 1));
+      const next = Math.max(0, fieldIdxSafe - 1);
+      setFieldIdx(next);
+      setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
       return;
     }
     if (key.downArrow) {
-      setFieldIdx((i) => Math.min(fields.length - 1, i + 1));
+      const next = Math.min(fields.length - 1, fieldIdxSafe + 1);
+      setFieldIdx(next);
+      setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
       return;
     }
     if (key.leftArrow) {
       setSectionIdx((i) => Math.max(0, i - 1));
       setFieldIdx(0);
+      setScrollOffset(0);
       return;
     }
     if (key.rightArrow) {
       setSectionIdx((i) => Math.min(SECTIONS.length - 1, i + 1));
       setFieldIdx(0);
+      setScrollOffset(0);
       return;
     }
     if (key.return) startEdit();
@@ -275,7 +329,9 @@ export function ConfigView({
           borderColor={theme.accent}
           paddingX={1}
         >
-          {fields.map((l, i) => {
+          {hiddenAbove > 0 && <Text dimColor>▲ {hiddenAbove} more</Text>}
+          {visibleFields.map((l, visibleI) => {
+            const i = scrollOffsetSafe + visibleI;
             const sel = i === fieldIdxSafe;
             const isEditingThis = sel && editing !== null;
             return (
@@ -312,6 +368,7 @@ export function ConfigView({
               </Box>
             );
           })}
+          {hiddenBelow > 0 && <Text dimColor>▼ {hiddenBelow} more</Text>}
         </Box>
       </Box>
       <Text dimColor wrap="truncate-end">

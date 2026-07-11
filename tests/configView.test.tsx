@@ -188,4 +188,29 @@ describe("ConfigView", () => {
     await press(stdin, LEFT);
     await until(() => /Root directory Junco keeps its ticket queue under/.test(lastFrame() ?? ""));
   });
+
+  it("windows the right pane so a long section (model, 15 levers) doesn't overflow", async () => {
+    const p = fixture({ vaultRoot: "/v" });
+    const { lastFrame, stdin } = render(
+      <ConfigView configPath={p} onExit={() => {}} visibleRows={4} />,
+    );
+    await until(() => /model/i.test(lastFrame() ?? ""));
+    await press(stdin, RIGHT); // general → model
+    await until(() => /id\s+local\/my-model/.test(lastFrame() ?? ""));
+    // The initial window covers only the first 4 of model's 15 levers
+    // (id, modelsJson, api, baseUrl) — the rest is clipped, not overflowed.
+    let f = lastFrame() ?? "";
+    expect(f).toMatch(/id\s+local\/my-model/);
+    expect(f).not.toMatch(/compat\s+\{\}/); // last lever, well past the window
+    expect(f).toMatch(/▼ 11 more/); // clipped-below indicator
+
+    // Move focus 10 rows down, past the window bottom (id..baseUrl); the
+    // window must scroll so the newly focused lever (index 10: cost.output)
+    // stays visible, while the now-scrolled-off id row disappears.
+    for (let i = 0; i < 10; i++) await press(stdin, DOWN);
+    await until(() => /cost\.output\s+0/.test(lastFrame() ?? ""));
+    f = lastFrame() ?? "";
+    expect(f).toMatch(/cost\.output\s+0/); // focused lever scrolled into view
+    expect(f).not.toMatch(/id\s+local\/my-model/); // scrolled off the top
+  });
 });
