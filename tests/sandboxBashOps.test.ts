@@ -14,6 +14,7 @@ const policy: SandboxPolicy = {
 /** A fake child process the fake spawn returns; drive it in the test. */
 function fakeProc() {
   const proc = new EventEmitter() as any;
+  proc.pid = 4242;
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
   proc.kill = vi.fn();
@@ -56,27 +57,51 @@ describe("makeSandboxedBashOperations", () => {
     expect(chunks.join("")).toBe("outerr");
   });
 
-  it("kills the process on timeout and resolves exitCode null", async () => {
+  it("kills the process group on timeout and resolves exitCode null", async () => {
     vi.useFakeTimers();
     const proc = fakeProc();
-    const ops = makeSandboxedBashOperations(noneBackend, policy, { spawnFn: (() => proc) as any });
+    const kills: Array<[number, string]> = [];
+    const ops = makeSandboxedBashOperations(noneBackend, policy, {
+      spawnFn: (() => proc) as any,
+      killFn: (pid, sig) => kills.push([pid, sig]),
+    });
     const p = ops.exec("sleep", "/work/tree", { onData: () => {}, timeout: 1000 });
     vi.advanceTimersByTime(1001);
-    expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(kills).toContainEqual([-4242, "SIGKILL"]); // negative pid = the group
     proc.emit("close", null);
     const res = await p;
     expect(res.exitCode).toBeNull();
     vi.useRealTimers();
   });
 
-  it("kills on abort signal", async () => {
+  it("kills the process group on abort signal", async () => {
     const proc = fakeProc();
+    const kills: Array<[number, string]> = [];
     const ac = new AbortController();
-    const ops = makeSandboxedBashOperations(noneBackend, policy, { spawnFn: (() => proc) as any });
+    const ops = makeSandboxedBashOperations(noneBackend, policy, {
+      spawnFn: (() => proc) as any,
+      killFn: (pid, sig) => kills.push([pid, sig]),
+    });
     const p = ops.exec("x", "/work/tree", { onData: () => {}, signal: ac.signal });
     ac.abort();
-    expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(kills).toContainEqual([-4242, "SIGKILL"]);
     proc.emit("close", null);
     await p;
+  });
+
+  it("spawns detached and reaps the process group on completion so a backgrounded child can't survive (#159)", async () => {
+    const proc = fakeProc();
+    const kills: Array<[number, string]> = [];
+    const spawnFn = vi.fn(() => proc) as any;
+    const ops = makeSandboxedBashOperations(noneBackend, policy, {
+      spawnFn,
+      killFn: (pid, sig) => kills.push([pid, sig]),
+    });
+    const done = ops.exec("echo hi & ", "/work/tree", { onData: () => {} });
+    proc.emit("close", 0);
+    await done;
+    // spawned in its own process group, and the group was reaped on close
+    expect(spawnFn.mock.calls[0][2].detached).toBe(true);
+    expect(kills).toContainEqual([-4242, "SIGKILL"]);
   });
 });
