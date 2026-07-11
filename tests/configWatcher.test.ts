@@ -30,7 +30,7 @@ function harness(initial: Snap, events: Snap[]) {
       if (s instanceof Error) throw s;
       return s.parsed;
     },
-    loadFn: () => {
+    assembleFn: () => {
       const s = cur();
       if (s instanceof Error) throw s;
       return s.config;
@@ -87,6 +87,22 @@ describe("configWatcher", () => {
     ]);
     h.fire();
     expect(h.restart).not.toHaveBeenCalled();
+  });
+
+  it("re-applies logLevel only when it changed", () => {
+    // A reload that leaves logLevel at "info" must NOT call setLogLevel (#163).
+    const h = harness(baseline, [
+      {
+        parsed: {
+          vaultRoot: "/v",
+          observability: { logLevel: "info", healthPort: 8787 },
+          worker: { pollIntervalSeconds: 20 },
+        },
+        config: { ...baseConfig },
+      },
+    ]);
+    h.fire();
+    expect(h.setLog).not.toHaveBeenCalled();
   });
 
   it("keeps the last-good config when a reload fails", () => {

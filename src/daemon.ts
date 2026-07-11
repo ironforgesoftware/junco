@@ -175,6 +175,12 @@ export function overlayFrozenRestartFields(frozen: Config, live: Config): Config
     github: {
       ...live.github,
       enabled: frozen.github.enabled,
+      // triggerLabel/askLabel feed the reporter's lifecycle-label prefix, which
+      // is baked in once at mainLoop setup — freeze them so the live bridge
+      // sweep can't scan a new label while the reporter still writes the old
+      // prefix (#162). Both are reload:"restart".
+      triggerLabel: frozen.github.triggerLabel,
+      askLabel: frozen.github.askLabel,
     },
   };
 }

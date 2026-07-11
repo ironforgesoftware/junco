@@ -16,10 +16,9 @@ export interface ModelCost {
   cacheWrite: number;
 }
 /** The model + inference provider junco drives Pi against. Resolved by
- * `loadConfig` from the `[model]` section (with fallbacks to the legacy
- * `[pi].model_id` / `[oMLX]` keys). When `modelsJson` points at an existing
- * Pi-style models.json the provider+model are loaded from THAT file and the
- * inline capability fields are ignored. */
+ * `loadConfig` from the `model` section of config.json. When `modelsJson`
+ * points at an existing Pi-style models.json the provider+model are loaded
+ * from THAT file and the inline capability fields are ignored. */
 export interface ModelConfig {
   id: string; // provider-prefixed, e.g. "openai/gpt-4o-mini"
   modelsJson: string | null; // path to a Pi models.json, or null for inline
@@ -110,8 +109,8 @@ export interface Config {
   planLintEnabled: boolean;
   planLintBlockOnError: boolean;
   planLintCheckLabels: boolean;
-  // Whether to sweep uncommitted leftovers into a final commit (parity with
-  // [pi].commit_leftovers). Pi-strict default is false (fail-loud).
+  // Whether to sweep uncommitted leftovers into a final commit
+  // (`worker.commitLeftovers`). Pi-strict default is false (fail-loud).
   commitLeftoversEnabled: boolean;
   // Post-session critic (parity with the Python [critic] section).
   criticEnabled: boolean;
