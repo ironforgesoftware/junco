@@ -418,7 +418,7 @@ export const LEVERS: Lever[] = [
   {
     path: "sandbox.enabled",
     type: "boolean",
-    default: false,
+    default: true,
     editable: true,
     reload: "live",
     description: "Wrap agent tool subprocesses in an OS sandbox (env scrub + path jail).",
