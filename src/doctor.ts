@@ -150,12 +150,17 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     }
 
     // 5. endpoint (hosted catalog models are not probed — Phase 2 adds the
-    // provider gate; Phase 3 adds per-API auth checks)
+    // provider gate; Phase 3 adds per-API auth checks). "catalog-eligible"
+    // rather than "hosted provider": a provider-prefixed id that ISN'T in the
+    // builtin catalog still lands here (shouldProbeEndpoint only checks
+    // eligibility, not an actual catalog hit) and the runtime cascade
+    // (resolveModelViaRegistries) falls through to inline resolution at first
+    // session — "hosted provider" would be actively wrong for that case.
     if (!shouldProbeEndpoint(cfg.model)) {
       report(
         "ok",
         "inference endpoint",
-        `${cfg.model.id} — hosted provider (catalog); probe skipped`,
+        `${cfg.model.id} — catalog-eligible; probe skipped (resolution confirmed at first session)`,
       );
     } else {
       const up = await reachableFn(cfg);

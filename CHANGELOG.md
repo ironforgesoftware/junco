@@ -26,7 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `model.baseUrl` previously bound to the local default endpoint
   (`http://127.0.0.1:1234/v1`); it now resolves from the builtin catalog.
   Explicitly set `model.baseUrl` (or `model.source: "inline"`) to keep the old
-  binding.
+  binding. A provider-prefixed id that is NOT actually in the builtin catalog
+  falls through to inline resolution — an explicit `model.baseUrl` +
+  `model.apiKey` are then required, and the session build fails with an
+  actionable error if the key is missing; endpoint probing is still skipped
+  for any catalog-eligible config, including this fall-through case.
 - The agent session no longer reads or creates `~/.pi/agent/auth.json`,
   `~/.pi/agent/settings.json`, or a target repo's `.pi/settings.json` — auth
   and settings are fully injected from junco config.

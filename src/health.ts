@@ -3,7 +3,8 @@
  * wait_for_omlx (lines 616-647).
  *
  * On daemon startup junco blocks until the configured inference endpoint is
- * reachable, so the first ticket doesn't fail on a cold server.
+ * reachable, so the first ticket doesn't fail on a cold server (skipped for
+ * hosted catalog-eligible models — see shouldProbeEndpoint).
  */
 
 import type { Config } from "./types.js";

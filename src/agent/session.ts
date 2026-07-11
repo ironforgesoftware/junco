@@ -398,8 +398,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * `apiBaseUrl()`.
  *
  * Model id: `cfg.model.id` is provider-prefixed (e.g. "openai/gpt-4o-mini").
- * We split on the first "/" into provider + bare model id, since the
- * programmatic `registerProvider`/`find` APIs take them separately.
+ * We split on the first "/" into provider + bare model id (`splitModelId`,
+ * consumed by `resolveModelViaRegistries` for the models.json/catalog/inline
+ * cascade); here the split instead feeds `setRuntimeApiKey(provider, ...)`.
  *
  * `overrides` lets a caller (e.g. the post-session critic) build a session with
  * NO tools (`tools: []`) and a different thinking level. When omitted the
