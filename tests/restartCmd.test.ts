@@ -227,7 +227,7 @@ describe("discoverService — reviewer findings", () => {
       platform: "linux",
       units: {
         "junco.service": "ExecStart=/usr/bin/junco start",
-        "junco-alt.service": "ExecStart=/usr/bin/junco start --config /elsewhere.toml",
+        "junco-alt.service": "ExecStart=/usr/bin/junco start --config /elsewhere.json",
       },
     });
     expect(await discoverService(CONFIG, f.deps)).toBeNull();

@@ -230,10 +230,10 @@ describe("renderSystemdUnit", () => {
       ...BASE_OPTS,
       nodeBin: "/opt/$REL/bin/node",
       cliEntry: "/opt/app%2f/dist/cli.js",
-      configPath: "/home/u/cfg$1%.toml",
+      configPath: "/home/u/cfg$1%.json",
     });
     expect(out).toContain(
-      'ExecStart="/opt/$$REL/bin/node" "/opt/app%%2f/dist/cli.js" start --config "/home/u/cfg$$1%%.toml"',
+      'ExecStart="/opt/$$REL/bin/node" "/opt/app%%2f/dist/cli.js" start --config "/home/u/cfg$$1%%.json"',
     );
   });
 

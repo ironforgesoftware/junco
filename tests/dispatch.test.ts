@@ -24,7 +24,7 @@ import { inboxPath, submitTicket } from "../src/dispatch.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
+const CONFIG_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
   model: {
     id: "test-model",
     modelsJson: null,
@@ -99,7 +99,7 @@ const TOML_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
 };
 
 function makeConfig(vaultRoot: string): Config {
-  return { ...TOML_DEFAULTS, vaultRoot, juncoSubdir: "Junco" };
+  return { ...CONFIG_DEFAULTS, vaultRoot, juncoSubdir: "Junco" };
 }
 
 const TICKET_NO_FRONTMATTER = `# Do the thing

@@ -68,7 +68,7 @@ describe("runDoctor", () => {
 
   it("does not report sandbox when disabled (default)", async () => {
     const lines: string[] = [];
-    await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(lines.join("")).not.toMatch(/sandbox/i);
   });
 
@@ -85,7 +85,7 @@ describe("runDoctor", () => {
       },
     } as unknown as Config;
     await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
     );
     expect(lines.join("")).toMatch(/✓ sandbox/);
@@ -104,7 +104,7 @@ describe("runDoctor", () => {
       },
     } as unknown as Config;
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () => cfg,
         // bwrap probe fails (127); other checks pass.
@@ -156,7 +156,7 @@ describe("runDoctor", () => {
       "/x/config.json",
       deps({
         loadConfigFn: () => {
-          throw new Error("bad toml");
+          throw new Error("bad config");
         },
       }),
     );
