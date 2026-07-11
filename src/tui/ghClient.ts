@@ -526,7 +526,9 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
 
     analyzeIssue(nwo, num) {
       return attempt(async () => {
-        const r = await (deps.analyzeCoreFn ?? analyzeIssueCore)(cfg, `${nwo}#${num}`);
+        const r = await (deps.analyzeCoreFn ?? analyzeIssueCore)(cfg, `${nwo}#${num}`, {
+          resolveDeps: { ghFn, gitFn },
+        });
         return { id: r.id };
       });
     },

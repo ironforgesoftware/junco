@@ -828,7 +828,34 @@ describe("analyzeIssue", () => {
     const client = makeGhDashboardClient(cfg, { ...fakes(), analyzeCoreFn });
     const r = await client.analyzeIssue("o/r", 7);
     expect(r).toEqual({ ok: true, value: { id: "analyze-o-r-7" } });
-    expect(analyzeCoreFn).toHaveBeenCalledWith(cfg, "o/r#7");
+    expect(analyzeCoreFn).toHaveBeenCalledWith(
+      cfg,
+      "o/r#7",
+      expect.objectContaining({ resolveDeps: expect.anything() }),
+    );
+  });
+
+  it("threads the client's {ghFn,gitFn} through resolveDeps — not the real-binary defaults", async () => {
+    const f = fakes();
+    let gotGhFn: unknown;
+    let gotGitFn: unknown;
+    const analyzeCoreFn = vi.fn(
+      async (
+        _c: Config,
+        _ref: string,
+        deps?: { resolveDeps?: { ghFn?: unknown; gitFn?: unknown } },
+      ) => {
+        gotGhFn = deps?.resolveDeps?.ghFn;
+        gotGitFn = deps?.resolveDeps?.gitFn;
+        return { id: "analyze-o-r-7", destPath: "/inbox/analyze-o-r-7.md" };
+      },
+    );
+    const client = makeGhDashboardClient(cfg, { ...f, analyzeCoreFn });
+    await client.analyzeIssue("o/r", 7);
+    // Identity check: the injected fakes reach the core, never falling back
+    // to real gh/git defaults inside resolveIssueTarget/ensureExternalClone.
+    expect(gotGhFn).toBe(f.ghFn);
+    expect(gotGitFn).toBe(f.gitFn);
   });
 
   it("throwing core -> ok:false", async () => {

@@ -1077,6 +1077,38 @@ describe("external-repo routing", () => {
     await until(() => (r.lastFrame() ?? "").includes("ticket queued: gh-up-stream-7"));
   });
 
+  it("d on an external repo resolving after unmount is swallowed by the aliveRef guard (no crash)", async () => {
+    // Same shape as the pane-2 "d" aliveRef test above, but for the
+    // external-repo dispatchTicket branch — its .then lacked the guard.
+    const { client } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
+    let releaseDispatch: (() => void) | undefined;
+    client.dispatchTicket = () =>
+      new Promise((res) => {
+        releaseDispatch = () => res(okv({ id: "gh-up-stream-7", destPath: "/inbox/x.md" }));
+      });
+    const file = wle();
+    writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
+    const errors: unknown[][] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+    try {
+      const r = renderApp(client, file);
+      await tick();
+      r.stdin.write("j"); // select up/stream (pane 1, index 1)
+      await until(() => (r.lastFrame() ?? "").includes("#7")); // its issue loaded
+      r.stdin.write("2"); // focus issues pane
+      await tick();
+      r.stdin.write("d"); // dispatchTicket now pending
+      await until(() => releaseDispatch !== undefined);
+      r.unmount(); // unmount cleanup flips aliveRef.current = false synchronously
+      releaseDispatch!(); // resolve AFTER unmount — the guard must swallow the .then
+      await new Promise((res) => setTimeout(res, 20)); // drain the continuation
+      expect(errors).toEqual([]);
+    } finally {
+      console.error = origError;
+    }
+  });
+
   it("c on an external repo drafts an analysis comment too (no refusal)", async () => {
     const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
     const analyzed: string[] = [];
