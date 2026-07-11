@@ -24,7 +24,7 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
-import { acquireSingletonLock } from "./lock.js";
+import { acquireSingletonLock, readLockHolder } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./config.js";
 import { parseTicket } from "./ticket.js";
 import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
@@ -132,6 +132,7 @@ Subcommands:
   rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
+  config path|list|get <path>|set <path> <value>  Inspect/edit config.json knobs
   assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
@@ -594,6 +595,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     process.stderr.write(`Usage: junco worktree prune <path>\n`);
     return 2;
+  }
+
+  // ------------------------------------------------------------
+  // config: inspect/edit config.json knobs via the lever registry
+  // (src/configLevers.ts) — path/list/get/set (src/configCmd.ts). Lazy
+  // import keeps it off every other subcommand's require graph, matching
+  // `prs`/`assess`. daemonRunningFn reuses the same lock-holder liveness
+  // check as `status`/`restart` so `set` on a restart-kind lever only warns
+  // when a daemon is actually up to restart.
+  // ------------------------------------------------------------
+  if (subcommand === "config") {
+    const { runConfigCommand } = await import("./configCmd.js");
+    const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+    return runConfigCommand(positionals.slice(1), configPath, {
+      printFn,
+      daemonRunningFn: () => readLockHolder(lockPath) !== null,
+    });
   }
 
   // ------------------------------------------------------------

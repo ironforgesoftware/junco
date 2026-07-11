@@ -627,3 +627,33 @@ export const LEVERS: Lever[] = [
 export function leverAtPath(path: string): Lever | undefined {
   return LEVERS.find((l) => l.path === path);
 }
+
+/** Coerce a raw CLI/TUI string into the value a lever's type expects,
+ * validating booleans/numbers/enums along the way. Shared by the `junco
+ * config set` CLI (src/configCmd.ts) and the TUI editor view. Structured
+ * levers always fail here — callers must reject them via `lever.editable`
+ * before ever reaching `coerceLever` (this is the fallback message). */
+export function coerceLever(lever: Lever, raw: string): { value: unknown } | { error: string } {
+  switch (lever.type) {
+    case "boolean":
+      if (raw === "true") return { value: true };
+      if (raw === "false") return { value: false };
+      return { error: "expected true|false" };
+    case "number": {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return { error: "expected a number" };
+      if (lever.min !== undefined && n < lever.min) return { error: `must be >= ${lever.min}` };
+      if (lever.max !== undefined && n > lever.max) return { error: `must be <= ${lever.max}` };
+      return { value: n };
+    }
+    case "enum":
+      if (!lever.enumValues?.includes(raw))
+        return { error: `expected one of ${lever.enumValues?.join("|")}` };
+      return { value: raw };
+    case "string":
+    case "secret":
+      return { value: raw };
+    default:
+      return { error: "structured — edit config.json directly" };
+  }
+}

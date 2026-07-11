@@ -338,6 +338,14 @@ export function loadConfig(path: string): Config {
   return assembleConfig(parseConfigFile(path));
 }
 
+/** Validate a raw (parsed-JSON) config object against `ConfigSchema`, throwing
+ * a zod error on failure. Used by `junco config set` (src/configCmd.ts) to
+ * confirm a sparse mutation still produces a valid, defaultable config before
+ * it's written to disk. */
+export function validateConfigObject(obj: unknown): void {
+  ConfigSchema.parse(obj);
+}
+
 export function queuePaths(cfg: Config): Paths {
   const root = join(cfg.vaultRoot, cfg.juncoSubdir);
   return {
