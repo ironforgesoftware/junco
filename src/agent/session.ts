@@ -532,8 +532,8 @@ export function makePiSessionFactory(
       );
     }
 
-    // Sandbox (opt-in): replace built-in tools with sandboxed operations and
-    // freeze ambient extension loading. Inert when [sandbox].enabled is false —
+    // Sandbox (on by default): replace built-in tools with sandboxed operations
+    // and freeze ambient extension loading. Inert when sandbox.enabled is false —
     // resolveSandbox returns null and the session is built exactly as before.
     let sandboxTools: unknown[] | undefined;
     let sandboxLoader: unknown;
