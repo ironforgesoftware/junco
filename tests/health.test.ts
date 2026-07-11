@@ -248,19 +248,32 @@ describe("waitForEndpoint", () => {
     // Should NOT loop forever
   });
 
-  it("returns immediately for catalog sources", async () => {
+  it("returns immediately for catalog sources via its OWN skip guard", async () => {
     const cfg = makeConfig({ model: hostedModel() });
-    // A live fetchFn stub + a stop.requested safety net bound the loop to one
-    // iteration if the guard is missing, so a regression fails fast instead of
-    // spinning the event loop forever (an instant-resolving sleep starves the
-    // macrotask queue — see CLAUDE.md's scheduler/daemon testing gotcha).
-    const stop = { requested: false };
-    const fetchFn = vi.fn().mockResolvedValue({ ok: false });
-    const sleep = vi.fn(async () => {
-      stop.requested = true;
-    });
-    await waitForEndpoint(cfg, stop, { fetchFn, sleep });
-    expect(sleep).not.toHaveBeenCalled();
-    expect(fetchFn).not.toHaveBeenCalled();
+    // sleep/fetchFn-not-called alone cannot isolate waitForEndpoint's own
+    // guard: were it deleted, endpointReachable's identical first-line guard
+    // returns true on the first loop iteration without fetching, and both
+    // spies stay uncalled anyway. The log line is what distinguishes the two
+    // paths — the skip guard logs "startup wait skipped" and never enters the
+    // loop; the loop path logs "inference endpoint reachable" instead.
+    // (log.info spy pattern per daemon.test.ts; the stop-flipping sleep is a
+    // safety net so a double-guard regression can't spin the loop forever.)
+    const { log } = await import("../src/logging.js");
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    try {
+      const stop = { requested: false };
+      const fetchFn = vi.fn().mockResolvedValue({ ok: false });
+      const sleep = vi.fn(async () => {
+        stop.requested = true;
+      });
+      await waitForEndpoint(cfg, stop, { fetchFn, sleep });
+      expect(sleep).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+      const msgs = infoSpy.mock.calls.map((c) => String(c[0]));
+      expect(msgs).toContain("hosted provider (catalog) — endpoint startup wait skipped");
+      expect(msgs.filter((m) => m.includes("inference endpoint reachable"))).toHaveLength(0);
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });
