@@ -188,7 +188,7 @@ export interface Ticket {
   /** Q&A only: directory the session runs in (read-only tools). Null = default. */
   workdir: string | null;
   /** Per-ticket sandbox egress opt-in (frontmatter `network: true`). Null = use
-   * the configured [sandbox].network default. Only ever widens this ticket. */
+   * the configured `sandbox.network` default. Only ever widens this ticket. */
   network: boolean | null;
 }
 

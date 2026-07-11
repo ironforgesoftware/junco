@@ -103,7 +103,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
     network: {
       type: "boolean",
       description:
-        "Sandbox egress opt-in for this ticket's agent session. Defaults to the configured [sandbox].network policy (deny). Set true to allow network (e.g. installing a new dependency); only widens this one ticket.",
+        "Sandbox egress opt-in for this ticket's agent session. Defaults to the configured `sandbox.network` policy (deny). Set true to allow network (e.g. installing a new dependency); only widens this one ticket.",
     },
     github: {
       type: "object",
