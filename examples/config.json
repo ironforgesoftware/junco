@@ -52,6 +52,13 @@
     "commandTimeout": 60,
     "blockOnFail": false
   },
+  "sandbox": {
+    "enabled": true,
+    "backend": "auto",
+    "network": "deny",
+    "extraDenyRead": [],
+    "extraAllowWrite": []
+  },
   "critic": {
     "enabled": true,
     "maxRetries": 1,
