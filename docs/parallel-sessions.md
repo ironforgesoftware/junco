@@ -41,9 +41,9 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
 ## Rules
 
 - **Never place dev worktrees under `worktrees/`.** That directory is the daemon's
-  `worktree_root`; junco creates and force-removes per-ticket worktrees there
+  `git.worktreeRoot`; junco creates and force-removes per-ticket worktrees there
   (`src/worktree.ts`). Anywhere else is safe — junco's cleanup is strictly path-scoped to
-  `<worktree_root>/<ticket-slug>`.
+  `<worktreeRoot>/<ticket-slug>`.
 - **One branch per worktree**, `feat/<topic>` off `main` (git refuses to check out the same
   branch twice anyway).
 - **`npm ci` per worktree.** Dependencies are exact-pinned; `node_modules/` and `dist/` are
@@ -83,7 +83,7 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
 
 ## Why not parallelize through junco itself?
 
-Junco's scheduler (`runScheduler` in `src/daemon.ts`) supports `max_concurrent > 1`, but tickets
+Junco's scheduler (`runScheduler` in `src/daemon.ts`) supports `worker.maxConcurrent > 1`, but tickets
 targeting the same repo always serialize by design — so dispatching several junco-dev tickets at
 this repo still runs them one at a time. Lifting that constraint would be a junco feature in its
 own right, not a workflow change.

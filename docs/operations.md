@@ -45,13 +45,13 @@ curl http://127.0.0.1:8787/ready
 curl http://127.0.0.1:8787/health | jq .
 ```
 
-**Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<state_dir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `observability.logLevel` to `debug` for verbose output, `info` for normal operation.
+**Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<stateDir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `observability.logLevel` to `debug` for verbose output, `info` for normal operation.
 
-**Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<state_dir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `observability.transcripts = false`.
+**Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<stateDir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `observability.transcripts = false`.
 
 **Concurrency:** `worker.maxConcurrent` (default 1) runs that many tickets in parallel. Tickets targeting the same `repo:` always serialize, and a graceful stop drains in-flight work.
 
-> The health server binds to loopback (`127.0.0.1`) by default. To expose it on a network interface, change `health_host`. Do so with care — there is no authentication.
+> The health server binds to loopback (`127.0.0.1`) by default. To expose it on a network interface, change `observability.healthHost`. Do so with care — there is no authentication.
 
 ## Running as a service
 
@@ -125,7 +125,7 @@ Q&A tickets do not use `gh` and are unaffected.
 If the daemon crashed mid-run (power loss, OOM), a ticket can be stranded in `processing/`. On the next startup Junco detects orphaned claims and recovers them automatically. If you need to force it, move the file back to `inbox/`:
 
 ```bash
-mv <vault_root>/Junco/processing/<ticket.md> <vault_root>/Junco/inbox/
+mv <vaultRoot>/Junco/processing/<ticket.md> <vaultRoot>/Junco/inbox/
 ```
 
 Existing result frontmatter written by the worker is stripped; your original frontmatter is preserved.
@@ -147,11 +147,11 @@ junco submit ./fixed-ticket.md --config ~/junco/config.json
 
 ### Verification failure blocks the PR
 
-If `verify.blockOnFail = true` and the `## Verification` block fails, the ticket moves to `failed/` and the worktree is preserved at `<worktree_root>/<id>`. Inspect it directly:
+If `verify.blockOnFail = true` and the `## Verification` block fails, the ticket moves to `failed/` and the worktree is preserved at `<worktreeRoot>/<id>`. Inspect it directly:
 
 ```bash
-cd <worktree_root>/<ticket-id>
+cd <worktreeRoot>/<ticket-id>
 # run the failing verification commands manually
 ```
 
-Fix and resubmit the ticket, or set `block_on_fail = false` if you want Junco to open the PR regardless.
+Fix and resubmit the ticket, or set `verify.blockOnFail = false` if you want Junco to open the PR regardless.

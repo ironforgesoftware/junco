@@ -383,7 +383,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
         healthHost: cfg.healthHost,
         healthPort: cfg.healthPort,
-        advice: "bind health_host to 127.0.0.1 unless it is firewalled",
+        advice: "bind healthHost to 127.0.0.1 unless it is firewalled",
       });
     }
 

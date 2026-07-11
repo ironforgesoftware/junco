@@ -113,12 +113,12 @@ Ticket templates live in the `templates/` directory:
 
 1. Ticket lands in `inbox/` — plan-lint validates frontmatter first (bad tickets → `failed/`, no agent run).
 2. Daemon claims it atomically into `processing/`.
-3. Git worktree provisioned from `origin/<base_branch>` at `<worktree_root>/<id>`.
+3. Git worktree provisioned from `origin/<base_branch>` at `<worktreeRoot>/<id>`.
 4. Agent runs with loop guards active (supervisor watches each turn; nudges on guard trips, kills on escalation).
 5. After the agent session: the `## Verification` block runs in the worktree.
 6. Critic compares the diff to the spec; if items are missing and retries remain, one corrective agent turn is dispatched.
 7. Branch pushed; `gh pr create --draft` opens the PR.
-8. Ticket moves to `done/` (success) or `failed/` (any failure). Worktree removed on success if `remove_worktree_on_success = true`.
+8. Ticket moves to `done/` (success) or `failed/` (any failure). Worktree removed on success if `git.removeWorktreeOnSuccess = true`.
 
 ## How it works
 
@@ -128,7 +128,7 @@ You (or any harness)
 │
 │ junco submit <ticket.md>
 ▼
-<vault_root>/Junco/inbox/ ← drop tickets here
+<vaultRoot>/Junco/inbox/ ← drop tickets here
 │
 │ daemon polls every 15s
 ▼
