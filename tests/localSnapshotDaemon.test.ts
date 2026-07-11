@@ -8,7 +8,15 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
     healthEnabled: true,
     healthHost: "127.0.0.1",
     healthPort: 8787,
-    model: { baseUrl: "http://127.0.0.1:9999/v1", apiKey: "k", modelsJson: null },
+    // id must be "local/…" — shouldProbeEndpoint's catalogEligible check reads
+    // it unconditionally now, and this fixture is a local test server (must
+    // always probe), not a hosted catalog model.
+    model: {
+      id: "local/test-model",
+      baseUrl: "http://127.0.0.1:9999/v1",
+      apiKey: "k",
+      modelsJson: null,
+    },
     ...overrides,
   } as unknown as Config;
 }

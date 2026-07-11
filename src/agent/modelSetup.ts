@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import type { Config } from "../types.js";
+import type { Config, ModelConfig } from "../types.js";
 
 /**
  * Split a provider-prefixed model id ("openai/gpt-4o-mini") into its provider and
@@ -19,6 +19,36 @@ export function splitModelId(full: string): { provider: string; modelId: string 
   const slash = full.indexOf("/");
   if (slash === -1) return { provider: "local", modelId: full };
   return { provider: full.slice(0, slash), modelId: full.slice(slash + 1) };
+}
+
+/** The fields the source rule needs — ModelConfig satisfies this structurally. */
+export interface ModelSourceFields {
+  source: "auto" | "catalog" | "inline";
+  id: string;
+  baseUrlExplicit: boolean;
+}
+
+/**
+ * Should this model resolve from the SDK's builtin hosted catalog?  Explicit
+ * `model.source` always wins; under "auto" a non-`local` provider prefix opts
+ * in unless the user explicitly set `model.baseUrl` (an explicit endpoint
+ * means a deliberate proxy/override → inline).
+ */
+export function catalogEligible(m: ModelSourceFields): boolean {
+  if (m.source === "catalog") return true;
+  if (m.source === "inline") return false;
+  return splitModelId(m.id).provider !== "local" && !m.baseUrlExplicit;
+}
+
+/**
+ * Whether the readiness machinery should probe the endpoint at all.  Hosted
+ * catalog models have no local server to wait for, and probing a metered API
+ * on every poll/dashboard tick is billed traffic.  A configured models.json
+ * still probes (its provider baseUrl may be local).  Phase 2 replaces the
+ * boolean call sites with the provider gate; this predicate survives.
+ */
+export function shouldProbeEndpoint(m: ModelConfig): boolean {
+  return !(catalogEligible(m) && !m.modelsJson);
 }
 
 /**
@@ -79,6 +109,72 @@ export function buildInlineProviderConfig(cfg: Config): InlineProviderConfig {
       ],
     },
   };
+}
+
+export interface RegistryLike {
+  find(provider: string, modelId: string): unknown;
+  registerProvider(name: string, config: Record<string, unknown>): void;
+}
+export interface RegistryOps {
+  fromFile(modelsJsonPath: string): RegistryLike;
+  inMemory(): RegistryLike;
+}
+export interface ResolvedModel {
+  model: unknown;
+  registry: RegistryLike;
+  path: "models_json" | "catalog" | "inline";
+}
+
+/**
+ * The three-way model resolution cascade — models.json → builtin catalog →
+ * inline — behind a registry seam so tests never import the SDK.  Catalog
+ * resolution deliberately never calls registerProvider: registering an inline
+ * provider REPLACES the SDK's builtin models for that provider (the pre-Phase-1
+ * bug that bound "anthropic/…" to the local default endpoint).
+ */
+export function resolveModelViaRegistries(
+  cfg: Config,
+  ops: RegistryOps,
+  warn: (msg: string, meta?: Record<string, unknown>) => void = () => {},
+): ResolvedModel {
+  const m = cfg.model;
+  const { provider, modelId } = splitModelId(m.id);
+
+  if (m.modelsJson && existsSync(m.modelsJson)) {
+    const registry = ops.fromFile(m.modelsJson);
+    const model = registry.find(provider, modelId);
+    if (model) return { model, registry, path: "models_json" };
+    warn("model not in models.json; falling through", {
+      modelsJson: m.modelsJson,
+      provider,
+      modelId,
+    });
+  }
+
+  if (catalogEligible(m)) {
+    const registry = ops.inMemory();
+    const model = registry.find(provider, modelId);
+    if (model) return { model, registry, path: "catalog" };
+    warn("model not in the builtin catalog; falling through to inline", { provider, modelId });
+  }
+
+  if (m.apiKey === null) {
+    throw new Error(
+      `model "${m.id}": provider "${provider}" did not resolve from the builtin catalog and no ` +
+        `inline endpoint is configured — set model.baseUrl + model.apiKey, point model.modelsJson ` +
+        `at a Pi models.json, or use a catalog provider id.`,
+    );
+  }
+  const registry = ops.inMemory();
+  const { providerConfig } = buildInlineProviderConfig(cfg);
+  registry.registerProvider(provider, providerConfig);
+  const model = registry.find(provider, modelId);
+  if (!model) {
+    throw new Error(
+      `Pi model "${provider}/${modelId}" not found in registry (baseUrl: ${apiBaseUrl(m.baseUrl)}).`,
+    );
+  }
+  return { model, registry, path: "inline" };
 }
 
 /**

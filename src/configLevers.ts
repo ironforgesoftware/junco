@@ -81,6 +81,15 @@ export const LEVERS: Lever[] = [
     description: "Provider-prefixed model id, e.g. openai/gpt-4o-mini.",
   },
   {
+    path: "model.source",
+    type: "string",
+    default: "auto",
+    editable: true,
+    reload: "live",
+    description:
+      "Model resolution mode: auto (catalog for non-local providers without an explicit baseUrl), catalog, or inline.",
+  },
+  {
     path: "model.modelsJson",
     type: "string",
     default: undefined,
@@ -100,18 +109,36 @@ export const LEVERS: Lever[] = [
   {
     path: "model.baseUrl",
     type: "string",
-    default: "http://127.0.0.1:1234/v1",
+    default: undefined,
     editable: true,
     reload: "live",
-    description: "OpenAI-compatible /v1 endpoint base URL.",
+    description:
+      "OpenAI-compatible /v1 endpoint base URL. Unset = local default (http://127.0.0.1:1234/v1); setting it forces inline resolution.",
   },
   {
     path: "model.apiKey",
     type: "secret",
-    default: "1234",
+    default: undefined,
     editable: true,
     reload: "live",
-    description: "API key for the inference endpoint.",
+    description:
+      'API key for the inference endpoint. Literal, "$ENV_VAR" reference, or unset to use the provider\'s env var (e.g. ANTHROPIC_API_KEY) for hosted catalog models.',
+  },
+  {
+    path: "model.retry.maxRetries",
+    type: "number",
+    default: undefined,
+    editable: true,
+    reload: "live",
+    description: "SDK auto-retry attempts on transient provider errors; unset = SDK default (3).",
+  },
+  {
+    path: "model.retry.baseDelayMs",
+    type: "number",
+    default: undefined,
+    editable: true,
+    reload: "live",
+    description: "Base delay for SDK auto-retry backoff in ms; unset = SDK default (2000).",
   },
   {
     path: "model.reasoning",

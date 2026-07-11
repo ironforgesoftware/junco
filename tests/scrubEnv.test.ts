@@ -40,4 +40,23 @@ describe("scrubEnv", () => {
     expect(ENV_ALLOWLIST.has("PATH")).toBe(true);
     expect(ENV_ALLOWLIST.has("GH_TOKEN")).toBe(false);
   });
+
+  it("drops hosted-provider API keys — they must never reach agent children", () => {
+    const out = scrubEnv({
+      PATH: "/bin",
+      ANTHROPIC_API_KEY: "sk-ant-x",
+      OPENAI_API_KEY: "sk-x",
+      GEMINI_API_KEY: "g-x",
+      ANTHROPIC_OAUTH_TOKEN: "t-x",
+    });
+    expect(out.PATH).toBe("/bin");
+    for (const k of [
+      "ANTHROPIC_API_KEY",
+      "OPENAI_API_KEY",
+      "GEMINI_API_KEY",
+      "ANTHROPIC_OAUTH_TOKEN",
+    ]) {
+      expect(out[k], k).toBeUndefined();
+    }
+  });
 });

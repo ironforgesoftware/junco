@@ -22,3 +22,22 @@ describe("Pi SDK import surface (sandbox wiring depends on these)", () => {
     }
   });
 });
+
+describe("Pi SDK import surface (hosted-provider factory wiring depends on these)", () => {
+  it("exposes the session-construction statics on the root", async () => {
+    const mod = (await import("@earendil-works/pi-coding-agent")) as Record<string, any>;
+    for (const name of [
+      "createAgentSession",
+      "AuthStorage",
+      "ModelRegistry",
+      "SessionManager",
+      "SettingsManager",
+    ]) {
+      expect(mod[name], name).toBeDefined();
+    }
+    expect(typeof mod.AuthStorage.inMemory, "AuthStorage.inMemory").toBe("function");
+    expect(typeof mod.SettingsManager.inMemory, "SettingsManager.inMemory").toBe("function");
+    expect(typeof mod.ModelRegistry.inMemory, "ModelRegistry.inMemory").toBe("function");
+    expect(typeof mod.ModelRegistry.create, "ModelRegistry.create").toBe("function");
+  });
+});

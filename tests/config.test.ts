@@ -8,6 +8,7 @@ import {
   resolveConfigPath,
   defaultUserConfigPath,
   isLoopbackHost,
+  resolveApiKey,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -527,5 +528,94 @@ describe("queuePaths", () => {
     const paths = queuePaths({ vaultRoot: "/v", juncoSubdir: "Junco" } as any);
     expect(paths.inbox).toBe("/v/Junco/inbox");
     expect(paths.failed).toBe("/v/Junco/failed");
+  });
+});
+
+describe("resolveApiKey", () => {
+  it("passes a literal key through", () => {
+    expect(resolveApiKey("sk-live-123", {})).toBe("sk-live-123");
+  });
+
+  it("returns null when unset (defer to provider env at request time)", () => {
+    expect(resolveApiKey(undefined, {})).toBeNull();
+  });
+
+  it("interpolates an exact $VAR reference from the daemon env", () => {
+    expect(resolveApiKey("$MY_PROVIDER_KEY", { MY_PROVIDER_KEY: "sk-env-9" })).toBe("sk-env-9");
+  });
+
+  it("throws a config error when the referenced $VAR is unset or empty", () => {
+    expect(() => resolveApiKey("$MISSING_KEY", {})).toThrow(/config: model\.apiKey.*MISSING_KEY/);
+    expect(() => resolveApiKey("$EMPTY_KEY", { EMPTY_KEY: "" })).toThrow(/EMPTY_KEY/);
+  });
+
+  it("rejects !command values — junco never shell-executes config values", () => {
+    expect(() => resolveApiKey("!op read secret", {})).toThrow(/config: model\.apiKey.*!command/);
+  });
+
+  it('schema-level: rejects a "!command" apiKey at parse time, env-independent', () => {
+    // Defense in depth (item 2): resolveApiKey's own throw only fires at
+    // assembly time (needs the daemon env); the schema rejects the shape at
+    // WRITE time too, so `junco config set` / the TUI editor / any
+    // validateConfigObject caller fails loud before the value ever reaches
+    // disk.
+    expect(() =>
+      loadConfig(writeJson({ vaultRoot: "/v", model: { apiKey: "!op read secret" } })),
+    ).toThrow(/model\.apiKey.*!command/);
+  });
+
+  it("treats a non-env-shaped $ string as a literal", () => {
+    expect(resolveApiKey("$not-an-env-ref", {})).toBe("$not-an-env-ref");
+  });
+});
+
+describe("hosted model config (source / baseUrlExplicit / apiKey / retry)", () => {
+  it("defaults stay local-first: source auto, local default baseUrl, placeholder key", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/vault" }));
+    expect(cfg.model.source).toBe("auto");
+    expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
+    expect(cfg.model.baseUrlExplicit).toBe(false);
+    expect(cfg.model.apiKey).toBe("1234");
+    expect(cfg.model.retry).toEqual({ maxRetries: null, baseDelayMs: null });
+  });
+
+  it("a hosted id with no baseUrl and no key resolves apiKey to null (env fallback)", () => {
+    const cfg = loadConfig(
+      writeJson({ vaultRoot: "/tmp/vault", model: { id: "anthropic/claude-sonnet-4-5" } }),
+    );
+    expect(cfg.model.baseUrlExplicit).toBe(false);
+    expect(cfg.model.apiKey).toBeNull();
+  });
+
+  it("an explicit baseUrl keeps the inline placeholder key (proxy/override)", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: { id: "anthropic/claude-sonnet-4-5", baseUrl: "http://10.0.0.5:8080/v1" },
+      }),
+    );
+    expect(cfg.model.baseUrlExplicit).toBe(true);
+    expect(cfg.model.apiKey).toBe("1234");
+  });
+
+  it("interpolates $VAR keys through the injectable env", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: { id: "anthropic/claude-sonnet-4-5", apiKey: "$PROVIDER_KEY" },
+      }),
+      { PROVIDER_KEY: "sk-real" },
+    );
+    expect(cfg.model.apiKey).toBe("sk-real");
+  });
+
+  it("parses retry levers and defaults them to null", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: { retry: { maxRetries: 5, baseDelayMs: 500 } },
+      }),
+    );
+    expect(cfg.model.retry).toEqual({ maxRetries: 5, baseDelayMs: 500 });
   });
 });

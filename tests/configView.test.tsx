@@ -68,7 +68,9 @@ describe("ConfigView", () => {
     const { lastFrame, stdin } = render(<ConfigView configPath={p} onExit={() => {}} />);
     await until(() => /model/i.test(lastFrame() ?? ""));
     await press(stdin, RIGHT); // general → model
-    await press(stdin, DOWN, DOWN, DOWN, DOWN, DOWN); // id, modelsJson, api, baseUrl, apiKey, reasoning
+    // id, source, modelsJson, api, baseUrl, apiKey, retry.maxRetries,
+    // retry.baseDelayMs, reasoning
+    await press(stdin, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN);
     await press(stdin, ENTER); // toggle reasoning: true → false
     await until(() => readCfg(p).model !== undefined);
     expect((readCfg(p).model as { reasoning: boolean }).reasoning).toBe(false);
@@ -238,7 +240,7 @@ describe("ConfigView", () => {
     expect(f).not.toMatch(/Subdirectory under vaultRoot holding inbox\/processing\/done\/failed\./);
   });
 
-  it("windows the right pane so a long section (model, 15 levers) doesn't overflow", async () => {
+  it("windows the right pane so a long section (model, 18 levers) doesn't overflow", async () => {
     const p = fixture({ vaultRoot: "/v" });
     const { lastFrame, stdin } = render(
       <ConfigView configPath={p} onExit={() => {}} visibleRows={4} />,
@@ -246,17 +248,17 @@ describe("ConfigView", () => {
     await until(() => /model/i.test(lastFrame() ?? ""));
     await press(stdin, RIGHT); // general → model
     await until(() => /id\s+local\/my-model/.test(lastFrame() ?? ""));
-    // The initial window covers only the first 4 of model's 15 levers
-    // (id, modelsJson, api, baseUrl) — the rest is clipped, not overflowed.
+    // The initial window covers only the first 4 of model's 18 levers
+    // (id, source, modelsJson, api) — the rest is clipped, not overflowed.
     let f = lastFrame() ?? "";
     expect(f).toMatch(/id\s+local\/my-model/);
     expect(f).not.toMatch(/compat\s+\{\}/); // last lever, well past the window
-    expect(f).toMatch(/▼ 11 more/); // clipped-below indicator
+    expect(f).toMatch(/▼ 14 more/); // clipped-below indicator
 
-    // Move focus 10 rows down, past the window bottom (id..baseUrl); the
-    // window must scroll so the newly focused lever (index 10: cost.output)
+    // Move focus 13 rows down, past the window bottom (id..api); the
+    // window must scroll so the newly focused lever (index 13: cost.output)
     // stays visible, while the now-scrolled-off id row disappears.
-    for (let i = 0; i < 10; i++) await press(stdin, DOWN);
+    for (let i = 0; i < 13; i++) await press(stdin, DOWN);
     await until(() => /cost\.output\s+0/.test(lastFrame() ?? ""));
     f = lastFrame() ?? "";
     expect(f).toMatch(/cost\.output\s+0/); // focused lever scrolled into view

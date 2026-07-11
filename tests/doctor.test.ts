@@ -37,6 +37,18 @@ function githubConfig(repos: { nwo: string; path: string }[]): Config {
   } as Config;
 }
 
+/** A hosted catalog model: no local server to probe, apiKey deferred (null). */
+function hostedModel() {
+  return {
+    id: "anthropic/claude-x",
+    source: "auto" as const,
+    baseUrlExplicit: false,
+    modelsJson: null,
+    apiKey: null,
+    baseUrl: "https://api.anthropic.com/v1",
+  };
+}
+
 function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
   return {
     loadConfigFn: () => okConfig,
@@ -64,6 +76,17 @@ describe("runDoctor", () => {
     expect(code).toBe(1);
     expect(lines.join("")).toMatch(/✗ inference endpoint/);
     expect(lines.join("")).toMatch(/NOT ready/);
+  });
+
+  it("skips the endpoint probe for hosted catalog configs with an ok note", async () => {
+    const lines: string[] = [];
+    const cfg = { ...okConfig, model: hostedModel() } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(/inference endpoint.*catalog.*probe skipped/i);
   });
 
   it("does not report sandbox when disabled (default)", async () => {

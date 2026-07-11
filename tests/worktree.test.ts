@@ -94,6 +94,9 @@ function makeConfig(work: string, wtsRoot: string): Config {
     juncoSubdir: "Junco",
     model: {
       id: "test/model",
+      source: "auto",
+      baseUrlExplicit: false,
+      retry: { maxRetries: null, baseDelayMs: null },
       modelsJson: null,
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:1234/v1",

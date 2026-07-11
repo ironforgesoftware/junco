@@ -15,16 +15,24 @@ export interface ModelCost {
   cacheRead: number;
   cacheWrite: number;
 }
+/** SDK auto-retry knobs passed to SettingsManager.inMemory; null = SDK default. */
+export interface ModelRetryConfig {
+  maxRetries: number | null;
+  baseDelayMs: number | null;
+}
 /** The model + inference provider junco drives Pi against. Resolved by
  * `loadConfig` from the `model` section of config.json. When `modelsJson`
  * points at an existing Pi-style models.json the provider+model are loaded
  * from THAT file and the inline capability fields are ignored. */
 export interface ModelConfig {
   id: string; // provider-prefixed, e.g. "openai/gpt-4o-mini"
+  source: "auto" | "catalog" | "inline"; // resolution mode; auto = catalog for non-local providers without an explicit baseUrl
   modelsJson: string | null; // path to a Pi models.json, or null for inline
   api: string; // Pi Api style, e.g. "openai-completions"
-  baseUrl: string; // OpenAI-compatible endpoint
-  apiKey: string;
+  baseUrl: string; // OpenAI-compatible endpoint (inline path; local default when unset)
+  baseUrlExplicit: boolean; // true iff base_url was present in the config file
+  apiKey: string | null; // null = defer to the provider's env var at request time
+  retry: ModelRetryConfig;
   reasoning: boolean;
   input: string[]; // e.g. ["text", "image"]
   contextWindow: number;
