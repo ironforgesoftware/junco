@@ -6,6 +6,8 @@ import { Tip, ReceiptList, Select, MultiSelect } from "../src/tui/wizard/control
 import { Welcome } from "../src/tui/wizard/chapters/Welcome.js";
 import { Workspace } from "../src/tui/wizard/chapters/Workspace.js";
 import { Model } from "../src/tui/wizard/chapters/Model.js";
+import { RepoSafety } from "../src/tui/wizard/chapters/RepoSafety.js";
+import { Github } from "../src/tui/wizard/chapters/Github.js";
 import { defaultAnswers } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
@@ -357,5 +359,211 @@ describe("Model chapter", () => {
     await until(() => advanced);
     expect(answers.mode).toBe("models_json");
     expect(answers.modelId).toBe("prov/m1");
+  });
+});
+
+describe("RepoSafety chapter", () => {
+  it("adds roots until an empty submit advances", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io: fakeIo(),
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<RepoSafety {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Which folders"));
+    stdin.write("/code");
+    await tick();
+    rerender(<RepoSafety {...props()} />);
+    await press(stdin, ENTER); // add /code
+    rerender(<RepoSafety {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("✓ /code"));
+    await press(stdin, ENTER); // empty → advance
+    await until(() => advanced);
+    expect(answers.repoRoots).toEqual(["/code"]);
+    expect(lastFrame()).toContain("never commits to your branches");
+  });
+
+  it("adding the same root twice results in one entry", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io: fakeIo(),
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<RepoSafety {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Which folders"));
+    stdin.write("/code");
+    await tick();
+    rerender(<RepoSafety {...props()} />);
+    await press(stdin, ENTER); // add /code
+    rerender(<RepoSafety {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("✓ /code"));
+    stdin.write("/code");
+    await tick();
+    rerender(<RepoSafety {...props()} />);
+    await press(stdin, ENTER); // add /code again — duplicate, ignored
+    rerender(<RepoSafety {...props()} />);
+    await press(stdin, ENTER); // empty → advance
+    await until(() => advanced);
+    expect(answers.repoRoots).toEqual(["/code"]);
+  });
+});
+
+describe("Github chapter", () => {
+  it("Off (default) advances immediately", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Github
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo()}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("GitHub bridge"));
+    expect(lastFrame()).toContain("zero gh calls");
+    await press(stdin, ENTER); // "Off" is first/default
+    await until(() => advanced);
+    expect(answers.github.enabled).toBe(false);
+  });
+
+  it("On collects repos then the approval toggle", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io: fakeIo(),
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("GitHub bridge"));
+    await press(stdin, DOWN, ENTER); // On
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("owner/repo"));
+    stdin.write("acme/api");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("local clone path"));
+    stdin.write("/tmp/acme");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER); // empty nwo → done adding
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("approval"));
+    await press(stdin, ENTER); // keep approval required (default)
+    await until(() => advanced);
+    expect(answers.github).toEqual({
+      enabled: true,
+      repos: [{ nwo: "acme/api", path: "/tmp/acme" }],
+      requireApproval: true,
+    });
+  });
+
+  it("persists an added repo to answers immediately, before the approval step submits", async () => {
+    // The upcoming WizardApp mounts one chapter at a time, so back
+    // navigation unmounts Github between adds. A repo entry must survive
+    // that unmount, which means it has to land in answers as soon as it's
+    // completed — not only at the final approval submit.
+    let answers = defaultAnswers();
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io: fakeIo(),
+      onNext: () => {},
+    });
+    const { lastFrame, stdin, rerender } = render(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("GitHub bridge"));
+    await press(stdin, DOWN, ENTER); // On
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("owner/repo"));
+    stdin.write("acme/api");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("local clone path"));
+    stdin.write("/tmp/acme");
+    await tick();
+    rerender(<Github {...props()} />);
+    await press(stdin, ENTER);
+    rerender(<Github {...props()} />);
+    // Still mid-flow (back on the nwo step, prompting for another repo) —
+    // the approval Select hasn't been reached, let alone submitted.
+    await until(() => (lastFrame() ?? "").includes("owner/repo"));
+    expect(answers.github.repos).toEqual([{ nwo: "acme/api", path: "/tmp/acme" }]);
+  });
+
+  it("adding the same nwo twice results in one entry", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io: fakeIo(),
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("GitHub bridge"));
+    await press(stdin, DOWN, ENTER); // On
+    rerender(<Github {...props()} />);
+    for (let i = 0; i < 2; i++) {
+      await until(() => (lastFrame() ?? "").includes("owner/repo"));
+      stdin.write("acme/api");
+      await tick();
+      rerender(<Github {...props()} />);
+      await press(stdin, ENTER);
+      rerender(<Github {...props()} />);
+      await until(() => (lastFrame() ?? "").includes("local clone path"));
+      stdin.write("/tmp/acme");
+      await tick();
+      rerender(<Github {...props()} />);
+      await press(stdin, ENTER);
+      rerender(<Github {...props()} />);
+    }
+    await press(stdin, ENTER); // empty nwo → done adding
+    rerender(<Github {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("approval"));
+    await press(stdin, ENTER);
+    await until(() => advanced);
+    expect(answers.github.repos).toEqual([{ nwo: "acme/api", path: "/tmp/acme" }]);
   });
 });
