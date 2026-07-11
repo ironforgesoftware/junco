@@ -106,7 +106,42 @@ transcripts = true                # Per-ticket event JSONL under <state_dir>/tra
 max_issues_per_run = 20           # No longer enforced — parking is uncapped. Kept for compat. See docs/assess.md.
 min_severity = "low"              # Findings ranked below this are dropped. critical | high | medium | low
 npm_bin = "npm"                   # Binary for the dependency scan (`<npm_bin> audit --json`).
+
+# ── Agent execution sandbox ──────────────────────────────────────────────────
+[sandbox]
+enabled = false                   # Master switch. false = current behavior. Set true to sandbox agent tools.
+backend = "auto"                  # auto → seatbelt (macOS) / bwrap (Linux). Or force: seatbelt | bwrap | none.
+network = "deny"                  # Default egress for agent tool subprocesses. deny | allow.
+extra_deny_read = []              # Extra absolute paths whose reads are denied (added to the built-in secret list).
+extra_allow_write = []            # Extra absolute paths where writes are allowed (added to worktree + scratch).
 ```
+
+## The agent execution sandbox
+
+When `[sandbox].enabled = true`, junco confines the Pi agent's tool execution
+using native OS isolation — **Seatbelt** (`sandbox-exec`) on macOS, **bubblewrap**
+(`bwrap`) on Linux. It needs no network service and no container runtime, so it
+works fully offline. The confinement:
+
+- **Writes** are restricted to the ticket's worktree + a per-session scratch dir
+  (the redirected `TMPDIR`) + `extra_allow_write`. A write anywhere else fails.
+- **Reads** are broad (toolchains need it) but a built-in deny-list hides
+  `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.gnupg`, `~/.pi`, and the state dir;
+  add more with `extra_deny_read`.
+- **Network** is denied by default (works offline by construction — the daemon,
+  not the sandboxed child, talks to the inference endpoint). A single ticket can
+  opt in with `network: true` frontmatter (e.g. to `npm install` a new
+  dependency). `network = "allow"` flips the global default.
+- **Environment** is scrubbed to an allowlist, so `GH_TOKEN` / API keys never
+  reach agent shell commands. Ambient `~/.pi` extension loading is frozen.
+
+**Fail-closed:** if `enabled` is true and the selected backend binary is missing
+or non-functional, tickets **fail with a clear error** — junco never silently
+runs unsandboxed. `backend = "none"` deliberately skips OS isolation (keeping the
+env scrub + filesystem tool-jail only) for unsupported platforms. Run
+`junco doctor` to preflight backend availability. Recommended pairing: give the
+daemon its own dedicated GitHub identity (see `docs/operations.md` § Security
+model) so the un-credentialed agent plane cannot act as you.
 
 ## Key knobs to know
 
@@ -119,3 +154,4 @@ npm_bin = "npm"                   # Binary for the dependency scan (`<npm_bin> a
 | `[supervisor].budget_per_kind`     | Raise to allow more nudges before killing a looping agent.                                                                 |
 | `[worker].startup_wait`            | Set `false` to start the daemon even when the endpoint is not yet up.                                                      |
 | `[git].remove_worktree_on_success` | Set `false` to retain worktrees after success (debugging).                                                                 |
+| `[sandbox].enabled`                | Set `true` to confine agent tool execution (Seatbelt/bwrap): worktree-only writes, no ambient credentials, no network.     |
