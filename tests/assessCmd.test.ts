@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -14,6 +14,7 @@ import { writePending, readPending } from "../src/assessReview.js";
 import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { submitTicket } from "../src/dispatch.js";
 import type { resolveIssueTarget, IssueTarget } from "../src/externalDispatch.js";
+import type { fileFindings } from "../src/assessFiling.js";
 
 const NONEXISTENT_STATE_DIR = "/nonexistent-junco-assesscmd-state";
 
@@ -176,6 +177,34 @@ describe("runAssessCommand", () => {
     );
 
     expect(code).toBe(0);
+    expect(submittedContent).toContain(`repo: ${JSON.stringify(dir)}`);
+  });
+
+  it("nwo target with a corrupt watchlist file: prints the unreadable-watchlist warning, still resolves via config repos (#106)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-assesscmd-badwatch-"));
+    const c = cfg([{ nwo: "Acme/Demo", path: dir }], dir); // stateDir = dir
+    writeFileSync(watchlistPath(c), "{ not json", "utf8");
+
+    let submittedContent = "";
+    const submitFn = ((_c: Config, content: string) => {
+      submittedContent = content;
+      return "/inbox/assess-demo.md";
+    }) as typeof submitTicket;
+
+    const out: string[] = [];
+    const code = await runAssessCommand(
+      c,
+      "acme/demo",
+      { autoPlan: false },
+      {
+        printFn: (s) => out.push(s),
+        submitFn,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/watchlist unreadable/i);
+    // config repos still resolve the target despite the corrupt watchlist
     expect(submittedContent).toContain(`repo: ${JSON.stringify(dir)}`);
   });
 
@@ -584,6 +613,54 @@ describe("runAssessFileCommand", () => {
     );
     expect(code).toBe(2);
     expect(out).toContain("assess-ghost");
+  });
+
+  it("fileFindings throws -> prints a clean `junco assess file: <msg>`, exit 1, batch preserved (#106)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-throws-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-throws",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "One",
+          description: "",
+          references: [],
+        },
+      ],
+    });
+    let out = "";
+    // fileFindings rethrows on the fatal-dedup path (a non-network GitOpError
+    // while fetching filed markers) — simulate that directly via the injected
+    // fileFindingsFn rather than reaching into gh internals.
+    const fileFindingsFn = (async () => {
+      throw new Error("dedup lookup failed: permission denied");
+    }) as typeof fileFindings;
+
+    const code = await runAssessFileCommand(
+      c,
+      "assess-x-throws",
+      { all: true, only: undefined },
+      {
+        printFn: (s) => {
+          out += s;
+        },
+        fileFindingsFn,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(out).toBe("junco assess file: dedup lookup failed: permission denied\n");
+    // the batch was never archived — it stays available for retry
+    expect(readPending(c, "assess-x-throws").batch).not.toBeNull();
   });
 
   it("--all files every finding in the batch", async () => {
