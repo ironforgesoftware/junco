@@ -37,6 +37,7 @@ const SECTION_ORDER = [
   "git",
   "pr",
   "verify",
+  "sandbox",
   "critic",
   "planLint",
   "observability",

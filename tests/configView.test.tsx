@@ -48,7 +48,15 @@ describe("ConfigView", () => {
     const { lastFrame } = render(<ConfigView configPath={p} onExit={() => {}} />);
     await until(() => /worker/i.test(lastFrame() ?? ""));
     const f = lastFrame() ?? "";
-    for (const section of ["general", "model", "worker", "supervisor", "git", "verify"]) {
+    for (const section of [
+      "general",
+      "model",
+      "worker",
+      "supervisor",
+      "git",
+      "verify",
+      "sandbox",
+    ]) {
       expect(f).toMatch(new RegExp(section));
     }
     // sectionIdx/fieldIdx default to 0 → the focused lever is `vaultRoot`.
@@ -66,11 +74,27 @@ describe("ConfigView", () => {
     expect((readCfg(p).model as { reasoning: boolean }).reasoning).toBe(false);
   });
 
+  it("surfaces the sandbox section and toggles sandbox.enabled from the editor", async () => {
+    // Explicit false so the toggle → true regardless of the schema default.
+    const p = fixture({ vaultRoot: "/v", sandbox: { enabled: false } });
+    const { lastFrame, stdin } = render(<ConfigView configPath={p} onExit={() => {}} />);
+    await until(() => /sandbox/i.test(lastFrame() ?? ""));
+    // Section-change resets fieldIdx to 0, so landing on `sandbox` focuses its
+    // first lever — `sandbox.enabled`, identified by its description.
+    for (let i = 0; i < 15 && !/Wrap agent tool subprocesses/.test(lastFrame() ?? ""); i++) {
+      await press(stdin, RIGHT);
+    }
+    expect(lastFrame() ?? "").toMatch(/Wrap agent tool subprocesses/);
+    await press(stdin, ENTER); // toggle sandbox.enabled: false → true
+    await until(() => (readCfg(p).sandbox as { enabled?: boolean }).enabled === true);
+    expect((readCfg(p).sandbox as { enabled: boolean }).enabled).toBe(true);
+  });
+
   it("cycling an enum lever writes the file", async () => {
     const p = fixture({ vaultRoot: "/v" });
     const { lastFrame, stdin } = render(<ConfigView configPath={p} onExit={() => {}} />);
     await until(() => /observability/i.test(lastFrame() ?? ""));
-    for (let i = 0; i < 9; i++) await press(stdin, RIGHT); // general..observability
+    for (let i = 0; i < 10; i++) await press(stdin, RIGHT); // general..observability (sandbox added after verify)
     await press(stdin, DOWN, DOWN, DOWN); // healthEnabled, healthHost, healthPort, logLevel
     await press(stdin, ENTER); // cycle logLevel: info → warn
     await until(() => readCfg(p).observability !== undefined);
