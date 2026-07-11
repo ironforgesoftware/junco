@@ -100,6 +100,72 @@ export function buildInlineProviderConfig(cfg: Config): InlineProviderConfig {
   };
 }
 
+export interface RegistryLike {
+  find(provider: string, modelId: string): unknown;
+  registerProvider(name: string, config: Record<string, unknown>): void;
+}
+export interface RegistryOps {
+  fromFile(modelsJsonPath: string): RegistryLike;
+  inMemory(): RegistryLike;
+}
+export interface ResolvedModel {
+  model: unknown;
+  registry: RegistryLike;
+  path: "models_json" | "catalog" | "inline";
+}
+
+/**
+ * The three-way model resolution cascade — models.json → builtin catalog →
+ * inline — behind a registry seam so tests never import the SDK.  Catalog
+ * resolution deliberately never calls registerProvider: registering an inline
+ * provider REPLACES the SDK's builtin models for that provider (the pre-Phase-1
+ * bug that bound "anthropic/…" to the local default endpoint).
+ */
+export function resolveModelViaRegistries(
+  cfg: Config,
+  ops: RegistryOps,
+  warn: (msg: string, meta?: Record<string, unknown>) => void = () => {},
+): ResolvedModel {
+  const m = cfg.model;
+  const { provider, modelId } = splitModelId(m.id);
+
+  if (m.modelsJson && existsSync(m.modelsJson)) {
+    const registry = ops.fromFile(m.modelsJson);
+    const model = registry.find(provider, modelId);
+    if (model) return { model, registry, path: "models_json" };
+    warn("model not in models.json; falling through", {
+      modelsJson: m.modelsJson,
+      provider,
+      modelId,
+    });
+  }
+
+  if (catalogEligible(m)) {
+    const registry = ops.inMemory();
+    const model = registry.find(provider, modelId);
+    if (model) return { model, registry, path: "catalog" };
+    warn("model not in the builtin catalog; falling through to inline", { provider, modelId });
+  }
+
+  if (m.apiKey === null) {
+    throw new Error(
+      `model "${m.id}": provider "${provider}" did not resolve from the builtin catalog and no ` +
+        `inline endpoint is configured — set model.baseUrl + model.apiKey, point model.modelsJson ` +
+        `at a Pi models.json, or use a catalog provider id.`,
+    );
+  }
+  const registry = ops.inMemory();
+  const { providerConfig } = buildInlineProviderConfig(cfg);
+  registry.registerProvider(provider, providerConfig);
+  const model = registry.find(provider, modelId);
+  if (!model) {
+    throw new Error(
+      `Pi model "${provider}/${modelId}" not found in registry (baseUrl: ${apiBaseUrl(m.baseUrl)}).`,
+    );
+  }
+  return { model, registry, path: "inline" };
+}
+
 /**
  * The endpoint the health probe should hit. When `models_json` is configured
  * and present, read the provider's `baseUrl` from that file (so the probe
