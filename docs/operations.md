@@ -8,25 +8,25 @@ Running junco day to day — the full CLI reference, health checks, service supe
 
 All commands accept `--config <path>` to point at a non-default `config.toml`. When omitted, junco uses `./config.toml` if present, else the user-level default `~/.config/junco/config.toml` (respects `XDG_CONFIG_HOME`) — so junco works from any directory after first-run setup. No global install needed either: `npx @ironforgesoftware/junco <command>` works the same as the installed `junco` binary.
 
-| Command | Description |
-|---|---|
-| `junco start [--config <path>] [--once]` | Run the daemon. Polls forever; `--once` processes one task then exits. Acquires a single-instance lock (`worker.lock` next to `config.toml`); exits 0 if another instance holds the lock. |
-| `junco run-once [--config <path>]` | One-shot: process a single available task and exit. No lock — convenient for dev or cron. |
-| `junco submit <file\|-> [--config <path>]` | Atomically place a ticket into the configured inbox. Use `-` to read from stdin. The inbox filename is derived from the ticket's `id` frontmatter field. |
-| `junco inbox-path [--config <path>]` | Print the resolved inbox directory path. |
-| `junco schema` | Print the ticket-frontmatter JSON Schema (the typed contract for all frontmatter fields). |
-| `junco init [--config <path>] [--yes]` | Interactive setup wizard: prompts for vault + model, **writes `config.toml`**, and creates the queue directories. With a config already present, just creates the dirs (never overwrites). `--yes` scaffolds defaults non-interactively. |
-| `junco` (no subcommand) | First run (no config yet) → the setup wizard; otherwise → `start`. |
-| `junco service [--platform launchd\|systemd] [--config <path>]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere. |
-| `junco status [--config <path>]` | One-glance view: daemon (pid/uptime), endpoint readiness, in-flight tickets, processed counts, queue sizes. |
-| `junco list [box] [--config <path>]` | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses. |
-| `junco retry <name…\|--all> [--config <path>]` | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped. |
-| `junco outbox [flush] [--config <path>]` | List the offline GitHub backlog (operation type, target issue/branch, age, attempt count, dead-letter count), or `flush` to push it now instead of waiting for the next daemon sweep. |
-| `junco doctor [--config <path>]` | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/state dirs writable. |
-| `junco dashboard [--config <path>]` | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. Needs a real TTY. |
-| `junco restart [--config <path>]` | Restart the supervised daemon so it picks up config and code changes: finds the launchd/systemd user unit referencing your config, kicks it with the platform-correct verb, verifies the pid changed. |
-| `junco logs [-f] [-n N] [--json\|--human] [--config <path>]` | Tail (or follow with `-f`) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`; `--human` forces the readable format even when piped (used by the dashboard's command palette). |
-| `junco --help` / `-h` | Print usage. |
+| Command                                                         | Description                                                                                                                                                                                                                              |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `junco start [--config <path>] [--once]`                        | Run the daemon. Polls forever; `--once` processes one task then exits. Acquires a single-instance lock (`worker.lock` next to `config.toml`); exits 0 if another instance holds the lock.                                                |
+| `junco run-once [--config <path>]`                              | One-shot: process a single available task and exit. No lock — convenient for dev or cron.                                                                                                                                                |
+| `junco submit <file\|-> [--config <path>]`                      | Atomically place a ticket into the configured inbox. Use `-` to read from stdin. The inbox filename is derived from the ticket's `id` frontmatter field.                                                                                 |
+| `junco inbox-path [--config <path>]`                            | Print the resolved inbox directory path.                                                                                                                                                                                                 |
+| `junco schema`                                                  | Print the ticket-frontmatter JSON Schema (the typed contract for all frontmatter fields).                                                                                                                                                |
+| `junco init [--config <path>] [--yes]`                          | Interactive setup wizard: prompts for vault + model, **writes `config.toml`**, and creates the queue directories. With a config already present, just creates the dirs (never overwrites). `--yes` scaffolds defaults non-interactively. |
+| `junco` (no subcommand)                                         | First run (no config yet) → the setup wizard; otherwise → `start`.                                                                                                                                                                       |
+| `junco service [--platform launchd\|systemd] [--config <path>]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere.                                                                                                                                                    |
+| `junco status [--config <path>]`                                | One-glance view: daemon (pid/uptime), endpoint readiness, in-flight tickets, processed counts, queue sizes.                                                                                                                              |
+| `junco list [box] [--config <path>]`                            | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses.                                                                                                                                   |
+| `junco retry <name…\|--all> [--config <path>]`                  | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped.                                                                                                             |
+| `junco outbox [flush] [--config <path>]`                        | List the offline GitHub backlog (operation type, target issue/branch, age, attempt count, dead-letter count), or `flush` to push it now instead of waiting for the next daemon sweep.                                                    |
+| `junco doctor [--config <path>]`                                | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/state dirs writable.                                                                                             |
+| `junco dashboard [--config <path>]`                             | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. Needs a real TTY.                                                                                                        |
+| `junco restart [--config <path>]`                               | Restart the supervised daemon so it picks up config and code changes: finds the launchd/systemd user unit referencing your config, kicks it with the platform-correct verb, verifies the pid changed.                                    |
+| `junco logs [-f] [-n N] [--json\|--human] [--config <path>]`    | Tail (or follow with `-f`) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`; `--human` forces the readable format even when piped (used by the dashboard's command palette).                               |
+| `junco --help` / `-h`                                           | Print usage.                                                                                                                                                                                                                             |
 
 ## Health & observability
 
@@ -95,6 +95,14 @@ The inbox is a **code-execution boundary**. Junco runs a coding agent with bash/
 [git]
 allowed_repo_roots = ["~/code"]   # [] (default) = any path on disk
 ```
+
+### Sandboxing the agent + a dedicated identity
+
+Two defenses harden the code-execution boundary above. They are independent — use either or both.
+
+**1. Native execution sandbox (`[sandbox]`).** Set `[sandbox].enabled = true` to confine agent tool execution with OS-level isolation (Seatbelt on macOS, bubblewrap on Linux; no container, works offline). Writes are restricted to the worktree, network is denied by default, and credentials/API keys are scrubbed from the agent's environment. It **fails closed** if the backend binary is missing (`junco doctor` preflights it). See `docs/configuration.md` § The agent execution sandbox for the full policy and the per-ticket `network: true` opt-in.
+
+**2. Dedicated GitHub identity.** Junco performs every `git push` / `gh pr create` itself; the agent never needs a token. Authenticate the **daemon** as a dedicated machine GitHub account (or a fine-grained PAT under one) scoped to only the repos junco may touch, with only `contents:write` + `pull_requests:write`. Combined with the sandbox's env scrub (which keeps the token off the agent plane entirely), a prompt-injected or runaway agent cannot exfiltrate a reusable credential or act as your personal account.
 
 ## Troubleshooting
 

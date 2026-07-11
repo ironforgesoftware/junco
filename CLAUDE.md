@@ -8,19 +8,19 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 
 ## Commands
 
-| Action | Command |
-|---|---|
-| Build | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded) |
-| All tests | `npm test` (vitest, ~1,500 tests, under a minute) |
-| One file | `npx vitest run tests/<name>.test.ts` |
-| Lint | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`) |
+| Action    | Command                                                                                              |
+| --------- | ---------------------------------------------------------------------------------------------------- |
+| Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                        |
+| All tests | `npm test` (vitest, ~1,500 tests, under a minute)                                                    |
+| One file  | `npx vitest run tests/<name>.test.ts`                                                                |
+| Lint      | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`)                |
 | Typecheck | `npm run typecheck` (tsc over src/ + tests/ via `tsconfig.eslint.json` — vitest does not type-check) |
-| Format | `npm run format` / `npm run format:check` (prettier, 100 cols) |
-| Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test` |
+| Format    | `npm run format` / `npm run format:check` (prettier, 100 cols)                                       |
+| Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test`             |
 
 Run the full gate before claiming work done; CI (`.github/workflows/quality-gate.yml`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test; the aggregate `quality-gate` check is required to merge.
 
-**Exit-code trap:** piping vitest into `grep`/`tail` makes the pipeline exit with the *filter's* status — a failing suite reads as green. Capture it explicitly: `npx vitest run > /tmp/out 2>&1; echo "exit: $?"`.
+**Exit-code trap:** piping vitest into `grep`/`tail` makes the pipeline exit with the _filter's_ status — a failing suite reads as green. Capture it explicitly: `npx vitest run > /tmp/out 2>&1; echo "exit: $?"`.
 
 ## Architecture in one breath
 
@@ -41,6 +41,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 - Repo/PR/worktree tests run a real git harness (bare remote + clone in tmp); they need `git config user.*` (CI sets it globally).
 - Prettier may reformat files between your read and your edit; re-read before editing and run `npx prettier --write` on touched files before committing.
 - Ink/TUI tests: never assert one fixed `setTimeout` tick after a state change — slow CI runners race React's commit (this flaked a release gate). Loop-until-condition with a bounded retry, then assert.
+- Sandbox (`agent/sandbox/`) tests: `buildPolicy`/path-jail `canonicalize()` **realpaths** real paths, so `/tmp` and `/var` collapse to `/private/...` on macOS. Use synthetic non-existent paths (`/sbxroot/...`) in unit tests so canonicalization is a no-op; the platform-gated `sandbox.integration.test.ts` exercises real Seatbelt/bwrap enforcement and skips when the backend binary is absent.
 
 ## The repo doubles as the maintainer's live runtime — do not disturb
 

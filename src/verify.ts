@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Config, Ticket } from "./types.js";
+import { scrubEnv } from "./scrubEnv.js";
 
 // ---------------------------------------------------------------------------
 // Spec verification — port of worker.py `run_spec_verification` (line 2850)
@@ -43,32 +44,13 @@ export const MAX_VERIFICATION_BLOCKS = 10;
  * command_timeout and the 10-block cap they coincide at 10 minutes. */
 export const VERIFICATION_MAX_TOTAL_MS = 10 * 60_000;
 
-// Minimal env allowlist for verification blocks: shell/locale/tmp basics plus
-// PATH+HOME (git resolves binaries and ~/.gitconfig through them). Everything
-// else — GH_TOKEN, GITHUB_TOKEN, API-key-shaped vars — is dropped by
-// construction because this is an allowlist, not a denylist.
-const ENV_ALLOWLIST = new Set([
-  "PATH",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "SHELL",
-  "LANG",
-  "LANGUAGE",
-  "TMPDIR",
-  "TERM",
-  "TZ",
-]);
-
-/** Build the scrubbed child env: allowlisted names + every LC_* locale var. */
+/** Build the scrubbed child env for verification blocks: never the worker's
+ * full process.env (which holds GH_TOKEN / inference-endpoint API keys). See
+ * scrubEnv (#35) — the same allowlist now also guards the sandboxed agent bash. */
 export function verificationEnv(
   source: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(source)) {
-    if (v !== undefined && (ENV_ALLOWLIST.has(k) || k.startsWith("LC_"))) env[k] = v;
-  }
-  return env;
+  return scrubEnv(source);
 }
 
 // Mirrors Python's:
