@@ -93,6 +93,56 @@ describe("runAgent", () => {
     expect(result.errorMessage).toBe("boom");
     expect(disposed).toBe(true);
   });
+
+  it("falls back to the assistant message's errorMessage when auto_retry_end never fires (#129)", async () => {
+    // A first-attempt non-retryable error (bad key, quota) never triggers a
+    // retry, so the SDK only ever emits turn_end — no auto_retry_end at all.
+    const events = [
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "401 invalid x-api-key",
+          usage: { input: 0, output: 0 },
+        },
+      },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+    });
+    expect(result.errorMessage).toBe("401 invalid x-api-key");
+    expect(result.stopReason).toBe("error");
+  });
+
+  it("lets a later auto_retry_end.finalError overwrite the turn_end errorMessage", async () => {
+    const events = [
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "401 invalid x-api-key",
+          usage: { input: 0, output: 0 },
+        },
+      },
+      { type: "auto_retry_end", finalError: "final" },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+    });
+    expect(result.errorMessage).toBe("final");
+  });
 });
 
 // A fake session for guard-driven tests: emits `events` to listeners when the

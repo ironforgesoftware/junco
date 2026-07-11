@@ -59,6 +59,13 @@ export class RunAccumulator {
           };
         }
         if (e.message?.stopReason) this.stopReason = e.message.stopReason;
+        // First-attempt non-retryable errors never emit auto_retry_end (the
+        // SDK only fires it when a retry was attempted) — the assistant
+        // message's errorMessage is the only record. auto_retry_end's
+        // finalError still overwrites this when it fires.
+        if (e.message?.errorMessage && this.errorMessage === null) {
+          this.errorMessage = String(e.message.errorMessage);
+        }
         this.turns++;
         break;
       }
