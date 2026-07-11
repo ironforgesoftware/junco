@@ -10,6 +10,7 @@ import {
   makeJailedFindOperations,
   makeJailedGrepOperations,
 } from "./fsOps.js";
+import { makeOpLock, lockOps } from "./opLock.js";
 
 /** Thrown (fail-closed) when a sandbox backend is required but unavailable. */
 export class SandboxUnavailableError extends Error {
@@ -120,12 +121,21 @@ export function buildSandbox(
   opts: BuildSandboxOpts,
 ): BuildSandboxResult {
   const { cwd, toolNames, backend, policy, home, bashDeps } = opts;
+  // One lock per session: bash runs exclusive, fs-ops shared, so no bash
+  // execution ever overlaps an fs-op's check→syscall window and a compromised
+  // agent cannot win a symlink-swap race against the in-process path jail (#159).
+  const lock = makeOpLock();
   const customTools: unknown[] = [];
   for (const name of toolNames) {
     if (!KNOWN_TOOLS.has(name)) continue;
     const factory = factoryFor(factories, name);
     if (!factory) continue;
-    customTools.push(factory(cwd, toolOptionsFor(name, cwd, backend, policy, bashDeps)));
+    const raw = toolOptionsFor(name, cwd, backend, policy, bashDeps).operations;
+    const operations =
+      raw && typeof raw === "object"
+        ? lockOps(raw as object, lock, name === "bash" ? "exclusive" : "shared")
+        : raw;
+    customTools.push(factory(cwd, { operations }));
   }
   const resourceLoader = new factories.DefaultResourceLoader({
     cwd,

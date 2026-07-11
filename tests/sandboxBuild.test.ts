@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildSandbox, toolOptionsFor } from "../src/agent/sandbox/index.js";
 import { noneBackend } from "../src/agent/sandbox/backend.js";
+import { makeOpLock, lockOps } from "../src/agent/sandbox/opLock.js";
 import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 
 const policy: SandboxPolicy = {
@@ -82,5 +83,48 @@ describe("buildSandbox", () => {
     });
     expect(calls.map((c) => c.name)).toEqual(["read"]);
     expect(res.customTools).toEqual([{ __tool: "read" }]);
+  });
+});
+
+describe("sandbox op mutual-exclusion (#159)", () => {
+  it("a bash exec never overlaps an fs-op", async () => {
+    const lock = makeOpLock();
+    const events: string[] = [];
+    const gate = (() => {
+      let r!: () => void;
+      const p = new Promise<void>((x) => (r = x));
+      return { p, r };
+    })();
+
+    const fs = lockOps(
+      {
+        writeFile: async (): Promise<void> => {
+          events.push("fs-in");
+          events.push("fs-out");
+        },
+      },
+      lock,
+      "shared",
+    );
+    const bash = lockOps(
+      {
+        exec: async (): Promise<{ exitCode: number }> => {
+          events.push("bash-in");
+          await gate.p;
+          events.push("bash-out");
+          return { exitCode: 0 };
+        },
+      },
+      lock,
+      "exclusive",
+    );
+
+    const b = (bash as { exec: () => Promise<unknown> }).exec();
+    await Promise.resolve(); // let bash acquire exclusive
+    const f = (fs as { writeFile: () => Promise<void> }).writeFile(); // must queue behind bash
+    gate.r();
+    await Promise.all([b, f]);
+    // bash fully brackets before fs starts — no interleave
+    expect(events).toEqual(["bash-in", "bash-out", "fs-in", "fs-out"]);
   });
 });
