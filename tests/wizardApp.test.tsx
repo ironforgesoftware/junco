@@ -314,7 +314,10 @@ describe("WizardApp", () => {
       mode: "rerun",
       currentRaw: raw,
       initialAnswers: answersFromConfig(raw),
-      discoverModels: async () => ["m-fast", "m-big"],
+      // Configured model deliberately NOT at index 0: the pick-step
+      // preselection (findIndex, not the fallback) must be what keeps this
+      // run a no-op — a broken findIndex would select m-big and fail below.
+      discoverModels: async () => ["m-big", "m-fast"],
       write: () => {
         writeCalls++;
         return { written: false, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };
