@@ -335,6 +335,107 @@ describe("Model chapter", () => {
     expect(answers.modelId).toBe("anthropic/claude"); // slash → kept as-is
   });
 
+  it("key step (fresh): masks typed input and never leaks the raw key", async () => {
+    let answers = defaultAnswers();
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io: fakeIo(),
+      onNext: () => {},
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, ENTER); // source: inline
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("endpoint"));
+    await press(stdin, ENTER); // accept default URL
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("API key"));
+    // wipe the default "1234" draft first so the masked-length assertion below
+    // is exact, not just "contains a bullet somewhere".
+    for (let i = 0; i < "1234".length; i++) {
+      await press(stdin, BACKSPACE);
+      rerender(<Model {...props()} />);
+    }
+    stdin.write("sk-secret");
+    await tick();
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("•"));
+    expect(lastFrame()).toContain("•".repeat("sk-secret".length));
+    expect(lastFrame()).not.toContain("sk-secret");
+  });
+
+  it("key step (rerun): starts empty, never shows the stored key, empty submit keeps it", async () => {
+    const raw = { model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "stored-key" } };
+    let answers = answersFromConfig(raw);
+    let discoverArgs: [string, string] | null = null;
+    const io = fakeIo({
+      mode: "rerun",
+      currentRaw: raw,
+      discoverModels: async (baseUrl, apiKey) => {
+        discoverArgs = [baseUrl, apiKey];
+        return ["m1"];
+      },
+    });
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {},
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, ENTER); // source: inline (preselected from answersFromConfig)
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("endpoint"));
+    await press(stdin, ENTER); // url unchanged
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("API key"));
+    expect(lastFrame()).toContain("unchanged — enter keeps the current key");
+    expect(lastFrame()).not.toContain("stored-key");
+    await press(stdin, ENTER); // empty submit → keep the stored key
+    rerender(<Model {...props()} />);
+    await until(() => discoverArgs !== null);
+    expect(discoverArgs).toEqual(["http://h:1/v1", "stored-key"]);
+    expect(answers.apiKey).toBe("stored-key");
+    expect(lastFrame()).not.toContain("stored-key");
+  });
+
+  it("key step (rerun, replace): typing a new key patches answers.apiKey", async () => {
+    const raw = { model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "stored-key" } };
+    let answers = answersFromConfig(raw);
+    const io = fakeIo({ mode: "rerun", currentRaw: raw, discoverModels: async () => ["m1"] });
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {},
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, ENTER); // source: inline
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("endpoint"));
+    await press(stdin, ENTER); // url unchanged
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("API key"));
+    stdin.write("new-key");
+    await tick();
+    rerender(<Model {...props()} />);
+    await press(stdin, ENTER);
+    await until(() => answers.apiKey === "new-key");
+    expect(answers.apiKey).toBe("new-key");
+  });
+
   it("models_json path lists file entries", async () => {
     let answers = defaultAnswers();
     let advanced = false;
@@ -654,6 +755,47 @@ describe("Review chapter", () => {
       />,
     );
     await until(() => (same.lastFrame() ?? "").includes("Nothing changed"));
+  });
+
+  it("fresh mode redacts model.apiKey in the JSON preview", async () => {
+    const answers = { ...defaultAnswers(), apiKey: "sk-realkey" };
+    const { lastFrame } = render(
+      <Review
+        {...noopChapter}
+        answers={answers}
+        patch={() => {}}
+        io={fakeIo()}
+        onNext={() => {}}
+        onWrite={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    expect(lastFrame()).toContain("••••");
+    expect(lastFrame()).not.toContain("sk-realkey");
+  });
+
+  it("rerun diff masks a changed model.apiKey (both sides)", async () => {
+    const raw = {
+      vaultRoot: "/v",
+      model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "old-key" },
+    };
+    const changed = { ...answersFromConfig(raw), apiKey: "new-key" };
+    const { lastFrame } = render(
+      <Review
+        {...noopChapter}
+        answers={changed}
+        patch={() => {}}
+        io={fakeIo({ mode: "rerun", currentRaw: raw })}
+        onNext={() => {}}
+        onWrite={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("model.apiKey"));
+    expect(lastFrame()).toContain("•••• → ••••");
+    expect(lastFrame()).not.toContain("old-key");
+    expect(lastFrame()).not.toContain("new-key");
   });
 });
 

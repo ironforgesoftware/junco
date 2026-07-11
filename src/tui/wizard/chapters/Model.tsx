@@ -25,6 +25,13 @@ export function Model({
   const [step, setStep] = useState<Step>("source");
   const [ids, setIds] = useState<string[]>([]);
   const [manualDraft, setManualDraft] = useState("");
+  // Local draft, never the answers value directly: in rerun mode this starts
+  // EMPTY (the stored key never touches the screen — ConfigView's startEdit
+  // pattern) and an empty submit leaves answers.apiKey untouched. Fresh mode
+  // starts from the current answer as before.
+  const [keyDraft, setKeyDraft] = useState<string>(() =>
+    io.mode === "rerun" ? "" : (answers.apiKey ?? ""),
+  );
   const textSteps: Step[] = ["url", "key", "manual", "mjPath"];
   useEffect(() => {
     setTextEditing(textSteps.includes(step));
@@ -108,12 +115,19 @@ export function Model({
       {step === "key" && (
         <>
           <Text>API key for the endpoint?</Text>
-          {field(
-            answers.apiKey ?? "",
-            (v) => patch({ apiKey: v }),
-            () => setStep("probe"),
-            "1234",
-          )}
+          <Box borderStyle="round" borderColor={theme.border} paddingX={1} width={46} marginTop={1}>
+            <TextField
+              value={keyDraft}
+              onChange={setKeyDraft}
+              onSubmit={() => {
+                if (keyDraft.trim() !== "") patch({ apiKey: keyDraft });
+                setStep("probe");
+              }}
+              focus
+              placeholder={io.mode === "rerun" ? "unchanged — enter keeps the current key" : "1234"}
+              mask
+            />
+          </Box>
         </>
       )}
       {step === "probe" && (

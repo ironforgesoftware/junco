@@ -5,9 +5,27 @@ import React from "react";
 import { Box, Text } from "ink";
 import { Select, type ChapterProps } from "../controls.js";
 import { TIPS, BIRD } from "../../../wizard/tips.js";
-import { LEVERS } from "../../../configLevers.js";
-import { renderConfigJson, diffAnswers, COVERED_LEVER_COUNT } from "../../../wizard/flow.js";
+import { LEVERS, getAtPath, setAtPath } from "../../../configLevers.js";
+import { buildConfigObject, diffAnswers, COVERED_LEVER_COUNT } from "../../../wizard/flow.js";
 import { theme } from "../../theme.js";
+
+/** Dotted lever paths marked `type: "secret"` — single source of truth so the
+ * Review redaction can never drift from ConfigView's own secret discipline.
+ * Today just `["model.apiKey"]`, derived rather than hardcoded. */
+const SECRET_PATHS = LEVERS.filter((l) => l.type === "secret").map((l) => l.path);
+
+/** Display-only redaction of the fresh-mode JSON preview: deep-clone the real
+ * config object and blank out non-empty secret values with `••••` before
+ * stringifying. The written config.json (buildConfigObject/renderConfigJson)
+ * never sees this clone — only the screen does. */
+function maskedConfigJson(a: Parameters<typeof buildConfigObject>[0]): string {
+  const clone = JSON.parse(JSON.stringify(buildConfigObject(a))) as Record<string, unknown>;
+  for (const p of SECRET_PATHS) {
+    const v = getAtPath(clone, p);
+    if (typeof v === "string" && v !== "") setAtPath(clone, p, "••••");
+  }
+  return JSON.stringify(clone, null, 2);
+}
 
 export interface ReviewProps extends ChapterProps {
   onWrite: () => void;
@@ -31,7 +49,7 @@ export function Review({ answers, io, onWrite, onBack, onCancel }: ReviewProps):
         <>
           <Text>This is the exact config.json that will be written:</Text>
           <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1} width={58}>
-            <Text>{renderConfigJson(answers).trimEnd()}</Text>
+            <Text>{maskedConfigJson(answers)}</Text>
           </Box>
         </>
       ) : untouched ? (
@@ -40,12 +58,18 @@ export function Review({ answers, io, onWrite, onBack, onCancel }: ReviewProps):
         <>
           <Text>Changes to {io.configPath}:</Text>
           <Box flexDirection="column" marginTop={1}>
-            {diff.map((d) => (
-              <Text key={d.path}>
-                <Text color={theme.accent}>{d.path}</Text>: <Text dimColor>{fmt(d.from)}</Text> →{" "}
-                {fmt(d.to)}
-              </Text>
-            ))}
+            {diff.map((d) => {
+              // Secret levers show "it changed", never the values: mask both
+              // sides identically rather than fmt()'ing the real from/to.
+              const masked = SECRET_PATHS.includes(d.path);
+              const from = masked ? "••••" : fmt(d.from);
+              const to = masked ? "••••" : fmt(d.to);
+              return (
+                <Text key={d.path}>
+                  <Text color={theme.accent}>{d.path}</Text>: <Text dimColor>{from}</Text> → {to}
+                </Text>
+              );
+            })}
           </Box>
         </>
       )}
