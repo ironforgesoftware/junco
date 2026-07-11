@@ -6,11 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-11
+
 ### Added
 
-- `junco config path|list|get|set` and an in-dashboard config editor (press `,`).
-- Daemon hot-reload: live-safe settings apply at the next poll; structural changes surface `pendingRestartFields` in `junco status` / `/health`.
-- **Agent execution sandbox (`sandbox`).** Native OS isolation of the Pi agent's tool execution — **Seatbelt** on macOS, **bubblewrap** on Linux, no container runtime, works fully offline. Confines tool writes to the worktree + a per-session scratch dir, denies network by default (per-ticket `network: true` frontmatter opts one ticket in), scrubs credentials (`GH_TOKEN`/API keys) from the agent's environment, applies a read deny-list over `~/.ssh`/`~/.config/gh`/etc., and freezes ambient `~/.pi` extension loading. **On by default**; **fails closed** when a required backend binary is unavailable — never a silent unsandboxed run. `junco doctor` preflights availability. Toggle it (and `backend`/`network`) live from the in-dashboard config editor (`,` → sandbox section) or `junco config set sandbox.enabled false`; changes apply to the next ticket with no restart. Pair with a dedicated GitHub identity for full credential separation (see `docs/operations.md` § Security model).
+- `junco config path|list|get|set` and an in-dashboard config editor (press `,`), backed by a single lever registry that also powers `junco config list` (#161).
+- Daemon hot-reload: live-safe settings apply at the next poll; structural changes surface `pendingRestartFields` in `junco status` / `/health` (#161).
+- **Agent execution sandbox (`sandbox`).** Native OS isolation of the Pi agent's tool execution — **Seatbelt** on macOS, **bubblewrap** on Linux, no container runtime, works fully offline. Confines tool writes to the worktree + a per-session scratch dir, denies network by default (per-ticket `network: true` frontmatter opts one ticket in), scrubs credentials (`GH_TOKEN`/API keys) from the agent's environment, applies a read deny-list over `~/.ssh`/`~/.config/gh`/etc., and freezes ambient `~/.pi` extension loading. **On by default**; **fails closed** when a required backend binary is unavailable — never a silent unsandboxed run. `junco doctor` preflights availability. Toggle it (and `backend`/`network`) live from the in-dashboard config editor (`,` → sandbox section) or `junco config set sandbox.enabled false`; changes apply to the next ticket with no restart. Pair with a dedicated GitHub identity for full credential separation (see `docs/operations.md` § Security model) (#160).
 - **Two-phase assess with a review queue.** `junco assess` no longer files issues straight from the audit — the daemon **parks** every finding for review, and nothing lands on a tracker until a human confirms the batch (`junco assess review` to inspect, `junco assess file <id> --all | --only <fingerprints>` to file). Filing runs under your own `gh` auth and works on **any watched repo, owned or not** — owned repos get `junco:finding` + `severity/<level>` labels best-effort; repos you don't own get label-free issues. An authoritative dedup re-runs at file time so a finding filed by hand in the interim is skipped, not duplicated (#95).
 - **Dashboard assess review view.** Press `v` in the dashboard to open a per-finding checklist with the same select-and-confirm-to-file flow as the CLI (#96).
 - **`junco analyze owner/repo#N`** — a read-only issue investigation that parks a comment draft for review and **never posts without operator confirmation**. Shares the issue-target resolution (`gh issue view`, then watched-repo lookup or auto-provision) that dispatch uses (#98).
@@ -19,12 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The execution sandbox is now ON by default** (`sandbox.enabled` defaults to `true`). On macOS this is transparent (Seatbelt is always available). On Linux without `bwrap` installed, tickets **fail closed** with a clear error — install bubblewrap, or set `sandbox.enabled: false` / `sandbox.backend: "none"` (via `junco config set` or the `,` config editor). Run `junco doctor` to preflight. See docs/configuration.md § agent execution sandbox.
+- **The execution sandbox is now ON by default** (`sandbox.enabled` defaults to `true`). On macOS this is transparent (Seatbelt is always available). On Linux without `bwrap` installed, tickets **fail closed** with a clear error — install bubblewrap, or set `sandbox.enabled: false` / `sandbox.backend: "none"` (via `junco config set` or the `,` config editor). Run `junco doctor` to preflight. See `docs/operations.md` § Sandboxing the agent (#166).
 - **BREAKING:** configuration is now `config.json` (camelCase) instead of `config.toml`; the `smol-toml` dependency is removed. Convert existing `config.toml` files by hand (see docs/configuration.md); junco errors with a pointer if it finds a leftover `config.toml`. Legacy `[pi]`/`[oMLX]` sections are gone — set `model.*` directly; the tool allowlist is now top-level `tools`, and `commit_leftovers` is `worker.commitLeftovers`.
 
 ### Fixed
 
 - **Transcripts:** every flow's transcript path routes through one slugifying helper, so a frontmatter id with path-unsafe characters can't escape the transcripts directory (#94, #100).
+- **Daemon & queue:** the scheduler drains in-flight tasks in a `finally` on a claim error and the third-signal hard-exit is testable (#142); malformed-frontmatter tickets route to `failed/` instead of looping, with a multi-level requeue collision suffix (#143); claims are guarded against a same-minute overwrite and `submit` uses a unique temp with an exclusive-create fallback (#144); `repoKey` is canonicalized so aliased repo paths serialize (#147).
+- **Health & CLI:** IPv6 health URLs are bracketed, `junco list` tolerates a missing queue-box dir (ENOENT), and the health server keeps a persistent error handler (#152).
+- **PR flow & GitHub bridge:** an offline soft-abort that made commits now routes to `done/` like its online twin (#146); the outbox embeds its idempotency marker on live comment posts and author-scopes the dedup scan (#148); the bridge vouches issue-body edits, `junco prs` includes external repos, ticket ids are unambiguous, plans are CRLF-normalized, and a null author is guarded (#150); managed external clones + syncs are asserted contained within `externalReposRoot` (#151).
+- **Assess & analyze:** a review batch is preserved when every filing fails and an empty `--only` selection is rejected (#149); assess/analyze issue numbers are bounded and branch/base names pattern-checked, with refreshed docs (#154, #155).
+- **Agent runtime:** dropped a phantom nudge on an output-budget kill, gated nudge-ignored on delivery, and injected the transcript sink (#153).
+- **Service:** non-blocking systemd restart with the stop timeout sized to the max ticket timeout (#145).
+- **TUI:** `aliveRef` guards extended to the remaining async handlers, plus a non-TTY `useTerminalSize` fallback (#156).
+- **Config hot-reload follow-ups:** `github.triggerLabel`/`askLabel` reclassified `restart` (and frozen so the bridge and reporter can't drift); the watcher single-parses and re-applies `logLevel` only when it changed; stale JSDoc dropped (#167, closes #162–#164).
+- **Migration follow-ups:** analyze threads its client's `gh`/`git` deps; the analyze branch uses a no-op reporter so it can never post; the unconsumed `issue_title` is dropped; read-only assess clones fork-lessly (no stray fork); the review store gains read-time shape validation + ENOENT-safe archiving; a transcript-slugify CI flake is fixed; TUI review-view scroll/badge polish (#168, closes #101–#106, #157).
+
+### Security
+
+- **Agent execution sandbox fs-tool path jail hardened against a symlink-swap TOCTOU** (#169, closes #159): bash execution is serialized against the in-process fs tools (only bash can plant a symlink) and bash's process group is reaped, so a compromised agent can't win a check→syscall swap race against the jail. The OS sandbox backend (Seatbelt/bwrap) remains the primary containment; a `setsid`-escaping background process on macOS is a documented residual.
 
 ## [0.5.0] - 2026-07-09
 
