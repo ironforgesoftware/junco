@@ -3,7 +3,6 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runInitWizard } from "../src/wizard.js";
-import { loadConfig } from "../src/config.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
@@ -16,11 +15,22 @@ describe("runInitWizard --yes", () => {
     const dir = tmp();
     const cp = join(dir, "config.json");
     const prints: string[] = [];
-    const code = await runInitWizard(cp, { yes: true, printFn: (s) => prints.push(s) });
+    // mkdirFn spy, NOT the real mkdirSync: the default vaultRoot is "~/Junco",
+    // so real dir creation would escape the tmpdir sandbox into $HOME (and on
+    // a case-insensitive fs, into the maintainer's live "~/junco" vault).
+    const dirs: string[] = [];
+    const code = await runInitWizard(cp, {
+      yes: true,
+      printFn: (s) => prints.push(s),
+      mkdirFn: (p) => dirs.push(p),
+    });
     expect(code).toBe(0);
     const cfg = read(cp);
     expect(cfg.vaultRoot).toBe("~/Junco");
     expect((cfg.model as { id: string }).id).toBe("local/my-model");
+    for (const box of ["inbox", "processing", "done", "failed"]) {
+      expect(dirs.some((d) => d.endsWith(box))).toBe(true);
+    }
     expect(prints.join("")).toContain("Wrote config");
     expect(prints.join("")).toContain("junco start");
   });
@@ -111,13 +121,15 @@ describe("runInitWizard interactive (collectFn seam)", () => {
     const dir = tmp();
     const cp = join(dir, "config.json");
     const prints: string[] = [];
-    let calls = 0;
     const code = await runInitWizard(cp, {
       printFn: (s) => prints.push(s),
-      loadConfigFn: (p) => {
-        calls++;
-        if (calls > 1) throw new Error("boom: unreadable after write");
-        return loadConfig(p);
+      // Throw on the read-back that follows the successful rename: io.write's
+      // file write lands (wroteFile flips true) and THEN the ensureDirs step
+      // blows up — the exact partial-failure shape #174 is about. Throwing
+      // here also keeps the test sandboxed: ensureDirs never runs, so the
+      // default "~/Junco" vaultRoot never touches the real $HOME.
+      loadConfigFn: () => {
+        throw new Error("boom: unreadable after write");
       },
       collectFn: async (io: WizardIO) => {
         try {
