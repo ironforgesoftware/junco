@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSandbox, toolsOptionsFor } from "../src/agent/sandbox/index.js";
+import { buildSandbox, toolOptionsFor } from "../src/agent/sandbox/index.js";
 import { noneBackend } from "../src/agent/sandbox/backend.js";
 import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 
@@ -10,34 +10,49 @@ const policy: SandboxPolicy = {
   scratchDir: "/tmp/s",
 };
 
-describe("toolsOptionsFor", () => {
+describe("toolOptionsFor", () => {
   it("wires bash operations for bash", () => {
-    const o = toolsOptionsFor("bash", "/work/tree", noneBackend, policy) as any;
-    expect(typeof o.bash.operations.exec).toBe("function");
+    const o = toolOptionsFor("bash", "/work/tree", noneBackend, policy) as any;
+    expect(typeof o.operations.exec).toBe("function");
   });
   it("wires read/write/edit/ls/find/grep operations", () => {
     for (const name of ["read", "write", "edit", "ls", "find", "grep"] as const) {
-      const o = toolsOptionsFor(name, "/work/tree", noneBackend, policy) as any;
-      expect(o[name].operations).toBeTruthy();
+      const o = toolOptionsFor(name, "/work/tree", noneBackend, policy) as any;
+      expect(o.operations).toBeTruthy();
     }
   });
 });
 
+/** Fake the seven per-tool factories + DefaultResourceLoader, recording calls. */
+function fakeFactories() {
+  const calls: Array<{ name: string; cwd: string; options: any }> = [];
+  const loaderOpts: any[] = [];
+  const mk =
+    (name: string) =>
+    (cwd: string, options: unknown): unknown => {
+      calls.push({ name, cwd, options });
+      return { __tool: name };
+    };
+  const factories = {
+    createBashToolDefinition: mk("bash"),
+    createReadToolDefinition: mk("read"),
+    createWriteToolDefinition: mk("write"),
+    createEditToolDefinition: mk("edit"),
+    createGrepToolDefinition: mk("grep"),
+    createFindToolDefinition: mk("find"),
+    createLsToolDefinition: mk("ls"),
+    DefaultResourceLoader: class {
+      constructor(o: any) {
+        loaderOpts.push(o);
+      }
+    },
+  };
+  return { factories, calls, loaderOpts };
+}
+
 describe("buildSandbox", () => {
   it("builds one custom tool per allowlisted name and a noExtensions loader", () => {
-    const created: Array<{ name: string; cwd: string; options: any }> = [];
-    const loaderOpts: any[] = [];
-    const factories = {
-      createToolDefinition: (name: string, cwd: string, options: unknown) => {
-        created.push({ name, cwd, options });
-        return { __tool: name };
-      },
-      DefaultResourceLoader: class {
-        constructor(o: any) {
-          loaderOpts.push(o);
-        }
-      },
-    };
+    const { factories, calls, loaderOpts } = fakeFactories();
     const res = buildSandbox(factories as any, {
       cwd: "/work/tree",
       toolNames: ["read", "bash", "write"],
@@ -45,7 +60,8 @@ describe("buildSandbox", () => {
       policy,
       home: "/home/x",
     });
-    expect(created.map((c) => c.name)).toEqual(["read", "bash", "write"]);
+    expect(calls.map((c) => c.name)).toEqual(["read", "bash", "write"]);
+    expect(calls.every((c) => c.cwd === "/work/tree")).toBe(true);
     expect(res.customTools).toEqual([{ __tool: "read" }, { __tool: "bash" }, { __tool: "write" }]);
     expect(loaderOpts[0]).toMatchObject({
       cwd: "/work/tree",
@@ -56,12 +72,7 @@ describe("buildSandbox", () => {
   });
 
   it("ignores tool names the SDK does not know (e.g. todo_write)", () => {
-    const factories = {
-      createToolDefinition: (name: string) => ({ __tool: name }),
-      DefaultResourceLoader: class {
-        constructor(_: any) {}
-      },
-    };
+    const { factories, calls } = fakeFactories();
     const res = buildSandbox(factories as any, {
       cwd: "/work/tree",
       toolNames: ["read", "todo_write"],
@@ -69,6 +80,7 @@ describe("buildSandbox", () => {
       policy,
       home: "/home/x",
     });
+    expect(calls.map((c) => c.name)).toEqual(["read"]);
     expect(res.customTools).toEqual([{ __tool: "read" }]);
   });
 });
