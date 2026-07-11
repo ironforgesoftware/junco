@@ -190,6 +190,59 @@ describe("runStatusCommand", () => {
     expect(out.join("")).not.toMatch(/guards:/);
   });
 
+  it("shows a restart-required warning when pendingRestartFields is non-empty", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 150,
+          currentTickets: [],
+          tasksProcessed: 0,
+          tasksSucceeded: 0,
+          tasksFailed: 0,
+          totalTokensIn: 0,
+          totalTokensOut: 0,
+          lastTaskStatus: null,
+          lastTaskAt: null,
+          pendingRestartFields: ["observability.healthPort"],
+        },
+      }),
+    })) as unknown as typeof fetch;
+    const code = await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/restart to apply/);
+  });
+
+  it("omits the restart-required warning when pendingRestartFields is empty", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 150,
+          currentTickets: [],
+          tasksProcessed: 0,
+          tasksSucceeded: 0,
+          tasksFailed: 0,
+          totalTokensIn: 0,
+          totalTokensOut: 0,
+          lastTaskStatus: null,
+          lastTaskAt: null,
+          pendingRestartFields: [],
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).not.toMatch(/restart to apply/);
+  });
+
   it("daemon down: says not running and still prints queue counts", async () => {
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");

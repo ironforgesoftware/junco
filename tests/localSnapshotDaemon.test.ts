@@ -52,6 +52,7 @@ function metrics(over: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
         updatedAt: "2026-07-09T00:05:00Z",
       },
     },
+    pendingRestartFields: [],
     ...over,
   };
 }
