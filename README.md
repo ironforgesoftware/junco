@@ -148,8 +148,8 @@ npx @ironforgesoftware/junco   # first run → setup wizard; afterwards → star
 
 `junco init` walks you through setup in a full-screen guided tour — workspace,
 inference endpoint + model (with live discovery), repo containment, the
-GitHub bridge, and the recommended extras — then verifies the result with a
-flight check and creates the queue. Re-run it anytime to tune an existing
+GitHub bridge, and the recommended extras — then creates the queue and
+verifies the result with a flight check. Re-run it anytime to tune an existing
 config (it only writes what you change). `junco init --yes` scaffolds
 defaults non-interactively. (Prefer a global install:
 `npm install -g @ironforgesoftware/junco`, then the command is just `junco`.)
