@@ -8,6 +8,7 @@ import {
   resolveConfigPath,
   defaultUserConfigPath,
   isLoopbackHost,
+  resolveApiKey,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -527,5 +528,32 @@ describe("queuePaths", () => {
     const paths = queuePaths({ vaultRoot: "/v", juncoSubdir: "Junco" } as any);
     expect(paths.inbox).toBe("/v/Junco/inbox");
     expect(paths.failed).toBe("/v/Junco/failed");
+  });
+});
+
+describe("resolveApiKey", () => {
+  it("passes a literal key through", () => {
+    expect(resolveApiKey("sk-live-123", {})).toBe("sk-live-123");
+  });
+
+  it("returns null when unset (defer to provider env at request time)", () => {
+    expect(resolveApiKey(undefined, {})).toBeNull();
+  });
+
+  it("interpolates an exact $VAR reference from the daemon env", () => {
+    expect(resolveApiKey("$MY_PROVIDER_KEY", { MY_PROVIDER_KEY: "sk-env-9" })).toBe("sk-env-9");
+  });
+
+  it("throws a config error when the referenced $VAR is unset or empty", () => {
+    expect(() => resolveApiKey("$MISSING_KEY", {})).toThrow(/config: model\.apiKey.*MISSING_KEY/);
+    expect(() => resolveApiKey("$EMPTY_KEY", { EMPTY_KEY: "" })).toThrow(/EMPTY_KEY/);
+  });
+
+  it("rejects !command values — junco never shell-executes config values", () => {
+    expect(() => resolveApiKey("!op read secret", {})).toThrow(/config: model\.apiKey.*!command/);
+  });
+
+  it("treats a non-env-shaped $ string as a literal", () => {
+    expect(resolveApiKey("$not-an-env-ref", {})).toBe("$not-an-env-ref");
   });
 });

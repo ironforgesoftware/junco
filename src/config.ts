@@ -82,6 +82,41 @@ const DEFAULT_COMPAT: Record<string, unknown> = {
   thinkingFormat: "qwen-chat-template",
 };
 
+const ENV_REF = /^\$([A-Z_][A-Z0-9_]*)$/;
+
+/**
+ * Resolve the configured model.apiKey: a literal passes through; an exact
+ * "$ENV_VAR" reference (uppercase env style only — anything else is a literal)
+ * is read from the daemon environment; absent stays null so the SDK's
+ * request-time provider env-var fallback (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+ * …) applies. "!command" values are rejected: the Pi SDK shell-executes them
+ * in its own auth files, and junco will not forward that surface from
+ * config.json.
+ */
+export function resolveApiKey(
+  raw: string | undefined,
+  env: Record<string, string | undefined>,
+): string | null {
+  if (raw === undefined) return null;
+  if (raw.startsWith("!")) {
+    throw new Error(
+      'config: model.apiKey must not be a "!command" value — junco does not execute shell ' +
+        'commands from config.json. Use a literal key or an "$ENV_VAR" reference.',
+    );
+  }
+  const m = ENV_REF.exec(raw);
+  if (m) {
+    const val = env[m[1]];
+    if (val === undefined || val === "") {
+      throw new Error(
+        `config: model.apiKey references $${m[1]}, but ${m[1]} is not set in the daemon environment.`,
+      );
+    }
+    return val;
+  }
+  return raw;
+}
+
 export const ConfigSchema = z.object({
   vaultRoot: z.string({ required_error: "config: vaultRoot is required" }),
   juncoSubdir: z.string().default("Junco"),
