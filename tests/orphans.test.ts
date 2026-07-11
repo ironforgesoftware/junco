@@ -15,6 +15,9 @@ function makeConfig(): { cfg: Config; root: string } {
     juncoSubdir: "Junco",
     model: {
       id: "m",
+      source: "auto",
+      baseUrlExplicit: false,
+      retry: { maxRetries: null, baseDelayMs: null },
       modelsJson: null,
       api: "openai-completions",
       baseUrl: "u",

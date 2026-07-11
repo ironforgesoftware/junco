@@ -557,3 +557,54 @@ describe("resolveApiKey", () => {
     expect(resolveApiKey("$not-an-env-ref", {})).toBe("$not-an-env-ref");
   });
 });
+
+describe("hosted model config (source / baseUrlExplicit / apiKey / retry)", () => {
+  it("defaults stay local-first: source auto, local default baseUrl, placeholder key", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/vault" }));
+    expect(cfg.model.source).toBe("auto");
+    expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
+    expect(cfg.model.baseUrlExplicit).toBe(false);
+    expect(cfg.model.apiKey).toBe("1234");
+    expect(cfg.model.retry).toEqual({ maxRetries: null, baseDelayMs: null });
+  });
+
+  it("a hosted id with no baseUrl and no key resolves apiKey to null (env fallback)", () => {
+    const cfg = loadConfig(
+      writeJson({ vaultRoot: "/tmp/vault", model: { id: "anthropic/claude-sonnet-4-5" } }),
+    );
+    expect(cfg.model.baseUrlExplicit).toBe(false);
+    expect(cfg.model.apiKey).toBeNull();
+  });
+
+  it("an explicit baseUrl keeps the inline placeholder key (proxy/override)", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: { id: "anthropic/claude-sonnet-4-5", baseUrl: "http://10.0.0.5:8080/v1" },
+      }),
+    );
+    expect(cfg.model.baseUrlExplicit).toBe(true);
+    expect(cfg.model.apiKey).toBe("1234");
+  });
+
+  it("interpolates $VAR keys through the injectable env", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: { id: "anthropic/claude-sonnet-4-5", apiKey: "$PROVIDER_KEY" },
+      }),
+      { PROVIDER_KEY: "sk-real" },
+    );
+    expect(cfg.model.apiKey).toBe("sk-real");
+  });
+
+  it("parses retry levers and defaults them to null", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: { retry: { maxRetries: 5, baseDelayMs: 500 } },
+      }),
+    );
+    expect(cfg.model.retry).toEqual({ maxRetries: 5, baseDelayMs: 500 });
+  });
+});

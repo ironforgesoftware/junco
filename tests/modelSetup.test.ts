@@ -13,6 +13,9 @@ import type { Config, ModelConfig } from "../src/types.js";
 
 const MODEL_DEFAULTS: ModelConfig = {
   id: "omlx/Qwen3.6-27B-oQ8-mtp",
+  source: "auto",
+  baseUrlExplicit: false,
+  retry: { maxRetries: null, baseDelayMs: null },
   modelsJson: null,
   api: "openai-completions",
   baseUrl: "http://127.0.0.1:1234/v1",

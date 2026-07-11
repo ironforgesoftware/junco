@@ -501,7 +501,12 @@ export function makePiSessionFactory(
     const { provider, modelId } = splitModelId(cfg.model.id);
 
     const authStorage = AuthStorage.create();
-    authStorage.setRuntimeApiKey(provider, cfg.model.apiKey);
+    // A null key defers to the Pi SDK's own auth-file / provider env-var
+    // fallback (see resolveApiKey in config.ts) — only set a runtime key when
+    // config.json resolved one. Full catalog-aware wiring lands in a later task.
+    if (cfg.model.apiKey !== null) {
+      authStorage.setRuntimeApiKey(provider, cfg.model.apiKey);
+    }
 
     // Path A (file): load the provider+model from a Pi models.json when it's
     // configured and present — single source of truth, zero drift. Path B
