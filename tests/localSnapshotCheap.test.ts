@@ -18,7 +18,15 @@ function makeCfg(root: string): Config {
     healthPort: 8787,
     gitBin: "git",
     ghBin: "gh",
-    model: { baseUrl: "http://127.0.0.1:9999/v1", apiKey: "k", modelsJson: null },
+    // id must be "local/…" — shouldProbeEndpoint's catalogEligible check reads
+    // it unconditionally now, and this fixture is a local test server (must
+    // always probe), not a hosted catalog model.
+    model: {
+      id: "local/test-model",
+      baseUrl: "http://127.0.0.1:9999/v1",
+      apiKey: "k",
+      modelsJson: null,
+    },
     github: { enabled: true, repos: [], externalReposRoot: join(root, "external") },
   } as unknown as Config;
 }

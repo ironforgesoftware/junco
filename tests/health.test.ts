@@ -5,8 +5,8 @@
  * Port of worker.py omlx_reachable / wait_for_omlx (now endpoint-named).
  */
 
-import { describe, it, expect } from "vitest";
-import type { Config } from "../src/types.js";
+import { describe, it, expect, vi } from "vitest";
+import type { Config, ModelConfig } from "../src/types.js";
 import type { StopFlagLike } from "../src/health.js";
 import { endpointReachable, waitForEndpoint } from "../src/health.js";
 
@@ -21,7 +21,11 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     model: {
       id: "omlx/test-model",
       source: "auto",
-      baseUrlExplicit: false,
+      // This fixture's baseUrl below IS explicit, so baseUrlExplicit is true —
+      // otherwise catalogEligible's auto-heuristic (non-"local" provider + no
+      // explicit baseUrl) would wrongly treat this inline/local model as
+      // catalog-eligible and shouldProbeEndpoint would skip these tests' probe.
+      baseUrlExplicit: true,
       retry: { maxRetries: null, baseDelayMs: null },
       modelsJson: null,
       api: "openai-completions",
@@ -96,6 +100,33 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
+/** A hosted catalog model: no local server to probe, apiKey deferred (null). */
+function hostedModel(overrides: Partial<ModelConfig> = {}): ModelConfig {
+  return {
+    id: "anthropic/claude-x",
+    source: "auto",
+    baseUrlExplicit: false,
+    retry: { maxRetries: null, baseDelayMs: null },
+    modelsJson: null,
+    api: "openai-completions",
+    baseUrl: "http://127.0.0.1:1234/v1/models",
+    apiKey: null,
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 131072,
+    maxTokens: 49152,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    thinkingLevel: "medium",
+    compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+    ...overrides,
+  };
+}
+
+/** Any non-null models.json path forces a probe regardless of catalog
+ * eligibility (shouldProbeEndpoint only checks truthiness — resolveProbeBaseUrl
+ * handles a missing/unreadable file by falling back to base_url). */
+const tmpModelsJson = "/tmp/junco-shouldprobe-does-not-exist-models.json";
+
 // ---------------------------------------------------------------------------
 // endpointReachable
 // ---------------------------------------------------------------------------
@@ -138,6 +169,21 @@ describe("endpointReachable", () => {
     const cfg = makeConfig();
     const result = await endpointReachable(cfg, { fetchFn, timeoutMs: 1000 });
     expect(result).toBe(false);
+  });
+
+  it("returns true without fetching for catalog sources", async () => {
+    const fetchFn = vi.fn();
+    const cfg = makeConfig({ model: hostedModel() });
+    await expect(endpointReachable(cfg, { fetchFn })).resolves.toBe(true);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("omits the Authorization header when apiKey is null but a probe runs", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true });
+    const cfg = makeConfig({ model: { ...hostedModel(), modelsJson: tmpModelsJson } });
+    await endpointReachable(cfg, { fetchFn });
+    const headers = fetchFn.mock.calls[0][1].headers;
+    expect(headers.Authorization).toBeUndefined();
   });
 });
 
@@ -200,5 +246,21 @@ describe("waitForEndpoint", () => {
     // Should have fetched once, slept once, then checked stop.requested and exited
     expect(sleepCallCount).toBe(1);
     // Should NOT loop forever
+  });
+
+  it("returns immediately for catalog sources", async () => {
+    const cfg = makeConfig({ model: hostedModel() });
+    // A live fetchFn stub + a stop.requested safety net bound the loop to one
+    // iteration if the guard is missing, so a regression fails fast instead of
+    // spinning the event loop forever (an instant-resolving sleep starves the
+    // macrotask queue — see CLAUDE.md's scheduler/daemon testing gotcha).
+    const stop = { requested: false };
+    const fetchFn = vi.fn().mockResolvedValue({ ok: false });
+    const sleep = vi.fn(async () => {
+      stop.requested = true;
+    });
+    await waitForEndpoint(cfg, stop, { fetchFn, sleep });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });

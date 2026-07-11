@@ -9,6 +9,7 @@ import {
   resolveProbeBaseUrl,
   catalogEligible,
   resolveModelViaRegistries,
+  shouldProbeEndpoint,
 } from "../src/agent/modelSetup.js";
 import type { Config, ModelConfig } from "../src/types.js";
 
@@ -123,6 +124,23 @@ describe("resolveProbeBaseUrl", () => {
   it("file mode: falls back to base_url when the file is missing/unreadable", () => {
     const cfg = mkCfg({ modelsJson: "/no/such/models.json", baseUrl: "http://fallback/v1" });
     expect(resolveProbeBaseUrl(cfg)).toBe("http://fallback/v1");
+  });
+});
+
+describe("shouldProbeEndpoint", () => {
+  it("skips the probe for catalog-eligible configs without a models.json", () => {
+    expect(shouldProbeEndpoint(mkCfg({ id: "anthropic/claude-x", modelsJson: null }).model)).toBe(
+      false,
+    );
+  });
+
+  it("probes local/inline configs and any models.json config", () => {
+    expect(shouldProbeEndpoint(mkCfg({ id: "local/my-model", modelsJson: null }).model)).toBe(true);
+    expect(
+      shouldProbeEndpoint(
+        mkCfg({ id: "anthropic/claude-x", modelsJson: "/tmp/models.json" }).model,
+      ),
+    ).toBe(true);
   });
 });
 

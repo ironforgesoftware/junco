@@ -8,7 +8,7 @@
 
 import type { Config } from "./types.js";
 import { log } from "./logging.js";
-import { resolveProbeBaseUrl } from "./agent/modelSetup.js";
+import { resolveProbeBaseUrl, shouldProbeEndpoint } from "./agent/modelSetup.js";
 
 /**
  * Minimal stop-flag interface consumed by waitForEndpoint.  The real StopFlag
@@ -41,6 +41,8 @@ export async function endpointReachable(
   cfg: Config,
   deps?: EndpointReachableDeps,
 ): Promise<boolean> {
+  if (!shouldProbeEndpoint(cfg.model)) return true;
+
   const fetchFn = deps?.fetchFn ?? fetch;
   const timeoutMs = deps?.timeoutMs ?? 5000;
 
@@ -53,7 +55,7 @@ export async function endpointReachable(
   try {
     const resp = await fetchFn(probeUrl, {
       method: "GET",
-      headers: { Authorization: `Bearer ${cfg.model.apiKey}` },
+      headers: cfg.model.apiKey !== null ? { Authorization: `Bearer ${cfg.model.apiKey}` } : {},
       signal: controller.signal,
     });
     return resp.ok;
@@ -102,6 +104,11 @@ export async function waitForEndpoint(
   deps?: WaitForEndpointDeps,
 ): Promise<void> {
   if (!cfg.startupWait) return;
+
+  if (!shouldProbeEndpoint(cfg.model)) {
+    log.info("hosted provider (catalog) — endpoint startup wait skipped");
+    return;
+  }
 
   const fetchFn = deps?.fetchFn;
   const sleep = deps?.sleep ?? defaultSleep;

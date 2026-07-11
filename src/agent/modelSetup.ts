@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import type { Config } from "../types.js";
+import type { Config, ModelConfig } from "../types.js";
 
 /**
  * Split a provider-prefixed model id ("openai/gpt-4o-mini") into its provider and
@@ -38,6 +38,17 @@ export function catalogEligible(m: ModelSourceFields): boolean {
   if (m.source === "catalog") return true;
   if (m.source === "inline") return false;
   return splitModelId(m.id).provider !== "local" && !m.baseUrlExplicit;
+}
+
+/**
+ * Whether the readiness machinery should probe the endpoint at all.  Hosted
+ * catalog models have no local server to wait for, and probing a metered API
+ * on every poll/dashboard tick is billed traffic.  A configured models.json
+ * still probes (its provider baseUrl may be local).  Phase 2 replaces the
+ * boolean call sites with the provider gate; this predicate survives.
+ */
+export function shouldProbeEndpoint(m: ModelConfig): boolean {
+  return !(catalogEligible(m) && !m.modelsJson);
 }
 
 /**
