@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, createWriteStream, mkdtempSync, type WriteStream } from "node:fs";
+import { mkdirSync, createWriteStream, mkdtempSync, type WriteStream } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -6,7 +6,7 @@ import type { Config, RunResult } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
 import { GuardManager, type GuardDecision } from "./guardManager.js";
 import { log } from "../logging.js";
-import { buildInlineProviderConfig, splitModelId, apiBaseUrl } from "./modelSetup.js";
+import { splitModelId, resolveModelViaRegistries, type RegistryLike } from "./modelSetup.js";
 import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
 import {
   selectBackend,
@@ -371,40 +371,31 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 /**
  * Real SDK session factory (validated by the e2e in Task 9; not unit-tested
  * here). Returns a thunk that builds a headless `AgentSession` pointed at the
- * configured OpenAI-compatible endpoint.
+ * configured OpenAI-compatible endpoint or a catalog-resolved hosted provider.
  *
- * PROVIDER/MODEL RESOLUTION — chosen path: in-memory `ModelRegistry` +
- * `registerProvider` (a typed variant of plan path "A"; NOT the disk
- * `models.json` nor the path "B" extension/resourceLoader route).
+ * PROVIDER/MODEL RESOLUTION is delegated to `resolveModelViaRegistries`
+ * (./modelSetup.js): the three-way cascade — Pi `models.json` → the SDK's
+ * builtin hosted catalog → an inline in-memory `registerProvider` — behind the
+ * `RegistryLike`/`RegistryOps` seam so that logic is unit-testable without an
+ * SDK import. This factory supplies the registry ops (`ModelRegistry.create`/
+ * `.inMemory`, both bound to `authStorage`) and consumes the resolved
+ * `{ model, registry }`.
  *
- * Why this over the alternatives (verified against the installed SDK type defs):
- *   - `ModelRegistry.inMemory(authStorage)` exists
- *     (dist/core/model-registry.d.ts:30) and `registerProvider(name, config)`
- *     is a PUBLIC method (model-registry.d.ts:96) whose `config` is the typed
- *     `ProviderConfigInput` interface (model-registry.d.ts:120-149). Because the
- *     provider/model shape is type-checked at build time, `npm run build`
- *     catches a malformed provider config — a disk `models.json` is parsed only
- *     at runtime and gives no such safety. `registry.find(provider, id)` then
- *     returns the resolved `Model` (model-registry.d.ts:60) BEFORE
- *     `createAgentSession` needs it.
- *   - Path "B" (resourceLoader.getExtensions calling pi.registerProvider) is
- *     only required when you cannot touch the registry directly; here we own the
- *     registry, so the extension machinery is unnecessary.
+ * Auth: `AuthStorage.inMemory()` never touches the operator's real
+ * `~/.pi/agent/auth.json`. A resolved `cfg.model.apiKey` is injected via
+ * `authStorage.setRuntimeApiKey(provider, cfg.model.apiKey)` (auth-storage.d.ts:63),
+ * the HIGHEST-priority source in `getApiKey` (auth-storage.d.ts:124-134); a null
+ * key defers to the SDK's own provider env-var fallback at request time.
  *
- * The provider/model values (api, compat block, reasoning, contextWindow,
- * maxTokens, thinkingFormat) come from the resolved `cfg.model` config — built
- * either from a Pi models.json (`cfg.model.modelsJson`, path A) or from the
- * inline `model.*` JSON fields via `buildInlineProviderConfig` (path B). The
- * `ProviderConfigInput` shape matches `docs/custom-provider.md` + the on-disk
- * schema in `docs/models.md`.
+ * Settings: `SettingsManager.inMemory({ retry })` avoids reading
+ * `~/.pi/agent/settings.json` or the target repo's `.pi/settings.json` (the
+ * latter trusted by default by the SDK — a repo-controlled injection surface
+ * for a queue worker). Retry knobs (`cfg.model.retry`) pass through only when
+ * configured; SDK defaults apply otherwise.
  *
  * baseUrl: `cfg.model.baseUrl` may point at the list-models endpoint
  * (`.../v1/models`); the provider API base is its parent (`.../v1`), derived via
  * `apiBaseUrl()`.
- *
- * Auth: the API key is injected via `authStorage.setRuntimeApiKey(provider,
- * cfg.model.apiKey)` (auth-storage.d.ts:63), the HIGHEST-priority source in
- * `getApiKey` (auth-storage.d.ts:124-134); nothing is persisted to disk.
  *
  * Model id: `cfg.model.id` is provider-prefixed (e.g. "openai/gpt-4o-mini").
  * We split on the first "/" into provider + bare model id, since the
@@ -495,47 +486,31 @@ export function makePiSessionFactory(
   overrides?: SessionOverrides,
 ): () => Promise<AgentSessionLike> {
   return async () => {
-    const { createAgentSession, AuthStorage, ModelRegistry, SessionManager } =
+    const { createAgentSession, AuthStorage, ModelRegistry, SessionManager, SettingsManager } =
       await import("@earendil-works/pi-coding-agent");
 
-    const { provider, modelId } = splitModelId(cfg.model.id);
+    const { provider } = splitModelId(cfg.model.id);
 
-    const authStorage = AuthStorage.create();
-    // A null key defers to the Pi SDK's own auth-file / provider env-var
-    // fallback (see resolveApiKey in config.ts) — only set a runtime key when
-    // config.json resolved one. Full catalog-aware wiring lands in a later task.
+    // In-memory auth: AuthStorage.create() file-backs onto the operator's real
+    // ~/.pi/agent/auth.json (creating it if absent) — junco must never touch it.
+    const authStorage = AuthStorage.inMemory();
+    // A null key defers to the SDK's request-time provider env-var fallback
+    // (ANTHROPIC_API_KEY, OPENAI_API_KEY, … — see resolveApiKey in config.ts).
     if (cfg.model.apiKey !== null) {
       authStorage.setRuntimeApiKey(provider, cfg.model.apiKey);
     }
 
-    // Path A (file): load the provider+model from a Pi models.json when it's
-    // configured and present — single source of truth, zero drift. Path B
-    // (inline): build the provider+model from the cfg.model.* fields. If the
-    // file path can't resolve the model, fall through to inline.
-    let modelRegistry: any;
-    let model: any;
-    if (cfg.model.modelsJson && existsSync(cfg.model.modelsJson)) {
-      modelRegistry = ModelRegistry.create(authStorage, cfg.model.modelsJson);
-      model = modelRegistry.find(provider, modelId);
-      if (!model) {
-        log.warn("model not in models.json; using inline [model] config", {
-          modelsJson: cfg.model.modelsJson,
-          provider,
-          modelId,
-        });
-      }
-    }
-    if (!model) {
-      const { providerConfig } = buildInlineProviderConfig(cfg);
-      modelRegistry = ModelRegistry.inMemory(authStorage);
-      modelRegistry.registerProvider(provider, providerConfig as any);
-      model = modelRegistry.find(provider, modelId);
-    }
-    if (!model) {
-      throw new Error(
-        `Pi model "${provider}/${modelId}" not found in registry (baseUrl: ${apiBaseUrl(cfg.model.baseUrl)}).`,
-      );
-    }
+    // models.json → builtin catalog → inline (see resolveModelViaRegistries).
+    const resolvedModel = resolveModelViaRegistries(
+      cfg,
+      {
+        fromFile: (p) => ModelRegistry.create(authStorage, p) as unknown as RegistryLike,
+        inMemory: () => ModelRegistry.inMemory(authStorage) as unknown as RegistryLike,
+      },
+      (msg, meta) => log.warn(msg, meta),
+    );
+    const model = resolvedModel.model as any;
+    const modelRegistry = resolvedModel.registry as any;
 
     // Sandbox (on by default): replace built-in tools with sandboxed operations
     // and freeze ambient extension loading. Inert when sandbox.enabled is false —
@@ -571,6 +546,20 @@ export function makePiSessionFactory(
       // default is the configured worker allowlist.
       tools: overrides?.tools ?? cfg.tools,
       sessionManager: SessionManager.inMemory(cwd),
+      // Never read ~/.pi/agent/settings.json or the target repo's
+      // .pi/settings.json (trusted by default by the SDK — a repo-controlled
+      // injection surface for a queue worker). Retry knobs come from config;
+      // SDK defaults apply otherwise.
+      settingsManager: SettingsManager.inMemory({
+        retry: {
+          ...(cfg.model.retry.maxRetries !== null
+            ? { maxRetries: cfg.model.retry.maxRetries }
+            : {}),
+          ...(cfg.model.retry.baseDelayMs !== null
+            ? { baseDelayMs: cfg.model.retry.baseDelayMs }
+            : {}),
+        },
+      }),
       // Sandboxed tool set + no-extensions loader (only when enabled). The
       // sandbox glue is intentionally SDK-free (returns unknown[]); cast here at
       // the single SDK boundary. Shapes are validated by tests/sandboxBuild +
