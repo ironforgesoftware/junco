@@ -3,41 +3,47 @@ import { builtinDenyReadPaths, buildPolicy } from "../src/agent/sandbox/policy.j
 
 describe("builtinDenyReadPaths", () => {
   it("covers the standard secret locations under home", () => {
-    const p = builtinDenyReadPaths("/home/x");
-    expect(p).toContain("/home/x/.ssh");
-    expect(p).toContain("/home/x/.aws");
-    expect(p).toContain("/home/x/.config/gh");
-    expect(p).toContain("/home/x/.gnupg");
-    expect(p).toContain("/home/x/.pi");
+    const p = builtinDenyReadPaths("/sbxroot/home/x");
+    expect(p).toContain("/sbxroot/home/x/.ssh");
+    expect(p).toContain("/sbxroot/home/x/.aws");
+    expect(p).toContain("/sbxroot/home/x/.config/gh");
+    expect(p).toContain("/sbxroot/home/x/.gnupg");
+    expect(p).toContain("/sbxroot/home/x/.pi");
   });
 });
 
+// Synthetic, guaranteed-nonexistent paths so canonicalize() is a deterministic
+// no-op (real system paths like /home, /tmp resolve differently per machine).
 describe("buildPolicy", () => {
   const base = {
     cfg: {
       enabled: true,
       backend: "auto" as const,
       network: "deny" as const,
-      extraDenyRead: ["/extra/secret"],
-      extraAllowWrite: ["/extra/writable"],
+      extraDenyRead: ["/sbxroot/extra/secret"],
+      extraAllowWrite: ["/sbxroot/extra/writable"],
     },
-    cwd: "/work/tree",
-    scratchDir: "/tmp/scratch1",
-    home: "/home/x",
-    stateDir: "/home/x/.local/state/junco",
+    cwd: "/sbxroot/work/tree",
+    scratchDir: "/sbxroot/nowhere/scratch1",
+    home: "/sbxroot/home/x",
+    stateDir: "/sbxroot/home/x/.local/state/junco",
     network: false,
   };
 
   it("writable roots = cwd + scratch + extras", () => {
     const pol = buildPolicy(base);
-    expect(pol.writableRoots).toEqual(["/work/tree", "/tmp/scratch1", "/extra/writable"]);
+    expect(pol.writableRoots).toEqual([
+      "/sbxroot/work/tree",
+      "/sbxroot/nowhere/scratch1",
+      "/sbxroot/extra/writable",
+    ]);
   });
 
   it("read denials = builtins + stateDir + extras", () => {
     const pol = buildPolicy(base);
-    expect(pol.readDenyPaths).toContain("/home/x/.ssh");
-    expect(pol.readDenyPaths).toContain("/home/x/.local/state/junco");
-    expect(pol.readDenyPaths).toContain("/extra/secret");
+    expect(pol.readDenyPaths).toContain("/sbxroot/home/x/.ssh");
+    expect(pol.readDenyPaths).toContain("/sbxroot/home/x/.local/state/junco");
+    expect(pol.readDenyPaths).toContain("/sbxroot/extra/secret");
   });
 
   it("threads the network flag through", () => {
@@ -45,8 +51,8 @@ describe("buildPolicy", () => {
     expect(buildPolicy({ ...base, network: false }).network).toBe(false);
   });
 
-  it("resolves relative/~ inputs to absolute", () => {
-    const pol = buildPolicy({ ...base, cwd: "/work/../work/tree" });
-    expect(pol.writableRoots[0]).toBe("/work/tree");
+  it("resolves relative/.. inputs to absolute", () => {
+    const pol = buildPolicy({ ...base, cwd: "/sbxroot/work/../work/tree" });
+    expect(pol.writableRoots[0]).toBe("/sbxroot/work/tree");
   });
 });

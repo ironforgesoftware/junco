@@ -1,6 +1,7 @@
 import { resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import type { SandboxPolicy } from "./policy.js";
+import { canonicalize } from "./canonicalize.js";
 
 /** Thrown when a tool operation targets a path outside its allowed scope. */
 export class SandboxViolation extends Error {
@@ -33,7 +34,9 @@ export function isUnderAnyDeny(abs: string, denies: string[]): boolean {
 }
 
 export function assertWriteAllowed(target: string, cwd: string, policy: SandboxPolicy): string {
-  const abs = resolveWithin(target, cwd);
+  // Canonicalize so a symlinked path (e.g. /tmp/..) is compared against the
+  // canonical writable roots, matching what the OS sandbox enforces.
+  const abs = canonicalize(resolveWithin(target, cwd));
   if (!isUnderAnyRoot(abs, policy.writableRoots)) {
     throw new SandboxViolation(`sandbox: write denied outside worktree/scratch: ${abs}`);
   }
@@ -41,7 +44,7 @@ export function assertWriteAllowed(target: string, cwd: string, policy: SandboxP
 }
 
 export function assertReadAllowed(target: string, cwd: string, policy: SandboxPolicy): string {
-  const abs = resolveWithin(target, cwd);
+  const abs = canonicalize(resolveWithin(target, cwd));
   if (isUnderAnyDeny(abs, policy.readDenyPaths)) {
     throw new SandboxViolation(`sandbox: read denied (protected path): ${abs}`);
   }

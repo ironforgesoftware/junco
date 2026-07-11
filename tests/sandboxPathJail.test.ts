@@ -8,55 +8,60 @@ import {
 } from "../src/agent/sandbox/pathJail.js";
 import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 
+// Synthetic, guaranteed-nonexistent paths so canonicalize() in the assert
+// helpers is a deterministic no-op across machines.
 const policy: SandboxPolicy = {
-  writableRoots: ["/work/tree", "/tmp/scratch"],
-  readDenyPaths: ["/home/x/.ssh", "/home/x/.local/state/junco"],
+  writableRoots: ["/sbxroot/work/tree", "/sbxroot/scratch"],
+  readDenyPaths: ["/sbxroot/home/x/.ssh", "/sbxroot/home/x/.local/state/junco"],
   network: false,
-  scratchDir: "/tmp/scratch",
+  scratchDir: "/sbxroot/scratch",
 };
 
 describe("resolveWithin", () => {
   it("resolves cwd-relative paths", () => {
-    expect(resolveWithin("src/a.ts", "/work/tree")).toBe("/work/tree/src/a.ts");
+    expect(resolveWithin("src/a.ts", "/sbxroot/work/tree")).toBe("/sbxroot/work/tree/src/a.ts");
   });
   it("keeps absolute paths", () => {
-    expect(resolveWithin("/etc/passwd", "/work/tree")).toBe("/etc/passwd");
+    expect(resolveWithin("/sbxroot/etc/passwd", "/sbxroot/work/tree")).toBe("/sbxroot/etc/passwd");
   });
   it("normalizes traversal", () => {
-    expect(resolveWithin("../../etc/passwd", "/work/tree")).toBe("/etc/passwd");
+    expect(resolveWithin("../../etc/passwd", "/sbxroot/work/tree")).toBe("/sbxroot/etc/passwd");
   });
 });
 
 describe("isUnderAnyRoot", () => {
   it("true for a child, false for a sibling prefix", () => {
-    expect(isUnderAnyRoot("/work/tree/src/a", ["/work/tree"])).toBe(true);
-    expect(isUnderAnyRoot("/work/tree", ["/work/tree"])).toBe(true);
-    expect(isUnderAnyRoot("/work/tree-evil/a", ["/work/tree"])).toBe(false);
+    expect(isUnderAnyRoot("/sbxroot/work/tree/src/a", ["/sbxroot/work/tree"])).toBe(true);
+    expect(isUnderAnyRoot("/sbxroot/work/tree", ["/sbxroot/work/tree"])).toBe(true);
+    expect(isUnderAnyRoot("/sbxroot/work/tree-evil/a", ["/sbxroot/work/tree"])).toBe(false);
   });
 });
 
 describe("assertWriteAllowed", () => {
   it("allows writes inside a writable root", () => {
-    expect(assertWriteAllowed("src/a.ts", "/work/tree", policy)).toBe("/work/tree/src/a.ts");
+    expect(assertWriteAllowed("src/a.ts", "/sbxroot/work/tree", policy)).toBe(
+      "/sbxroot/work/tree/src/a.ts",
+    );
   });
   it("blocks writes outside all roots (incl. traversal escape)", () => {
-    expect(() => assertWriteAllowed("../../etc/x", "/work/tree", policy)).toThrow(SandboxViolation);
-    expect(() => assertWriteAllowed("/home/x/.bashrc", "/work/tree", policy)).toThrow(
+    expect(() => assertWriteAllowed("../../etc/x", "/sbxroot/work/tree", policy)).toThrow(
       SandboxViolation,
     );
+    expect(() =>
+      assertWriteAllowed("/sbxroot/home/x/.bashrc", "/sbxroot/work/tree", policy),
+    ).toThrow(SandboxViolation);
   });
 });
 
 describe("assertReadAllowed", () => {
   it("allows a normal read", () => {
-    expect(assertReadAllowed("/usr/lib/node", "/work/tree", policy)).toBe("/usr/lib/node");
+    expect(assertReadAllowed("/sbxroot/usr/lib/node", "/sbxroot/work/tree", policy)).toBe(
+      "/sbxroot/usr/lib/node",
+    );
   });
   it("blocks reads of denied subpaths", () => {
-    expect(() => assertReadAllowed("/home/x/.ssh/id_rsa", "/work/tree", policy)).toThrow(
-      SandboxViolation,
-    );
     expect(() =>
-      assertReadAllowed("~/.ssh/id_rsa".replace("~", "/home/x"), "/work/tree", policy),
+      assertReadAllowed("/sbxroot/home/x/.ssh/id_rsa", "/sbxroot/work/tree", policy),
     ).toThrow(SandboxViolation);
   });
 });

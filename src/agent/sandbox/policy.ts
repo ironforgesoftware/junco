@@ -1,5 +1,6 @@
-import { resolve, join } from "node:path";
+import { join } from "node:path";
 import type { SandboxConfig } from "../../types.js";
+import { canonicalize } from "./canonicalize.js";
 
 /** Absolute paths whose reads are always denied inside the sandbox. Not
  *  operator-removable (extra_deny_read only adds). */
@@ -33,15 +34,17 @@ export function buildPolicy(opts: {
   network: boolean;
 }): SandboxPolicy {
   const { cfg, cwd, scratchDir, home, stateDir, network } = opts;
+  // Canonicalize so the OS-sandbox profile and the JS jail agree with the
+  // kernel's symlink-resolved view (macOS /var→/private/var, /tmp→/private/tmp).
   const writableRoots = [
-    resolve(cwd),
-    resolve(scratchDir),
-    ...cfg.extraAllowWrite.map((p) => resolve(p)),
+    canonicalize(cwd),
+    canonicalize(scratchDir),
+    ...cfg.extraAllowWrite.map(canonicalize),
   ];
   const readDenyPaths = [
-    ...builtinDenyReadPaths(home).map((p) => resolve(p)),
-    resolve(stateDir),
-    ...cfg.extraDenyRead.map((p) => resolve(p)),
+    ...builtinDenyReadPaths(home).map(canonicalize),
+    canonicalize(stateDir),
+    ...cfg.extraDenyRead.map(canonicalize),
   ];
-  return { writableRoots, readDenyPaths, network, scratchDir: resolve(scratchDir) };
+  return { writableRoots, readDenyPaths, network, scratchDir: canonicalize(scratchDir) };
 }
