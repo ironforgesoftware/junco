@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `junco init` is now a full-screen guided walkthrough (Ink): chapter rail,
+  machine preflight, live model discovery, repo-containment and GitHub-bridge
+  setup, an extras multiselect, a review-before-write step, and a post-write
+  flight check. Re-running `junco init` on an existing config enters a tune-up
+  mode that pre-fills current values and writes only what changed (all other
+  keys preserved). `--yes` still scaffolds the same minimal default config
+  non-interactively.
+
+### Removed
+
+- `@clack/prompts` dependency — the old prompt-based wizard is gone, replaced
+  by the Ink walkthrough above.
+
 ## [0.6.0] - 2026-07-11
 
 ### Added
