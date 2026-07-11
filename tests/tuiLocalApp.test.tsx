@@ -153,3 +153,36 @@ describe("header-band click coordinate", () => {
     expect(headerTabBands(100).hit(headerTabBands(100).localStart)).toBe("local");
   });
 });
+
+describe("config editor reachable in local mode", () => {
+  // A github-disabled user starts in local mode and can't switch to github
+  // mode (see "github disabled" above) — `,` must open the config editor
+  // straight out of local mode, not just from the github cascade. The
+  // isolated ConfigView suite (tests/configView.test.tsx) can't catch a
+  // wiring gap in App.tsx's input routing, so this exercises the full App.
+  it(", opens the config editor from LOCAL mode", async () => {
+    const r = renderApp({ initialUiMode: "local", githubEnabled: false });
+    await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
+    r.stdin.write(",");
+    // Description text for the initially-focused `vaultRoot` lever — unique
+    // ConfigView chrome, not something LocalDashboard's sections ever render.
+    await until(() => (r.lastFrame() ?? "").includes("Root directory Junco keeps"));
+    expect(r.lastFrame()).toContain("Root directory Junco keeps");
+  });
+
+  it("Esc exits the config editor back to LOCAL mode", async () => {
+    const r = renderApp({ initialUiMode: "local", githubEnabled: false });
+    await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
+    r.stdin.write(",");
+    await until(() => (r.lastFrame() ?? "").includes("Root directory Junco keeps"));
+    r.stdin.write(ESC);
+    // "[LOCAL]" is header chrome present the whole time (config view included)
+    // — wait for the config-specific body content to actually unmount, then
+    // confirm the LOCAL section rail (queue/outbox/worktrees/daemon) is back.
+    await until(() => !(r.lastFrame() ?? "").includes("Root directory Junco keeps"));
+    const f = r.lastFrame() ?? "";
+    expect(f).toContain("[LOCAL]");
+    expect(f).toContain("queue");
+    expect(f).toContain("daemon");
+  });
+});

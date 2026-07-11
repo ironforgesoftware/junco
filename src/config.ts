@@ -1,7 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import type { Config, Paths } from "./types.js";
 
@@ -19,7 +18,7 @@ export function expandHome(p: string): string {
 
 /**
  * True when `host` is a loopback bind address — 127.0.0.0/8, ::1 (optionally
- * bracketed), or the literal "localhost". A non-loopback health_host (e.g.
+ * bracketed), or the literal "localhost". A non-loopback healthHost (e.g.
  * "0.0.0.0" or a LAN IP) exposes the unauthenticated /health metrics to the
  * network, so daemon startup and `junco doctor` warn on it (#44). Empty/unknown
  * strings are treated as non-loopback (fail safe → warn).
@@ -47,7 +46,7 @@ export function defaultUserConfigPath(
     env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== ""
       ? env.XDG_CONFIG_HOME
       : join(homedir(), ".config");
-  return join(base, "junco", "config.toml");
+  return join(base, "junco", "config.json");
 }
 
 export interface ResolveConfigDeps {
@@ -57,7 +56,7 @@ export interface ResolveConfigDeps {
 }
 
 /**
- * Where the config lives. Order: explicit --config → ./config.toml when present
+ * Where the config lives. Order: explicit --config → ./config.json when present
  * (repo-local setups keep working) → the user-level default. The returned path
  * may not exist yet — first-run detection checks that separately.
  */
@@ -68,31 +67,13 @@ export function resolveConfigPath(
   const existsFn = deps.existsFn ?? existsSync;
   const cwd = deps.cwd ?? ((): string => process.cwd());
   if (explicit) return resolve(cwd(), explicit);
-  const local = resolve(cwd(), "config.toml");
+  const local = resolve(cwd(), "config.json");
   if (existsFn(local)) return local;
   return defaultUserConfigPath(deps.env ?? process.env);
 }
 
-// The tool allowlist is configured (parity with the Python worker) as a
-// `--tools <csv>` pair inside `[pi].extra_args`, e.g.
-//   extra_args = ["--tools", "bash,read,write,edit,grep,find,todo_write"]
-// Extract that CSV; fall back to DEFAULT_TOOLS when no --tools is present.
-function toolsFromExtraArgs(extraArgs: string[] | undefined): string[] {
-  if (extraArgs) {
-    const i = extraArgs.indexOf("--tools");
-    if (i >= 0 && i + 1 < extraArgs.length) {
-      const tools = extraArgs[i + 1]
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      if (tools.length > 0) return tools;
-    }
-  }
-  return DEFAULT_TOOLS;
-}
-
 // junco's previously-hardcoded compat block (src/agent/session.ts), now the
-// default. The SDK uses camelCase; TOML uses snake_case (camelized on load).
+// default. The SDK and the config file both use camelCase — no camelization.
 const DEFAULT_COMPAT: Record<string, unknown> = {
   supportsDeveloperRole: false,
   supportsReasoningEffort: false,
@@ -101,112 +82,76 @@ const DEFAULT_COMPAT: Record<string, unknown> = {
   thinkingFormat: "qwen-chat-template",
 };
 
-function camelizeKeys(obj: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    out[k.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase())] = v;
-  }
-  return out;
-}
-
-const TomlSchema = z.object({
-  vault_root: z.string({ required_error: "config: vault_root is required" }),
-  junco_subdir: z.string().default("Junco"),
-  pi: z
-    .object({
-      model_id: z.string().default("local/my-model"),
-      extra_args: z.array(z.string()).optional(),
-      commit_leftovers: z.boolean().default(false),
-    })
-    .default({}),
-  oMLX: z
-    .object({
-      url: z.string().default("http://127.0.0.1:1234/v1"),
-      api_key: z.string().default("1234"),
-    })
-    .default({}),
-  // The model + inference provider. Every field is optional: omitted fields
-  // fall back to the legacy [pi].model_id / [oMLX] keys (id/base_url/api_key) or
-  // to the tuned defaults below (which reproduce junco's previously-hardcoded
-  // values). Set `models_json` to load the provider+model from a Pi models.json
-  // instead of the inline fields.
+export const ConfigSchema = z.object({
+  vaultRoot: z.string({ required_error: "config: vaultRoot is required" }),
+  juncoSubdir: z.string().default("Junco"),
+  tools: z.array(z.string()).default(DEFAULT_TOOLS),
   model: z
     .object({
-      id: z.string().optional(),
-      models_json: z.string().optional(),
-      api: z.string().optional(),
-      base_url: z.string().optional(),
-      api_key: z.string().optional(),
-      reasoning: z.boolean().optional(),
-      input: z.array(z.string()).optional(),
-      context_window: z.number().optional(),
-      max_tokens: z.number().optional(),
+      id: z.string().default("local/my-model"),
+      modelsJson: z.string().optional(),
+      api: z.string().default("openai-completions"),
+      baseUrl: z.string().default("http://127.0.0.1:1234/v1"),
+      apiKey: z.string().default("1234"),
+      reasoning: z.boolean().default(true),
+      input: z.array(z.string()).default(["text", "image"]),
+      contextWindow: z.number().default(131072),
+      maxTokens: z.number().default(49152),
       cost: z
         .object({
-          input: z.number(),
-          output: z.number(),
-          cache_read: z.number(),
-          cache_write: z.number(),
+          input: z.number().default(0),
+          output: z.number().default(0),
+          cacheRead: z.number().default(0),
+          cacheWrite: z.number().default(0),
         })
-        .partial()
-        .optional(),
-      thinking_level: z.string().optional(),
-      // Open record so any present/future Pi compat key passes through. Keys are
-      // snake_case in TOML and camelCased before reaching the SDK.
-      compat: z.record(z.unknown()).optional(),
+        .default({}),
+      thinkingLevel: z.string().default("medium"),
+      compat: z.record(z.unknown()).default({}),
     })
     .default({}),
   worker: z
     .object({
-      default_timeout_minutes: z.number().min(1).default(30),
-      poll_interval_seconds: z.number().min(1).default(15),
-      startup_poll_seconds: z.number().min(1).default(30),
-      startup_wait: z.boolean().default(true),
-      // Resilience: transient failures (endpoint errors with no commits) are
-      // requeued with a not_before backoff up to this many times.
-      max_transient_retries: z.number().int().min(0).default(2),
-      retry_backoff_seconds: z.number().min(0).default(60),
-      // Parallel ticket slots. Tickets targeting the SAME repo always serialize.
-      max_concurrent: z.number().int().min(1).default(1),
+      defaultTimeoutMinutes: z.number().min(1).default(30),
+      pollIntervalSeconds: z.number().min(1).default(15),
+      startupPollSeconds: z.number().min(1).default(30),
+      startupWait: z.boolean().default(true),
+      maxTransientRetries: z.number().int().min(0).default(2),
+      retryBackoffSeconds: z.number().min(0).default(60),
+      maxConcurrent: z.number().int().min(1).default(1),
+      commitLeftovers: z.boolean().default(false),
     })
     .default({}),
-  // Loop-guard supervisor knobs. Python defaults: enabled false; here we
-  // default enabled TRUE for the in-process agent run (M2). The numeric
-  // defaults match the Python worker (budget_per_kind 1, escalation_window 3,
-  // output_budget_per_turn 12000, output_budget_post_commit 24000).
   supervisor: z
     .object({
       enabled: z.boolean().default(true),
-      budget_per_kind: z.number().default(1),
-      escalation_window_turns: z.number().default(3),
-      output_budget_per_turn: z.number().default(12000),
-      output_budget_post_commit: z.number().default(24000),
+      budgetPerKind: z.number().default(1),
+      escalationWindowTurns: z.number().default(3),
+      outputBudgetPerTurn: z.number().default(12000),
+      outputBudgetPostCommit: z.number().default(24000),
     })
     .default({}),
   git: z
     .object({
-      git_bin: z.string().default("git"),
-      gh_bin: z.string().default("gh"),
-      default_base_branch: z.string().default("main"),
-      branch_prefix: z.string().default("junco/"),
-      worktree_root: z.string().default("~/junco/worktrees"),
-      remove_worktree_on_success: z.boolean().default(true),
-      // Containment rail: when non-empty, PR-flow tickets may only target
-      // repos under these roots ([] = anywhere).
-      allowed_repo_roots: z.array(z.string()).default([]),
+      gitBin: z.string().default("git"),
+      ghBin: z.string().default("gh"),
+      defaultBaseBranch: z.string().default("main"),
+      branchPrefix: z.string().default("junco/"),
+      worktreeRoot: z.string().default("~/junco/worktrees"),
+      removeWorktreeOnSuccess: z.boolean().default(true),
+      allowedRepoRoots: z.array(z.string()).default([]),
     })
     .default({}),
   pr: z
     .object({
-      draft_by_default: z.boolean().default(true),
-      default_labels: z.array(z.string()).default([]),
+      draftByDefault: z.boolean().default(true),
+      defaultLabels: z.array(z.string()).default([]),
     })
     .default({}),
   verify: z
     .object({
       enabled: z.boolean().default(true),
-      command_timeout: z.number().min(1).default(60),
-      block_on_fail: z.boolean().default(false),
+      commandTimeout: z.number().min(1).default(60),
+      blockOnFail: z.boolean().default(false),
     })
     .default({}),
   sandbox: z
@@ -214,52 +159,52 @@ const TomlSchema = z.object({
       enabled: z.boolean().default(false),
       backend: z.enum(["auto", "seatbelt", "bwrap", "none"]).default("auto"),
       network: z.enum(["deny", "allow"]).default("deny"),
-      extra_deny_read: z.array(z.string()).default([]),
-      extra_allow_write: z.array(z.string()).default([]),
+      extraDenyRead: z.array(z.string()).default([]),
+      extraAllowWrite: z.array(z.string()).default([]),
     })
     .default({}),
   critic: z
     .object({
       enabled: z.boolean().default(true),
-      max_retries: z.number().default(1),
+      maxRetries: z.number().default(1),
       thinking: z.string().default("minimal"),
     })
     .default({}),
-  plan_lint: z
+  planLint: z
     .object({
       enabled: z.boolean().default(true),
-      block_on_error: z.boolean().default(true),
-      check_labels: z.boolean().default(true),
+      blockOnError: z.boolean().default(true),
+      checkLabels: z.boolean().default(true),
     })
     .default({}),
   observability: z
     .object({
-      health_enabled: z.boolean().default(true),
-      // An empty (or whitespace-only) health_host passes z.string() but makes
+      healthEnabled: z.boolean().default(true),
+      // An empty (or whitespace-only) healthHost passes z.string() but makes
       // `server.listen(port, "")` bind ALL interfaces — exposing the
       // unauthenticated /health metrics network-wide (#71). Normalize it back
       // to loopback so the most-exposed value can never be the silent default.
-      health_host: z
+      healthHost: z
         .string()
         .default("127.0.0.1")
         .transform((h) => (h.trim() === "" ? "127.0.0.1" : h)),
-      health_port: z.number().int().min(1).max(65535).default(8787),
-      log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
+      healthPort: z.number().int().min(1).max(65535).default(8787),
+      logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
       // Daemon-owned state (worker.log, per-ticket transcripts) lives here.
-      state_dir: z.string().default("~/.local/state/junco"),
-      log_to_file: z.boolean().default(true),
+      stateDir: z.string().default("~/.local/state/junco"),
+      logToFile: z.boolean().default(true),
       transcripts: z.boolean().default(true),
     })
     .default({}),
   github: z
     .object({
       enabled: z.boolean().default(false),
-      trigger_label: z.string().min(1).default("junco"),
-      ask_label: z.string().min(1).optional(),
-      poll_interval_seconds: z.number().min(5).default(60),
-      require_approval: z.boolean().default(true),
-      planner_model_id: z.string().min(1).optional(),
-      external_repos_root: z.string().min(1).optional(),
+      triggerLabel: z.string().min(1).default("junco"),
+      askLabel: z.string().min(1).optional(),
+      pollIntervalSeconds: z.number().min(5).default(60),
+      requireApproval: z.boolean().default(true),
+      plannerModelId: z.string().min(1).optional(),
+      externalReposRoot: z.string().min(1).optional(),
       repos: z
         .array(
           z.object({
@@ -272,107 +217,149 @@ const TomlSchema = z.object({
     .default({}),
   assess: z
     .object({
-      max_issues_per_run: z.number().int().min(1).default(20),
-      min_severity: z.enum(["critical", "high", "medium", "low"]).default("low"),
-      npm_bin: z.string().min(1).default("npm"),
+      maxIssuesPerRun: z.number().int().min(1).default(20),
+      minSeverity: z.enum(["critical", "high", "medium", "low"]).default("low"),
+      npmBin: z.string().min(1).default("npm"),
     })
     .default({}),
 });
 
-export function loadConfig(path: string): Config {
-  const raw = parseToml(readFileSync(path, "utf8")) as Record<string, unknown>;
-  // Accept both [oMLX] and [omlx] section casings (parity with the Python
-  // load_config, which read data.get("oMLX", data.get("omlx", {}))).
-  if (raw.oMLX === undefined && raw.omlx !== undefined) raw.oMLX = raw.omlx;
-  const d = TomlSchema.parse(raw);
+export type ConfigParsed = z.infer<typeof ConfigSchema>;
+
+/** Parse + validate `path` against the JSON config schema, filling defaults.
+ * Throws a friendly error on malformed JSON, and — when a leftover
+ * `config.toml` sits next to a missing `config.json` — a guard error pointing
+ * at the migration instead of a generic ENOENT. */
+export function parseConfigFile(path: string): ConfigParsed {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (e) {
+    if (path.endsWith(".json")) {
+      const tomlPath = path.slice(0, -".json".length) + ".toml";
+      if (existsSync(tomlPath)) {
+        throw new Error(
+          `config: found ${tomlPath} but TOML config was removed — convert it to ${path} ` +
+            `(see docs/configuration.md). Your config.toml is untouched.`,
+        );
+      }
+    }
+    throw e;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw new Error(
+      `config: ${path} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  return ConfigSchema.parse(raw);
+}
+
+/** Assemble the flat runtime `Config` from the parsed (nested, camelCase,
+ * defaulted) schema output — expanding `~` in path fields and deriving the
+ * github cross-field defaults (askLabel, externalReposRoot). */
+export function assembleConfig(d: ConfigParsed): Config {
   return {
-    vaultRoot: expandHome(d.vault_root),
-    juncoSubdir: d.junco_subdir,
+    vaultRoot: expandHome(d.vaultRoot),
+    juncoSubdir: d.juncoSubdir,
+    tools: d.tools,
     model: {
-      // id/base_url/api_key fall back to the legacy [pi].model_id / [oMLX] keys.
-      id: d.model.id ?? d.pi.model_id,
-      modelsJson: d.model.models_json ? expandHome(d.model.models_json) : null,
-      api: d.model.api ?? "openai-completions",
+      id: d.model.id,
+      modelsJson: d.model.modelsJson ? expandHome(d.model.modelsJson) : null,
+      api: d.model.api,
       // Stored raw; apiBaseUrl() normalizes (strips trailing /models) at use.
-      baseUrl: d.model.base_url ?? d.oMLX.url,
-      apiKey: d.model.api_key ?? d.oMLX.api_key,
-      reasoning: d.model.reasoning ?? true,
-      input: d.model.input ?? ["text", "image"],
-      contextWindow: d.model.context_window ?? 131072,
-      maxTokens: d.model.max_tokens ?? 49152,
+      baseUrl: d.model.baseUrl,
+      apiKey: d.model.apiKey,
+      reasoning: d.model.reasoning,
+      input: d.model.input,
+      contextWindow: d.model.contextWindow,
+      maxTokens: d.model.maxTokens,
       cost: {
-        input: d.model.cost?.input ?? 0,
-        output: d.model.cost?.output ?? 0,
-        cacheRead: d.model.cost?.cache_read ?? 0,
-        cacheWrite: d.model.cost?.cache_write ?? 0,
+        input: d.model.cost.input,
+        output: d.model.cost.output,
+        cacheRead: d.model.cost.cacheRead,
+        cacheWrite: d.model.cost.cacheWrite,
       },
-      thinkingLevel: d.model.thinking_level ?? "medium",
-      compat: { ...DEFAULT_COMPAT, ...camelizeKeys(d.model.compat ?? {}) },
+      thinkingLevel: d.model.thinkingLevel,
+      compat: { ...DEFAULT_COMPAT, ...d.model.compat },
     },
-    tools: toolsFromExtraArgs(d.pi.extra_args),
-    defaultTimeoutMinutes: d.worker.default_timeout_minutes,
-    pollIntervalSeconds: d.worker.poll_interval_seconds,
-    startupPollSeconds: d.worker.startup_poll_seconds,
-    startupWait: d.worker.startup_wait,
-    maxTransientRetries: d.worker.max_transient_retries,
-    retryBackoffSeconds: d.worker.retry_backoff_seconds,
-    maxConcurrent: d.worker.max_concurrent,
+    defaultTimeoutMinutes: d.worker.defaultTimeoutMinutes,
+    pollIntervalSeconds: d.worker.pollIntervalSeconds,
+    startupPollSeconds: d.worker.startupPollSeconds,
+    startupWait: d.worker.startupWait,
+    maxTransientRetries: d.worker.maxTransientRetries,
+    retryBackoffSeconds: d.worker.retryBackoffSeconds,
+    maxConcurrent: d.worker.maxConcurrent,
+    commitLeftoversEnabled: d.worker.commitLeftovers,
     supervisorEnabled: d.supervisor.enabled,
-    supervisorBudgetPerKind: d.supervisor.budget_per_kind,
-    supervisorEscalationWindow: d.supervisor.escalation_window_turns,
-    supervisorOutputBudgetPerTurn: d.supervisor.output_budget_per_turn,
-    supervisorOutputBudgetPostCommit: d.supervisor.output_budget_post_commit,
-    gitBin: d.git.git_bin,
-    ghBin: d.git.gh_bin,
-    defaultBaseBranch: d.git.default_base_branch,
-    branchPrefix: d.git.branch_prefix,
-    worktreeRoot: expandHome(d.git.worktree_root),
-    removeWorktreeOnSuccess: d.git.remove_worktree_on_success,
-    allowedRepoRoots: d.git.allowed_repo_roots.map(expandHome),
-    draftByDefault: d.pr.draft_by_default,
-    defaultLabels: d.pr.default_labels,
+    supervisorBudgetPerKind: d.supervisor.budgetPerKind,
+    supervisorEscalationWindow: d.supervisor.escalationWindowTurns,
+    supervisorOutputBudgetPerTurn: d.supervisor.outputBudgetPerTurn,
+    supervisorOutputBudgetPostCommit: d.supervisor.outputBudgetPostCommit,
+    gitBin: d.git.gitBin,
+    ghBin: d.git.ghBin,
+    defaultBaseBranch: d.git.defaultBaseBranch,
+    branchPrefix: d.git.branchPrefix,
+    worktreeRoot: expandHome(d.git.worktreeRoot),
+    removeWorktreeOnSuccess: d.git.removeWorktreeOnSuccess,
+    allowedRepoRoots: d.git.allowedRepoRoots.map(expandHome),
+    draftByDefault: d.pr.draftByDefault,
+    defaultLabels: d.pr.defaultLabels,
     verifyEnabled: d.verify.enabled,
-    verifyCommandTimeout: d.verify.command_timeout,
-    verifyBlockOnFail: d.verify.block_on_fail,
+    verifyCommandTimeout: d.verify.commandTimeout,
+    verifyBlockOnFail: d.verify.blockOnFail,
     criticEnabled: d.critic.enabled,
-    criticMaxRetries: d.critic.max_retries,
+    criticMaxRetries: d.critic.maxRetries,
     criticThinking: d.critic.thinking,
-    planLintEnabled: d.plan_lint.enabled,
-    planLintBlockOnError: d.plan_lint.block_on_error,
-    planLintCheckLabels: d.plan_lint.check_labels,
-    commitLeftoversEnabled: d.pi.commit_leftovers,
-    healthEnabled: d.observability.health_enabled,
-    healthHost: d.observability.health_host,
-    healthPort: d.observability.health_port,
-    logLevel: d.observability.log_level,
-    stateDir: expandHome(d.observability.state_dir),
-    logToFile: d.observability.log_to_file,
+    planLintEnabled: d.planLint.enabled,
+    planLintBlockOnError: d.planLint.blockOnError,
+    planLintCheckLabels: d.planLint.checkLabels,
+    healthEnabled: d.observability.healthEnabled,
+    healthHost: d.observability.healthHost,
+    healthPort: d.observability.healthPort,
+    logLevel: d.observability.logLevel,
+    stateDir: expandHome(d.observability.stateDir),
+    logToFile: d.observability.logToFile,
     transcriptsEnabled: d.observability.transcripts,
     github: {
       enabled: d.github.enabled,
-      triggerLabel: d.github.trigger_label,
-      askLabel: d.github.ask_label ?? `${d.github.trigger_label}:ask`,
-      pollIntervalSeconds: d.github.poll_interval_seconds,
-      requireApproval: d.github.require_approval,
-      plannerModelId: d.github.planner_model_id ?? null,
+      triggerLabel: d.github.triggerLabel,
+      askLabel: d.github.askLabel ?? `${d.github.triggerLabel}:ask`,
+      pollIntervalSeconds: d.github.pollIntervalSeconds,
+      requireApproval: d.github.requireApproval,
+      plannerModelId: d.github.plannerModelId ?? null,
       externalReposRoot: expandHome(
-        d.github.external_repos_root ?? join(d.observability.state_dir, "external"),
+        d.github.externalReposRoot ?? join(d.observability.stateDir, "external"),
       ),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
     },
     assess: {
-      maxIssuesPerRun: d.assess.max_issues_per_run,
-      minSeverity: d.assess.min_severity,
-      npmBin: d.assess.npm_bin,
+      maxIssuesPerRun: d.assess.maxIssuesPerRun,
+      minSeverity: d.assess.minSeverity,
+      npmBin: d.assess.npmBin,
     },
     sandbox: {
       enabled: d.sandbox.enabled,
       backend: d.sandbox.backend,
       network: d.sandbox.network,
-      extraDenyRead: d.sandbox.extra_deny_read.map(expandHome),
-      extraAllowWrite: d.sandbox.extra_allow_write.map(expandHome),
+      extraDenyRead: d.sandbox.extraDenyRead.map(expandHome),
+      extraAllowWrite: d.sandbox.extraAllowWrite.map(expandHome),
     },
   };
+}
+
+export function loadConfig(path: string): Config {
+  return assembleConfig(parseConfigFile(path));
+}
+
+/** Validate a raw (parsed-JSON) config object against `ConfigSchema`, throwing
+ * a zod error on failure. Used by `junco config set` (src/configCmd.ts) to
+ * confirm a sparse mutation still produces a valid, defaultable config before
+ * it's written to disk. */
+export function validateConfigObject(obj: unknown): void {
+  ConfigSchema.parse(obj);
 }
 
 export function queuePaths(cfg: Config): Paths {

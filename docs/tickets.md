@@ -22,11 +22,11 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 | `id`              | string              | Unique ticket identifier. Used as the inbox filename and branch suffix.                                                                                                                                                                                                                                                                                     |
 | `repo`            | path                | Absolute path to the target git repository. Presence triggers PR flow.                                                                                                                                                                                                                                                                                      |
 | `priority`        | `low\|normal\|high` | Processing order within the queue.                                                                                                                                                                                                                                                                                                                          |
-| `timeout_minutes` | number              | Per-ticket wall-clock cap. Overrides `[worker].default_timeout_minutes`.                                                                                                                                                                                                                                                                                    |
-| `base_branch`     | string              | Branch to fork from. Overrides `[git].default_base_branch`.                                                                                                                                                                                                                                                                                                 |
+| `timeout_minutes` | number              | Per-ticket wall-clock cap. Overrides `worker.defaultTimeoutMinutes`.                                                                                                                                                                                                                                                                                        |
+| `base_branch`     | string              | Branch to fork from. Overrides `git.defaultBaseBranch`.                                                                                                                                                                                                                                                                                                     |
 | `branch_name`     | string              | Override the auto-generated branch name.                                                                                                                                                                                                                                                                                                                    |
 | `pr_title`        | string              | Pull request title.                                                                                                                                                                                                                                                                                                                                         |
-| `draft`           | bool                | Open PR as draft. Overrides `[pr].draft_by_default`.                                                                                                                                                                                                                                                                                                        |
+| `draft`           | bool                | Open PR as draft. Overrides `pr.draftByDefault`.                                                                                                                                                                                                                                                                                                            |
 | `labels`          | string[]            | Labels to apply to the PR.                                                                                                                                                                                                                                                                                                                                  |
 | `reviewers`       | string[]            | GitHub handles to request as reviewers.                                                                                                                                                                                                                                                                                                                     |
 | `amends_pr`       | number              | PR number — add commits to an existing PR instead of opening a new one.                                                                                                                                                                                                                                                                                     |
@@ -88,13 +88,13 @@ npx tsc --noEmit
 
 ```bash
 # From a file:
-junco submit ./my-ticket.md --config ~/junco/config.toml
+junco submit ./my-ticket.md --config ~/junco/config.json
 
 # From stdin:
-cat my-ticket.md | junco submit - --config ~/junco/config.toml
+cat my-ticket.md | junco submit - --config ~/junco/config.json
 
 # Print the inbox path:
-junco inbox-path --config ~/junco/config.toml
+junco inbox-path --config ~/junco/config.json
 ```
 
 The bundled `junco-dispatch` skill (for Claude Code) scaffolds well-structured tickets from any Claude session and submits them automatically.
@@ -113,12 +113,12 @@ Ticket templates live in the `templates/` directory:
 
 1. Ticket lands in `inbox/` — plan-lint validates frontmatter first (bad tickets → `failed/`, no agent run).
 2. Daemon claims it atomically into `processing/`.
-3. Git worktree provisioned from `origin/<base_branch>` at `<worktree_root>/<id>`.
+3. Git worktree provisioned from `origin/<base_branch>` at `<worktreeRoot>/<id>`.
 4. Agent runs with loop guards active (supervisor watches each turn; nudges on guard trips, kills on escalation).
 5. After the agent session: the `## Verification` block runs in the worktree.
 6. Critic compares the diff to the spec; if items are missing and retries remain, one corrective agent turn is dispatched.
 7. Branch pushed; `gh pr create --draft` opens the PR.
-8. Ticket moves to `done/` (success) or `failed/` (any failure). Worktree removed on success if `remove_worktree_on_success = true`.
+8. Ticket moves to `done/` (success) or `failed/` (any failure). Worktree removed on success if `git.removeWorktreeOnSuccess = true`.
 
 ## How it works
 
@@ -128,7 +128,7 @@ You (or any harness)
 │
 │ junco submit <ticket.md>
 ▼
-<vault_root>/Junco/inbox/ ← drop tickets here
+<vaultRoot>/Junco/inbox/ ← drop tickets here
 │
 │ daemon polls every 15s
 ▼
@@ -159,7 +159,7 @@ GitHub draft PR (or answer written in-place for Q&A)
 
 ### Reliability
 
-- **Transient failures retry themselves.** When a run fails for infrastructure reasons (endpoint error, truncated stream) with no commits made, the ticket goes back to the inbox with `retry_count` bumped and a `not_before` backoff stamp — up to `[worker].max_transient_retries` (default 2). Real failures (plan-lint, verification, guard kills) still fail immediately.
+- **Transient failures retry themselves.** When a run fails for infrastructure reasons (endpoint error, truncated stream) with no commits made, the ticket goes back to the inbox with `retry_count` bumped and a `not_before` backoff stamp — up to `worker.maxTransientRetries` (default 2). Real failures (plan-lint, verification, guard kills) still fail immediately.
 - **The worker doesn't burn tickets while your endpoint is down.** Readiness is probed before every claim; work stays queued until the endpoint answers.
 - **Crashes requeue, not fail.** Tickets found in `processing/` at startup rejoin the inbox under the same retry budget; only an exhausted budget routes to `failed/`.
 - **Timeouts salvage work.** A session that hits its timeout after committing gets its commits pushed and a draft PR opened (status `timeout_partial`, routed to `done/`) with a partial-run banner, instead of losing the work in a dead worktree.

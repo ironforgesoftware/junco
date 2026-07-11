@@ -16,12 +16,14 @@ import { executeClaimed, type ClaimedWork } from "../src/runOnce.js";
 import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.js";
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
+import { makeConfigHolder } from "../src/configWatcher.js";
 import {
   StopFlag,
   sleepInterruptible,
   installSignalHandlers,
   mainLoop,
   runScheduler,
+  overlayFrozenRestartFields,
   type MainLoopDeps,
 } from "../src/daemon.js";
 
@@ -122,11 +124,18 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
  * default sleep resolves immediately so the poll loop never blocks on real
  * timers.  Callers override `runOnceFn` / `sleep` to drive the loop and reach
  * the stop condition.
+ *
+ * `configHolder` stays optional (unlike every other field) — it's the Task 6
+ * live-reload seam, and most tests exercise the no-holder fallback path (see
+ * "mainLoop reads the holder each iteration" for the holder-set case).
  */
+type StubMainLoopDeps = Required<Omit<MainLoopDeps, "configHolder">> &
+  Pick<MainLoopDeps, "configHolder">;
+
 function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
-  deps: Required<MainLoopDeps>;
+  deps: StubMainLoopDeps;
 } {
-  const deps: Required<MainLoopDeps> = {
+  const deps: StubMainLoopDeps = {
     runOnceFn: vi.fn(async () => false),
     claimFn: vi.fn(async () => null),
     executeFn: vi.fn(async () => {}),
@@ -335,6 +344,63 @@ describe("installSignalHandlers", () => {
     uninstall();
     expect(process.listenerCount("SIGINT")).toBe(beforeInt);
     expect(process.listenerCount("SIGTERM")).toBe(beforeTerm);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// overlayFrozenRestartFields
+// ---------------------------------------------------------------------------
+
+describe("overlayFrozenRestartFields", () => {
+  it('pins every reload:"restart" lever to frozen; passes live-kind fields through', () => {
+    const frozen = makeConfig({
+      vaultRoot: "/frozen/vault",
+      juncoSubdir: "FrozenJunco",
+      maxConcurrent: 1,
+      healthEnabled: false,
+      healthHost: "127.0.0.1",
+      healthPort: 8787,
+      stateDir: "/frozen/state",
+      logToFile: false,
+      transcriptsEnabled: false,
+      pollIntervalSeconds: 15,
+      github: { ...makeConfig().github, enabled: false, triggerLabel: "frozen-trigger" },
+    });
+    const live = makeConfig({
+      vaultRoot: "/live/vault",
+      juncoSubdir: "LiveJunco",
+      maxConcurrent: 10,
+      healthEnabled: true,
+      healthHost: "0.0.0.0",
+      healthPort: 9999,
+      stateDir: "/live/state",
+      logToFile: true,
+      transcriptsEnabled: true,
+      pollIntervalSeconds: 42,
+      model: { ...makeConfig().model, id: "model-v2" },
+      github: { ...makeConfig().github, enabled: true, triggerLabel: "live-trigger" },
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    // Restart-kind flat fields: pinned to frozen, never the live edit.
+    expect(result.vaultRoot).toBe(frozen.vaultRoot);
+    expect(result.juncoSubdir).toBe(frozen.juncoSubdir);
+    expect(result.maxConcurrent).toBe(frozen.maxConcurrent);
+    expect(result.healthEnabled).toBe(frozen.healthEnabled);
+    expect(result.healthHost).toBe(frozen.healthHost);
+    expect(result.healthPort).toBe(frozen.healthPort);
+    expect(result.stateDir).toBe(frozen.stateDir);
+    expect(result.logToFile).toBe(frozen.logToFile);
+    expect(result.transcriptsEnabled).toBe(frozen.transcriptsEnabled);
+    expect(result.github.enabled).toBe(frozen.github.enabled);
+
+    // Live-kind fields: pass through from live, including a NESTED github
+    // field that is not restart-kind (triggerLabel stays live per the
+    // follow-up note in the daemon.ts helper's doc comment).
+    expect(result.pollIntervalSeconds).toBe(live.pollIntervalSeconds);
+    expect(result.model.id).toBe(live.model.id);
+    expect(result.github.triggerLabel).toBe(live.github.triggerLabel);
   });
 });
 
@@ -611,6 +677,86 @@ describe("mainLoop — observability", () => {
     expect(startHealthServerFn).toHaveBeenCalledTimes(1);
     expect(handle.close).toHaveBeenCalledTimes(1);
   });
+
+  it("mainLoop reads the holder each iteration (live reload reaches next runOnce)", async () => {
+    const seen: number[] = [];
+    const holder = makeConfigHolder({ ...makeConfig(), pollIntervalSeconds: 1 });
+    const stop = new StopFlag();
+    let n = 0;
+    const runOnceFn = async (c: Config) => {
+      seen.push(c.pollIntervalSeconds);
+      if (n === 0) holder.current = { ...holder.current, pollIntervalSeconds: 99 };
+      if (++n >= 2) stop.requestStop();
+      return true; // handled → loop continues without sleeping to idle
+    };
+    await mainLoop(
+      holder.current,
+      stop,
+      {},
+      {
+        configHolder: holder,
+        runOnceFn,
+        sleep: async () => {
+          await new Promise((r) => setTimeout(r, 1));
+        },
+        recoverOrphansFn: () => {},
+        pruneFn: () => {},
+        waitForEndpointFn: async () => {},
+        mkdirs: () => {},
+        startHealthServerFn: async () => null as unknown as HealthServerHandle,
+      },
+    );
+    expect(seen).toEqual([1, 99]);
+  });
+
+  it("mainLoop hot-applies a live lever edit but pins a restart-kind lever to the frozen startup cfg", async () => {
+    // A live edit to model.id (reload:"live") must reach the very next
+    // runOnceFn; a simultaneous edit to vaultRoot (reload:"restart") must
+    // NEVER reach it — runOnce derives queue paths from cfg.vaultRoot, so a
+    // hot-applied edit there would silently move the daemon onto a different
+    // (likely nonexistent) queue mid-run.
+    const startCfg = makeConfig({ vaultRoot: "/frozen/vault", pollIntervalSeconds: 1 });
+    const holder = makeConfigHolder(startCfg);
+    const stop = new StopFlag();
+    const seenVaultRoots: string[] = [];
+    const seenModelIds: string[] = [];
+    let n = 0;
+    const runOnceFn = async (c: Config) => {
+      seenVaultRoots.push(c.vaultRoot);
+      seenModelIds.push(c.model.id);
+      if (n === 0) {
+        holder.current = {
+          ...holder.current,
+          vaultRoot: "/live/vault", // restart-kind — must NOT reach the next runOnceFn
+          model: { ...holder.current.model, id: "model-v2" }, // live-kind — must
+        };
+      }
+      if (++n >= 2) stop.requestStop();
+      return true; // handled → loop continues without sleeping to idle
+    };
+    await mainLoop(
+      startCfg,
+      stop,
+      {},
+      {
+        configHolder: holder,
+        runOnceFn,
+        // Real macrotask tick — an instant-resolve fake sleep starves the
+        // scheduler's setTimeout-based waits in other suites; mirrored here
+        // for consistency even though this loop never reaches idle sleep.
+        sleep: async () => {
+          await new Promise((r) => setTimeout(r, 1));
+        },
+        recoverOrphansFn: () => {},
+        pruneFn: () => {},
+        waitForEndpointFn: async () => {},
+        mkdirs: () => {},
+        startHealthServerFn: async () => null as unknown as HealthServerHandle,
+      },
+    );
+    expect(seenModelIds).toEqual([startCfg.model.id, "model-v2"]);
+    expect(seenVaultRoots).toEqual([startCfg.vaultRoot, startCfg.vaultRoot]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -767,6 +913,84 @@ describe("runScheduler", () => {
     const inbox = readdirSync(join(j, "inbox"));
     expect(inbox).toHaveLength(1);
     expect(readFileSync(join(j, "inbox", inbox[0]), "utf8")).toMatch(/retry_count: 1/);
+  });
+
+  it("live per-ticket cfg reaches newly-claimed tickets while the concurrency ceiling stays frozen (Fix B + Fix C)", async () => {
+    // Fix B: claimFn/executeFn read `configHolder.current` each dispatch, so a
+    // mid-run edit (e.g. model.id) reaches the very next claim/execute — not
+    // just tickets claimed after a fresh runScheduler() call.
+    // Fix C: the inner while's concurrency ceiling reads the FROZEN `cfg`
+    // this scheduler was invoked with, never `configHolder.current` — a live
+    // edit to worker.max_concurrent (a `reload:"restart"` lever) must NOT
+    // silently widen the pool mid-run.
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const holder = makeConfigHolder(cfg);
+    const stop = new StopFlag();
+    const queue = [
+      fakeWork("a", null),
+      fakeWork("b", null),
+      fakeWork("c", null),
+      fakeWork("d", null),
+      fakeWork("e", null),
+    ];
+    let running = 0;
+    let peak = 0;
+    let finished = 0;
+    let mutated = false;
+    const claimedModelIds: string[] = [];
+    const executedModelIds: string[] = [];
+
+    const claimFn = async (c: Config) => {
+      const w = queue.shift();
+      if (!w) {
+        if (queue.length === 0 && running === 0) stop.requestStop();
+        return null;
+      }
+      claimedModelIds.push(c.model.id);
+      return w;
+    };
+    const executeFn = async (c: Config, w: ClaimedWork) => {
+      executedModelIds.push(c.model.id);
+      running++;
+      peak = Math.max(peak, running);
+      if (w.ticket.id === "a" && !mutated) {
+        mutated = true;
+        // Bump BOTH a live lever (model.id) and the restart-kind lever
+        // (maxConcurrent) in the same edit — Fix B says the former must
+        // reach the next dispatch; Fix C says the latter must not.
+        holder.current = {
+          ...holder.current,
+          maxConcurrent: 10,
+          model: { ...holder.current.model, id: "model-v2" },
+        };
+      }
+      await new Promise((r) => setTimeout(r, w.ticket.id === "a" ? 30 : 5));
+      running--;
+      finished++;
+    };
+
+    await runScheduler(
+      cfg,
+      stop,
+      {},
+      { claimFn, executeFn, sleep: tickSleep, configHolder: holder },
+    );
+
+    expect(finished).toBe(5);
+    expect(claimedModelIds).toHaveLength(5);
+    expect(executedModelIds).toHaveLength(5);
+    // Fix B: only ticket "a" (claimed/executed before the edit) saw the
+    // original model id — every ticket claimed/executed after it picked up
+    // the LIVE value, including "b", which was already in flight in the same
+    // dispatch burst as the edit.
+    expect(claimedModelIds[0]).toBe(cfg.model.id);
+    expect(executedModelIds[0]).toBe(cfg.model.id);
+    expect(claimedModelIds.slice(1).every((id) => id === "model-v2")).toBe(true);
+    expect(executedModelIds.slice(1).every((id) => id === "model-v2")).toBe(true);
+    // Fix C: holder.current.maxConcurrent became 10 mid-run, but the pool
+    // never grew past the FROZEN cfg.maxConcurrent (2) runScheduler started
+    // with — never more than 2 tasks ran at once.
+    expect(peak).toBe(2);
   });
 });
 

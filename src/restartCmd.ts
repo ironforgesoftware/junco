@@ -2,7 +2,7 @@
  * `junco restart` — restart the service unit supervising the daemon.
  *
  * Discovery is BY CONFIG PATH, not by name: the launchd plist (or systemd user
- * unit) whose invocation references the resolved config.toml. This finds
+ * unit) whose invocation references the resolved config.json. This finds
  * custom labels and `junco service`-rendered defaults alike, with zero config.
  *
  * The restart verb matters: a launchd job with KeepAlive.SuccessfulExit=false

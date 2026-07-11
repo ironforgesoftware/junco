@@ -43,6 +43,7 @@ function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot
     guardNudges: 0,
     guardKills: 0,
     currentProgress: {},
+    pendingRestartFields: [],
     ...overrides,
   };
 }

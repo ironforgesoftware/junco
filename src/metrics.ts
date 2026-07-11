@@ -56,6 +56,7 @@ export interface MetricsSnapshot {
       updatedAt: string;
     }
   >;
+  pendingRestartFields: string[]; // config levers changed live that need a restart
 }
 
 export class RunMetrics {
@@ -86,6 +87,7 @@ export class RunMetrics {
   private _requeues = 0;
   private _guardNudges = 0;
   private _guardKills = 0;
+  private _pendingRestartFields = new Set<string>();
   private _progress: Record<
     string,
     {
@@ -158,6 +160,12 @@ export class RunMetrics {
   recordGuardDecision(action: "nudge" | "kill"): void {
     if (action === "nudge") this._guardNudges++;
     else this._guardKills++;
+  }
+
+  /** Record config lever names changed live (hot-reload) that need a daemon
+   * restart to fully apply. Accumulates and de-dups across calls. */
+  addPendingRestartFields(fields: string[]): void {
+    for (const f of fields) this._pendingRestartFields.add(f);
   }
 
   /** A task entered execution. Seeds its progress entry (startedAt = now). */
@@ -269,6 +277,7 @@ export class RunMetrics {
       guardNudges: this._guardNudges,
       guardKills: this._guardKills,
       currentProgress: { ...this._progress },
+      pendingRestartFields: [...this._pendingRestartFields].sort(),
     };
   }
 
@@ -299,6 +308,7 @@ export class RunMetrics {
     this._requeues = 0;
     this._guardNudges = 0;
     this._guardKills = 0;
+    this._pendingRestartFields = new Set();
     this._progress = {};
   }
 }

@@ -24,10 +24,11 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
-import { acquireSingletonLock } from "./lock.js";
+import { acquireSingletonLock, readLockHolder } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./config.js";
 import { parseTicket } from "./ticket.js";
-import { StopFlag, installSignalHandlers, mainLoop } from "./daemon.js";
+import { StopFlag, installSignalHandlers, mainLoop, type MainLoopDeps } from "./daemon.js";
+import { makeConfigHolder, watchConfig, type ConfigHolder } from "./configWatcher.js";
 import { runOnce } from "./runOnce.js";
 import { makeGithubReporter } from "./githubReport.js";
 import {
@@ -57,8 +58,17 @@ export interface CliDeps {
   loadConfigFn?: (path: string) => Config;
   acquireLockFn?: (lockPath: string) => SingletonLock | null;
   installSignalHandlersFn?: (stopFlag: StopFlag) => () => void;
-  mainLoopFn?: (cfg: Config, stopFlag: StopFlag, opts: { once?: boolean }) => Promise<void>;
+  mainLoopFn?: (
+    cfg: Config,
+    stopFlag: StopFlag,
+    opts: { once?: boolean },
+    deps?: MainLoopDeps,
+  ) => Promise<void>;
   runOnceFn?: (cfg: Config) => Promise<boolean>;
+  /** Config hot-reload watcher for `start` (Task 6). Injected so tests never
+   * touch a real fs.watch on a config path that may not exist on disk.
+   * Default: the real watchConfig. */
+  watchConfigFn?: (configPath: string, holder: ConfigHolder) => { close(): void };
   /** Output function for the `service`, `inbox-path`, `schema`, `submit`, `init` subcommands. Default: process.stdout.write. */
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
@@ -121,7 +131,7 @@ const USAGE = `\
 Usage: junco <subcommand> [options]
 
 Subcommands:
-  init         Interactive setup wizard — writes config.toml + creates the queue
+  init         Interactive setup wizard — writes config.json + creates the queue
   start        Start the daemon
   run-once     Process one task and exit (dev/cron convenience; no lock)
   service      Render a service file to stdout (launchd plist or systemd unit)
@@ -132,6 +142,7 @@ Subcommands:
   rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
+  config path|list|get <path>|set <path> <value>  Inspect/edit config.json knobs
   assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
@@ -153,8 +164,8 @@ Subcommands:
                     otherwise starts the daemon.
 
 Options:
-  --config <path>       Path to config.toml
-                        [default: ./config.toml if present, else ~/.config/junco/config.toml]
+  --config <path>       Path to config.json
+                        [default: ./config.json if present, else ~/.config/junco/config.json]
   --yes, -y             (init) Scaffold a default config without prompting
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
@@ -208,6 +219,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const acquireLockFn = deps.acquireLockFn ?? acquireSingletonLock;
   const installSignalHandlersFn = deps.installSignalHandlersFn ?? installSignalHandlers;
   const mainLoopFn = deps.mainLoopFn ?? mainLoop;
+  const watchConfigFn = deps.watchConfigFn ?? watchConfig;
   // The manual run-once poke reports back to GitHub too when the bridge is on
   // (a daemon-claimed bridged ticket would otherwise leave its issue stale).
   const runOnceFn =
@@ -243,8 +255,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   const existsFn = deps.existsFn ?? ((p: string) => existsSync(p));
-  // Resolve the config path ONCE: explicit --config → ./config.toml when
-  // present → the user-level default (~/.config/junco/config.toml).
+  // Resolve the config path ONCE: explicit --config → ./config.json when
+  // present → the user-level default (~/.config/junco/config.json).
   const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
   // First-run aware: a bare invocation runs the setup wizard when there's no
   // config yet, and starts the daemon once one exists.
@@ -371,15 +383,32 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
         healthHost: cfg.healthHost,
         healthPort: cfg.healthPort,
-        advice: "bind health_host to 127.0.0.1 unless it is firewalled",
+        advice: "bind healthHost to 127.0.0.1 unless it is firewalled",
       });
     }
 
     const stopFlag = new StopFlag();
     const uninstall = installSignalHandlersFn(stopFlag);
 
+    // Live-reload (Task 6): the holder starts seeded with the config we just
+    // loaded; the watcher re-parses config.json on change and swaps in a new
+    // Config, which mainLoop's per-iteration reads pick up without a restart.
+    // Hot-reload is optional — a watch-start failure (EMFILE/ENOSPC/EACCES/
+    // unsupported FS) must NOT crash the daemon, matching the health server's
+    // graceful-degrade pattern below: log a warning and continue with the
+    // holder seeded but never updated (hot-reload disabled until restart).
+    const holder = makeConfigHolder(cfg);
+    let watcher: { close(): void } | null = null;
     try {
-      await mainLoopFn(cfg, stopFlag, { once: values.once as boolean });
+      watcher = watchConfigFn(configPath, holder);
+    } catch (e) {
+      log.warn("config watcher failed to start; hot-reload disabled until restart", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+
+    try {
+      await mainLoopFn(cfg, stopFlag, { once: values.once as boolean }, { configHolder: holder });
       return 0;
     } catch (e) {
       log.error("fatal error in main loop", {
@@ -387,6 +416,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       });
       return 1;
     } finally {
+      if (watcher) watcher.close();
       uninstall();
       lock.release();
       teardownLogs();
@@ -597,6 +627,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
+  // config: inspect/edit config.json knobs via the lever registry
+  // (src/configLevers.ts) — path/list/get/set (src/configCmd.ts). Lazy
+  // import keeps it off every other subcommand's require graph, matching
+  // `prs`/`assess`. daemonRunningFn reuses the same lock-holder liveness
+  // check as `status`/`restart` so `set` on a restart-kind lever only warns
+  // when a daemon is actually up to restart.
+  // ------------------------------------------------------------
+  if (subcommand === "config") {
+    const { runConfigCommand } = await import("./configCmd.js");
+    const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+    return runConfigCommand(positionals.slice(1), configPath, {
+      printFn,
+      daemonRunningFn: () => readLockHolder(lockPath) !== null,
+    });
+  }
+
+  // ------------------------------------------------------------
   // schema: print the ticket frontmatter JSON Schema (no config needed)
   // ------------------------------------------------------------
   if (subcommand === "schema") {
@@ -694,7 +741,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       if (!wantYes && !deps.runInitWizardFn && !process.stdin.isTTY) {
         process.stderr.write(
           `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
-            `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.toml.\n`,
+            `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.json.\n`,
         );
         return 1;
       }

@@ -57,7 +57,7 @@ export async function runPrsCommand(cfg: Config, deps: PrsCmdDeps = {}): Promise
   const repos = resolveWatchedReposForPrs(cfg);
   if (repos.length === 0) {
     print(
-      "no watched repositories — add [[github.repos]] to config.toml or watch one from the dashboard\n",
+      "no watched repositories — add github.repos to config.json or watch one from the dashboard\n",
     );
     return 0;
   }

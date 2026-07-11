@@ -39,6 +39,7 @@ import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
 import { ReviewView, type ReviewState } from "./components/ReviewView.js";
+import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
@@ -93,6 +94,7 @@ type View =
   | "detail"
   | "help"
   | "addRepo"
+  | "config"
   | "palette"
   | "cmdOutput"
   | "queue"
@@ -1084,7 +1086,7 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (mapping.fromConfig) {
-        showToast("info", `${mapping.nwo} is defined in config.toml`);
+        showToast("info", `${mapping.nwo} is defined in config.json`);
         return;
       }
       if (watchlistError) {
@@ -1297,7 +1299,7 @@ export function App(props: AppProps): React.JSX.Element {
   // The mode toggle is inert while a text field (filter / add-repo / palette)
   // or the confirm modal owns input — so `m` can never eat a typed character.
   const canToggleMode = (): boolean =>
-    !filtering && view !== "addRepo" && view !== "palette" && confirm === null;
+    !filtering && view !== "addRepo" && view !== "config" && view !== "palette" && confirm === null;
   // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
@@ -1433,6 +1435,11 @@ export function App(props: AppProps): React.JSX.Element {
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return; // layer 2 (text field owns input)
 
+    // ConfigView owns all input while open (own useInput + onExit, mirroring
+    // addRepo above) — kept ahead of the mode toggle and LOCAL dispatch so
+    // neither `m` nor a LOCAL-mode key ever leaks past it mid-edit.
+    if (view === "config") return; // layer 2b
+
     // layer 3 — the global mode toggle (`m` / Shift+Tab), hoisted above the
     // github cascade so `m` never eats a typed char (canToggleMode is false
     // while filtering / addRepo / palette / a confirm modal is open).
@@ -1445,6 +1452,21 @@ export function App(props: AppProps): React.JSX.Element {
       }
       setUiMode(target);
       dismissToast();
+      return;
+    }
+
+    // layer 3b — `,` opens the in-dashboard config editor. Mode-agnostic (it
+    // is hoisted ahead of the LOCAL dispatch below) so a github-disabled user
+    // — who starts in local mode and can never reach the github cascade that
+    // used to own this binding — isn't left with no way to open settings.
+    // Gated the same way the mode toggle above is: not while typing a filter,
+    // not while the LOCAL confirm modal owns input, and only from the main
+    // view (never stealing the key from help/detail/queue/prs/palette/etc.,
+    // which in LOCAL mode is moot since local never routes view away from
+    // "main"/"help").
+    if (input === "," && view === "main" && !filtering && confirm === null) {
+      dismissToast();
+      setView("config");
       return;
     }
 
@@ -1770,6 +1792,9 @@ export function App(props: AppProps): React.JSX.Element {
       setView("queue");
       return;
     }
+    // `,` (open config) is handled mode-agnostically by layer 3b above, ahead
+    // of this cascade — the settings idiom, free per
+    // `grep -n 'input === ' src/tui/App.tsx`.
     if (input === "p") {
       setScroll(0);
       setView("prs");
@@ -1974,7 +1999,14 @@ export function App(props: AppProps): React.JSX.Element {
     if (uiMode === "local") return; // the LOCAL body is keyboard-first in v1
 
     // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
-    if (view === "help" || view === "palette" || view === "addRepo" || view === "review") return;
+    if (
+      view === "help" ||
+      view === "palette" ||
+      view === "addRepo" ||
+      view === "review" ||
+      view === "config"
+    )
+      return;
     if (ev.kind === "release") return; // presses act on press, not release
     if (ev.kind === "press") dismissToast();
 
@@ -2081,9 +2113,14 @@ export function App(props: AppProps): React.JSX.Element {
   useMouse(onMouseEvent);
 
   const hints =
-    uiMode === "local"
-      ? localHintsFor(localSection, localFocus)
-      : hintsFor(view as HintView, pane, layout.mode, filtering);
+    view === "config"
+      ? // Mode-agnostic, like the view === "config" render branch above: the
+        // config editor's own hints apply regardless of which surface opened
+        // it, not LOCAL's section-rail hints.
+        hintsFor("config", pane, layout.mode, filtering)
+      : uiMode === "local"
+        ? localHintsFor(localSection, localFocus)
+        : hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
   const paletteProps = {
     commands: PALETTE_COMMANDS,
@@ -2158,7 +2195,12 @@ export function App(props: AppProps): React.JSX.Element {
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}
     >
-      {uiMode === "local" ? (
+      {view === "config" ? (
+        // Mode-agnostic: `,` (layer 3b) can set view="config" from either
+        // surface, so this must be checked ahead of the uiMode branch below
+        // or a LOCAL-mode config view would render LocalDashboard instead.
+        <ConfigView configPath={configPath} onExit={() => setView("main")} />
+      ) : uiMode === "local" ? (
         <LocalDashboard
           cheap={localCheap}
           heavy={localHeavy}

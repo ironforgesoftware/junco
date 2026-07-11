@@ -147,7 +147,7 @@ npx @ironforgesoftware/junco   # first run → setup wizard; afterwards → star
 ```
 
 The wizard asks a few questions, detects the models on your endpoint, writes
-`config.toml`, and creates the queue. (Prefer a global install:
+`config.json`, and creates the queue. (Prefer a global install:
 `npm install -g @ironforgesoftware/junco`, then the command is just `junco`.
 `junco init --yes` scaffolds defaults non-interactively.)
 
@@ -172,7 +172,7 @@ frontmatter contract, `examples/` has templates, and the bundled
 | Guide                                      | What's inside                                                                                           |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | [Tickets](docs/tickets.md)                 | Ticket flavors, frontmatter reference, examples, submission, the PR-flow lifecycle                      |
-| [Configuration](docs/configuration.md)     | The annotated `config.toml` reference and the knobs worth knowing                                       |
+| [Configuration](docs/configuration.md)     | The `config.json` skeleton, key knobs, hot-reload, and the `junco config` CLI                           |
 | [GitHub mode](docs/github-mode.md)         | Setup, the plan → approve → PR loop, lifecycle labels, offline behavior, trust model                    |
 | [Vulnerability assessment](docs/assess.md) | `junco assess` — audit any watched repo, review parked findings, file the ones you confirm              |
 | [Analysis comments](docs/analyze.md)       | `junco analyze` — investigate an issue read-only, review the drafted comment, post the ones you confirm |

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { RunMetrics } from "../src/metrics.js";
+import { RunMetrics, metrics } from "../src/metrics.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -453,5 +453,32 @@ describe("requeue + guard metrics", () => {
     expect(s.requeues).toBe(0);
     expect(s.guardNudges).toBe(0);
     expect(s.guardKills).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pendingRestartFields (hot-reload restart-warn)
+// ---------------------------------------------------------------------------
+describe("pendingRestartFields", () => {
+  it("starts empty", () => {
+    const s = new RunMetrics().snapshot();
+    expect(s.pendingRestartFields).toEqual([]);
+  });
+
+  it("accumulates and de-dups pending restart fields in the snapshot", () => {
+    metrics.reset();
+    metrics.addPendingRestartFields(["observability.healthPort", "vaultRoot"]);
+    metrics.addPendingRestartFields(["vaultRoot"]);
+    expect(metrics.snapshot().pendingRestartFields).toEqual([
+      "observability.healthPort",
+      "vaultRoot",
+    ]);
+  });
+
+  it("reset clears pending restart fields", () => {
+    const m = new RunMetrics();
+    m.addPendingRestartFields(["a", "b"]);
+    m.reset();
+    expect(m.snapshot().pendingRestartFields).toEqual([]);
   });
 });

@@ -6,16 +6,16 @@ Running junco day to day — the full CLI reference, health checks, service supe
 
 ## CLI reference
 
-All commands accept `--config <path>` to point at a non-default `config.toml`. When omitted, junco uses `./config.toml` if present, else the user-level default `~/.config/junco/config.toml` (respects `XDG_CONFIG_HOME`) — so junco works from any directory after first-run setup. No global install needed either: `npx @ironforgesoftware/junco <command>` works the same as the installed `junco` binary.
+All commands accept `--config <path>` to point at a non-default `config.json`. When omitted, junco uses `./config.json` if present, else the user-level default `~/.config/junco/config.json` (respects `XDG_CONFIG_HOME`) — so junco works from any directory after first-run setup. No global install needed either: `npx @ironforgesoftware/junco <command>` works the same as the installed `junco` binary.
 
 | Command                                                         | Description                                                                                                                                                                                                                              |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `junco start [--config <path>] [--once]`                        | Run the daemon. Polls forever; `--once` processes one task then exits. Acquires a single-instance lock (`worker.lock` next to `config.toml`); exits 0 if another instance holds the lock.                                                |
+| `junco start [--config <path>] [--once]`                        | Run the daemon. Polls forever; `--once` processes one task then exits. Acquires a single-instance lock (`worker.lock` next to `config.json`); exits 0 if another instance holds the lock.                                                |
 | `junco run-once [--config <path>]`                              | One-shot: process a single available task and exit. No lock — convenient for dev or cron.                                                                                                                                                |
 | `junco submit <file\|-> [--config <path>]`                      | Atomically place a ticket into the configured inbox. Use `-` to read from stdin. The inbox filename is derived from the ticket's `id` frontmatter field.                                                                                 |
 | `junco inbox-path [--config <path>]`                            | Print the resolved inbox directory path.                                                                                                                                                                                                 |
 | `junco schema`                                                  | Print the ticket-frontmatter JSON Schema (the typed contract for all frontmatter fields).                                                                                                                                                |
-| `junco init [--config <path>] [--yes]`                          | Interactive setup wizard: prompts for vault + model, **writes `config.toml`**, and creates the queue directories. With a config already present, just creates the dirs (never overwrites). `--yes` scaffolds defaults non-interactively. |
+| `junco init [--config <path>] [--yes]`                          | Interactive setup wizard: prompts for vault + model, **writes `config.json`**, and creates the queue directories. With a config already present, just creates the dirs (never overwrites). `--yes` scaffolds defaults non-interactively. |
 | `junco` (no subcommand)                                         | First run (no config yet) → the setup wizard; otherwise → `start`.                                                                                                                                                                       |
 | `junco service [--platform launchd\|systemd] [--config <path>]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere.                                                                                                                                                    |
 | `junco status [--config <path>]`                                | One-glance view: daemon (pid/uptime), endpoint readiness, in-flight tickets, processed counts, queue sizes.                                                                                                                              |
@@ -30,7 +30,7 @@ All commands accept `--config <path>` to point at a non-default `config.toml`. W
 
 ## Health & observability
 
-When `[observability].health_enabled = true`, Junco serves HTTP on `health_host:health_port` (default `127.0.0.1:8787`).
+When `observability.healthEnabled = true`, Junco serves HTTP on `healthHost:healthPort` (default `127.0.0.1:8787`).
 
 | Endpoint      | Success                                    | Use                                                                                                                                                                                                                                            |
 | ------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -45,13 +45,13 @@ curl http://127.0.0.1:8787/ready
 curl http://127.0.0.1:8787/health | jq .
 ```
 
-**Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<state_dir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `[observability].log_level` to `debug` for verbose output, `info` for normal operation.
+**Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<stateDir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `observability.logLevel` to `debug` for verbose output, `info` for normal operation.
 
-**Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<state_dir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `[observability].transcripts = false`.
+**Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<stateDir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `observability.transcripts = false`.
 
-**Concurrency:** `[worker].max_concurrent` (default 1) runs that many tickets in parallel. Tickets targeting the same `repo:` always serialize, and a graceful stop drains in-flight work.
+**Concurrency:** `worker.maxConcurrent` (default 1) runs that many tickets in parallel. Tickets targeting the same `repo:` always serialize, and a graceful stop drains in-flight work.
 
-> The health server binds to loopback (`127.0.0.1`) by default. To expose it on a network interface, change `health_host`. Do so with care — there is no authentication.
+> The health server binds to loopback (`127.0.0.1`) by default. To expose it on a network interface, change `observability.healthHost`. Do so with care — there is no authentication.
 
 ## Running as a service
 
@@ -60,7 +60,7 @@ curl http://127.0.0.1:8787/health | jq .
 ### macOS (launchd)
 
 ```bash
-junco service --platform launchd --config ~/junco/config.toml \
+junco service --platform launchd --config ~/junco/config.json \
   > ~/Library/LaunchAgents/com.junco.worker.plist
 
 launchctl load ~/Library/LaunchAgents/com.junco.worker.plist
@@ -70,7 +70,7 @@ launchctl start com.junco.worker
 ### Linux (systemd)
 
 ```bash
-junco service --platform systemd --config ~/junco/config.toml \
+junco service --platform systemd --config ~/junco/config.json \
   > ~/.config/systemd/user/junco.service
 
 systemctl --user daemon-reload
@@ -79,7 +79,7 @@ systemctl --user enable --now junco
 
 ### Lock semantics and supervisor restart loops
 
-`junco start` acquires `worker.lock` (next to `config.toml`). If a second instance starts while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
+`junco start` acquires `worker.lock` (next to `config.json`). If a second instance starts while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
 
 `junco run-once` does **not** acquire the lock — it is safe for cron and dev use alongside a running daemon.
 
@@ -89,18 +89,23 @@ The daemon reads its config and code once at startup. `junco restart` bounces th
 
 ## Security model
 
-The inbox is a **code-execution boundary**. Junco runs a coding agent with bash/file tools against whatever ticket lands in `inbox/`, and `## Verification` blocks run as your user — anyone who can write to the inbox can act as you. Keep the inbox on a local disk you own, don't point it at a synced/shared folder others can write to, and set `[git].allowed_repo_roots` to confine PR-flow tickets to approved checkout locations:
+The inbox is a **code-execution boundary**. Junco runs a coding agent with bash/file tools against whatever ticket lands in `inbox/`, and `## Verification` blocks run as your user — anyone who can write to the inbox can act as you. Keep the inbox on a local disk you own, don't point it at a synced/shared folder others can write to, and set `git.allowedRepoRoots` to confine PR-flow tickets to approved checkout locations:
 
-```toml
-[git]
-allowed_repo_roots = ["~/code"]   # [] (default) = any path on disk
+```json
+{
+  "git": {
+    "allowedRepoRoots": ["~/code"]
+  }
+}
 ```
+
+(`[]`, the default, means any path on disk.)
 
 ### Sandboxing the agent + a dedicated identity
 
 Two defenses harden the code-execution boundary above. They are independent — use either or both.
 
-**1. Native execution sandbox (`[sandbox]`).** Set `[sandbox].enabled = true` to confine agent tool execution with OS-level isolation (Seatbelt on macOS, bubblewrap on Linux; no container, works offline). Writes are restricted to the worktree, network is denied by default, and credentials/API keys are scrubbed from the agent's environment. It **fails closed** if the backend binary is missing (`junco doctor` preflights it). See `docs/configuration.md` § The agent execution sandbox for the full policy and the per-ticket `network: true` opt-in.
+**1. Native execution sandbox (`sandbox`).** Set `sandbox.enabled: true` to confine agent tool execution with OS-level isolation (Seatbelt on macOS, bubblewrap on Linux; no container, works offline). Writes are restricted to the worktree, network is denied by default, and credentials/API keys are scrubbed from the agent's environment. It **fails closed** if the backend binary is missing (`junco doctor` preflights it). Run `junco config list` (the `sandbox.*` levers) for the full policy, and use the per-ticket `network: true` frontmatter opt-in to widen egress for one ticket.
 
 **2. Dedicated GitHub identity.** Junco performs every `git push` / `gh pr create` itself; the agent never needs a token. Authenticate the **daemon** as a dedicated machine GitHub account (or a fine-grained PAT under one) scoped to only the repos junco may touch, with only `contents:write` + `pull_requests:write`. Combined with the sandbox's env scrub (which keeps the token off the agent plane entirely), a prompt-injected or runaway agent cannot exfiltrate a reusable credential or act as your personal account.
 
@@ -108,9 +113,9 @@ Two defenses harden the code-execution boundary above. They are independent — 
 
 ### Inference endpoint unreachable at boot
 
-By default (`[worker].startup_wait = true`) Junco blocks startup and retries every `startup_poll_seconds` (default 30) until the endpoint responds. Check that your inference server is running and that `[model].base_url` points to the correct address.
+By default (`worker.startupWait = true`) Junco blocks startup and retries every `startupPollSeconds` (default 30) until the endpoint responds. Check that your inference server is running and that `model.baseUrl` points to the correct address.
 
-Set `startup_wait = false` to let Junco start immediately and fail individual tickets if the endpoint is down.
+Set `worker.startupWait = false` to let Junco start immediately and fail individual tickets if the endpoint is down.
 
 ### `gh` not authenticated
 
@@ -128,7 +133,7 @@ Q&A tickets do not use `gh` and are unaffected.
 If the daemon crashed mid-run (power loss, OOM), a ticket can be stranded in `processing/`. On the next startup Junco detects orphaned claims and recovers them automatically. If you need to force it, move the file back to `inbox/`:
 
 ```bash
-mv <vault_root>/Junco/processing/<ticket.md> <vault_root>/Junco/inbox/
+mv <vaultRoot>/Junco/processing/<ticket.md> <vaultRoot>/Junco/inbox/
 ```
 
 Existing result frontmatter written by the worker is stripped; your original frontmatter is preserved.
@@ -138,23 +143,23 @@ Existing result frontmatter written by the worker is stripped; your original fro
 If a ticket lands in `failed/` immediately (before any agent run), plan-lint rejected it. Open the ticket file — the `## Result` block describes the specific lint error. Common causes:
 
 - `repo:` path does not exist or is not a git repository
-- Label names in `labels:` do not exist on the target GitHub repo (`[plan_lint].check_labels = true`)
+- Label names in `labels:` do not exist on the target GitHub repo (`planLint.checkLabels = true`)
 - `## Verification` block contains `cd <repo>` (forbidden — verification runs inside the worktree already)
 - Missing required frontmatter fields
 
 Fix the frontmatter and resubmit:
 
 ```bash
-junco submit ./fixed-ticket.md --config ~/junco/config.toml
+junco submit ./fixed-ticket.md --config ~/junco/config.json
 ```
 
 ### Verification failure blocks the PR
 
-If `[verify].block_on_fail = true` and the `## Verification` block fails, the ticket moves to `failed/` and the worktree is preserved at `<worktree_root>/<id>`. Inspect it directly:
+If `verify.blockOnFail = true` and the `## Verification` block fails, the ticket moves to `failed/` and the worktree is preserved at `<worktreeRoot>/<id>`. Inspect it directly:
 
 ```bash
-cd <worktree_root>/<ticket-id>
+cd <worktreeRoot>/<ticket-id>
 # run the failing verification commands manually
 ```
 
-Fix and resubmit the ticket, or set `block_on_fail = false` if you want Junco to open the PR regardless.
+Fix and resubmit the ticket, or set `verify.blockOnFail = false` if you want Junco to open the PR regardless.

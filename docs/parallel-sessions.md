@@ -8,7 +8,7 @@ per feature — without disturbing the live junco daemon that runs from this che
 ## Why worktrees
 
 The main checkout doubles as the maintainer's live runtime (see CLAUDE.md): the launchd daemon
-executes `dist/` from here, and `config.toml`, `tickets/`, `worktrees/` are live state. A worktree
+executes `dist/` from here, and `config.json`, `tickets/`, `worktrees/` are live state. A worktree
 gives each parallel session its own working tree, branch, `node_modules/`, and `dist/` — builds and
 test runs in one session can't touch the daemon's build or another session's files.
 
@@ -41,9 +41,9 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
 ## Rules
 
 - **Never place dev worktrees under `worktrees/`.** That directory is the daemon's
-  `worktree_root`; junco creates and force-removes per-ticket worktrees there
+  `git.worktreeRoot`; junco creates and force-removes per-ticket worktrees there
   (`src/worktree.ts`). Anywhere else is safe — junco's cleanup is strictly path-scoped to
-  `<worktree_root>/<ticket-slug>`.
+  `<worktreeRoot>/<ticket-slug>`.
 - **One branch per worktree**, `feat/<topic>` off `main` (git refuses to check out the same
   branch twice anyway).
 - **`npm ci` per worktree.** Dependencies are exact-pinned; `node_modules/` and `dist/` are
@@ -56,11 +56,11 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
   lockfile moved) → `npm run build` → `junco restart` — and check the queue is idle first
   (`currentTickets` in the health JSON) so the restart never interrupts a running ticket.
   Test live behavior only after this, or the missing feature reads as a bug.
-- **Sandbox smoke tests exactly as CLAUDE.md prescribes.** A worktree has no `./config.toml`, so
-  config resolution falls back to the user-level default — which is the maintainer's *live*
+- **Sandbox smoke tests exactly as CLAUDE.md prescribes.** A worktree has no `./config.json`, so
+  config resolution falls back to the user-level default — which is the maintainer's _live_
   config. Never run `junco start` or submit test tickets from a worktree either.
 - **Full gate per branch** before PR: `npm run lint && npm run format:check && npm run typecheck
-  && npm run build && npm test`.
+&& npm run build && npm test`.
 - **Keep sessions off each other's subsystems.** Two sessions editing the same module trade the
   serialization you removed for rebase conflicts. Split work by module boundaries
   (see ARCHITECTURE.md's module map).
@@ -83,7 +83,7 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
 
 ## Why not parallelize through junco itself?
 
-Junco's scheduler (`runScheduler` in `src/daemon.ts`) supports `max_concurrent > 1`, but tickets
+Junco's scheduler (`runScheduler` in `src/daemon.ts`) supports `worker.maxConcurrent > 1`, but tickets
 targeting the same repo always serialize by design — so dispatching several junco-dev tickets at
 this repo still runs them one at a time. Lifting that constraint would be a junco feature in its
 own right, not a workflow change.

@@ -1,0 +1,79 @@
+{
+  "vaultRoot": "~/junco-vault",
+  "juncoSubdir": "Junco",
+  "tools": ["bash", "read", "write", "edit", "grep", "find"],
+  "worker": {
+    "commitLeftovers": false,
+    "defaultTimeoutMinutes": 30,
+    "pollIntervalSeconds": 15,
+    "startupPollSeconds": 30,
+    "startupWait": true,
+    "maxTransientRetries": 2,
+    "retryBackoffSeconds": 60,
+    "maxConcurrent": 1
+  },
+  "model": {
+    "id": "myprovider/my-model",
+    "api": "openai-completions",
+    "baseUrl": "http://127.0.0.1:1234/v1",
+    "apiKey": "your-api-key",
+    "reasoning": true,
+    "input": ["text", "image"],
+    "contextWindow": 131072,
+    "maxTokens": 49152,
+    "thinkingLevel": "medium",
+    "compat": {
+      "maxTokensField": "max_tokens",
+      "thinkingFormat": "qwen-chat-template"
+    }
+  },
+  "supervisor": {
+    "enabled": true,
+    "budgetPerKind": 1,
+    "escalationWindowTurns": 3,
+    "outputBudgetPerTurn": 12000,
+    "outputBudgetPostCommit": 24000
+  },
+  "git": {
+    "gitBin": "git",
+    "ghBin": "gh",
+    "defaultBaseBranch": "main",
+    "branchPrefix": "junco/",
+    "worktreeRoot": "~/junco/worktrees",
+    "removeWorktreeOnSuccess": true,
+    "allowedRepoRoots": []
+  },
+  "pr": {
+    "draftByDefault": true,
+    "defaultLabels": []
+  },
+  "verify": {
+    "enabled": true,
+    "commandTimeout": 60,
+    "blockOnFail": false
+  },
+  "critic": {
+    "enabled": true,
+    "maxRetries": 1,
+    "thinking": "minimal"
+  },
+  "planLint": {
+    "enabled": true,
+    "blockOnError": true,
+    "checkLabels": true
+  },
+  "observability": {
+    "healthEnabled": true,
+    "healthHost": "127.0.0.1",
+    "healthPort": 8787,
+    "logLevel": "info",
+    "stateDir": "~/.local/state/junco",
+    "logToFile": true,
+    "transcripts": true
+  },
+  "assess": {
+    "maxIssuesPerRun": 20,
+    "minSeverity": "low",
+    "npmBin": "npm"
+  }
+}

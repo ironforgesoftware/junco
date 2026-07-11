@@ -60,6 +60,7 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
       metrics: Record<string, unknown> & {
         currentTickets?: string[];
         currentTicket?: string | null;
+        pendingRestartFields?: string[];
       };
     };
     const m = body.metrics;
@@ -83,6 +84,11 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
     const requeues = Number(m.requeues ?? 0);
     if (nudges + kills + requeues > 0) {
       detailLines.push(`guards:    ${nudges} nudges · ${kills} kills · ${requeues} requeues`);
+    }
+    // Hot-reload restart-warn: config levers changed live but not yet applied.
+    const pendingRestartFields = m.pendingRestartFields ?? [];
+    if (pendingRestartFields.length > 0) {
+      detailLines.push(`⚠ config changed — restart to apply: ${pendingRestartFields.join(", ")}`);
     }
   } catch {
     const holder = deps.lockPath ? lockHolderFn(deps.lockPath) : null;

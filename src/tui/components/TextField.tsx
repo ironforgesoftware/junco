@@ -3,19 +3,24 @@ import { Text, useInput } from "ink";
 import { isMouseInput } from "../mouse.js";
 
 /** Minimal single-line input: printable chars append, backspace deletes,
- * enter submits. Only listens while `focus` is true. */
+ * enter submits. Only listens while `focus` is true. `mask` renders every
+ * typed character as `•` (secret levers in ConfigView) while `value` — and
+ * every editing operation on it — stays the real plaintext; only the glyphs
+ * drawn to the screen change. */
 export function TextField({
   value,
   onChange,
   onSubmit,
   focus,
   placeholder,
+  mask = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
   focus: boolean;
   placeholder: string;
+  mask?: boolean;
 }): React.JSX.Element {
   useInput(
     (input, key) => {
@@ -38,7 +43,7 @@ export function TextField({
   }
   return (
     <Text>
-      {value}
+      {mask ? "•".repeat(value.length) : value}
       {focus && <Text color="cyan">█</Text>}
     </Text>
   );

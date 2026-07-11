@@ -392,7 +392,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * The provider/model values (api, compat block, reasoning, contextWindow,
  * maxTokens, thinkingFormat) come from the resolved `cfg.model` config — built
  * either from a Pi models.json (`cfg.model.modelsJson`, path A) or from the
- * inline `[model].*` TOML fields via `buildInlineProviderConfig` (path B). The
+ * inline `model.*` JSON fields via `buildInlineProviderConfig` (path B). The
  * `ProviderConfigInput` shape matches `docs/custom-provider.md` + the on-disk
  * schema in `docs/models.md`.
  *

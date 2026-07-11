@@ -52,13 +52,13 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 
 describe("runDoctor", () => {
   it("all green → exit 0", async () => {
-    expect(await runDoctor("/x/config.toml", deps())).toBe(0);
+    expect(await runDoctor("/x/config.json", deps())).toBe(0);
   });
 
   it("unreachable endpoint → ✗ and exit 1", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ reachableFn: async () => false, printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(1);
@@ -122,7 +122,7 @@ describe("runDoctor", () => {
   it("missing gh is a warning, not a failure (Q&A-only setups are valid)", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         execFn: async (cmd: string) =>
           cmd === "gh"
@@ -138,7 +138,7 @@ describe("runDoctor", () => {
   it("gh installed but unauthenticated → warning with the login hint", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         execFn: async (_cmd: string, args: string[]) =>
           args[0] === "auth"
@@ -153,7 +153,7 @@ describe("runDoctor", () => {
 
   it("unparseable config → ✗ and exit 1, later checks skipped", async () => {
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () => {
           throw new Error("bad toml");
@@ -166,7 +166,7 @@ describe("runDoctor", () => {
   it("model missing from the endpoint listing → warning only", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ fetchModelsFn: async () => ["other"], printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);
@@ -174,14 +174,14 @@ describe("runDoctor", () => {
   });
 
   it("unwritable queue dir → ✗ and exit 1", async () => {
-    const code = await runDoctor("/x/config.toml", deps({ accessOkFn: () => false }));
+    const code = await runDoctor("/x/config.json", deps({ accessOkFn: () => false }));
     expect(code).toBe(1);
   });
 
   it("running daemon is reported informationally", async () => {
     const lines: string[] = [];
     await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ lockHolderFn: () => 4242, printFn: (s) => lines.push(s) }),
     );
     expect(lines.join("")).toMatch(/✓ daemon — running \(pid 4242\)/);
@@ -190,7 +190,7 @@ describe("runDoctor", () => {
   it("warns on a non-loopback health_host, does not fail doctor (#44)", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () =>
           ({ ...okConfig, healthEnabled: true, healthHost: "0.0.0.0" }) as unknown as Config,
@@ -206,7 +206,7 @@ describe("runDoctor", () => {
     // "" binds all interfaces; the old `&& cfg.healthHost` guard evaded the warn.
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () =>
           ({ ...okConfig, healthEnabled: true, healthHost: "" }) as unknown as Config,
@@ -220,7 +220,7 @@ describe("runDoctor", () => {
   it("no health-bind warning for a loopback health_host (#44)", async () => {
     const lines: string[] = [];
     await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () =>
           ({ ...okConfig, healthEnabled: true, healthHost: "127.0.0.1" }) as unknown as Config,
@@ -234,14 +234,14 @@ describe("runDoctor", () => {
 describe("runDoctor github checks", () => {
   it("disabled bridge → no github lines at all", async () => {
     const lines: string[] = [];
-    await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(lines.join("")).not.toMatch(/github/);
   });
 
   it("warns when enabled with no repos", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ loadConfigFn: () => githubConfig([]), printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);
@@ -251,7 +251,7 @@ describe("runDoctor github checks", () => {
   it("fails a repo whose origin does not match the nwo", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () => githubConfig([{ nwo: "acme/api", path: "/tmp/clone" }]),
         execFn: async (_cmd: string, args: string[]) =>
@@ -269,7 +269,7 @@ describe("runDoctor github checks", () => {
   it("passes a matching repo reachable via gh", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () => githubConfig([{ nwo: "acme/api", path: "/tmp/clone" }]),
         execFn: async (_cmd: string, args: string[]) =>
@@ -286,7 +286,7 @@ describe("runDoctor github checks", () => {
   it("fails when the dispatch template is unreadable (bridge enabled)", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () => githubConfig([]),
         readTemplateFn: () => {
@@ -302,7 +302,7 @@ describe("runDoctor github checks", () => {
   it("reports the template ok when readable", async () => {
     const lines: string[] = [];
     await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ loadConfigFn: () => githubConfig([]), printFn: (s) => lines.push(s) }),
     );
     expect(lines.join("")).toMatch(/✓ github planner template/);
@@ -311,7 +311,7 @@ describe("runDoctor github checks", () => {
   it("fails a repo not reachable via gh", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () => githubConfig([{ nwo: "acme/api", path: "/tmp/clone" }]),
         execFn: async (_cmd: string, args: string[]) => {
@@ -335,7 +335,7 @@ describe("runDoctor github checks", () => {
     ]);
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({
         loadConfigFn: () => ({ ...githubConfig([]), stateDir }) as Config,
         execFn: async (_cmd: string, args: string[]) =>
@@ -354,7 +354,7 @@ describe("runDoctor github checks", () => {
 describe("runDoctor outbox checks", () => {
   it("no backlog, no dead-letters → no outbox lines, still ready", async () => {
     const lines: string[] = [];
-    const code = await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/outbox/);
   });
@@ -367,7 +367,7 @@ describe("runDoctor outbox checks", () => {
     writeFileSync(join(dir, "2-b-labels.json"), "{}", "utf8");
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);
@@ -381,7 +381,7 @@ describe("runDoctor outbox checks", () => {
     writeFileSync(join(dead, "1-a-labels.json"), "{}", "utf8");
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);
@@ -393,7 +393,7 @@ describe("runDoctor outbox checks", () => {
 describe("runDoctor assess review checks", () => {
   it("no pending reviews → no assess review line", async () => {
     const lines: string[] = [];
-    const code = await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/assess review/);
   });
@@ -411,7 +411,7 @@ describe("runDoctor assess review checks", () => {
     });
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);
@@ -424,7 +424,7 @@ describe("runDoctor assess review checks", () => {
 describe("runDoctor analyze review checks", () => {
   it("no pending drafts → no analyze drafts line", async () => {
     const lines: string[] = [];
-    const code = await runDoctor("/x/config.toml", deps({ printFn: (s) => lines.push(s) }));
+    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/analyze drafts/);
   });
@@ -444,7 +444,7 @@ describe("runDoctor analyze review checks", () => {
     });
     const lines: string[] = [];
     const code = await runDoctor(
-      "/x/config.toml",
+      "/x/config.json",
       deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);

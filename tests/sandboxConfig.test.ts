@@ -5,20 +5,23 @@ import { tmpdir } from "node:os";
 import { loadConfig } from "../src/config.js";
 
 const dirs: string[] = [];
-function writeConfig(body: string): string {
+function writeConfig(obj: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "junco-sbxcfg-"));
   dirs.push(dir);
-  const p = join(dir, "config.toml");
-  writeFileSync(p, body);
+  const p = join(dir, "config.json");
+  writeFileSync(p, JSON.stringify(obj));
   return p;
 }
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-const BASE = `vault_root = "~/vault"\n[model]\nid = "x/y"\nbase_url = "http://127.0.0.1:1/v1"\napi_key = "k"\n`;
+const BASE = {
+  vaultRoot: "~/vault",
+  model: { id: "x/y", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k" },
+};
 
-describe("[sandbox] config", () => {
+describe("sandbox config", () => {
   it("defaults: disabled, auto backend, network deny, empty lists", () => {
     const cfg = loadConfig(writeConfig(BASE));
     expect(cfg.sandbox).toEqual({
@@ -32,10 +35,16 @@ describe("[sandbox] config", () => {
 
   it("parses an explicit section and expands ~ in path lists", () => {
     const cfg = loadConfig(
-      writeConfig(
-        BASE +
-          `[sandbox]\nenabled = true\nbackend = "bwrap"\nnetwork = "allow"\nextra_deny_read = ["~/secrets"]\nextra_allow_write = ["~/scratch"]\n`,
-      ),
+      writeConfig({
+        ...BASE,
+        sandbox: {
+          enabled: true,
+          backend: "bwrap",
+          network: "allow",
+          extraDenyRead: ["~/secrets"],
+          extraAllowWrite: ["~/scratch"],
+        },
+      }),
     );
     expect(cfg.sandbox.enabled).toBe(true);
     expect(cfg.sandbox.backend).toBe("bwrap");
@@ -45,6 +54,6 @@ describe("[sandbox] config", () => {
   });
 
   it("rejects an unknown backend", () => {
-    expect(() => loadConfig(writeConfig(BASE + `[sandbox]\nbackend = "docker"\n`))).toThrow();
+    expect(() => loadConfig(writeConfig({ ...BASE, sandbox: { backend: "docker" } }))).toThrow();
   });
 });

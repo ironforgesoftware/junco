@@ -13,7 +13,7 @@ import { renderLaunchdPlist, renderSystemdUnit, renderService } from "../src/ser
 
 const BASE_OPTS = {
   cliEntry: "/x/dist/cli.js",
-  configPath: "/x/config.toml",
+  configPath: "/x/config.json",
   nodeBin: "/usr/bin/node",
   label: "com.junco.test",
   logDir: "/x/logs",
@@ -48,7 +48,7 @@ describe("renderLaunchdPlist", () => {
 
   it("includes configPath in ProgramArguments", () => {
     const out = renderLaunchdPlist(BASE_OPTS);
-    expect(out).toContain("<string>/x/config.toml</string>");
+    expect(out).toContain("<string>/x/config.json</string>");
   });
 
   it("includes the Label", () => {
@@ -114,7 +114,7 @@ describe("renderLaunchdPlist", () => {
   it("derives logDir from configPath dir when logDir omitted", () => {
     const { logDir: _l, ...noLogDir } = BASE_OPTS;
     const out = renderLaunchdPlist(noLogDir);
-    // configPath is /x/config.toml → dir is /x → logs go to /x/launchd.out
+    // configPath is /x/config.json → dir is /x → logs go to /x/launchd.out
     expect(out).toContain("/x/launchd.out");
     expect(out).toContain("/x/launchd.err");
   });
@@ -146,7 +146,7 @@ describe("renderSystemdUnit", () => {
   it("contains ExecStart with nodeBin cliEntry start --config configPath", () => {
     const out = renderSystemdUnit(BASE_OPTS);
     expect(out).toContain(
-      'ExecStart="/usr/bin/node" "/x/dist/cli.js" start --config "/x/config.toml"',
+      'ExecStart="/usr/bin/node" "/x/dist/cli.js" start --config "/x/config.json"',
     );
   });
 
@@ -205,10 +205,10 @@ describe("renderSystemdUnit", () => {
       ...BASE_OPTS,
       nodeBin: "/opt/node runtime/bin/node",
       cliEntry: "/opt/junco app/dist/cli.js",
-      configPath: "/home/john doe/config.toml",
+      configPath: "/home/john doe/config.json",
     });
     expect(out).toContain(
-      'ExecStart="/opt/node runtime/bin/node" "/opt/junco app/dist/cli.js" start --config "/home/john doe/config.toml"',
+      'ExecStart="/opt/node runtime/bin/node" "/opt/junco app/dist/cli.js" start --config "/home/john doe/config.json"',
     );
   });
 
