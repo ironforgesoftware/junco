@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, existsSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -60,5 +60,48 @@ describe("jailed edit", () => {
     writeFileSync(join(outside, "f.txt"), "x");
     const ops = makeJailedEditOperations(work, policyFor(work));
     await expect(ops.access(join(outside, "f.txt"))).rejects.toBeInstanceOf(SandboxViolation);
+  });
+});
+
+// Security (#158): a dangling in-jail symlink pointing OUT of the jail must not
+// let a write escape. The jail must deny it and no file may appear outside.
+describe("dangling-symlink write escape is blocked", () => {
+  it("write through an out-of-jail dangling symlink is denied and creates nothing", async () => {
+    const work = tmp();
+    const outsideTarget = join(tmp(), "ESCAPED.txt"); // absent, outside `work`
+    symlinkSync(outsideTarget, join(work, "innocent"));
+    const ops = makeJailedWriteOperations(work, policyFor(work));
+    await expect(ops.writeFile(join(work, "innocent"), "PWNED")).rejects.toBeInstanceOf(
+      SandboxViolation,
+    );
+    expect(existsSync(outsideTarget)).toBe(false);
+  });
+
+  it("edit through an out-of-jail dangling symlink is denied and creates nothing", async () => {
+    const work = tmp();
+    const outsideTarget = join(tmp(), "ESCAPED2.txt");
+    symlinkSync(outsideTarget, join(work, "innocent"));
+    const ops = makeJailedEditOperations(work, policyFor(work));
+    await expect(ops.writeFile(join(work, "innocent"), "PWNED")).rejects.toBeInstanceOf(
+      SandboxViolation,
+    );
+    expect(existsSync(outsideTarget)).toBe(false);
+  });
+
+  it("mkdir through an out-of-jail dangling symlink is denied and creates nothing", async () => {
+    const work = tmp();
+    const outsideParent = join(tmp(), "escape-dir"); // absent, outside `work`
+    symlinkSync(outsideParent, join(work, "innocent"));
+    const ops = makeJailedWriteOperations(work, policyFor(work));
+    await expect(ops.mkdir(join(work, "innocent"))).rejects.toBeInstanceOf(SandboxViolation);
+    expect(existsSync(outsideParent)).toBe(false);
+  });
+
+  it("still allows a legit write to a NEW in-jail file via an in-jail symlink", async () => {
+    const work = tmp();
+    symlinkSync(join(work, "real.txt"), join(work, "link")); // → work/real.txt (absent, in-jail)
+    const ops = makeJailedWriteOperations(work, policyFor(work));
+    await ops.writeFile(join(work, "link"), "ok");
+    expect(existsSync(join(work, "real.txt"))).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, access, stat, readdir, glob } from "node:fs/promises";
+import { readFile, mkdir, access, stat, readdir, glob, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { assertReadAllowed, assertWriteAllowed } from "./pathJail.js";
 import type { SandboxPolicy } from "./policy.js";
@@ -6,6 +6,22 @@ import type { SandboxPolicy } from "./policy.js";
 // Every method is async so a synchronous jail violation (SandboxViolation
 // thrown by assertRead/WriteAllowed) surfaces as a promise rejection — which is
 // what the SDK's tool layer and the Operations contract expect.
+
+// O_NOFOLLOW backstops the canonicalize-based jail (#158): even if a
+// final-component symlink is swapped in between the jail check and the open()
+// (TOCTOU), the kernel refuses to follow it. `abs` is already a fully-resolved,
+// symlink-free path from assertWriteAllowed, so this never bites a legit write.
+const WRITE_NOFOLLOW =
+  constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW;
+
+async function writeFileNoFollow(abs: string, content: string): Promise<void> {
+  const fh = await open(abs, WRITE_NOFOLLOW);
+  try {
+    await fh.writeFile(content);
+  } finally {
+    await fh.close();
+  }
+}
 
 export interface ReadOperationsLike {
   readFile: (abs: string) => Promise<Buffer>;
@@ -50,7 +66,7 @@ export function makeJailedReadOperations(cwd: string, policy: SandboxPolicy): Re
 export function makeJailedWriteOperations(cwd: string, policy: SandboxPolicy): WriteOperationsLike {
   const W = (p: string): string => assertWriteAllowed(p, cwd, policy);
   return {
-    writeFile: async (p, content) => writeFile(W(p), content),
+    writeFile: async (p, content) => writeFileNoFollow(W(p), content),
     mkdir: async (dir) => {
       await mkdir(W(dir), { recursive: true });
     },
@@ -62,7 +78,7 @@ export function makeJailedEditOperations(cwd: string, policy: SandboxPolicy): Ed
   const W = (p: string): string => assertWriteAllowed(p, cwd, policy);
   return {
     readFile: async (p) => readFile(R(p)),
-    writeFile: async (p, content) => writeFile(W(p), content),
+    writeFile: async (p, content) => writeFileNoFollow(W(p), content),
     // Editing requires write scope; assert write (also normalizes traversal).
     access: async (p) => {
       W(p);
