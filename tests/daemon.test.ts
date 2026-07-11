@@ -364,7 +364,12 @@ describe("overlayFrozenRestartFields", () => {
       logToFile: false,
       transcriptsEnabled: false,
       pollIntervalSeconds: 15,
-      github: { ...makeConfig().github, enabled: false, triggerLabel: "frozen-trigger" },
+      github: {
+        ...makeConfig().github,
+        enabled: false,
+        triggerLabel: "frozen-trigger",
+        askLabel: "frozen-ask",
+      },
     });
     const live = makeConfig({
       vaultRoot: "/live/vault",
@@ -378,7 +383,12 @@ describe("overlayFrozenRestartFields", () => {
       transcriptsEnabled: true,
       pollIntervalSeconds: 42,
       model: { ...makeConfig().model, id: "model-v2" },
-      github: { ...makeConfig().github, enabled: true, triggerLabel: "live-trigger" },
+      github: {
+        ...makeConfig().github,
+        enabled: true,
+        triggerLabel: "live-trigger",
+        askLabel: "live-ask",
+      },
     });
 
     const result = overlayFrozenRestartFields(frozen, live);
@@ -394,13 +404,14 @@ describe("overlayFrozenRestartFields", () => {
     expect(result.logToFile).toBe(frozen.logToFile);
     expect(result.transcriptsEnabled).toBe(frozen.transcriptsEnabled);
     expect(result.github.enabled).toBe(frozen.github.enabled);
+    // github.triggerLabel/askLabel are reload:"restart" — the reporter bakes in
+    // the label prefix at startup, so they must be frozen too (#162).
+    expect(result.github.triggerLabel).toBe(frozen.github.triggerLabel);
+    expect(result.github.askLabel).toBe(frozen.github.askLabel);
 
-    // Live-kind fields: pass through from live, including a NESTED github
-    // field that is not restart-kind (triggerLabel stays live per the
-    // follow-up note in the daemon.ts helper's doc comment).
+    // Live-kind fields: pass through from live.
     expect(result.pollIntervalSeconds).toBe(live.pollIntervalSeconds);
     expect(result.model.id).toBe(live.model.id);
-    expect(result.github.triggerLabel).toBe(live.github.triggerLabel);
   });
 });
 

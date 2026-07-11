@@ -1,7 +1,7 @@
 import { watch } from "node:fs";
 import { dirname, basename } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, parseConfigFile, type ConfigParsed } from "./config.js";
+import { assembleConfig, parseConfigFile, type ConfigParsed } from "./config.js";
 import { LEVERS, getAtPath } from "./configLevers.js";
 import { setLogLevel, log } from "./logging.js";
 import { metrics } from "./metrics.js";
@@ -17,7 +17,7 @@ const RESTART_PATHS = new Set(LEVERS.filter((l) => l.reload === "restart").map((
 
 export interface WatchConfigDeps {
   watchFn?: (dir: string, listener: () => void) => { close(): void };
-  loadFn?: (p: string) => Config;
+  assembleFn?: (d: ConfigParsed) => Config;
   parseFn?: (p: string) => ConfigParsed;
   setLogLevelFn?: (l: Config["logLevel"]) => void;
   onRestartFields?: (fields: string[]) => void;
@@ -48,7 +48,7 @@ export function watchConfig(
       watch(dir, (_e, fn) => {
         if (fn === basename(configPath)) listener();
       }));
-  const loadFn = deps.loadFn ?? loadConfig;
+  const assembleFn = deps.assembleFn ?? assembleConfig;
   const parseFn = deps.parseFn ?? parseConfigFile;
   const setLogLevelFn = deps.setLogLevelFn ?? setLogLevel;
   const onRestartFields = deps.onRestartFields ?? ((f) => metrics.addPendingRestartFields(f));
@@ -75,19 +75,23 @@ export function watchConfig(
   let pending: { cancel(): void } | null = null;
 
   const reload = (): void => {
+    // Single read: parse the file once, then assemble the flat Config from that
+    // parsed object (no second readFileSync via loadConfig).
     let nextParsed: ConfigParsed;
-    let nextConfig: Config;
     try {
       nextParsed = parseFn(configPath);
-      nextConfig = loadFn(configPath);
     } catch (e) {
       logger.error("config reload failed; keeping previous config", {
         error: e instanceof Error ? e.message : String(e),
       });
       return;
     }
+    const nextConfig = assembleFn(nextParsed);
+    // Re-apply the log threshold only when it actually changed (setLogLevel is a
+    // cheap idempotent global, but "only if changed" matches the spec).
+    const prevLogLevel = holder.current.logLevel;
     holder.current = nextConfig;
-    setLogLevelFn(nextConfig.logLevel);
+    if (nextConfig.logLevel !== prevLogLevel) setLogLevelFn(nextConfig.logLevel);
     const changed = changedLeverPaths(prevParsed, nextParsed);
     prevParsed = nextParsed;
     const restart = changed.filter((p) => RESTART_PATHS.has(p));

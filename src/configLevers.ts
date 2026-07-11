@@ -588,17 +588,18 @@ export const LEVERS: Lever[] = [
     type: "string",
     default: "junco",
     editable: true,
-    reload: "live",
-    description: "Approval label that triggers the PR flow; lifecycle labels derive from it.",
+    reload: "restart",
+    description:
+      "Approval label that triggers the PR flow; lifecycle labels derive from it. Restart to apply — the reporter bakes in the label prefix at startup.",
   },
   {
     path: "github.askLabel",
     type: "string",
     default: undefined,
     editable: true,
-    reload: "live",
+    reload: "restart",
     description:
-      "Issue label that routes to the read-only Q&A path (defaults to `<triggerLabel>:ask`).",
+      "Issue label that routes to the read-only Q&A path (defaults to `<triggerLabel>:ask`). Restart to apply (see triggerLabel).",
   },
   {
     path: "github.pollIntervalSeconds",
