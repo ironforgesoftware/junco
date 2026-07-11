@@ -63,6 +63,25 @@ describe("classifyProviderFailure", () => {
     }
   });
 
+  it("outage phrases match case-insensitively without an adjoining status digit", () => {
+    for (const s of ["Bad Gateway", "Internal Server Error", "Service Unavailable"]) {
+      expect(classifyProviderFailure(s), s).toBe("outage");
+    }
+  });
+
+  it("errno tokens stay case-sensitive — lowercase 'econnrefused' is not an outage", () => {
+    expect(classifyProviderFailure("econnrefused")).toBe("unknown");
+  });
+
+  it("fs EACCES / permission denied is not provider auth → unknown", () => {
+    for (const s of [
+      "Error: EACCES: permission denied, open '/repo/.git/index.lock'",
+      "EACCES: permission denied, mkdir '/repo/worktrees/wt-1'",
+    ]) {
+      expect(classifyProviderFailure(s), s).toBe("unknown");
+    }
+  });
+
   it("ordinary agent text and guard kills → unknown", () => {
     expect(classifyProviderFailure("agent looped writing the same file")).toBe("unknown");
     expect(classifyProviderFailure("run aborted: output budget exceeded")).toBe("unknown");
