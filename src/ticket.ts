@@ -56,9 +56,13 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
     assess = { autoPlan: a.auto_plan === true };
     // Issue numbers are positive integers (parity with github.issue > 0); a
     // #0/negative scope is malformed and simply drops the issue binding.
+    // `issue_title` (present in the frontmatter for self-documentation) is
+    // deliberately NOT parsed through: nothing renders assess's issue title
+    // today (unlike analyze's, which analyzeFlow.ts sanitizes and parks for
+    // display), so surfacing an unsanitized parsed value here would just be
+    // dead weight with no consumer to keep honest (#104).
     if (typeof a.issue === "number" && Number.isInteger(a.issue) && a.issue > 0) {
       assess.issue = a.issue;
-      assess.issueTitle = String(a.issue_title ?? "");
     }
   }
   const analyzeRaw = frontmatter.analyze;

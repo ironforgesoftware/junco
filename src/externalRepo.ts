@@ -99,21 +99,31 @@ export async function ensureFork(
   return candidate;
 }
 
-/** Idempotently ensure the managed clone (+fork +fork remote) for `nwo`. */
+/** Idempotently ensure the managed clone for `nwo`. By default also ensures a
+ * fork (+`fork` remote) — the push target dispatch/analyze need to open a PR.
+ * Pass `{ fork: false }` for read-only consumers (`junco assess`): the clone
+ * (origin = upstream either way — see the module doc comment) is all they
+ * need, and skipping `gh repo fork` avoids leaving an unused fork behind on
+ * the operator's account (#105). `forkNwo` is null whenever fork-less. */
 export async function ensureExternalClone(
   cfg: Config,
   nwo: string,
   deps: ExternalRepoDeps = {},
-): Promise<{ path: string; forkNwo: string }> {
+  opts: { fork?: boolean } = {},
+): Promise<{ path: string; forkNwo: string | null }> {
   const ghFn = deps.ghFn ?? gh;
   const gitFn = deps.gitFn ?? git;
   const existsFn = deps.existsFn ?? existsSync;
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
+  const fork = opts.fork ?? true;
   const path = externalClonePath(cfg, nwo);
 
   if (existsFn(path)) {
     // Read raw git config (not resolved via url.<base>.insteadOf rewrites) to ensure
     // nwoFromRemoteUrl sees the canonical github.com URL, not a rewritten target.
+    // This origin check applies identically to forked and fork-less clones —
+    // origin is ALWAYS upstream in both modes (see module doc comment), so a
+    // clone provisioned fork-less needs no special-casing here.
     const origin = await gitFn(cfg, ["-C", path, "config", "--get", "remote.origin.url"], {
       check: false,
     });
@@ -131,7 +141,10 @@ export async function ensureExternalClone(
       // past it. An unparseable URL fails loud instead of silently falling
       // through to ensureFork + `remote add` (which would no-op via
       // check:false since the remote already exists, leaving a returned
-      // forkNwo that doesn't match what's actually on disk).
+      // forkNwo that doesn't match what's actually on disk). A fork-less
+      // caller landing on an already-forked clone (e.g. assess reusing a
+      // clone dispatch previously provisioned) still gets the real forkNwo
+      // back here — harmless, since fork-less callers don't consume it.
       const forkUrl = fr.stdout.trim();
       const forkNwo = nwoFromRemoteUrl(forkUrl);
       if (forkNwo !== null) return { path, forkNwo }; // fully provisioned — zero gh calls
@@ -139,12 +152,16 @@ export async function ensureExternalClone(
         `${path} has a 'fork' remote that is not a github.com URL: ${forkUrl} — fix or remove the fork remote`,
       );
     }
-    // fr.code !== 0: fork remote is absent — fall through to provision it.
+    // fr.code !== 0: fork remote is absent — the steady state for a fork-less
+    // clone. A forking caller falls through below to provision it; a
+    // fork-less caller is done (see `if (!fork)` below).
   } else {
     mkdirFn(dirname(path));
     await ghFn(cfg, ["repo", "clone", nwo, path], { timeoutMs: CLONE_TIMEOUT });
     log.info(`cloned external repo ${nwo} -> ${path}`);
   }
+
+  if (!fork) return { path, forkNwo: null };
 
   const forkNwo = await ensureFork(cfg, nwo, deps);
   await gitFn(cfg, ["-C", path, "remote", "add", "fork", `https://github.com/${forkNwo}.git`], {

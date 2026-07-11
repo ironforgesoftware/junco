@@ -180,6 +180,97 @@ describe("ensureExternalClone", () => {
       ensureExternalClone(cfg, "up/stream", { ...f, existsFn: () => true }),
     ).rejects.toThrow(/origin/);
   });
+
+  // --- fork-less mode (#105): opts.fork === false skips `gh repo fork` and
+  // the `fork` remote entirely — assess's read-only path uses this so it
+  // doesn't leave an unused fork on the operator's account. ---
+
+  it("fork:false, fresh clone: clones upstream, never calls `gh repo fork`, forkNwo is null", async () => {
+    const made: string[] = [];
+    const f = fakes((c) => {
+      const a = c.args.join(" ");
+      if (a === `repo clone up/stream ${join("/ext", "up", "stream")}`) return {};
+      return { code: 1 }; // anything else (fork, api user, remote add) is a bug
+    });
+    const r = await ensureExternalClone(
+      cfg,
+      "up/stream",
+      { ...f, existsFn: () => false, mkdirFn: (d) => void made.push(d) },
+      { fork: false },
+    );
+    expect(r).toEqual({ path: join("/ext", "up", "stream"), forkNwo: null });
+    expect(f.calls.some((c) => c.bin === "gh" && c.args.join(" ").startsWith("repo fork"))).toBe(
+      false,
+    );
+    expect(f.calls.some((c) => c.bin === "git" && c.args.join(" ").includes("remote add"))).toBe(
+      false,
+    );
+    expect(made.length).toBeGreaterThan(0);
+  });
+
+  it("fork:false, existing clone without a fork remote: no-op past validation, forkNwo is null", async () => {
+    const f = fakes((c) => {
+      const a = c.args.join(" ");
+      if (c.bin === "git" && a.endsWith("config --get remote.origin.url"))
+        return { stdout: "https://github.com/up/stream.git\n" };
+      if (c.bin === "git" && a.endsWith("config --get remote.fork.url")) return { code: 1 }; // absent
+      return { code: 1 }; // anything else (fork, remote add) is a bug
+    });
+    const r = await ensureExternalClone(
+      cfg,
+      "up/stream",
+      { ...f, existsFn: () => true },
+      { fork: false },
+    );
+    expect(r).toEqual({ path: join("/ext", "up", "stream"), forkNwo: null });
+    expect(f.calls.filter((c) => c.bin === "gh")).toHaveLength(0);
+  });
+
+  it("fork:false, existing clone that already has a fork remote (previously forked by dispatch): still returns it, no new gh calls", async () => {
+    // The origin validation is identical for forked and fork-less clones
+    // (origin is always upstream); a fork-less caller landing on an
+    // already-forked clone just gets the existing forkNwo back — harmless,
+    // since fork-less callers don't consume it.
+    const f = fakes((c) => {
+      if (c.bin === "git" && c.args.join(" ").endsWith("config --get remote.origin.url"))
+        return { stdout: "https://github.com/up/stream.git\n" };
+      if (c.bin === "git" && c.args.join(" ").endsWith("config --get remote.fork.url"))
+        return { stdout: "https://github.com/me/stream.git\n" };
+      return { code: 1 };
+    });
+    const r = await ensureExternalClone(
+      cfg,
+      "up/stream",
+      { ...f, existsFn: () => true },
+      { fork: false },
+    );
+    expect(r).toEqual({ path: join("/ext", "up", "stream"), forkNwo: "me/stream" });
+    expect(f.calls.filter((c) => c.bin === "gh")).toHaveLength(0);
+  });
+
+  it("fork:true (default) is unchanged: fresh clone still forks and adds the fork remote", async () => {
+    const made: string[] = [];
+    const f = fakes((c) => {
+      const a = c.args.join(" ");
+      if (a === `repo clone up/stream ${join("/ext", "up", "stream")}`) return {};
+      if (a === "repo fork up/stream --clone=false") return {};
+      if (a === "api user --jq .login") return { stdout: "me\n" };
+      if (a === "repo view me/stream --json parent")
+        return { stdout: JSON.stringify({ parent: { name: "stream", owner: { login: "up" } } }) };
+      if (c.bin === "git" && a.includes("remote add fork https://github.com/me/stream.git"))
+        return {};
+      return { code: 1 };
+    });
+    const r = await ensureExternalClone(cfg, "up/stream", {
+      ...f,
+      existsFn: () => false,
+      mkdirFn: (d) => void made.push(d),
+    });
+    expect(r).toEqual({ path: join("/ext", "up", "stream"), forkNwo: "me/stream" });
+    expect(f.calls.some((c) => c.bin === "gh" && c.args.join(" ").startsWith("repo fork"))).toBe(
+      true,
+    );
+  });
 });
 
 describe("syncExternalClone", () => {

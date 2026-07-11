@@ -307,4 +307,39 @@ describe("resolveIssueTarget", () => {
       /not a GitHub issue reference/,
     );
   });
+
+  // --- fork-less mode (#105): opts.fork is forwarded to ensureCloneFn so a
+  // read-only caller (junco assess) can provision without leaving a fork. ---
+
+  it("forwards opts.fork to ensureCloneFn on the provisioning branch", async () => {
+    const cfg = freshCfg();
+    let receivedFork: boolean | undefined;
+    const t = await resolveIssueTarget(
+      cfg,
+      "up/stream#3",
+      {
+        ghFn,
+        ensureCloneFn: async (_cfg, _nwo, _deps, opts) => {
+          receivedFork = opts?.fork;
+          return { path: "/clones/up/stream", forkNwo: null };
+        },
+      },
+      { fork: false },
+    );
+    expect(receivedFork).toBe(false);
+    expect(t.forkNwo).toBeNull();
+  });
+
+  it("defaults to fork:true when opts is omitted (dispatch/analyze behavior unchanged)", async () => {
+    const cfg = freshCfg();
+    let receivedFork: boolean | undefined;
+    await resolveIssueTarget(cfg, "up/stream#3", {
+      ghFn,
+      ensureCloneFn: async (_cfg, _nwo, _deps, opts) => {
+        receivedFork = opts?.fork;
+        return { path: "/clones/up/stream", forkNwo: "me/stream" };
+      },
+    });
+    expect(receivedFork).toBeUndefined(); // resolveIssueTarget forwards `opts` as-is; ensureExternalClone itself defaults fork to true
+  });
 });

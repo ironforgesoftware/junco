@@ -68,7 +68,10 @@ describe("buildAssessTicket", () => {
 
     const t = parseTicket("submitted.md", content);
     expect(t.assess?.issue).toBe(7);
-    expect(t.assess?.issueTitle).toBe("Bug");
+    // issue_title lands in frontmatter (self-documentation) but is deliberately
+    // not parsed onto Ticket.assess — nothing renders it (#104).
+    expect(content).toContain(`issue_title: ${JSON.stringify("Bug")}`);
+    expect(t.assess).not.toHaveProperty("issueTitle");
     expect(t.assess?.autoPlan).toBe(false);
     expect(t.github).toBeNull();
     expect(content).toContain("## Issue context (untrusted content)");
@@ -263,6 +266,34 @@ describe("runAssessCommand", () => {
     expect(submittedContent).toContain("issue: 7");
     expect(submittedContent).toContain(JSON.stringify("Bug"));
     expect(out.join("")).toContain("queued:");
+  });
+
+  it("issue-ref target: resolveFn is called with { fork: false } — assess is read-only, never forks (#105)", async () => {
+    let receivedOpts: { fork?: boolean } | undefined;
+    const resolveFn = (async (_c, _target, _deps, opts) => {
+      receivedOpts = opts;
+      return {
+        nwo: "up/stream",
+        issue: 7,
+        title: "Bug",
+        body: "details",
+        clonePath: "/clones/up-stream",
+        external: true,
+        forkNwo: null,
+      } satisfies IssueTarget;
+    }) as typeof resolveIssueTarget;
+
+    const submitFn = ((_c: Config, _content: string) => "/inbox/x.md") as typeof submitTicket;
+
+    const code = await runAssessCommand(
+      cfg(),
+      "up/stream#7",
+      { autoPlan: false },
+      { printFn: () => {}, submitFn, resolveFn },
+    );
+
+    expect(code).toBe(0);
+    expect(receivedOpts).toEqual({ fork: false });
   });
 
   it("issue-ref target: resolveFn throws -> exit 1, message prefixed `junco assess:`", async () => {
