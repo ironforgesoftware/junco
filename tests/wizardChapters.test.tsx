@@ -5,6 +5,7 @@ import { until } from "./helpers/until.js";
 import { Tip, ReceiptList, Select, MultiSelect } from "../src/tui/wizard/controls.js";
 import { Welcome } from "../src/tui/wizard/chapters/Welcome.js";
 import { Workspace } from "../src/tui/wizard/chapters/Workspace.js";
+import { Model } from "../src/tui/wizard/chapters/Model.js";
 import { defaultAnswers } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
@@ -261,5 +262,100 @@ describe("Workspace", () => {
     await press(stdin, ENTER);
     await until(() => advanced);
     expect(answers.vaultRoot).toBe("/tmp/nest");
+  });
+});
+
+describe("Model chapter", () => {
+  it("inline path: url → key → probe → pick, prefixing the discovered id", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const io = fakeIo({ discoverModels: async () => ["m-fast", "m-big"] });
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, ENTER); // source: inline (first option)
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("endpoint"));
+    await press(stdin, ENTER); // accept default URL
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("API key"));
+    await press(stdin, ENTER); // accept default key
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("2 models found"));
+    await press(stdin, ENTER); // pick first discovered id
+    await until(() => advanced);
+    expect(answers.modelId).toBe("local/m-fast"); // 127.0.0.1 → "local" prefix
+    expect(answers.mode).toBe("inline");
+  });
+
+  it("empty discovery falls to manual entry", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const io = fakeIo({ discoverModels: async () => [] });
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, ENTER);
+    rerender(<Model {...props()} />);
+    await press(stdin, ENTER); // url
+    rerender(<Model {...props()} />);
+    await press(stdin, ENTER); // key
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Model id"));
+    stdin.write("anthropic/claude");
+    await tick();
+    rerender(<Model {...props()} />);
+    await press(stdin, ENTER);
+    await until(() => advanced);
+    expect(answers.modelId).toBe("anthropic/claude"); // slash → kept as-is
+  });
+
+  it("models_json path lists file entries", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const io = fakeIo({ listModelsJson: () => ["prov/m1", "prov/m2"] });
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, DOWN, ENTER); // second option: models.json
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("models.json"));
+    await press(stdin, ENTER); // accept default path
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("prov/m1"));
+    await press(stdin, ENTER);
+    await until(() => advanced);
+    expect(answers.mode).toBe("models_json");
+    expect(answers.modelId).toBe("prov/m1");
   });
 });
