@@ -109,7 +109,7 @@ function errMsg(e: unknown): string {
 }
 
 /** Chrome budget (title + border × 2 + footer description + toast + hint,
- * with a little slack for the ↑/↓ "more" indicators) subtracted from the
+ * with a little slack for the ▲/▼ "more" indicators) subtracted from the
  * terminal height to size the right-pane viewport; clamped to a minimum so a
  * tiny or unknown terminal still shows something usable. */
 const CHROME_ROWS = 8;
@@ -274,15 +274,19 @@ export function ConfigView({
       return;
     }
     if (key.upArrow) {
-      const next = Math.max(0, fieldIdxSafe - 1);
-      setFieldIdx(next);
-      setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
+      setFieldIdx((i) => {
+        const next = Math.max(0, i - 1);
+        setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
+        return next;
+      });
       return;
     }
     if (key.downArrow) {
-      const next = Math.min(fields.length - 1, fieldIdxSafe + 1);
-      setFieldIdx(next);
-      setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
+      setFieldIdx((i) => {
+        const next = Math.min(fields.length - 1, i + 1);
+        setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
+        return next;
+      });
       return;
     }
     if (key.leftArrow) {

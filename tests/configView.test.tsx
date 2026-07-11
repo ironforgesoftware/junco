@@ -189,6 +189,31 @@ describe("ConfigView", () => {
     await until(() => /Root directory Junco keeps its ticket queue under/.test(lastFrame() ?? ""));
   });
 
+  it("two rapid down-arrows with no tick between them advance focus by two", async () => {
+    // Regression test: the up/down handlers used to read a render-time-fixed
+    // `fieldIdxSafe` into a `next` local before calling `setFieldIdx(next)`.
+    // Two keystrokes fired before React commits a render between them both
+    // computed the same stale `next`, so the second `setFieldIdx` was a
+    // no-op and one keystroke silently vanished. Firing the two raw
+    // `stdin.write`s back-to-back (no `tick()` in between, unlike `press()`)
+    // reproduces that race; the fix nests the scroll-offset update inside a
+    // stale-safe functional `setFieldIdx` updater so each keystroke
+    // compounds off the previous one regardless of commit timing.
+    const p = fixture({ vaultRoot: "/v" });
+    const { lastFrame, stdin } = render(<ConfigView configPath={p} onExit={() => {}} />);
+    await until(() => /general/.test(lastFrame() ?? ""));
+    // general section, field order: vaultRoot (0) -> juncoSubdir (1) -> tools (2).
+    expect(lastFrame()).toMatch(/Root directory Junco keeps its ticket queue under/);
+    stdin.write(DOWN);
+    stdin.write(DOWN);
+    await until(() => /Tool allowlist granted to the coding agent\./.test(lastFrame() ?? ""));
+    const f = lastFrame() ?? "";
+    expect(f).toMatch(/Tool allowlist granted to the coding agent\./);
+    // If only one keystroke had landed, focus would have stopped on
+    // juncoSubdir instead — assert that description is NOT what's shown.
+    expect(f).not.toMatch(/Subdirectory under vaultRoot holding inbox\/processing\/done\/failed\./);
+  });
+
   it("windows the right pane so a long section (model, 15 levers) doesn't overflow", async () => {
     const p = fixture({ vaultRoot: "/v" });
     const { lastFrame, stdin } = render(
