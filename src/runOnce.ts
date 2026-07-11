@@ -224,9 +224,15 @@ export async function executeClaimed(
         });
         if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
         else
-          await reporter
-            .onFinal(next, outcomeFromQa(flow.status, flow.result))
-            .catch(() => undefined);
+          // #103: analyze tickets never post. Route the terminal disposition
+          // through a hard-coded no-op reporter rather than the injected
+          // `reporter` — this makes the guarantee structural instead of
+          // resting on the reporter's own `if (!t.github …) return` guard,
+          // which a hand-authored ticket carrying BOTH `analyze:` and
+          // `github:` would otherwise sail through.
+          await NOOP_REPORTER.onFinal(next, outcomeFromQa(flow.status, flow.result)).catch(
+            () => undefined,
+          );
         log.info("finalized (analyze)", { dst: flow.dst, status: flow.status });
         return;
       }
