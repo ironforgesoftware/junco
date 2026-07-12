@@ -15,6 +15,7 @@ function harness(initial: Snap, events: Snap[]) {
   const setLog = vi.fn();
   const restart = vi.fn();
   const logError = vi.fn();
+  const onApplied = vi.fn();
   const initialConfig =
     initial instanceof Error || "assembleError" in initial ? baseConfig : initial.config;
   const holder = makeConfigHolder(initialConfig);
@@ -42,6 +43,7 @@ function harness(initial: Snap, events: Snap[]) {
     setLogLevelFn: setLog,
     onRestartFields: restart,
     logFn: { warn: vi.fn(), error: logError },
+    onApplied,
   });
   return {
     fire: () => {
@@ -52,6 +54,7 @@ function harness(initial: Snap, events: Snap[]) {
     setLog,
     restart,
     logError,
+    onApplied,
     handle,
   };
 }
@@ -140,5 +143,34 @@ describe("configWatcher", () => {
       "config reload failed; keeping previous config",
       expect.objectContaining({ error: expect.stringContaining("MISSING_KEY") }),
     );
+  });
+
+  it("onApplied fires after a successful reload (Task 10 hot-reload clear)", () => {
+    const h = harness(baseline, [
+      {
+        parsed: { vaultRoot: "/v", observability: { logLevel: "debug", healthPort: 8787 } },
+        config: { ...baseConfig, logLevel: "debug" },
+      },
+    ]);
+    h.fire();
+    expect(h.onApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it("onApplied does NOT fire when a reload's parse fails (bad json)", () => {
+    const h = harness(baseline, [new Error("bad json")]);
+    h.fire();
+    expect(h.onApplied).not.toHaveBeenCalled();
+  });
+
+  it("onApplied does NOT fire when a reload's assembly throws (bad apiKey)", () => {
+    const assembleError = new Error("config: model.apiKey references $MISSING_KEY");
+    const h = harness(baseline, [
+      {
+        parsed: { vaultRoot: "/v", observability: { logLevel: "info", healthPort: 8787 } },
+        assembleError,
+      },
+    ]);
+    h.fire();
+    expect(h.onApplied).not.toHaveBeenCalled();
   });
 });

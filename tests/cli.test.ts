@@ -100,6 +100,26 @@ describe("run(['start']) — happy path", () => {
     await run(["start"], deps);
     expect(fakeLock.release).toHaveBeenCalledTimes(1);
   });
+
+  it("wires a shared provider gate into both watchConfigFn's onApplied and mainLoopFn's deps (Task 10)", async () => {
+    const watchConfigFn = vi.fn(() => ({ close: vi.fn() }));
+    const deps = makeDeps({ watchConfigFn });
+    await run(["start"], deps);
+
+    expect(watchConfigFn).toHaveBeenCalledTimes(1);
+    const [, , watchDeps] = (watchConfigFn as MockedFunction<any>).mock.calls[0];
+    expect(typeof watchDeps.onApplied).toBe("function");
+
+    const [, , , mainLoopDeps] = (deps.mainLoopFn as MockedFunction<any>).mock.calls[0];
+    expect(mainLoopDeps.gate).toBeDefined();
+    expect(typeof mainLoopDeps.gate.clearLatched).toBe("function");
+
+    // Same instance, not a lookalike — the watcher's onApplied must clear the
+    // EXACT gate the daemon reads its claim/health state from, not a copy.
+    const clearSpy = vi.spyOn(mainLoopDeps.gate, "clearLatched");
+    watchDeps.onApplied();
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

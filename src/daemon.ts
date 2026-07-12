@@ -21,9 +21,15 @@ import { queuePaths } from "./config.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
-import { waitForEndpoint, endpointReachable, type StopFlagLike } from "./health.js";
+import {
+  waitForEndpoint,
+  endpointReachable,
+  makeCachedProbe,
+  type StopFlagLike,
+} from "./health.js";
 import { log } from "./logging.js";
 import { metrics } from "./metrics.js";
+import { ProviderGate } from "./providerGate.js";
 import {
   startHealthServer,
   type HealthServerHandle,
@@ -219,6 +225,31 @@ export interface MainLoopDeps {
    * (restart-kind) collaborators above intentionally keep reading the
    * initial `cfg` — see the "Do NOT change" list in mainLoop's body. */
   configHolder?: ConfigHolder;
+  /** Provider gate (Task 10): classification-driven claim pausing, shared by
+   * the claim readyFn (serial + scheduler), the health server's gateStatus,
+   * and (via cli.ts) the config-watcher's clear-on-successful-reload. Absent
+   * → mainLoop builds its own via makeProviderGate(cfg). Typed as a Pick (not
+   * the concrete class) so tests can inject a plain fake — same pattern as
+   * runOnce.test.ts's fakeGate — without pulling in the real latching state
+   * machine. */
+  gate?: Pick<
+    ProviderGate,
+    "claimBlockReason" | "status" | "reportFailure" | "reportSuccess" | "notBeforeIso"
+  >;
+}
+
+/**
+ * Default provider-gate factory (Task 10): seeds retry backoff from
+ * cfg.retryBackoffSeconds and routes transitions into the process-wide
+ * metrics singleton. Shared by mainLoop's own default and cli.ts (which
+ * constructs one gate up front so it can wire the SAME instance into both
+ * mainLoopFn's deps and the config-watcher's onApplied clear).
+ */
+export function makeProviderGate(cfg: Config): ProviderGate {
+  return new ProviderGate({
+    retryBackoffSeconds: cfg.retryBackoffSeconds,
+    onTransition: (_from, to) => metrics.recordGateTransition(to),
+  });
 }
 
 function defaultMkdirs(cfg: Config): void {
@@ -244,6 +275,11 @@ export interface SchedulerDeps {
    * poll sleep) prefer `configHolder.current` over the `cfg` this scheduler
    * was invoked with. */
   configHolder?: ConfigHolder;
+  /** Provider gate (Task 10), threaded into the default executeFn's
+   * executeClaimed call (peer of `reporter`) — absent preserves pre-gate
+   * scheduler behavior exactly. See MainLoopDeps.gate for the full picture;
+   * mainLoop passes its own gate through here. */
+  gate?: Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">;
 }
 
 /**
@@ -266,7 +302,11 @@ export async function runScheduler(
   const executeFn =
     deps.executeFn ??
     ((c: Config, w: ClaimedWork) =>
-      executeClaimed(c, w, { abortSignal: stopFlag.forceSignal, reporter: deps.reporter }));
+      executeClaimed(c, w, {
+        abortSignal: stopFlag.forceSignal,
+        reporter: deps.reporter,
+        gate: deps.gate,
+      }));
   const sleep = deps.sleep ?? sleepInterruptible;
   // Live-reload seam (Task 6): falls back to the `cfg` this scheduler was
   // invoked with when no holder is wired (existing callers/tests unaffected).
@@ -407,23 +447,6 @@ export async function mainLoop(
     }
   };
 
-  // The daemon's default runOnce probes endpoint readiness before claiming,
-  // so an endpoint outage queues work instead of burning tickets into failed/.
-  const runOnceFn =
-    deps.runOnceFn ??
-    ((c: Config) =>
-      runOnce(c, {
-        readyFn: () => endpointReachable(c),
-        abortSignal: stopFlag.forceSignal,
-        reporter,
-      }));
-  const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
-  const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
-  const waitForEndpointFn =
-    deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
-  const sleep = deps.sleep ?? sleepInterruptible;
-  const mkdirs = deps.mkdirs ?? defaultMkdirs;
-  const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
   // Live-reload seam (Task 6): per-iteration reads below prefer the holder's
   // current config over the `cfg` this loop was started with. Setup below
   // (mkdirs, recoverOrphans, pruneFn, waitForEndpoint, the health server's
@@ -433,6 +456,47 @@ export async function mainLoop(
   // the holder below — see overlayFrozenRestartFields.
   const activeCfg = (): Config =>
     deps.configHolder ? overlayFrozenRestartFields(cfg, deps.configHolder.current) : cfg;
+
+  // Provider gate (Task 10): classification-driven claim pausing. A latched
+  // auth/quota/misconfig state (or an unexpired rate-limit/outage backoff)
+  // pauses claiming without touching retry_count; runOnce/executeClaimed
+  // report into it below, the health server surfaces its status, and (via
+  // cli.ts) a successful config hot-reload clears a stale latch.
+  const gate = deps.gate ?? makeProviderGate(cfg);
+  // Single TTL-cached probe shared by the claim gate and the health server so
+  // neither multiplies upstream endpoint-probe traffic. Wraps the *call* —
+  // activeCfg() is read fresh on every uncached probe — so a hot-reloaded
+  // endpoint config is picked up on the next probe past the TTL; no cache
+  // invalidation is needed.
+  const cachedReachable = makeCachedProbe(() => endpointReachable(activeCfg()));
+  const gatedReady = async (): Promise<boolean> => {
+    const block = gate.claimBlockReason();
+    if (block) {
+      log.warn("claiming paused by provider gate", { reason: block });
+      return false;
+    }
+    return cachedReachable();
+  };
+
+  // The daemon's default runOnce probes endpoint readiness (gated) before
+  // claiming, so an endpoint outage OR a latched provider failure queues work
+  // instead of burning tickets into failed/.
+  const runOnceFn =
+    deps.runOnceFn ??
+    ((c: Config) =>
+      runOnce(c, {
+        readyFn: gatedReady,
+        abortSignal: stopFlag.forceSignal,
+        reporter,
+        gate,
+      }));
+  const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
+  const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
+  const waitForEndpointFn =
+    deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
+  const sleep = deps.sleep ?? sleepInterruptible;
+  const mkdirs = deps.mkdirs ?? defaultMkdirs;
+  const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
   mkdirs(cfg);
   // Stamp the start time once the queue dirs exist; the health server reports
@@ -458,7 +522,8 @@ export async function mainLoop(
         host: cfg.healthHost,
         port: cfg.healthPort,
         metrics,
-        readinessProbe: () => endpointReachable(activeCfg()),
+        readinessProbe: cachedReachable,
+        gateStatus: () => gate.status(),
       });
       log.info("health endpoint listening", { url: health.url });
     } catch (e) {
@@ -477,12 +542,13 @@ export async function mainLoop(
         executeFn: deps.executeFn,
         sleep: deps.sleep,
         configHolder: deps.configHolder,
-        readyFn: () => endpointReachable(activeCfg()),
+        readyFn: gatedReady,
         maybeBridgeSweepFn: async () => {
           await maybeBridgeSweep();
           await maybeOutboxDrain();
         },
         reporter,
+        gate,
       });
     } else {
       let idleAnnounced = false;
