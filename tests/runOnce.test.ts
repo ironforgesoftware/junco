@@ -597,6 +597,52 @@ describe("provider gate wiring (Phase 2 Task 5)", () => {
     expect(gate.failureCalls).toEqual([]);
   });
 
+  it("Q&A outage error reports to the gate but still requeues via the BUDGETED path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const gate = fakeGate();
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: erroringFactory("connect ECONNREFUSED 127.0.0.1:1234"),
+      gate,
+    });
+    expect(handled).toBe(true);
+    expect(gate.failureCalls).toEqual([
+      { cls: "outage", reason: "connect ECONNREFUSED 127.0.0.1:1234" },
+    ]);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path, NOT the gate's count-free one
+    expect(content).toMatch(/not_before:/);
+  });
+
+  it("crash containment: an outage-class factory reject reports to the gate but keeps the BUDGETED requeue path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const outageFactory = () => async (): Promise<never> => {
+      throw new Error("fetch failed");
+    };
+    const gate = fakeGate();
+
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: outageFactory, gate });
+    expect(handled).toBe(true);
+    expect(gate.failureCalls).toEqual([{ cls: "outage", reason: "fetch failed" }]);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path, NOT the gate's count-free one
+    expect(content).toMatch(/not_before:/);
+  });
+
   it("without a gate in deps, a 401 error falls back to the existing budgeted requeue path (byte-identical pre-gate behavior)", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");

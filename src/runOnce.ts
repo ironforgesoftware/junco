@@ -397,8 +397,11 @@ export async function executeClaimed(
       // key, catalog-miss model id) throws OUTSIDE runAgent's try/catch, so
       // this is the only place that reason string ever reaches the
       // classifier. Gate-class → the gate's count-free requeue; everything
-      // else keeps the existing budgeted requeueTicket path.
+      // else keeps the existing budgeted requeueTicket path. Outage mirrors
+      // the Q&A site: report to the gate (non-latching backoff pauses
+      // claiming) but stay on the budgeted path below.
       const crashCls = classifyProviderFailure(reason);
+      if (deps.gate && crashCls === "outage") deps.gate.reportFailure(crashCls, reason);
       if (deps.gate && GATE_CLASSES.has(crashCls)) {
         deps.gate.reportFailure(crashCls, reason);
         try {
