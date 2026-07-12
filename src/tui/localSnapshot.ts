@@ -325,13 +325,14 @@ export interface HealthBody {
   gate?: GateStatus | null;
 }
 
-/** Trimmed projection of GateStatus for the dashboard: drops `since` (not
- * rendered) and loses the branded GateStateKind (dashboard only switches on
- * a handful of known strings, see LocalDashboard.tsx's gate-color sets). */
+/** Trimmed projection of GateStatus for the dashboard: state + reason only —
+ * rendered fields (LocalDashboard.tsx reads `daemon.gate.state`/`.reason`
+ * exclusively). Drops `since` and `until` (neither is rendered) and loses the
+ * branded GateStateKind (the dashboard only switches on a handful of known
+ * strings, see LocalDashboard.tsx's gate-color sets). */
 export interface DaemonGateInfo {
   state: string;
   reason: string | null;
-  until: string | null;
 }
 
 export interface DaemonDetail {
@@ -401,7 +402,6 @@ export async function fetchHealthBody(
   }
 }
 
-// One shared TTL-cached endpoint probe for the whole TUI process (module
 /** Compose DaemonDetail from an ALREADY-fetched /health body (no second
  * request) plus an independent inference-endpoint probe (endpointReachable
  * hits /models, health.ts:40 — reachability is independent of the daemon).
@@ -428,7 +428,6 @@ export async function buildDaemonDetail(
         : {
             state: healthBody.gate.state,
             reason: healthBody.gate.reason,
-            until: healthBody.gate.until,
           };
     const progress: DaemonDetail["progress"] = {};
     for (const [id, v] of Object.entries(m.currentProgress ?? {})) {

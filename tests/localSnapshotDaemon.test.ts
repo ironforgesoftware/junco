@@ -144,8 +144,9 @@ describe("buildDaemonDetail", () => {
       },
     };
     const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
-    // The snapshot's gate is a trimmed projection (state/reason/until) — no `since`.
-    expect(d.gate).toEqual({ state: "auth_error", reason: "invalid api key", until: null });
+    // The snapshot's gate is a trimmed projection (state/reason only) — no
+    // `since`/`until`, neither is rendered.
+    expect(d.gate).toEqual({ state: "auth_error", reason: "invalid api key" });
   });
 
   it("gate absent from the /health payload (older daemon) → null", async () => {

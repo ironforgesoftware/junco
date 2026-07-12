@@ -89,6 +89,24 @@ describe("runDoctor", () => {
     expect(lines.join("\n")).toMatch(/inference endpoint.*catalog.*probe skipped/i);
   });
 
+  it("reports probe-disabled (not catalog-eligible) when worker.endpointProbe=never on a non-catalog model", async () => {
+    const lines: string[] = [];
+    // okConfig.model is a LOCAL model (id "local/m") — not catalog-eligible.
+    // Probing is skipped here purely because endpointProbe=never overrides
+    // the catalog-skip heuristic, so the "catalog-eligible" note would be
+    // actively wrong.
+    const cfg = { ...okConfig, endpointProbe: "never" } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(
+      /inference endpoint.*probe disabled.*worker\.endpointProbe=never/i,
+    );
+    expect(lines.join("\n")).not.toMatch(/catalog-eligible/i);
+  });
+
   it("does not report sandbox when disabled (default)", async () => {
     const lines: string[] = [];
     await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));

@@ -156,11 +156,17 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // eligibility, not an actual catalog hit) and the runtime cascade
     // (resolveModelViaRegistries) falls through to inline resolution at first
     // session — "hosted provider" would be actively wrong for that case.
+    // worker.endpointProbe="never" is a SEPARATE reason to skip: it overrides
+    // the catalog-skip heuristic outright (probePolicy in health.ts), so it
+    // can fire on a non-catalog (e.g. local) model too — the catalog-eligible
+    // note would be wrong there, so branch on the actual reason.
     if (!probePolicy(cfg)) {
       report(
         "ok",
         "inference endpoint",
-        `${cfg.model.id} — catalog-eligible; probe skipped (resolution confirmed at first session)`,
+        cfg.endpointProbe === "never"
+          ? `${cfg.model.id} — probe disabled (worker.endpointProbe=never)`
+          : `${cfg.model.id} — catalog-eligible; probe skipped (resolution confirmed at first session)`,
       );
     } else {
       const up = await reachableFn(cfg);

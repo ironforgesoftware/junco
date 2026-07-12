@@ -356,7 +356,7 @@ describe("DaemonSection", () => {
   it("auth_error gate → hollow dot + `state — reason` line (red-dot case)", () => {
     const daemon = {
       ...DAEMON,
-      gate: { state: "auth_error", reason: "invalid api key", until: null },
+      gate: { state: "auth_error", reason: "invalid api key" },
     };
     const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
     expect(f).toContain("○ inference endpoint");
@@ -366,7 +366,7 @@ describe("DaemonSection", () => {
   it("rate_limited gate with no reason → state-only line, no dangling dash", () => {
     const daemon = {
       ...DAEMON,
-      gate: { state: "rate_limited", reason: null, until: "2026-07-09T12:05:00Z" },
+      gate: { state: "rate_limited", reason: null },
     };
     const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
     expect(f).toContain("rate_limited");

@@ -26,6 +26,10 @@ const AUTH =
 const MODEL_NOT_FOUND =
   /model[_ ]not[_ ]found|model[^\n]{0,60}(?:not found|does not exist)|unknown model|did not resolve from the builtin catalog/i;
 const RATE_LIMIT = /\b429\b|rate[_ -]?limit|overloaded|too many requests/i;
+// \b5\d{2}\b can spuriously match an incidental 3-digit number in unrelated
+// text (a line number, an issue number, ...) — accepted because "outage"
+// only ever drives a non-latching backoff report (self-healing on the next
+// success), unlike the LATCHED classes above where a false match would stick.
 const OUTAGE_TEXT =
   /\b5\d{2}\b|bad gateway|service unavailable|internal server error|fetch failed|socket hang up/i;
 const OUTAGE_ERRNO = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE/;
