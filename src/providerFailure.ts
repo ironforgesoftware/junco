@@ -24,7 +24,7 @@ const QUOTA = /insufficient[_ ]quota|exceeded your current quota|billing/i;
 const AUTH =
   /\b40[13]\b|unauthorized|forbidden|invalid[_ -]?(?:api[_ -]?key|x-api-key|bearer token)|authentication[_ -]?(?:error|failed)/i;
 const MODEL_NOT_FOUND =
-  /model[_ ]not[_ ]found|model[^\n]{0,60}(?:not found|does not exist)|unknown model/i;
+  /model[_ ]not[_ ]found|model[^\n]{0,60}(?:not found|does not exist)|unknown model|did not resolve from the builtin catalog/i;
 const RATE_LIMIT = /\b429\b|rate[_ -]?limit|overloaded|too many requests/i;
 const OUTAGE_TEXT =
   /\b5\d{2}\b|bad gateway|service unavailable|internal server error|fetch failed|socket hang up/i;

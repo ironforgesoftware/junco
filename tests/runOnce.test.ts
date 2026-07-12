@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runOnce, claimNextTask } from "../src/runOnce.js";
 import type { Config, Ticket } from "../src/types.js";
+import type { ProviderFailureClass } from "../src/providerFailure.js";
 import type { AssessFlowResult } from "../src/assessFlow.js";
 import type { AnalyzeFlowResult } from "../src/analyzeFlow.js";
 import { listPending } from "../src/assessReview.js";
@@ -431,6 +432,189 @@ describe("executeClaimed crash containment", () => {
     writeFileSync(join(j, "inbox", "b.md"), "---\nid: b\nretry_count: 2\n---\nq\n", "utf8");
     await runOnce(cfg(root), { sessionFactoryFor: rejectingFactory, reporter });
     expect(calls).toEqual(["start", "final:failed"]);
+  });
+});
+
+/** A session factory whose fake session's prompt() rejects with `message` —
+ * surfaces as result.errorMessage (see agent/session.ts's outer catch). */
+function erroringFactory(message: string) {
+  return () => async () => ({
+    subscribe() {
+      return () => {};
+    },
+    async prompt() {
+      throw new Error(message);
+    },
+    dispose() {},
+    abort: async () => {},
+  });
+}
+
+/** Records calls made by the code under test; a plain object satisfying
+ * `Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">` —
+ * no need to pull in the real latching state machine for these tests. */
+function fakeGate(notBefore = "2099-01-01T00:00:00.000Z") {
+  const failureCalls: { cls: ProviderFailureClass; reason: string }[] = [];
+  let successCalls = 0;
+  return {
+    failureCalls,
+    get successCalls() {
+      return successCalls;
+    },
+    reportFailure(cls: ProviderFailureClass, reason: string) {
+      failureCalls.push({ cls, reason });
+    },
+    reportSuccess() {
+      successCalls += 1;
+    },
+    notBeforeIso() {
+      return notBefore;
+    },
+  };
+}
+
+describe("provider gate wiring (Phase 2 Task 5)", () => {
+  it("gate-class Q&A failure (401 auth) requeues WITHOUT consuming the retry budget and reports to the gate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const gate = fakeGate();
+    const calls: string[] = [];
+    const reporter = {
+      onStart: async () => void calls.push("start"),
+      onRequeue: async () => void calls.push("requeue"),
+      onFinal: async () => void calls.push("final"),
+    };
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: erroringFactory("401 invalid x-api-key"),
+      gate,
+      reporter,
+    });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).not.toMatch(/retry_count:/); // absent, not bumped
+    expect(content).toMatch(/not_before:/);
+    expect(gate.failureCalls).toHaveLength(1);
+    expect(gate.failureCalls[0]?.cls).toBe("auth");
+    expect(calls).toEqual(["start", "requeue"]);
+  });
+
+  it("gate-class Q&A failure (429 rate limit) reports rate_limit and requeues count-free", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const gate = fakeGate();
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: erroringFactory("429 rate limited"),
+      gate,
+    });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).not.toMatch(/retry_count:/);
+    expect(content).toMatch(/not_before:/);
+    expect(gate.failureCalls).toEqual([{ cls: "rate_limit", reason: "429 rate limited" }]);
+  });
+
+  it("crash containment classifies a catalog-miss session-build throw as model_not_found and gate-routes it count-free", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    // retry_count already at the budget cap — proves the gate path bypasses
+    // the budget check entirely rather than just having budget left.
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\nretry_count: 2\n---\nq\n", "utf8");
+    const catalogMissFactory = () => async (): Promise<never> => {
+      throw new Error(
+        'model "anthropic/nope": provider "anthropic" did not resolve from the builtin catalog and ' +
+          "no inline endpoint is configured — set model.baseUrl + model.apiKey, point " +
+          "model.modelsJson at a Pi models.json, or use a catalog provider id.",
+      );
+    };
+    const gate = fakeGate();
+
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: catalogMissFactory, gate });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 2/); // unchanged, not consumed
+    expect(gate.failureCalls).toHaveLength(1);
+    expect(gate.failureCalls[0]?.cls).toBe("model_not_found");
+  });
+
+  it("plain-text Q&A error with a gate present still uses the existing budgeted requeue path and does not latch the gate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const gate = fakeGate();
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: erroringFactory("agent gave up"),
+      gate,
+    });
+    expect(handled).toBe(true);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path consumed the count
+    expect(gate.failureCalls).toEqual([]); // no latch — classifier says unknown
+  });
+
+  it("a successful Q&A run reports success to the gate exactly once, just before finalize", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const gate = fakeGate();
+
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory(), gate });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "done"))).toHaveLength(1);
+    expect(gate.successCalls).toBe(1);
+    expect(gate.failureCalls).toEqual([]);
+  });
+
+  it("without a gate in deps, a 401 error falls back to the existing budgeted requeue path (byte-identical pre-gate behavior)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: erroringFactory("401 invalid x-api-key"),
+    });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path, not the gate's count-free path
+    expect(content).toMatch(/not_before:/);
   });
 });
 

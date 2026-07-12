@@ -37,6 +37,17 @@ describe("classifyProviderFailure", () => {
     }
   });
 
+  it("catalog-miss / registry-miss session-build errors → model_not_found (runOnce crash containment)", () => {
+    for (const s of [
+      'model "anthropic/nope": provider "anthropic" did not resolve from the builtin catalog and no ' +
+        "inline endpoint is configured — set model.baseUrl + model.apiKey, point model.modelsJson at " +
+        "a Pi models.json, or use a catalog provider id.",
+      'Pi model "openai/gpt-4o" not found in registry (baseUrl: https://api.openai.com/v1).',
+    ]) {
+      expect(classifyProviderFailure(s), s).toBe("model_not_found");
+    }
+  });
+
   it("rate_limit: 429 / rate limit / overloaded / too many requests", () => {
     for (const s of [
       "429 Too Many Requests",
