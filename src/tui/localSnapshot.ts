@@ -18,7 +18,8 @@ import { readWatchlist, watchlistPath } from "../watchlist.js";
 import { nwoFromRemoteUrl } from "../githubInbox.js";
 import { repoDiscriminator } from "../worktree.js";
 import type { MetricsSnapshot } from "../metrics.js";
-import { endpointReachable } from "../health.js";
+import { endpointReachable, makeCachedProbe } from "../health.js";
+import type { GateStatus } from "../providerGate.js";
 import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
 import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
@@ -313,6 +314,19 @@ export interface HealthBody {
   status: string;
   ready: boolean;
   metrics: MetricsSnapshot;
+  /** Provider gate (Task 9/10) — always present on a current daemon
+   * (possibly `null` when no gate is wired); the key is absent entirely on an
+   * older daemon build. Optional here so both shapes typecheck. */
+  gate?: GateStatus | null;
+}
+
+/** Trimmed projection of GateStatus for the dashboard: drops `since` (not
+ * rendered) and loses the branded GateStateKind (dashboard only switches on
+ * a handful of known strings, see LocalDashboard.tsx's gate-color sets). */
+export interface DaemonGateInfo {
+  state: string;
+  reason: string | null;
+  until: string | null;
 }
 
 export interface DaemonDetail {
@@ -332,6 +346,9 @@ export interface DaemonDetail {
     string,
     { turns: number; lastTool: string | null; outputTokens: number; startedAt: string }
   >;
+  /** null when no gate is configured/reported, or on an older daemon whose
+   * /health payload never had the field. */
+  gate: DaemonGateInfo | null;
   error: string | null;
 }
 
@@ -350,6 +367,7 @@ function emptyDaemon(cfg: Config): DaemonDetail {
     tasksByStatus: {},
     currentTickets: [],
     progress: {},
+    gate: null,
     error: null,
   };
 }
@@ -378,9 +396,25 @@ export async function fetchHealthBody(
   }
 }
 
+// One shared TTL-cached endpoint probe for the whole TUI process (module
+// level, not per-call) — buildDaemonDetail runs on every cheap-tick poll, and
+// without sharing a cache the dashboard would multiply /models probes at the
+// poll cadence. Mirrors the daemon's own claim-gate + /health cache sharing
+// (daemon.ts:471, health.ts:171-208 makeCachedProbe). The wrapped closure
+// reads whatever cfg/deps buildDaemonDetail set immediately before invoking
+// it below — junco's TUI/CLI only ever targets one fixed cfg per process, so
+// this indirection is safe in practice; tests calling buildDaemonDetail with
+// varying fixtures stay sequential (each call is awaited before the next).
+let probeCtx: { cfg: Config; deps: LocalSnapshotDeps } | null = null;
+const cachedEndpointProbe = makeCachedProbe(async (): Promise<boolean> => {
+  if (probeCtx === null) return true;
+  return endpointReachable(probeCtx.cfg, { fetchFn: probeCtx.deps.fetchFn });
+});
+
 /** Compose DaemonDetail from an ALREADY-fetched /health body (no second
  * request) plus an independent inference-endpoint probe (endpointReachable
- * hits /models, health.ts:40 — reachability is independent of the daemon). */
+ * hits /models, health.ts:40 — reachability is independent of the daemon),
+ * routed through the module-level `cachedEndpointProbe` above. */
 export async function buildDaemonDetail(
   cfg: Config,
   healthBody: HealthBody | null,
@@ -388,9 +422,18 @@ export async function buildDaemonDetail(
 ): Promise<DaemonDetail> {
   const base = emptyDaemon(cfg);
   try {
-    base.endpointReachable = await endpointReachable(cfg, { fetchFn: deps.fetchFn });
+    probeCtx = { cfg, deps };
+    base.endpointReachable = await cachedEndpointProbe();
     if (healthBody === null) return base; // daemon down
     const m = healthBody.metrics;
+    const gate: DaemonGateInfo | null =
+      healthBody.gate == null
+        ? null
+        : {
+            state: healthBody.gate.state,
+            reason: healthBody.gate.reason,
+            until: healthBody.gate.until,
+          };
     const progress: DaemonDetail["progress"] = {};
     for (const [id, v] of Object.entries(m.currentProgress ?? {})) {
       progress[id] = {
@@ -412,6 +455,7 @@ export async function buildDaemonDetail(
       tasksByStatus: { ...(m.tasksByStatus ?? {}) },
       currentTickets: [...(m.currentTickets ?? [])],
       progress,
+      gate,
     };
   } catch (e) {
     return { ...base, error: e instanceof Error ? e.message : String(e) };

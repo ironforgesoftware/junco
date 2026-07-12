@@ -128,5 +128,35 @@ describe("buildDaemonDetail", () => {
     expect(d.endpointReachable).toBe(true);
     expect(d.currentTickets).toEqual([]);
     expect(d.error).toBeNull();
+    expect(d.gate).toBeNull();
+  });
+
+  it("parses gate from the /health payload (Task 9/10 field)", async () => {
+    const body: HealthBody = {
+      status: "ok",
+      ready: true,
+      metrics: metrics(),
+      gate: {
+        state: "auth_error",
+        reason: "invalid api key",
+        since: "2026-07-10T00:00:00Z",
+        until: null,
+      },
+    };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    // The snapshot's gate is a trimmed projection (state/reason/until) — no `since`.
+    expect(d.gate).toEqual({ state: "auth_error", reason: "invalid api key", until: null });
+  });
+
+  it("gate absent from the /health payload (older daemon) → null", async () => {
+    const body: HealthBody = { status: "ok", ready: true, metrics: metrics() };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    expect(d.gate).toBeNull();
+  });
+
+  it("gate explicitly null in the payload (no gate configured) → null", async () => {
+    const body: HealthBody = { status: "ok", ready: true, metrics: metrics(), gate: null };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    expect(d.gate).toBeNull();
   });
 });

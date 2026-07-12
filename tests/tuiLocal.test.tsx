@@ -30,6 +30,7 @@ const DAEMON: DaemonDetail = {
   tokensOut: 2000,
   tasksByStatus: { completed: 5, failed: 1 },
   currentTickets: ["gh-acme-api-1"],
+  gate: null,
   progress: {
     "gh-acme-api-1": {
       turns: 3,
@@ -343,6 +344,40 @@ describe("DaemonSection", () => {
       <DaemonSection daemon={{ ...DAEMON, up: false }} scroll={0} height={20} focused={false} />,
     ).lastFrame()!;
     expect(f).toContain("○ not running");
+  });
+
+  it("gate null (plain ok case) → filled dot, no reason line", () => {
+    const f = render(<DaemonSection daemon={DAEMON} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).toContain("● inference endpoint");
+    expect(f).not.toContain("auth_error");
+    expect(f).not.toContain("rate_limited");
+  });
+
+  it("auth_error gate → hollow dot + `state — reason` line (red-dot case)", () => {
+    const daemon = {
+      ...DAEMON,
+      gate: { state: "auth_error", reason: "invalid api key", until: null },
+    };
+    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).toContain("○ inference endpoint");
+    expect(f).toContain("auth_error — invalid api key");
+  });
+
+  it("rate_limited gate with no reason → state-only line, no dangling dash", () => {
+    const daemon = {
+      ...DAEMON,
+      gate: { state: "rate_limited", reason: null, until: "2026-07-09T12:05:00Z" },
+    };
+    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).toContain("rate_limited");
+    expect(f).not.toContain("rate_limited —");
+  });
+
+  it("gate ok/null but endpoint unreachable → hollow dot, no reason line", () => {
+    const daemon = { ...DAEMON, endpointReachable: false, gate: null };
+    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).toContain("○ inference endpoint");
+    expect(f).not.toContain("auth_error");
   });
 });
 

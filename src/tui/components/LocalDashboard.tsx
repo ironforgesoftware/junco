@@ -128,6 +128,12 @@ const SOURCE_TAG: Record<LocalRepo["source"], string> = {
   clone: "(clone)",
 };
 
+// Provider-gate (Task 9/10) severity buckets for the daemon panel's
+// endpoint dot — latched auth/quota/config failures outrank a transient
+// rate-limit/outage backoff, which in turn outranks a plain probe miss.
+const GATE_RED = new Set(["auth_error", "quota_exhausted", "misconfig"]);
+const GATE_YELLOW = new Set(["rate_limited", "outage_backoff"]);
+
 /** GitHub outbox op-log: live ops (selectable) with the cursor op's lastError
  * expanded, plus a read-only dead tail. Mirrors outboxCmd's opLine format. */
 export function OutboxSection({
@@ -413,14 +419,28 @@ export function DaemonSection({
       </Text>,
     );
   }
+  const gateState = daemon.gate?.state ?? "ok";
+  const epColor = GATE_RED.has(gateState)
+    ? theme.error
+    : GATE_YELLOW.has(gateState)
+      ? theme.warn
+      : daemon.endpointReachable
+        ? theme.success
+        : theme.warn;
+  const epDot = epColor === theme.success ? "●" : "○";
   lines.push(
     <Text key="ep">
-      <Text color={daemon.endpointReachable ? theme.success : theme.warn}>
-        {daemon.endpointReachable ? "●" : "○"}
-      </Text>{" "}
-      inference endpoint
+      <Text color={epColor}>{epDot}</Text> inference endpoint
     </Text>,
   );
+  if (daemon.gate !== null && daemon.gate.state !== "ok") {
+    lines.push(
+      <Text key="gate" color={epColor} wrap="truncate-end">
+        {daemon.gate.state}
+        {daemon.gate.reason !== null ? ` — ${daemon.gate.reason}` : ""}
+      </Text>,
+    );
+  }
   lines.push(
     <Text key="hp" dimColor>
       health {daemon.healthHost}:{daemon.healthPort}
