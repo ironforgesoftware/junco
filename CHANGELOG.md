@@ -19,9 +19,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `model.retry.maxRetries` / `model.retry.baseDelayMs` — SDK auto-retry levers.
 - Endpoint probing (startup wait, readiness, doctor) is skipped for hosted
   catalog models.
+- **Provider gate:** infrastructure failures from the inference endpoint now
+  pause ticket claiming instead of quietly retrying against a provider that
+  will keep saying no. Six states — `ok`, `auth_error`, `quota_exhausted`,
+  `misconfig`, `rate_limited`, `outage_backoff` — are latched or backed off
+  based on the failure text (auth/quota/model-not-found/rate-limit/outage);
+  any successful session, a config hot-reload apply, or a daemon restart
+  clears the gate, and `rate_limited`/`outage_backoff` also expire on their
+  own once their backoff window passes.
+- `worker.endpointProbe` (`"auto"` / `"always"` / `"never"`) controls whether
+  the inference endpoint is probed for reachability, overriding the
+  catalog-skip default; probe results are cached for ~10 seconds and shared
+  across the claim gate, `/health`, and `/ready`.
+- `/health` gains a `gate: {state, reason, since, until}` field (`null` when
+  no gate is wired); `/ready` returns its 503 body with the gate's reason
+  whenever the gate is latched or backed off.
+- The interactive dashboard (`junco dashboard`) shows the provider gate's
+  state as a colored dot on the daemon panel (red for a latch, yellow for a
+  backoff) plus a reason line when the gate isn't `ok`.
 
 ### Changed
 
+- **Behavior:** auth, quota, model-not-found, and rate-limit failures no
+  longer consume the ticket's `retry_count` budget. Previously every
+  infrastructure failure went through the same budgeted transient-retry path;
+  now these four classes are recognized as the provider's fault, not the
+  ticket's — the ticket is stamped with a fresh `not_before` and returned to
+  the inbox with `retry_count` untouched. Outage (network/5xx) and
+  unclassified failures keep the existing budgeted transient-retry path.
 - `junco init` is now a full-screen guided walkthrough (Ink): chapter rail,
   machine preflight, live model discovery, repo-containment and GitHub-bridge
   setup, an extras multiselect, a review-before-write step, and a post-write
@@ -29,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode that pre-fills current values and writes only what changed (all other
   keys preserved). `--yes` still scaffolds the same minimal default config
   non-interactively.
+
 - **Behavior:** a provider-prefixed `model.id` without an explicit
   `model.baseUrl` previously bound to the local default endpoint
   (`http://127.0.0.1:1234/v1`); it now resolves from the builtin catalog.

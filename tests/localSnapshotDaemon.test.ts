@@ -51,6 +51,7 @@ function metrics(over: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
     requeues: 0,
     guardNudges: 2,
     guardKills: 1,
+    gateTransitions: {},
     currentProgress: {
       "t-1": {
         turns: 3,
@@ -127,5 +128,62 @@ describe("buildDaemonDetail", () => {
     expect(d.endpointReachable).toBe(true);
     expect(d.currentTickets).toEqual([]);
     expect(d.error).toBeNull();
+    expect(d.gate).toBeNull();
+  });
+
+  it("parses gate from the /health payload (Task 9/10 field)", async () => {
+    const body: HealthBody = {
+      status: "ok",
+      ready: true,
+      metrics: metrics(),
+      gate: {
+        state: "auth_error",
+        reason: "invalid api key",
+        since: "2026-07-10T00:00:00Z",
+        until: null,
+      },
+    };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    // The snapshot's gate is a trimmed projection (state/reason only) — no
+    // `since`/`until`, neither is rendered.
+    expect(d.gate).toEqual({ state: "auth_error", reason: "invalid api key" });
+  });
+
+  it("gate absent from the /health payload (older daemon) → null", async () => {
+    const body: HealthBody = { status: "ok", ready: true, metrics: metrics() };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    expect(d.gate).toBeNull();
+  });
+
+  it("gate explicitly null in the payload (no gate configured) → null", async () => {
+    const body: HealthBody = { status: "ok", ready: true, metrics: metrics(), gate: null };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    expect(d.gate).toBeNull();
+  });
+
+  it("back-to-back calls each respect their own fetchFn (no cross-call probe cache)", async () => {
+    // Deps-seam isolation: the endpoint probe must consult THIS call's fetchFn,
+    // never a warm result from a previous call's different fetchFn.
+    const d1 = await buildDaemonDetail(makeCfg(), null, { fetchFn: recordingFetch([], null) });
+    expect(d1.endpointReachable).toBe(true); // /models ok
+    const failingFetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const d2 = await buildDaemonDetail(makeCfg(), null, { fetchFn: failingFetch });
+    expect(d2.endpointReachable).toBe(false); // probe fails → false, not a stale cached true
+  });
+
+  it("an injected reachableFn overrides the direct probe (the cached-probe seam)", async () => {
+    let calls = 0;
+    const reachableFn = async (): Promise<boolean> => {
+      calls++;
+      return false;
+    };
+    const d = await buildDaemonDetail(makeCfg(), null, {
+      fetchFn: recordingFetch([], null), // would say reachable — must not be consulted
+      reachableFn,
+    });
+    expect(d.endpointReachable).toBe(false);
+    expect(calls).toBe(1);
   });
 });

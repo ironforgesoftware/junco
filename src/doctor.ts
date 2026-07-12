@@ -7,9 +7,9 @@
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import { loadConfig, queuePaths, isLoopbackHost } from "./config.js";
-import { endpointReachable } from "./health.js";
+import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
-import { splitModelId, shouldProbeEndpoint } from "./agent/modelSetup.js";
+import { splitModelId } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { selectBackend, classifyAvailability } from "./agent/sandbox/backend.js";
@@ -133,11 +133,17 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // eligibility, not an actual catalog hit) and the runtime cascade
     // (resolveModelViaRegistries) falls through to inline resolution at first
     // session — "hosted provider" would be actively wrong for that case.
-    if (!shouldProbeEndpoint(cfg.model)) {
+    // worker.endpointProbe="never" is a SEPARATE reason to skip: it overrides
+    // the catalog-skip heuristic outright (probePolicy in health.ts), so it
+    // can fire on a non-catalog (e.g. local) model too — the catalog-eligible
+    // note would be wrong there, so branch on the actual reason.
+    if (!probePolicy(cfg)) {
       report(
         "ok",
         "inference endpoint",
-        `${cfg.model.id} — catalog-eligible; probe skipped (resolution confirmed at first session)`,
+        cfg.endpointProbe === "never"
+          ? `${cfg.model.id} — probe disabled (worker.endpointProbe=never)`
+          : `${cfg.model.id} — catalog-eligible; probe skipped (resolution confirmed at first session)`,
       );
     } else {
       const up = await reachableFn(cfg);

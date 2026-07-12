@@ -259,6 +259,16 @@ export const LEVERS: Lever[] = [
     description: "Whether the daemon waits at startup for crash-recovery grace before claiming.",
   },
   {
+    path: "worker.endpointProbe",
+    type: "enum",
+    enumValues: ["auto", "always", "never"],
+    default: "auto",
+    editable: true,
+    reload: "live",
+    description:
+      "Endpoint probe policy: auto (probe local/inline, skip hosted catalog), always, or never.",
+  },
+  {
     path: "worker.maxTransientRetries",
     type: "number",
     default: 2,

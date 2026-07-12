@@ -173,6 +173,10 @@ export const ConfigSchema = z.object({
       pollIntervalSeconds: z.number().min(1).default(15),
       startupPollSeconds: z.number().min(1).default(30),
       startupWait: z.boolean().default(true),
+      // auto: probe local/inline endpoints, skip hosted-catalog ones
+      // (shouldProbeEndpoint's existing rule). always/never override that
+      // rule outright — see probePolicy() in health.ts.
+      endpointProbe: z.enum(["auto", "always", "never"]).default("auto"),
       maxTransientRetries: z.number().int().min(0).default(2),
       retryBackoffSeconds: z.number().min(0).default(60),
       maxConcurrent: z.number().int().min(1).default(1),
@@ -365,6 +369,7 @@ export function assembleConfig(
     pollIntervalSeconds: d.worker.pollIntervalSeconds,
     startupPollSeconds: d.worker.startupPollSeconds,
     startupWait: d.worker.startupWait,
+    endpointProbe: d.worker.endpointProbe,
     maxTransientRetries: d.worker.maxTransientRetries,
     retryBackoffSeconds: d.worker.retryBackoffSeconds,
     maxConcurrent: d.worker.maxConcurrent,

@@ -118,6 +118,42 @@ describe("auto_retry_end — retry exhaustion surfaces into errorMessage (#129)"
   });
 });
 
+describe("auto_retry_end — a SUCCESSFUL recovery clears the poisoned errorMessage", () => {
+  // The SDK emits turn_end for the ERRORED assistant message BEFORE deciding
+  // to retry, then — when the retry SUCCEEDS — auto_retry_end with
+  // success:true and no finalError (agent-session.d.ts: `{ type:
+  // "auto_retry_end"; success: boolean; attempt: number; finalError?: string
+  // }`, verified against node_modules/@earendil-works/pi-coding-agent). Junco's
+  // turn_end fallback (null-guarded first-wins, above) had already captured
+  // the transient error; without this clear it survives forever, poisoning a
+  // successfully-recovered run's errorMessage.
+  it("clears the turn_end-captured error when auto_retry_end reports success:true", () => {
+    const acc = new RunAccumulator();
+    acc.observe({
+      type: "turn_end",
+      message: { errorMessage: "429 overloaded" },
+    } as any);
+    expect(acc.result(0).errorMessage).toBe("429 overloaded"); // sanity: captured first
+    acc.observe({ type: "auto_retry_end", success: true, attempt: 1 } as any);
+    expect(acc.result(0).errorMessage).toBeNull();
+  });
+
+  it("still lets finalError win when auto_retry_end reports failure (success:false)", () => {
+    const acc = new RunAccumulator();
+    acc.observe({
+      type: "turn_end",
+      message: { errorMessage: "429 overloaded" },
+    } as any);
+    acc.observe({
+      type: "auto_retry_end",
+      success: false,
+      attempt: 5,
+      finalError: "final error after retries",
+    } as any);
+    expect(acc.result(0).errorMessage).toBe("final error after retries");
+  });
+});
+
 describe("finalText — last assistant message (#36)", () => {
   const msgStart = (role: string) => ({ type: "message_start", message: { role } }) as any;
   const delta = (t: string) =>

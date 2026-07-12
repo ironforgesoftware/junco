@@ -93,6 +93,95 @@ describe("runAgent", () => {
     expect(result.errorMessage).toBe("boom");
     expect(disposed).toBe(true);
   });
+
+  it("falls back to the assistant message's errorMessage when auto_retry_end never fires (#129)", async () => {
+    // A first-attempt non-retryable error (bad key, quota) never triggers a
+    // retry, so the SDK only ever emits turn_end — no auto_retry_end at all.
+    const events = [
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "401 invalid x-api-key",
+          usage: { input: 0, output: 0 },
+        },
+      },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+    });
+    expect(result.errorMessage).toBe("401 invalid x-api-key");
+    expect(result.stopReason).toBe("error");
+  });
+
+  it("lets a later auto_retry_end.finalError overwrite the turn_end errorMessage", async () => {
+    const events = [
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "401 invalid x-api-key",
+          usage: { input: 0, output: 0 },
+        },
+      },
+      { type: "auto_retry_end", success: false, finalError: "final" },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+    });
+    expect(result.errorMessage).toBe("final");
+  });
+
+  it("clears a captured turn_end error when auto_retry_end reports a successful recovery (success:true)", async () => {
+    // Full recovered-blip sequence: turn_end (errored attempt, captured as the
+    // fallback errorMessage) -> auto_retry_end success:true (retry recovered,
+    // no finalError) -> a clean turn_end for the successful continuation.
+    // Without clearing on success, the first attempt's transient error would
+    // survive to the final RunResult even though the run went on to finish
+    // cleanly.
+    const events = [
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "429 overloaded",
+          usage: { input: 0, output: 0 },
+        },
+      },
+      { type: "auto_retry_end", success: true, attempt: 1 },
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          usage: { input: 1, output: 1, cacheRead: 0 },
+        },
+      },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+    });
+    expect(result.errorMessage).toBeNull();
+    expect(result.stopReason).toBe("stop");
+  });
 });
 
 // A fake session for guard-driven tests: emits `events` to listeners when the

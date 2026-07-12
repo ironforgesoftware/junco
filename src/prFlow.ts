@@ -30,7 +30,9 @@ import {
   type Commit,
 } from "./pr.js";
 import { lintTicket, LabelCache } from "./planLint.js";
-import { isTransientFailure, requeueTicket } from "./requeue.js";
+import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
+import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
+import type { ProviderGate } from "./providerGate.js";
 import { runSpecVerification, type VerificationResult } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
@@ -320,6 +322,10 @@ export interface PrFlowDeps {
   /** Network-retry backoff base for fetch/push/PR-create (default 1000ms) —
    * tests that script offline failures pass ~5ms so the suite stays fast. */
   retryBaseDelayMs?: number;
+  /** Provider gate — classification-driven claim pausing (peer of RunDeps.gate
+   * in runOnce.ts). Optional: absent (CLI one-shot, tests) preserves pre-gate
+   * behavior exactly. */
+  gate?: Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">;
 }
 
 export async function runPrFlow(
@@ -477,6 +483,29 @@ export async function runPrFlow(
     } catch {
       /* unreadable worktree → treat as 0; requeue is still the safe path */
     }
+    // Infrastructure failures (bad key, quota, 429, model typo) are not the
+    // ticket's fault: report to the gate (pauses claiming) and requeue
+    // WITHOUT consuming the retry budget — but ONLY when nothing has been
+    // committed yet. Committed work is NEVER discarded (same invariant as
+    // isTransientFailure just below): a 401 after real commits keeps today's
+    // salvage behavior (preserve worktree + fail) untouched — the gate is not
+    // consulted at all in that case.
+    if (commitsSoFar === 0) {
+      const cls = classifyProviderFailure(result.errorMessage);
+      if (deps.gate && GATE_CLASSES.has(cls)) {
+        deps.gate.reportFailure(cls, result.errorMessage ?? cls);
+        const rq = requeueTicketKeepBudget(
+          cfg,
+          claimedPath,
+          deps.gate.notBeforeIso(),
+          result.errorMessage ?? cls,
+        );
+        await cleanupWorktree(cfg, ctx, wtPath);
+        log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
+        return requeuedResult(rq.dst, result);
+      }
+      if (deps.gate && cls === "outage") deps.gate.reportFailure(cls, result.errorMessage ?? cls);
+    }
     if (isTransientFailure(result, commitsSoFar)) {
       const rq = requeueTicket(
         cfg,
@@ -565,6 +594,27 @@ export async function runPrFlow(
       // stop_reason error/length with nothing committed is the transient
       // class — requeue with backoff before falling through to terminal fail.
       if (result.stopReason === "error" || result.stopReason === "length") {
+        // Zero-commit by construction (inside the newCommits===0 gate above).
+        // Classify result.errorMessage ONLY — it is structurally null here (a
+        // non-null errorMessage was already intercepted by Phase 5's hardError
+        // check), so this branch is defensive-only and normally classifies
+        // "unknown", falling through to the budgeted requeue below exactly as
+        // before the gate existed. It MUST NOT read finalText: stop_reason=
+        // 'length' is truncated AGENT PROSE, and prose like "add rate limit
+        // handling" or "fix the 403 handling" would classify as a gate class —
+        // a count-free requeue loop plus a queue-wide latch only an operator
+        // can clear (a latched queue never emits the reportSuccess that would
+        // clear it). See the Task-6 review.
+        const cls = classifyProviderFailure(result.errorMessage);
+        if (deps.gate && GATE_CLASSES.has(cls)) {
+          const reason = result.errorMessage ?? cls;
+          deps.gate.reportFailure(cls, reason);
+          const rq = requeueTicketKeepBudget(cfg, claimedPath, deps.gate.notBeforeIso(), reason);
+          await cleanupWorktree(cfg, ctx, wtPath);
+          log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
+          return requeuedResult(rq.dst, result);
+        }
+        if (deps.gate && cls === "outage") deps.gate.reportFailure(cls, result.errorMessage ?? cls);
         const rq = requeueTicket(cfg, claimedPath, task, `stop_reason=${result.stopReason}`);
         if (rq.requeued) {
           await cleanupWorktree(cfg, ctx, wtPath);
@@ -605,6 +655,13 @@ export async function runPrFlow(
         `no-changes outcome for ${claimedPath}; skipping ${isAmend(ctx) ? "PR-update" : "PR"}`,
       );
       if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
+      // A clean no-changes finish is a genuine inference-side success (reached
+      // only past every gate/outage/stop_reason failure branch above) —
+      // report it so the gate's failure streak heals. Guarded on
+      // !abortedByGuard alone: timedOut was already excluded earlier in this
+      // block, and having gotten this far without hitting Phase 5's hardError
+      // return means errorMessage is null whenever abortedByGuard is false too.
+      if (deps.gate && !result.abortedByGuard) deps.gate.reportSuccess();
       return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
     }
 
@@ -855,6 +912,10 @@ export async function runPrFlow(
   }
 
   // --- Phase 14: finalize success. ---
+  // A guard-kill or timeout can reach this same return with commits salvaged
+  // (aborted_partial/timeout_partial) — that's not a clean inference-side
+  // success (mirrors the Q&A gate wiring in runOnce.ts, which excludes both).
+  if (deps.gate && !result.abortedByGuard && !result.timedOut) deps.gate.reportSuccess();
   return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
 }
 

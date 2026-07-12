@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Config, ModelConfig } from "../src/types.js";
 import type { StopFlagLike } from "../src/health.js";
-import { endpointReachable, waitForEndpoint } from "../src/health.js";
+import { endpointReachable, waitForEndpoint, probePolicy, makeCachedProbe } from "../src/health.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -47,6 +47,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     maxTransientRetries: 2,
     retryBackoffSeconds: 60,
     maxConcurrent: 1,
+    endpointProbe: "auto",
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -275,5 +276,140 @@ describe("waitForEndpoint", () => {
     } finally {
       infoSpy.mockRestore();
     }
+  });
+
+  it('returns immediately for endpointProbe: "never", logging a generic skip line', async () => {
+    const cfg = makeConfig({ endpointProbe: "never" });
+    const { log } = await import("../src/logging.js");
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    try {
+      const stop = { requested: false };
+      const fetchFn = vi.fn().mockResolvedValue({ ok: false });
+      const sleep = vi.fn(async () => {
+        stop.requested = true;
+      });
+      await waitForEndpoint(cfg, stop, { fetchFn, sleep });
+      expect(sleep).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+      const msgs = infoSpy.mock.calls.map((c) => String(c[0]));
+      expect(msgs.some((m) => m.includes("endpointProbe=never"))).toBe(true);
+      expect(msgs.filter((m) => m.includes("inference endpoint reachable"))).toHaveLength(0);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// probePolicy
+// ---------------------------------------------------------------------------
+
+describe("probePolicy", () => {
+  it('"never" is false regardless of the model', () => {
+    expect(probePolicy(makeConfig({ endpointProbe: "never" }))).toBe(false);
+    expect(probePolicy(makeConfig({ endpointProbe: "never", model: hostedModel() }))).toBe(false);
+  });
+
+  it('"always" is true regardless of the model', () => {
+    expect(probePolicy(makeConfig({ endpointProbe: "always" }))).toBe(true);
+    expect(probePolicy(makeConfig({ endpointProbe: "always", model: hostedModel() }))).toBe(true);
+  });
+
+  it('"auto" delegates to shouldProbeEndpoint (local probes, hosted catalog skips)', () => {
+    expect(probePolicy(makeConfig({ endpointProbe: "auto" }))).toBe(true);
+    expect(probePolicy(makeConfig({ endpointProbe: "auto", model: hostedModel() }))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// endpointReachable — endpointProbe policy overrides
+// ---------------------------------------------------------------------------
+
+describe("endpointReachable — endpointProbe policy", () => {
+  it('"never" skips the probe even for a local (normally-probed) config', async () => {
+    const fetchFn = vi.fn();
+    const cfg = makeConfig({ endpointProbe: "never" });
+    await expect(endpointReachable(cfg, { fetchFn })).resolves.toBe(true);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('"always" probes even a hosted-catalog config that "auto" would skip', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true });
+    const cfg = makeConfig({ model: hostedModel(), endpointProbe: "always" });
+    await expect(endpointReachable(cfg, { fetchFn })).resolves.toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeCachedProbe
+// ---------------------------------------------------------------------------
+
+describe("makeCachedProbe", () => {
+  it("does not re-invoke the probe for a second call within the TTL", async () => {
+    let now = 1_000;
+    let calls = 0;
+    const probe = async (): Promise<boolean> => {
+      calls++;
+      return true;
+    };
+    const cached = makeCachedProbe(probe, 10_000, () => now);
+
+    await expect(cached()).resolves.toBe(true);
+    now += 5_000;
+    await expect(cached()).resolves.toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  it("re-invokes the probe once the TTL has expired", async () => {
+    let now = 1_000;
+    let calls = 0;
+    const probe = async (): Promise<boolean> => {
+      calls++;
+      return true;
+    };
+    const cached = makeCachedProbe(probe, 10_000, () => now);
+
+    await expect(cached()).resolves.toBe(true);
+    now += 10_001;
+    await expect(cached()).resolves.toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("dedupes concurrent callers into a single in-flight probe invocation", async () => {
+    let calls = 0;
+    let resolveProbe: (v: boolean) => void = () => {};
+    const deferred = new Promise<boolean>((resolve) => {
+      resolveProbe = resolve;
+    });
+    const probe = (): Promise<boolean> => {
+      calls++;
+      return deferred;
+    };
+    const cached = makeCachedProbe(probe);
+
+    const p1 = cached();
+    const p2 = cached();
+    resolveProbe(true);
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(calls).toBe(1);
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+  });
+
+  it("treats a rejected probe as false, cached for the TTL", async () => {
+    let now = 1_000;
+    let calls = 0;
+    const probe = async (): Promise<boolean> => {
+      calls++;
+      throw new Error("boom");
+    };
+    const cached = makeCachedProbe(probe, 10_000, () => now);
+
+    await expect(cached()).resolves.toBe(false);
+    now += 5_000;
+    await expect(cached()).resolves.toBe(false);
+    expect(calls).toBe(1);
   });
 });

@@ -32,11 +32,11 @@ All commands accept `--config <path>` to point at a non-default `config.json`. W
 
 When `observability.healthEnabled = true`, Junco serves HTTP on `healthHost:healthPort` (default `127.0.0.1:8787`).
 
-| Endpoint      | Success                                    | Use                                                                                                                                                                                                                                            |
-| ------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /live`   | `200 {status:"alive", pid, uptimeSeconds}` | Liveness — is the process up?                                                                                                                                                                                                                  |
-| `GET /ready`  | `200 {status:"ready"}` or `503`            | Readiness — can the endpoint be reached?                                                                                                                                                                                                       |
-| `GET /health` | `200 {status:"ok", ready, metrics:{...}}`  | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals. |
+| Endpoint      | Success                                         | Use                                                                                                                                                                                                                                                                     |
+| ------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /live`   | `200 {status:"alive", pid, uptimeSeconds}`      | Liveness — is the process up?                                                                                                                                                                                                                                           |
+| `GET /ready`  | `200 {status:"ready"}` or `503`                 | Readiness — can the endpoint be reached? A latched or backed-off provider gate forces the 503 (with the gate's reason) regardless of the probe result.                                                                                                                  |
+| `GET /health` | `200 {status:"ok", ready, metrics:{...}, gate}` | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals, plus `gate` (see below). |
 
 ```bash
 # Quick checks:
@@ -44,6 +44,23 @@ curl http://127.0.0.1:8787/live
 curl http://127.0.0.1:8787/ready
 curl http://127.0.0.1:8787/health | jq .
 ```
+
+### Provider gate
+
+Junco classifies inference-endpoint failures and, for the ones an operator (not a retry) has to fix, pauses ticket claiming instead of burning tickets against a provider that will keep saying no. The gate's `gate` field on `/health` is `{state, reason, since, until}` — `reason` is the classified error text, `since`/`until` are ISO timestamps (`until` is `null` except for the two backoff states below). `gate` itself is `null` only when no gate is wired at all.
+
+| State             | Entered on                                                                      | Clears on                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`              | default / no active failure                                                     | —                                                                                                                                   |
+| `auth_error`      | auth failure (401/403, unauthorized/forbidden, invalid API key or bearer token) | a successful session, a config hot-reload apply, or a daemon restart                                                                |
+| `quota_exhausted` | quota/billing error                                                             | a successful session, a config hot-reload apply, or a daemon restart                                                                |
+| `misconfig`       | model not found / doesn't resolve                                               | a successful session, a config hot-reload apply, or a daemon restart                                                                |
+| `rate_limited`    | 429 / rate-limit / overloaded response                                          | the above, or automatically once the backoff `until` elapses — the delay doubles on each further rate-limit report, capped at 900 s |
+| `outage_backoff`  | 5xx / connection error (timeout, refused, DNS…)                                 | the above, or automatically once the backoff `until` elapses — a single, non-doubling `worker.retryBackoffSeconds` interval         |
+
+`auth_error`/`quota_exhausted`/`misconfig` are latches: once entered they hold until an explicit clear (they never expire on their own, and a later rate-limit/outage report can't downgrade them). `rate_limited`/`outage_backoff` are backoffs: they lapse to `ok` the moment they're read past their `until` deadline, with no timer required. Tickets that trip the gate are returned to the inbox with a fresh `not_before` but their retry budget untouched — see [Reliability](tickets.md#reliability).
+
+The interactive dashboard (`junco dashboard`) shows the gate as a colored dot on the daemon panel (red for a latch, yellow for a backoff) with a reason line underneath when the state isn't `ok`.
 
 **Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<stateDir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `observability.logLevel` to `debug` for verbose output, `info` for normal operation.
 

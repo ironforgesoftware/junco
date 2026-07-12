@@ -114,6 +114,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    endpointProbe: "auto",
     maxTransientRetries: 2,
     retryBackoffSeconds: 60,
     maxConcurrent: 1,

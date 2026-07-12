@@ -17,6 +17,8 @@ import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.j
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import { makeConfigHolder } from "../src/configWatcher.js";
+import type { GateStatus } from "../src/providerGate.js";
+import type { ProviderFailureClass } from "../src/providerFailure.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -33,6 +35,31 @@ function makeFakeHealthHandle(): HealthServerHandle {
     port: 12345,
     url: "http://127.0.0.1:12345",
     close: vi.fn(async () => {}),
+  };
+}
+
+/** Minimal fake gate: same Pick-shape pattern as runOnce.test.ts's fakeGate (a
+ * plain object — no need for the real latching state machine), extended with
+ * claimBlockReason/status for the daemon's own local checks (gatedReady + the
+ * health server's gateStatus). `blockReason: null` never blocks claiming. */
+function fakeGate(blockReason: string | null): {
+  claimBlockReason: () => string | null;
+  status: () => GateStatus;
+  reportFailure: (cls: ProviderFailureClass, reason: string) => void;
+  reportSuccess: () => void;
+  notBeforeIso: () => string;
+} {
+  return {
+    claimBlockReason: () => blockReason,
+    status: () => ({
+      state: blockReason ? "auth_error" : "ok",
+      reason: blockReason,
+      since: null,
+      until: null,
+    }),
+    reportFailure: () => {},
+    reportSuccess: () => {},
+    notBeforeIso: () => "2099-01-01T00:00:00.000Z",
   };
 }
 
@@ -66,6 +93,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    endpointProbe: "auto",
     maxTransientRetries: 2,
     retryBackoffSeconds: 60,
     maxConcurrent: 1,
@@ -152,6 +180,9 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
     bridgeSweepFn: vi.fn(async () => 0),
     outboxDrainFn: vi.fn(async () => ({ sent: 0, dead: 0, remaining: 0, offline: false })),
+    // Never blocks by default — most tests don't care about the gate at all;
+    // override with fakeGate(reason) to exercise blocked-claim behavior.
+    gate: fakeGate(null),
     ...overrides,
   };
   return { deps };
@@ -567,6 +598,109 @@ describe("mainLoop", () => {
     await mainLoop(cfg, stop, {}, deps);
 
     expect(deps.runOnceFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — provider gate wiring (Task 10)
+// ---------------------------------------------------------------------------
+
+describe("mainLoop — provider gate wiring", () => {
+  it("a latched gate blocks claiming via the DEFAULT runOnceFn (serial mode): inbox untouched + pause warn logged", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-gate-serial-"));
+      const j = join(root, "Junco");
+      for (const d of ["inbox", "processing", "done", "failed"]) {
+        mkdirSync(join(j, d), { recursive: true });
+      }
+      writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+      const cfg = makeConfig({ vaultRoot: root });
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        // Leave runOnceFn undefined so mainLoop builds its own default, which
+        // is exactly the wiring under test (readyFn: gatedReady, gate).
+        runOnceFn: undefined,
+        gate: fakeGate("auth_error: bad key"),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      // The ticket was never claimed — still sitting in inbox, never moved to
+      // processing/.
+      expect(readdirSync(join(j, "inbox"))).toHaveLength(1);
+      expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+      const warned = warnSpy.mock.calls.some(
+        (c) => String(c[0]) === "claiming paused by provider gate",
+      );
+      expect(warned).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a latched gate blocks claiming via the DEFAULT claimFn (scheduler mode, max_concurrent>1): inbox untouched + pause warn logged", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-gate-sched-"));
+      const j = join(root, "Junco");
+      for (const d of ["inbox", "processing", "done", "failed"]) {
+        mkdirSync(join(j, d), { recursive: true });
+      }
+      writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+      const cfg = makeConfig({ vaultRoot: root, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        // Leave claimFn/executeFn undefined so runScheduler builds its own
+        // default claimFn (claimNextTask), which is threaded `readyFn: gatedReady`.
+        claimFn: undefined,
+        executeFn: undefined,
+        gate: fakeGate("auth_error: bad key"),
+        sleep: vi.fn(async () => {
+          await new Promise((r) => setTimeout(r, 1));
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(readdirSync(join(j, "inbox"))).toHaveLength(1);
+      expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+      const warned = warnSpy.mock.calls.some(
+        (c) => String(c[0]) === "claiming paused by provider gate",
+      );
+      expect(warned).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("wires the health server's readinessProbe to the cached probe and gateStatus to the gate", async () => {
+    const cfg = makeConfig({ healthEnabled: true });
+    const stop = new StopFlag();
+    const handle = makeFakeHealthHandle();
+    const startHealthServerFn = vi.fn(async (_opts: HealthServerOpts) => handle);
+    const gate = fakeGate("auth_error: bad key");
+    const { deps } = makeDeps({
+      startHealthServerFn,
+      gate,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    const arg = startHealthServerFn.mock.calls[0]![0]!;
+    expect(typeof arg.readinessProbe).toBe("function");
+    expect(typeof arg.gateStatus).toBe("function");
+    expect(arg.gateStatus!()).toEqual(gate.status());
   });
 });
 

@@ -20,7 +20,9 @@ import { runAssessFlow } from "./assessFlow.js";
 // cycle as assessFlow above (both bindings are only dereferenced inside
 // function bodies, never during module evaluation).
 import { runAnalyzeFlow } from "./analyzeFlow.js";
-import { isTransientFailure, requeueTicket } from "./requeue.js";
+import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
+import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
+import type { ProviderGate } from "./providerGate.js";
 import { transcriptPathFor } from "./slug.js";
 import {
   NOOP_REPORTER,
@@ -76,6 +78,9 @@ export interface RunDeps {
   abortSignal?: AbortSignal;
   /** Lifecycle feedback (GitHub bridge). Defaults to a no-op. */
   reporter?: TicketReporter;
+  /** Provider gate — classification-driven claim pausing. Optional: absent
+   * (CLI one-shot, tests) preserves pre-gate behavior exactly. */
+  gate?: Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">;
 }
 
 /** One claimed unit of work, ready to execute. */
@@ -136,7 +141,11 @@ export async function claimNextTask(
   // Readiness gate: when there IS eligible work, don't claim it unless the
   // inference endpoint can actually serve it.
   if (opts.readyFn && !(await opts.readyFn())) {
-    log.warn("inference endpoint not ready; leaving inbox untouched this poll", {
+    // readyFn wraps BOTH the endpoint reachability probe and the provider
+    // gate (daemon.ts) — a latched/backed-off gate blocks claiming exactly
+    // like an unreachable endpoint does, so "inference endpoint not ready"
+    // is misleading when only the gate is the reason. Stay readiness-neutral.
+    log.warn("not ready to claim (endpoint or provider gate); leaving inbox untouched this poll", {
       eligible: eligible.length,
     });
     return null;
@@ -274,6 +283,7 @@ export async function executeClaimed(
             abortSignal: deps.abortSignal,
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
             onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
+            gate: deps.gate,
           });
           if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
@@ -323,6 +333,31 @@ export async function executeClaimed(
           ? transcriptPathFor(cfg.stateDir, next.id)
           : undefined,
       });
+      // Infrastructure failures (bad key, quota, 429, model typo) are not the
+      // ticket's fault: report to the gate (pauses claiming) and requeue
+      // WITHOUT consuming the retry budget. Only zero-commit runs — Q&A never
+      // commits. Transient (outage/unknown) failures keep the budgeted path.
+      const cls = classifyProviderFailure(result.errorMessage);
+      // Parity with prFlow's `hardError` guard (excludes abortedByGuard AND
+      // timedOut): a timeout landing mid-retry-backoff leaves the FIRST
+      // attempt's errorMessage captured (no clean auto_retry_end ever fires —
+      // the timeout aborts the run before the SDK can decide retry/recover),
+      // so that stale error must not be gate-routed as if it were the run's
+      // actual outcome. timedOut/abortedByGuard win: existing timeout/guard
+      // semantics apply below instead.
+      if (deps.gate && !result.timedOut && !result.abortedByGuard && GATE_CLASSES.has(cls)) {
+        deps.gate.reportFailure(cls, result.errorMessage ?? cls);
+        const rq = requeueTicketKeepBudget(
+          cfg,
+          claimed,
+          deps.gate.notBeforeIso(),
+          result.errorMessage ?? cls,
+        );
+        await reporter.onRequeue(next).catch(() => undefined);
+        log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
+        return;
+      }
+      if (deps.gate && cls === "outage") deps.gate.reportFailure(cls, result.errorMessage ?? cls);
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
       // backoff instead of finalizing to failed/ (budget permitting).
       if (isTransientFailure(result, 0)) {
@@ -336,6 +371,9 @@ export async function executeClaimed(
           await reporter.onRequeue(next).catch(() => undefined);
           return;
         }
+      }
+      if (deps.gate && result.errorMessage === null && !result.timedOut && !result.abortedByGuard) {
+        deps.gate.reportSuccess();
       }
       const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
       await reporter.onFinal(next, outcomeFromQa(fin.status, result)).catch(() => undefined);
@@ -354,17 +392,56 @@ export async function executeClaimed(
         id: next.id,
         error: e instanceof Error ? (e.stack ?? e.message) : String(e),
       });
-      try {
-        const rq = requeueTicket(cfg, claimed, next, reason);
-        if (rq.requeued) {
+      // Classify the thrown reason FIRST (same infrastructure-vs-ticket split
+      // as the Q&A failure site above) — a rejecting session factory (bad
+      // key, catalog-miss model id) throws OUTSIDE runAgent's try/catch, so
+      // this is the only place that reason string ever reaches the
+      // classifier. UNLIKE the Q&A site, `reason` here is ARBITRARY exception
+      // text (a rejecting factory's own message, a git/gh error, even a
+      // ticket filename echoed into an error) — never the SDK's structured
+      // in-session errorMessage. Bare \b40[13]\b/\b429\b patterns can
+      // false-positive against that text (e.g. "processing issue-403.md
+      // failed"). auth/quota/rate_limit route through GATE_CLASSES into the
+      // gate's LATCHED states (auth_error/quota_exhausted) — a false latch
+      // here BLOCKS CLAIMING and only clears on an explicit reportSuccess(),
+      // but a latch that never lets a ticket run can never produce that
+      // success, freezing the queue forever. So gate-class routing at THIS
+      // site is narrowed to model_not_found only — the resolution-failure
+      // throw class this crash site was actually built for (a session-build
+      // error junco's own resolveModelViaRegistries authors, not
+      // attacker/ticket text). auth/quota/rate_limit fall through to the
+      // unknown/budgeted path below. `outage` is exempt from this narrowing
+      // and keeps reporting unconditionally: it's a non-latching, self-
+      // expiring backoff, and its errno/5xx phrases are specific enough that
+      // a false match just adds a harmless delay.
+      const crashCls = classifyProviderFailure(reason);
+      if (deps.gate && crashCls === "outage") deps.gate.reportFailure(crashCls, reason);
+      if (deps.gate && crashCls === "model_not_found") {
+        deps.gate.reportFailure(crashCls, reason);
+        try {
+          const rq = requeueTicketKeepBudget(cfg, claimed, deps.gate.notBeforeIso(), reason);
           await reporter.onRequeue(next).catch(() => undefined);
+          log.warn("provider-gate requeue (crash containment)", { dst: rq.dst, class: crashCls });
           return;
+        } catch (rqErr) {
+          log.error("crash gate-requeue failed; falling back to failed/", {
+            id: next.id,
+            error: rqErr instanceof Error ? rqErr.message : String(rqErr),
+          });
         }
-      } catch (rqErr) {
-        log.error("crash requeue failed; falling back to failed/", {
-          id: next.id,
-          error: rqErr instanceof Error ? rqErr.message : String(rqErr),
-        });
+      } else {
+        try {
+          const rq = requeueTicket(cfg, claimed, next, reason);
+          if (rq.requeued) {
+            await reporter.onRequeue(next).catch(() => undefined);
+            return;
+          }
+        } catch (rqErr) {
+          log.error("crash requeue failed; falling back to failed/", {
+            id: next.id,
+            error: rqErr instanceof Error ? rqErr.message : String(rqErr),
+          });
+        }
       }
       const crashResult: RunResult = {
         // renderResult only surfaces finalText, so carry the reason there too

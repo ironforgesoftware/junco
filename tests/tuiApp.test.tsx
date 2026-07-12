@@ -89,6 +89,7 @@ const LOCAL_CHEAP: LocalCheap = {
     tasksByStatus: {},
     currentTickets: [],
     progress: {},
+    gate: null,
     error: null,
   },
   error: null,

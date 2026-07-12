@@ -29,7 +29,13 @@ import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock, readLockHolder } from "./lock.js";
 import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./config.js";
 import { parseTicket } from "./ticket.js";
-import { StopFlag, installSignalHandlers, mainLoop, type MainLoopDeps } from "./daemon.js";
+import {
+  StopFlag,
+  installSignalHandlers,
+  mainLoop,
+  makeProviderGate,
+  type MainLoopDeps,
+} from "./daemon.js";
 import { makeConfigHolder, watchConfig, type ConfigHolder } from "./configWatcher.js";
 import { runOnce } from "./runOnce.js";
 import { makeGithubReporter } from "./githubReport.js";
@@ -69,8 +75,15 @@ export interface CliDeps {
   runOnceFn?: (cfg: Config) => Promise<boolean>;
   /** Config hot-reload watcher for `start` (Task 6). Injected so tests never
    * touch a real fs.watch on a config path that may not exist on disk.
-   * Default: the real watchConfig. */
-  watchConfigFn?: (configPath: string, holder: ConfigHolder) => { close(): void };
+   * Default: the real watchConfig. The optional third param carries
+   * `onApplied` (Task 10) — the daemon wires it to the shared provider
+   * gate's `clearLatched()` so a successful reload (bad key fixed, quota
+   * lifted) drops a stale latch without a restart. */
+  watchConfigFn?: (
+    configPath: string,
+    holder: ConfigHolder,
+    deps?: { onApplied?: () => void },
+  ) => { close(): void };
   /** Output function for the `service`, `inbox-path`, `schema`, `submit`, `init` subcommands. Default: process.stdout.write. */
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
@@ -392,6 +405,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const stopFlag = new StopFlag();
     const uninstall = installSignalHandlersFn(stopFlag);
 
+    // Provider gate (Task 10): one instance shared between mainLoop's claim/
+    // health wiring and the hot-reload watcher below, so a successful config
+    // edit (bad key fixed, quota lifted, model id corrected) clears a stale
+    // latch without requiring a restart.
+    const gate = makeProviderGate(cfg);
+
     // Live-reload (Task 6): the holder starts seeded with the config we just
     // loaded; the watcher re-parses config.json on change and swaps in a new
     // Config, which mainLoop's per-iteration reads pick up without a restart.
@@ -402,7 +421,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const holder = makeConfigHolder(cfg);
     let watcher: { close(): void } | null = null;
     try {
-      watcher = watchConfigFn(configPath, holder);
+      watcher = watchConfigFn(configPath, holder, { onApplied: () => gate.clearLatched() });
     } catch (e) {
       log.warn("config watcher failed to start; hot-reload disabled until restart", {
         error: e instanceof Error ? e.message : String(e),
@@ -410,7 +429,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
 
     try {
-      await mainLoopFn(cfg, stopFlag, { once: values.once as boolean }, { configHolder: holder });
+      await mainLoopFn(
+        cfg,
+        stopFlag,
+        { once: values.once as boolean },
+        { configHolder: holder, gate },
+      );
       return 0;
     } catch (e) {
       log.error("fatal error in main loop", {

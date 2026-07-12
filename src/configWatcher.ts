@@ -24,6 +24,12 @@ export interface WatchConfigDeps {
   logFn?: { warn: (m: string, meta?: unknown) => void; error: (m: string, meta?: unknown) => void };
   scheduleFn?: (cb: () => void, ms: number) => { cancel(): void };
   debounceMs?: number;
+  /** Invoked right after a SUCCESSFUL reload adopts the new config (never on a
+   * failed parse/assemble, which returns early and keeps the previous
+   * config). The daemon wires this to `gate.clearLatched()` (Task 10) so an
+   * operator fixing a bad apiKey/model id in config.json doesn't have to wait
+   * out the auth/misconfig latch or restart the daemon. Default: no-op. */
+  onApplied?: () => void;
 }
 
 // A null `prev` means the construction-time seed failed (unexpected — the
@@ -52,6 +58,7 @@ export function watchConfig(
   const parseFn = deps.parseFn ?? parseConfigFile;
   const setLogLevelFn = deps.setLogLevelFn ?? setLogLevel;
   const onRestartFields = deps.onRestartFields ?? ((f) => metrics.addPendingRestartFields(f));
+  const onApplied = deps.onApplied ?? ((): void => {});
   const logger = deps.logFn ?? log;
   const schedule =
     deps.scheduleFn ??
@@ -97,6 +104,7 @@ export function watchConfig(
     // cheap idempotent global, but "only if changed" matches the spec).
     const prevLogLevel = holder.current.logLevel;
     holder.current = nextConfig;
+    onApplied();
     if (nextConfig.logLevel !== prevLogLevel) setLogLevelFn(nextConfig.logLevel);
     const changed = changedLeverPaths(prevParsed, nextParsed);
     prevParsed = nextParsed;

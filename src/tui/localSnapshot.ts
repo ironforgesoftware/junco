@@ -18,7 +18,8 @@ import { readWatchlist, watchlistPath } from "../watchlist.js";
 import { nwoFromRemoteUrl } from "../githubInbox.js";
 import { repoDiscriminator } from "../worktree.js";
 import type { MetricsSnapshot } from "../metrics.js";
-import { endpointReachable } from "../health.js";
+import { endpointReachable, makeCachedProbe } from "../health.js";
+import type { GateStatus } from "../providerGate.js";
 import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
 import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
@@ -30,6 +31,11 @@ export interface LocalSnapshotDeps {
   fetchFn?: typeof fetch;
   nowFn?: () => Date;
   gitFn?: (args: string[], cwd: string) => Promise<{ code: number; stdout: string }>;
+  /** buildDaemonDetail's endpoint-reachability probe. Absent → a direct
+   * uncached `endpointReachable(cfg, { fetchFn })` per call (fresh per-call
+   * semantics for tests); makeLocalCheapFn injects its per-factory
+   * makeCachedProbe wrapper here so dashboard polling shares one cache. */
+  reachableFn?: () => Promise<boolean>;
 }
 
 type GitFn = NonNullable<LocalSnapshotDeps["gitFn"]>;
@@ -313,6 +319,20 @@ export interface HealthBody {
   status: string;
   ready: boolean;
   metrics: MetricsSnapshot;
+  /** Provider gate (Task 9/10) — always present on a current daemon
+   * (possibly `null` when no gate is wired); the key is absent entirely on an
+   * older daemon build. Optional here so both shapes typecheck. */
+  gate?: GateStatus | null;
+}
+
+/** Trimmed projection of GateStatus for the dashboard: state + reason only —
+ * rendered fields (LocalDashboard.tsx reads `daemon.gate.state`/`.reason`
+ * exclusively). Drops `since` and `until` (neither is rendered) and loses the
+ * branded GateStateKind (the dashboard only switches on a handful of known
+ * strings, see LocalDashboard.tsx's gate-color sets). */
+export interface DaemonGateInfo {
+  state: string;
+  reason: string | null;
 }
 
 export interface DaemonDetail {
@@ -332,6 +352,9 @@ export interface DaemonDetail {
     string,
     { turns: number; lastTool: string | null; outputTokens: number; startedAt: string }
   >;
+  /** null when no gate is configured/reported, or on an older daemon whose
+   * /health payload never had the field. */
+  gate: DaemonGateInfo | null;
   error: string | null;
 }
 
@@ -350,6 +373,7 @@ function emptyDaemon(cfg: Config): DaemonDetail {
     tasksByStatus: {},
     currentTickets: [],
     progress: {},
+    gate: null,
     error: null,
   };
 }
@@ -380,7 +404,11 @@ export async function fetchHealthBody(
 
 /** Compose DaemonDetail from an ALREADY-fetched /health body (no second
  * request) plus an independent inference-endpoint probe (endpointReachable
- * hits /models, health.ts:40 — reachability is independent of the daemon). */
+ * hits /models, health.ts:40 — reachability is independent of the daemon).
+ * The probe goes through `deps.reachableFn` when injected (makeLocalCheapFn
+ * passes its per-factory cached probe); otherwise a direct uncached call —
+ * per-call `fetchFn` injection stays honored, never a warm result from a
+ * previous call's different deps. */
 export async function buildDaemonDetail(
   cfg: Config,
   healthBody: HealthBody | null,
@@ -388,9 +416,19 @@ export async function buildDaemonDetail(
 ): Promise<DaemonDetail> {
   const base = emptyDaemon(cfg);
   try {
-    base.endpointReachable = await endpointReachable(cfg, { fetchFn: deps.fetchFn });
+    const reachable =
+      deps.reachableFn ??
+      ((): Promise<boolean> => endpointReachable(cfg, { fetchFn: deps.fetchFn }));
+    base.endpointReachable = await reachable();
     if (healthBody === null) return base; // daemon down
     const m = healthBody.metrics;
+    const gate: DaemonGateInfo | null =
+      healthBody.gate == null
+        ? null
+        : {
+            state: healthBody.gate.state,
+            reason: healthBody.gate.reason,
+          };
     const progress: DaemonDetail["progress"] = {};
     for (const [id, v] of Object.entries(m.currentProgress ?? {})) {
       progress[id] = {
@@ -412,6 +450,7 @@ export async function buildDaemonDetail(
       tasksByStatus: { ...(m.tasksByStatus ?? {}) },
       currentTickets: [...(m.currentTickets ?? [])],
       progress,
+      gate,
     };
   } catch (e) {
     return { ...base, error: e instanceof Error ? e.message : String(e) };
@@ -500,6 +539,13 @@ export function makeLocalCheapFn(
   cfg: Config,
   deps: LocalSnapshotDeps = {},
 ): (opts?: { section?: LocalSection }) => Promise<LocalCheap> {
+  // One TTL-cached endpoint probe per FACTORY (dashboardCmd constructs this
+  // once per process), so cheap-tick polling can't multiply upstream /models
+  // probes — mirrors the daemon's own shared cache (daemon.ts:471, health.ts
+  // makeCachedProbe). Closure-scoped, NOT module-level: cfg/fetchFn are fixed
+  // at construction, so per-call deps injection elsewhere stays isolated.
+  const cachedReachable =
+    deps.reachableFn ?? makeCachedProbe(() => endpointReachable(cfg, { fetchFn: deps.fetchFn }));
   return async (opts: { section?: LocalSection } = {}): Promise<LocalCheap> => {
     const base: LocalCheap = {
       queue: emptyQueue(cfg),
@@ -541,7 +587,10 @@ export function makeLocalCheapFn(
         };
       }
 
-      const daemon = await buildDaemonDetail(cfg, healthBody, deps);
+      const daemon = await buildDaemonDetail(cfg, healthBody, {
+        ...deps,
+        reachableFn: cachedReachable,
+      });
 
       return { queue, counts, outbox, daemon, error: null };
     } catch (e) {

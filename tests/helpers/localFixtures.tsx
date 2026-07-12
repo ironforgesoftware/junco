@@ -76,6 +76,7 @@ export const CHEAP: LocalCheap = {
     tasksByStatus: { done: 12, failed: 3 },
     currentTickets: ["gh-acme-api-1"],
     progress: {},
+    gate: null,
     error: null,
   },
   error: null,
