@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-12
+
 ### Added
 
 - Hosted catalog model resolution: a provider-prefixed `model.id` (e.g.
