@@ -280,6 +280,101 @@ describe("ProviderGate", () => {
     });
   });
 
+  describe("budget_exhausted (Phase-3 Task 5)", () => {
+    it("reportBudgetExhausted → budget_exhausted with the given reason and until, blocks claiming", () => {
+      gate.reportBudgetExhausted(3_600_000, "daily budget $3 reached ($5 spent)");
+      expect(gate.status()).toEqual({
+        state: "budget_exhausted",
+        reason: "daily budget $3 reached ($5 spent)",
+        since: new Date(0).toISOString(),
+        until: new Date(3_600_000).toISOString(),
+      });
+      expect(gate.claimBlockReason()).toBe("daily budget $3 reached ($5 spent)");
+      expect(transitions).toEqual([["ok", "budget_exhausted"]]);
+    });
+
+    it("auto-expires to ok once `until` (injected local midnight) has passed, firing onTransition", () => {
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      t = 3_600_000;
+      const s = gate.status();
+      expect(s.state).toBe("ok");
+      expect(s.until).toBeNull();
+      expect(transitions).toEqual([
+        ["ok", "budget_exhausted"],
+        ["budget_exhausted", "ok"],
+      ]);
+      expect(gate.claimBlockReason()).toBeNull();
+    });
+
+    it("repeated reports while still exhausted push `until` forward WITHOUT firing onTransition again (no spam)", () => {
+      gate.reportBudgetExhausted(3_600_000, "budget reached (poll 1)");
+      gate.reportBudgetExhausted(7_200_000, "budget reached (poll 2)");
+      expect(transitions).toEqual([["ok", "budget_exhausted"]]);
+      const s = gate.status();
+      expect(s.until).toBe(new Date(7_200_000).toISOString());
+      expect(s.reason).toBe("budget reached (poll 2)");
+      // `since` stays pinned to the first report, same as the latch/rate-limit
+      // same-kind-report behavior.
+      expect(s.since).toBe(new Date(0).toISOString());
+    });
+
+    it("reportSuccess does NOT clear it — a still-in-flight session finishing must not lift the cap", () => {
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      gate.reportSuccess();
+      expect(gate.status().state).toBe("budget_exhausted");
+      expect(gate.claimBlockReason()).toBe("budget reached");
+      // No extra transition fired by the no-op reportSuccess.
+      expect(transitions).toEqual([["ok", "budget_exhausted"]]);
+    });
+
+    it("reportSuccess is a normal no-op once budget_exhausted has already auto-expired", () => {
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      t = 3_600_000; // expire it
+      gate.reportSuccess();
+      expect(gate.status().state).toBe("ok");
+      expect(transitions).toEqual([
+        ["ok", "budget_exhausted"],
+        ["budget_exhausted", "ok"],
+      ]);
+    });
+
+    it("clearLatched DOES clear it — operator raised the budget via hot-reload", () => {
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      gate.clearLatched();
+      expect(gate.status().state).toBe("ok");
+      expect(gate.claimBlockReason()).toBeNull();
+      expect(transitions).toEqual([
+        ["ok", "budget_exhausted"],
+        ["budget_exhausted", "ok"],
+      ]);
+    });
+
+    it("an existing operator-fixable latch (auth_error) is NOT overwritten by a budget report — latch wins", () => {
+      gate.reportFailure("auth", "401 unauthorized");
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      const s = gate.status();
+      expect(s.state).toBe("auth_error");
+      expect(s.reason).toBe("401 unauthorized");
+      expect(transitions).toEqual([["ok", "auth_error"]]);
+    });
+
+    it("an existing quota_exhausted/misconfig latch is likewise not overwritten by a budget report", () => {
+      gate.reportFailure("quota", "insufficient_quota");
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      expect(gate.status().state).toBe("quota_exhausted");
+
+      gate.clearLatched();
+      gate.reportFailure("model_not_found", "model not found: gpt-x");
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      expect(gate.status().state).toBe("misconfig");
+    });
+
+    it("notBeforeIso reports the injected until instant while active", () => {
+      gate.reportBudgetExhausted(3_600_000, "budget reached");
+      expect(gate.notBeforeIso()).toBe(new Date(3_600_000).toISOString());
+    });
+  });
+
   describe("notBeforeIso", () => {
     it("returns `now` when ok", () => {
       expect(gate.notBeforeIso()).toBe(new Date(0).toISOString());

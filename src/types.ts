@@ -124,6 +124,9 @@ export interface Config {
   // Whether to sweep uncommitted leftovers into a final commit
   // (`worker.commitLeftovers`). Pi-strict default is false (fail-loud).
   commitLeftoversEnabled: boolean;
+  // Daily USD spend cap (`worker.dailyBudgetUsd`); 0 = off, spend ledger never
+  // consulted. See providerGate.ts's budget_exhausted state.
+  dailyBudgetUsd: number;
   // Post-session critic (parity with the Python [critic] section).
   criticEnabled: boolean;
   criticMaxRetries: number;

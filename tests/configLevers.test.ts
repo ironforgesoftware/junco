@@ -158,4 +158,15 @@ describe("hosted-provider levers", () => {
       editable: true,
     });
   });
+
+  it("registers worker.dailyBudgetUsd as a live number lever defaulting to 0 (Phase-3 Task 5)", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("worker.dailyBudgetUsd")).toMatchObject({
+      type: "number",
+      default: 0,
+      min: 0,
+      reload: "live",
+      editable: true,
+    });
+  });
 });

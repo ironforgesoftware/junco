@@ -6,13 +6,14 @@ export type GateStateKind =
   | "quota_exhausted"
   | "misconfig"
   | "rate_limited"
-  | "outage_backoff";
+  | "outage_backoff"
+  | "budget_exhausted";
 
 export interface GateStatus {
   state: GateStateKind;
   reason: string | null; // human-readable cause, e.g. the classified error text
   since: string | null; // ISO — when the non-ok state was entered
-  until: string | null; // ISO — rate_limited/outage_backoff expiry; null for latches
+  until: string | null; // ISO — rate_limited/outage_backoff/budget_exhausted expiry; null for latches
 }
 
 export interface ProviderGateOpts {
@@ -25,7 +26,7 @@ interface InternalState {
   kind: GateStateKind;
   reason: string | null;
   since: number | null; // epoch ms; null only while ok
-  until: number | null; // epoch ms; set only for rate_limited/outage_backoff
+  until: number | null; // epoch ms; set only for rate_limited/outage_backoff/budget_exhausted
 }
 
 const LATCHED_KINDS: ReadonlySet<GateStateKind> = new Set([
@@ -45,14 +46,24 @@ const OK_STATE: InternalState = { kind: "ok", reason: null, since: null, until: 
  * `currentState()` (shared by status()/claimBlockReason()/notBeforeIso() so
  * they can never disagree about whether a deadline has passed).
  *
- * Two families of non-ok state:
+ * Three families of non-ok state:
  *  - Latches (auth_error/quota_exhausted/misconfig): operator-fixable
  *    misconfiguration, not transient load. They stick until an explicit
  *    reportSuccess()/clearLatched() — auto-retrying them would just spin
  *    against a provider that will keep saying no. A latch is never
  *    downgraded by a later rate_limit/outage report ("latch wins").
  *  - Until-based backoffs (rate_limited/outage_backoff): expire on their own
- *    once read past their deadline.
+ *    once read past their deadline; a reportSuccess() also clears them early.
+ *  - budget_exhausted (Phase-3 Task 5): a hybrid. Like the backoffs above it
+ *    is until-based (the caller injects local midnight) and auto-expires
+ *    through the same currentState() chokepoint. Unlike them — and unlike
+ *    the latches — reportSuccess() does NOT clear it: a session finishing
+ *    successfully doesn't un-spend money, so a still-running session that
+ *    completes after the daily cap was hit must not lift the block. Only the
+ *    midnight expiry or an explicit clearLatched() (operator raised the
+ *    budget via hot-reload) clears it early. It also observes the same
+ *    latch-wins precedence as rate_limit/outage: an operator-fixable latch is
+ *    a stronger signal and is never overwritten by a budget report.
  */
 export class ProviderGate {
   private readonly retryBackoffSeconds: number;
@@ -107,10 +118,38 @@ export class ProviderGate {
     }
   }
 
-  /** Any successful session clears everything: latches, backoffs, and streak. */
+  /**
+   * Any successful session clears everything: latches, backoffs, and streak —
+   * EXCEPT budget_exhausted (Phase-3 Task 5). A success doesn't un-spend
+   * money, so a session that was already in flight when the daily cap was
+   * hit must not lift the block by finishing successfully afterwards; only
+   * midnight expiry or clearLatched() (operator action) ends it early.
+   */
   reportSuccess(): void {
+    if (this.currentState().kind === "budget_exhausted") return;
     this.streak = 0;
     this.transitionTo("ok", null, null);
+  }
+
+  /**
+   * Direct threshold report (Phase-3 Task 5) — not a classified provider
+   * failure, so it bypasses reportFailure()'s ProviderFailureClass switch.
+   * The daemon calls this from gatedReady on every poll while
+   * cfg.dailyBudgetUsd is exceeded, BEFORE consulting claimBlockReason().
+   * `untilMs` is the caller-injected local-midnight instant
+   * (SpendLedger.nextMidnightMs()); same latch-wins precedence as
+   * reportFailure's rate_limit/outage cases — an existing operator-fixable
+   * latch is a stronger signal and is never overwritten by a budget report.
+   * Same-kind re-reports (still exhausted on a later poll) just push `until`
+   * forward via transitionTo's existing same-kind branch — no transition
+   * spam, no re-fired onTransition.
+   */
+  reportBudgetExhausted(untilMs: number, reason: string): void {
+    // Route through the shared expiry gate first, like reportFailure — a
+    // stale until-based state must lapse to ok BEFORE we branch.
+    this.currentState();
+    if (LATCHED_KINDS.has(this.state.kind)) return; // latch wins
+    this.transitionTo("budget_exhausted", reason, untilMs);
   }
 
   /**

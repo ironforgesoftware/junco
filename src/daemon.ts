@@ -235,15 +235,22 @@ export interface MainLoopDeps {
    * machine. */
   gate?: Pick<
     ProviderGate,
-    "claimBlockReason" | "status" | "reportFailure" | "reportSuccess" | "notBeforeIso"
+    | "claimBlockReason"
+    | "status"
+    | "reportFailure"
+    | "reportSuccess"
+    | "notBeforeIso"
+    | "reportBudgetExhausted"
   >;
   /** Per-day spend ledger (Phase-3 Task 4), constructed next to the gate:
    * absent → mainLoop builds its own via `makeSpendLedger(cfg.stateDir)`.
    * `cfg` here is always the FROZEN startup config (stateDir is
    * restart-kind — see overlayFrozenRestartFields), exactly like the gate and
    * the health server bind. Threaded into both the serial default runOnceFn
-   * and the scheduler's default executeFn (peer of `gate`). */
-  spend?: Pick<SpendLedger, "recordUsd">;
+   * and the scheduler's default executeFn (peer of `gate`). `todayUsd`/
+   * `nextMidnightMs` (Phase-3 Task 5) are consulted by gatedReady itself,
+   * ahead of the claim gate check — see gatedReady below. */
+  spend?: Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">;
 }
 
 /**
@@ -488,6 +495,23 @@ export async function mainLoop(
   // invalidation is needed.
   const cachedReachable = makeCachedProbe(() => endpointReachable(activeCfg()));
   const gatedReady = async (): Promise<boolean> => {
+    // Daily spend cap (Phase-3 Task 5): checked BEFORE the gate/probe, on
+    // EVERY poll, using the LIVE config — dailyBudgetUsd is a live lever, so
+    // an operator raising it hot-reloads immediately. 0 disables the check
+    // entirely and never touches the spend ledger (spy-verified in tests).
+    // Reporting into the gate here (rather than just returning false
+    // directly) gives the budget the same claimBlockReason()/status()/
+    // /health surfacing as every other gate state, with no new surface code.
+    const liveCfg = activeCfg();
+    if (liveCfg.dailyBudgetUsd > 0) {
+      const todaySpent = spend.todayUsd();
+      if (todaySpent >= liveCfg.dailyBudgetUsd) {
+        gate.reportBudgetExhausted(
+          spend.nextMidnightMs(),
+          `daily budget $${liveCfg.dailyBudgetUsd} reached ($${todaySpent.toFixed(2)} spent)`,
+        );
+      }
+    }
     const block = gate.claimBlockReason();
     if (block) {
       log.warn("claiming paused by provider gate", { reason: block });

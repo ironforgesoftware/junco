@@ -304,6 +304,16 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Sweep uncommitted leftovers into a final commit at run end.",
   },
+  {
+    path: "worker.dailyBudgetUsd",
+    type: "number",
+    default: 0,
+    min: 0,
+    editable: true,
+    reload: "live",
+    description:
+      "Daily USD spend cap; claiming pauses once reached until local midnight (0 disables).",
+  },
 
   // --- supervisor.* ---
   {

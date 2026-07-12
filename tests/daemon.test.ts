@@ -17,8 +17,9 @@ import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.j
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import { makeConfigHolder } from "../src/configWatcher.js";
-import type { GateStatus } from "../src/providerGate.js";
+import { ProviderGate, type GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
+import { makeSpendLedger } from "../src/spendLedger.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -68,6 +69,7 @@ function fakeGate(blockReason: string | null): {
   reportFailure: (cls: ProviderFailureClass, reason: string) => void;
   reportSuccess: () => void;
   notBeforeIso: () => string;
+  reportBudgetExhausted: (untilMs: number, reason: string) => void;
 } {
   return {
     claimBlockReason: () => blockReason,
@@ -80,19 +82,34 @@ function fakeGate(blockReason: string | null): {
     reportFailure: () => {},
     reportSuccess: () => {},
     notBeforeIso: () => "2099-01-01T00:00:00.000Z",
+    reportBudgetExhausted: () => {},
   };
 }
 
 /** Minimal fake spend ledger (Phase-3 Task 4): a plain object satisfying
- * `Pick<SpendLedger, "recordUsd">` — same shape-only pattern as fakeGate, no
- * need to pull in the real persisted-file ledger for wiring tests. */
-function fakeSpend(): { calls: number[]; recordUsd: (usd: number) => void } {
+ * `Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">` — same
+ * shape-only pattern as fakeGate, no need to pull in the real persisted-file
+ * ledger for wiring tests. `todayUsd` defaults to 0 (under any budget) so
+ * existing callers that don't care about the budget gate (Phase-3 Task 5) are
+ * unaffected. */
+function fakeSpend(todayUsd = 0): {
+  calls: number[];
+  recordUsd: (usd: number) => void;
+  todayUsd: () => number;
+  nextMidnightMs: () => number;
+} {
   const calls: number[] = [];
   return {
     calls,
     recordUsd(usd: number) {
       calls.push(usd);
     },
+    todayUsd: () => todayUsd,
+    // An hour in the future by REAL wall-clock time — safe against gates
+    // built with the default (unfaked) `now: () => Date.now()`, which would
+    // otherwise auto-expire a just-latched budget_exhausted state instantly
+    // if this returned a fixed past instant like 0.
+    nextMidnightMs: () => Date.now() + 3_600_000,
   };
 }
 
@@ -130,6 +147,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     maxTransientRetries: 2,
     retryBackoffSeconds: 60,
     maxConcurrent: 1,
+    dailyBudgetUsd: 0,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -737,6 +755,150 @@ describe("mainLoop — provider gate wiring", () => {
     expect(typeof arg.readinessProbe).toBe("function");
     expect(typeof arg.gateStatus).toBe("function");
     expect(arg.gateStatus!()).toEqual(gate.status());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — daily budget gate wiring (Phase 3 Task 5)
+//
+// gatedReady is an internal closure (not exported), so — same technique as
+// the spend-ledger-wiring block below — these tests leave runOnceFn
+// undefined (mainLoop builds its own default wrapping the REAL runOnce with
+// `readyFn: gatedReady`) and intercept runOnceBox.current to capture the
+// `readyFn` daemon.ts actually constructed. Calling that captured readyFn
+// directly exercises the real budget-check + gate wiring without needing a
+// real agent session to drive an actual claim through to completion.
+// ---------------------------------------------------------------------------
+
+describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
+  it("dailyBudgetUsd = 0 never consults the spend ledger", async () => {
+    const cfg = makeConfig({ dailyBudgetUsd: 0 });
+    const stop = new StopFlag();
+    const spend = {
+      recordUsd: vi.fn(),
+      todayUsd: vi.fn(() => 999),
+      nextMidnightMs: vi.fn(() => 0),
+    };
+    let captured: { readyFn?: () => Promise<boolean> } | undefined;
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(
+      async (_c: Config, runDeps: { readyFn?: () => Promise<boolean> }) => {
+        captured = runDeps;
+        return false;
+      },
+    );
+    try {
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        spend,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured?.readyFn).toBeDefined();
+      await captured!.readyFn!();
+      expect(spend.todayUsd).not.toHaveBeenCalled();
+    } finally {
+      runOnceBox.current = realRunOnce;
+    }
+  });
+
+  it("dailyBudgetUsd exceeded blocks claiming via the DEFAULT runOnceFn, with the budget reason logged", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-budget-serial-"));
+      const j = join(root, "Junco");
+      for (const d of ["inbox", "processing", "done", "failed"]) {
+        mkdirSync(join(j, d), { recursive: true });
+      }
+      writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+      const cfg = makeConfig({ vaultRoot: root, dailyBudgetUsd: 3 });
+      const stop = new StopFlag();
+      // A real gate (not the static fakeGate) so reportBudgetExhausted
+      // actually latches state that claimBlockReason() then observes.
+      const gate = new ProviderGate({ retryBackoffSeconds: 60 });
+      const spend = fakeSpend(5); // 5.00 spent, cap is 3.00
+      const { deps } = makeDeps({
+        // Leave runOnceFn undefined so mainLoop builds its own default, which
+        // is exactly the wiring under test (readyFn: gatedReady, gate, spend).
+        runOnceFn: undefined,
+        gate,
+        spend,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      // The ticket was never claimed — still sitting in inbox, never moved to
+      // processing/.
+      expect(readdirSync(join(j, "inbox"))).toHaveLength(1);
+      expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+      const warned = warnSpy.mock.calls.some(
+        (c) => String(c[0]) === "claiming paused by provider gate",
+      );
+      expect(warned).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("blocks claiming with a real ProviderGate + SpendLedger once exceeded, and resumes once BOTH the gate's until and the ledger's calendar day roll past midnight", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-budget-real-"));
+    const stateDir = join(root, "state");
+    const cfg = makeConfig({ vaultRoot: root, stateDir, dailyBudgetUsd: 3 });
+    const stop = new StopFlag();
+
+    // Single shared, mutable clock driving BOTH the gate's auto-expiry and
+    // the ledger's local-calendar-day rollover — exactly like production,
+    // where both default to the same Date.now().
+    let t = new Date(2026, 0, 1, 12, 0, 0, 0).getTime(); // noon, Jan 1
+    const spend = makeSpendLedger(stateDir, { now: () => t });
+    spend.recordUsd(5); // over the 3.00 cap
+    const gate = new ProviderGate({ retryBackoffSeconds: 60, now: () => t });
+
+    let captured: { readyFn?: () => Promise<boolean> } | undefined;
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(
+      async (_c: Config, runDeps: { readyFn?: () => Promise<boolean> }) => {
+        captured = runDeps;
+        return false;
+      },
+    );
+    try {
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        gate,
+        spend,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+      expect(captured?.readyFn).toBeDefined();
+
+      // Poll while still over budget: the gate latches to budget_exhausted
+      // and claiming is blocked.
+      await captured!.readyFn!();
+      expect(gate.status().state).toBe("budget_exhausted");
+      expect(gate.claimBlockReason()).not.toBeNull();
+
+      // Advance the shared clock past midnight: the ledger's calendar day
+      // rolls over to 0 spent AND the gate's own `until` (next local
+      // midnight) auto-expires — both driven by the same clock.
+      t = new Date(2026, 0, 2, 0, 0, 1, 0).getTime();
+      await captured!.readyFn!();
+      expect(gate.status().state).toBe("ok");
+      expect(gate.claimBlockReason()).toBeNull();
+    } finally {
+      runOnceBox.current = realRunOnce;
+    }
   });
 });
 
