@@ -39,6 +39,7 @@ function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot
     totalTokensIn: 1000,
     totalTokensOut: 2000,
     totalDurationMs: 30000,
+    totalCostUsd: 0,
     lastTaskAt: "2026-05-31T00:00:28.000Z",
     lastTaskStatus: "completed",
     bridgeSweeps: 0,

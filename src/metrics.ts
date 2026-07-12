@@ -23,6 +23,10 @@ export interface MetricsSnapshot {
   totalTokensIn: number;
   totalTokensOut: number;
   totalDurationMs: number;
+  /** Summed USD across every recordTask call that reported a cost (Phase-3
+   * cost accounting — critic/corrective usage rolled into the ticket's total
+   * before recordTask is called). 0 when no run has reported a cost. */
+  totalCostUsd: number;
   lastTaskAt: string | null; // ISO of the most recent recordTask()
   lastTaskStatus: string | null;
   // GitHub bridge (issues → inbox): sweep counters, 0/null when disabled.
@@ -75,6 +79,7 @@ export class RunMetrics {
   private _totalTokensIn = 0;
   private _totalTokensOut = 0;
   private _totalDurationMs = 0;
+  private _totalCostUsd = 0;
   private _lastTaskAt: Date | null = null;
   private _lastTaskStatus: string | null = null;
   private _bridgeSweeps = 0;
@@ -226,10 +231,15 @@ export class RunMetrics {
    * Record a completed task.
    *
    * @param status  Terminal status string (e.g. "completed", "failed", "timeout")
-   * @param usage   Token usage — only input and output are summed here
+   * @param usage   Token usage — input/output are summed here; costUsd is
+   *                optional (omitted by callers/fakes that don't report cost)
    * @param durationMs  Wall-clock duration for the task
    */
-  recordTask(status: string, usage: { input: number; output: number }, durationMs: number): void {
+  recordTask(
+    status: string,
+    usage: { input: number; output: number; costUsd?: number },
+    durationMs: number,
+  ): void {
     this._tasksProcessed++;
 
     // Bucket by status
@@ -245,6 +255,7 @@ export class RunMetrics {
     this._totalTokensIn += usage.input;
     this._totalTokensOut += usage.output;
     this._totalDurationMs += durationMs;
+    this._totalCostUsd += usage.costUsd ?? 0;
 
     this._lastTaskAt = this._now();
     this._lastTaskStatus = status;
@@ -271,6 +282,7 @@ export class RunMetrics {
       totalTokensIn: this._totalTokensIn,
       totalTokensOut: this._totalTokensOut,
       totalDurationMs: this._totalDurationMs,
+      totalCostUsd: this._totalCostUsd,
       lastTaskAt: this._lastTaskAt ? this._lastTaskAt.toISOString() : null,
       lastTaskStatus: this._lastTaskStatus,
       bridgeSweeps: this._bridgeSweeps,
@@ -304,6 +316,7 @@ export class RunMetrics {
     this._totalTokensIn = 0;
     this._totalTokensOut = 0;
     this._totalDurationMs = 0;
+    this._totalCostUsd = 0;
     this._lastTaskAt = null;
     this._lastTaskStatus = null;
     this._bridgeSweeps = 0;

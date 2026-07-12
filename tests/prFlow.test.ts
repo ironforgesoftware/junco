@@ -210,9 +210,9 @@ function ctxFor(cfg: Config, task: Ticket) {
  * Python fake_omp_pr.sh — a real commit so countNewCommits > 0.
  */
 function commitFactory(
-  opts: { commit?: boolean; stopReason?: string; file?: string } = {},
+  opts: { commit?: boolean; stopReason?: string; file?: string; costUsd?: number } = {},
 ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
-  const { commit = true, stopReason = "stop", file = "feature.txt" } = opts;
+  const { commit = true, stopReason = "stop", file = "feature.txt", costUsd } = opts;
   return (_cfg, cwd) => async () => {
     let listener: ((e: any) => void) | null = null;
     return {
@@ -232,7 +232,16 @@ function commitFactory(
         });
         listener?.({
           type: "turn_end",
-          message: { stopReason, usage: { input: 5, output: 5, cacheRead: 0, totalTokens: 10 } },
+          message: {
+            stopReason,
+            usage: {
+              input: 5,
+              output: 5,
+              cacheRead: 0,
+              totalTokens: 10,
+              ...(costUsd !== undefined ? { cost: { total: costUsd } } : {}),
+            },
+          },
         });
         listener?.({ type: "agent_end", messages: [], willRetry: false });
       },
@@ -243,7 +252,7 @@ function commitFactory(
 }
 
 /** A fake critic session that emits a fixed JUNCO_VERIFY verdict line. */
-function criticFactory(verdictLine: string): () => Promise<AgentSessionLike> {
+function criticFactory(verdictLine: string, costUsd?: number): () => Promise<AgentSessionLike> {
   return async () => {
     let listener: ((e: any) => void) | null = null;
     return {
@@ -260,7 +269,13 @@ function criticFactory(verdictLine: string): () => Promise<AgentSessionLike> {
           type: "turn_end",
           message: {
             stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              totalTokens: 2,
+              ...(costUsd !== undefined ? { cost: { total: costUsd } } : {}),
+            },
           },
         });
         listener?.({ type: "agent_end", messages: [], willRetry: false });
@@ -537,6 +552,55 @@ exit 1
     expect(text).toContain("pushed: true");
     // Two commits: the initial + the corrective re-dispatch.
     expect(text).toContain("commit_count: 2");
+  });
+
+  it("critic corrective: footer usage/cost sum ALL four sessions (main + critic x2 + corrective)", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "critic-cost.md",
+      `---\nid: critic-cost\nrepo: ${h.work}\n---\n# Feature needing a fix\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    // Main run + corrective turn each report input=5/output=5/total=10/cost=0.01
+    // (same commitFactory drives both, per prFlow's sessionFactoryFor reuse).
+    // Critic pass 1 + critic pass 2 each report input=1/output=1/total=2/
+    // cost=0.0023 (same criticFactory drives both — MISSING on every call).
+    // Sum: in=12 out=12 total=24 cost=0.01*2 + 0.0023*2 = 0.0246.
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.01 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: MISSING the X bit", 0.0023),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: completed");
+    expect(text).toContain("commit_count: 2");
+    expect(text).toContain("**Tokens:** in=12 out=12 cost=$0.0246");
+  });
+
+  it("critic PASS on the first pass (no corrective): footer usage = main + critic pass 1 only", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "critic-pass.md",
+      `---\nid: critic-pass\nrepo: ${h.work}\n---\n# Feature\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: PASS"),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: completed");
+    // Main (in=5/out=5) + one critic pass (in=1/out=1); no corrective ran.
+    expect(text).toContain("**Tokens:** in=6 out=6 cost=$0.0000");
   });
 
   // -------------------------------------------------------------------------

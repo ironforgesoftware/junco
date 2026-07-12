@@ -354,6 +354,20 @@ describe("runCriticPass", () => {
     expect(result.rawOutput).toContain("JUNCO_VERIFY: PASS");
   });
 
+  it("returns the critic session's usage (Phase-3 cost accounting)", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    writeFileSync(join(work, "feature.ts"), "export const x = 1;\n");
+    run(["git", "-C", work, "add", "feature.ts"]);
+    run(["git", "-C", work, "commit", "-m", "feat"]);
+
+    const result = await runCriticPass(makeCfg(), makeTicket("do the thing"), work, "origin/main", {
+      criticSessionFactory: async () => fakeCriticSession("JUNCO_VERIFY: PASS") as any,
+    });
+    // fakeCriticSession's turn_end reports { input: 1, output: 1, cacheRead: 0,
+    // totalTokens: 2 } — runAgent's accumulator threads it straight through.
+    expect(result.usage).toEqual({ input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 });
+  });
+
   it("MISSING verdict → status missing with findings", async () => {
     const { work } = setupGitHarness(tmpRoot);
     writeFileSync(join(work, "feature.ts"), "export const x = 1;\n");
@@ -396,6 +410,7 @@ describe("runCriticPass", () => {
       status: "skipped",
       findings: "cfg.critic_enabled=false",
       rawOutput: "",
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
     });
   });
 
@@ -408,7 +423,12 @@ describe("runCriticPass", () => {
         throw new Error("factory should not be called on empty diff");
       },
     });
-    expect(result).toEqual({ status: "skipped", findings: "empty diff", rawOutput: "" });
+    expect(result).toEqual({
+      status: "skipped",
+      findings: "empty diff",
+      rawOutput: "",
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+    });
   });
 });
 

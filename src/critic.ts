@@ -14,7 +14,7 @@
  * re-dispatch (see `buildCorrectivePrompt`), but never blocks the push.
  */
 
-import type { Config, Ticket } from "./types.js";
+import type { Config, Ticket, Usage } from "./types.js";
 import { git } from "./git.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
 
@@ -22,7 +22,16 @@ export interface CriticResult {
   status: "pass" | "missing" | "skipped" | "error";
   findings: string;
   rawOutput: string;
+  /** Token/cost usage for this critic pass's in-process session — zeroed for
+   * the skip paths below (no session ran). Aggregated with the main run's (and
+   * any corrective turn's) usage by prFlow so the ticket's recorded cost
+   * reflects the whole ticket, not just the main worker turn. */
+  usage: Usage;
 }
+
+/** A critic pass that never dispatched a session (disabled / empty diff)
+ * reports zero usage — nothing was spent. */
+const ZERO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
 
 /**
  * Mirrors Python `_CRITIC_MARKER_RE = re.compile(r"JUNCO_VERIFY:\s*(PASS|MISSING)\b\s*(.*?)$", re.MULTILINE)`.
@@ -163,11 +172,16 @@ export async function runCriticPass(
   deps?: CriticDeps,
 ): Promise<CriticResult> {
   if (!cfg.criticEnabled) {
-    return { status: "skipped", findings: "cfg.critic_enabled=false", rawOutput: "" };
+    return {
+      status: "skipped",
+      findings: "cfg.critic_enabled=false",
+      rawOutput: "",
+      usage: ZERO_USAGE,
+    };
   }
   const diff = await gitDiff(cfg, wtPath, baseRef);
   if (!diff.trim()) {
-    return { status: "skipped", findings: "empty diff", rawOutput: "" };
+    return { status: "skipped", findings: "empty diff", rawOutput: "", usage: ZERO_USAGE };
   }
   const prompt = buildCriticPrompt(task.body, diff, baseRef);
   // No tools (diff-vs-spec review needs none) + the configured critic thinking
@@ -188,7 +202,7 @@ export async function runCriticPass(
   // safe. allText is the whole-run concatenation; fall back for empty runs.
   const text = result.allText ?? result.finalText;
   const scan = scanCriticMarker(text);
-  return { status: scan.status, findings: scan.findings, rawOutput: text };
+  return { status: scan.status, findings: scan.findings, rawOutput: text, usage: result.usage };
 }
 
 /**

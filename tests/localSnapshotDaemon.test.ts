@@ -37,6 +37,7 @@ function metrics(over: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
     totalTokensIn: 1000,
     totalTokensOut: 2000,
     totalDurationMs: 0,
+    totalCostUsd: 0,
     lastTaskAt: null,
     lastTaskStatus: null,
     bridgeSweeps: 0,
