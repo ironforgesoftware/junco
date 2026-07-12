@@ -63,6 +63,10 @@ Junco classifies inference-endpoint failures and, for the ones an operator (not 
 
 The interactive dashboard (`junco dashboard`) shows the gate as a colored dot on the daemon panel (red for a latch, yellow for a backoff) with a reason line underneath when the state isn't `ok`.
 
+### Spend
+
+`/health` also carries a `spend` field: `{todayUsd, dailyBudgetUsd} | null` — today's tallied USD spend and the live `worker.dailyBudgetUsd` cap (`0` means no cap configured), `null` only when no spend ledger is wired at all. Every completed session's actual resolved cost (main run, critic pass, corrective re-dispatch) is recorded against the local calendar day regardless of whether a cap is set — see [Configuration § Daily spend cap](configuration.md#daily-spend-cap). The dashboard's daemon panel prints a matching `spend $X.XX today` line, appending `/ $Y.YY budget` once a cap is configured.
+
 **Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<stateDir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `observability.logLevel` to `debug` for verbose output, `info` for normal operation.
 
 **Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<stateDir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `observability.transcripts = false`.
