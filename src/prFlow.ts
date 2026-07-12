@@ -595,24 +595,26 @@ export async function runPrFlow(
       // class — requeue with backoff before falling through to terminal fail.
       if (result.stopReason === "error" || result.stopReason === "length") {
         // Zero-commit by construction (inside the newCommits===0 gate above).
-        // result.errorMessage is virtually always null here: a non-null
-        // errorMessage on the initial run would already have been caught by
-        // Phase 5's hardError check, before this code is ever reached. A
-        // provider failure that instead surfaces as a silent stop_reason
-        // turn carries its diagnostic text in the model's own visible
-        // output, so classification falls back to finalText when there is
-        // no structured errorMessage.
-        const reasonText = result.errorMessage ?? result.finalText;
-        const cls = classifyProviderFailure(reasonText);
+        // Classify result.errorMessage ONLY — it is structurally null here (a
+        // non-null errorMessage was already intercepted by Phase 5's hardError
+        // check), so this branch is defensive-only and normally classifies
+        // "unknown", falling through to the budgeted requeue below exactly as
+        // before the gate existed. It MUST NOT read finalText: stop_reason=
+        // 'length' is truncated AGENT PROSE, and prose like "add rate limit
+        // handling" or "fix the 403 handling" would classify as a gate class —
+        // a count-free requeue loop plus a queue-wide latch only an operator
+        // can clear (a latched queue never emits the reportSuccess that would
+        // clear it). See the Task-6 review.
+        const cls = classifyProviderFailure(result.errorMessage);
         if (deps.gate && GATE_CLASSES.has(cls)) {
-          const reason = reasonText || cls;
+          const reason = result.errorMessage ?? cls;
           deps.gate.reportFailure(cls, reason);
           const rq = requeueTicketKeepBudget(cfg, claimedPath, deps.gate.notBeforeIso(), reason);
           await cleanupWorktree(cfg, ctx, wtPath);
           log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
           return requeuedResult(rq.dst, result);
         }
-        if (deps.gate && cls === "outage") deps.gate.reportFailure(cls, reasonText || cls);
+        if (deps.gate && cls === "outage") deps.gate.reportFailure(cls, result.errorMessage ?? cls);
         const rq = requeueTicket(cfg, claimedPath, task, `stop_reason=${result.stopReason}`);
         if (rq.requeued) {
           await cleanupWorktree(cfg, ctx, wtPath);

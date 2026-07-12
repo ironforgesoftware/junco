@@ -1482,7 +1482,7 @@ describe("provider gate wiring (Phase 2 Task 6)", () => {
     expect(readdirSync(h.wtsRoot)).toHaveLength(1); // preserved, not cleaned
   });
 
-  it("gate-class zero-commit 429 at the stop_reason site requeues WITHOUT consuming the retry budget and reports rate_limit to the gate", async () => {
+  it("prose '429' in finalText at the stop_reason site does NOT consult the gate — agent prose never reaches the classifier", async () => {
     const cfg = makeConfig(h);
     const { task, path } = makeTicket(
       h,
@@ -1501,9 +1501,9 @@ describe("provider gate wiring (Phase 2 Task 6)", () => {
     expect(flow.requeued).toBe(true);
     expect(flow.dst).toContain(join("Junco", "inbox"));
     const content = readFileSync(flow.dst, "utf8");
-    expect(content).not.toMatch(/retry_count:/);
+    expect(content).toMatch(/retry_count: 1/); // BUDGETED requeue — not the gate's count-free one
     expect(content).toMatch(/not_before:/);
-    expect(gate.failureCalls).toEqual([{ cls: "rate_limit", reason: "429 too many requests" }]);
+    expect(gate.failureCalls).toEqual([]); // errorMessage is null here; prose must never latch
   });
 
   it("outage zero-commit (hard-error site, thrown ECONNREFUSED) reports outage to the gate but keeps the BUDGETED requeue path", async () => {
@@ -1531,7 +1531,7 @@ describe("provider gate wiring (Phase 2 Task 6)", () => {
     ]);
   });
 
-  it("outage zero-commit at the stop_reason site reports outage to the gate but keeps the BUDGETED requeue path", async () => {
+  it("outage-looking prose in finalText at the stop_reason site does NOT reach the gate — budgeted requeue only", async () => {
     const cfg = makeConfig(h);
     const { task, path } = makeTicket(
       h,
@@ -1551,7 +1551,35 @@ describe("provider gate wiring (Phase 2 Task 6)", () => {
     const content = readFileSync(flow.dst, "utf8");
     expect(content).toMatch(/retry_count: 1/);
     expect(content).toMatch(/not_before:/);
-    expect(gate.failureCalls).toEqual([{ cls: "outage", reason: "fetch failed: upstream reset" }]);
+    expect(gate.failureCalls).toEqual([]); // prose, not a structured errorMessage — no gate report
+  });
+
+  it("false-positive regression: agent prose mentioning 429/403/billing at stop_reason=length never latches the gate", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "prose-latch.md",
+      `---\nid: prose-latch\nrepo: ${h.work}\n---\n# Handle limits\n\nAdd rate limit handling.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    // Truncated agent PROSE about the ticket's subject matter — exactly the
+    // text that must never be mistaken for a provider failure: it name-drops
+    // a 429, a 403, and billing while being a work narration, not an error.
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: stopReasonFactory(
+        "length",
+        "I will add 429 rate limit handling, fix the 403 handling, and update the billing retry docs",
+      ),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path — the count IS consumed
+    expect(gate.failureCalls).toEqual([]); // and the gate never hears about it
   });
 
   it("an unclassified stop_reason='error' with a gate present still uses the existing budgeted requeue path and does not consult the gate", async () => {
