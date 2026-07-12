@@ -41,3 +41,16 @@ export function classifyProviderFailure(
   if (OUTAGE_TEXT.test(errorText) || OUTAGE_ERRNO.test(errorText)) return "outage";
   return "unknown";
 }
+
+// Failure classes that are the provider's fault, not the ticket's: an
+// operator-fixable misconfiguration (auth/quota/model typo) or an active rate
+// limit. These route through the gate and requeueTicketKeepBudget instead of
+// the budgeted transient-retry path — see the Q&A/crash sites in runOnce.ts
+// and the two zero-commit failure sites in prFlow.ts. Shared here (rather than
+// declared per-module) so both callers route the exact same set.
+export const GATE_CLASSES: ReadonlySet<ProviderFailureClass> = new Set([
+  "auth",
+  "quota",
+  "rate_limit",
+  "model_not_found",
+]);

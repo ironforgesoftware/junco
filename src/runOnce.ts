@@ -21,7 +21,7 @@ import { runAssessFlow } from "./assessFlow.js";
 // function bodies, never during module evaluation).
 import { runAnalyzeFlow } from "./analyzeFlow.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
-import { classifyProviderFailure, type ProviderFailureClass } from "./providerFailure.js";
+import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import { transcriptPathFor } from "./slug.js";
 import {
@@ -38,18 +38,6 @@ import { metrics } from "./metrics.js";
 // claimed ticket sitting in processing/ (PR-flow tickets in a worktree get the
 // full set in a later milestone).
 export const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
-
-// Failure classes that are the provider's fault, not the ticket's: an
-// operator-fixable misconfiguration (auth/quota/model typo) or an active
-// rate limit. These route through the gate and requeueTicketKeepBudget
-// instead of the budgeted transient-retry path — see the Q&A failure site
-// and crash containment in executeClaimed below.
-const GATE_CLASSES: ReadonlySet<ProviderFailureClass> = new Set([
-  "auth",
-  "quota",
-  "rate_limit",
-  "model_not_found",
-]);
 
 /**
  * Canonicalize a lexically-resolved repo path into a stable per-repo
@@ -291,6 +279,7 @@ export async function executeClaimed(
             abortSignal: deps.abortSignal,
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
             onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
+            gate: deps.gate,
           });
           if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);

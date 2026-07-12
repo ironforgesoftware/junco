@@ -29,6 +29,7 @@ import { parseTicket } from "../src/ticket.js";
 import { listOps, type OutboxOp } from "../src/githubOutbox.js";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
+import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 
 // ---------------------------------------------------------------------------
@@ -1287,6 +1288,376 @@ esac
     // (it queues itself if still offline); only the composite fresh op sets it.
     expect(flow.prQueued).toBe(false);
   }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// Provider gate wiring (Phase 2 Task 6) — classify + gate-route the two
+// zero-commit failure sites (hard-error at ~line 480, stop_reason at ~line
+// 568), and report a clean run's success to the gate.
+// ---------------------------------------------------------------------------
+
+/** Records calls made by the code under test; a plain object satisfying
+ * `Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">` —
+ * mirrors the runOnce.test.ts fakeGate (Phase 2 Task 5). */
+function fakeGate(notBefore = "2099-01-01T00:00:00.000Z") {
+  const failureCalls: { cls: ProviderFailureClass; reason: string }[] = [];
+  let successCalls = 0;
+  return {
+    failureCalls,
+    get successCalls() {
+      return successCalls;
+    },
+    reportFailure(cls: ProviderFailureClass, reason: string) {
+      failureCalls.push({ cls, reason });
+    },
+    reportSuccess() {
+      successCalls += 1;
+    },
+    notBeforeIso() {
+      return notBefore;
+    },
+  };
+}
+
+describe("provider gate wiring (Phase 2 Task 6)", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = setup();
+  });
+  afterEach(() => {
+    rmSync(h.root, { recursive: true, force: true });
+  });
+
+  /** Session whose prompt() throws — a hard non-guard error with no commits.
+   * Parametrized (unlike the plain `erroringFactory` above) so different
+   * gate-class/outage/unclassified error TEXTS can drive the hard-error site. */
+  function throwingFactory(
+    message: string,
+  ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    return (_cfg, _cwd) => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        throw new Error(message);
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+  }
+
+  /** Session that commits, THEN throws — the hard-error-WITH-commits case:
+   * gate-class routing must not touch this (committed work is salvaged, not
+   * discarded), regardless of the error text. */
+  function commitThenThrowFactory(
+    message: string,
+  ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    return (_cfg, cwd) => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        writeFileSync(join(cwd, "feature.txt"), `work ${Date.now()}\n`, "utf8");
+        run(["git", "-C", cwd, "add", "-A"]);
+        run(["git", "-C", cwd, "commit", "-m", "feat: feature.txt"]);
+        throw new Error(message);
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+  }
+
+  /** Session whose prompt() ends the turn with the given stopReason and no
+   * commit — no thrown exception, no errorMessage on the turn (a "silent"
+   * stop_reason='error'/'length'). Drives prFlow's stop_reason requeue gate
+   * (~line 568): errorMessage is null, so classification there falls back to
+   * the assistant's own visible text (RunResult.finalText), which is exactly
+   * what `text` becomes. */
+  function stopReasonFactory(
+    stopReason: string,
+    text: string,
+  ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    return (_cfg, _cwd) => async () => {
+      let listener: ((e: any) => void) | null = null;
+      return {
+        subscribe(l: (e: any) => void) {
+          listener = l;
+          return () => {};
+        },
+        async prompt() {
+          listener?.({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: text },
+          });
+          listener?.({
+            type: "turn_end",
+            message: { stopReason, usage: { input: 5, output: 5, cacheRead: 0, totalTokens: 10 } },
+          });
+          listener?.({ type: "agent_end", messages: [], willRetry: false });
+        },
+        dispose() {},
+        abort: async () => {},
+      };
+    };
+  }
+
+  /** Local copy of the outer describe block's `timingOutFactory` (that one is
+   * scoped to its own callback, not visible here): commits, then hangs until
+   * runAgent's timeout timer aborts it — produces a timedOut, salvaged RunResult. */
+  function timingOutFactory(
+    opts: { commit?: boolean } = {},
+  ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    const { commit = true } = opts;
+    return (_cfg, cwd) => async () => {
+      let resolveHang: (() => void) | null = null;
+      return {
+        subscribe() {
+          return () => {};
+        },
+        async prompt() {
+          if (commit) {
+            writeFileSync(join(cwd, "salvage.txt"), "work before the cutoff\n", "utf8");
+            run(["git", "-C", cwd, "add", "-A"]);
+            run(["git", "-C", cwd, "commit", "-m", "feat: salvage"]);
+          }
+          await new Promise<void>((r) => {
+            resolveHang = r;
+          }); // hang until abort()
+        },
+        dispose() {},
+        abort: async () => {
+          resolveHang?.();
+        },
+      };
+    };
+  }
+
+  it("gate-class zero-commit 401 (hard-error site) requeues WITHOUT consuming the retry budget and reports auth to the gate", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "auth401.md",
+      `---\nid: auth401\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: throwingFactory("401 invalid x-api-key"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    expect(flow.dst).toContain(join("Junco", "inbox"));
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).not.toMatch(/retry_count:/); // absent, not bumped
+    expect(content).toMatch(/not_before:/);
+    expect(gate.failureCalls).toEqual([{ cls: "auth", reason: "401 invalid x-api-key" }]);
+    expect(readdirSync(h.wtsRoot)).toHaveLength(0); // worktree cleaned for the retry
+  });
+
+  it("WITH commits + 401 (hard-error site): gate is NOT consulted; the existing salvage (preserve + fail) path is unchanged", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "auth401commits.md",
+      `---\nid: auth401commits\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitThenThrowFactory("401 invalid x-api-key"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: failed");
+    expect(text).toContain("Worktree preserved");
+    expect(gate.failureCalls).toEqual([]); // never consulted — commits exist
+    expect(readdirSync(h.wtsRoot)).toHaveLength(1); // preserved, not cleaned
+  });
+
+  it("gate-class zero-commit 429 at the stop_reason site requeues WITHOUT consuming the retry budget and reports rate_limit to the gate", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "rate429.md",
+      `---\nid: rate429\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: stopReasonFactory("error", "429 too many requests"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    expect(flow.dst).toContain(join("Junco", "inbox"));
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).not.toMatch(/retry_count:/);
+    expect(content).toMatch(/not_before:/);
+    expect(gate.failureCalls).toEqual([{ cls: "rate_limit", reason: "429 too many requests" }]);
+  });
+
+  it("outage zero-commit (hard-error site, thrown ECONNREFUSED) reports outage to the gate but keeps the BUDGETED requeue path", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "outage1.md",
+      `---\nid: outage1\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: throwingFactory("connect ECONNREFUSED 127.0.0.1:1234"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path, NOT the gate's count-free one
+    expect(content).toMatch(/not_before:/);
+    expect(gate.failureCalls).toEqual([
+      { cls: "outage", reason: "connect ECONNREFUSED 127.0.0.1:1234" },
+    ]);
+  });
+
+  it("outage zero-commit at the stop_reason site reports outage to the gate but keeps the BUDGETED requeue path", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "outage2.md",
+      `---\nid: outage2\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: stopReasonFactory("length", "fetch failed: upstream reset"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).toMatch(/retry_count: 1/);
+    expect(content).toMatch(/not_before:/);
+    expect(gate.failureCalls).toEqual([{ cls: "outage", reason: "fetch failed: upstream reset" }]);
+  });
+
+  it("an unclassified stop_reason='error' with a gate present still uses the existing budgeted requeue path and does not consult the gate", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "plaintext568.md",
+      `---\nid: plaintext568\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: stopReasonFactory("error", "agent gave up trying"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path consumed the count
+    expect(gate.failureCalls).toEqual([]); // no latch — classifier says unknown
+  });
+
+  it("a stop_reason='error' zero-commit run without a gate in deps falls back to the plain requeueTicket path (byte-identical pre-gate behavior)", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "nogate568.md",
+      `---\nid: nogate568\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: stopReasonFactory("error", "429 too many requests"),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path, not the gate's count-free path
+    expect(content).toMatch(/not_before:/);
+  });
+
+  it("a successful run (commits, push, PR opened) reports success to the gate exactly once", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "gatesuccess.md",
+      `---\nid: gatesuccess\nrepo: ${h.work}\n---\n# Add a feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(gate.successCalls).toBe(1);
+    expect(gate.failureCalls).toEqual([]);
+  });
+
+  it("a clean no-changes finish also reports success to the gate exactly once", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "gatenochange.md",
+      `---\nid: gatenochange\nrepo: ${h.work}\n---\n# No-op ticket\n\nDecide nothing is needed.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: false }),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed_no_changes");
+    expect(gate.successCalls).toBe(1);
+    expect(gate.failureCalls).toEqual([]);
+  });
+
+  it("a timed-out salvage run with commits does NOT report success to the gate", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "gatetimeout.md",
+      `---\nid: gatetimeout\nrepo: ${h.work}\ntimeout_minutes: 0.005\n---\n# Slow\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: timingOutFactory({ commit: true }),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("timeout_partial");
+    expect(gate.successCalls).toBe(0);
+    expect(gate.failureCalls).toEqual([]);
+  }, 20000);
 });
 
 // ---------------------------------------------------------------------------
