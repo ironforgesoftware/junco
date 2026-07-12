@@ -63,6 +63,25 @@ describe("runInitWizard interactive (collectFn seam)", () => {
     expect(existsSync(join(dir, "vault", "inbox"))).toBe(true);
   });
 
+  it("wires io.listCatalogProviders to the injected listCatalogProvidersFn", async () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    let calls = 0;
+    const code = await runInitWizard(cp, {
+      listCatalogProvidersFn: async () => {
+        calls++;
+        return [{ provider: "acme", ids: ["big", "small"] }];
+      },
+      collectFn: async (io: WizardIO) => {
+        const catalog = await io.listCatalogProviders();
+        expect(catalog).toEqual([{ provider: "acme", ids: ["big", "small"] }]);
+        return "cancelled";
+      },
+    });
+    expect(code).toBe(130);
+    expect(calls).toBe(1);
+  });
+
   it("rerun mode prefills from the file and preserves uncovered keys", async () => {
     const dir = tmp();
     const cp = join(dir, "config.json");

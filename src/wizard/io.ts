@@ -3,6 +3,7 @@
 
 import type { WizardAnswers, AnswerDiff } from "./flow.js";
 import type { CheckResult } from "./detect.js";
+import type { CatalogEntry } from "../agent/session.js";
 
 export type WizardOutcome = "written" | "unchanged" | "cancelled";
 
@@ -24,6 +25,12 @@ export interface WizardIO {
   preflight(): Promise<CheckResult[]>;
   discoverModels(baseUrl: string, apiKey: string): Promise<string[]>;
   listModelsJson(path: string): string[];
+  /** The SDK's complete built-in hosted-model catalog, grouped by provider —
+   * backs the "hosted" source's provider/model pickers. Wired to
+   * session.ts's `listCatalogProviders` by default (see wizard.ts); can
+   * reject (network-free, but the SDK import itself can throw) — callers
+   * must treat that as a friendly fallback, never a crash. */
+  listCatalogProviders(): Promise<CatalogEntry[]>;
   write(a: WizardAnswers): WriteResult;
   flightCheck(): Promise<CheckResult[]>;
 }

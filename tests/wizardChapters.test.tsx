@@ -161,6 +161,10 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
     preflight: async () => [{ verdict: "ok", label: "git", detail: "2.44" }],
     discoverModels: async () => ["m-fast", "m-big"],
     listModelsJson: () => [],
+    listCatalogProviders: async () => [
+      { provider: "acme", ids: ["big", "small"] },
+      { provider: "globex", ids: ["fast"] },
+    ],
     write: () => ({
       written: true,
       configPath: "/tmp/config.json",
@@ -453,7 +457,7 @@ describe("Model chapter", () => {
     });
     const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
     await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
-    await press(stdin, DOWN, ENTER); // second option: models.json
+    await press(stdin, DOWN, DOWN, ENTER); // third option: models.json (after inline, hosted)
     rerender(<Model {...props()} />);
     await until(() => (lastFrame() ?? "").includes("models.json"));
     await press(stdin, ENTER); // accept default path
@@ -463,6 +467,136 @@ describe("Model chapter", () => {
     await until(() => advanced);
     expect(answers.mode).toBe("models_json");
     expect(answers.modelId).toBe("prov/m1");
+  });
+
+  it("hosted chain: source → provider → model → key → finish, verbatim provider/id (no inferProvider)", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const io = fakeIo();
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, DOWN, ENTER); // second option: hosted
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Which hosted provider?"));
+    // catalog is [{acme}, {globex}] (alphabetical) — DOWN picks the second, globex
+    await press(stdin, DOWN, ENTER);
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Which globex model?"));
+    await press(stdin, ENTER); // globex's only id: "fast"
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("API key for globex?"));
+    // wipe the inline-placeholder "1234" draft, then type a real hosted key
+    for (let i = 0; i < "1234".length; i++) {
+      await press(stdin, BACKSPACE);
+      rerender(<Model {...props()} />);
+    }
+    stdin.write("sk-hosted");
+    await tick();
+    rerender(<Model {...props()} />);
+    await press(stdin, ENTER);
+    await until(() => advanced);
+    expect(answers.mode).toBe("hosted");
+    expect(answers.modelId).toBe("globex/fast"); // verbatim provider/id, no inferProvider
+    expect(answers.apiKey).toBe("sk-hosted");
+  });
+
+  it("hosted chain: blank key submit leaves answers.apiKey unset (env-var deferral)", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const io = fakeIo();
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {
+        advanced = true;
+      },
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, DOWN, ENTER); // hosted
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Which hosted provider?"));
+    await press(stdin, ENTER); // first provider: acme
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Which acme model?"));
+    await press(stdin, ENTER); // acme's first id: "big"
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("API key for acme?"));
+    for (let i = 0; i < "1234".length; i++) {
+      await press(stdin, BACKSPACE);
+      rerender(<Model {...props()} />);
+    }
+    expect(lastFrame()).toContain("blank = provider's own env var at runtime");
+    await press(stdin, ENTER); // blank submit
+    await until(() => advanced);
+    expect(answers.modelId).toBe("acme/big");
+    expect(answers.apiKey).toBeUndefined();
+  });
+
+  it("hosted chain: catalog-load failure shows a friendly message and routes back to source", async () => {
+    let answers = defaultAnswers();
+    const io = fakeIo({
+      listCatalogProviders: async () => {
+        throw new Error("boom");
+      },
+    });
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {},
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    await press(stdin, DOWN, ENTER); // hosted
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Couldn't load the hosted-provider catalog"));
+    expect(lastFrame()).toContain("boom");
+    // Back on the source step, not crashed and not stuck on a spinner.
+    expect(lastFrame()).toContain("How is the model configured?");
+    expect(lastFrame()).toContain("Inline — an OpenAI-compatible endpoint");
+  });
+
+  it('rerun over a hosted config preselects "hosted" at the source step (continuity fix)', async () => {
+    const raw = { model: { id: "anthropic/claude-fancy" } }; // no baseUrl, no modelsJson → mode "hosted"
+    let answers = answersFromConfig(raw);
+    expect(answers.mode).toBe("hosted"); // sanity check on Task 9's answersFromConfig
+    const io = fakeIo({ mode: "rerun", currentRaw: raw });
+    const props = () => ({
+      ...noopChapter,
+      answers,
+      patch: (p: Partial<typeof answers>) => {
+        answers = { ...answers, ...p };
+      },
+      io,
+      onNext: () => {},
+    });
+    const { lastFrame, stdin, rerender } = render(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
+    // Bare Enter, no DOWN: before the fix this defaulted to inline's index
+    // and would land on the URL step instead.
+    await press(stdin, ENTER);
+    rerender(<Model {...props()} />);
+    await until(() => (lastFrame() ?? "").includes("Which hosted provider?"));
+    expect(answers.mode).toBe("hosted");
   });
 });
 
@@ -767,6 +901,31 @@ describe("Review chapter", () => {
       />,
     );
     await until(() => (same.lastFrame() ?? "").includes("Nothing changed"));
+  });
+
+  it("fresh mode: hosted config preview shows model.id verbatim, no baseUrl/modelsJson line", async () => {
+    const answers = {
+      ...defaultAnswers(),
+      mode: "hosted" as const,
+      modelId: "anthropic/claude-fancy",
+      apiKey: undefined,
+      baseUrl: undefined,
+    };
+    const { lastFrame } = render(
+      <Review
+        {...noopChapter}
+        answers={answers}
+        patch={() => {}}
+        io={fakeIo()}
+        onNext={() => {}}
+        onWrite={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    expect(lastFrame()).toContain('"id": "anthropic/claude-fancy"');
+    expect(lastFrame()).not.toContain("baseUrl");
+    expect(lastFrame()).not.toContain("modelsJson");
   });
 
   it("fresh mode redacts model.apiKey in the JSON preview", async () => {
