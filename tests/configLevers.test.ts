@@ -133,3 +133,18 @@ describe("path helpers", () => {
     expect(getAtPath({}, "a.b.c")).toBeUndefined();
   });
 });
+
+describe("hosted-provider levers", () => {
+  it("registers model.source and model.retry.* as live levers", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("model.source")).toMatchObject({ reload: "live", default: "auto" });
+    expect(byPath.get("model.retry.maxRetries")).toMatchObject({ reload: "live" });
+    expect(byPath.get("model.retry.baseDelayMs")).toMatchObject({ reload: "live" });
+  });
+
+  it("model.apiKey and model.baseUrl no longer advertise hard defaults", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("model.apiKey")?.default).toBeUndefined();
+    expect(byPath.get("model.baseUrl")?.default).toBeUndefined();
+  });
+});

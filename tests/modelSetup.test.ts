@@ -7,11 +7,17 @@ import {
   apiBaseUrl,
   buildInlineProviderConfig,
   resolveProbeBaseUrl,
+  catalogEligible,
+  resolveModelViaRegistries,
+  shouldProbeEndpoint,
 } from "../src/agent/modelSetup.js";
 import type { Config, ModelConfig } from "../src/types.js";
 
 const MODEL_DEFAULTS: ModelConfig = {
   id: "omlx/Qwen3.6-27B-oQ8-mtp",
+  source: "auto",
+  baseUrlExplicit: false,
+  retry: { maxRetries: null, baseDelayMs: null },
   modelsJson: null,
   api: "openai-completions",
   baseUrl: "http://127.0.0.1:1234/v1",
@@ -118,5 +124,130 @@ describe("resolveProbeBaseUrl", () => {
   it("file mode: falls back to base_url when the file is missing/unreadable", () => {
     const cfg = mkCfg({ modelsJson: "/no/such/models.json", baseUrl: "http://fallback/v1" });
     expect(resolveProbeBaseUrl(cfg)).toBe("http://fallback/v1");
+  });
+});
+
+describe("shouldProbeEndpoint", () => {
+  it("skips the probe for catalog-eligible configs without a models.json", () => {
+    expect(shouldProbeEndpoint(mkCfg({ id: "anthropic/claude-x", modelsJson: null }).model)).toBe(
+      false,
+    );
+  });
+
+  it("probes local/inline configs and any models.json config", () => {
+    expect(shouldProbeEndpoint(mkCfg({ id: "local/my-model", modelsJson: null }).model)).toBe(true);
+    expect(
+      shouldProbeEndpoint(
+        mkCfg({ id: "anthropic/claude-x", modelsJson: "/tmp/models.json" }).model,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("catalogEligible", () => {
+  it("auto + non-local provider + no explicit baseUrl → eligible", () => {
+    expect(
+      catalogEligible({
+        source: "auto",
+        id: "anthropic/claude-sonnet-4-5",
+        baseUrlExplicit: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("auto + explicit baseUrl → inline (deliberate proxy/override)", () => {
+    expect(
+      catalogEligible({ source: "auto", id: "anthropic/claude-sonnet-4-5", baseUrlExplicit: true }),
+    ).toBe(false);
+  });
+
+  it("auto + local provider (bare or prefixed) → never eligible", () => {
+    expect(catalogEligible({ source: "auto", id: "my-model", baseUrlExplicit: false })).toBe(false);
+    expect(catalogEligible({ source: "auto", id: "local/my-model", baseUrlExplicit: false })).toBe(
+      false,
+    );
+  });
+
+  it("explicit source wins over the heuristic in both directions", () => {
+    expect(catalogEligible({ source: "catalog", id: "openai/gpt-x", baseUrlExplicit: true })).toBe(
+      true,
+    );
+    expect(catalogEligible({ source: "inline", id: "openai/gpt-x", baseUrlExplicit: false })).toBe(
+      false,
+    );
+  });
+});
+
+/** A minimal RegistryLike fake. After an inline registration, find() resolves
+ * the registered model — mirrors the real registry (registerProvider replaces
+ * provider models for that name). */
+function fakeRegistry(models: Record<string, unknown>) {
+  const registered: Array<{ name: string; config: Record<string, unknown> }> = [];
+  return {
+    registered,
+    find: (p: string, m: string) =>
+      models[`${p}/${m}`] ?? (registered.length > 0 ? { fromInline: true } : undefined),
+    registerProvider: (name: string, config: Record<string, unknown>) => {
+      registered.push({ name, config });
+    },
+  };
+}
+
+/** Fails the test if called — asserts a cascade branch is never reached. */
+const fail = (): never => {
+  throw new Error("must not be called");
+};
+
+describe("resolveModelViaRegistries", () => {
+  let dir: string | null = null;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  it("models.json hit wins (path models_json), no provider registered", () => {
+    dir = mkdtempSync(join(tmpdir(), "junco-models-"));
+    const existingModelsJsonPath = join(dir, "models.json");
+    writeFileSync(existingModelsJsonPath, JSON.stringify({ providers: {} }));
+
+    const sentinel = { catalog: "file" };
+    const file = fakeRegistry({ "anthropic/claude-x": sentinel });
+    const mem = fakeRegistry({});
+    const cfg = mkCfg({ id: "anthropic/claude-x", modelsJson: existingModelsJsonPath });
+    const out = resolveModelViaRegistries(cfg, { fromFile: () => file, inMemory: () => mem });
+    expect(out).toMatchObject({ model: sentinel, path: "models_json" });
+    expect(file.registered).toEqual([]);
+  });
+
+  it("catalog hit resolves WITHOUT registerProvider (the clobber bug stays dead)", () => {
+    const sentinel = { catalog: "builtin" };
+    const mem = fakeRegistry({ "anthropic/claude-x": sentinel });
+    const cfg = mkCfg({ id: "anthropic/claude-x", modelsJson: null, apiKey: null });
+    const out = resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem });
+    expect(out).toMatchObject({ model: sentinel, path: "catalog" });
+    expect(mem.registered).toEqual([]);
+  });
+
+  it("catalog miss falls through to inline when a key exists", () => {
+    const mem = fakeRegistry({});
+    const cfg = mkCfg({ id: "unknownprov/m1", modelsJson: null, apiKey: "k" });
+    const out = resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem });
+    expect(out.path).toBe("inline");
+    expect(mem.registered[0]?.name).toBe("unknownprov");
+  });
+
+  it("catalog miss with a null key throws an actionable config error", () => {
+    const mem = fakeRegistry({});
+    const cfg = mkCfg({ id: "unknownprov/m1", modelsJson: null, apiKey: null });
+    expect(() => resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem })).toThrow(
+      /did not resolve from the builtin catalog/,
+    );
+  });
+
+  it("ineligible (local) config goes straight to inline", () => {
+    const mem = fakeRegistry({});
+    const cfg = mkCfg({ id: "local/my-model", modelsJson: null, apiKey: "1234" });
+    const out = resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem });
+    expect(out.path).toBe("inline");
   });
 });

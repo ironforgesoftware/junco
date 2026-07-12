@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import type { Config, Paths } from "./types.js";
+import { catalogEligible } from "./agent/modelSetup.js";
 
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
@@ -82,6 +83,43 @@ const DEFAULT_COMPAT: Record<string, unknown> = {
   thinkingFormat: "qwen-chat-template",
 };
 
+const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1";
+
+const ENV_REF = /^\$([A-Z_][A-Z0-9_]*)$/;
+
+/**
+ * Resolve the configured model.apiKey: a literal passes through; an exact
+ * "$ENV_VAR" reference (uppercase env style only — anything else is a literal)
+ * is read from the daemon environment; absent stays null so the SDK's
+ * request-time provider env-var fallback (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+ * …) applies. "!command" values are rejected: the Pi SDK shell-executes them
+ * in its own auth files, and junco will not forward that surface from
+ * config.json.
+ */
+export function resolveApiKey(
+  raw: string | undefined,
+  env: Record<string, string | undefined>,
+): string | null {
+  if (raw === undefined) return null;
+  if (raw.startsWith("!")) {
+    throw new Error(
+      'config: model.apiKey must not be a "!command" value — junco does not execute shell ' +
+        'commands from config.json. Use a literal key or an "$ENV_VAR" reference.',
+    );
+  }
+  const m = ENV_REF.exec(raw);
+  if (m) {
+    const val = env[m[1]];
+    if (val === undefined || val === "") {
+      throw new Error(
+        `config: model.apiKey references $${m[1]}, but ${m[1]} is not set in the daemon environment.`,
+      );
+    }
+    return val;
+  }
+  return raw;
+}
+
 export const ConfigSchema = z.object({
   vaultRoot: z.string({ required_error: "config: vaultRoot is required" }),
   juncoSubdir: z.string().default("Junco"),
@@ -89,10 +127,30 @@ export const ConfigSchema = z.object({
   model: z
     .object({
       id: z.string().default("local/my-model"),
+      source: z.enum(["auto", "catalog", "inline"]).default("auto"),
       modelsJson: z.string().optional(),
       api: z.string().default("openai-completions"),
-      baseUrl: z.string().default("http://127.0.0.1:1234/v1"),
-      apiKey: z.string().default("1234"),
+      baseUrl: z.string().optional(),
+      // Env-independent mirror of resolveApiKey's own "!command" rejection
+      // (defense in depth): reject the shape at WRITE time — `config set` /
+      // the TUI editor / validateConfigObject — rather than only discovering
+      // it at daemon-env-dependent assembly time. $VAR interpolation stays a
+      // resolveApiKey concern (it needs the daemon environment, unavailable
+      // here).
+      apiKey: z
+        .string()
+        .optional()
+        .refine((v) => v === undefined || !v.startsWith("!"), {
+          message:
+            'config: model.apiKey must not be a "!command" value — junco does not execute ' +
+            "shell commands from config.json.",
+        }),
+      retry: z
+        .object({
+          maxRetries: z.number().int().min(0).optional(),
+          baseDelayMs: z.number().min(0).optional(),
+        })
+        .default({}),
       reasoning: z.boolean().default(true),
       input: z.array(z.string()).default(["text", "image"]),
       contextWindow: z.number().default(131072),
@@ -263,18 +321,33 @@ export function parseConfigFile(path: string): ConfigParsed {
 /** Assemble the flat runtime `Config` from the parsed (nested, camelCase,
  * defaulted) schema output — expanding `~` in path fields and deriving the
  * github cross-field defaults (askLabel, externalReposRoot). */
-export function assembleConfig(d: ConfigParsed): Config {
+export function assembleConfig(
+  d: ConfigParsed,
+  env: Record<string, string | undefined> = process.env,
+): Config {
+  const baseUrlExplicit = d.model.baseUrl !== undefined;
+  const eligible = catalogEligible({ source: d.model.source, id: d.model.id, baseUrlExplicit });
+  const resolvedKey = resolveApiKey(d.model.apiKey, env);
   return {
     vaultRoot: expandHome(d.vaultRoot),
     juncoSubdir: d.juncoSubdir,
     tools: d.tools,
     model: {
       id: d.model.id,
+      source: d.model.source,
       modelsJson: d.model.modelsJson ? expandHome(d.model.modelsJson) : null,
       api: d.model.api,
       // Stored raw; apiBaseUrl() normalizes (strips trailing /models) at use.
-      baseUrl: d.model.baseUrl,
-      apiKey: d.model.apiKey,
+      baseUrl: d.model.baseUrl ?? DEFAULT_LOCAL_BASE_URL,
+      baseUrlExplicit,
+      // Catalog-eligible configs may omit the key: the SDK falls back to the
+      // provider's env var (ANTHROPIC_API_KEY, …) at request time. The "1234"
+      // placeholder applies only to inline/local endpoints.
+      apiKey: resolvedKey ?? (eligible ? null : "1234"),
+      retry: {
+        maxRetries: d.model.retry.maxRetries ?? null,
+        baseDelayMs: d.model.retry.baseDelayMs ?? null,
+      },
       reasoning: d.model.reasoning,
       input: d.model.input,
       contextWindow: d.model.contextWindow,
@@ -353,8 +426,11 @@ export function assembleConfig(d: ConfigParsed): Config {
   };
 }
 
-export function loadConfig(path: string): Config {
-  return assembleConfig(parseConfigFile(path));
+export function loadConfig(
+  path: string,
+  env: Record<string, string | undefined> = process.env,
+): Config {
+  return assembleConfig(parseConfigFile(path), env);
 }
 
 /** Validate a raw (parsed-JSON) config object against `ConfigSchema`, throwing

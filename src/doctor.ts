@@ -9,7 +9,7 @@ import type { Config } from "./types.js";
 import { loadConfig, queuePaths, isLoopbackHost } from "./config.js";
 import { endpointReachable } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
-import { splitModelId } from "./agent/modelSetup.js";
+import { splitModelId, shouldProbeEndpoint } from "./agent/modelSetup.js";
 import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { selectBackend, classifyAvailability } from "./agent/sandbox/backend.js";
@@ -126,28 +126,42 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       }
     }
 
-    // 5. endpoint
-    const up = await reachableFn(cfg);
-    report(
-      up ? "ok" : "fail",
-      "inference endpoint",
-      up ? cfg.model.baseUrl : `${cfg.model.baseUrl} unreachable`,
-    );
+    // 5. endpoint (hosted catalog models are not probed — Phase 2 adds the
+    // provider gate; Phase 3 adds per-API auth checks). "catalog-eligible"
+    // rather than "hosted provider": a provider-prefixed id that ISN'T in the
+    // builtin catalog still lands here (shouldProbeEndpoint only checks
+    // eligibility, not an actual catalog hit) and the runtime cascade
+    // (resolveModelViaRegistries) falls through to inline resolution at first
+    // session — "hosted provider" would be actively wrong for that case.
+    if (!shouldProbeEndpoint(cfg.model)) {
+      report(
+        "ok",
+        "inference endpoint",
+        `${cfg.model.id} — catalog-eligible; probe skipped (resolution confirmed at first session)`,
+      );
+    } else {
+      const up = await reachableFn(cfg);
+      report(
+        up ? "ok" : "fail",
+        "inference endpoint",
+        up ? cfg.model.baseUrl : `${cfg.model.baseUrl} unreachable`,
+      );
 
-    // 6. model advertised (warn-only: not every endpoint lists models)
-    if (up) {
-      const ids = await fetchModelsFn(cfg.model.baseUrl, cfg.model.apiKey);
-      const { modelId } = splitModelId(cfg.model.id);
-      if (ids.length === 0) {
-        report("warn", "model", `endpoint does not list models; cannot verify ${cfg.model.id}`);
-      } else if (ids.includes(modelId) || ids.includes(cfg.model.id)) {
-        report("ok", "model", cfg.model.id);
-      } else {
-        report(
-          "warn",
-          "model",
-          `${cfg.model.id} not among the endpoint's ${ids.length} advertised models`,
-        );
+      // 6. model advertised (warn-only: not every endpoint lists models)
+      if (up) {
+        const ids = await fetchModelsFn(cfg.model.baseUrl, cfg.model.apiKey);
+        const { modelId } = splitModelId(cfg.model.id);
+        if (ids.length === 0) {
+          report("warn", "model", `endpoint does not list models; cannot verify ${cfg.model.id}`);
+        } else if (ids.includes(modelId) || ids.includes(cfg.model.id)) {
+          report("ok", "model", cfg.model.id);
+        } else {
+          report(
+            "warn",
+            "model",
+            `${cfg.model.id} not among the endpoint's ${ids.length} advertised models`,
+          );
+        }
       }
     }
 

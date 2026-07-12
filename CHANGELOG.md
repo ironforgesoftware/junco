@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Hosted catalog model resolution: a provider-prefixed `model.id` (e.g.
+  `anthropic/claude-sonnet-4-5`) with no explicit `model.baseUrl` now resolves
+  from the embedded SDK's builtin provider catalog (real endpoint, cost, and
+  context-window metadata). `model.source` (`auto`/`catalog`/`inline`) pins the
+  behavior explicitly.
+- `model.apiKey` may be omitted (the provider's environment variable, e.g.
+  `ANTHROPIC_API_KEY`, applies at request time) or set to an `"$ENV_VAR"`
+  reference; `"!command"` values are rejected.
+- `model.retry.maxRetries` / `model.retry.baseDelayMs` — SDK auto-retry levers.
+- Endpoint probing (startup wait, readiness, doctor) is skipped for hosted
+  catalog models.
+
 ### Changed
 
 - `junco init` is now a full-screen guided walkthrough (Ink): chapter rail,
@@ -15,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode that pre-fills current values and writes only what changed (all other
   keys preserved). `--yes` still scaffolds the same minimal default config
   non-interactively.
+- **Behavior:** a provider-prefixed `model.id` without an explicit
+  `model.baseUrl` previously bound to the local default endpoint
+  (`http://127.0.0.1:1234/v1`); it now resolves from the builtin catalog.
+  Explicitly set `model.baseUrl` (or `model.source: "inline"`) to keep the old
+  binding. A provider-prefixed id that is NOT actually in the builtin catalog
+  falls through to inline resolution — an explicit `model.baseUrl` +
+  `model.apiKey` are then required, and the session build fails with an
+  actionable error if the key is missing; endpoint probing is still skipped
+  for any catalog-eligible config, including this fall-through case.
+- The agent session no longer reads or creates `~/.pi/agent/auth.json`,
+  `~/.pi/agent/settings.json`, or a target repo's `.pi/settings.json` — auth
+  and settings are fully injected from junco config.
 
 ### Removed
 

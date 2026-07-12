@@ -40,10 +40,13 @@ export interface FetchModelsDeps {
   timeoutMs?: number;
 }
 
-/** GET <base>/models (Bearer auth) → OpenAI-style data[].id. [] on any error/empty. */
+/** GET <base>/models (Bearer auth) → OpenAI-style data[].id. [] on any error/empty.
+ * `apiKey: null` (deferred to the provider's env var — see resolveApiKey in
+ * config.ts) omits the Authorization header entirely rather than sending
+ * "Bearer null". */
 export async function fetchModels(
   baseUrl: string,
-  apiKey: string,
+  apiKey: string | null,
   deps: FetchModelsDeps = {},
 ): Promise<string[]> {
   const fetchFn = deps.fetchFn ?? fetch;
@@ -54,7 +57,7 @@ export async function fetchModels(
   try {
     const resp = await fetchFn(url, {
       method: "GET",
-      headers: { Authorization: `Bearer ${apiKey}` },
+      headers: apiKey !== null ? { Authorization: `Bearer ${apiKey}` } : {},
       signal: controller.signal,
     });
     if (!resp.ok) return [];
