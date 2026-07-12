@@ -89,6 +89,9 @@ interface AuthOutcome {
  * doctor has no free-route recipe for it. 200 → ok; 401/403 → fail (bad key);
  * any other non-2xx → warn (inconclusive); a network error → warn
  * (unreachable, not necessarily a bad key).
+ * An aggregator/proxy sitting behind a non-canonical baseUrl (a route shape
+ * doctor doesn't know) can legitimately warn "inconclusive" here for a
+ * perfectly good key — an accepted degrade, not a bug to chase.
  */
 async function checkAuth(
   info: ResolvedModelInfo,
@@ -105,7 +108,12 @@ async function checkAuth(
     url = `${base}/v1/models`;
     headers = { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
   } else if (info.api.startsWith("google-")) {
-    url = `${base}/v1beta/models?key=${encodeURIComponent(apiKey)}`;
+    // The vendored catalog's baseUrl for google-generative-ai models already
+    // ends with /v1beta (pi-ai providers/google.models.js) — suffix-guard so
+    // a catalog hit doesn't double it into .../v1beta/v1beta/models (a
+    // permanent 404 that reads as "inconclusive" for both good and bad keys).
+    const withV1beta = base.endsWith("/v1beta") ? base : `${base}/v1beta`;
+    url = `${withV1beta}/models?key=${encodeURIComponent(apiKey)}`;
     headers = {};
   } else {
     return { v: "ok", detail: `unknown api "${info.api}" — auth check skipped` };

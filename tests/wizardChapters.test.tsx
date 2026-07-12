@@ -496,11 +496,9 @@ describe("Model chapter", () => {
     await press(stdin, ENTER); // globex's only id: "fast"
     rerender(<Model {...props()} />);
     await until(() => (lastFrame() ?? "").includes("API key for globex?"));
-    // wipe the inline-placeholder "1234" draft, then type a real hosted key
-    for (let i = 0; i < "1234".length; i++) {
-      await press(stdin, BACKSPACE);
-      rerender(<Model {...props()} />);
-    }
+    // No backspacing: switching into hosted must already have blanked the
+    // inline-placeholder "1234" draft (regression proof for the fix — a
+    // paste here must land exactly, never append onto a stale draft).
     stdin.write("sk-hosted");
     await tick();
     rerender(<Model {...props()} />);
@@ -537,10 +535,9 @@ describe("Model chapter", () => {
     await press(stdin, ENTER); // acme's first id: "big"
     rerender(<Model {...props()} />);
     await until(() => (lastFrame() ?? "").includes("API key for acme?"));
-    for (let i = 0; i < "1234".length; i++) {
-      await press(stdin, BACKSPACE);
-      rerender(<Model {...props()} />);
-    }
+    // No backspacing: the draft must already be blank on arrival (regression
+    // proof) — a bare enter-through must leave answers.apiKey unset, not
+    // silently write the inline-placeholder "1234" into a hosted config.
     expect(lastFrame()).toContain("blank = provider's own env var at runtime");
     await press(stdin, ENTER); // blank submit
     await until(() => advanced);

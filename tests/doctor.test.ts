@@ -475,7 +475,11 @@ describe("runDoctor hosted-aware preflight", () => {
           catalogInfo({
             provider: "google",
             api: "google-generative-ai",
-            baseUrl: "https://generativelanguage.googleapis.com",
+            // The real vendored catalog baseUrl (pi-ai providers/google.models.js)
+            // already ends with /v1beta — pinning the real convention here is
+            // the regression proof: the old code appended /v1beta unconditionally
+            // and would have built .../v1beta/v1beta/models (permanent 404).
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
           }),
         rawApiKeyFn: () => "sk-goog-literal",
         fetchFn,

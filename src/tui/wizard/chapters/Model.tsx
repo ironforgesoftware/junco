@@ -149,6 +149,7 @@ export function Model({
               onSubmit={(v) => {
                 const mode = v as "inline" | "models_json" | "hosted";
                 setCatalogError(null); // retrying clears any stale failure message
+                const enteringHostedFresh = mode === "hosted" && answers.mode !== "hosted";
                 patch({
                   mode,
                   // Switching INTO hosted from another mode drops the inline
@@ -157,9 +158,17 @@ export function Model({
                   // that placeholder as a literal hosted apiKey. A rerun
                   // that's already hosted (re-submitting the preselected
                   // option unchanged) keeps whatever key it prefilled.
-                  apiKey:
-                    mode === "hosted" && answers.mode !== "hosted" ? undefined : answers.apiKey,
+                  apiKey: enteringHostedFresh ? undefined : answers.apiKey,
                 });
+                // The draft mirrors the same reset: keyDraft init only runs at
+                // mount, so without this the fresh-mode "1234" placeholder
+                // would linger in the box even after answers.apiKey is
+                // cleared above — masked as if a real key were already typed,
+                // and an enter-through submit would then patch that literal
+                // "1234" back into a hosted config (auth failure on a metered
+                // provider), while a paste would append onto it instead of
+                // replacing it.
+                if (enteringHostedFresh) setKeyDraft("");
                 setStep(
                   mode === "inline" ? "url" : mode === "hosted" ? "hostedProvider" : "mjPath",
                 );
