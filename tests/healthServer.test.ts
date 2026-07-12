@@ -7,10 +7,21 @@ import { describe, it, expect, afterEach } from "vitest";
 import { startHealthServer } from "../src/healthServer.js";
 import type { HealthServerHandle } from "../src/healthServer.js";
 import type { MetricsSnapshot } from "../src/metrics.js";
+import type { GateStatus } from "../src/providerGate.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function makeGateStatus(overrides: Partial<GateStatus> = {}): GateStatus {
+  return {
+    state: "ok",
+    reason: null,
+    since: null,
+    until: null,
+    ...overrides,
+  };
+}
 
 function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
   return {
@@ -257,6 +268,111 @@ describe("healthServer", () => {
       const body = (await resp.json()) as { status: string; ready: boolean };
       expect(body.status).toBe("ok");
       expect(body.ready).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Provider-gate status (/health, /ready)
+  // -------------------------------------------------------------------------
+
+  describe("gate status", () => {
+    it("gate ok + probe true → /health.gate.state is 'ok' and /ready is 200", async () => {
+      const gate = makeGateStatus({ state: "ok" });
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+        readinessProbe: async () => true,
+        gateStatus: () => gate,
+      });
+
+      const healthResp = await fetch(`${handle.url}/health`);
+      expect(healthResp.status).toBe(200);
+      const healthBody = (await healthResp.json()) as { gate: GateStatus };
+      expect(healthBody.gate.state).toBe("ok");
+
+      const readyResp = await fetch(`${handle.url}/ready`);
+      expect(readyResp.status).toBe(200);
+      const readyBody = (await readyResp.json()) as { status: string };
+      expect(readyBody.status).toBe("ready");
+    });
+
+    it("gate auth_error → /ready is 503 with the gate's reason even when the probe passes", async () => {
+      const gate = makeGateStatus({
+        state: "auth_error",
+        reason: "401 unauthorized",
+        since: "2026-07-01T00:00:00.000Z",
+      });
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+        readinessProbe: async () => true, // endpoint pings fine — the latch must still win
+        gateStatus: () => gate,
+      });
+
+      const readyResp = await fetch(`${handle.url}/ready`);
+      expect(readyResp.status).toBe(503);
+      const readyBody = (await readyResp.json()) as { status: string; reason: string };
+      expect(readyBody.status).toBe("not_ready");
+      expect(readyBody.reason).toBe("401 unauthorized");
+
+      const healthResp = await fetch(`${handle.url}/health`);
+      expect(healthResp.status).toBe(200);
+      const healthBody = (await healthResp.json()) as { gate: GateStatus };
+      expect(healthBody.gate.state).toBe("auth_error");
+      expect(healthBody.gate.reason).toBe("401 unauthorized");
+    });
+
+    it("gate non-ok with a null reason falls back to the state name in /ready's reason", async () => {
+      const gate = makeGateStatus({ state: "misconfig", reason: null });
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+        readinessProbe: async () => true,
+        gateStatus: () => gate,
+      });
+
+      const readyResp = await fetch(`${handle.url}/ready`);
+      expect(readyResp.status).toBe(503);
+      const readyBody = (await readyResp.json()) as { reason: string };
+      expect(readyBody.reason).toBe("misconfig");
+    });
+
+    it("no gateStatus option → /health.gate is null and /ready behavior is unchanged", async () => {
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+        readinessProbe: async () => true,
+      });
+
+      const healthResp = await fetch(`${handle.url}/health`);
+      const healthBody = (await healthResp.json()) as { gate: GateStatus | null };
+      expect(healthBody.gate).toBeNull();
+
+      const readyResp = await fetch(`${handle.url}/ready`);
+      expect(readyResp.status).toBe(200);
+      const readyBody = (await readyResp.json()) as { status: string };
+      expect(readyBody.status).toBe("ready");
+    });
+
+    it("a throwing gateStatus does not 500 — /ready and /health fall back to probe-driven behavior", async () => {
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+        readinessProbe: async () => true,
+        gateStatus: () => {
+          throw new Error("gate exploded");
+        },
+      });
+
+      const readyResp = await fetch(`${handle.url}/ready`);
+      expect(readyResp.status).toBe(200);
+      const readyBody = (await readyResp.json()) as { status: string };
+      expect(readyBody.status).toBe("ready");
+
+      const healthResp = await fetch(`${handle.url}/health`);
+      expect(healthResp.status).toBe(200);
+      const healthBody = (await healthResp.json()) as { gate: GateStatus | null };
+      expect(healthBody.gate).toBeNull();
     });
   });
 

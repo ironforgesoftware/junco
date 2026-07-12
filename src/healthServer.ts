@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { MetricsSnapshot } from "./metrics.js";
+import type { GateStatus } from "./providerGate.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -30,6 +31,17 @@ export interface HealthServerOpts {
    * A rejection is treated as "not ready" — it does NOT cause a 500.
    */
   readinessProbe?: () => Promise<boolean>;
+  /**
+   * Source of the provider-gate's latched/backoff state (typically
+   * `ProviderGate#status`, bound by the daemon). Omit when no gate is wired.
+   *
+   * `/health` always includes `gate: gateStatus?.() ?? null`. `/ready` treats
+   * a non-"ok" gate as an override: even a passing `readinessProbe` cannot
+   * make the endpoint "ready" while auth/quota/misconfig is latched, since no
+   * work can actually be served. A throw is contained the same way as
+   * `readinessProbe` (see `safeGate`) — it must never 500 the server.
+   */
+  gateStatus?: () => GateStatus;
   /**
    * Where to report a post-listen server error (an accept-time failure such as
    * EMFILE under fd exhaustion). Defaults to `console.error`. The error is
@@ -75,6 +87,22 @@ async function safeProbe(probe: () => Promise<boolean>): Promise<boolean> {
   }
 }
 
+/**
+ * A throwing `gateStatus` callback must not 500 the server — same
+ * containment discipline as `safeProbe` above. On throw (or when no callback
+ * was supplied) we treat it as "no gate signal": `/health` reports `gate:
+ * null` and `/ready` falls back to the probe-driven result, rather than
+ * guessing at a state we failed to read.
+ */
+function safeGate(gateStatus: (() => GateStatus) | undefined): GateStatus | null {
+  if (!gateStatus) return null;
+  try {
+    return gateStatus();
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -107,6 +135,17 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
       }
 
       if (path === "/ready") {
+        const gate = safeGate(opts.gateStatus);
+        if (gate !== null && gate.state !== "ok") {
+          // A latched/backed-off gate means work cannot be served regardless
+          // of whether the endpoint itself is reachable — the probe result is
+          // not even consulted here.
+          writeJson(res, 503, {
+            status: "not_ready",
+            reason: gate.reason ?? gate.state,
+          });
+          return;
+        }
         const ready = await safeProbe(probe);
         if (ready) {
           writeJson(res, 200, { status: "ready" });
@@ -124,7 +163,8 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
           Promise.resolve(opts.metrics.snapshot()),
           safeProbe(probe),
         ]);
-        writeJson(res, 200, { status: "ok", ready, metrics: snap });
+        const gate = safeGate(opts.gateStatus);
+        writeJson(res, 200, { status: "ok", ready, metrics: snap, gate });
         return;
       }
 
