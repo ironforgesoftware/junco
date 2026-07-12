@@ -50,7 +50,7 @@ export interface AnalyzeDeps {
   /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
   onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   nowFn?: () => Date;
-  /** Per-day spend ledger (Phase-3 Task 3), peer of prFlow/runOnce's
+  /** Per-day spend ledger (Phase-3 Task 4), peer of prFlow/runOnce's
    * RunDeps.spend: the analyze agent run's resolved `usage.costUsd` is
    * recorded here immediately after it completes, mirroring the Q&A/PR-flow
    * pattern. Optional: absent (CLI one-shot, tests) is a no-op. */
@@ -224,7 +224,7 @@ export async function runAnalyzeFlow(
   });
   // Record spend immediately, BEFORE any requeue/finalize branching below —
   // mirrors runOnce.ts's Q&A wire, prFlow's main-session record, and
-  // assessFlow's Phase-3 Task 3 wire: the dollars were spent regardless of
+  // assessFlow's Phase-3 Task 4 wire: the dollars were spent regardless of
   // what the ticket does next. No-op when deps.spend is absent or costUsd is
   // 0/non-finite.
   deps.spend?.recordUsd(agentResult.usage.costUsd);

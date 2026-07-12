@@ -52,7 +52,7 @@ export interface AssessDeps {
   /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
   onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   nowFn?: () => Date;
-  /** Per-day spend ledger (Phase-3 Task 3), peer of prFlow/runOnce's
+  /** Per-day spend ledger (Phase-3 Task 4), peer of prFlow/runOnce's
    * RunDeps.spend: the assess agent run's resolved `usage.costUsd` is
    * recorded here immediately after it completes, mirroring the Q&A/PR-flow
    * pattern. Optional: absent (CLI one-shot, tests) is a no-op. */
