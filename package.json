@@ -55,7 +55,6 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
-    "@clack/prompts": "1.5.0",
     "@earendil-works/pi-coding-agent": "0.80.3",
     "ink": "7.1.0",
     "react": "19.2.7",

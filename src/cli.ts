@@ -3,7 +3,9 @@
  * Junco CLI — M4 restructure.
  *
  * Subcommands:
- *   junco init [--config <path>] [--yes]     — setup wizard (writes config + queue)
+ *   junco init [--config <path>] [--yes]     — guided setup walkthrough (writes
+ *                                              config + queue; re-run it anytime
+ *                                              to tune settings)
  *   junco start [--config <path>] [--once]   — daemon (acquire lock, run mainLoop)
  *   junco run-once [--config <path>]         — dev/cron one-shot (no lock)
  *   junco                                    — bare → wizard on first run (no
@@ -131,7 +133,7 @@ const USAGE = `\
 Usage: junco <subcommand> [options]
 
 Subcommands:
-  init         Interactive setup wizard — writes config.json + creates the queue
+  init         Guided setup walkthrough — writes config.json + creates the queue (re-run it anytime to tune settings)
   start        Start the daemon
   run-once     Process one task and exit (dev/cron convenience; no lock)
   service      Render a service file to stdout (launchd plist or systemd unit)
@@ -730,42 +732,46 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // init: interactive setup wizard (writes config + creates the queue) when no
-  // config exists; ensures the queue dirs (no overwrite) when one already does.
+  // init: guided setup walkthrough. Fresh config → full wizard; existing
+  // config + interactive → the wizard's re-run (tune-up) mode; existing
+  // config + --yes/non-TTY → just ensure the queue dirs (never overwrite).
   // ------------------------------------------------------------
   if (subcommand === "init") {
-    if (!existsFn(resolve(configPath))) {
-      const wantYes = values.yes as boolean;
-      // Non-TTY guard: never hang on a prompt in pipes/CI. An injected
-      // runInitWizardFn counts as "interactive"; --yes scaffolds without prompting.
-      if (!wantYes && !deps.runInitWizardFn && !process.stdin.isTTY) {
-        process.stderr.write(
-          `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
-            `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.json.\n`,
-        );
-        return 1;
-      }
-      const runWizard =
-        deps.runInitWizardFn ??
-        ((cp: string, o: { yes?: boolean }) => runInitWizard(cp, { yes: o.yes, printFn }));
-      return runWizard(configPath, { yes: wantYes });
+    const wantYes = values.yes as boolean;
+    const exists = existsFn(resolve(configPath));
+    // An injected runInitWizardFn counts as "interactive" (test seam).
+    const interactive = Boolean(deps.runInitWizardFn) || Boolean(process.stdin.isTTY);
+
+    if (!exists && !wantYes && !interactive) {
+      process.stderr.write(
+        `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
+          `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.json.\n`,
+      );
+      return 1;
     }
 
-    // Config already present — ensure the queue dirs, never overwrite the config.
-    const cfg = loadConfigFn(configPath);
-    const paths = queuePaths(cfg);
-    for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
-      mkdirSync(d, { recursive: true });
+    if (exists && (wantYes || !interactive)) {
+      // Config already present — ensure the queue dirs, never overwrite.
+      const cfg = loadConfigFn(configPath);
+      const paths = queuePaths(cfg);
+      for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
+        mkdirSync(d, { recursive: true });
+      }
+      printFn(
+        `Config already exists at ${resolve(configPath)}; ensured queue directories:\n` +
+          `  inbox:      ${paths.inbox}\n` +
+          `  processing: ${paths.processing}\n` +
+          `  done:       ${paths.done}\n` +
+          `  failed:     ${paths.failed}\n` +
+          `  worktrees:  ${cfg.worktreeRoot}\n`,
+      );
+      return 0;
     }
-    printFn(
-      `Config already exists at ${resolve(configPath)}; ensured queue directories:\n` +
-        `  inbox:      ${paths.inbox}\n` +
-        `  processing: ${paths.processing}\n` +
-        `  done:       ${paths.done}\n` +
-        `  failed:     ${paths.failed}\n` +
-        `  worktrees:  ${cfg.worktreeRoot}\n`,
-    );
-    return 0;
+
+    const runWizard =
+      deps.runInitWizardFn ??
+      ((cp: string, o: { yes?: boolean }) => runInitWizard(cp, { yes: o.yes, printFn }));
+    return runWizard(configPath, { yes: wantYes });
   }
 
   // ------------------------------------------------------------

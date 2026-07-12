@@ -1,192 +1,244 @@
 /**
- * Interactive setup wizard for `junco init` — a colorized clack TUI that prompts
- * for the essentials, discovers available models from the endpoint (or a Pi
- * models.json), writes a `config.json`, and creates the queue directories.
+ * `junco init` — the guided setup walkthrough. `--yes` scaffolds the default
+ * config with zero prompts (and zero React); interactive runs render the Ink
+ * WizardApp (lazy-imported, dashboardCmd-style). All side effects live in the
+ * WizardIO built here; the interactive step itself is behind `collectFn`, so
+ * every contract below is testable without a TTY.
  *
- * Testability: the prompt surface is the injectable `Prompter` seam (clack in
- * production, a scripted prompter in tests), and `renderConfigJson` is pure — so
- * the wizard's logic is exercised without a real TTY.
+ * Exit codes: 0 written/unchanged · 130 cancelled · 1 no raw-mode terminal.
  */
 
-import { writeFileSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import {
+  writeFileSync,
+  readFileSync,
+  renameSync,
+  mkdirSync,
+  existsSync,
+  unlinkSync,
+} from "node:fs";
+import { resolve, dirname, join } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, queuePaths, expandHome, resolveConfigPath } from "./config.js";
-import { type Prompter, WizardCancelled, clackPrompter } from "./wizard/prompter.js";
-import { fetchModels, parseModelsJson, inferProvider } from "./wizard/models.js";
-
-/** `select` sentinel for the "enter manually" escape hatch (not a real model id). */
-const MANUAL = " manual";
-
-export interface WizardAnswers {
-  vaultRoot: string;
-  mode: "inline" | "models_json";
-  modelId: string;
-  baseUrl?: string; // inline mode
-  apiKey?: string; // inline mode
-  modelsJson?: string; // models_json mode
-}
-
-/** Render a minimal config.json from the wizard answers. Pure — output must
- * round-trip through loadConfig. Writes juncoSubdir:"" so the queue lives
- * directly under vaultRoot. */
-export function renderConfigJson(a: WizardAnswers): string {
-  const model: Record<string, unknown> = { id: a.modelId };
-  if (a.mode === "models_json") {
-    model.modelsJson = a.modelsJson ?? "~/.pi/agent/models.json";
-  } else {
-    model.baseUrl = a.baseUrl ?? "http://127.0.0.1:1234/v1";
-    model.apiKey = a.apiKey ?? "";
-  }
-  return JSON.stringify({ vaultRoot: a.vaultRoot, juncoSubdir: "", model }, null, 2) + "\n";
-}
-
-/** Defaults used by `--yes` (non-interactive scaffold). */
-export function defaultAnswers(): WizardAnswers {
-  return {
-    vaultRoot: "~/Junco",
-    mode: "inline",
-    modelId: "local/my-model",
-    baseUrl: "http://127.0.0.1:1234/v1",
-    apiKey: "1234",
-  };
-}
-
-export interface CollectDeps {
-  fetchModelsFn?: typeof fetchModels;
-  parseModelsJsonFn?: typeof parseModelsJson;
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-}
-
-/** Show discovered ids as a select (+ a manual escape hatch); empty list → manual prompt. */
-async function pickModel(p: Prompter, ids: string[]): Promise<string> {
-  if (ids.length > 0) {
-    const choice = await p.select({
-      message: "Select a model",
-      options: [
-        ...ids.map((id) => ({ value: id, label: id })),
-        { value: MANUAL, label: "✏️  Enter manually…" },
-      ],
-    });
-    if (choice !== MANUAL) return choice;
-  }
-  return p.text({ message: "Model id?", default: "my-model" });
-}
-
-/** The interactive prompt script over the Prompter seam. */
-export async function collectAnswers(p: Prompter, deps: CollectDeps = {}): Promise<WizardAnswers> {
-  const fetchModelsFn = deps.fetchModelsFn ?? fetchModels;
-  const parseModelsJsonFn = deps.parseModelsJsonFn ?? parseModelsJson;
-
-  p.intro("junco init");
-  const vaultRoot = await p.text({
-    message: "Where should Junco keep its tickets?",
-    default: "~/Junco",
-  });
-  const mode = (await p.select({
-    message: "How is the model configured?",
-    options: [
-      { value: "inline", label: "Inline — an OpenAI-compatible endpoint" },
-      { value: "models_json", label: "From a Pi models.json file" },
-    ],
-  })) as WizardAnswers["mode"];
-
-  if (mode === "models_json") {
-    const modelsJson = await p.text({
-      message: "Path to your Pi models.json?",
-      default: "~/.pi/agent/models.json",
-    });
-    const ids = parseModelsJsonFn(expandHome(modelsJson));
-    const modelId = await pickModel(p, ids);
-    return { vaultRoot, mode, modelId, modelsJson };
-  }
-
-  const baseUrl = await p.text({
-    message: "Inference endpoint base URL (OpenAI-compatible)?",
-    default: "http://127.0.0.1:1234/v1",
-  });
-  const apiKey = await p.text({ message: "API key for the endpoint?", default: "1234" });
-  const ids = await p.spinner(
-    `Fetching models from ${hostOf(baseUrl)}…`,
-    () => fetchModelsFn(baseUrl, apiKey),
-    (r) => `${r.length} model${r.length === 1 ? "" : "s"} found`,
-  );
-  const picked = await pickModel(p, ids);
-  // Discovered/typed bare ids get the inferred provider prefix; ids that already
-  // contain "/" (manual full ids, OpenRouter-style vendor/model) are kept as-is.
-  const modelId = picked.includes("/") ? picked : `${inferProvider(baseUrl)}/${picked}`;
-  return { vaultRoot, mode, modelId, baseUrl, apiKey };
-}
+import {
+  loadConfig,
+  queuePaths,
+  expandHome,
+  resolveConfigPath,
+  validateConfigObject,
+} from "./config.js";
+import {
+  defaultAnswers,
+  renderConfigJson,
+  buildConfigObject,
+  answersFromConfig,
+  diffAnswers,
+  applyAnswers,
+  type WizardAnswers,
+  type AnswerDiff,
+} from "./wizard/flow.js";
+import type { WizardIO, WizardOutcome } from "./wizard/io.js";
+import { greetingName, preflightChecks, flightChecks, type DetectDeps } from "./wizard/detect.js";
+import { fetchModels, parseModelsJson } from "./wizard/models.js";
+import { NEXT_STEPS } from "./wizard/tips.js";
 
 export interface WizardDeps {
-  /** Injected prompt surface (tests). When omitted, a clack-backed prompter is used. */
-  prompter?: Prompter;
   /** Skip prompts and scaffold from defaults (--yes). */
   yes?: boolean;
+  /** Interactive collection seam — the Ink app in production, a fake in tests. */
+  collectFn?: (io: WizardIO) => Promise<WizardOutcome>;
+  detectDeps?: DetectDeps;
   fetchModelsFn?: typeof fetchModels;
   parseModelsJsonFn?: typeof parseModelsJson;
   writeFileFn?: (path: string, content: string) => void;
+  renameFn?: (from: string, to: string) => void;
+  /** Best-effort cleanup of the PID-suffixed temp file when renameFn throws
+   * after the temp write succeeded. */
+  unlinkFn?: (p: string) => void;
+  readFileFn?: (path: string) => string;
+  existsFn?: (path: string) => boolean;
   loadConfigFn?: (path: string) => Config;
   mkdirFn?: (path: string) => void;
   printFn?: (s: string) => void;
+  /** Raw-mode probe (tests force true). */
+  isInteractiveFn?: () => boolean;
 }
 
-/**
- * Run the setup wizard: collect answers → write config.json → load it → create
- * the queue dirs → print next steps. Returns an exit code (0 ok, 130 cancelled).
- */
+function summary(configPath: string, queueRoot: string, wrote: boolean): string {
+  const flag = configPath === resolveConfigPath(undefined) ? "" : ` (--config ${configPath})`;
+  const head = wrote ? `✓ Wrote config:  ${configPath}\n` : `✓ Config untouched: ${configPath}\n`;
+  return (
+    `\n${head}` +
+    `✓ Queue ready:   ${queueRoot}/{inbox,processing,done,failed}\n\n` +
+    `Next steps${flag}:\n` +
+    NEXT_STEPS.map((s) => `  • ${s.cmd} — ${s.blurb}\n`).join("")
+  );
+}
+
+/** Default interactive collector: lazy-import React/Ink + the WizardApp so
+ * non-interactive paths never pay the React cost (dashboardCmd pattern).
+ * exitOnCtrlC is false — WizardApp handles Ctrl-C itself (post-write Ctrl-C
+ * reports written/unchanged rather than lying about an already-written
+ * config), so Ink must never intercept and exit ahead of onOutcome. */
+async function inkCollect(io: WizardIO): Promise<WizardOutcome> {
+  const [react, ink, { WizardApp }] = await Promise.all([
+    import("react"),
+    import("ink"),
+    import("./tui/wizard/WizardApp.js"),
+  ]);
+  let outcome: WizardOutcome = "cancelled";
+  const instance = ink.render(
+    react.createElement(WizardApp, {
+      io,
+      onOutcome: (o: WizardOutcome) => {
+        outcome = o;
+      },
+    }),
+    { exitOnCtrlC: false, alternateScreen: true },
+  );
+  await instance.waitUntilExit();
+  return outcome;
+}
+
 export async function runInitWizard(configPath: string, deps: WizardDeps = {}): Promise<number> {
-  const writeFileFn = deps.writeFileFn ?? ((p, c) => writeFileSync(p, c, "utf8"));
-  const loadConfigFn = deps.loadConfigFn ?? loadConfig;
-  const mkdirFn = deps.mkdirFn ?? ((p) => mkdirSync(p, { recursive: true }));
+  const resolved = resolve(configPath);
+  const existsFn = deps.existsFn ?? existsSync;
   const printFn = deps.printFn ?? ((s) => process.stdout.write(s));
+  const mkdirFn = deps.mkdirFn ?? ((p) => mkdirSync(p, { recursive: true }));
+  const writeFileFn = deps.writeFileFn ?? ((p, c) => writeFileSync(p, c, "utf8"));
+  const readFileFn = deps.readFileFn ?? ((p) => readFileSync(p, "utf8"));
+  const renameFn = deps.renameFn ?? renameSync;
+  const unlinkFn = deps.unlinkFn ?? unlinkSync;
+  const loadConfigFn = deps.loadConfigFn ?? loadConfig;
+  // Set the instant the rename lands (both write branches below) so a later
+  // throw in the same io.write call (e.g. ensureDirs re-reading a config that
+  // turns out unreadable) doesn't make the cancel path lie about nothing
+  // being on disk.
+  let wroteFile = false;
 
-  try {
-    let answers: WizardAnswers;
-    if (deps.yes) {
-      answers = defaultAnswers();
-    } else {
-      const prompter = deps.prompter ?? clackPrompter();
-      answers = await collectAnswers(prompter, {
-        fetchModelsFn: deps.fetchModelsFn,
-        parseModelsJsonFn: deps.parseModelsJsonFn,
-      });
-    }
-
-    const json = renderConfigJson(answers);
-    const resolved = resolve(configPath);
-    mkdirFn(dirname(resolved)); // ensure the config's parent dir exists
-    writeFileFn(resolved, json);
-
-    // Load the freshly-written config and create the queue dirs from it.
-    const cfg = loadConfigFn(resolved);
+  const ensureDirs = (cfg: Config): string => {
     const paths = queuePaths(cfg);
     for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
       mkdirFn(d);
     }
+    return dirname(paths.inbox);
+  };
 
-    const queueRoot = dirname(paths.inbox);
-    // No --config noise when the config landed on the default resolution path —
-    // a bare `junco start` will find it from any directory.
-    const flag = resolved === resolveConfigPath(undefined) ? "" : ` --config ${resolved}`;
-    printFn(
-      `\n✓ Wrote config:  ${resolved}\n` +
-        `✓ Created queue: ${queueRoot}/{inbox,processing,done,failed}\n\n` +
-        `Next steps:\n` +
-        `  • Tweak the model/endpoint in ${resolved} if needed.\n` +
-        `  • Start the worker:  junco start${flag}\n` +
-        `  • Submit a ticket:   junco submit <ticket>.md${flag}\n`,
-    );
+  if (deps.yes) {
+    // Non-interactive scaffold — same minimal default config as ever (the
+    // packaged smoke test drives this path headless).
+    mkdirFn(dirname(resolved));
+    writeFileFn(resolved, renderConfigJson(defaultAnswers()));
+    const queueRoot = ensureDirs(loadConfigFn(resolved));
+    printFn(summary(resolved, queueRoot, true));
     return 0;
-  } catch (e) {
-    if (e instanceof WizardCancelled) return 130; // clack.cancel() already printed
-    throw e;
   }
+
+  // A TTY without raw-mode support cannot drive Ink — bail with the fix
+  // before loading React (never render a broken UI).
+  const interactive = deps.isInteractiveFn
+    ? deps.isInteractiveFn()
+    : Boolean(process.stdin.isTTY && typeof process.stdin.setRawMode === "function");
+  if (!deps.collectFn && !interactive) {
+    printFn(
+      `junco init: this terminal cannot run the interactive walkthrough.\n` +
+        `  Pass --yes to scaffold defaults, or create ${resolved} by hand.\n`,
+    );
+    return 1;
+  }
+
+  const mode: "fresh" | "rerun" = existsFn(resolved) ? "rerun" : "fresh";
+  const invalidConfig = (reason: string): number => {
+    printFn(
+      `junco init: ${resolved} is not a valid config (${reason}).\n` +
+        `  Fix or remove it, then re-run junco init. (junco config path shows the resolved location.)\n`,
+    );
+    return 1;
+  };
+  let raw: Record<string, unknown> | null = null;
+  if (mode === "rerun") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileFn(resolved));
+    } catch (e) {
+      return invalidConfig(e instanceof Error ? e.message : String(e));
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      const kind = parsed === null ? "null" : Array.isArray(parsed) ? "an array" : typeof parsed;
+      return invalidConfig(`expected a JSON object, got ${kind}`);
+    }
+    raw = parsed as Record<string, unknown>;
+  }
+
+  const io: WizardIO = {
+    mode,
+    configPath: resolved,
+    initialAnswers: raw ? answersFromConfig(raw) : defaultAnswers(),
+    currentRaw: raw,
+    greetName: () => greetingName(deps.detectDeps),
+    preflight: () => preflightChecks(deps.detectDeps),
+    discoverModels: (baseUrl, apiKey) => (deps.fetchModelsFn ?? fetchModels)(baseUrl, apiKey),
+    listModelsJson: (p) => (deps.parseModelsJsonFn ?? parseModelsJson)(expandHome(p)),
+    write: (a: WizardAnswers) => {
+      let written = false;
+      let changes: AnswerDiff[] = [];
+      // Atomic temp+rename, PID-suffixed (ConfigView/configCmd pattern) — a
+      // crash mid-write must never leave a truncated config.json where a
+      // full one used to not exist. If the rename itself throws (e.g. EPERM
+      // on the destination) after the temp write already succeeded, don't
+      // leave the temp file behind — best-effort unlink, then rethrow so the
+      // caller still sees the original failure.
+      const renameOrCleanup = (tmp: string, dest: string): void => {
+        try {
+          renameFn(tmp, dest);
+        } catch (e) {
+          try {
+            unlinkFn(tmp);
+          } catch {
+            /* best effort */
+          }
+          throw e;
+        }
+      };
+      if (mode === "fresh") {
+        // Validate before touching disk — mirrors rerun mode's ordering
+        // below, so a schema-invalid answer set never leaves a half-written
+        // file (or none at all) for the caller to trip over.
+        validateConfigObject(buildConfigObject(a));
+        mkdirFn(dirname(resolved));
+        const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
+        writeFileFn(tmp, renderConfigJson(a));
+        renameOrCleanup(tmp, resolved);
+        wroteFile = true;
+        written = true;
+      } else {
+        changes = diffAnswers(raw as Record<string, unknown>, a);
+        if (changes.length > 0) {
+          const next = applyAnswers(raw as Record<string, unknown>, a);
+          validateConfigObject(next);
+          const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
+          writeFileFn(tmp, JSON.stringify(next, null, 2) + "\n");
+          renameOrCleanup(tmp, resolved);
+          wroteFile = true;
+          written = true;
+        }
+      }
+      const queueRoot = ensureDirs(loadConfigFn(resolved));
+      return { written, configPath: resolved, queueRoot, changes };
+    },
+    flightCheck: () => flightChecks(loadConfigFn(resolved), deps.detectDeps),
+  };
+
+  const outcome = await (deps.collectFn ?? inkCollect)(io);
+  if (outcome === "cancelled") {
+    printFn(
+      wroteFile
+        ? `Setup did not finish — but the config WAS written to ${resolved}.\n` +
+            `  Run junco doctor to verify the rest.\n`
+        : "Setup cancelled — nothing written.\n",
+    );
+    return 130;
+  }
+  // The alt-screen UI vanished on exit — leave a durable transcript.
+  const queueRoot = dirname(queuePaths(loadConfigFn(resolved)).inbox);
+  printFn(summary(resolved, queueRoot, outcome === "written"));
+  return 0;
 }
