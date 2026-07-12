@@ -18,10 +18,10 @@ export interface WatchedRepoAnswer {
 
 export interface WizardAnswers {
   vaultRoot: string;
-  mode: "inline" | "models_json";
+  mode: "inline" | "models_json" | "hosted";
   modelId: string;
   baseUrl?: string; // inline mode
-  apiKey?: string; // inline mode
+  apiKey?: string; // inline mode; also hosted mode (literal or "$VAR" ref)
   modelsJson?: string; // models_json mode
   repoRoots: string[];
   github: { enabled: boolean; repos: WatchedRepoAnswer[]; requireApproval: boolean };
@@ -62,6 +62,15 @@ export function buildConfigObject(a: WizardAnswers): Record<string, unknown> {
   const model: Record<string, unknown> = { id: a.modelId };
   if (a.mode === "models_json") {
     model.modelsJson = a.modelsJson ?? DEFAULT_MODELS_JSON;
+  } else if (a.mode === "hosted") {
+    // Catalog-eligible by construction: no baseUrl key at all (an explicit
+    // baseUrl — even the localhost default — flips catalogEligible/
+    // assembleConfig to inline resolution, see agent/modelSetup.ts) and no
+    // source key (unset "auto" already resolves to catalog for a non-local
+    // provider prefix with no explicit baseUrl). apiKey is omitted entirely
+    // when the user left it blank so the SDK falls back to the provider's
+    // own env var at request time; a pasted literal or "$VAR" ref is kept.
+    if (a.apiKey) model.apiKey = a.apiKey;
   } else {
     model.baseUrl = a.baseUrl ?? d.baseUrl!;
     // apiKey fallback stays "" — NOT d.apiKey ("1234", the wizard's inline
@@ -106,12 +115,25 @@ function coveredPaths(a: WizardAnswers): { path: string; value: unknown }[] {
           { path: "model.baseUrl", value: undefined },
           { path: "model.apiKey", value: undefined },
         ]
-      : [
-          { path: "model.modelsJson", value: undefined },
-          { path: "model.baseUrl", value: a.baseUrl ?? d.baseUrl! },
-          // apiKey fallback stays "" (see buildConfigObject) — not d.apiKey.
-          { path: "model.apiKey", value: a.apiKey ?? "" },
-        ];
+      : a.mode === "hosted"
+        ? [
+            { path: "model.modelsJson", value: undefined },
+            // Always undefined — a hosted rerun must never write a baseUrl,
+            // even the localhost default, or the config stops being
+            // catalog-eligible (assembleConfig treats a present key as an
+            // explicit override, see agent/modelSetup.ts:catalogEligible).
+            { path: "model.baseUrl", value: undefined },
+            // Only a real value when the user actually set one; blank never
+            // materializes a placeholder key, so an untouched rerun is a
+            // true no-op diff.
+            { path: "model.apiKey", value: a.apiKey || undefined },
+          ]
+        : [
+            { path: "model.modelsJson", value: undefined },
+            { path: "model.baseUrl", value: a.baseUrl ?? d.baseUrl! },
+            // apiKey fallback stays "" (see buildConfigObject) — not d.apiKey.
+            { path: "model.apiKey", value: a.apiKey ?? "" },
+          ];
   return [
     { path: "vaultRoot", value: a.vaultRoot },
     { path: "model.id", value: a.modelId },
@@ -138,13 +160,33 @@ export const COVERED_LEVER_COUNT = coveredPaths(defaultAnswers()).length;
 export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {
   const d = defaultAnswers();
   const g = (p: string): unknown => getAtPath(raw, p);
-  const mode = typeof g("model.modelsJson") === "string" ? "models_json" : "inline";
+  // Raw-key presence, not resolved Config: a hosted config has neither a
+  // modelsJson path nor an explicit baseUrl key. Checking presence here
+  // (rather than inferring "inline" as the catch-all default) is the fix for
+  // the trap this task exists to avoid — see flow.ts's module comment and
+  // the brief: misclassifying a hosted config as inline on rerun would
+  // prefill the localhost baseUrl and destroy catalog eligibility on write.
+  const hasModelsJson = typeof g("model.modelsJson") === "string";
+  const hasBaseUrl = g("model.baseUrl") !== undefined;
+  const mode: WizardAnswers["mode"] = hasModelsJson
+    ? "models_json"
+    : hasBaseUrl
+      ? "inline"
+      : "hosted";
   return {
     vaultRoot: (g("vaultRoot") as string) ?? d.vaultRoot,
     mode,
     modelId: (g("model.id") as string) ?? d.modelId,
-    baseUrl: (g("model.baseUrl") as string) ?? d.baseUrl,
-    apiKey: (g("model.apiKey") as string) ?? d.apiKey,
+    // Hosted mode never prefills the localhost baseUrl default — that would
+    // reintroduce the exact trap this task fixes on the next rerun.
+    baseUrl: mode === "hosted" ? undefined : ((g("model.baseUrl") as string) ?? d.baseUrl),
+    // Hosted mode never falls back to d.apiKey ("1234", the inline
+    // placeholder) — a hosted config with no key is deliberate env-var
+    // deferral, not a blank inline field.
+    apiKey:
+      mode === "hosted"
+        ? (g("model.apiKey") as string | undefined)
+        : ((g("model.apiKey") as string) ?? d.apiKey),
     modelsJson: g("model.modelsJson") as string | undefined,
     repoRoots: (g("git.allowedRepoRoots") as string[]) ?? [],
     github: {
