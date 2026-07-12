@@ -39,6 +39,8 @@ Junco is configured via a JSON file — `./config.json` if present, else `~/.con
 
 Endpoint probing — the daemon's startup readiness wait, `/health` and dashboard reachability checks, and `junco doctor`'s endpoint check — is skipped for a catalog-resolved model (no local server to wait for, and probing a metered API on every poll/dashboard tick is billed traffic). A configured `model.modelsJson` still probes, since the provider `baseUrl` it declares may be local.
 
+`worker.endpointProbe` overrides that skip heuristic directly: `"never"` always skips probing (even for a local/inline model), `"always"` always probes (even a catalog-resolved hosted model), and `"auto"` (default) defers to the skip-for-catalog rule above. Probe results are cached for ~10 seconds so a poll loop or dashboard tick can't multiply upstream probe traffic; the cache is shared by the claim gate, `/health`, and `/ready` inside the daemon process, and the dashboard (a separate process) keeps its own cache on the same terms.
+
 A provider-prefixed id that is catalog-eligible but NOT actually present in the embedded SDK's builtin catalog (e.g. a typo'd or not-yet-added provider) falls through to inline resolution — an explicit `model.baseUrl` and `model.apiKey` are then required, and the session build fails with an actionable error if the key is missing; endpoint probing is still skipped for any catalog-eligible config, including this fall-through case.
 
 ```json
