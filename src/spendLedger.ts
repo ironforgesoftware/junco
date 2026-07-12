@@ -5,10 +5,16 @@
  * (`src/watchlist.ts:22-77`): mkdir -p, sibling `.tmp`, rename. Read discipline
  * mirrors `readWatchlist` (`src/watchlist.ts:28-77`): missing/corrupt/stale
  * file never throws — it degrades to a fresh `{today, 0}` instead.
+ *
+ * Input discipline: `recordUsd` accepts only finite, positive amounts.
+ * Non-finite input (a bad upstream SDK float) is dropped with a warn —
+ * summing it would poison the file and zero the day's total; `usd <= 0`
+ * is a silent skip (0 per contract, negatives have no refund semantics).
  */
 
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { log } from "./logging.js";
 
 export interface SpendLedgerDeps {
   now?: () => number;
@@ -90,7 +96,19 @@ export function makeSpendLedger(stateDir: string, deps: SpendLedgerDeps = {}): S
 
   return {
     recordUsd(usd: number): void {
-      if (usd === 0) return; // no-op: skip the write entirely
+      // Reject non-finite and non-positive amounts BEFORE touching the file.
+      // A single NaN/Infinity would poison the sum (current.usd + NaN → NaN,
+      // which JSON.stringify serializes as `null` → the next read hits the
+      // corrupt-file branch and silently zeroes the day's legitimately
+      // recorded spend — the budget cap would stop working for the rest of
+      // the day). Negative dollars have no refund semantics here; 0 is the
+      // documented skip-the-write no-op. Only the non-finite case warns:
+      // it means an upstream SDK float went bad and must be visible.
+      if (!Number.isFinite(usd)) {
+        log.warn("spendLedger: ignoring non-finite USD amount", { usd: String(usd) });
+        return;
+      }
+      if (usd <= 0) return; // no-op: skip the write entirely (0 and negatives)
       const current = read(); // rollover on write: read() folds in the day change
       write({ date: current.date, usd: current.usd + usd });
     },

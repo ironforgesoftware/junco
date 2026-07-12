@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   mkdtempSync,
   writeFileSync,
@@ -10,6 +10,11 @@ import {
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { makeSpendLedger } from "../src/spendLedger.js";
+import { log } from "../src/logging.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "junco-spend-"));
@@ -35,12 +40,60 @@ describe("makeSpendLedger", () => {
     expect(ledger.todayUsd()).toBeCloseTo(3.75);
   });
 
-  it("recordUsd(0) is a no-op — skips the write entirely", () => {
+  it("recordUsd(0) is a no-op — skips the write entirely, no warn", () => {
     const dir = tmp();
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
     const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
     ledger.recordUsd(0);
     expect(existsSync(join(dir, "spend.json"))).toBe(false);
     expect(ledger.todayUsd()).toBe(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("recordUsd(NaN) must NOT zero the day: prior total survives, file stays valid, warn fires", () => {
+    const dir = tmp();
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    ledger.recordUsd(47);
+
+    ledger.recordUsd(NaN); // one bad SDK float
+
+    expect(ledger.todayUsd()).toBeCloseTo(47); // NOT 0 — the day's spend is not discarded
+    const raw = JSON.parse(readFileSync(join(dir, "spend.json"), "utf8")) as {
+      date: string;
+      usd: number;
+    };
+    expect(raw.usd).toBeCloseTo(47); // still valid JSON, not `null`
+    expect(warnSpy).toHaveBeenCalled(); // a bad float must be visible
+  });
+
+  it("recordUsd(Infinity) is rejected the same way: total survives, warn fires", () => {
+    const dir = tmp();
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    ledger.recordUsd(47);
+
+    ledger.recordUsd(Infinity);
+    ledger.recordUsd(-Infinity);
+
+    expect(ledger.todayUsd()).toBeCloseTo(47);
+    const raw = JSON.parse(readFileSync(join(dir, "spend.json"), "utf8")) as { usd: number };
+    expect(raw.usd).toBeCloseTo(47);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("recordUsd(-5) is silently skipped — no refund semantics, no write, no warn", () => {
+    const dir = tmp();
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    ledger.recordUsd(3);
+    const before = readFileSync(join(dir, "spend.json"), "utf8");
+
+    ledger.recordUsd(-5);
+
+    expect(ledger.todayUsd()).toBeCloseTo(3);
+    expect(readFileSync(join(dir, "spend.json"), "utf8")).toBe(before); // no write
+    expect(warnSpy).not.toHaveBeenCalled(); // silent skip, unlike non-finite
   });
 
   it("persists to spend.json under the state dir in the documented shape", () => {
