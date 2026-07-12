@@ -239,6 +239,7 @@ export async function executeClaimed(
           abortSignal: deps.abortSignal,
           onProgress: (p) => metrics.setTaskProgress(next.id, p),
           onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
+          spend: deps.spend,
         });
         if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
         else
@@ -266,6 +267,7 @@ export async function executeClaimed(
           abortSignal: deps.abortSignal,
           onProgress: (p) => metrics.setTaskProgress(next.id, p),
           onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
+          spend: deps.spend,
         });
         if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
         else

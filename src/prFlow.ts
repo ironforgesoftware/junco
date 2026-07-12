@@ -561,7 +561,7 @@ export async function runPrFlow(
   // connectivity returns. `pushed` records whether the branch already landed.
   const queueOfflinePr = (pushed: boolean): string => {
     const title = derivePrTitle(ctx, task);
-    const bodyText = buildPrBody(task, ctx, prOutcome, result);
+    const bodyText = buildPrBody(task, ctx, prOutcome, finalResult);
     const status = computePrStatus(result, prOutcome, null);
     return enqueueOp(cfg, "prflow", {
       kind: "pr",
@@ -893,7 +893,7 @@ export async function runPrFlow(
   } else {
     try {
       const title = derivePrTitle(ctx, task);
-      const bodyText = buildPrBody(task, ctx, prOutcome, result);
+      const bodyText = buildPrBody(task, ctx, prOutcome, finalResult);
       const bodyFile = writePrBodyTempfile(bodyText);
       try {
         prOutcome.prUrl = await openPullRequest(

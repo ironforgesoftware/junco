@@ -133,8 +133,14 @@ export class ProviderGate {
    * midnight expiry or clearLatched() (operator action) ends it early.
    */
   reportSuccess(): void {
-    if (this.currentState().kind === "budget_exhausted") return;
+    // A success is real provider-health evidence regardless of budget — reset
+    // the streak unconditionally, BEFORE the budget_exhausted early-return, so
+    // a session that completes successfully while budget-latched still resets
+    // rate-limit doubling for whenever the block itself lifts (midnight or an
+    // operator's clearLatched()). The state transition itself stays gated:
+    // budget_exhausted is not cleared here (see class comment).
     this.streak = 0;
+    if (this.currentState().kind === "budget_exhausted") return;
     this.transitionTo("ok", null, null);
   }
 

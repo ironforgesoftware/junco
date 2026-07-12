@@ -373,6 +373,26 @@ describe("ProviderGate", () => {
       gate.reportBudgetExhausted(3_600_000, "budget reached");
       expect(gate.notBeforeIso()).toBe(new Date(3_600_000).toISOString());
     });
+
+    it("reportSuccess resets the rate_limit streak even while budget-latched (no state transition) — after midnight expiry the next rate_limit starts back at the base delay, not doubled", () => {
+      gate.reportFailure("rate_limit", "429"); // streak 1 -> 60s
+      gate.reportFailure("rate_limit", "429"); // streak 2 -> 120s
+      gate.reportBudgetExhausted(3_600_000, "budget reached"); // overrides rate_limited (not itself latched)
+      gate.reportSuccess(); // a session finishing successfully IS real provider-health evidence...
+      // ...but must NOT lift the budget block itself: still latched, no extra transition.
+      expect(gate.status().state).toBe("budget_exhausted");
+      expect(transitions).toEqual([
+        ["ok", "rate_limited"],
+        ["rate_limited", "budget_exhausted"],
+      ]);
+      t = 3_600_000; // local midnight passes — budget_exhausted auto-expires to ok
+      gate.reportFailure("rate_limit", "429 again");
+      const s = gate.status();
+      expect(s.state).toBe("rate_limited");
+      // Base delay (60s), not doubled to 240s — reportSuccess reset the streak
+      // even though it couldn't clear the budget latch itself.
+      expect(s.until).toBe(new Date(t + 60_000).toISOString());
+    });
   });
 
   describe("notBeforeIso", () => {

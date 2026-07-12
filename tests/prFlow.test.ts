@@ -604,6 +604,44 @@ exit 1
     expect(text).toContain("**Tokens:** in=6 out=6 cost=$0.0000");
   });
 
+  it("PR body Run-metadata Tokens line matches the aggregate (main + critic x2 + corrective), not just the main run", async () => {
+    // Capture the PR body gh received, same technique as the offline-base-fetch
+    // test above — a shim that copies whatever --body-file points at.
+    const capture = join(h.root, "pr-body-tokens-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/456"; exit 0`;
+    const cfg = makeConfig(h, {
+      ghBin: ghShim("gh-tokens-capture.sh", prCreate),
+      criticEnabled: true,
+      criticMaxRetries: 1,
+      verifyEnabled: false,
+    });
+    const { task, path } = makeTicket(
+      h,
+      "critic-cost-body.md",
+      `---\nid: critic-cost-body\nrepo: ${h.work}\n---\n# Feature needing a fix\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    // Same aggregation as "footer usage/cost sum ALL four sessions" above:
+    // main + corrective (in=5/out=5 each) + critic pass 1 + pass 2 (in=1/out=1
+    // each) → in=12 out=12 total=24.
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.01 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: MISSING the X bit", 0.0023),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.status).toBe("completed");
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("- Tokens: in=12 · out=12 · total=24");
+  });
+
   // -------------------------------------------------------------------------
   // Transient-failure requeue
   // -------------------------------------------------------------------------
