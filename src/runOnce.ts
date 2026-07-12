@@ -23,6 +23,7 @@ import { runAnalyzeFlow } from "./analyzeFlow.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
 import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
+import type { SpendLedger } from "./spendLedger.js";
 import { transcriptPathFor } from "./slug.js";
 import {
   NOOP_REPORTER,
@@ -81,6 +82,14 @@ export interface RunDeps {
   /** Provider gate — classification-driven claim pausing. Optional: absent
    * (CLI one-shot, tests) preserves pre-gate behavior exactly. */
   gate?: Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">;
+  /** Per-day spend ledger (Phase-3 Task 4): every completed session's
+   * `result.usage.costUsd` is recorded here immediately after the session
+   * ends, INCLUDING sessions whose ticket goes on to requeue — the money was
+   * spent regardless of the ticket's eventual disposition, so this is the
+   * honest accounting record. Threaded into prFlow's deps below (its main,
+   * critic, and corrective sessions each record their own). Optional: absent
+   * (CLI one-shot, tests) is a no-op everywhere `recordUsd` would be called. */
+  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 /** One claimed unit of work, ready to execute. */
@@ -284,6 +293,7 @@ export async function executeClaimed(
             onProgress: (p) => metrics.setTaskProgress(next.id, p),
             onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
             gate: deps.gate,
+            spend: deps.spend,
           });
           if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
@@ -333,6 +343,12 @@ export async function executeClaimed(
           ? transcriptPathFor(cfg.stateDir, next.id)
           : undefined,
       });
+      // Record spend immediately, BEFORE any classification/requeue logic
+      // below: a session that goes on to requeue (transient failure, gate
+      // class) still spent real money, and the ledger must count it (Phase-3
+      // Task 4). No-op when deps.spend is absent or costUsd is 0/non-finite
+      // (recordUsd's own guard).
+      deps.spend?.recordUsd(result.usage.costUsd);
       // Infrastructure failures (bad key, quota, 429, model typo) are not the
       // ticket's fault: report to the gate (pauses claiming) and requeue
       // WITHOUT consuming the retry budget. Only zero-commit runs — Q&A never

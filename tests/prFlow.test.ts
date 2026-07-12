@@ -1754,6 +1754,159 @@ describe("provider gate wiring (Phase 2 Task 6)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Spend ledger wiring (Phase 3 Task 4)
+// ---------------------------------------------------------------------------
+
+/** Records recordUsd calls; a plain object satisfying
+ * `Pick<SpendLedger, "recordUsd">` — mirrors fakeGate above (no need for the
+ * real persisted-file ledger in these wiring tests). */
+function fakeSpend(): { calls: number[]; recordUsd: (usd: number) => void } {
+  const calls: number[] = [];
+  return {
+    calls,
+    recordUsd(usd: number) {
+      calls.push(usd);
+    },
+  };
+}
+
+/** A session whose prompt() ends the turn with a non-null errorMessage AND a
+ * nonzero cost, no commit — a zero-commit hard-error that requeues via the
+ * BUDGETED path (isTransientFailure: errorMessage !== null), used to prove
+ * spend is recorded even though the ticket never reaches finalizePr. */
+function costedTransientFactory(
+  costUsd: number,
+  errorMessage: string,
+): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+  return (_cfg, _cwd) => async () => {
+    let listener: ((e: any) => void) | null = null;
+    return {
+      subscribe(l: (e: any) => void) {
+        listener = l;
+        return () => {};
+      },
+      async prompt() {
+        listener?.({
+          type: "turn_end",
+          message: {
+            stopReason: "error",
+            errorMessage,
+            usage: { input: 3, output: 4, cacheRead: 0, totalTokens: 7, cost: { total: costUsd } },
+          },
+        });
+        listener?.({ type: "agent_end", messages: [], willRetry: false });
+      },
+      dispose() {},
+      abort: async () => {},
+    };
+  };
+}
+
+describe("spend ledger wiring (Phase 3 Task 4)", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = setup();
+  });
+  afterEach(() => {
+    rmSync(h.root, { recursive: true, force: true });
+  });
+
+  it("PR ticket with critic + corrective records once per session (main, critic x2, corrective)", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "spend-critic-cost.md",
+      `---\nid: spend-critic-cost\nrepo: ${h.work}\n---\n# Feature needing a fix\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const spend = fakeSpend();
+
+    // Main run + corrective turn each report cost=0.01; critic pass 1 + pass 2
+    // each report cost=0.0023 (same fakes drive both, per prFlow's factory
+    // reuse — mirrors the existing footer-sum test above).
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.01 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: MISSING the X bit", 0.0023),
+      spend,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    // Four sessions ran: main, critic pass 1, corrective, critic pass 2 — each
+    // records its OWN costUsd as that session completes (not the aggregated
+    // footer total), in the order the sessions actually ran.
+    expect(spend.calls).toHaveLength(4);
+    expect(spend.calls[0]).toBeCloseTo(0.01); // main
+    expect(spend.calls[1]).toBeCloseTo(0.0023); // critic pass 1
+    expect(spend.calls[2]).toBeCloseTo(0.01); // corrective
+    expect(spend.calls[3]).toBeCloseTo(0.0023); // critic pass 2 (post-retry)
+  });
+
+  it("critic PASS on the first pass (no corrective): records exactly main + one critic pass", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "spend-critic-pass.md",
+      `---\nid: spend-critic-pass\nrepo: ${h.work}\n---\n# Feature\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const spend = fakeSpend();
+
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.02 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: PASS", 0.001),
+      spend,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    expect(spend.calls).toHaveLength(2);
+    expect(spend.calls[0]).toBeCloseTo(0.02);
+    expect(spend.calls[1]).toBeCloseTo(0.001);
+  });
+
+  it("a run that ends in a REQUEUE is still recorded — the main session's spend is counted before the requeue exit", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "spend-requeue.md",
+      `---\nid: spend-requeue\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const spend = fakeSpend();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: costedTransientFactory(0.03, "agent gave up"),
+      spend,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted requeue path, not the gate's
+    expect(spend.calls).toHaveLength(1);
+    expect(spend.calls[0]).toBeCloseTo(0.03);
+  });
+
+  it("no spend dep in deps → recording is a no-op; the run completes exactly as it would without the ledger", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "spend-none.md",
+      `---\nid: spend-none\nrepo: ${h.work}\n---\n# Add a feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.05 }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fork PR flow (Task 10) — push to a non-origin remote, open the PR against
 // upstream with a cross-repo --head, and keep the outbox silent on the upstream
 // issue for external tickets.

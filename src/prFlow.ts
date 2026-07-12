@@ -33,6 +33,7 @@ import { lintTicket, LabelCache } from "./planLint.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
 import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
+import type { SpendLedger } from "./spendLedger.js";
 import { runSpecVerification, type VerificationResult } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
@@ -345,6 +346,14 @@ export interface PrFlowDeps {
    * in runOnce.ts). Optional: absent (CLI one-shot, tests) preserves pre-gate
    * behavior exactly. */
   gate?: Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">;
+  /** Per-day spend ledger (Phase-3 Task 4), peer of RunDeps.spend in
+   * runOnce.ts: EVERY session this ticket runs — main worker turn, each
+   * critic pass, the optional corrective re-dispatch — records its OWN
+   * `usage.costUsd` here immediately as that session completes, independent
+   * of the ticket's eventual disposition (a requeue exit still counts the
+   * main run's spend). Optional: absent preserves pre-ledger behavior
+   * exactly (recordUsd is never called). */
+  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 export async function runPrFlow(
@@ -484,6 +493,11 @@ export async function runPrFlow(
     onGuardDecision: deps.onGuardDecision,
     transcriptPath,
   });
+  // Record spend immediately, BEFORE any requeue/fail branching below: this
+  // session's dollars were spent regardless of what the ticket does next
+  // (Phase-3 Task 4 — the ledger is the honest record, unlike the ticket's
+  // own footer accounting which never sees a requeued attempt again).
+  deps.spend?.recordUsd(result.usage.costUsd);
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
@@ -726,6 +740,7 @@ export async function runPrFlow(
       });
       prOutcome.critic = critic;
       extraUsages.push(critic.usage);
+      deps.spend?.recordUsd(critic.usage.costUsd);
       log.info(
         `critic: ${critic.status}${critic.findings ? ` (${critic.findings.slice(0, 120)})` : ""}`,
       );
@@ -762,6 +777,7 @@ export async function runPrFlow(
             : undefined,
         });
         extraUsages.push(corrective.usage);
+        deps.spend?.recordUsd(corrective.usage.costUsd);
         prOutcome.criticRetriesUsed = 1;
         log.info(`critic retry: agent abortedByGuard=${corrective.abortedByGuard}`);
         // Re-evaluate commits + critic + verification after the retry.
@@ -772,6 +788,7 @@ export async function runPrFlow(
         });
         prOutcome.critic = criticAfter;
         extraUsages.push(criticAfter.usage);
+        deps.spend?.recordUsd(criticAfter.usage.costUsd);
         log.info(
           `critic (post-retry): ${criticAfter.status}${criticAfter.findings ? ` (${criticAfter.findings.slice(0, 120)})` : ""}`,
         );

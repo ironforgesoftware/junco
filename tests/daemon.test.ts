@@ -29,6 +29,26 @@ import {
   type MainLoopDeps,
 } from "../src/daemon.js";
 
+// Phase-3 Task 4: intercept runOnce/executeClaimed exactly as daemon.ts sees
+// them (both are genuine cross-module imports from runOnce.js, so Vitest's
+// module registry can redirect them — see the "spend ledger wiring" describe
+// below). Each box defaults to a PASSTHROUGH to the real implementation
+// (wired up inside the factory below), so every OTHER test in this file that
+// never touches these boxes is completely unaffected; only the spend-wiring
+// tests swap `.current` to a spy for the duration of one test.
+const runOnceBox = vi.hoisted(() => ({ current: null as unknown as (...a: any[]) => any }));
+const executeClaimedBox = vi.hoisted(() => ({ current: null as unknown as (...a: any[]) => any }));
+vi.mock("../src/runOnce.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runOnce.js")>();
+  runOnceBox.current = actual.runOnce;
+  executeClaimedBox.current = actual.executeClaimed;
+  return {
+    ...actual,
+    runOnce: (...args: unknown[]) => runOnceBox.current(...args),
+    executeClaimed: (...args: unknown[]) => executeClaimedBox.current(...args),
+  };
+});
+
 /** A fake health-server handle whose close() is a spy — never binds a port. */
 function makeFakeHealthHandle(): HealthServerHandle {
   return {
@@ -60,6 +80,19 @@ function fakeGate(blockReason: string | null): {
     reportFailure: () => {},
     reportSuccess: () => {},
     notBeforeIso: () => "2099-01-01T00:00:00.000Z",
+  };
+}
+
+/** Minimal fake spend ledger (Phase-3 Task 4): a plain object satisfying
+ * `Pick<SpendLedger, "recordUsd">` — same shape-only pattern as fakeGate, no
+ * need to pull in the real persisted-file ledger for wiring tests. */
+function fakeSpend(): { calls: number[]; recordUsd: (usd: number) => void } {
+  const calls: number[] = [];
+  return {
+    calls,
+    recordUsd(usd: number) {
+      calls.push(usd);
+    },
   };
 }
 
@@ -183,6 +216,9 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // Never blocks by default — most tests don't care about the gate at all;
     // override with fakeGate(reason) to exercise blocked-claim behavior.
     gate: fakeGate(null),
+    // Most tests don't care about spend at all; override with fakeSpend() (or
+    // `undefined` to exercise mainLoop's own default-ledger construction).
+    spend: fakeSpend(),
     ...overrides,
   };
   return { deps };
@@ -701,6 +737,178 @@ describe("mainLoop — provider gate wiring", () => {
     expect(typeof arg.readinessProbe).toBe("function");
     expect(typeof arg.gateStatus).toBe("function");
     expect(arg.gateStatus!()).toEqual(gate.status());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — spend ledger wiring (Phase 3 Task 4)
+//
+// There is no sessionFactoryFor seam at the daemon layer (MainLoopDeps/
+// SchedulerDeps only expose abortSignal/reporter/gate/spend to the default
+// runOnceFn/executeFn closures), so a real agent session can't be driven
+// through mainLoop the way runOnce.test.ts/prFlow.test.ts exercise recordUsd
+// end-to-end. Instead these tests intercept runOnce/executeClaimed (the
+// runOnceBox/executeClaimedBox passthrough boxes declared at the top of this
+// file) to inspect the deps object daemon.ts actually constructs — proving
+// both the DEFAULT ledger's construction (absent deps.spend, built from
+// cfg.stateDir) and its threading into both the serial and scheduler paths.
+// ---------------------------------------------------------------------------
+
+describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
+  // Each test below swaps runOnceBox.current/executeClaimedBox.current to a
+  // spy for its own duration and restores the REAL implementation in a
+  // `finally` — the boxes must stay on the real passthrough for every other
+  // test in this file (see the vi.mock factory at the top).
+
+  it("serial mode: absent deps.spend → mainLoop builds a REAL makeSpendLedger(cfg.stateDir) and threads it into the DEFAULT runOnceFn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-serial-"));
+    const stateDir = join(root, "state");
+    const cfg = makeConfig({ vaultRoot: root, stateDir });
+    const stop = new StopFlag();
+    const captured: unknown[] = [];
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(async (_c: Config, runDeps: unknown) => {
+      captured.push(runDeps);
+      return false; // no work claimed — never touches the fs beyond this
+    });
+    try {
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        spend: undefined,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured).toHaveLength(1);
+      const passedSpend = (captured[0] as { spend?: { recordUsd: (usd: number) => void } }).spend;
+      expect(passedSpend).toBeDefined();
+      expect(typeof passedSpend?.recordUsd).toBe("function");
+      // Prove it's a genuinely WORKING makeSpendLedger(cfg.stateDir) instance
+      // (not a stub) — record through it and read the persisted file back.
+      passedSpend!.recordUsd(1.5);
+      const ledger = JSON.parse(readFileSync(join(stateDir, "spend.json"), "utf8")) as {
+        usd: number;
+      };
+      expect(ledger.usd).toBeCloseTo(1.5);
+    } finally {
+      runOnceBox.current = realRunOnce;
+    }
+  });
+
+  it("scheduler mode (max_concurrent>1): absent deps.spend → mainLoop builds a REAL ledger and threads it into the DEFAULT executeFn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-sched-"));
+    const j = join(root, "Junco");
+    for (const d of ["inbox", "processing", "done", "failed"]) {
+      mkdirSync(join(j, d), { recursive: true });
+    }
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const stateDir = join(root, "state");
+    const cfg = makeConfig({
+      vaultRoot: root,
+      stateDir,
+      maxConcurrent: 2,
+      pollIntervalSeconds: 0.001,
+    });
+    const stop = new StopFlag();
+    const captured: unknown[] = [];
+    const realExecuteClaimed = executeClaimedBox.current;
+    executeClaimedBox.current = vi.fn(async (_c: Config, _w: ClaimedWork, execDeps: unknown) => {
+      captured.push(execDeps);
+      stop.requestStop();
+    });
+    try {
+      const { deps } = makeDeps({
+        // Leave claimFn/executeFn undefined so runScheduler builds its own
+        // defaults (claimNextTask claims the real ticket above; the default
+        // executeFn is exactly the wiring under test).
+        claimFn: undefined,
+        executeFn: undefined,
+        spend: undefined,
+        sleep: vi.fn(async () => {}),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured).toHaveLength(1);
+      const passedSpend = (captured[0] as { spend?: { recordUsd: (usd: number) => void } }).spend;
+      expect(passedSpend).toBeDefined();
+      expect(typeof passedSpend?.recordUsd).toBe("function");
+      passedSpend!.recordUsd(2.25);
+      const ledger = JSON.parse(readFileSync(join(stateDir, "spend.json"), "utf8")) as {
+        usd: number;
+      };
+      expect(ledger.usd).toBeCloseTo(2.25);
+    } finally {
+      executeClaimedBox.current = realExecuteClaimed;
+    }
+  });
+
+  it("threads an explicitly-provided spend ledger through unchanged (no default construction) in both modes", async () => {
+    const spend = fakeSpend();
+
+    // Serial mode.
+    {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-explicit-serial-"));
+      const cfg = makeConfig({ vaultRoot: root, stateDir: join(root, "state") });
+      const stop = new StopFlag();
+      const captured: unknown[] = [];
+      const realRunOnce = runOnceBox.current;
+      runOnceBox.current = vi.fn(async (_c: Config, runDeps: unknown) => {
+        captured.push(runDeps);
+        return false;
+      });
+      try {
+        const { deps } = makeDeps({
+          runOnceFn: undefined,
+          spend,
+          sleep: vi.fn(async () => {
+            stop.requestStop();
+          }),
+        });
+        await mainLoop(cfg, stop, {}, deps);
+        expect((captured[0] as { spend?: unknown }).spend).toBe(spend);
+      } finally {
+        runOnceBox.current = realRunOnce;
+      }
+    }
+
+    // Scheduler mode.
+    {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-explicit-sched-"));
+      const j = join(root, "Junco");
+      for (const d of ["inbox", "processing", "done", "failed"]) {
+        mkdirSync(join(j, d), { recursive: true });
+      }
+      writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+      const cfg = makeConfig({
+        vaultRoot: root,
+        stateDir: join(root, "state"),
+        maxConcurrent: 2,
+        pollIntervalSeconds: 0.001,
+      });
+      const stop = new StopFlag();
+      const captured: unknown[] = [];
+      const realExecuteClaimed = executeClaimedBox.current;
+      executeClaimedBox.current = vi.fn(async (_c: Config, _w: ClaimedWork, execDeps: unknown) => {
+        captured.push(execDeps);
+        stop.requestStop();
+      });
+      try {
+        const { deps } = makeDeps({
+          claimFn: undefined,
+          executeFn: undefined,
+          spend,
+          sleep: vi.fn(async () => {}),
+        });
+        await mainLoop(cfg, stop, {}, deps);
+        expect((captured[0] as { spend?: unknown }).spend).toBe(spend);
+      } finally {
+        executeClaimedBox.current = realExecuteClaimed;
+      }
+    }
   });
 });
 
