@@ -77,6 +77,7 @@ export const CHEAP: LocalCheap = {
     currentTickets: ["gh-acme-api-1"],
     progress: {},
     gate: null,
+    spend: null,
     error: null,
   },
   error: null,

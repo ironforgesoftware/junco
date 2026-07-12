@@ -756,6 +756,28 @@ describe("mainLoop — provider gate wiring", () => {
     expect(typeof arg.gateStatus).toBe("function");
     expect(arg.gateStatus!()).toEqual(gate.status());
   });
+
+  it("wires the health server's spendStatus to the ledger + live dailyBudgetUsd (Phase-3 Task 6)", async () => {
+    const cfg = makeConfig({ healthEnabled: true, dailyBudgetUsd: 7.5 });
+    const stop = new StopFlag();
+    const handle = makeFakeHealthHandle();
+    const startHealthServerFn = vi.fn(async (_opts: HealthServerOpts) => handle);
+    const spend = fakeSpend(2.25);
+    const { deps } = makeDeps({
+      startHealthServerFn,
+      spend,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    const arg = startHealthServerFn.mock.calls[0]![0]!;
+    expect(typeof arg.spendStatus).toBe("function");
+    expect(arg.spendStatus!()).toEqual({ todayUsd: 2.25, dailyBudgetUsd: 7.5 });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -888,6 +910,10 @@ describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
       await captured!.readyFn!();
       expect(gate.status().state).toBe("budget_exhausted");
       expect(gate.claimBlockReason()).not.toBeNull();
+      // The cap is formatted with .toFixed(2), matching the spent amount's
+      // formatting — "$3" (not "$3.00") would misleadingly imply the cap is
+      // less precisely tracked than the spend it's being compared against.
+      expect(gate.status().reason).toBe("daily budget $3.00 reached ($5.00 spent)");
 
       // Advance the shared clock past midnight: the ledger's calendar day
       // rolls over to 0 spent AND the gate's own `until` (next local

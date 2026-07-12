@@ -63,7 +63,14 @@ const OK_STATE: InternalState = { kind: "ok", reason: null, since: null, until: 
  *    midnight expiry or an explicit clearLatched() (operator raised the
  *    budget via hot-reload) clears it early. It also observes the same
  *    latch-wins precedence as rate_limit/outage: an operator-fixable latch is
- *    a stronger signal and is never overwritten by a budget report.
+ *    a stronger signal and is never overwritten by a budget report. The
+ *    reverse is NOT guarded the same way: budget_exhausted is not itself in
+ *    LATCHED_KINDS, so a later rate_limit/outage report can transiently
+ *    overwrite it (reportFailure's "latch wins" checks only skip the three
+ *    LATCHED_KINDS); safety instead relies on gatedReady (daemon.ts)
+ *    re-checking the live spend against the cap and re-reporting
+ *    budget_exhausted on every poll, before claimBlockReason() is ever
+ *    consulted — so a stray overwrite cannot survive past the next poll.
  */
 export class ProviderGate {
   private readonly retryBackoffSeconds: number;

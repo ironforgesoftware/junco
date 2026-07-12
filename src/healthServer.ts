@@ -43,11 +43,28 @@ export interface HealthServerOpts {
    */
   gateStatus?: () => GateStatus;
   /**
+   * Source of today's spend + configured daily cap (Phase-3 Task 6), typically
+   * bound by the daemon to `spend.todayUsd()` + the live `dailyBudgetUsd`.
+   * `/health` always includes `spend: spendStatus?.() ?? null`. A throw is
+   * contained the same way as `gateStatus` (see `safeSpend`) — it must never
+   * 500 the server.
+   */
+  spendStatus?: () => SpendStatus;
+  /**
    * Where to report a post-listen server error (an accept-time failure such as
    * EMFILE under fd exhaustion). Defaults to `console.error`. The error is
    * logged and swallowed so it can never crash the host process (#121).
    */
   logFn?: (msg: string) => void;
+}
+
+/** Today's USD spend + the configured daily cap (Phase-3 Task 6). `dailyBudgetUsd`
+ * is 0 when the operator has no cap configured — mirrors `Config.dailyBudgetUsd`
+ * (types.ts), duplicated here rather than imported so this transport-layer
+ * module stays free of a `Config` dependency. */
+export interface SpendStatus {
+  todayUsd: number;
+  dailyBudgetUsd: number;
 }
 
 export interface HealthServerHandle {
@@ -98,6 +115,16 @@ function safeGate(gateStatus: (() => GateStatus) | undefined): GateStatus | null
   if (!gateStatus) return null;
   try {
     return gateStatus();
+  } catch {
+    return null;
+  }
+}
+
+/** Same containment discipline as `safeGate` above, for `spendStatus`. */
+function safeSpend(spendStatus: (() => SpendStatus) | undefined): SpendStatus | null {
+  if (!spendStatus) return null;
+  try {
+    return spendStatus();
   } catch {
     return null;
   }
@@ -164,7 +191,8 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
           safeProbe(probe),
         ]);
         const gate = safeGate(opts.gateStatus);
-        writeJson(res, 200, { status: "ok", ready, metrics: snap, gate });
+        const spend = safeSpend(opts.spendStatus);
+        writeJson(res, 200, { status: "ok", ready, metrics: snap, gate, spend });
         return;
       }
 

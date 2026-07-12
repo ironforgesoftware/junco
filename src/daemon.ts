@@ -508,7 +508,7 @@ export async function mainLoop(
       if (todaySpent >= liveCfg.dailyBudgetUsd) {
         gate.reportBudgetExhausted(
           spend.nextMidnightMs(),
-          `daily budget $${liveCfg.dailyBudgetUsd} reached ($${todaySpent.toFixed(2)} spent)`,
+          `daily budget $${liveCfg.dailyBudgetUsd.toFixed(2)} reached ($${todaySpent.toFixed(2)} spent)`,
         );
       }
     }
@@ -567,6 +567,10 @@ export async function mainLoop(
         metrics,
         readinessProbe: cachedReachable,
         gateStatus: () => gate.status(),
+        spendStatus: () => ({
+          todayUsd: spend.todayUsd(),
+          dailyBudgetUsd: activeCfg().dailyBudgetUsd,
+        }),
       });
       log.info("health endpoint listening", { url: health.url });
     } catch (e) {

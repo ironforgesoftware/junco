@@ -132,7 +132,7 @@ const SOURCE_TAG: Record<LocalRepo["source"], string> = {
 // endpoint dot — latched auth/quota/config failures outrank a transient
 // rate-limit/outage backoff, which in turn outranks a plain probe miss.
 const GATE_RED = new Set(["auth_error", "quota_exhausted", "misconfig"]);
-const GATE_YELLOW = new Set(["rate_limited", "outage_backoff"]);
+const GATE_YELLOW = new Set(["rate_limited", "outage_backoff", "budget_exhausted"]);
 
 /** GitHub outbox op-log: live ops (selectable) with the cursor op's lastError
  * expanded, plus a read-only dead tail. Mirrors outboxCmd's opLine format. */
@@ -456,6 +456,17 @@ export function DaemonSection({
       tok in {daemon.tokensIn ?? 0} · out {daemon.tokensOut ?? 0}
     </Text>,
   );
+  if (daemon.spend !== null) {
+    const spendLine =
+      daemon.spend.dailyBudgetUsd > 0
+        ? `spend $${daemon.spend.todayUsd.toFixed(2)} today / $${daemon.spend.dailyBudgetUsd.toFixed(2)} budget`
+        : `spend $${daemon.spend.todayUsd.toFixed(2)} today`;
+    lines.push(
+      <Text key="spend" dimColor>
+        {spendLine}
+      </Text>,
+    );
+  }
   const statuses = Object.entries(daemon.tasksByStatus);
   if (statuses.length > 0) {
     lines.push(<Text key="tbs">{statuses.map(([k, v]) => `${k}:${v}`).join(" · ")}</Text>);

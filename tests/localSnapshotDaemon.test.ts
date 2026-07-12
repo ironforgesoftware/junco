@@ -162,6 +162,29 @@ describe("buildDaemonDetail", () => {
     expect(d.gate).toBeNull();
   });
 
+  it("parses spend from the /health payload (Phase-3 Task 6 field)", async () => {
+    const body: HealthBody = {
+      status: "ok",
+      ready: true,
+      metrics: metrics(),
+      spend: { todayUsd: 1.23, dailyBudgetUsd: 5 },
+    };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    expect(d.spend).toEqual({ todayUsd: 1.23, dailyBudgetUsd: 5 });
+  });
+
+  it("spend absent from the /health payload (older daemon) → null", async () => {
+    const body: HealthBody = { status: "ok", ready: true, metrics: metrics() };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    expect(d.spend).toBeNull();
+  });
+
+  it("spend explicitly null in the payload (no spendStatus configured) → null", async () => {
+    const body: HealthBody = { status: "ok", ready: true, metrics: metrics(), spend: null };
+    const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
+    expect(d.spend).toBeNull();
+  });
+
   it("back-to-back calls each respect their own fetchFn (no cross-call probe cache)", async () => {
     // Deps-seam isolation: the endpoint probe must consult THIS call's fetchFn,
     // never a warm result from a previous call's different fetchFn.

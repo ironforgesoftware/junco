@@ -31,6 +31,7 @@ const DAEMON: DaemonDetail = {
   tasksByStatus: { completed: 5, failed: 1 },
   currentTickets: ["gh-acme-api-1"],
   gate: null,
+  spend: null,
   progress: {
     "gh-acme-api-1": {
       turns: 3,
@@ -378,6 +379,38 @@ describe("DaemonSection", () => {
     const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
     expect(f).toContain("○ inference endpoint");
     expect(f).not.toContain("auth_error");
+  });
+
+  it("budget_exhausted gate → YELLOW (warn) dot, not a filled green dot, + reason line", () => {
+    const daemon = {
+      ...DAEMON,
+      gate: { state: "budget_exhausted", reason: "daily budget $3.00 reached ($5.00 spent)" },
+    };
+    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
+    // The hollow dot proves it took the warn/error branch, not the
+    // endpointReachable-driven green "●" fallback a missing GATE_YELLOW entry
+    // would fall through to.
+    expect(f).toContain("○ inference endpoint");
+    expect(f).not.toContain("● inference endpoint");
+    expect(f).toContain("budget_exhausted — daily budget $3.00 reached ($5.00 spent)");
+  });
+
+  it("no spend on the daemon detail (older daemon / no ledger wired) → no spend ticker line", () => {
+    const f = render(<DaemonSection daemon={DAEMON} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).not.toContain("spend $");
+  });
+
+  it("spend present, no budget configured (dailyBudgetUsd 0) → ticker shows today's spend only", () => {
+    const daemon = { ...DAEMON, spend: { todayUsd: 1.5, dailyBudgetUsd: 0 } };
+    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).toContain("spend $1.50 today");
+    expect(f).not.toContain("budget");
+  });
+
+  it("spend present with a budget configured → ticker shows today's spend / budget", () => {
+    const daemon = { ...DAEMON, spend: { todayUsd: 2.345, dailyBudgetUsd: 10 } };
+    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
+    expect(f).toContain("spend $2.35 today / $10.00 budget");
   });
 });
 
