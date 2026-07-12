@@ -40,7 +40,7 @@ describe("RunAccumulator", () => {
     const r = acc.result(123);
     expect(r.finalText).toBe("Hello world");
     expect(r.toolCalls).toEqual([{ name: "read", args: { path: "/x" } }]);
-    expect(r.usage).toEqual({ input: 10, output: 3, cacheRead: 1, total: 14 });
+    expect(r.usage).toEqual({ input: 10, output: 3, cacheRead: 1, total: 14, costUsd: 0 });
     expect(r.stopReason).toBe("stop");
     expect(r.durationMs).toBe(123);
     expect(r.timedOut).toBe(false);
@@ -56,7 +56,13 @@ describe("RunAccumulator", () => {
       type: "turn_end",
       message: { usage: { input: 3, output: 1, cacheRead: 0, totalTokens: 4 } },
     } as any);
-    expect(acc.result(0).usage).toEqual({ input: 8, output: 3, cacheRead: 0, total: 11 });
+    expect(acc.result(0).usage).toEqual({
+      input: 8,
+      output: 3,
+      cacheRead: 0,
+      total: 11,
+      costUsd: 0,
+    });
   });
 
   it("records multiple tool calls in order and ignores tool_execution_end for args", () => {
@@ -90,6 +96,28 @@ describe("RunAccumulator", () => {
       message: { usage: { input: 6, output: 4, cacheRead: 0 } },
     } as any);
     expect(acc.result(0).usage.total).toBe(10);
+  });
+
+  it("sums usage.cost.total (USD) across turns into costUsd", () => {
+    const acc = new RunAccumulator();
+    acc.observe({
+      type: "turn_end",
+      message: { usage: { input: 10, output: 5, cost: { total: 0.0123 } } },
+    } as any);
+    acc.observe({
+      type: "turn_end",
+      message: { usage: { input: 10, output: 5, cost: { total: 0.0123 } } },
+    } as any);
+    expect(acc.result(0).usage.costUsd).toBeCloseTo(0.0246);
+  });
+
+  it("defaults costUsd to 0 when a turn's usage omits cost", () => {
+    const acc = new RunAccumulator();
+    acc.observe({
+      type: "turn_end",
+      message: { usage: { input: 6, output: 4, cacheRead: 0 } },
+    } as any);
+    expect(acc.result(0).usage.costUsd).toBe(0);
   });
 });
 

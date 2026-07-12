@@ -26,7 +26,7 @@ function sandbox() {
 const ok: RunResult = {
   finalText: "the answer",
   toolCalls: [],
-  usage: { input: 1, output: 1, cacheRead: 0, total: 2 },
+  usage: { input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 },
   stopReason: "stop",
   errorMessage: null,
   timedOut: false,

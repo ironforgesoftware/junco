@@ -16,7 +16,7 @@ const flow: PrFlowResult = {
 const qaResult: RunResult = {
   finalText: "The answer.",
   toolCalls: [],
-  usage: { input: 1, output: 2, cacheRead: 0, total: 3 },
+  usage: { input: 1, output: 2, cacheRead: 0, total: 3, costUsd: 0 },
   stopReason: "end_turn",
   errorMessage: null,
   timedOut: false,

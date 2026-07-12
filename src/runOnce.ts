@@ -448,7 +448,7 @@ export async function executeClaimed(
         // (errorMessage drives the failed status + the reporter's failureReason).
         finalText: `Execution crashed: ${reason}`,
         toolCalls: [],
-        usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
         stopReason: null,
         errorMessage: reason,
         timedOut: false,

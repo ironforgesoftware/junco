@@ -72,7 +72,7 @@ function emptyRunResult(errorMessage: string): RunResult {
   return {
     finalText: "",
     toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
     stopReason: null,
     errorMessage,
     timedOut: false,
