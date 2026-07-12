@@ -87,6 +87,10 @@ export interface Config {
   pollIntervalSeconds: number;
   startupPollSeconds: number;
   startupWait: boolean;
+  // Endpoint reachability probe policy (worker.endpointProbe): auto defers to
+  // shouldProbeEndpoint (probe local/inline, skip hosted catalog); always/never
+  // override that rule outright. See probePolicy() in health.ts.
+  endpointProbe: "auto" | "always" | "never";
   // Resilience: transient-failure requeue budget + backoff (worker section).
   maxTransientRetries: number;
   retryBackoffSeconds: number;

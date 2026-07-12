@@ -619,3 +619,25 @@ describe("hosted model config (source / baseUrlExplicit / apiKey / retry)", () =
     expect(cfg.model.retry).toEqual({ maxRetries: 5, baseDelayMs: 500 });
   });
 });
+
+describe("worker.endpointProbe", () => {
+  it("defaults to auto", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/vault" }));
+    expect(cfg.endpointProbe).toBe("auto");
+  });
+
+  it("parses always and never", () => {
+    expect(
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { endpointProbe: "always" } })).endpointProbe,
+    ).toBe("always");
+    expect(
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { endpointProbe: "never" } })).endpointProbe,
+    ).toBe("never");
+  });
+
+  it("rejects an unrecognized value", () => {
+    expect(() =>
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { endpointProbe: "sometimes" } })),
+    ).toThrow();
+  });
+});

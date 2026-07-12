@@ -147,4 +147,15 @@ describe("hosted-provider levers", () => {
     expect(byPath.get("model.apiKey")?.default).toBeUndefined();
     expect(byPath.get("model.baseUrl")?.default).toBeUndefined();
   });
+
+  it("registers worker.endpointProbe as a live enum lever defaulting to auto", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("worker.endpointProbe")).toMatchObject({
+      type: "enum",
+      enumValues: ["auto", "always", "never"],
+      default: "auto",
+      reload: "live",
+      editable: true,
+    });
+  });
 });

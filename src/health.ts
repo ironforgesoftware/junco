@@ -21,6 +21,30 @@ export interface StopFlagLike {
 }
 
 // ---------------------------------------------------------------------------
+// probePolicy
+// ---------------------------------------------------------------------------
+
+/**
+ * Should the endpoint be probed right now?  `worker.endpointProbe` is a
+ * three-way override of shouldProbeEndpoint's catalog-skip heuristic:
+ * "never" always skips, "always" always probes, "auto" (default) defers to
+ * shouldProbeEndpoint (probe local/inline, skip hosted-catalog models).
+ * Shared by endpointReachable, waitForEndpoint, and doctor's own guard so the
+ * policy has exactly one source of truth.
+ */
+export function probePolicy(cfg: Config): boolean {
+  switch (cfg.endpointProbe) {
+    case "never":
+      return false;
+    case "always":
+      return true;
+    case "auto":
+    default:
+      return shouldProbeEndpoint(cfg.model);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // endpointReachable
 // ---------------------------------------------------------------------------
 
@@ -42,7 +66,7 @@ export async function endpointReachable(
   cfg: Config,
   deps?: EndpointReachableDeps,
 ): Promise<boolean> {
-  if (!shouldProbeEndpoint(cfg.model)) return true;
+  if (!probePolicy(cfg)) return true;
 
   const fetchFn = deps?.fetchFn ?? fetch;
   const timeoutMs = deps?.timeoutMs ?? 5000;
@@ -106,8 +130,12 @@ export async function waitForEndpoint(
 ): Promise<void> {
   if (!cfg.startupWait) return;
 
-  if (!shouldProbeEndpoint(cfg.model)) {
-    log.info("hosted provider (catalog) — endpoint startup wait skipped");
+  if (!probePolicy(cfg)) {
+    if (cfg.endpointProbe === "never") {
+      log.info("endpoint probe disabled (worker.endpointProbe=never) — startup wait skipped");
+    } else {
+      log.info("hosted provider (catalog) — endpoint startup wait skipped");
+    }
     return;
   }
 
@@ -134,4 +162,47 @@ export async function waitForEndpoint(
 
     await sleep(cfg.startupPollSeconds, stopFlag);
   }
+}
+
+// ---------------------------------------------------------------------------
+// makeCachedProbe
+// ---------------------------------------------------------------------------
+
+/** TTL-cached, in-flight-deduplicated wrapper around a boolean probe. One
+ * instance is shared by the claim gate, /health, and /ready so the dashboard's
+ * poll cadence can't multiply upstream probe traffic.
+ *
+ * A rejection is treated as a `false` result and cached for the same TTL as a
+ * success — deliberately, so a flaky/unreachable endpoint doesn't turn into a
+ * probe-per-caller storm; the next natural TTL expiry re-checks it. */
+export function makeCachedProbe(
+  probe: () => Promise<boolean>,
+  ttlMs = 10_000,
+  now: () => number = Date.now,
+): () => Promise<boolean> {
+  let cached: boolean | undefined;
+  let cachedAt = -Infinity;
+  let inFlight: Promise<boolean> | undefined;
+
+  return async function cachedProbe(): Promise<boolean> {
+    if (cached !== undefined && now() - cachedAt < ttlMs) {
+      return cached;
+    }
+    if (inFlight) return inFlight;
+
+    inFlight = (async () => {
+      let result: boolean;
+      try {
+        result = await probe();
+      } catch {
+        result = false;
+      }
+      cached = result;
+      cachedAt = now();
+      inFlight = undefined;
+      return result;
+    })();
+
+    return inFlight;
+  };
 }

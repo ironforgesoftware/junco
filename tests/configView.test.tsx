@@ -136,7 +136,7 @@ describe("ConfigView", () => {
     const { lastFrame, stdin } = render(<ConfigView configPath={p} onExit={() => {}} />);
     await until(() => /worker/i.test(lastFrame() ?? ""));
     await press(stdin, RIGHT, RIGHT); // general, model, worker
-    await press(stdin, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN); // ...down to maxConcurrent (min 1)
+    await press(stdin, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN); // ...down to maxConcurrent (min 1)
     await press(stdin, ENTER); // start edit — buffer prefilled "1"
     await press(stdin, BACKSPACE); // clear "1"
     await press(stdin, "0"); // violates min:1

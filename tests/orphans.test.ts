@@ -35,6 +35,7 @@ function makeConfig(): { cfg: Config; root: string } {
     pollIntervalSeconds: 15,
     startupPollSeconds: 30,
     startupWait: true,
+    endpointProbe: "auto",
     maxTransientRetries: 2,
     retryBackoffSeconds: 60,
     maxConcurrent: 1,
