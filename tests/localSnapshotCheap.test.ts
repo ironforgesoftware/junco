@@ -113,6 +113,18 @@ describe("makeLocalCheapFn", () => {
     expect(cheap.outbox.deadOps[0].lastError).toBe("boom");
   });
 
+  it("caches the endpoint probe per factory: two quick ticks → ONE /models probe, two /health", async () => {
+    const cfg = makeCfg(mkdtempSync(join(tmpdir(), "junco-cheap5-")));
+    const urls: string[] = [];
+    const fn = makeLocalCheapFn(cfg, { fetchFn: recordingFetch(urls) });
+    await fn();
+    await fn();
+    // /health is fetched every tick; the /models probe is TTL-cached inside
+    // the factory closure (makeCachedProbe), so the second tick reuses it.
+    expect(urls.filter((u) => u.endsWith("/health"))).toHaveLength(2);
+    expect(urls.filter((u) => u.endsWith("/models"))).toHaveLength(1);
+  });
+
   it("never-throws: a throwing fetchFn yields a renderable snapshot (daemon down, no throw)", async () => {
     const cfg = makeCfg(mkdtempSync(join(tmpdir(), "junco-cheap4-")));
     const boom = (async () => {

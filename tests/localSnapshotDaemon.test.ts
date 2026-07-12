@@ -159,4 +159,30 @@ describe("buildDaemonDetail", () => {
     const d = await buildDaemonDetail(makeCfg(), body, { fetchFn: recordingFetch([], body) });
     expect(d.gate).toBeNull();
   });
+
+  it("back-to-back calls each respect their own fetchFn (no cross-call probe cache)", async () => {
+    // Deps-seam isolation: the endpoint probe must consult THIS call's fetchFn,
+    // never a warm result from a previous call's different fetchFn.
+    const d1 = await buildDaemonDetail(makeCfg(), null, { fetchFn: recordingFetch([], null) });
+    expect(d1.endpointReachable).toBe(true); // /models ok
+    const failingFetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const d2 = await buildDaemonDetail(makeCfg(), null, { fetchFn: failingFetch });
+    expect(d2.endpointReachable).toBe(false); // probe fails → false, not a stale cached true
+  });
+
+  it("an injected reachableFn overrides the direct probe (the cached-probe seam)", async () => {
+    let calls = 0;
+    const reachableFn = async (): Promise<boolean> => {
+      calls++;
+      return false;
+    };
+    const d = await buildDaemonDetail(makeCfg(), null, {
+      fetchFn: recordingFetch([], null), // would say reachable — must not be consulted
+      reachableFn,
+    });
+    expect(d.endpointReachable).toBe(false);
+    expect(calls).toBe(1);
+  });
 });

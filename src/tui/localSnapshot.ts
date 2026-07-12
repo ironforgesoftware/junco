@@ -31,6 +31,11 @@ export interface LocalSnapshotDeps {
   fetchFn?: typeof fetch;
   nowFn?: () => Date;
   gitFn?: (args: string[], cwd: string) => Promise<{ code: number; stdout: string }>;
+  /** buildDaemonDetail's endpoint-reachability probe. Absent → a direct
+   * uncached `endpointReachable(cfg, { fetchFn })` per call (fresh per-call
+   * semantics for tests); makeLocalCheapFn injects its per-factory
+   * makeCachedProbe wrapper here so dashboard polling shares one cache. */
+  reachableFn?: () => Promise<boolean>;
 }
 
 type GitFn = NonNullable<LocalSnapshotDeps["gitFn"]>;
@@ -397,24 +402,13 @@ export async function fetchHealthBody(
 }
 
 // One shared TTL-cached endpoint probe for the whole TUI process (module
-// level, not per-call) — buildDaemonDetail runs on every cheap-tick poll, and
-// without sharing a cache the dashboard would multiply /models probes at the
-// poll cadence. Mirrors the daemon's own claim-gate + /health cache sharing
-// (daemon.ts:471, health.ts:171-208 makeCachedProbe). The wrapped closure
-// reads whatever cfg/deps buildDaemonDetail set immediately before invoking
-// it below — junco's TUI/CLI only ever targets one fixed cfg per process, so
-// this indirection is safe in practice; tests calling buildDaemonDetail with
-// varying fixtures stay sequential (each call is awaited before the next).
-let probeCtx: { cfg: Config; deps: LocalSnapshotDeps } | null = null;
-const cachedEndpointProbe = makeCachedProbe(async (): Promise<boolean> => {
-  if (probeCtx === null) return true;
-  return endpointReachable(probeCtx.cfg, { fetchFn: probeCtx.deps.fetchFn });
-});
-
 /** Compose DaemonDetail from an ALREADY-fetched /health body (no second
  * request) plus an independent inference-endpoint probe (endpointReachable
- * hits /models, health.ts:40 — reachability is independent of the daemon),
- * routed through the module-level `cachedEndpointProbe` above. */
+ * hits /models, health.ts:40 — reachability is independent of the daemon).
+ * The probe goes through `deps.reachableFn` when injected (makeLocalCheapFn
+ * passes its per-factory cached probe); otherwise a direct uncached call —
+ * per-call `fetchFn` injection stays honored, never a warm result from a
+ * previous call's different deps. */
 export async function buildDaemonDetail(
   cfg: Config,
   healthBody: HealthBody | null,
@@ -422,8 +416,10 @@ export async function buildDaemonDetail(
 ): Promise<DaemonDetail> {
   const base = emptyDaemon(cfg);
   try {
-    probeCtx = { cfg, deps };
-    base.endpointReachable = await cachedEndpointProbe();
+    const reachable =
+      deps.reachableFn ??
+      ((): Promise<boolean> => endpointReachable(cfg, { fetchFn: deps.fetchFn }));
+    base.endpointReachable = await reachable();
     if (healthBody === null) return base; // daemon down
     const m = healthBody.metrics;
     const gate: DaemonGateInfo | null =
@@ -544,6 +540,13 @@ export function makeLocalCheapFn(
   cfg: Config,
   deps: LocalSnapshotDeps = {},
 ): (opts?: { section?: LocalSection }) => Promise<LocalCheap> {
+  // One TTL-cached endpoint probe per FACTORY (dashboardCmd constructs this
+  // once per process), so cheap-tick polling can't multiply upstream /models
+  // probes — mirrors the daemon's own shared cache (daemon.ts:471, health.ts
+  // makeCachedProbe). Closure-scoped, NOT module-level: cfg/fetchFn are fixed
+  // at construction, so per-call deps injection elsewhere stays isolated.
+  const cachedReachable =
+    deps.reachableFn ?? makeCachedProbe(() => endpointReachable(cfg, { fetchFn: deps.fetchFn }));
   return async (opts: { section?: LocalSection } = {}): Promise<LocalCheap> => {
     const base: LocalCheap = {
       queue: emptyQueue(cfg),
@@ -585,7 +588,10 @@ export function makeLocalCheapFn(
         };
       }
 
-      const daemon = await buildDaemonDetail(cfg, healthBody, deps);
+      const daemon = await buildDaemonDetail(cfg, healthBody, {
+        ...deps,
+        reachableFn: cachedReachable,
+      });
 
       return { queue, counts, outbox, daemon, error: null };
     } catch (e) {
