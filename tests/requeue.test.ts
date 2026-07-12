@@ -16,7 +16,7 @@ import type { Config, RunResult } from "../src/types.js";
 const res = (over: Partial<RunResult>): RunResult => ({
   finalText: "",
   toolCalls: [],
-  usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+  usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
   stopReason: null,
   errorMessage: null,
   timedOut: false,

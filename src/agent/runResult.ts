@@ -9,7 +9,7 @@ export class RunAccumulator {
    * `allText` so a fence banked before the closing message survives (#67). */
   private completedTexts: string[] = [];
   private toolCalls: ToolCall[] = [];
-  private usage: Usage = { input: 0, output: 0, cacheRead: 0, total: 0 };
+  private usage: Usage = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
   private stopReason: string | null = null;
   private errorMessage: string | null = null;
   private turns = 0;
@@ -51,11 +51,16 @@ export class RunAccumulator {
           // The SDK Usage field is `totalTokens` (the Python worker/fake used the
           // same name); fall back to `total`, then to input+output, for safety.
           const turnTotal = u.totalTokens ?? u.total ?? (u.input ?? 0) + (u.output ?? 0);
+          // The SDK's per-turn Usage carries its own USD figure at `cost.total`
+          // (pi-ai types.d.ts:248-269), computed by calculateCost in models.js
+          // from the model's rate card — sum it rather than deriving our own
+          // pricing table. Absent on fakes/providers that don't report cost.
           this.usage = {
             input: this.usage.input + (u.input ?? 0),
             output: this.usage.output + (u.output ?? 0),
             cacheRead: this.usage.cacheRead + (u.cacheRead ?? 0),
             total: this.usage.total + turnTotal,
+            costUsd: this.usage.costUsd + (u.cost?.total ?? 0),
           };
         }
         if (e.message?.stopReason) this.stopReason = e.message.stopReason;

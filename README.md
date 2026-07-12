@@ -13,8 +13,9 @@ Junco is a daemon that runs on your machine. Label a GitHub issue `junco` and it
 plans the work as an issue comment; approve with a label, and it executes with a
 supervised coding agent in an isolated git worktree and opens the pull request —
 all watched from a fullscreen terminal dashboard. It drives the agent against any
-**OpenAI-compatible inference endpoint** you point it at: your code, your git, and
-your credentials stay in a loop you control. The other door is a folder: Markdown
+**OpenAI-compatible inference endpoint** you point it at — or a hosted provider
+from the embedded catalog. Your code, your git, and your credentials stay in a
+loop you control. The other door is a folder: Markdown
 tickets with a small YAML header, authored by any tool or human — junco is
 harness-agnostic on the dispatch side.
 
@@ -97,7 +98,8 @@ $ junco logs -f
 - **Offline-tolerant** — when GitHub is unreachable, an outbox queues the
   comments, labels, and PR pushes durably and drains itself on reconnect.
 - **Local-first by design** — your machine, your git, your `gh` auth, your choice
-  of inference endpoint. There is no third service in the loop.
+  of inference endpoint. There is no third service in the loop unless you choose
+  one.
 
 ## It audits, you decide what to file
 
@@ -147,9 +149,10 @@ npx @ironforgesoftware/junco   # first run → setup wizard; afterwards → star
 ```
 
 `junco init` walks you through setup in a full-screen guided tour — workspace,
-inference endpoint + model (with live discovery), repo containment, the
-GitHub bridge, and the recommended extras — then creates the queue and
-verifies the result with a flight check. Re-run it anytime to tune an existing
+model setup (an inference endpoint with live discovery, or a hosted provider
+from the built-in catalog), repo containment, the GitHub bridge, and the
+recommended extras — then creates the queue and verifies the result with a
+flight check. Re-run it anytime to tune an existing
 config (it only writes what you change). `junco init --yes` scaffolds
 defaults non-interactively. (Prefer a global install:
 `npm install -g @ironforgesoftware/junco`, then the command is just `junco`.)

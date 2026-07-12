@@ -36,7 +36,7 @@ export const TIPS: Record<TipKey, string> = {
   workspace:
     "This is junco's nest — tickets fly into inbox/, get worked in processing/, and land in done/ or failed/.",
   model:
-    "junco drives a coding agent through this inference endpoint. Any OpenAI-compatible /v1 works.",
+    "junco drives a coding agent through an inference endpoint — any OpenAI-compatible /v1 server, or a hosted provider from the built-in catalog.",
   repoSafety:
     "junco only works in throwaway worktrees and opens pull requests — it never commits to your branches. Folders you list here are the only places a ticket can point it. Leave the list empty to allow any repo path.",
   githubOff:

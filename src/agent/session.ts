@@ -2,11 +2,16 @@ import { mkdirSync, createWriteStream, mkdtempSync, type WriteStream } from "nod
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { Config, RunResult } from "../types.js";
+import type { Config, RunResult, ModelCost } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
 import { GuardManager, type GuardDecision } from "./guardManager.js";
 import { log } from "../logging.js";
-import { splitModelId, resolveModelViaRegistries, type RegistryLike } from "./modelSetup.js";
+import {
+  splitModelId,
+  resolveModelViaRegistries,
+  type RegistryLike,
+  type RegistryOps,
+} from "./modelSetup.js";
 import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
 import {
   selectBackend,
@@ -481,6 +486,125 @@ export async function resolveSandbox(
   return { backend, policy };
 }
 
+/**
+ * Bridge from the SDK's `ModelRegistry` static (create/inMemory, both bound to
+ * an `authStorage`) to `resolveModelViaRegistries`' SDK-free `RegistryOps`
+ * seam. Shared by `makePiSessionFactory`, `getResolvedModelInfo`, and
+ * `listCatalogProviders` so the cast-through-`unknown` bridge — `RegistryLike`
+ * is a structural subset of the real `ModelRegistry`, kept narrow so
+ * `modelSetup.ts` needs no SDK import — lives in exactly one place.
+ */
+function sdkRegistryOps(
+  ModelRegistryStatic: {
+    create(authStorage: unknown, modelsJsonPath?: string): unknown;
+    inMemory(authStorage: unknown): unknown;
+  },
+  authStorage: unknown,
+): RegistryOps {
+  return {
+    fromFile: (p) => ModelRegistryStatic.create(authStorage, p) as unknown as RegistryLike,
+    inMemory: () => ModelRegistryStatic.inMemory(authStorage) as unknown as RegistryLike,
+  };
+}
+
+/** The subset of the SDK's resolved `Model<Api>` fields `getResolvedModelInfo`
+ * surfaces (verified against `dist/core/model-registry.d.ts` re-exported
+ * `Model<Api>` in `@earendil-works/pi-ai/compat`'s `types.d.ts:567-591`: `id`,
+ * `provider`, `baseUrl`, `api`, `cost` all present on every resolved model
+ * regardless of cascade path). */
+interface SdkResolvedModelFields {
+  provider: string;
+  id: string;
+  baseUrl: string;
+  api: string;
+  cost: ModelCost;
+}
+
+export interface ResolvedModelInfo {
+  provider: string;
+  modelId: string;
+  baseUrl: string;
+  api: string;
+  cost: ModelCost;
+  path: "models_json" | "catalog" | "inline";
+}
+
+/**
+ * Resolve a model id through the same models.json → builtin catalog → inline
+ * cascade `makePiSessionFactory` uses (`resolveModelViaRegistries`), and
+ * surface the resolved model's fields — for `doctor` and the config wizard to
+ * validate a model id without constructing a full agent session.
+ *
+ * `modelId`, when given, OVERRIDES `cfg.model.id` (same endpoint/apiKey/source
+ * — mirrors the planner-model override in runOnce.ts:317) so a planner-model
+ * preflight can check the override resolves before a Q&A ticket runs it.
+ *
+ * Throws whatever `resolveModelViaRegistries` throws on a cascade miss (no
+ * models.json match, no catalog match, and no inline apiKey configured) —
+ * callers surface that message as-is (doctor prints it; the wizard rejects
+ * the input).
+ */
+export async function getResolvedModelInfo(
+  cfg: Config,
+  modelId?: string,
+): Promise<ResolvedModelInfo> {
+  const { AuthStorage, ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+
+  const model = modelId !== undefined ? { ...cfg.model, id: modelId } : cfg.model;
+  const effectiveCfg: Config = modelId !== undefined ? { ...cfg, model } : cfg;
+
+  // Ephemeral in-memory auth, exactly like the real factory — never touches
+  // ~/.pi/agent/auth.json. Not required for resolution to succeed (find/
+  // registerProvider don't consult it), but kept for parity with the real
+  // session path in case a future SDK version validates auth during resolve.
+  const authStorage = AuthStorage.inMemory();
+  if (model.apiKey !== null) {
+    authStorage.setRuntimeApiKey(splitModelId(model.id).provider, model.apiKey);
+  }
+
+  const resolved = resolveModelViaRegistries(
+    effectiveCfg,
+    sdkRegistryOps(ModelRegistry, authStorage),
+  );
+  const m = resolved.model as SdkResolvedModelFields;
+  return {
+    provider: m.provider,
+    modelId: m.id,
+    baseUrl: m.baseUrl,
+    api: m.api,
+    cost: m.cost,
+    path: resolved.path,
+  };
+}
+
+export interface CatalogEntry {
+  provider: string;
+  ids: string[];
+}
+
+/**
+ * Enumerate the SDK's built-in hosted-model catalog, grouped by provider — the
+ * COMPLETE list (no filtering/favorites), for the config wizard's provider
+ * picker. `ModelRegistry.inMemory(...)` has no models.json backing it, so
+ * `.getAll()` (built-in + custom, `model-registry.d.ts:52`) returns exactly
+ * the built-in catalog here. Embedded data — no network call.
+ */
+export async function listCatalogProviders(): Promise<CatalogEntry[]> {
+  const { AuthStorage, ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  const models = registry.getAll() as SdkResolvedModelFields[];
+
+  const idsByProvider = new Map<string, string[]>();
+  for (const m of models) {
+    const ids = idsByProvider.get(m.provider);
+    if (ids) ids.push(m.id);
+    else idsByProvider.set(m.provider, [m.id]);
+  }
+  return Array.from(idsByProvider.entries())
+    .map(([provider, ids]) => ({ provider, ids: ids.sort() }))
+    .sort((a, b) => a.provider.localeCompare(b.provider));
+}
+
 export function makePiSessionFactory(
   cfg: Config,
   cwd: string,
@@ -504,10 +628,7 @@ export function makePiSessionFactory(
     // models.json → builtin catalog → inline (see resolveModelViaRegistries).
     const resolvedModel = resolveModelViaRegistries(
       cfg,
-      {
-        fromFile: (p) => ModelRegistry.create(authStorage, p) as unknown as RegistryLike,
-        inMemory: () => ModelRegistry.inMemory(authStorage) as unknown as RegistryLike,
-      },
+      sdkRegistryOps(ModelRegistry, authStorage),
       (msg, meta) => log.warn(msg, meta),
     );
     const model = resolvedModel.model as any;

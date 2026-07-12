@@ -127,6 +127,7 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
     preflight: async () => [{ verdict: "ok", label: "git", detail: "2.44" }],
     discoverModels: async () => ["m-fast"],
     listModelsJson: () => [],
+    listCatalogProviders: async () => [{ provider: "acme", ids: ["m-fast"] }],
     write: (a) => {
       written.push(a);
       return { written: true, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };

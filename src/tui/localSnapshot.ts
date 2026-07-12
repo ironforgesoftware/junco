@@ -20,6 +20,7 @@ import { repoDiscriminator } from "../worktree.js";
 import type { MetricsSnapshot } from "../metrics.js";
 import { endpointReachable, makeCachedProbe } from "../health.js";
 import type { GateStatus } from "../providerGate.js";
+import type { SpendStatus } from "../healthServer.js";
 import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
 import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
@@ -323,6 +324,11 @@ export interface HealthBody {
    * (possibly `null` when no gate is wired); the key is absent entirely on an
    * older daemon build. Optional here so both shapes typecheck. */
   gate?: GateStatus | null;
+  /** Per-day spend (Phase-3 Task 6) — always present on a current daemon
+   * (possibly `null` when no spendStatus is wired); the key is absent
+   * entirely on an older daemon build. Optional here so both shapes
+   * typecheck. */
+  spend?: SpendStatus | null;
 }
 
 /** Trimmed projection of GateStatus for the dashboard: state + reason only —
@@ -333,6 +339,14 @@ export interface HealthBody {
 export interface DaemonGateInfo {
   state: string;
   reason: string | null;
+}
+
+/** Trimmed projection of SpendStatus for the dashboard — currently identical
+ * to the source shape (both fields are rendered), kept as its own type so
+ * DaemonDetail doesn't couple directly to the healthServer transport type. */
+export interface DaemonSpendInfo {
+  todayUsd: number;
+  dailyBudgetUsd: number;
 }
 
 export interface DaemonDetail {
@@ -355,6 +369,9 @@ export interface DaemonDetail {
   /** null when no gate is configured/reported, or on an older daemon whose
    * /health payload never had the field. */
   gate: DaemonGateInfo | null;
+  /** null when no spendStatus is configured/reported, or on an older daemon
+   * whose /health payload never had the field. */
+  spend: DaemonSpendInfo | null;
   error: string | null;
 }
 
@@ -374,6 +391,7 @@ function emptyDaemon(cfg: Config): DaemonDetail {
     currentTickets: [],
     progress: {},
     gate: null,
+    spend: null,
     error: null,
   };
 }
@@ -429,6 +447,13 @@ export async function buildDaemonDetail(
             state: healthBody.gate.state,
             reason: healthBody.gate.reason,
           };
+    const spend: DaemonSpendInfo | null =
+      healthBody.spend == null
+        ? null
+        : {
+            todayUsd: healthBody.spend.todayUsd,
+            dailyBudgetUsd: healthBody.spend.dailyBudgetUsd,
+          };
     const progress: DaemonDetail["progress"] = {};
     for (const [id, v] of Object.entries(m.currentProgress ?? {})) {
       progress[id] = {
@@ -451,6 +476,7 @@ export async function buildDaemonDetail(
       currentTickets: [...(m.currentTickets ?? [])],
       progress,
       gate,
+      spend,
     };
   } catch (e) {
     return { ...base, error: e instanceof Error ? e.message : String(e) };

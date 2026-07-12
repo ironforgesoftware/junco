@@ -606,6 +606,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   planLintBlockOnError: false,
   planLintCheckLabels: false,
   commitLeftoversEnabled: false,
+  dailyBudgetUsd: 0,
   criticEnabled: false,
   criticMaxRetries: 1,
   criticThinking: "minimal",

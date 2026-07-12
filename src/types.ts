@@ -124,6 +124,9 @@ export interface Config {
   // Whether to sweep uncommitted leftovers into a final commit
   // (`worker.commitLeftovers`). Pi-strict default is false (fail-loud).
   commitLeftoversEnabled: boolean;
+  // Daily USD spend cap (`worker.dailyBudgetUsd`); 0 = off, spend ledger never
+  // consulted. See providerGate.ts's budget_exhausted state.
+  dailyBudgetUsd: number;
   // Post-session critic (parity with the Python [critic] section).
   criticEnabled: boolean;
   criticMaxRetries: number;
@@ -217,6 +220,10 @@ export interface Usage {
   output: number;
   cacheRead: number;
   total: number;
+  /** Summed USD across every turn (pi-ai `Usage.cost.total`, computed by
+   * `calculateCost` in models.js from the model's rate card — pi-ai
+   * `types.d.ts:248-269`). 0 when the provider/fake reports no cost. */
+  costUsd: number;
 }
 export interface RunResult {
   finalText: string;

@@ -5,7 +5,7 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { startHealthServer } from "../src/healthServer.js";
-import type { HealthServerHandle } from "../src/healthServer.js";
+import type { HealthServerHandle, SpendStatus } from "../src/healthServer.js";
 import type { MetricsSnapshot } from "../src/metrics.js";
 import type { GateStatus } from "../src/providerGate.js";
 
@@ -19,6 +19,14 @@ function makeGateStatus(overrides: Partial<GateStatus> = {}): GateStatus {
     reason: null,
     since: null,
     until: null,
+    ...overrides,
+  };
+}
+
+function makeSpendStatus(overrides: Partial<SpendStatus> = {}): SpendStatus {
+  return {
+    todayUsd: 1.5,
+    dailyBudgetUsd: 5,
     ...overrides,
   };
 }
@@ -39,6 +47,7 @@ function makeSnapshot(overrides: Partial<MetricsSnapshot> = {}): MetricsSnapshot
     totalTokensIn: 1000,
     totalTokensOut: 2000,
     totalDurationMs: 30000,
+    totalCostUsd: 0,
     lastTaskAt: "2026-05-31T00:00:28.000Z",
     lastTaskStatus: "completed",
     bridgeSweeps: 0,
@@ -373,6 +382,52 @@ describe("healthServer", () => {
       expect(healthResp.status).toBe(200);
       const healthBody = (await healthResp.json()) as { gate: GateStatus | null };
       expect(healthBody.gate).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Spend status (/health) — Phase-3 Task 6
+  // -------------------------------------------------------------------------
+
+  describe("spend status", () => {
+    it("spendStatus present → /health.spend has todayUsd + dailyBudgetUsd", async () => {
+      const spend = makeSpendStatus({ todayUsd: 2.34, dailyBudgetUsd: 10 });
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+        spendStatus: () => spend,
+      });
+
+      const resp = await fetch(`${handle.url}/health`);
+      expect(resp.status).toBe(200);
+      const body = (await resp.json()) as { spend: SpendStatus };
+      expect(body.spend).toEqual({ todayUsd: 2.34, dailyBudgetUsd: 10 });
+    });
+
+    it("no spendStatus option → /health.spend is null", async () => {
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+      });
+
+      const resp = await fetch(`${handle.url}/health`);
+      const body = (await resp.json()) as { spend: SpendStatus | null };
+      expect(body.spend).toBeNull();
+    });
+
+    it("a throwing spendStatus does not 500 — /health.spend falls back to null", async () => {
+      handle = await startHealthServer({
+        port: 0,
+        metrics: makeFakeMetrics(),
+        spendStatus: () => {
+          throw new Error("spend exploded");
+        },
+      });
+
+      const resp = await fetch(`${handle.url}/health`);
+      expect(resp.status).toBe(200);
+      const body = (await resp.json()) as { spend: SpendStatus | null };
+      expect(body.spend).toBeNull();
     });
   });
 

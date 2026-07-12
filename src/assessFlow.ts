@@ -19,6 +19,7 @@ import { statSync, existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 import type { Config, Ticket, RunResult } from "./types.js";
+import type { SpendLedger } from "./spendLedger.js";
 import { queuePaths, expandHome } from "./config.js";
 import { gh, git, runCmd, GitOpError, isNetworkError } from "./git.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
@@ -51,6 +52,11 @@ export interface AssessDeps {
   /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
   onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   nowFn?: () => Date;
+  /** Per-day spend ledger (Phase-3 Task 4), peer of prFlow/runOnce's
+   * RunDeps.spend: the assess agent run's resolved `usage.costUsd` is
+   * recorded here immediately after it completes, mirroring the Q&A/PR-flow
+   * pattern. Optional: absent (CLI one-shot, tests) is a no-op. */
+  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 export interface AssessFlowResult {
@@ -77,7 +83,7 @@ function emptyRunResult(errorMessage: string): RunResult {
   return {
     finalText: "",
     toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
     stopReason: null,
     errorMessage,
     timedOut: false,
@@ -261,6 +267,11 @@ export async function runAssessFlow(
     onGuardDecision: deps.onGuardDecision,
     transcriptPath: cfg.transcriptsEnabled ? transcriptPathFor(cfg.stateDir, ticket.id) : undefined,
   });
+  // Record spend immediately, BEFORE any requeue/finalize branching below —
+  // mirrors runOnce.ts's Q&A wire and prFlow's main-session record: the
+  // dollars were spent regardless of what the ticket does next (Phase-3
+  // Task 3). No-op when deps.spend is absent or costUsd is 0/non-finite.
+  deps.spend?.recordUsd(agentResult.usage.costUsd);
 
   // Transient failure → requeue with backoff (mirror runOnce.ts:243-254). Safe
   // because nothing has been filed yet: a rerun converges through dedup. On a

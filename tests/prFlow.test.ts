@@ -156,6 +156,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
     planLintBlockOnError: true,
     planLintCheckLabels: false,
     commitLeftoversEnabled: false,
+    dailyBudgetUsd: 0,
     healthEnabled: false,
     healthHost: "127.0.0.1",
     healthPort: 8787,
@@ -210,9 +211,9 @@ function ctxFor(cfg: Config, task: Ticket) {
  * Python fake_omp_pr.sh — a real commit so countNewCommits > 0.
  */
 function commitFactory(
-  opts: { commit?: boolean; stopReason?: string; file?: string } = {},
+  opts: { commit?: boolean; stopReason?: string; file?: string; costUsd?: number } = {},
 ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
-  const { commit = true, stopReason = "stop", file = "feature.txt" } = opts;
+  const { commit = true, stopReason = "stop", file = "feature.txt", costUsd } = opts;
   return (_cfg, cwd) => async () => {
     let listener: ((e: any) => void) | null = null;
     return {
@@ -232,7 +233,16 @@ function commitFactory(
         });
         listener?.({
           type: "turn_end",
-          message: { stopReason, usage: { input: 5, output: 5, cacheRead: 0, totalTokens: 10 } },
+          message: {
+            stopReason,
+            usage: {
+              input: 5,
+              output: 5,
+              cacheRead: 0,
+              totalTokens: 10,
+              ...(costUsd !== undefined ? { cost: { total: costUsd } } : {}),
+            },
+          },
         });
         listener?.({ type: "agent_end", messages: [], willRetry: false });
       },
@@ -243,7 +253,7 @@ function commitFactory(
 }
 
 /** A fake critic session that emits a fixed JUNCO_VERIFY verdict line. */
-function criticFactory(verdictLine: string): () => Promise<AgentSessionLike> {
+function criticFactory(verdictLine: string, costUsd?: number): () => Promise<AgentSessionLike> {
   return async () => {
     let listener: ((e: any) => void) | null = null;
     return {
@@ -260,7 +270,13 @@ function criticFactory(verdictLine: string): () => Promise<AgentSessionLike> {
           type: "turn_end",
           message: {
             stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              totalTokens: 2,
+              ...(costUsd !== undefined ? { cost: { total: costUsd } } : {}),
+            },
           },
         });
         listener?.({ type: "agent_end", messages: [], willRetry: false });
@@ -537,6 +553,93 @@ exit 1
     expect(text).toContain("pushed: true");
     // Two commits: the initial + the corrective re-dispatch.
     expect(text).toContain("commit_count: 2");
+  });
+
+  it("critic corrective: footer usage/cost sum ALL four sessions (main + critic x2 + corrective)", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "critic-cost.md",
+      `---\nid: critic-cost\nrepo: ${h.work}\n---\n# Feature needing a fix\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    // Main run + corrective turn each report input=5/output=5/total=10/cost=0.01
+    // (same commitFactory drives both, per prFlow's sessionFactoryFor reuse).
+    // Critic pass 1 + critic pass 2 each report input=1/output=1/total=2/
+    // cost=0.0023 (same criticFactory drives both — MISSING on every call).
+    // Sum: in=12 out=12 total=24 cost=0.01*2 + 0.0023*2 = 0.0246.
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.01 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: MISSING the X bit", 0.0023),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: completed");
+    expect(text).toContain("commit_count: 2");
+    expect(text).toContain("**Tokens:** in=12 out=12 cost=$0.0246");
+  });
+
+  it("critic PASS on the first pass (no corrective): footer usage = main + critic pass 1 only", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "critic-pass.md",
+      `---\nid: critic-pass\nrepo: ${h.work}\n---\n# Feature\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: PASS"),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: completed");
+    // Main (in=5/out=5) + one critic pass (in=1/out=1); no corrective ran.
+    expect(text).toContain("**Tokens:** in=6 out=6 cost=$0.0000");
+  });
+
+  it("PR body Run-metadata Tokens line matches the aggregate (main + critic x2 + corrective), not just the main run", async () => {
+    // Capture the PR body gh received, same technique as the offline-base-fetch
+    // test above — a shim that copies whatever --body-file points at.
+    const capture = join(h.root, "pr-body-tokens-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/456"; exit 0`;
+    const cfg = makeConfig(h, {
+      ghBin: ghShim("gh-tokens-capture.sh", prCreate),
+      criticEnabled: true,
+      criticMaxRetries: 1,
+      verifyEnabled: false,
+    });
+    const { task, path } = makeTicket(
+      h,
+      "critic-cost-body.md",
+      `---\nid: critic-cost-body\nrepo: ${h.work}\n---\n# Feature needing a fix\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    // Same aggregation as "footer usage/cost sum ALL four sessions" above:
+    // main + corrective (in=5/out=5 each) + critic pass 1 + pass 2 (in=1/out=1
+    // each) → in=12 out=12 total=24.
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.01 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: MISSING the X bit", 0.0023),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+
+    expect(flow.status).toBe("completed");
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("- Tokens: in=12 · out=12 · total=24");
   });
 
   // -------------------------------------------------------------------------
@@ -1690,6 +1793,159 @@ describe("provider gate wiring (Phase 2 Task 6)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Spend ledger wiring (Phase 3 Task 4)
+// ---------------------------------------------------------------------------
+
+/** Records recordUsd calls; a plain object satisfying
+ * `Pick<SpendLedger, "recordUsd">` — mirrors fakeGate above (no need for the
+ * real persisted-file ledger in these wiring tests). */
+function fakeSpend(): { calls: number[]; recordUsd: (usd: number) => void } {
+  const calls: number[] = [];
+  return {
+    calls,
+    recordUsd(usd: number) {
+      calls.push(usd);
+    },
+  };
+}
+
+/** A session whose prompt() ends the turn with a non-null errorMessage AND a
+ * nonzero cost, no commit — a zero-commit hard-error that requeues via the
+ * BUDGETED path (isTransientFailure: errorMessage !== null), used to prove
+ * spend is recorded even though the ticket never reaches finalizePr. */
+function costedTransientFactory(
+  costUsd: number,
+  errorMessage: string,
+): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+  return (_cfg, _cwd) => async () => {
+    let listener: ((e: any) => void) | null = null;
+    return {
+      subscribe(l: (e: any) => void) {
+        listener = l;
+        return () => {};
+      },
+      async prompt() {
+        listener?.({
+          type: "turn_end",
+          message: {
+            stopReason: "error",
+            errorMessage,
+            usage: { input: 3, output: 4, cacheRead: 0, totalTokens: 7, cost: { total: costUsd } },
+          },
+        });
+        listener?.({ type: "agent_end", messages: [], willRetry: false });
+      },
+      dispose() {},
+      abort: async () => {},
+    };
+  };
+}
+
+describe("spend ledger wiring (Phase 3 Task 4)", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = setup();
+  });
+  afterEach(() => {
+    rmSync(h.root, { recursive: true, force: true });
+  });
+
+  it("PR ticket with critic + corrective records once per session (main, critic x2, corrective)", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "spend-critic-cost.md",
+      `---\nid: spend-critic-cost\nrepo: ${h.work}\n---\n# Feature needing a fix\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const spend = fakeSpend();
+
+    // Main run + corrective turn each report cost=0.01; critic pass 1 + pass 2
+    // each report cost=0.0023 (same fakes drive both, per prFlow's factory
+    // reuse — mirrors the existing footer-sum test above).
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.01 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: MISSING the X bit", 0.0023),
+      spend,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    // Four sessions ran: main, critic pass 1, corrective, critic pass 2 — each
+    // records its OWN costUsd as that session completes (not the aggregated
+    // footer total), in the order the sessions actually ran.
+    expect(spend.calls).toHaveLength(4);
+    expect(spend.calls[0]).toBeCloseTo(0.01); // main
+    expect(spend.calls[1]).toBeCloseTo(0.0023); // critic pass 1
+    expect(spend.calls[2]).toBeCloseTo(0.01); // corrective
+    expect(spend.calls[3]).toBeCloseTo(0.0023); // critic pass 2 (post-retry)
+  });
+
+  it("critic PASS on the first pass (no corrective): records exactly main + one critic pass", async () => {
+    const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1, verifyEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "spend-critic-pass.md",
+      `---\nid: spend-critic-pass\nrepo: ${h.work}\n---\n# Feature\n\nImplement X.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const spend = fakeSpend();
+
+    const { dst } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.02 }),
+      criticSessionFactory: criticFactory("JUNCO_VERIFY: PASS", 0.001),
+      spend,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(dst.startsWith(h.done)).toBe(true);
+    expect(spend.calls).toHaveLength(2);
+    expect(spend.calls[0]).toBeCloseTo(0.02);
+    expect(spend.calls[1]).toBeCloseTo(0.001);
+  });
+
+  it("a run that ends in a REQUEUE is still recorded — the main session's spend is counted before the requeue exit", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "spend-requeue.md",
+      `---\nid: spend-requeue\nrepo: ${h.work}\n---\n# Flaky\n\nDo a thing.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const spend = fakeSpend();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: costedTransientFactory(0.03, "agent gave up"),
+      spend,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    const content = readFileSync(flow.dst, "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted requeue path, not the gate's
+    expect(spend.calls).toHaveLength(1);
+    expect(spend.calls[0]).toBeCloseTo(0.03);
+  });
+
+  it("no spend dep in deps → recording is a no-op; the run completes exactly as it would without the ledger", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "spend-none.md",
+      `---\nid: spend-none\nrepo: ${h.work}\n---\n# Add a feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true, costUsd: 0.05 }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fork PR flow (Task 10) — push to a non-origin remote, open the PR against
 // upstream with a cross-repo --head, and keep the outbox silent on the upstream
 // issue for external tickets.
@@ -1921,7 +2177,7 @@ describe("buildPrBody github provenance", () => {
   const okResult = {
     finalText: "done.",
     toolCalls: [],
-    usage: { input: 1, output: 1, cacheRead: 0, total: 2 },
+    usage: { input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 },
     stopReason: "stop",
     errorMessage: null,
     timedOut: false,

@@ -30,6 +30,7 @@ import {
 import { log } from "./logging.js";
 import { metrics } from "./metrics.js";
 import { ProviderGate } from "./providerGate.js";
+import { makeSpendLedger, type SpendLedger } from "./spendLedger.js";
 import {
   startHealthServer,
   type HealthServerHandle,
@@ -234,8 +235,22 @@ export interface MainLoopDeps {
    * machine. */
   gate?: Pick<
     ProviderGate,
-    "claimBlockReason" | "status" | "reportFailure" | "reportSuccess" | "notBeforeIso"
+    | "claimBlockReason"
+    | "status"
+    | "reportFailure"
+    | "reportSuccess"
+    | "notBeforeIso"
+    | "reportBudgetExhausted"
   >;
+  /** Per-day spend ledger (Phase-3 Task 4), constructed next to the gate:
+   * absent → mainLoop builds its own via `makeSpendLedger(cfg.stateDir)`.
+   * `cfg` here is always the FROZEN startup config (stateDir is
+   * restart-kind — see overlayFrozenRestartFields), exactly like the gate and
+   * the health server bind. Threaded into both the serial default runOnceFn
+   * and the scheduler's default executeFn (peer of `gate`). `todayUsd`/
+   * `nextMidnightMs` (Phase-3 Task 5) are consulted by gatedReady itself,
+   * ahead of the claim gate check — see gatedReady below. */
+  spend?: Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">;
 }
 
 /**
@@ -280,6 +295,10 @@ export interface SchedulerDeps {
    * scheduler behavior exactly. See MainLoopDeps.gate for the full picture;
    * mainLoop passes its own gate through here. */
   gate?: Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">;
+  /** Per-day spend ledger (Task 4), threaded into the default executeFn's
+   * executeClaimed call (peer of `gate`) — absent preserves pre-ledger
+   * scheduler behavior exactly. mainLoop passes its own ledger through here. */
+  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 /**
@@ -306,6 +325,7 @@ export async function runScheduler(
         abortSignal: stopFlag.forceSignal,
         reporter: deps.reporter,
         gate: deps.gate,
+        spend: deps.spend,
       }));
   const sleep = deps.sleep ?? sleepInterruptible;
   // Live-reload seam (Task 6): falls back to the `cfg` this scheduler was
@@ -463,6 +483,11 @@ export async function mainLoop(
   // report into it below, the health server surfaces its status, and (via
   // cli.ts) a successful config hot-reload clears a stale latch.
   const gate = deps.gate ?? makeProviderGate(cfg);
+  // Per-day spend ledger (Phase-3 Task 4): every session runOnce/executeClaimed
+  // runs records its costUsd here. `cfg` is the frozen startup config, not
+  // activeCfg() — stateDir is restart-kind (same freeze as the gate above and
+  // the health server's host/port bind; see overlayFrozenRestartFields).
+  const spend = deps.spend ?? makeSpendLedger(cfg.stateDir);
   // Single TTL-cached probe shared by the claim gate and the health server so
   // neither multiplies upstream endpoint-probe traffic. Wraps the *call* —
   // activeCfg() is read fresh on every uncached probe — so a hot-reloaded
@@ -470,6 +495,23 @@ export async function mainLoop(
   // invalidation is needed.
   const cachedReachable = makeCachedProbe(() => endpointReachable(activeCfg()));
   const gatedReady = async (): Promise<boolean> => {
+    // Daily spend cap (Phase-3 Task 5): checked BEFORE the gate/probe, on
+    // EVERY poll, using the LIVE config — dailyBudgetUsd is a live lever, so
+    // an operator raising it hot-reloads immediately. 0 disables the check
+    // entirely and never touches the spend ledger (spy-verified in tests).
+    // Reporting into the gate here (rather than just returning false
+    // directly) gives the budget the same claimBlockReason()/status()/
+    // /health surfacing as every other gate state, with no new surface code.
+    const liveCfg = activeCfg();
+    if (liveCfg.dailyBudgetUsd > 0) {
+      const todaySpent = spend.todayUsd();
+      if (todaySpent >= liveCfg.dailyBudgetUsd) {
+        gate.reportBudgetExhausted(
+          spend.nextMidnightMs(),
+          `daily budget $${liveCfg.dailyBudgetUsd.toFixed(2)} reached ($${todaySpent.toFixed(2)} spent)`,
+        );
+      }
+    }
     const block = gate.claimBlockReason();
     if (block) {
       log.warn("claiming paused by provider gate", { reason: block });
@@ -489,6 +531,7 @@ export async function mainLoop(
         abortSignal: stopFlag.forceSignal,
         reporter,
         gate,
+        spend,
       }));
   const recoverOrphansFn = deps.recoverOrphansFn ?? recoverOrphans;
   const pruneFn = deps.pruneFn ?? ((r: string) => pruneStaleWorktrees(r));
@@ -524,6 +567,10 @@ export async function mainLoop(
         metrics,
         readinessProbe: cachedReachable,
         gateStatus: () => gate.status(),
+        spendStatus: () => ({
+          todayUsd: spend.todayUsd(),
+          dailyBudgetUsd: activeCfg().dailyBudgetUsd,
+        }),
       });
       log.info("health endpoint listening", { url: health.url });
     } catch (e) {
@@ -549,6 +596,7 @@ export async function mainLoop(
         },
         reporter,
         gate,
+        spend,
       });
     } else {
       let idleAnnounced = false;

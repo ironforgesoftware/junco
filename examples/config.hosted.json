@@ -1,0 +1,75 @@
+{
+  "vaultRoot": "~/junco-vault",
+  "juncoSubdir": "Junco",
+  "tools": ["bash", "read", "write", "edit", "grep", "find"],
+  "worker": {
+    "commitLeftovers": false,
+    "defaultTimeoutMinutes": 30,
+    "pollIntervalSeconds": 15,
+    "startupPollSeconds": 30,
+    "startupWait": true,
+    "maxTransientRetries": 2,
+    "retryBackoffSeconds": 60,
+    "maxConcurrent": 1,
+    "dailyBudgetUsd": 5
+  },
+  "model": {
+    "id": "anthropic/claude-sonnet-4-5"
+  },
+  "supervisor": {
+    "enabled": true,
+    "budgetPerKind": 1,
+    "escalationWindowTurns": 3,
+    "outputBudgetPerTurn": 12000,
+    "outputBudgetPostCommit": 24000
+  },
+  "git": {
+    "gitBin": "git",
+    "ghBin": "gh",
+    "defaultBaseBranch": "main",
+    "branchPrefix": "junco/",
+    "worktreeRoot": "~/junco/worktrees",
+    "removeWorktreeOnSuccess": true,
+    "allowedRepoRoots": []
+  },
+  "pr": {
+    "draftByDefault": true,
+    "defaultLabels": []
+  },
+  "verify": {
+    "enabled": true,
+    "commandTimeout": 60,
+    "blockOnFail": false
+  },
+  "sandbox": {
+    "enabled": true,
+    "backend": "auto",
+    "network": "deny",
+    "extraDenyRead": [],
+    "extraAllowWrite": []
+  },
+  "critic": {
+    "enabled": true,
+    "maxRetries": 1,
+    "thinking": "minimal"
+  },
+  "planLint": {
+    "enabled": true,
+    "blockOnError": true,
+    "checkLabels": true
+  },
+  "observability": {
+    "healthEnabled": true,
+    "healthHost": "127.0.0.1",
+    "healthPort": 8787,
+    "logLevel": "info",
+    "stateDir": "~/.local/state/junco",
+    "logToFile": true,
+    "transcripts": true
+  },
+  "assess": {
+    "maxIssuesPerRun": 20,
+    "minSeverity": "low",
+    "npmBin": "npm"
+  }
+}

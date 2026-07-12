@@ -21,12 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catalog models.
 - **Provider gate:** infrastructure failures from the inference endpoint now
   pause ticket claiming instead of quietly retrying against a provider that
-  will keep saying no. Six states — `ok`, `auth_error`, `quota_exhausted`,
-  `misconfig`, `rate_limited`, `outage_backoff` — are latched or backed off
-  based on the failure text (auth/quota/model-not-found/rate-limit/outage);
-  any successful session, a config hot-reload apply, or a daemon restart
-  clears the gate, and `rate_limited`/`outage_backoff` also expire on their
-  own once their backoff window passes.
+  will keep saying no. Seven states — `ok`, `auth_error`, `quota_exhausted`,
+  `misconfig`, `rate_limited`, `outage_backoff`, `budget_exhausted` — are
+  latched or backed off based on the failure text (auth/quota/model-not-found/
+  rate-limit/outage/daily-budget); any successful session, a config hot-reload
+  apply, or a daemon restart clears the gate, and `rate_limited`/
+  `outage_backoff` also expire on their own once their backoff window passes
+  (`budget_exhausted` is the one exception — see below).
 - `worker.endpointProbe` (`"auto"` / `"always"` / `"never"`) controls whether
   the inference endpoint is probed for reachability, overriding the
   catalog-skip default; probe results are cached for ~10 seconds and shared
@@ -37,6 +38,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The interactive dashboard (`junco dashboard`) shows the provider gate's
   state as a colored dot on the daemon panel (red for a latch, yellow for a
   backoff) plus a reason line when the gate isn't `ok`.
+- **Cost accounting.** Every completed session (main run, critic pass,
+  corrective re-dispatch) records its resolved USD cost to a per-day spend
+  ledger. A Q&A/assess/analyze ticket's `## Result` footer gains a
+  `cost=$X.XXXX` field alongside elapsed time and tokens; `/health` gains a
+  `spend: {todayUsd, dailyBudgetUsd} | null` field; the dashboard's daemon
+  panel prints a `spend $X.XX today` line (`/ $Y.YY budget` once a cap is
+  configured).
+- `worker.dailyBudgetUsd` (default `0`, disabled): once today's spend reaches
+  the cap, the provider gate enters `budget_exhausted` and pauses ticket
+  claiming until local midnight or an operator's config hot-reload raises the
+  cap — unlike every other gate state, a successful session does NOT clear
+  it, since finishing a session doesn't un-spend money.
+- `junco doctor` runs a hosted-aware preflight for a catalog-resolved model:
+  echoes the resolved provider and base URL, reports the api-key source (a
+  `$ENV_VAR` reference, a config literal, or the provider's own environment
+  variable), and — when a key is configured — runs a live per-provider auth
+  check against the resolved endpoint.
+- `junco init` gains a "hosted provider from the built-in catalog"
+  model-source option alongside the inline-endpoint and models.json paths:
+  pick a provider then a model straight from the embedded catalog, then the
+  same shared api-key step (a blank key defers to the provider's own
+  environment variable at runtime).
 
 ### Changed
 

@@ -90,6 +90,7 @@ const LOCAL_CHEAP: LocalCheap = {
     currentTickets: [],
     progress: {},
     gate: null,
+    spend: null,
     error: null,
   },
   error: null,

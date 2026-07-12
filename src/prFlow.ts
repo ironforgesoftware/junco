@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import type { Config, Ticket, RunResult } from "./types.js";
+import type { Config, Ticket, RunResult, Usage } from "./types.js";
 import type { RepoContext } from "./repoContext.js";
 import { isAmend } from "./repoContext.js";
 import { GitOpError, git, gh, isNetworkError } from "./git.js";
@@ -33,6 +33,7 @@ import { lintTicket, LabelCache } from "./planLint.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
 import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
+import type { SpendLedger } from "./spendLedger.js";
 import { runSpecVerification, type VerificationResult } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
@@ -159,13 +160,32 @@ function requeuedResult(dst: string, result: RunResult): PrFlowResult {
 // back-to-back tickets to the same repo from repeating the `gh label list` call.
 const LABEL_CACHE = new LabelCache();
 
+/** Sum Usage fields across every session a ticket ran (main worker turn +
+ * critic pass(es) + an optional corrective re-dispatch) — the ticket's
+ * recorded cost/tokens should reflect the whole ticket, not just the main
+ * worker turn (Phase-3 cost accounting). `extras` is empty when post-session
+ * review was skipped (guard-abort/timeout), in which case this is a no-op
+ * copy of `base`. */
+function sumUsage(base: Usage, extras: Usage[]): Usage {
+  return extras.reduce(
+    (acc, u) => ({
+      input: acc.input + u.input,
+      output: acc.output + u.output,
+      cacheRead: acc.cacheRead + u.cacheRead,
+      total: acc.total + u.total,
+      costUsd: acc.costUsd + u.costUsd,
+    }),
+    base,
+  );
+}
+
 /** Port of worker.py `_empty_run_result`: a synthetic RunResult for phases that
  * fail before (or instead of) an agent run. errorMessage carries the reason. */
 function emptyRunResult(phaseError: string): RunResult {
   return {
     finalText: "",
     toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
     stopReason: null,
     errorMessage: phaseError,
     timedOut: false,
@@ -326,6 +346,14 @@ export interface PrFlowDeps {
    * in runOnce.ts). Optional: absent (CLI one-shot, tests) preserves pre-gate
    * behavior exactly. */
   gate?: Pick<ProviderGate, "reportFailure" | "reportSuccess" | "notBeforeIso">;
+  /** Per-day spend ledger (Phase-3 Task 4), peer of RunDeps.spend in
+   * runOnce.ts: EVERY session this ticket runs — main worker turn, each
+   * critic pass, the optional corrective re-dispatch — records its OWN
+   * `usage.costUsd` here immediately as that session completes, independent
+   * of the ticket's eventual disposition (a requeue exit still counts the
+   * main run's spend). Optional: absent preserves pre-ledger behavior
+   * exactly (recordUsd is never called). */
+  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 export async function runPrFlow(
@@ -465,6 +493,11 @@ export async function runPrFlow(
     onGuardDecision: deps.onGuardDecision,
     transcriptPath,
   });
+  // Record spend immediately, BEFORE any requeue/fail branching below: this
+  // session's dollars were spent regardless of what the ticket does next
+  // (Phase-3 Task 4 — the ledger is the honest record, unlike the ticket's
+  // own footer accounting which never sees a requeued attempt again).
+  deps.spend?.recordUsd(result.usage.costUsd);
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
@@ -528,7 +561,7 @@ export async function runPrFlow(
   // connectivity returns. `pushed` records whether the branch already landed.
   const queueOfflinePr = (pushed: boolean): string => {
     const title = derivePrTitle(ctx, task);
-    const bodyText = buildPrBody(task, ctx, prOutcome, result);
+    const bodyText = buildPrBody(task, ctx, prOutcome, finalResult);
     const status = computePrStatus(result, prOutcome, null);
     return enqueueOp(cfg, "prflow", {
       kind: "pr",
@@ -556,6 +589,15 @@ export async function runPrFlow(
       prUrl: null,
     });
   };
+
+  // Aggregated usage across every session this ticket ran (main + critic pass
+  // 1 + corrective + critic pass 2, whichever executed) — computed in Phase 9
+  // below and read by every finalizePr call from Phase 10 onward (catch
+  // blocks included, hence hoisted above the try). Defaults to the main run
+  // alone; reassigned once Phase 9 knows what else ran. Requeue exits
+  // (requeuedResult, above and below) are untouched — they never read
+  // result.usage, and aggregating THEIR usage is Task 4's ledger's job.
+  let finalResult: RunResult = result;
 
   // --- Phases 6-13: commits, push, PR. Any GitOpError → preserve + failed. ---
   try {
@@ -667,7 +709,11 @@ export async function runPrFlow(
 
     // Phase 9: post-session review (skip on a guard-aborted or timed-out
     // session — the work is by definition incomplete; review would mis-flag).
+    // extraUsages collects every session run in this phase (critic pass 1,
+    // corrective, critic pass 2 — whichever executed) so their usage can be
+    // summed into the main run's for the ticket's recorded cost/tokens.
     const skipPostSessionReview = result.abortedByGuard || result.timedOut;
+    const extraUsages: Usage[] = [];
     if (skipPostSessionReview) {
       // Record the skip as metadata (parity with worker.py PrOutcome.critic =
       // CriticResult(status="skipped", ...)). The buildPrBody banner only fires
@@ -676,6 +722,7 @@ export async function runPrFlow(
         status: "skipped",
         findings: result.timedOut ? "timed-out session" : "aborted-by-repetition session",
         rawOutput: "",
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
       };
     }
     if (!skipPostSessionReview) {
@@ -692,6 +739,8 @@ export async function runPrFlow(
         criticSessionFactory: deps.criticSessionFactory,
       });
       prOutcome.critic = critic;
+      extraUsages.push(critic.usage);
+      deps.spend?.recordUsd(critic.usage.costUsd);
       log.info(
         `critic: ${critic.status}${critic.findings ? ` (${critic.findings.slice(0, 120)})` : ""}`,
       );
@@ -727,6 +776,8 @@ export async function runPrFlow(
               })
             : undefined,
         });
+        extraUsages.push(corrective.usage);
+        deps.spend?.recordUsd(corrective.usage.costUsd);
         prOutcome.criticRetriesUsed = 1;
         log.info(`critic retry: agent abortedByGuard=${corrective.abortedByGuard}`);
         // Re-evaluate commits + critic + verification after the retry.
@@ -736,12 +787,18 @@ export async function runPrFlow(
           criticSessionFactory: deps.criticSessionFactory,
         });
         prOutcome.critic = criticAfter;
+        extraUsages.push(criticAfter.usage);
+        deps.spend?.recordUsd(criticAfter.usage.costUsd);
         log.info(
           `critic (post-retry): ${criticAfter.status}${criticAfter.findings ? ` (${criticAfter.findings.slice(0, 120)})` : ""}`,
         );
         prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
       }
     }
+
+    // extraUsages is empty when post-session review was skipped (guard-abort
+    // / timeout), in which case this is a no-op copy of `result`.
+    finalResult = { ...result, usage: sumUsage(result.usage, extraUsages) };
 
     // Phase 10: verification gate.
     const verification = prOutcome.verification;
@@ -753,9 +810,9 @@ export async function runPrFlow(
       log.warn(`${phaseError} — preserving worktree, skipping push/PR`);
       prOutcome.worktreePreserved = true;
       return flowResult(
-        finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+        finalizePr(claimedPath, finalResult, prOutcome, { dirs, phaseError }),
         prOutcome,
-        result,
+        finalResult,
         phaseError,
       );
     }
@@ -786,7 +843,11 @@ export async function runPrFlow(
       prOutcome.worktreePreserved = true;
       const opId = queueOfflinePr(false /* pushed */);
       log.info(`github unreachable — PR queued to outbox (${opId})`);
-      return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
+      return flowResult(
+        finalizePr(claimedPath, finalResult, prOutcome, { dirs }),
+        prOutcome,
+        finalResult,
+      );
     }
     if (isOffline(e) && isAmend(ctx)) {
       // Offline amend: only the push is unknown; the PR URL is already known, so
@@ -806,15 +867,19 @@ export async function runPrFlow(
       prOutcome.worktreePreserved = true;
       prOutcome.prUrl = amendTarget?.prUrl ?? null;
       log.info("github unreachable — amend push queued to outbox");
-      return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
+      return flowResult(
+        finalizePr(claimedPath, finalResult, prOutcome, { dirs }),
+        prOutcome,
+        finalResult,
+      );
     }
     const phaseError = `push/commit failed: ${e.message}`;
     prOutcome.worktreePreserved = true;
     log.error(phaseError);
     return flowResult(
-      finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+      finalizePr(claimedPath, finalResult, prOutcome, { dirs, phaseError }),
       prOutcome,
-      result,
+      finalResult,
       phaseError,
     );
   }
@@ -828,7 +893,7 @@ export async function runPrFlow(
   } else {
     try {
       const title = derivePrTitle(ctx, task);
-      const bodyText = buildPrBody(task, ctx, prOutcome, result);
+      const bodyText = buildPrBody(task, ctx, prOutcome, finalResult);
       const bodyFile = writePrBodyTempfile(bodyText);
       try {
         prOutcome.prUrl = await openPullRequest(
@@ -857,7 +922,11 @@ export async function runPrFlow(
         prOutcome.prQueued = true;
         prOutcome.worktreePreserved = true;
         log.info(`github unreachable — PR queued to outbox (${opId})`);
-        return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
+        return flowResult(
+          finalizePr(claimedPath, finalResult, prOutcome, { dirs }),
+          prOutcome,
+          finalResult,
+        );
       }
       // Idempotent create (issue #29): the branch is already pushed, so a PR may
       // already exist for this head (a prior attempt opened it, or a race).
@@ -895,9 +964,9 @@ export async function runPrFlow(
         log.error(phaseError);
         if (cfg.removeWorktreeOnSuccess) await cleanupWorktree(cfg, ctx, wtPath);
         return flowResult(
-          finalizePr(claimedPath, result, prOutcome, { dirs, phaseError }),
+          finalizePr(claimedPath, finalResult, prOutcome, { dirs, phaseError }),
           prOutcome,
-          result,
+          finalResult,
           phaseError,
         );
       }
@@ -916,7 +985,11 @@ export async function runPrFlow(
   // (aborted_partial/timeout_partial) — that's not a clean inference-side
   // success (mirrors the Q&A gate wiring in runOnce.ts, which excludes both).
   if (deps.gate && !result.abortedByGuard && !result.timedOut) deps.gate.reportSuccess();
-  return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
+  return flowResult(
+    finalizePr(claimedPath, finalResult, prOutcome, { dirs }),
+    prOutcome,
+    finalResult,
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -181,6 +181,10 @@ export const ConfigSchema = z.object({
       retryBackoffSeconds: z.number().min(0).default(60),
       maxConcurrent: z.number().int().min(1).default(1),
       commitLeftovers: z.boolean().default(false),
+      // Daily USD spend cap (Phase-3 Task 5): 0 = off (spend ledger never
+      // consulted). Once today's spend reaches this, the provider gate enters
+      // budget_exhausted until local midnight — see providerGate.ts.
+      dailyBudgetUsd: z.number().min(0).default(0),
     })
     .default({}),
   supervisor: z
@@ -374,6 +378,7 @@ export function assembleConfig(
     retryBackoffSeconds: d.worker.retryBackoffSeconds,
     maxConcurrent: d.worker.maxConcurrent,
     commitLeftoversEnabled: d.worker.commitLeftovers,
+    dailyBudgetUsd: d.worker.dailyBudgetUsd,
     supervisorEnabled: d.supervisor.enabled,
     supervisorBudgetPerKind: d.supervisor.budgetPerKind,
     supervisorEscalationWindow: d.supervisor.escalationWindowTurns,

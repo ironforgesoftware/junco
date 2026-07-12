@@ -69,6 +69,7 @@ function cfg(root: string): Config {
     planLintBlockOnError: true,
     planLintCheckLabels: true,
     commitLeftoversEnabled: false,
+    dailyBudgetUsd: 0,
     healthEnabled: false,
     healthHost: "127.0.0.1",
     healthPort: 8787,
@@ -142,8 +143,11 @@ function ticketContent(repo: string, extra = ""): string {
   return `---\nid: assess-1\nrepo: ${JSON.stringify(repo)}\n${extra}---\n# Assess ${repo}\nscan for vulns\n`;
 }
 
-/** A scriptable AgentSessionLike that emits `finalText` as one text delta. */
-function fakeSession(finalText: string) {
+/** A scriptable AgentSessionLike that emits `finalText` as one text delta.
+ * `costUsd` (default 0) lands in the turn's usage.cost.total — runResult.ts
+ * folds that into RunResult.usage.costUsd, which is what a `deps.spend` wire
+ * records (Phase-3 Task 3). */
+function fakeSession(finalText: string, costUsd = 0) {
   return async () => ({
     subscribe(l: (e: any) => void) {
       queueMicrotask(() => {
@@ -155,7 +159,7 @@ function fakeSession(finalText: string) {
           type: "turn_end",
           message: {
             stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2, cost: { total: costUsd } },
           },
         });
         l({ type: "agent_end", messages: [], willRetry: false });
@@ -754,5 +758,47 @@ describe("runAssessFlow", () => {
     expect(listPending(cfg(root))).toHaveLength(0);
     expect(gh.calls.some((a) => a[0] === "issue" && a[1] === "create")).toBe(false);
     expect(readdirSync(join(j, "failed"))).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Spend ledger wiring (Phase 3 Task 3 — mirrors the Q&A/prFlow pattern)
+  // -------------------------------------------------------------------------
+
+  it("records the agent session's resolved cost via deps.spend, right after the agent run", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+    const gh = ghDedupEmpty();
+    const calls: number[] = [];
+    const spend = { recordUsd: (usd: number) => calls.push(usd) };
+
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: () => fakeSession("no findings", 0.0042),
+      spend,
+    });
+
+    expect(r.status).toBe("completed");
+    expect(calls).toEqual([0.0042]);
+  });
+
+  it("deps.spend absent is a no-op — no throw, same result as without it", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+    const gh = ghDedupEmpty();
+
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: () => fakeSession("no findings", 0.0042),
+    });
+
+    expect(r.status).toBe("completed");
   });
 });

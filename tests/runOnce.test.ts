@@ -21,6 +21,7 @@ import type { AnalyzeFlowResult } from "../src/analyzeFlow.js";
 import { listPending } from "../src/assessReview.js";
 import { draftCount } from "../src/commentReview.js";
 import { makeGithubReporter } from "../src/githubReport.js";
+import { makeSpendLedger } from "../src/spendLedger.js";
 
 function cfg(root: string): Config {
   return {
@@ -76,6 +77,7 @@ function cfg(root: string): Config {
     planLintBlockOnError: true,
     planLintCheckLabels: true,
     commitLeftoversEnabled: false,
+    dailyBudgetUsd: 0,
     healthEnabled: false,
     healthHost: "127.0.0.1",
     healthPort: 8787,
@@ -473,6 +475,179 @@ function fakeGate(notBefore = "2099-01-01T00:00:00.000Z") {
     },
   };
 }
+
+/** Records recordUsd calls; a plain object satisfying
+ * `Pick<SpendLedger, "recordUsd">` — mirrors fakeGate above (no need to pull
+ * in the real persisted-file ledger for wiring tests). */
+function fakeSpend(): { calls: number[]; recordUsd: (usd: number) => void } {
+  const calls: number[] = [];
+  return {
+    calls,
+    recordUsd(usd: number) {
+      calls.push(usd);
+    },
+  };
+}
+
+/** A Q&A session that emits ONE turn_end carrying a cost, then finishes
+ * cleanly (stopReason "stop", no errorMessage) — the happy-path costed run. */
+function costedFactory(costUsd: number) {
+  return () => async () => {
+    let listener: ((e: any) => void) | null = null;
+    return {
+      subscribe(l: (e: any) => void) {
+        listener = l;
+        queueMicrotask(() => {
+          listener?.({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "reply!" },
+          });
+          listener?.({
+            type: "turn_end",
+            message: {
+              stopReason: "stop",
+              usage: {
+                input: 3,
+                output: 4,
+                cacheRead: 0,
+                totalTokens: 7,
+                cost: { total: costUsd },
+              },
+            },
+          });
+          listener?.({ type: "agent_end", messages: [], willRetry: false });
+        });
+        return () => {};
+      },
+      async prompt() {
+        await new Promise((r) => setTimeout(r, 1));
+      },
+      dispose() {},
+      abort: async () => {},
+    };
+  };
+}
+
+/** A Q&A session that emits ONE turn_end carrying BOTH a cost and a
+ * non-null errorMessage (stopReason "error") — costUsd > 0 but the run is
+ * transient (isTransientFailure: errorMessage !== null) and requeues. */
+function costedTransientFactory(costUsd: number, errorMessage: string) {
+  return () => async () => {
+    let listener: ((e: any) => void) | null = null;
+    return {
+      subscribe(l: (e: any) => void) {
+        listener = l;
+        queueMicrotask(() => {
+          listener?.({
+            type: "turn_end",
+            message: {
+              stopReason: "error",
+              errorMessage,
+              usage: {
+                input: 3,
+                output: 4,
+                cacheRead: 0,
+                totalTokens: 7,
+                cost: { total: costUsd },
+              },
+            },
+          });
+          listener?.({ type: "agent_end", messages: [], willRetry: false });
+        });
+        return () => {};
+      },
+      async prompt() {
+        await new Promise((r) => setTimeout(r, 1));
+      },
+      dispose() {},
+      abort: async () => {},
+    };
+  };
+}
+
+describe("spend ledger wiring (Phase 3 Task 4)", () => {
+  it("a completed Q&A run records once with the run's costUsd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const spend = fakeSpend();
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: costedFactory(0.0456),
+      spend,
+    });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "done"))).toHaveLength(1);
+    expect(spend.calls).toHaveLength(1);
+    expect(spend.calls[0]).toBeCloseTo(0.0456);
+  });
+
+  it("a run that ends in a REQUEUE is still recorded — the ledger counts money spent regardless of the ticket's disposition", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const spend = fakeSpend();
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: costedTransientFactory(0.0789, "agent gave up"),
+      spend,
+    });
+    expect(handled).toBe(true);
+    // Requeued (budgeted path), not failed/done — pin the requeue explicitly.
+    expect(readdirSync(join(j, "done"))).toHaveLength(0);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    expect(readFileSync(join(j, "inbox", inbox[0]), "utf8")).toMatch(/retry_count: 1/);
+    // ...yet the session's spend was still recorded.
+    expect(spend.calls).toHaveLength(1);
+    expect(spend.calls[0]).toBeCloseTo(0.0789);
+  });
+
+  it("no spend dep in deps → recording is a no-op; the run completes exactly as it would without the ledger", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+
+    // A costed session, but `spend` is absent from deps — must not throw, and
+    // the ticket must finalize exactly as the pre-ledger behavior did.
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: costedFactory(0.01) });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "done"))).toHaveLength(1);
+  });
+
+  it("a fake session reporting costUsd 0 records nothing on disk (recordUsd's own zero-guard, not a special case here)", async () => {
+    // Uses the REAL makeSpendLedger rather than the plain fakeSpend() spy:
+    // runOnce/executeClaimed call `recordUsd(costUsd)` UNCONDITIONALLY (no
+    // zero-check of their own — recordUsd's guard is the ledger's job, per
+    // the brief), so this pins that a zero-cost fake session (fakeFactory's
+    // turn_end carries no `cost` field, so costUsd defaults to 0) still
+    // leaves the persisted ledger untouched.
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const stateDir = join(root, "state");
+    const spend = makeSpendLedger(stateDir);
+
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: () => fakeFactory(), spend });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "done"))).toHaveLength(1);
+    expect(spend.todayUsd()).toBe(0);
+    expect(existsSync(join(stateDir, "spend.json"))).toBe(false);
+  });
+});
 
 describe("provider gate wiring (Phase 2 Task 5)", () => {
   it("gate-class Q&A failure (401 auth) requeues WITHOUT consuming the retry budget and reports to the gate", async () => {
@@ -1166,7 +1341,7 @@ describe("assess routing", () => {
     return {
       finalText,
       toolCalls: [],
-      usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
       stopReason: "stop",
       errorMessage: null,
       timedOut: false,
@@ -1392,7 +1567,7 @@ describe("analyze routing", () => {
     return {
       finalText,
       toolCalls: [],
-      usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
       stopReason: "stop",
       errorMessage: null,
       timedOut: false,

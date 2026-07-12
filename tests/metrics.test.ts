@@ -51,6 +51,7 @@ describe("RunMetrics", () => {
       expect(s.totalTokensIn).toBe(0);
       expect(s.totalTokensOut).toBe(0);
       expect(s.totalDurationMs).toBe(0);
+      expect(s.totalCostUsd).toBe(0);
       expect(s.lastTaskAt).toBeNull();
       expect(s.lastTaskStatus).toBeNull();
     });
@@ -148,6 +149,16 @@ describe("RunMetrics", () => {
       expect(s.lastTaskStatus).toBe("completed");
       expect(s.lastTaskAt).toBe(new Date(BASE_MS).toISOString());
     });
+
+    it("costUsd is optional — callers that omit it leave totalCostUsd untouched", () => {
+      m.recordTask("completed", { input: 100, output: 200 }, 1500);
+      expect(m.snapshot().totalCostUsd).toBe(0);
+    });
+
+    it("records costUsd into totalCostUsd when the caller reports one", () => {
+      m.recordTask("completed", { input: 100, output: 200, costUsd: 0.0123 }, 1500);
+      expect(m.snapshot().totalCostUsd).toBeCloseTo(0.0123, 4);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -206,6 +217,13 @@ describe("RunMetrics", () => {
       expect(s.totalDurationMs).toBe(1500);
     });
 
+    it("accumulates totalCostUsd across multiple recordTask calls, mixing reported and omitted costUsd", () => {
+      m.recordTask("completed", { input: 100, output: 200, costUsd: 0.01 }, 1000);
+      m.recordTask("failed", { input: 50, output: 75 }, 500); // no costUsd — adds 0
+      m.recordTask("completed", { input: 10, output: 10, costUsd: 0.0146 }, 200);
+      expect(m.snapshot().totalCostUsd).toBeCloseTo(0.0246, 4);
+    });
+
     it("accumulates tasksByStatus buckets correctly", () => {
       m.recordTask("completed", { input: 1, output: 1 }, 100);
       m.recordTask("completed", { input: 1, output: 1 }, 100);
@@ -245,7 +263,7 @@ describe("RunMetrics", () => {
       m.markStarted();
       m.recordPoll();
       m.setCurrentTicket("task-x");
-      m.recordTask("completed", { input: 100, output: 200 }, 1500);
+      m.recordTask("completed", { input: 100, output: 200, costUsd: 0.05 }, 1500);
       m.reset();
       const s = m.snapshot();
       expect(s.startedAt).toBeNull();
@@ -260,6 +278,7 @@ describe("RunMetrics", () => {
       expect(s.totalTokensIn).toBe(0);
       expect(s.totalTokensOut).toBe(0);
       expect(s.totalDurationMs).toBe(0);
+      expect(s.totalCostUsd).toBe(0);
       expect(s.lastTaskAt).toBeNull();
       expect(s.lastTaskStatus).toBeNull();
     });

@@ -20,6 +20,7 @@ import { statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 import type { Config, Ticket, RunResult } from "./types.js";
+import type { SpendLedger } from "./spendLedger.js";
 import { queuePaths, expandHome } from "./config.js";
 import { git, GitOpError } from "./git.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
@@ -49,6 +50,11 @@ export interface AnalyzeDeps {
   /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
   onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   nowFn?: () => Date;
+  /** Per-day spend ledger (Phase-3 Task 4), peer of prFlow/runOnce's
+   * RunDeps.spend: the analyze agent run's resolved `usage.costUsd` is
+   * recorded here immediately after it completes, mirroring the Q&A/PR-flow
+   * pattern. Optional: absent (CLI one-shot, tests) is a no-op. */
+  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 export interface AnalyzeFlowResult {
@@ -72,7 +78,7 @@ function emptyRunResult(errorMessage: string): RunResult {
   return {
     finalText: "",
     toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
     stopReason: null,
     errorMessage,
     timedOut: false,
@@ -216,6 +222,12 @@ export async function runAnalyzeFlow(
     onGuardDecision: deps.onGuardDecision,
     transcriptPath: cfg.transcriptsEnabled ? transcriptPathFor(cfg.stateDir, ticket.id) : undefined,
   });
+  // Record spend immediately, BEFORE any requeue/finalize branching below —
+  // mirrors runOnce.ts's Q&A wire, prFlow's main-session record, and
+  // assessFlow's Phase-3 Task 4 wire: the dollars were spent regardless of
+  // what the ticket does next. No-op when deps.spend is absent or costUsd is
+  // 0/non-finite.
+  deps.spend?.recordUsd(agentResult.usage.costUsd);
 
   // --- Phase 4: Transient failure → requeue with backoff (mirror
   // assessFlow.ts:271-290). Safe because nothing is parked yet: a rerun

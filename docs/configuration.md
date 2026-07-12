@@ -51,6 +51,18 @@ A provider-prefixed id that is catalog-eligible but NOT actually present in the 
 
 With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog and the key comes from `ANTHROPIC_API_KEY` in the daemon environment.
 
+## Daily spend cap
+
+`worker.dailyBudgetUsd` (default `0`, disabled) caps total USD spend per local calendar day, tallied from every completed session's actual resolved cost (main run, critic pass, and any corrective re-dispatch). Once today's spend reaches the cap, the provider gate enters `budget_exhausted` and pauses new ticket claims until local midnight, or until an operator raises the cap via a config hot-reload — see [Operations § Provider gate](operations.md#provider-gate) for the full gate-state table and the `/health` spend field.
+
+```json
+{
+  "worker": {
+    "dailyBudgetUsd": 5
+  }
+}
+```
+
 ## The full reference
 
 The full, always-current annotated reference is `junco config list` — every lever with its default, type, and one-line explanation:

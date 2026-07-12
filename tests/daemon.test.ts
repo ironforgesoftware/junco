@@ -17,8 +17,9 @@ import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.j
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import { makeConfigHolder } from "../src/configWatcher.js";
-import type { GateStatus } from "../src/providerGate.js";
+import { ProviderGate, type GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
+import { makeSpendLedger } from "../src/spendLedger.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -28,6 +29,26 @@ import {
   overlayFrozenRestartFields,
   type MainLoopDeps,
 } from "../src/daemon.js";
+
+// Phase-3 Task 4: intercept runOnce/executeClaimed exactly as daemon.ts sees
+// them (both are genuine cross-module imports from runOnce.js, so Vitest's
+// module registry can redirect them — see the "spend ledger wiring" describe
+// below). Each box defaults to a PASSTHROUGH to the real implementation
+// (wired up inside the factory below), so every OTHER test in this file that
+// never touches these boxes is completely unaffected; only the spend-wiring
+// tests swap `.current` to a spy for the duration of one test.
+const runOnceBox = vi.hoisted(() => ({ current: null as unknown as (...a: any[]) => any }));
+const executeClaimedBox = vi.hoisted(() => ({ current: null as unknown as (...a: any[]) => any }));
+vi.mock("../src/runOnce.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runOnce.js")>();
+  runOnceBox.current = actual.runOnce;
+  executeClaimedBox.current = actual.executeClaimed;
+  return {
+    ...actual,
+    runOnce: (...args: unknown[]) => runOnceBox.current(...args),
+    executeClaimed: (...args: unknown[]) => executeClaimedBox.current(...args),
+  };
+});
 
 /** A fake health-server handle whose close() is a spy — never binds a port. */
 function makeFakeHealthHandle(): HealthServerHandle {
@@ -48,6 +69,7 @@ function fakeGate(blockReason: string | null): {
   reportFailure: (cls: ProviderFailureClass, reason: string) => void;
   reportSuccess: () => void;
   notBeforeIso: () => string;
+  reportBudgetExhausted: (untilMs: number, reason: string) => void;
 } {
   return {
     claimBlockReason: () => blockReason,
@@ -60,6 +82,34 @@ function fakeGate(blockReason: string | null): {
     reportFailure: () => {},
     reportSuccess: () => {},
     notBeforeIso: () => "2099-01-01T00:00:00.000Z",
+    reportBudgetExhausted: () => {},
+  };
+}
+
+/** Minimal fake spend ledger (Phase-3 Task 4): a plain object satisfying
+ * `Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">` — same
+ * shape-only pattern as fakeGate, no need to pull in the real persisted-file
+ * ledger for wiring tests. `todayUsd` defaults to 0 (under any budget) so
+ * existing callers that don't care about the budget gate (Phase-3 Task 5) are
+ * unaffected. */
+function fakeSpend(todayUsd = 0): {
+  calls: number[];
+  recordUsd: (usd: number) => void;
+  todayUsd: () => number;
+  nextMidnightMs: () => number;
+} {
+  const calls: number[] = [];
+  return {
+    calls,
+    recordUsd(usd: number) {
+      calls.push(usd);
+    },
+    todayUsd: () => todayUsd,
+    // An hour in the future by REAL wall-clock time — safe against gates
+    // built with the default (unfaked) `now: () => Date.now()`, which would
+    // otherwise auto-expire a just-latched budget_exhausted state instantly
+    // if this returned a fixed past instant like 0.
+    nextMidnightMs: () => Date.now() + 3_600_000,
   };
 }
 
@@ -97,6 +147,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     maxTransientRetries: 2,
     retryBackoffSeconds: 60,
     maxConcurrent: 1,
+    dailyBudgetUsd: 0,
     supervisorEnabled: false,
     supervisorBudgetPerKind: 1,
     supervisorEscalationWindow: 3,
@@ -183,6 +234,9 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // Never blocks by default — most tests don't care about the gate at all;
     // override with fakeGate(reason) to exercise blocked-claim behavior.
     gate: fakeGate(null),
+    // Most tests don't care about spend at all; override with fakeSpend() (or
+    // `undefined` to exercise mainLoop's own default-ledger construction).
+    spend: fakeSpend(),
     ...overrides,
   };
   return { deps };
@@ -701,6 +755,348 @@ describe("mainLoop — provider gate wiring", () => {
     expect(typeof arg.readinessProbe).toBe("function");
     expect(typeof arg.gateStatus).toBe("function");
     expect(arg.gateStatus!()).toEqual(gate.status());
+  });
+
+  it("wires the health server's spendStatus to the ledger + live dailyBudgetUsd (Phase-3 Task 6)", async () => {
+    const cfg = makeConfig({ healthEnabled: true, dailyBudgetUsd: 7.5 });
+    const stop = new StopFlag();
+    const handle = makeFakeHealthHandle();
+    const startHealthServerFn = vi.fn(async (_opts: HealthServerOpts) => handle);
+    const spend = fakeSpend(2.25);
+    const { deps } = makeDeps({
+      startHealthServerFn,
+      spend,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    const arg = startHealthServerFn.mock.calls[0]![0]!;
+    expect(typeof arg.spendStatus).toBe("function");
+    expect(arg.spendStatus!()).toEqual({ todayUsd: 2.25, dailyBudgetUsd: 7.5 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — daily budget gate wiring (Phase 3 Task 5)
+//
+// gatedReady is an internal closure (not exported), so — same technique as
+// the spend-ledger-wiring block below — these tests leave runOnceFn
+// undefined (mainLoop builds its own default wrapping the REAL runOnce with
+// `readyFn: gatedReady`) and intercept runOnceBox.current to capture the
+// `readyFn` daemon.ts actually constructed. Calling that captured readyFn
+// directly exercises the real budget-check + gate wiring without needing a
+// real agent session to drive an actual claim through to completion.
+// ---------------------------------------------------------------------------
+
+describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
+  it("dailyBudgetUsd = 0 never consults the spend ledger", async () => {
+    const cfg = makeConfig({ dailyBudgetUsd: 0 });
+    const stop = new StopFlag();
+    const spend = {
+      recordUsd: vi.fn(),
+      todayUsd: vi.fn(() => 999),
+      nextMidnightMs: vi.fn(() => 0),
+    };
+    let captured: { readyFn?: () => Promise<boolean> } | undefined;
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(
+      async (_c: Config, runDeps: { readyFn?: () => Promise<boolean> }) => {
+        captured = runDeps;
+        return false;
+      },
+    );
+    try {
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        spend,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured?.readyFn).toBeDefined();
+      await captured!.readyFn!();
+      expect(spend.todayUsd).not.toHaveBeenCalled();
+    } finally {
+      runOnceBox.current = realRunOnce;
+    }
+  });
+
+  it("dailyBudgetUsd exceeded blocks claiming via the DEFAULT runOnceFn, with the budget reason logged", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-budget-serial-"));
+      const j = join(root, "Junco");
+      for (const d of ["inbox", "processing", "done", "failed"]) {
+        mkdirSync(join(j, d), { recursive: true });
+      }
+      writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+      const cfg = makeConfig({ vaultRoot: root, dailyBudgetUsd: 3 });
+      const stop = new StopFlag();
+      // A real gate (not the static fakeGate) so reportBudgetExhausted
+      // actually latches state that claimBlockReason() then observes.
+      const gate = new ProviderGate({ retryBackoffSeconds: 60 });
+      const spend = fakeSpend(5); // 5.00 spent, cap is 3.00
+      const { deps } = makeDeps({
+        // Leave runOnceFn undefined so mainLoop builds its own default, which
+        // is exactly the wiring under test (readyFn: gatedReady, gate, spend).
+        runOnceFn: undefined,
+        gate,
+        spend,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      // The ticket was never claimed — still sitting in inbox, never moved to
+      // processing/.
+      expect(readdirSync(join(j, "inbox"))).toHaveLength(1);
+      expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+      const warned = warnSpy.mock.calls.some(
+        (c) => String(c[0]) === "claiming paused by provider gate",
+      );
+      expect(warned).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("blocks claiming with a real ProviderGate + SpendLedger once exceeded, and resumes once BOTH the gate's until and the ledger's calendar day roll past midnight", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-budget-real-"));
+    const stateDir = join(root, "state");
+    const cfg = makeConfig({ vaultRoot: root, stateDir, dailyBudgetUsd: 3 });
+    const stop = new StopFlag();
+
+    // Single shared, mutable clock driving BOTH the gate's auto-expiry and
+    // the ledger's local-calendar-day rollover — exactly like production,
+    // where both default to the same Date.now().
+    let t = new Date(2026, 0, 1, 12, 0, 0, 0).getTime(); // noon, Jan 1
+    const spend = makeSpendLedger(stateDir, { now: () => t });
+    spend.recordUsd(5); // over the 3.00 cap
+    const gate = new ProviderGate({ retryBackoffSeconds: 60, now: () => t });
+
+    let captured: { readyFn?: () => Promise<boolean> } | undefined;
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(
+      async (_c: Config, runDeps: { readyFn?: () => Promise<boolean> }) => {
+        captured = runDeps;
+        return false;
+      },
+    );
+    try {
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        gate,
+        spend,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+      expect(captured?.readyFn).toBeDefined();
+
+      // Poll while still over budget: the gate latches to budget_exhausted
+      // and claiming is blocked.
+      await captured!.readyFn!();
+      expect(gate.status().state).toBe("budget_exhausted");
+      expect(gate.claimBlockReason()).not.toBeNull();
+      // The cap is formatted with .toFixed(2), matching the spent amount's
+      // formatting — "$3" (not "$3.00") would misleadingly imply the cap is
+      // less precisely tracked than the spend it's being compared against.
+      expect(gate.status().reason).toBe("daily budget $3.00 reached ($5.00 spent)");
+
+      // Advance the shared clock past midnight: the ledger's calendar day
+      // rolls over to 0 spent AND the gate's own `until` (next local
+      // midnight) auto-expires — both driven by the same clock.
+      t = new Date(2026, 0, 2, 0, 0, 1, 0).getTime();
+      await captured!.readyFn!();
+      expect(gate.status().state).toBe("ok");
+      expect(gate.claimBlockReason()).toBeNull();
+    } finally {
+      runOnceBox.current = realRunOnce;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — spend ledger wiring (Phase 3 Task 4)
+//
+// There is no sessionFactoryFor seam at the daemon layer (MainLoopDeps/
+// SchedulerDeps only expose abortSignal/reporter/gate/spend to the default
+// runOnceFn/executeFn closures), so a real agent session can't be driven
+// through mainLoop the way runOnce.test.ts/prFlow.test.ts exercise recordUsd
+// end-to-end. Instead these tests intercept runOnce/executeClaimed (the
+// runOnceBox/executeClaimedBox passthrough boxes declared at the top of this
+// file) to inspect the deps object daemon.ts actually constructs — proving
+// both the DEFAULT ledger's construction (absent deps.spend, built from
+// cfg.stateDir) and its threading into both the serial and scheduler paths.
+// ---------------------------------------------------------------------------
+
+describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
+  // Each test below swaps runOnceBox.current/executeClaimedBox.current to a
+  // spy for its own duration and restores the REAL implementation in a
+  // `finally` — the boxes must stay on the real passthrough for every other
+  // test in this file (see the vi.mock factory at the top).
+
+  it("serial mode: absent deps.spend → mainLoop builds a REAL makeSpendLedger(cfg.stateDir) and threads it into the DEFAULT runOnceFn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-serial-"));
+    const stateDir = join(root, "state");
+    const cfg = makeConfig({ vaultRoot: root, stateDir });
+    const stop = new StopFlag();
+    const captured: unknown[] = [];
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(async (_c: Config, runDeps: unknown) => {
+      captured.push(runDeps);
+      return false; // no work claimed — never touches the fs beyond this
+    });
+    try {
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        spend: undefined,
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured).toHaveLength(1);
+      const passedSpend = (captured[0] as { spend?: { recordUsd: (usd: number) => void } }).spend;
+      expect(passedSpend).toBeDefined();
+      expect(typeof passedSpend?.recordUsd).toBe("function");
+      // Prove it's a genuinely WORKING makeSpendLedger(cfg.stateDir) instance
+      // (not a stub) — record through it and read the persisted file back.
+      passedSpend!.recordUsd(1.5);
+      const ledger = JSON.parse(readFileSync(join(stateDir, "spend.json"), "utf8")) as {
+        usd: number;
+      };
+      expect(ledger.usd).toBeCloseTo(1.5);
+    } finally {
+      runOnceBox.current = realRunOnce;
+    }
+  });
+
+  it("scheduler mode (max_concurrent>1): absent deps.spend → mainLoop builds a REAL ledger and threads it into the DEFAULT executeFn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-sched-"));
+    const j = join(root, "Junco");
+    for (const d of ["inbox", "processing", "done", "failed"]) {
+      mkdirSync(join(j, d), { recursive: true });
+    }
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const stateDir = join(root, "state");
+    const cfg = makeConfig({
+      vaultRoot: root,
+      stateDir,
+      maxConcurrent: 2,
+      pollIntervalSeconds: 0.001,
+    });
+    const stop = new StopFlag();
+    const captured: unknown[] = [];
+    const realExecuteClaimed = executeClaimedBox.current;
+    executeClaimedBox.current = vi.fn(async (_c: Config, _w: ClaimedWork, execDeps: unknown) => {
+      captured.push(execDeps);
+      stop.requestStop();
+    });
+    try {
+      const { deps } = makeDeps({
+        // Leave claimFn/executeFn undefined so runScheduler builds its own
+        // defaults (claimNextTask claims the real ticket above; the default
+        // executeFn is exactly the wiring under test).
+        claimFn: undefined,
+        executeFn: undefined,
+        spend: undefined,
+        sleep: vi.fn(async () => {}),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured).toHaveLength(1);
+      const passedSpend = (captured[0] as { spend?: { recordUsd: (usd: number) => void } }).spend;
+      expect(passedSpend).toBeDefined();
+      expect(typeof passedSpend?.recordUsd).toBe("function");
+      passedSpend!.recordUsd(2.25);
+      const ledger = JSON.parse(readFileSync(join(stateDir, "spend.json"), "utf8")) as {
+        usd: number;
+      };
+      expect(ledger.usd).toBeCloseTo(2.25);
+    } finally {
+      executeClaimedBox.current = realExecuteClaimed;
+    }
+  });
+
+  it("threads an explicitly-provided spend ledger through unchanged (no default construction) in both modes", async () => {
+    const spend = fakeSpend();
+
+    // Serial mode.
+    {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-explicit-serial-"));
+      const cfg = makeConfig({ vaultRoot: root, stateDir: join(root, "state") });
+      const stop = new StopFlag();
+      const captured: unknown[] = [];
+      const realRunOnce = runOnceBox.current;
+      runOnceBox.current = vi.fn(async (_c: Config, runDeps: unknown) => {
+        captured.push(runDeps);
+        return false;
+      });
+      try {
+        const { deps } = makeDeps({
+          runOnceFn: undefined,
+          spend,
+          sleep: vi.fn(async () => {
+            stop.requestStop();
+          }),
+        });
+        await mainLoop(cfg, stop, {}, deps);
+        expect((captured[0] as { spend?: unknown }).spend).toBe(spend);
+      } finally {
+        runOnceBox.current = realRunOnce;
+      }
+    }
+
+    // Scheduler mode.
+    {
+      const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-explicit-sched-"));
+      const j = join(root, "Junco");
+      for (const d of ["inbox", "processing", "done", "failed"]) {
+        mkdirSync(join(j, d), { recursive: true });
+      }
+      writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+      const cfg = makeConfig({
+        vaultRoot: root,
+        stateDir: join(root, "state"),
+        maxConcurrent: 2,
+        pollIntervalSeconds: 0.001,
+      });
+      const stop = new StopFlag();
+      const captured: unknown[] = [];
+      const realExecuteClaimed = executeClaimedBox.current;
+      executeClaimedBox.current = vi.fn(async (_c: Config, _w: ClaimedWork, execDeps: unknown) => {
+        captured.push(execDeps);
+        stop.requestStop();
+      });
+      try {
+        const { deps } = makeDeps({
+          claimFn: undefined,
+          executeFn: undefined,
+          spend,
+          sleep: vi.fn(async () => {}),
+        });
+        await mainLoop(cfg, stop, {}, deps);
+        expect((captured[0] as { spend?: unknown }).spend).toBe(spend);
+      } finally {
+        executeClaimedBox.current = realExecuteClaimed;
+      }
+    }
   });
 });
 

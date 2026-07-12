@@ -38,6 +38,7 @@ import {
 import type { WizardIO, WizardOutcome } from "./wizard/io.js";
 import { greetingName, preflightChecks, flightChecks, type DetectDeps } from "./wizard/detect.js";
 import { fetchModels, parseModelsJson } from "./wizard/models.js";
+import { listCatalogProviders, type CatalogEntry } from "./agent/session.js";
 import { NEXT_STEPS } from "./wizard/tips.js";
 
 export interface WizardDeps {
@@ -48,6 +49,7 @@ export interface WizardDeps {
   detectDeps?: DetectDeps;
   fetchModelsFn?: typeof fetchModels;
   parseModelsJsonFn?: typeof parseModelsJson;
+  listCatalogProvidersFn?: () => Promise<CatalogEntry[]>;
   writeFileFn?: (path: string, content: string) => void;
   renameFn?: (from: string, to: string) => void;
   /** Best-effort cleanup of the PID-suffixed temp file when renameFn throws
@@ -177,6 +179,7 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
     preflight: () => preflightChecks(deps.detectDeps),
     discoverModels: (baseUrl, apiKey) => (deps.fetchModelsFn ?? fetchModels)(baseUrl, apiKey),
     listModelsJson: (p) => (deps.parseModelsJsonFn ?? parseModelsJson)(expandHome(p)),
+    listCatalogProviders: () => (deps.listCatalogProvidersFn ?? listCatalogProviders)(),
     write: (a: WizardAnswers) => {
       let written = false;
       let changes: AnswerDiff[] = [];

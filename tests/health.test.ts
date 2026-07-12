@@ -72,6 +72,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     planLintBlockOnError: true,
     planLintCheckLabels: true,
     commitLeftoversEnabled: false,
+    dailyBudgetUsd: 0,
     healthEnabled: false,
     healthHost: "127.0.0.1",
     healthPort: 8787,

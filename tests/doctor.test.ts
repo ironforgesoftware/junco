@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import type { Config } from "../src/types.js";
+import type { ResolvedModelInfo } from "../src/agent/session.js";
 
 const okConfig = {
   model: { id: "local/m", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "k", modelsJson: null },
@@ -49,6 +50,19 @@ function hostedModel() {
   };
 }
 
+/** A resolveInfoFn success value for a confirmed catalog hit. */
+function catalogInfo(over: Partial<ResolvedModelInfo> = {}): ResolvedModelInfo {
+  return {
+    provider: "anthropic",
+    modelId: "claude-x",
+    baseUrl: "https://api.anthropic.com",
+    api: "anthropic-messages",
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    path: "catalog",
+    ...over,
+  };
+}
+
 function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
   return {
     loadConfigFn: () => okConfig,
@@ -78,15 +92,24 @@ describe("runDoctor", () => {
     expect(lines.join("")).toMatch(/NOT ready/);
   });
 
-  it("skips the endpoint probe for hosted catalog configs with an ok note", async () => {
+  it("skips the old reachability probe for hosted catalog configs — resolution echo instead", async () => {
     const lines: string[] = [];
-    const cfg = { ...okConfig, model: hostedModel() } as unknown as Config;
+    const cfg = {
+      ...okConfig,
+      model: { ...hostedModel(), apiKey: "sk-ant-test" },
+    } as unknown as Config;
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => cfg,
+        resolveInfoFn: async () => catalogInfo(),
+        fetchFn: async () => new Response(null, { status: 200 }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/inference endpoint.*catalog.*probe skipped/i);
+    expect(lines.join("\n")).not.toMatch(/inference endpoint/i);
+    expect(lines.join("\n")).toMatch(/model — anthropic\/claude-x resolves via catalog/i);
   });
 
   it("reports probe-disabled (not catalog-eligible) when worker.endpointProbe=never on a non-catalog model", async () => {
@@ -299,6 +322,327 @@ describe("runDoctor", () => {
       }),
     );
     expect(lines.join("")).not.toMatch(/health bind/);
+  });
+});
+
+describe("runDoctor hosted-aware preflight", () => {
+  /** A hosted config with an apiKey set (auth-check tests need a real key to
+   * send, unlike the resolution/skip tests above). */
+  function hostedCfg(over: { model?: Partial<ReturnType<typeof hostedModel>> } = {}): Config {
+    return {
+      ...okConfig,
+      model: { ...hostedModel(), apiKey: "sk-ant-test", ...over.model },
+    } as unknown as Config;
+  }
+
+  it("a cascade throw on resolution → fail with the error text", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => {
+          throw new Error("no catalog match for anthropic/claude-x");
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toMatch(/✗ model — no catalog match for anthropic\/claude-x/);
+  });
+
+  it("key source: config literal", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => "sk-ant-literal",
+        fetchFn: async () => ({ ok: true, status: 200 }) as Response,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(/✓ key source — config literal \(model\.apiKey\)/);
+  });
+
+  it("key source: $VAR reference resolves", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => "$MY_ANTHROPIC_KEY",
+        fetchFn: async () => ({ ok: true, status: 200 }) as Response,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(
+      /✓ key source — \$MY_ANTHROPIC_KEY \(resolved from the environment\)/,
+    );
+  });
+
+  it("key source: provider env var name present (apiKey unset in config)", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg({ model: { ...hostedModel(), apiKey: null } }),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => undefined,
+        env: { ANTHROPIC_API_KEY: "present-in-env" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(/✓ key source — ANTHROPIC_API_KEY present in the environment/);
+    // apiKey is null → the auth check has nothing to send, so it notes that
+    // instead of silently skipping.
+    expect(lines.join("\n")).toMatch(/⚠ auth — no key configured/);
+  });
+
+  it("key source: none — warns for a non-local provider with the generic env-var name", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg({ model: { ...hostedModel(), apiKey: null } }),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => undefined,
+        env: {},
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(
+      /⚠ key source — no key configured — the SDK will typically look for ANTHROPIC_API_KEY-style env vars at request time/,
+    );
+  });
+
+  it("auth check: 200 → ok, and sends the anthropic-messages free route correctly", async () => {
+    const lines: string[] = [];
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => "sk-ant-literal",
+        fetchFn,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(/✓ auth — auth verified/);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.anthropic.com/v1/models");
+    expect((init.headers as Record<string, string>)["x-api-key"]).toBe("sk-ant-test");
+    expect((init.headers as Record<string, string>)["anthropic-version"]).toBe("2023-06-01");
+  });
+
+  it("auth check: sends the openai-completions free route correctly", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+    await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () =>
+          catalogInfo({
+            provider: "openai",
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+          }),
+        rawApiKeyFn: () => "sk-oai-literal",
+        fetchFn,
+      }),
+    );
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.openai.com/v1/models");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-ant-test");
+  });
+
+  it("auth check: sends the google free route correctly (key as a query param)", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+    await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () =>
+          catalogInfo({
+            provider: "google",
+            api: "google-generative-ai",
+            // The real vendored catalog baseUrl (pi-ai providers/google.models.js)
+            // already ends with /v1beta — pinning the real convention here is
+            // the regression proof: the old code appended /v1beta unconditionally
+            // and would have built .../v1beta/v1beta/models (permanent 404).
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          }),
+        rawApiKeyFn: () => "sk-goog-literal",
+        fetchFn,
+      }),
+    );
+    const [url] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models?key=sk-ant-test");
+  });
+
+  it("auth check: 401 → fail (auth rejected)", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => "sk-ant-literal",
+        fetchFn: async () => ({ ok: false, status: 401 }) as Response,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toMatch(/✗ auth — auth rejected \(check the key\)/);
+  });
+
+  it("auth check: 403 → fail (auth rejected)", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => "sk-ant-literal",
+        fetchFn: async () => ({ ok: false, status: 403 }) as Response,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toMatch(/✗ auth — auth rejected \(check the key\)/);
+  });
+
+  it("auth check: network error → warn (endpoint unreachable), does not fail doctor", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo(),
+        rawApiKeyFn: () => "sk-ant-literal",
+        fetchFn: async () => {
+          throw new Error("ECONNREFUSED");
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(/⚠ auth — endpoint unreachable/);
+  });
+
+  it("auth check: unknown api family → skip with a note, no request sent", async () => {
+    const lines: string[] = [];
+    const fetchFn = vi.fn();
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo({ api: "mistral-conversations" }),
+        rawApiKeyFn: () => "sk-ant-literal",
+        fetchFn,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(
+      /✓ auth — unknown api "mistral-conversations" — auth check skipped/,
+    );
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("auth check: skipped (not a fail) when the resolved path falls through to inline, not catalog", async () => {
+    const lines: string[] = [];
+    const fetchFn = vi.fn();
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => hostedCfg(),
+        resolveInfoFn: async () => catalogInfo({ path: "inline" }),
+        rawApiKeyFn: () => "sk-ant-literal",
+        fetchFn,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).not.toMatch(/auth —/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("planner preflight: no plannerModelId configured → no planner line at all", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => okConfig,
+        resolveInfoFn: async () => catalogInfo(),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).not.toMatch(/planner model/);
+  });
+
+  it("planner preflight: plannerModelId set → resolves ok, alongside an ordinary local primary model", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      github: { ...okConfig.github, plannerModelId: "openai/gpt-4o" },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        resolveInfoFn: async (_c: Config, modelId?: string) =>
+          catalogInfo({ provider: "openai", modelId, api: "openai-completions" }),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(/✓ planner model — openai\/gpt-4o resolves via catalog/);
+  });
+
+  it("planner preflight: a miss warns (not fails) — ordinary tickets don't use it", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      github: { ...okConfig.github, plannerModelId: "openai/does-not-exist" },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        resolveInfoFn: async (_c: Config, modelId?: string) => {
+          if (modelId === undefined) return catalogInfo();
+          throw new Error("no catalog match for openai/does-not-exist");
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toMatch(
+      /⚠ planner model — no catalog match for openai\/does-not-exist/,
+    );
+  });
+
+  it("local config: byte-identical output — no hosted-preflight lines leak in (regression)", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
+    expect(code).toBe(0);
+    const out = lines.join("\n");
+    expect(out).not.toMatch(/resolves via/);
+    expect(out).not.toMatch(/key source/);
+    expect(out).not.toMatch(/planner model/);
+    expect(out).not.toMatch(/✓ auth —|✗ auth —|⚠ auth —/);
+    expect(out).toMatch(/ready — 0 failure\(s\), 0 warning\(s\)/);
   });
 });
 

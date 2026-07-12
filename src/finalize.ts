@@ -24,7 +24,7 @@ function statusFor(r: RunResult): string {
 
 function renderResult(original: string, status: string, r: RunResult): string {
   const reply = r.finalText || "_(no assistant text)_";
-  const stats = `**Elapsed:** ${Math.round(r.durationMs / 1000)}s · **Tokens:** in=${r.usage.input} out=${r.usage.output}`;
+  const stats = `**Elapsed:** ${Math.round(r.durationMs / 1000)}s · **Tokens:** in=${r.usage.input} out=${r.usage.output} cost=$${r.usage.costUsd.toFixed(4)}`;
   // Omit stop_reason when absent (Python parity: the key was only written when
   // truthy) so a future parser of this block doesn't see the literal "null".
   const stopLine = r.stopReason ? `\nstop_reason: ${r.stopReason}` : "";
@@ -106,7 +106,7 @@ function renderPrResult(
   phaseError: string | null,
 ): string {
   const reply = r.finalText || "_(no assistant text)_";
-  const stats = `**Elapsed:** ${Math.round(r.durationMs / 1000)}s · **Tokens:** in=${r.usage.input} out=${r.usage.output}`;
+  const stats = `**Elapsed:** ${Math.round(r.durationMs / 1000)}s · **Tokens:** in=${r.usage.input} out=${r.usage.output} cost=$${r.usage.costUsd.toFixed(4)}`;
   const stopLine = r.stopReason ? `\nstop_reason: ${r.stopReason}` : "";
 
   // PR frontmatter fields, emitted into the junco-result metadata block when a

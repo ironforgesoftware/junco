@@ -104,6 +104,57 @@ describe("buildConfigObject / renderConfigJson", () => {
   });
 });
 
+describe("hosted mode — fresh build (must PRESERVE catalog eligibility)", () => {
+  it("emits model.id only — no baseUrl, no apiKey when blank, never a source key", () => {
+    const a: WizardAnswers = {
+      ...defaultAnswers(),
+      mode: "hosted",
+      modelId: "anthropic/claude-sonnet-4-5",
+      apiKey: undefined,
+    };
+    const obj = buildConfigObject(a);
+    const model = obj.model as Record<string, unknown>;
+    expect(model).toEqual({ id: "anthropic/claude-sonnet-4-5" });
+    expect("baseUrl" in model).toBe(false);
+    expect("apiKey" in model).toBe(false);
+    expect("source" in model).toBe(false);
+  });
+
+  it("includes model.apiKey when the user pasted a literal key", () => {
+    const a: WizardAnswers = {
+      ...defaultAnswers(),
+      mode: "hosted",
+      modelId: "openai/gpt-4o",
+      apiKey: "sk-live-abc123",
+    };
+    const model = buildConfigObject(a).model as Record<string, unknown>;
+    expect(model).toEqual({ id: "openai/gpt-4o", apiKey: "sk-live-abc123" });
+  });
+
+  it("includes model.apiKey verbatim for a $VAR reference", () => {
+    const a: WizardAnswers = {
+      ...defaultAnswers(),
+      mode: "hosted",
+      modelId: "openai/gpt-4o",
+      apiKey: "$OPENAI_API_KEY",
+    };
+    const model = buildConfigObject(a).model as Record<string, unknown>;
+    expect(model.apiKey).toBe("$OPENAI_API_KEY");
+  });
+
+  it("round-trips catalog-eligible: no baseUrl key means baseUrlExplicit stays false", () => {
+    const a: WizardAnswers = {
+      ...defaultAnswers(),
+      mode: "hosted",
+      modelId: "anthropic/claude-sonnet-4-5",
+      apiKey: undefined,
+    };
+    const cfg = loadRendered(a);
+    expect(cfg.model.id).toBe("anthropic/claude-sonnet-4-5");
+    expect(cfg.model.baseUrlExplicit).toBe(false);
+  });
+});
+
 describe("re-run mode", () => {
   const raw = {
     vaultRoot: "/v",
@@ -184,5 +235,80 @@ describe("re-run mode", () => {
     expect(COVERED_LEVER_COUNT).toBe(13);
     // The pin makes coverage changes conscious: it must be updated when the
     // wizard's covered-lever surface expands or contracts.
+  });
+
+  it("regression: inline config rerun still writes model.baseUrl (an unrelated change doesn't drop it)", () => {
+    const out = applyAnswers(raw, { ...answersFromConfig(raw), modelId: "prov/m2" });
+    expect((out.model as { baseUrl: string }).baseUrl).toBe("http://h:1/v1");
+  });
+});
+
+describe("hosted mode — re-run detection (the trap: misclassifying as inline destroys catalog eligibility)", () => {
+  it("classifies hosted when the raw config has no modelsJson and no baseUrl key", () => {
+    const a = answersFromConfig({ vaultRoot: "/v", model: { id: "anthropic/claude-sonnet-4-5" } });
+    expect(a.mode).toBe("hosted");
+    expect(a.modelId).toBe("anthropic/claude-sonnet-4-5");
+    expect(a.baseUrl).toBeUndefined(); // NO localhost baseUrl prefill
+  });
+
+  it("prefills a hosted apiKey verbatim (literal or $VAR ref), never the inline placeholder when absent", () => {
+    const withKey = answersFromConfig({ model: { id: "p/m", apiKey: "$OPENAI_API_KEY" } });
+    expect(withKey.apiKey).toBe("$OPENAI_API_KEY");
+    const withoutKey = answersFromConfig({ model: { id: "p/m" } });
+    expect(withoutKey.apiKey).toBeUndefined(); // NOT "1234" (defaultAnswers' inline placeholder)
+  });
+
+  it("still prefers models_json mode when the file sets it, even with no baseUrl key", () => {
+    const a = answersFromConfig({ model: { id: "p/m", modelsJson: "/mj.json" } });
+    expect(a.mode).toBe("models_json");
+  });
+
+  it("hosted rerun coveredPaths never write model.baseUrl, even when the id changes", () => {
+    const hostedRaw = { vaultRoot: "/v", model: { id: "p/m" } };
+    const a = answersFromConfig(hostedRaw);
+    a.modelId = "p/m2";
+    expect(diffAnswers(hostedRaw, a)).toEqual([{ path: "model.id", from: "p/m", to: "p/m2" }]);
+    const out = applyAnswers(hostedRaw, a);
+    expect((out.model as { id: string }).id).toBe("p/m2");
+    expect(JSON.stringify(out)).not.toContain("baseUrl");
+  });
+
+  it("hosted rerun surfaces model.apiKey only when it actually changes", () => {
+    const hostedRaw = { vaultRoot: "/v", model: { id: "p/m", apiKey: "$OLD_VAR" } };
+    const a = answersFromConfig(hostedRaw);
+    expect(diffAnswers(hostedRaw, a)).toEqual([]); // untouched rerun is a true no-op
+    a.apiKey = "$NEW_VAR";
+    expect(diffAnswers(hostedRaw, a)).toEqual([
+      { path: "model.apiKey", from: "$OLD_VAR", to: "$NEW_VAR" },
+    ]);
+    const out = applyAnswers(hostedRaw, a);
+    expect((out.model as { apiKey: string }).apiKey).toBe("$NEW_VAR");
+    expect(JSON.stringify(out)).not.toContain("baseUrl");
+  });
+
+  it("switching inline → hosted clears model.baseUrl and model.apiKey in the output", () => {
+    const inlineRaw = {
+      vaultRoot: "/v",
+      model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" },
+    };
+    const a = answersFromConfig(inlineRaw);
+    a.mode = "hosted";
+    a.baseUrl = undefined;
+    a.apiKey = undefined;
+    const out = applyAnswers(inlineRaw, a);
+    expect((out.model as { id: string }).id).toBe("p/m");
+    expect(JSON.stringify(out)).not.toContain("baseUrl");
+    expect(JSON.stringify(out)).not.toContain("apiKey");
+  });
+
+  it("switching hosted → inline writes model.baseUrl and model.apiKey in the output", () => {
+    const hostedRaw = { vaultRoot: "/v", model: { id: "p/m" } };
+    const a = answersFromConfig(hostedRaw);
+    a.mode = "inline";
+    a.baseUrl = "http://h:1/v1";
+    a.apiKey = "k";
+    const out = applyAnswers(hostedRaw, a);
+    expect((out.model as { baseUrl: string; apiKey: string }).baseUrl).toBe("http://h:1/v1");
+    expect((out.model as { baseUrl: string; apiKey: string }).apiKey).toBe("k");
   });
 });

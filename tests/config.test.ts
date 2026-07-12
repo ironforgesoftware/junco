@@ -285,13 +285,21 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.logToFile).toBe(true);
     expect(cfg.transcriptsEnabled).toBe(true);
     expect(cfg.allowedRepoRoots).toEqual([]);
+    // Phase-3 Task 5: off by default — the daemon never consults the spend
+    // ledger unless the operator opts in.
+    expect(cfg.dailyBudgetUsd).toBe(0);
   });
 
   it("resilience keys are configurable", () => {
     const cfg = loadConfig(
       writeJson({
         vaultRoot: "/v",
-        worker: { maxTransientRetries: 0, retryBackoffSeconds: 5, maxConcurrent: 3 },
+        worker: {
+          maxTransientRetries: 0,
+          retryBackoffSeconds: 5,
+          maxConcurrent: 3,
+          dailyBudgetUsd: 3.5,
+        },
         observability: { stateDir: "~/x", logToFile: false, transcripts: false },
         git: { allowedRepoRoots: ["~/code"] },
       }),
@@ -303,6 +311,7 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.logToFile).toBe(false);
     expect(cfg.transcriptsEnabled).toBe(false);
     expect(cfg.allowedRepoRoots).toEqual([join(homedir(), "code")]);
+    expect(cfg.dailyBudgetUsd).toBe(3.5);
   });
 
   it("rejects maxConcurrent < 1 and negative retry knobs", () => {
@@ -311,6 +320,12 @@ describe("loadConfig (JSON)", () => {
     ).toThrow();
     expect(() =>
       loadConfig(writeJson({ vaultRoot: "/v", worker: { maxTransientRetries: -1 } })),
+    ).toThrow();
+  });
+
+  it("rejects a negative worker.dailyBudgetUsd", () => {
+    expect(() =>
+      loadConfig(writeJson({ vaultRoot: "/v", worker: { dailyBudgetUsd: -1 } })),
     ).toThrow();
   });
 

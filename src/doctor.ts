@@ -6,10 +6,11 @@
 
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, queuePaths, isLoopbackHost } from "./config.js";
+import { loadConfig, parseConfigFile, queuePaths, isLoopbackHost } from "./config.js";
 import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
+import { getResolvedModelInfo, type ResolvedModelInfo } from "./agent/session.js";
 import { readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { selectBackend, classifyAvailability } from "./agent/sandbox/backend.js";
@@ -32,9 +33,103 @@ export interface DoctorDeps {
   lockHolderFn?: (lockPath: string) => number | null;
   readTemplateFn?: () => string;
   printFn?: (s: string) => void;
+  /** Resolves a model id through the models.json → catalog → inline cascade
+   * (see session.ts) — defaults to the real SDK-backed helper. `modelId`
+   * overrides `cfg.model.id` for the planner preflight. */
+  resolveInfoFn?: (cfg: Config, modelId?: string) => Promise<ResolvedModelInfo>;
+  /** Auth-check HTTP calls (free list-models routes only — see checkAuth). */
+  fetchFn?: typeof fetch;
+  /** The RAW (pre-resolveApiKey) `model.apiKey` field straight off config.json
+   * — a literal and a "$VAR" reference both collapse into the same resolved
+   * string by the time `cfg.model.apiKey` reaches us, so telling them apart
+   * for the key-source echo requires re-reading the file. Defaults to
+   * re-parsing the same path loadConfigFn already validated; a failure here
+   * degrades to "unknown" (undefined) rather than failing doctor — this is a
+   * diagnostic nicety, not the config-load gate. */
+  rawApiKeyFn?: (configPath: string) => string | undefined;
+  /** Process environment, for the provider-env-var-fallback checks (key
+   * source echo). Defaults to `process.env`; injectable so tests never read
+   * or mutate the real environment. */
+  env?: Record<string, string | undefined>;
 }
 
 type Verdict = "ok" | "warn" | "fail";
+
+/** A bare "$ENV_VAR" reference (uppercase env style only) — mirrors config.ts's
+ * private ENV_REF exactly; kept as its own copy here since doctor only needs
+ * to detect the shape (config.ts's resolveApiKey already did the resolving). */
+const ENV_REF = /^\$([A-Z_][A-Z0-9_]*)$/;
+
+function defaultRawApiKey(configPath: string): string | undefined {
+  try {
+    return parseConfigFile(configPath).model.apiKey;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `ResolvedModelInfo.path` values as shown to the operator — "models_json"
+ * reads as "models.json" (the actual file kind); the other two pass through. */
+function pathLabel(path: ResolvedModelInfo["path"]): string {
+  return path === "models_json" ? "models.json" : path;
+}
+
+interface AuthOutcome {
+  v: Verdict;
+  detail: string;
+}
+
+/**
+ * Per-API-family auth check against each provider's FREE authenticated
+ * list-models route — never a paid completions call:
+ *   - openai-*    → GET {baseUrl}/models          Bearer <key>
+ *   - anthropic-* → GET {baseUrl}/v1/models        x-api-key + anthropic-version
+ *   - google-*    → GET {baseUrl}/v1beta/models?key=<key>
+ * Any other/unknown api family is skipped with a note (no request sent) —
+ * doctor has no free-route recipe for it. 200 → ok; 401/403 → fail (bad key);
+ * any other non-2xx → warn (inconclusive); a network error → warn
+ * (unreachable, not necessarily a bad key).
+ * An aggregator/proxy sitting behind a non-canonical baseUrl (a route shape
+ * doctor doesn't know) can legitimately warn "inconclusive" here for a
+ * perfectly good key — an accepted degrade, not a bug to chase.
+ */
+async function checkAuth(
+  info: ResolvedModelInfo,
+  apiKey: string,
+  fetchFn: typeof fetch,
+): Promise<AuthOutcome> {
+  const base = info.baseUrl.replace(/\/+$/, "");
+  let url: string;
+  let headers: Record<string, string>;
+  if (info.api.startsWith("openai-")) {
+    url = `${base}/models`;
+    headers = { Authorization: `Bearer ${apiKey}` };
+  } else if (info.api.startsWith("anthropic-")) {
+    url = `${base}/v1/models`;
+    headers = { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
+  } else if (info.api.startsWith("google-")) {
+    // The vendored catalog's baseUrl for google-generative-ai models already
+    // ends with /v1beta (pi-ai providers/google.models.js) — suffix-guard so
+    // a catalog hit doesn't double it into .../v1beta/v1beta/models (a
+    // permanent 404 that reads as "inconclusive" for both good and bad keys).
+    const withV1beta = base.endsWith("/v1beta") ? base : `${base}/v1beta`;
+    url = `${withV1beta}/models?key=${encodeURIComponent(apiKey)}`;
+    headers = {};
+  } else {
+    return { v: "ok", detail: `unknown api "${info.api}" — auth check skipped` };
+  }
+
+  try {
+    const resp = await fetchFn(url, { method: "GET", headers });
+    if (resp.ok) return { v: "ok", detail: "auth verified" };
+    if (resp.status === 401 || resp.status === 403) {
+      return { v: "fail", detail: "auth rejected (check the key)" };
+    }
+    return { v: "warn", detail: `auth check inconclusive (HTTP ${resp.status})` };
+  } catch {
+    return { v: "warn", detail: "endpoint unreachable" };
+  }
+}
 
 export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
@@ -43,6 +138,10 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   const fetchModelsFn = deps.fetchModelsFn ?? fetchModels;
   const accessOkFn = deps.accessOkFn ?? defaultAccessOk;
   const lockHolderFn = deps.lockHolderFn ?? readLockHolder;
+  const resolveInfoFn = deps.resolveInfoFn ?? getResolvedModelInfo;
+  const fetchFn = deps.fetchFn ?? fetch;
+  const rawApiKeyFn = deps.rawApiKeyFn ?? defaultRawApiKey;
+  const env = deps.env ?? process.env;
 
   const results: Array<{ v: Verdict; label: string }> = [];
   const report = (v: Verdict, label: string, detail = ""): void => {
@@ -126,25 +225,73 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       }
     }
 
-    // 5. endpoint (hosted catalog models are not probed — Phase 2 adds the
-    // provider gate; Phase 3 adds per-API auth checks). "catalog-eligible"
-    // rather than "hosted provider": a provider-prefixed id that ISN'T in the
-    // builtin catalog still lands here (shouldProbeEndpoint only checks
-    // eligibility, not an actual catalog hit) and the runtime cascade
-    // (resolveModelViaRegistries) falls through to inline resolution at first
-    // session — "hosted provider" would be actively wrong for that case.
-    // worker.endpointProbe="never" is a SEPARATE reason to skip: it overrides
-    // the catalog-skip heuristic outright (probePolicy in health.ts), so it
-    // can fire on a non-catalog (e.g. local) model too — the catalog-eligible
-    // note would be wrong there, so branch on the actual reason.
+    // 5. endpoint / model resolution. "catalog-eligible" rather than "hosted
+    // provider": a provider-prefixed id that ISN'T in the builtin catalog
+    // still lands here (shouldProbeEndpoint only checks eligibility, not an
+    // actual catalog hit) and the runtime cascade (resolveModelViaRegistries)
+    // falls through to inline resolution at first session — "hosted
+    // provider" would be actively wrong for that case, hence gating the auth
+    // check below on the ACTUAL resolved path, not this branch's entry
+    // condition. worker.endpointProbe="never" is a SEPARATE reason to land
+    // here: it overrides the catalog-skip heuristic outright (probePolicy in
+    // health.ts), so it can fire on a non-catalog (e.g. local) model too — an
+    // operator who explicitly disabled probing did not ask for the new
+    // auth-check network side effect either, so that sub-branch keeps the
+    // old bare message untouched (models.json configs never reach this branch
+    // at all: shouldProbeEndpoint always probes them the old way below).
     if (!probePolicy(cfg)) {
-      report(
-        "ok",
-        "inference endpoint",
-        cfg.endpointProbe === "never"
-          ? `${cfg.model.id} — probe disabled (worker.endpointProbe=never)`
-          : `${cfg.model.id} — catalog-eligible; probe skipped (resolution confirmed at first session)`,
-      );
+      if (cfg.endpointProbe === "never") {
+        report(
+          "ok",
+          "inference endpoint",
+          `${cfg.model.id} — probe disabled (worker.endpointProbe=never)`,
+        );
+      } else {
+        // Phase 3 hosted-aware preflight: resolution echo, key source, and
+        // (for a confirmed catalog hit) a per-API auth check — see checkAuth.
+        let info: ResolvedModelInfo | null = null;
+        try {
+          info = await resolveInfoFn(cfg);
+          report(
+            "ok",
+            "model",
+            `${cfg.model.id} resolves via ${pathLabel(info.path)} (${info.baseUrl})`,
+          );
+        } catch (e) {
+          report("fail", "model", e instanceof Error ? e.message : String(e));
+        }
+
+        const provider = info?.provider ?? splitModelId(cfg.model.id).provider;
+        const envVar = `${provider.toUpperCase()}_API_KEY`;
+        const raw = rawApiKeyFn(configPath);
+        const envRefMatch = raw !== undefined ? ENV_REF.exec(raw) : null;
+        if (envRefMatch) {
+          report("ok", "key source", `$${envRefMatch[1]} (resolved from the environment)`);
+        } else if (raw !== undefined) {
+          report("ok", "key source", "config literal (model.apiKey)");
+        } else if (env[envVar]) {
+          report("ok", "key source", `${envVar} present in the environment`);
+        } else if (provider !== "local") {
+          report(
+            "warn",
+            "key source",
+            `no key configured — the SDK will typically look for ${envVar}-style env vars at request time`,
+          );
+        }
+
+        if (info && info.path === "catalog") {
+          if (cfg.model.apiKey === null) {
+            report(
+              "warn",
+              "auth",
+              "no key configured — skipping the auth check (see key source above)",
+            );
+          } else {
+            const outcome = await checkAuth(info, cfg.model.apiKey, fetchFn);
+            report(outcome.v, "auth", outcome.detail);
+          }
+        }
+      }
     } else {
       const up = await reachableFn(cfg);
       report(
@@ -168,6 +315,23 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
             `${cfg.model.id} not among the endpoint's ${ids.length} advertised models`,
           );
         }
+      }
+    }
+
+    // 5a. planner model preflight — plannerModelId overrides cfg.model.id for
+    // planning-session tickets only (runOnce.ts:317); a bad override shouldn't
+    // fail doctor since ordinary Q&A/PR tickets never use it, hence warn.
+    if (cfg.github.plannerModelId) {
+      const plannerId = cfg.github.plannerModelId;
+      try {
+        const plannerInfo = await resolveInfoFn(cfg, plannerId);
+        report(
+          "ok",
+          "planner model",
+          `${plannerId} resolves via ${pathLabel(plannerInfo.path)} (${plannerInfo.baseUrl})`,
+        );
+      } catch (e) {
+        report("warn", "planner model", e instanceof Error ? e.message : String(e));
       }
     }
 

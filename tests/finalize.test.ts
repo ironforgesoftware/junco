@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { finalize, finalizePr, computePrStatus } from "../src/finalize.js";
 import type { PrOutcome } from "../src/prFlow.js";
 import type { RunResult } from "../src/types.js";
+import { metrics } from "../src/metrics.js";
 
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), "junco-fin-"));
@@ -26,7 +27,7 @@ function sandbox() {
 const ok: RunResult = {
   finalText: "the answer",
   toolCalls: [],
-  usage: { input: 1, output: 1, cacheRead: 0, total: 2 },
+  usage: { input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 },
   stopReason: "stop",
   errorMessage: null,
   timedOut: false,
@@ -61,6 +62,26 @@ describe("finalize", () => {
     expect(status).toBe("failed");
     expect(dst.startsWith(failed)).toBe(true);
     expect(readFileSync(dst, "utf8")).toContain("status: failed");
+  });
+
+  it("renders cost=$X.XXXX (4dp) in the Tokens line", () => {
+    const { ticket, done, failed } = sandbox();
+    const { dst } = finalize(
+      ticket,
+      { ...ok, usage: { ...ok.usage, costUsd: 0.0246 } },
+      {
+        done,
+        failed,
+      },
+    );
+    expect(readFileSync(dst, "utf8")).toContain("**Tokens:** in=1 out=1 cost=$0.0246");
+  });
+
+  it("passes costUsd through to metrics.recordTask, accumulating into totalCostUsd", () => {
+    const { ticket, done, failed } = sandbox();
+    const before = metrics.snapshot().totalCostUsd;
+    finalize(ticket, { ...ok, usage: { ...ok.usage, costUsd: 0.0246 } }, { done, failed });
+    expect(metrics.snapshot().totalCostUsd).toBeCloseTo(before + 0.0246, 4);
   });
 });
 
@@ -111,6 +132,46 @@ describe("finalizePr — collision safety (issue #48)", () => {
     expect(readFileSync(join(failed, "2026__q1.md"), "utf8")).toBe("ATTEMPT ONE");
     expect(dst).not.toBe(join(failed, "2026__q1.md"));
     expect(readdirSync(failed).filter((n) => n.endsWith(".md"))).toHaveLength(2);
+  });
+});
+
+describe("finalizePr — cost accounting (Phase-3)", () => {
+  const outcome: PrOutcome = {
+    statusOverride: null,
+    nwo: null,
+    branch: null,
+    baseBranch: null,
+    prUrl: null,
+    commits: [],
+    pushed: false,
+    worktreePath: null,
+    worktreePreserved: false,
+    amendedPrNumber: null,
+    verification: null,
+    critic: null,
+    criticRetriesUsed: 0,
+    prQueued: false,
+    staleBase: false,
+  };
+
+  it("renders cost=$X.XXXX (4dp) in the Tokens line", () => {
+    const { ticket, done, failed } = sandbox();
+    const { dst } = finalizePr(
+      ticket,
+      { ...ok, usage: { ...ok.usage, costUsd: 0.0246 } },
+      outcome,
+      { dirs: { done, failed } },
+    );
+    expect(readFileSync(dst, "utf8")).toContain("**Tokens:** in=1 out=1 cost=$0.0246");
+  });
+
+  it("passes costUsd through to metrics.recordTask, accumulating into totalCostUsd", () => {
+    const { ticket, done, failed } = sandbox();
+    const before = metrics.snapshot().totalCostUsd;
+    finalizePr(ticket, { ...ok, usage: { ...ok.usage, costUsd: 0.0246 } }, outcome, {
+      dirs: { done, failed },
+    });
+    expect(metrics.snapshot().totalCostUsd).toBeCloseTo(before + 0.0246, 4);
   });
 });
 
