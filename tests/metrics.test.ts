@@ -482,3 +482,31 @@ describe("pendingRestartFields", () => {
     expect(m.snapshot().pendingRestartFields).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// gate transition counters
+// ---------------------------------------------------------------------------
+describe("gate transition counters", () => {
+  it("starts with empty gateTransitions", () => {
+    const s = new RunMetrics().snapshot();
+    expect(s.gateTransitions).toEqual({});
+  });
+
+  it("records two auth_error + one ok → snapshot {auth_error: 2, ok: 1}", () => {
+    const m = new RunMetrics();
+    m.recordGateTransition("auth_error");
+    m.recordGateTransition("auth_error");
+    m.recordGateTransition("ok");
+    const s = m.snapshot();
+    expect(s.gateTransitions).toEqual({ auth_error: 2, ok: 1 });
+  });
+
+  it("reset clears gateTransitions to empty object", () => {
+    const m = new RunMetrics();
+    m.recordGateTransition("auth_error");
+    m.recordGateTransition("ok");
+    m.reset();
+    const s = m.snapshot();
+    expect(s.gateTransitions).toEqual({});
+  });
+});

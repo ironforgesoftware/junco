@@ -51,6 +51,7 @@ function metrics(over: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
     requeues: 0,
     guardNudges: 2,
     guardKills: 1,
+    gateTransitions: {},
     currentProgress: {
       "t-1": {
         turns: 3,

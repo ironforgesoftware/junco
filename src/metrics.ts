@@ -45,6 +45,8 @@ export interface MetricsSnapshot {
   requeues: number;
   guardNudges: number;
   guardKills: number;
+  // Gate transition counters: state name → count of entries into that state.
+  gateTransitions: Record<string, number>;
   /** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
   currentProgress: Record<
     string,
@@ -87,6 +89,7 @@ export class RunMetrics {
   private _requeues = 0;
   private _guardNudges = 0;
   private _guardKills = 0;
+  private _gateTransitions: Record<string, number> = {};
   private _pendingRestartFields = new Set<string>();
   private _progress: Record<
     string,
@@ -160,6 +163,12 @@ export class RunMetrics {
   recordGuardDecision(action: "nudge" | "kill"): void {
     if (action === "nudge") this._guardNudges++;
     else this._guardKills++;
+  }
+
+  /** Record a gate transition into a named state. Increments the counter for
+   * that state. */
+  recordGateTransition(to: string): void {
+    this._gateTransitions[to] = (this._gateTransitions[to] ?? 0) + 1;
   }
 
   /** Record config lever names changed live (hot-reload) that need a daemon
@@ -276,6 +285,7 @@ export class RunMetrics {
       requeues: this._requeues,
       guardNudges: this._guardNudges,
       guardKills: this._guardKills,
+      gateTransitions: { ...this._gateTransitions },
       currentProgress: { ...this._progress },
       pendingRestartFields: [...this._pendingRestartFields].sort(),
     };
@@ -308,6 +318,7 @@ export class RunMetrics {
     this._requeues = 0;
     this._guardNudges = 0;
     this._guardKills = 0;
+    this._gateTransitions = {};
     this._pendingRestartFields = new Set();
     this._progress = {};
   }
