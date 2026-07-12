@@ -70,7 +70,19 @@ export class RunAccumulator {
         break;
       }
       case "auto_retry_end":
-        if (e.finalError) this.errorMessage = String(e.finalError);
+        // SDK shape (agent-session.d.ts AgentSessionEvent union): `{ type:
+        // "auto_retry_end"; success: boolean; attempt: number; finalError?:
+        // string }`. The SDK emits turn_end for the ERRORED assistant message
+        // BEFORE deciding to retry — the null-guarded capture above already
+        // banked that error — and only fires auto_retry_end once the retry
+        // decision is made. When the retry SUCCEEDS (success:true) there is
+        // no finalError: the first attempt's error was TRANSIENT and
+        // RECOVERED, so clear it — otherwise a fully-recovered run keeps a
+        // poisoned errorMessage forever (prFlow sends completed committed
+        // work to failed/, Q&A gate-routes a clean run as a failure, budgeted
+        // paths regress). When it FAILS, finalError still overwrites.
+        if (e.success === true) this.errorMessage = null;
+        else if (e.finalError) this.errorMessage = String(e.finalError);
         break;
     }
   }

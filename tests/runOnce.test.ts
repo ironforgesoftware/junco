@@ -598,6 +598,65 @@ describe("provider gate wiring (Phase 2 Task 5)", () => {
     expect(gate.failureCalls).toEqual([]);
   });
 
+  it("a recovered auto-retry blip (turn_end error -> auto_retry_end success -> clean turn_end) finalizes to done/ and reports SUCCESS, not failure", async () => {
+    // Regression pin for the CRITICAL fix in src/agent/runResult.ts: the SDK
+    // emits turn_end for the errored attempt BEFORE deciding to retry, and
+    // when the retry recovers it emits auto_retry_end{success:true} with no
+    // finalError. Before the fix, the first attempt's errorMessage survived
+    // (null-guarded first-wins never got cleared), so a fully-recovered run
+    // would gate-route as a rate_limit failure (count-free requeue) instead
+    // of finalizing to done/ and reporting success.
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const gate = fakeGate();
+    const recoveredBlipFactory = () => async () => ({
+      subscribe(l: (e: any) => void) {
+        queueMicrotask(() => {
+          l({
+            type: "turn_end",
+            message: {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "429 overloaded",
+              usage: { input: 0, output: 0 },
+            },
+          });
+          l({ type: "auto_retry_end", success: true, attempt: 1 });
+          l({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", delta: "all good now" },
+          });
+          l({
+            type: "turn_end",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
+            },
+          });
+          l({ type: "agent_end", messages: [], willRetry: false });
+        });
+        return () => {};
+      },
+      async prompt() {
+        await new Promise((r) => setTimeout(r, 5));
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: recoveredBlipFactory, gate });
+    expect(handled).toBe(true);
+    expect(readdirSync(join(j, "done"))).toHaveLength(1);
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    expect(gate.successCalls).toBe(1);
+    expect(gate.failureCalls).toEqual([]);
+  });
+
   it("Q&A outage error reports to the gate but still requeues via the BUDGETED path", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
@@ -642,6 +701,99 @@ describe("provider gate wiring (Phase 2 Task 5)", () => {
     const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
     expect(content).toMatch(/retry_count: 1/); // budgeted path, NOT the gate's count-free one
     expect(content).toMatch(/not_before:/);
+  });
+
+  it("crash containment: an arbitrary 403 in a thrown reason does NOT gate-latch (false-latch guard) — budgeted requeue instead", async () => {
+    // The crash site classifies ARBITRARY exception text (a rejecting session
+    // factory, a git/gh error, even a ticket filename echoed into a message),
+    // never the SDK's structured in-session errorMessage. Bare \b40[13]\b /
+    // \b429\b patterns can false-positive against that text (e.g. a gh CLI
+    // error mentioning an HTTP 403). auth/quota/rate_limit route through
+    // GATE_CLASSES into the gate's LATCHED states (auth_error/
+    // quota_exhausted) — a false latch here BLOCKS CLAIMING and only clears
+    // on an explicit success, but a latch that never lets a ticket run can
+    // never produce that success, freezing the queue forever. So only
+    // model_not_found (the resolution-failure throw class this crash site
+    // was actually built for) gets gate-class routing at THIS site; auth/
+    // quota/rate_limit fall through to the unknown/budgeted path.
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
+    const forbiddenFactory = () => async (): Promise<never> => {
+      throw new Error("gh: HTTP 403 Forbidden from api.github.com");
+    };
+    const gate = fakeGate();
+
+    const handled = await runOnce(cfg(root), { sessionFactoryFor: forbiddenFactory, gate });
+    expect(handled).toBe(true);
+    expect(gate.failureCalls).toEqual([]); // NOT gate-routed — not model_not_found, not outage
+    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
+    expect(readdirSync(join(j, "processing"))).toHaveLength(0);
+    const inbox = readdirSync(join(j, "inbox"));
+    expect(inbox).toHaveLength(1);
+    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
+    expect(content).toMatch(/retry_count: 1/); // budgeted path, not the gate's count-free one
+    expect(content).toMatch(/not_before:/);
+  });
+
+  it("Q&A timeout with a stale gate-class errorMessage does not take the count-free path (parity with prFlow's hardError guard)", async () => {
+    // A timeout landing mid-retry-backoff leaves the FIRST attempt's
+    // errorMessage captured (no clean auto_retry_end ever fires — the
+    // timeout aborts the run first), so classifying it as gate-class here
+    // would wrongly report to the gate and requeue count-free. timedOut must
+    // win: existing timeout semantics (routes to failed/ as "timeout") apply
+    // instead, exactly like prFlow's `hardError` guard excludes timedOut.
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\ntimeout_minutes: 0.001\n---\nq\n", "utf8");
+    const gate = fakeGate();
+    const timedOutRateLimitFactory = () => async () => {
+      let resolvePrompt: (() => void) | undefined;
+      return {
+        subscribe(l: (e: any) => void) {
+          queueMicrotask(() => {
+            l({
+              type: "turn_end",
+              message: {
+                role: "assistant",
+                stopReason: "error",
+                errorMessage: "429 rate limited",
+                usage: { input: 0, output: 0 },
+              },
+            });
+          });
+          return () => {};
+        },
+        async prompt() {
+          // Never resolves on its own; only the timeout's abort() unblocks it.
+          return new Promise<void>((resolve) => {
+            resolvePrompt = resolve;
+          });
+        },
+        dispose() {},
+        abort: async () => {
+          resolvePrompt?.();
+        },
+      };
+    };
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: timedOutRateLimitFactory,
+      gate,
+    });
+    expect(handled).toBe(true);
+    expect(gate.failureCalls).toEqual([]); // gate NOT consulted for count-free routing
+    expect(gate.successCalls).toBe(0);
+    const failed = readdirSync(join(j, "failed"));
+    expect(failed).toHaveLength(1); // existing timeout semantics: routes to failed/ as "timeout"
+    const content = readFileSync(join(j, "failed", failed[0]), "utf8");
+    expect(content).toContain("status: timeout");
   });
 
   it("without a gate in deps, a 401 error falls back to the existing budgeted requeue path (byte-identical pre-gate behavior)", async () => {

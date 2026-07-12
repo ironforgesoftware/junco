@@ -131,7 +131,7 @@ describe("runAgent", () => {
           usage: { input: 0, output: 0 },
         },
       },
-      { type: "auto_retry_end", finalError: "final" },
+      { type: "auto_retry_end", success: false, finalError: "final" },
       { type: "agent_end", messages: [], willRetry: false },
     ];
     const session = fakeSession(events);
@@ -142,6 +142,45 @@ describe("runAgent", () => {
       createSession: async () => session as any,
     });
     expect(result.errorMessage).toBe("final");
+  });
+
+  it("clears a captured turn_end error when auto_retry_end reports a successful recovery (success:true)", async () => {
+    // Full recovered-blip sequence: turn_end (errored attempt, captured as the
+    // fallback errorMessage) -> auto_retry_end success:true (retry recovered,
+    // no finalError) -> a clean turn_end for the successful continuation.
+    // Without clearing on success, the first attempt's transient error would
+    // survive to the final RunResult even though the run went on to finish
+    // cleanly.
+    const events = [
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "429 overloaded",
+          usage: { input: 0, output: 0 },
+        },
+      },
+      { type: "auto_retry_end", success: true, attempt: 1 },
+      {
+        type: "turn_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          usage: { input: 1, output: 1, cacheRead: 0 },
+        },
+      },
+      { type: "agent_end", messages: [], willRetry: false },
+    ];
+    const session = fakeSession(events);
+    const result = await runAgent({
+      body: "ping",
+      cwd: "/tmp",
+      timeoutMs: 1000,
+      createSession: async () => session as any,
+    });
+    expect(result.errorMessage).toBeNull();
+    expect(result.stopReason).toBe("stop");
   });
 });
 

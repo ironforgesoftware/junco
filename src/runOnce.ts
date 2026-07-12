@@ -141,7 +141,11 @@ export async function claimNextTask(
   // Readiness gate: when there IS eligible work, don't claim it unless the
   // inference endpoint can actually serve it.
   if (opts.readyFn && !(await opts.readyFn())) {
-    log.warn("inference endpoint not ready; leaving inbox untouched this poll", {
+    // readyFn wraps BOTH the endpoint reachability probe and the provider
+    // gate (daemon.ts) — a latched/backed-off gate blocks claiming exactly
+    // like an unreachable endpoint does, so "inference endpoint not ready"
+    // is misleading when only the gate is the reason. Stay readiness-neutral.
+    log.warn("not ready to claim (endpoint or provider gate); leaving inbox untouched this poll", {
       eligible: eligible.length,
     });
     return null;
@@ -334,7 +338,14 @@ export async function executeClaimed(
       // WITHOUT consuming the retry budget. Only zero-commit runs — Q&A never
       // commits. Transient (outage/unknown) failures keep the budgeted path.
       const cls = classifyProviderFailure(result.errorMessage);
-      if (deps.gate && GATE_CLASSES.has(cls)) {
+      // Parity with prFlow's `hardError` guard (excludes abortedByGuard AND
+      // timedOut): a timeout landing mid-retry-backoff leaves the FIRST
+      // attempt's errorMessage captured (no clean auto_retry_end ever fires —
+      // the timeout aborts the run before the SDK can decide retry/recover),
+      // so that stale error must not be gate-routed as if it were the run's
+      // actual outcome. timedOut/abortedByGuard win: existing timeout/guard
+      // semantics apply below instead.
+      if (deps.gate && !result.timedOut && !result.abortedByGuard && GATE_CLASSES.has(cls)) {
         deps.gate.reportFailure(cls, result.errorMessage ?? cls);
         const rq = requeueTicketKeepBudget(
           cfg,
@@ -385,13 +396,27 @@ export async function executeClaimed(
       // as the Q&A failure site above) — a rejecting session factory (bad
       // key, catalog-miss model id) throws OUTSIDE runAgent's try/catch, so
       // this is the only place that reason string ever reaches the
-      // classifier. Gate-class → the gate's count-free requeue; everything
-      // else keeps the existing budgeted requeueTicket path. Outage mirrors
-      // the Q&A site: report to the gate (non-latching backoff pauses
-      // claiming) but stay on the budgeted path below.
+      // classifier. UNLIKE the Q&A site, `reason` here is ARBITRARY exception
+      // text (a rejecting factory's own message, a git/gh error, even a
+      // ticket filename echoed into an error) — never the SDK's structured
+      // in-session errorMessage. Bare \b40[13]\b/\b429\b patterns can
+      // false-positive against that text (e.g. "processing issue-403.md
+      // failed"). auth/quota/rate_limit route through GATE_CLASSES into the
+      // gate's LATCHED states (auth_error/quota_exhausted) — a false latch
+      // here BLOCKS CLAIMING and only clears on an explicit reportSuccess(),
+      // but a latch that never lets a ticket run can never produce that
+      // success, freezing the queue forever. So gate-class routing at THIS
+      // site is narrowed to model_not_found only — the resolution-failure
+      // throw class this crash site was actually built for (a session-build
+      // error junco's own resolveModelViaRegistries authors, not
+      // attacker/ticket text). auth/quota/rate_limit fall through to the
+      // unknown/budgeted path below. `outage` is exempt from this narrowing
+      // and keeps reporting unconditionally: it's a non-latching, self-
+      // expiring backoff, and its errno/5xx phrases are specific enough that
+      // a false match just adds a harmless delay.
       const crashCls = classifyProviderFailure(reason);
       if (deps.gate && crashCls === "outage") deps.gate.reportFailure(crashCls, reason);
-      if (deps.gate && GATE_CLASSES.has(crashCls)) {
+      if (deps.gate && crashCls === "model_not_found") {
         deps.gate.reportFailure(crashCls, reason);
         try {
           const rq = requeueTicketKeepBudget(cfg, claimed, deps.gate.notBeforeIso(), reason);
