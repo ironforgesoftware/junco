@@ -10,6 +10,7 @@ import { gh } from "./git.js";
 import { submitTicket } from "./dispatch.js";
 import { ensureExternalClone, type ExternalRepoDeps } from "./externalRepo.js";
 import { readWatchlist, writeWatchlist, watchlistPath, resolveWatchedRepos } from "./watchlist.js";
+import { withBotAuth } from "./ghAuth.js";
 import type { Config } from "./types.js";
 
 const GH_TIMEOUT = 60_000;
@@ -17,6 +18,13 @@ const GH_TIMEOUT = 60_000;
 export interface ExternalDispatchDeps extends ExternalRepoDeps {
   submitFn?: typeof submitTicket;
   ensureCloneFn?: typeof ensureExternalClone;
+  /** Attach the daemon's bot-account GitHub auth context before provisioning
+   * an unowned repo's fork/clone (Task 6, gh-bot-account spec) — see the
+   * provisioning branch in resolveIssueTarget for why. Default: the real
+   * withBotAuth. (Typed monomorphically over Config — see cli.ts's
+   * CliDeps.withBotAuthFn for why `typeof withBotAuth` itself doesn't work
+   * here.) */
+  withBotAuthFn?: (cfg: Config) => Promise<Config>;
 }
 
 /** `owner/repo#123` or a github.com issue URL. Null = unusable. */
@@ -96,6 +104,12 @@ export async function resolveIssueTarget(
 ): Promise<IssueTarget> {
   const ghFn = deps.ghFn ?? gh;
   const ensureCloneFn = deps.ensureCloneFn ?? ensureExternalClone;
+  // Wrapped (monomorphic over Config) rather than `deps.withBotAuthFn ??
+  // withBotAuth` inline — withBotAuth is generic over `C extends
+  // Pick<Config, ...>`, and calling a union of that generic signature with
+  // ExternalDispatchDeps' monomorphic-over-Config fake fails to typecheck
+  // (infers C from the constraint, not from the Config argument).
+  const withBotAuthFn = deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c));
 
   const ref = parseIssueRef(input);
   if (ref === null) {
@@ -121,7 +135,11 @@ export async function resolveIssueTarget(
   if (owned !== undefined) {
     clonePath = owned.path;
   } else {
-    const provisioned = await ensureCloneFn(cfg, ref.nwo, deps, opts);
+    // The fork this provisions is the DAEMON's future push target — it must
+    // live on the bot's account even though this runs human-triggered (spec:
+    // boundary exception). The issue-view read above stays ambient.
+    const botCfg = await withBotAuthFn(cfg);
+    const provisioned = await ensureCloneFn(botCfg, ref.nwo, deps, opts);
     clonePath = provisioned.path;
     forkNwo = provisioned.forkNwo;
     const file = watchlistPath(cfg);

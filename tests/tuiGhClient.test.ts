@@ -29,7 +29,16 @@ const cfg = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
+  botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
 } as unknown as Config;
+
+/** Same literal as Task 2's CTX / cli.test.ts's FAKE_CTX. */
+const FAKE_CTX = {
+  configDir: "/sbx/junco-gh",
+  login: "junco-agent",
+  email: "1234+junco-agent@users.noreply.github.com",
+  credentialHelper: "!gh auth git-credential",
+};
 
 const NET = new GitOpError("gh failed", "connect: network is unreachable", 1);
 
@@ -610,6 +619,47 @@ describe("prepareExternalRepo", () => {
       "up/stream",
     );
     expect(r.ok).toBe(false);
+  });
+
+  // --- bot-account provisioning (Task 6): the fork this provisions is the
+  // daemon's future push target, so the clone/fork call must run under the
+  // bot context even though it is human-triggered (spec boundary exception —
+  // same rule as resolveIssueTarget's provisioning branch). ---
+
+  it("provisions under the bot context — ensureCloneFn receives the ghAuth-attached config", async () => {
+    const cloneCfgs: Array<Config> = [];
+    const ensureCloneFn = vi.fn(async (c: Config, _nwo: string, _d: unknown) => {
+      cloneCfgs.push(c);
+      return { path: "/x/external/up/stream", forkNwo: "junco-agent/stream" };
+    });
+    const r = await makeGhDashboardClient(cfg, {
+      ...fakes(),
+      ensureCloneFn,
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+    }).prepareExternalRepo("up/stream");
+    expect(r).toEqual({
+      ok: true,
+      value: { path: "/x/external/up/stream", forkNwo: "junco-agent/stream" },
+    });
+    expect(cloneCfgs).toHaveLength(1);
+    expect(cloneCfgs[0].ghAuth?.login).toBe(FAKE_CTX.login);
+  });
+
+  it("bot auth failure (enabled but unauthed) → ok:false with the actionable message, never throws", async () => {
+    const ensureCloneFn = vi.fn(async (_c: unknown, _nwo: string, _d: unknown) => ({
+      path: "/x",
+      forkNwo: "y/z",
+    }));
+    const r = await makeGhDashboardClient(cfg, {
+      ...fakes(),
+      ensureCloneFn,
+      withBotAuthFn: async () => {
+        throw new Error("botAccount.enabled is true but no working gh login exists");
+      },
+    }).prepareExternalRepo("up/stream");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("no working gh login");
+    expect(ensureCloneFn).not.toHaveBeenCalled();
   });
 });
 

@@ -21,6 +21,16 @@ import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
 import { run } from "../src/cli.js";
+import { ConfigSchema } from "../src/config.js";
+import type { ConfigParsed } from "../src/config.js";
+
+/** Same literal as Task 2's CTX / ghAuth.test.ts's GhAuthContext fixture. */
+const FAKE_CTX = {
+  configDir: "/sbx/junco-gh",
+  login: "junco-agent",
+  email: "1234+junco-agent@users.noreply.github.com",
+  credentialHelper: "!gh auth git-credential",
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,6 +72,10 @@ function makeDeps(
     runOnceFn: vi.fn(async () => true),
     // Never touch a real fs.watch — the stub config path may not exist on disk.
     watchConfigFn: vi.fn(() => ({ close: vi.fn() })),
+    // stubConfig() returns `{}` — no botAccount — so the real withBotAuth
+    // would throw reading `.enabled` off undefined. Default to a no-op
+    // pass-through; tests that care about bot-auth wiring override it.
+    withBotAuthFn: vi.fn(async (c: Config) => c),
     ...overrides,
   };
 }
@@ -365,6 +379,101 @@ describe("run(['run-once'])", () => {
     const deps = makeDeps();
     await run(["run-once"], deps);
     expect(deps.mainLoopFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bot auth at daemon entrypoints — Task 6
+// ---------------------------------------------------------------------------
+
+describe("bot auth at daemon entrypoints", () => {
+  it("start refuses to run when bot auth resolution throws", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("botAccount.enabled is true but no working gh login exists");
+      },
+    });
+    const code = await run(["start"], deps);
+    expect(code).toBe(1);
+    expect(deps.mainLoopFn).not.toHaveBeenCalled();
+    expect(deps.acquireLockFn).not.toHaveBeenCalled();
+  });
+
+  it("start's refusal prints the failure to stderr", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("botAccount.enabled is true but no working gh login exists");
+      },
+    });
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    try {
+      await run(["start"], deps);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("")).toContain("botAccount.enabled is true but no working gh login exists");
+  });
+
+  it("start passes the bot-attached config through to mainLoopFn", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+    });
+    await run(["start"], deps);
+    const [seenCfg] = (deps.mainLoopFn as MockedFunction<any>).mock.calls[0];
+    expect((seenCfg as Config).ghAuth?.login).toBe(FAKE_CTX.login);
+  });
+
+  it("start's watcher re-attaches the startup ghAuth context while the reload keeps botAccount enabled, and drops it when the reload disables botAccount", async () => {
+    const watchConfigFn = vi.fn(() => ({ close: vi.fn() }));
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      watchConfigFn,
+    });
+    await run(["start"], deps);
+
+    const [, , watchDeps] = (watchConfigFn as MockedFunction<any>).mock.calls[0];
+    const assembleFn = watchDeps.assembleFn as (d: ConfigParsed) => Config;
+
+    const enabledParsed = ConfigSchema.parse({
+      vaultRoot: "/tmp/x",
+      botAccount: { enabled: true, configDir: "/tmp/gh" },
+    });
+    expect(assembleFn(enabledParsed).ghAuth?.login).toBe(FAKE_CTX.login);
+
+    const disabledParsed = ConfigSchema.parse({
+      vaultRoot: "/tmp/x",
+      botAccount: { enabled: false },
+    });
+    expect(assembleFn(disabledParsed).ghAuth).toBeUndefined();
+  });
+
+  it("run-once refuses to run when bot auth resolution throws", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("boom");
+      },
+    });
+    const code = await run(["run-once"], deps);
+    expect(code).toBe(1);
+    expect(deps.runOnceFn).not.toHaveBeenCalled();
+  });
+
+  it("run-once hands the attached config to runOnceFn", async () => {
+    let seen: Config | undefined;
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      runOnceFn: async (c: Config) => {
+        seen = c;
+        return false;
+      },
+    });
+    const code = await run(["run-once"], deps);
+    expect(code).toBe(0);
+    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
   });
 });
 

@@ -16,6 +16,7 @@ import type { DashPr } from "./prState.js";
 import { fetchJuncoPrs } from "../githubPrs.js";
 import { ensureExternalClone } from "../externalRepo.js";
 import { dispatchIssue } from "../externalDispatch.js";
+import { withBotAuth } from "../ghAuth.js";
 import { listPending, readPending, type PendingAssess } from "../assessReview.js";
 import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
@@ -171,6 +172,11 @@ export interface GhClientDeps {
   renameFn?: (a: string, b: string) => void;
   mkdirFn?: (d: string) => void;
   ensureCloneFn?: typeof ensureExternalClone;
+  /** Attach the daemon's bot-account GitHub auth context before
+   * prepareExternalRepo's fork/clone provisioning (Task 6, gh-bot-account
+   * spec) — same rule and monomorphic-over-Config typing as
+   * ExternalDispatchDeps.withBotAuthFn (see externalDispatch.ts). */
+  withBotAuthFn?: (cfg: Config) => Promise<Config>;
   dispatchIssueFn?: typeof dispatchIssue;
   listPendingFn?: typeof listPending;
   readPendingFn?: typeof readPending;
@@ -482,11 +488,17 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
 
     prepareExternalRepo(nwo) {
       return attempt(async () => {
+        // The fork this provisions is the DAEMON's future push target — it
+        // must live on the bot's account even though this runs human-triggered
+        // (spec: boundary exception; same rule as resolveIssueTarget's
+        // provisioning branch). A withBotAuth throw (enabled but unauthed)
+        // surfaces as an error Result via attempt(), never a crash.
+        const botCfg = await (deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c)))(cfg);
         // This call never opts out of forking (unlike assess's read-only path,
         // #105) — the dashboard's watch flow always needs a push target, so a
         // null forkNwo here means ensureExternalClone's fork step was skipped
         // unexpectedly. Fail loud rather than silently widen the return type.
-        const r = await (deps.ensureCloneFn ?? ensureExternalClone)(cfg, nwo, { ghFn, gitFn });
+        const r = await (deps.ensureCloneFn ?? ensureExternalClone)(botCfg, nwo, { ghFn, gitFn });
         if (r.forkNwo === null) {
           throw new Error(`${nwo}: expected a fork to be provisioned but got none`);
         }

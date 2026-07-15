@@ -19,6 +19,14 @@ import { parseTicket } from "../src/ticket.js";
 import { deriveRepoContext } from "../src/repoContext.js";
 import { readWatchlist, watchlistPath } from "../src/watchlist.js";
 
+/** Same literal as Task 2's CTX / cli.test.ts's FAKE_CTX. */
+const FAKE_CTX = {
+  configDir: "/sbx/junco-gh",
+  login: "junco-agent",
+  email: "1234+junco-agent@users.noreply.github.com",
+  credentialHelper: "!gh auth git-credential",
+};
+
 // ---------------------------------------------------------------------------
 // parseIssueRef
 // ---------------------------------------------------------------------------
@@ -118,6 +126,7 @@ describe("dispatchIssue", () => {
         plannerModelId: null,
         externalReposRoot: join(vaultRoot, "external"),
       },
+      botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     } as unknown as Config;
   }
 
@@ -226,6 +235,7 @@ describe("resolveIssueTarget", () => {
         plannerModelId: null,
         externalReposRoot: join(vaultRoot, "external"),
       },
+      botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     } as unknown as Config;
   }
 
@@ -341,5 +351,38 @@ describe("resolveIssueTarget", () => {
       },
     });
     expect(receivedFork).toBeUndefined(); // resolveIssueTarget forwards `opts` as-is; ensureExternalClone itself defaults fork to true
+  });
+
+  // --- bot-account provisioning (Task 6): the fork this provisions is the
+  // daemon's future push target, so it must be created under the bot's
+  // identity even though dispatch is human-triggered. ---
+
+  it("provisions unowned clones under the bot context; the issue-view read stays ambient", async () => {
+    const cfg = freshCfg();
+    const cloneCfgs: Array<Config> = [];
+    const t = await resolveIssueTarget(cfg, "up/stream#3", {
+      ghFn,
+      ensureCloneFn: async (c) => {
+        cloneCfgs.push(c);
+        return { path: "/clones/up/stream", forkNwo: "junco-agent/stream" };
+      },
+      withBotAuthFn: async (c) => ({ ...c, ghAuth: FAKE_CTX }),
+    });
+    expect(cloneCfgs).toHaveLength(1);
+    expect(cloneCfgs[0].ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(t.forkNwo).toBe("junco-agent/stream");
+  });
+
+  it("owned repos never call withBotAuthFn — the bot context is only for provisioning", async () => {
+    const cfg = freshCfg();
+    let botAuthCalled = false;
+    await resolveIssueTarget(cfg, "acme/api#7", {
+      ghFn,
+      withBotAuthFn: async (c) => {
+        botAuthCalled = true;
+        return { ...c, ghAuth: FAKE_CTX };
+      },
+    });
+    expect(botAuthCalled).toBe(false);
   });
 });
