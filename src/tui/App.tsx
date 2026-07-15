@@ -79,6 +79,9 @@ export interface AppProps {
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>;
   /** Fixed terminal size (tests) — ink-testing-library has no resizable stdout. */
   sizeOverride?: TerminalSize;
+  /** Palette "setup" hook: the Root host swaps to the setup walkthrough
+   * in-process (no subprocess). Absent when App is mounted standalone. */
+  onRequestWizard?: () => void;
   onExit: () => void;
 }
 
@@ -1062,6 +1065,14 @@ export function App(props: AppProps): React.JSX.Element {
     const visible = filterCommands(PALETTE_COMMANDS, paletteFilter);
     const current = visible[Math.min(paletteSel, Math.max(0, visible.length - 1))];
     if (!current) return;
+    if (current.name === "setup") {
+      // In-process: swap the Root host to the wizard instead of spawning a
+      // subprocess (there's no `junco setup` subcommand — the wizard can't
+      // nest a second Ink render inside this one).
+      setView("main");
+      props.onRequestWizard?.();
+      return;
+    }
     if (current.excluded !== null) {
       showToast("info", `${current.name}: ${current.excluded}`);
       return;
@@ -1073,7 +1084,15 @@ export function App(props: AppProps): React.JSX.Element {
     const typed = paletteArgs.split(/\s+/).filter(Boolean);
     const extraArgs = typed.length > 0 ? typed : current.defaultArgs;
     runPaletteCommand(current.name, extraArgs);
-  }, [paletteFilter, paletteSel, paletteArgsMode, paletteArgs, runPaletteCommand, showToast]);
+  }, [
+    paletteFilter,
+    paletteSel,
+    paletteArgsMode,
+    paletteArgs,
+    runPaletteCommand,
+    showToast,
+    props,
+  ]);
 
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
   // cursor's LocalRepo.nwo). The config-vs-watchlist decision comes from the

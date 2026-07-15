@@ -29,7 +29,10 @@ const cmd = (
   excluded: string | null = null,
 ): PaletteCommand => ({ name, argsHint, description, defaultArgs, excluded });
 
-/** Mirrors cli.ts USAGE — a consistency test pins runnable names to it. */
+/** Mirrors cli.ts USAGE — a consistency test pins runnable names to it. The
+ * one exception is "setup": App intercepts it in-process (the Root host swaps
+ * to the setup walkthrough) instead of spawning a subprocess, so it has no
+ * cli.ts USAGE row by design. */
 export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("status", null, "Daemon / endpoint / queue health at a glance"),
   cmd("list", "[box]", "List tickets per queue box (inbox|processing|done|failed)"),
@@ -51,7 +54,7 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("inbox-path", null, "Print the inbox directory path"),
   cmd("schema", null, "Print the ticket frontmatter JSON Schema"),
   cmd("submit", "<file|->", "Submit a ticket to the inbox"),
-  cmd("init", null, "Setup wizard", [], "interactive wizard — can't nest inside the dashboard"),
+  cmd("setup", null, "Guided setup walkthrough (runs inside the dashboard)"),
   cmd("dashboard", null, "This dashboard", [], "already running"),
   cmd("start", null, "Start the daemon", [], "foreground daemon would block — use restart"),
 ];

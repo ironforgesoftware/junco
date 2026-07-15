@@ -199,37 +199,45 @@ export const stubClient: DashboardClient = {
   }),
 };
 
-export function renderApp(over: Partial<AppProps> = {}): ReturnType<typeof render> {
+/** The full fake AppProps set `renderApp` mounts, as a plain object. Exported
+ * so callers that host `App` themselves (e.g. the Root FTUE switcher tests,
+ * which feed this as `buildAppProps`) get the identical prop set without the
+ * MouseProvider wrapper. */
+export function makeAppProps(over: Partial<AppProps> = {}): AppProps {
   const runCli: AppProps["runCliFn"] =
     over.runCliFn ?? (async () => ({ code: 0, output: "ok", timedOut: false }));
+  return {
+    client: stubClient,
+    trigger: "junco",
+    branchPrefix: "junco/",
+    configRepos: [
+      { nwo: "acme/api", path: "/c/api" },
+      { nwo: "beta/two", path: "/c/two" },
+    ],
+    watchlistFile: "/tmp/wl.json",
+    configPath: "/x/config.json",
+    clonesDir: "/x/state/repos",
+    refreshPollMs: 999999,
+    healthPollMs: 999999,
+    queuePollMs: 999999,
+    queueFn: async () => EMPTY_QUEUE,
+    localCheapFn: async () => CHEAP,
+    localHeavyFn: async () => HEAVY,
+    localCheapPollMs: 999999,
+    localHeavyPollMs: 999999,
+    initialUiMode: "github",
+    githubEnabled: true,
+    runCliFn: runCli,
+    sizeOverride: { columns: WIDE_COLS_TEST, rows: 30 },
+    onExit: () => {},
+    ...over,
+  };
+}
+
+export function renderApp(over: Partial<AppProps> = {}): ReturnType<typeof render> {
   return render(
     <MouseProvider>
-      <App
-        client={stubClient}
-        trigger="junco"
-        branchPrefix="junco/"
-        configRepos={[
-          { nwo: "acme/api", path: "/c/api" },
-          { nwo: "beta/two", path: "/c/two" },
-        ]}
-        watchlistFile="/tmp/wl.json"
-        configPath="/x/config.json"
-        clonesDir="/x/state/repos"
-        refreshPollMs={999999}
-        healthPollMs={999999}
-        queuePollMs={999999}
-        queueFn={async () => EMPTY_QUEUE}
-        localCheapFn={async () => CHEAP}
-        localHeavyFn={async () => HEAVY}
-        localCheapPollMs={999999}
-        localHeavyPollMs={999999}
-        initialUiMode="github"
-        githubEnabled
-        runCliFn={runCli}
-        sizeOverride={{ columns: WIDE_COLS_TEST, rows: 30 }}
-        onExit={() => {}}
-        {...over}
-      />
+      <App {...makeAppProps(over)} />
     </MouseProvider>,
   );
 }

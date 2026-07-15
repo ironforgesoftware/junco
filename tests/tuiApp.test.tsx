@@ -1445,11 +1445,13 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write(":");
     await tick();
-    r.stdin.write("init");
+    // "dashboard" is excluded ("already running") and, unlike "start" (which
+    // "restart" also matches), filters uniquely to its own excluded row.
+    r.stdin.write("dashboard");
     await tick();
     r.stdin.write("\r");
     // Exclusion reason is now an auto-expiring toast under the modal.
-    await until(() => (r.lastFrame() ?? "").includes("can't nest inside the dashboard"));
+    await until(() => (r.lastFrame() ?? "").includes("already running"));
     expect(runs).toHaveLength(0);
   });
 

@@ -2,20 +2,33 @@
  * `junco dashboard` — entry point. TTY guard runs BEFORE any Ink import so
  * non-interactive invocations never pay the React cost; the Ink app module
  * is loaded dynamically (the daemon and every other subcommand stay React-free).
+ *
+ * The dashboard hosts the first-run setup walkthrough (spec §4): a null `cfg`
+ * means no config exists yet, so the Ink Root opens the wizard first and swaps
+ * to the dashboard once a config is written. A FRESH-mode cancel is the only
+ * exit that returns non-zero (130).
  */
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
 import type { Config } from "./types.js";
+import type { AppProps } from "./tui/App.js";
 import type React from "react";
 
 export interface DashboardDeps {
   isTTY?: boolean;
   renderFn?: (element: React.ReactElement) => { waitUntilExit: () => Promise<void> };
   printErr?: (s: string) => void;
+  /** Config reload after the wizard writes one (FTUE handoff). Default: loadConfig. */
+  loadConfigFn?: (p: string) => Config;
+  /** stdout sink for the post-cancel message (Amendment 1). Default: process.stdout.write. */
+  printOut?: (s: string) => void;
+  /** Existence probe for the truthful cancel message (Amendment 1). Default: fs.existsSync. */
+  existsFn?: (p: string) => boolean;
 }
 
 export async function runDashboard(
-  cfg: Config,
+  cfg: Config | null,
   configPath: string,
   deps: DashboardDeps = {},
 ): Promise<number> {
@@ -23,15 +36,20 @@ export async function runDashboard(
   const printErr = deps.printErr ?? ((s: string) => process.stderr.write(s));
   if (!isTTY) {
     printErr(
-      "junco dashboard needs an interactive terminal.\n" +
-        "Try `junco list`, `junco status`, or `junco logs -f` instead.\n",
+      cfg === null
+        ? "junco dashboard needs an interactive terminal for first-run setup.\n" +
+            "  Run `junco config init` to scaffold a default config headlessly, then re-run in a terminal.\n"
+        : "junco dashboard needs an interactive terminal.\n" +
+            "Try `junco list`, `junco status`, or `junco logs -f` instead.\n",
     );
     return 1;
   }
 
   const [
-    { App },
+    { Root },
     { MouseProvider },
+    { buildWizardIO },
+    { loadConfig },
     { makeGhDashboardClient },
     { watchlistPath },
     { makeQueueSnapshotFn },
@@ -39,8 +57,11 @@ export async function runDashboard(
     react,
     ink,
   ] = await Promise.all([
-    import("./tui/App.js"),
+    // App.js is pulled in transitively by Root.js — no separate value import.
+    import("./tui/Root.js"),
     import("./tui/MouseProvider.js"),
+    import("./wizard.js"),
+    import("./config.js"),
     import("./tui/ghClient.js"),
     import("./watchlist.js"),
     import("./tui/queueSnapshot.js"),
@@ -54,34 +75,60 @@ export async function runDashboard(
     deps.renderFn ??
     ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true, alternateScreen: true }));
 
-  const client = makeGhDashboardClient(cfg);
+  // The exact prop assembly that used to live inline — now per-config so the
+  // FTUE handoff (and future config re-runs) rebuild the client stack fresh.
+  const buildAppProps = (c: Config): Omit<AppProps, "onRequestWizard"> => ({
+    client: makeGhDashboardClient(c),
+    trigger: c.github.triggerLabel,
+    branchPrefix: c.branchPrefix,
+    configRepos: c.github.repos,
+    watchlistFile: watchlistPath(c),
+    // The palette spawns CLI subcommands against this same config.
+    configPath,
+    // Managed clones for the add-repo "empty path = clone for me" flow.
+    clonesDir: join(c.stateDir, "repos"),
+    queueFn: makeQueueSnapshotFn(c),
+    // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
+    localCheapFn: makeLocalCheapFn(c),
+    localHeavyFn: makeLocalHeavyFn(c),
+    // GitHub disabled -> land on LOCAL; the daemon still won't sweep GitHub,
+    // but there's a live local surface to show instead of refusing to launch.
+    initialUiMode: c.github.enabled ? "github" : "local",
+    githubEnabled: c.github.enabled,
+    // App drives useApp().exit() itself; this stays a no-op hook point.
+    onExit: () => {},
+  });
+
+  let exitCode = 0;
   const instance = renderFn(
     react.createElement(
       MouseProvider,
       null,
-      react.createElement(App, {
-        client,
-        trigger: cfg.github.triggerLabel,
-        branchPrefix: cfg.branchPrefix,
-        configRepos: cfg.github.repos,
-        watchlistFile: watchlistPath(cfg),
-        // The palette spawns CLI subcommands against this same config.
+      react.createElement(Root, {
         configPath,
-        // Managed clones for the add-repo "empty path = clone for me" flow.
-        clonesDir: join(cfg.stateDir, "repos"),
-        queueFn: makeQueueSnapshotFn(cfg),
-        // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
-        localCheapFn: makeLocalCheapFn(cfg),
-        localHeavyFn: makeLocalHeavyFn(cfg),
-        // GitHub disabled -> land on LOCAL; the daemon still won't sweep GitHub,
-        // but there's a live local surface to show instead of refusing to launch.
-        initialUiMode: cfg.github.enabled ? "github" : "local",
-        githubEnabled: cfg.github.enabled,
-        // App drives useApp().exit() itself; this stays a no-op hook point.
-        onExit: () => {},
+        initialConfig: cfg,
+        buildAppProps,
+        makeWizardIo: () => buildWizardIO(configPath),
+        loadConfigFn: deps.loadConfigFn ?? loadConfig,
+        onFinalExitCode: (n: number) => {
+          exitCode = n;
+        },
       }),
     ),
   );
   await instance.waitUntilExit();
-  return 0;
+  if (exitCode === 130) {
+    // Amendment 1 — truthful cancel: WizardIO.write() renames the config into
+    // place BEFORE a throwable re-read, so a user CAN cancel with the file
+    // already on disk. Existence-check at PRINT time rather than unconditionally
+    // claiming nothing was written.
+    const printOut = deps.printOut ?? ((s: string) => process.stdout.write(s));
+    const exists = (deps.existsFn ?? existsSync)(resolve(configPath));
+    printOut(
+      exists
+        ? `Setup did not finish — but a config exists at ${configPath}. Run junco doctor to verify it.\n`
+        : "Setup cancelled — nothing written.\n",
+    );
+  }
+  return exitCode;
 }

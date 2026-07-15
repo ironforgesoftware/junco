@@ -867,10 +867,11 @@ describe("run(['init']) — wizard routing", () => {
 });
 
 describe("run(['dashboard']) — routing", () => {
-  it("routes `dashboard` to runDashboardFn with the loaded config", async () => {
+  it("routes `dashboard` to runDashboardFn with the loaded config when one exists", async () => {
     const { cfg } = freshDispatchVault(); // the file's existing full-Config helper
     let got: Config | null = null;
     const code = await run(["dashboard", "--config", "/x/config.json"], {
+      existsFn: () => true, // config present → config-loaded path
       loadConfigFn: () => cfg,
       runDashboardFn: async (c) => {
         got = c;
@@ -879,6 +880,22 @@ describe("run(['dashboard']) — routing", () => {
     });
     expect(code).toBe(0);
     expect(got).not.toBeNull();
+  });
+
+  it("routes `dashboard` with NO config to the FTUE path (null cfg, config never loaded)", async () => {
+    let got: Config | null | undefined = undefined;
+    const code = await run(["dashboard", "--config", "/x/config.json"], {
+      existsFn: () => false, // no config → dashboard hosts the wizard
+      loadConfigFn: () => {
+        throw new Error("config must not be loaded on the FTUE path");
+      },
+      runDashboardFn: async (c) => {
+        got = c;
+        return 0;
+      },
+    });
+    expect(code).toBe(0);
+    expect(got).toBeNull();
   });
 });
 

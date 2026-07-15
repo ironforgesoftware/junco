@@ -32,8 +32,11 @@ describe("CommandPalette", () => {
     const f = lastFrame()!;
     expect(f).toContain("status");
     expect(f).toContain("queue health");
-    expect(f).toContain("init");
-    expect(f).toContain("can't nest inside the dashboard");
+    // "setup" is a runnable in-process row (Root swaps to the wizard).
+    expect(f).toContain("setup");
+    expect(f).toContain("Guided setup walkthrough");
+    // "dashboard" stays excluded-with-reason ("already running").
+    expect(f).toContain("already running");
   });
 
   it("filter narrows the visible rows", () => {

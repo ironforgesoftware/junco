@@ -93,6 +93,77 @@ describe("runDashboard", () => {
   });
 });
 
+describe("runDashboard FTUE (nullable config)", () => {
+  it("non-TTY with a null config exits 1 and points at `config init`", async () => {
+    let rendered = false;
+    const errs: string[] = [];
+    const code = await runDashboard(null, "/x/config.json", {
+      isTTY: false,
+      renderFn: () => {
+        rendered = true;
+        return { waitUntilExit: async () => {} };
+      },
+      printErr: (s) => errs.push(s),
+    });
+    expect(code).toBe(1);
+    expect(rendered).toBe(false);
+    expect(errs.join("")).toContain("config init");
+  });
+
+  it("TTY with a null config renders the Root element without throwing", async () => {
+    let el: unknown = null;
+    const code = await runDashboard(null, "/x/config.json", {
+      isTTY: true,
+      renderFn: (element) => {
+        el = element;
+        return { waitUntilExit: async () => {} };
+      },
+    });
+    expect(code).toBe(0);
+    expect(el).not.toBeNull();
+  });
+
+  // Amendment 1 — truthful cancel message: the wizard renames the config into
+  // place before a throwable re-read, so a user CAN cancel with the file
+  // already on disk. runDashboard existence-checks at print time.
+  it("FTUE cancel with NO file on disk prints the truthful 'nothing written' message", async () => {
+    const outs: string[] = [];
+    const code = await runDashboard(null, "/x/config.json", {
+      isTTY: true,
+      existsFn: () => false,
+      printOut: (s) => outs.push(s),
+      renderFn: (element) => {
+        // Root is the MouseProvider's child; fire its FTUE-cancel callback.
+        (
+          element.props as { children: { props: { onFinalExitCode: (n: number) => void } } }
+        ).children.props.onFinalExitCode(130);
+        return { waitUntilExit: async () => {} };
+      },
+    });
+    expect(code).toBe(130);
+    expect(outs.join("")).toContain("nothing written");
+    expect(outs.join("")).not.toContain("junco doctor");
+  });
+
+  it("FTUE cancel with a file ALREADY on disk prints the truthful 'config exists' message", async () => {
+    const outs: string[] = [];
+    const code = await runDashboard(null, "/x/config.json", {
+      isTTY: true,
+      existsFn: () => true,
+      printOut: (s) => outs.push(s),
+      renderFn: (element) => {
+        (
+          element.props as { children: { props: { onFinalExitCode: (n: number) => void } } }
+        ).children.props.onFinalExitCode(130);
+        return { waitUntilExit: async () => {} };
+      },
+    });
+    expect(code).toBe(130);
+    expect(outs.join("")).toContain("a config exists at");
+    expect(outs.join("")).toContain("junco doctor");
+  });
+});
+
 describe("lazy loading discipline", () => {
   it("cli.ts reaches the dashboard only through a dynamic import", async () => {
     const { readFileSync } = await import("node:fs");

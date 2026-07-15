@@ -92,8 +92,10 @@ export interface CliDeps {
   existsFn?: (path: string) => boolean;
   /** The init wizard (tests inject a spy to assert routing without touching the fs). */
   runInitWizardFn?: (configPath: string, opts: { yes?: boolean }) => Promise<number>;
-  /** The dashboard command (tests inject a spy; default lazily imports dashboardCmd.js). */
-  runDashboardFn?: (cfg: Config, configPath: string) => Promise<number>;
+  /** The dashboard command (tests inject a spy; default lazily imports
+   * dashboardCmd.js). `cfg` is null on the FTUE path (no config on disk yet —
+   * the dashboard hosts the setup walkthrough). */
+  runDashboardFn?: (cfg: Config | null, configPath: string) => Promise<number>;
   /** The restart command (takes the RESOLVED config path — it matches service
    * units and the worker.lock by path, not by parsed config). */
   runRestartFn?: (configPath: string) => Promise<number>;
@@ -606,14 +608,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // React-free).
   // ------------------------------------------------------------
   if (subcommand === "dashboard") {
-    const cfg = loadConfigFn(configPath);
-    setLogLevel(cfg.logLevel);
     const runDashboardFn =
       deps.runDashboardFn ??
-      (async (c: Config, p: string) => {
+      (async (c: Config | null, p: string) => {
         const { runDashboard } = await import("./dashboardCmd.js");
         return runDashboard(c, p);
       });
+    if (!existsFn(resolve(configPath))) {
+      // FTUE: the dashboard hosts the setup walkthrough (spec §4) — no config
+      // to load yet, so pass null and let the Ink Root open the wizard first.
+      return runDashboardFn(null, configPath);
+    }
+    const cfg = loadConfigFn(configPath);
+    setLogLevel(cfg.logLevel);
     return runDashboardFn(cfg, configPath);
   }
 
