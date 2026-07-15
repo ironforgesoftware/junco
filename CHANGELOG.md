@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Full-TUI mouse control with hover feedback: config editor, command palette, queue, review, help, add-repo, LOCAL dashboard, plus clickable footer hint chips in every view.
+
+### Changed
+
+- Dashboard mouse protocol upgraded to SGR any-motion tracking (hover); click targets now resolve via a render-time hit-region registry.
+
 ## [0.7.0] - 2026-07-12
 
 ### Added
