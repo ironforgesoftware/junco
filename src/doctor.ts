@@ -26,6 +26,7 @@ export interface DoctorDeps {
   execFn?: (
     cmd: string,
     args: string[],
+    opts?: { env?: Record<string, string> },
   ) => Promise<{ code: number; stdout: string; stderr: string }>;
   reachableFn?: (cfg: Config) => Promise<boolean>;
   fetchModelsFn?: typeof fetchModels;
@@ -182,6 +183,48 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         "gh",
         auth.code === 0 ? "authenticated" : "installed but not authenticated (run: gh auth login)",
       );
+    }
+
+    // 4b. bot account (only when enabled): identity under the isolated config
+    // dir; same-login means the bot identity is doing nothing.
+    if (cfg.botAccount.enabled && ghVer.code === 0) {
+      const botEnv = { env: { GH_CONFIG_DIR: cfg.botAccount.configDir } };
+      const bot = await execFn(cfg.ghBin, ["api", "user"], botEnv);
+      if (bot.code !== 0) {
+        report(
+          "fail",
+          "bot account",
+          `enabled but not logged in under ${cfg.botAccount.configDir} (run: junco auth login)`,
+        );
+      } else {
+        let botLogin: string | null = null;
+        try {
+          botLogin = (JSON.parse(bot.stdout) as { login: string }).login;
+        } catch {
+          /* fall through to inconclusive */
+        }
+        if (botLogin === null) {
+          report("warn", "bot account", "could not parse gh api user output");
+        } else {
+          const ambient = await execFn(cfg.ghBin, ["api", "user"]);
+          let ambientLogin: string | null = null;
+          try {
+            ambientLogin =
+              ambient.code === 0 ? (JSON.parse(ambient.stdout) as { login: string }).login : null;
+          } catch {
+            /* ambient identity is optional here */
+          }
+          if (ambientLogin !== null && ambientLogin === botLogin) {
+            report(
+              "warn",
+              "bot account",
+              `bot login "${botLogin}" equals your personal gh login — separate identities to get attribution/approval value`,
+            );
+          } else {
+            report("ok", "bot account", `acting as ${botLogin}`);
+          }
+        }
+      }
     }
 
     // 4a. sandbox backend (only when enabled)
@@ -396,6 +439,40 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           `github repo ${repo.nwo}`,
           view.code === 0 ? repo.path : "not reachable via gh (auth? spelling?)",
         );
+
+        // Bot mode only: the bot account needs enough permission on this
+        // watched repo to actually push branches, not just read issues.
+        if (cfg.botAccount.enabled) {
+          const perm = await execFn(
+            cfg.ghBin,
+            ["repo", "view", repo.nwo, "--json", "viewerPermission"],
+            { env: { GH_CONFIG_DIR: cfg.botAccount.configDir } },
+          );
+          let level: string | null = null;
+          try {
+            level =
+              perm.code === 0
+                ? (JSON.parse(perm.stdout) as { viewerPermission: string }).viewerPermission
+                : null;
+          } catch {
+            /* inconclusive */
+          }
+          if (level === "ADMIN" || level === "MAINTAIN" || level === "WRITE") {
+            report("ok", `bot access: ${repo.nwo}`, level.toLowerCase());
+          } else if (level === "TRIAGE") {
+            report(
+              "warn",
+              `bot access: ${repo.nwo}`,
+              "triage — label edits work, branch pushes will fail; invite the bot with write",
+            );
+          } else {
+            report(
+              "warn",
+              `bot access: ${repo.nwo}`,
+              `${level ?? "unknown"} — invite the bot as a collaborator (write) for this watched repo`,
+            );
+          }
+        }
       }
       report("ok", "github watchlist", watchlistPath(cfg));
     }
