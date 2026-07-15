@@ -5,6 +5,7 @@
 export const theme = {
   accent: "#eb6f92",
   selectionBg: "#2a2e3a",
+  hoverBg: "#20242f",
   border: "gray",
   success: "green",
   warn: "yellow",
