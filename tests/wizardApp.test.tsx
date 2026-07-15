@@ -203,6 +203,41 @@ describe("WizardApp", () => {
     await until(() => outcome === "cancelled");
   });
 
+  it("onOutcome fires exactly once on repeated finish attempts; WizardApp never exits Ink itself", async () => {
+    // Regression for the Plan B Task 2 refactor: finishWith used to call
+    // useApp().exit() right after onOutcome, which both reports the outcome
+    // AND tears the Ink instance down. Now the HOST owns that lifetime, so
+    // WizardApp must (a) still guard onOutcome to exactly one call even if
+    // finish is triggered again, and (b) stay mounted and responsive
+    // afterward — no self-inflicted unmount to verify that against.
+    let calls = 0;
+    let outcome = "";
+    const { lastFrame, stdin } = render(
+      <WizardApp
+        io={fakeIo()}
+        onOutcome={(o) => {
+          calls++;
+          outcome = o;
+        }}
+        sizeOverride={SIZE}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Ada"));
+    await press(stdin, ESC); // cancel
+    await until(() => outcome === "cancelled");
+    expect(calls).toBe(1);
+    // Would-be second and third finish attempts — guarded by the `reported`
+    // ref. If WizardApp had exited Ink here (old behavior), stdin.write below
+    // would be writing into a torn-down instance instead of exercising the
+    // guard.
+    await press(stdin, ESC);
+    await press(stdin, "\x03");
+    expect(calls).toBe(1);
+    expect(outcome).toBe("cancelled");
+    // Still mounted and rendering — proof WizardApp itself never exited.
+    expect(lastFrame()).toContain("Ada");
+  });
+
   it("q typed into a text field does NOT cancel", async () => {
     let outcome = "none";
     const { lastFrame, stdin } = render(

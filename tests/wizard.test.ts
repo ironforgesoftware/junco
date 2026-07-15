@@ -2,13 +2,70 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runInitWizard } from "../src/wizard.js";
+import { runInitWizard, buildWizardIO } from "../src/wizard.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), "wiz-"));
 const read = (p: string): Record<string, unknown> =>
   JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+
+describe("buildWizardIO", () => {
+  it("fresh mode when no config exists; io.write scaffolds it", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const r = buildWizardIO(cp, { existsFn: () => false });
+    expect(r.ok && r.mode).toBe("fresh");
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.mode).toBe("fresh");
+    expect(r.io.currentRaw).toBeNull();
+    expect(r.io.initialAnswers).toEqual(defaultAnswers());
+    const a = { ...r.io.initialAnswers, vaultRoot: join(dir, "vault") };
+    const result = r.io.write(a);
+    expect(result.written).toBe(true);
+    expect(read(cp).vaultRoot).toBe(join(dir, "vault"));
+    expect(existsSync(join(dir, "vault", "inbox"))).toBe(true);
+  });
+
+  it("rerun mode reads the existing raw config into initialAnswers", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const raw = {
+      vaultRoot: join(dir, "vault"),
+      juncoSubdir: "",
+      model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" },
+      worker: { maxConcurrent: 4 },
+    };
+    writeFileSync(cp, JSON.stringify(raw), "utf8");
+    const r = buildWizardIO(cp);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.mode).toBe("rerun");
+    expect(r.io.mode).toBe("rerun");
+    expect(r.io.initialAnswers.modelId).toBe("p/m");
+    expect(r.io.currentRaw).toEqual(raw);
+  });
+
+  it("invalid existing config → ok:false with the parse reason", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    writeFileSync(cp, "not json{", "utf8");
+    const r = buildWizardIO(cp);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected ok:false");
+    expect(r.error).toMatch(/not a valid config/);
+  });
+
+  it("non-object existing config → ok:false", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    writeFileSync(cp, "42", "utf8");
+    const r = buildWizardIO(cp);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected ok:false");
+    expect(r.error).toMatch(/not a valid config/);
+  });
+});
 
 describe("runInitWizard --yes", () => {
   it("writes the default config and creates the queue dirs, no prompts", async () => {
@@ -131,22 +188,38 @@ describe("runInitWizard interactive (collectFn seam)", () => {
     expect(existsSync(join(dir, "vault", "inbox"))).toBe(true); // dirs still ensured
   });
 
-  it("cancel after a successful write reports the config WAS written (truthful exit)", async () => {
-    // Regression for #174: io.write can succeed (file renamed into place) and
+  it("cancel after a successful write still reports the generic cancelled message (transitional)", async () => {
+    // Was the #174 regression test ("...reports the config WAS written,
+    // truthful exit"): io.write can succeed (file renamed into place) and
     // *then* throw further down the same call (ensureDirs -> loadConfigFn) —
     // e.g. a corrupt/unreadable config surfacing only once queuePaths reads
-    // it back. The collectFn swallows that throw and reports "cancelled", so
-    // the exit message must not lie about nothing being on disk.
+    // it back. runInitWizard used to track that with an outer `wroteFile`
+    // flag so the cancel message stayed truthful about the on-disk state.
+    //
+    // Plan B Task 2 moved io.write into buildWizardIO's closure, so
+    // runInitWizard no longer has visibility into whether the rename landed
+    // before the later throw — per that task's brief, the flag is dropped
+    // rather than threaded through WizardIoResult.
+    //
+    // Known transitional inaccuracy, accepted: this path IS reachable with
+    // the real WizardApp, not just this fake collectFn — write() renames the
+    // config into place BEFORE ensureDirs(loadConfigFn(...)), which can
+    // throw independently; WizardApp catches that throw and leaves `result`
+    // null, so a subsequent q/Esc/Ctrl-C maps to cancel() with the file
+    // already on disk, and "Setup cancelled — nothing written." is wrong on
+    // that narrow path. runInitWizard is deleted in the next tasks (B4), so
+    // no release ever carries this; the dashboard host (B3) restores
+    // truthful reporting via an existence check at print time.
     const dir = tmp();
     const cp = join(dir, "config.json");
     const prints: string[] = [];
     const code = await runInitWizard(cp, {
       printFn: (s) => prints.push(s),
       // Throw on the read-back that follows the successful rename: io.write's
-      // file write lands (wroteFile flips true) and THEN the ensureDirs step
-      // blows up — the exact partial-failure shape #174 is about. Throwing
-      // here also keeps the test sandboxed: ensureDirs never runs, so the
-      // default "~/Junco" vaultRoot never touches the real $HOME.
+      // file write lands and THEN the ensureDirs step blows up — the exact
+      // partial-failure shape #174 is about. Throwing here also keeps the
+      // test sandboxed: ensureDirs never runs, so the default "~/Junco"
+      // vaultRoot never touches the real $HOME.
       loadConfigFn: () => {
         throw new Error("boom: unreadable after write");
       },
@@ -162,9 +235,7 @@ describe("runInitWizard interactive (collectFn seam)", () => {
     });
     expect(code).toBe(130);
     expect(existsSync(cp)).toBe(true); // the write itself landed
-    expect(prints.join("")).toContain("config WAS written");
-    expect(prints.join("")).toContain(cp);
-    expect(prints.join("")).toContain("junco doctor");
+    expect(prints.join("")).toBe("Setup cancelled — nothing written.\n");
   });
 
   it("rename failure cleans up the PID-suffixed temp file and rethrows", async () => {

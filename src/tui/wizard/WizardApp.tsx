@@ -1,10 +1,10 @@
 /** The walkthrough shell: chapter rail (✓/▶), chapter router, footer legend,
  * and global navigation keys. Chapters own Enter; this component owns
  * q/Esc/←/Ctrl-C. `textEditing` mutes q while a TextField is focused so "q"
- * can be typed into paths. Outcome is reported exactly once via onOutcome,
- * then the app exits (runInitWizard maps it to an exit code). */
+ * can be typed into paths. Outcome is reported exactly once via onOutcome;
+ * the HOST — Root — swaps views or exits. */
 import React, { useRef, useState } from "react";
-import { Box, Text, useApp } from "ink";
+import { Box, Text } from "ink";
 import { CHAPTERS, type WizardAnswers } from "../../wizard/flow.js";
 import type { WizardIO, WizardOutcome, WriteResult } from "../../wizard/io.js";
 import { theme } from "../theme.js";
@@ -32,7 +32,6 @@ export function WizardApp({
   sizeOverride,
   revealMs,
 }: WizardAppProps): React.JSX.Element {
-  const { exit } = useApp();
   const size = useTerminalSize(sizeOverride);
   const narrow = size.columns < 80;
   const [answers, setAnswers] = useState<WizardAnswers>(io.initialAnswers);
@@ -46,7 +45,6 @@ export function WizardApp({
     if (reported.current) return;
     reported.current = true;
     onOutcome(o);
-    exit();
   };
   const cancel = (): void => finishWith("cancelled");
   const patch = (p: Partial<WizardAnswers>): void => setAnswers((a) => ({ ...a, ...p }));
