@@ -186,6 +186,7 @@ Subcommands:
   analyze edit <id>                       edit a pending draft in $EDITOR
   analyze post <id> [--no-footer]        post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
+  auth login   Log the junco bot account in (isolated gh config dir; daemon acts as it)
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive dashboard — first run opens the guided setup walkthrough
   restart      Restart the supervised daemon (picks up config + code changes)
@@ -839,6 +840,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       process.stderr.write(`junco dispatch: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
+  }
+
+  // ------------------------------------------------------------
+  // auth login: log the bot account in (isolated GH_CONFIG_DIR). Lazy import
+  // keeps it off every other subcommand's require graph.
+  // ------------------------------------------------------------
+  if (subcommand === "auth") {
+    const { runAuthCommand } = await import("./authCmd.js");
+    return runAuthCommand(positionals.slice(1), configPath, {});
   }
 
   // ------------------------------------------------------------

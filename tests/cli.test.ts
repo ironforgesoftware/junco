@@ -1115,3 +1115,47 @@ describe("run(['dispatch', ref])", () => {
     expect(loadConfigFn).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// auth subcommand — gh-bot-account Task 9. The cli.ts block lazy-imports
+// authCmd with NO injectable dep (deps: {}), so these exercise the real
+// routing into runAuthCommand; process.stderr is spied (the :409 precedent)
+// because runAuthCommand's printErr defaults to process.stderr.write.
+// ---------------------------------------------------------------------------
+
+describe("run(['auth']) — routing", () => {
+  async function runCapturingStderr(argv: string[]): Promise<{ code: number; err: string }> {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      lines.push(String(s));
+      return true;
+    });
+    try {
+      const code = await run(argv, {});
+      return { code, err: lines.join("") };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("`auth login` with no config on disk routes into runAuthCommand: exit 1 + dashboard hint", async () => {
+    const { code, err } = await runCapturingStderr([
+      "auth",
+      "login",
+      "--config",
+      "/nonexistent/junco-cli-auth/config.json",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("junco dashboard");
+  });
+
+  it("verb-free `auth` is a usage error: exit 2 + the auth usage line", async () => {
+    const { code, err } = await runCapturingStderr([
+      "auth",
+      "--config",
+      "/nonexistent/junco-cli-auth/config.json",
+    ]);
+    expect(code).toBe(2);
+    expect(err).toMatch(/usage: junco auth login/i);
+  });
+});
