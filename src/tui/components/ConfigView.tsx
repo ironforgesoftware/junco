@@ -19,11 +19,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Box, Text, useInput, useStdout } from "ink";
+import { Box, Text, useStdout } from "ink";
 import { theme } from "../theme.js";
 import { TextField } from "./TextField.js";
 import { LEVERS, getAtPath, setAtPath, coerceLever, type Lever } from "../../configLevers.js";
 import { validateConfigObject } from "../../config.js";
+import { useGuardedInput } from "../useGuardedInput.js";
 
 /** Top-level scalar leaves that share one "general" section rather than each
  * getting a one-row section of their own. */
@@ -263,7 +264,7 @@ export function ConfigView({
     commit(target, c.value);
   };
 
-  useInput((_input, key) => {
+  useGuardedInput((_input, key) => {
     if (editing !== null) {
       // Typing/backspace/submit belong to the inline TextField below (it has
       // its own active useInput); this hook's only job while editing is Esc.

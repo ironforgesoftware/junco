@@ -5,10 +5,10 @@
  * chapter component implements.
  */
 import React, { useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { BIRD } from "../../wizard/tips.js";
-import { isMouseInput } from "../mouse.js";
+import { useGuardedInput } from "../useGuardedInput.js";
 import type { CheckResult } from "../../wizard/detect.js";
 import type { WizardAnswers } from "../../wizard/flow.js";
 import type { WizardIO } from "../../wizard/io.js";
@@ -76,9 +76,8 @@ export function Select({
   // mutated value; `bump` just forces the re-render that reads it back out.
   const idxRef = useRef(initial);
   const [, bump] = useState(0);
-  useInput(
+  useGuardedInput(
     (input, key) => {
-      if (isMouseInput(input)) return;
       if (key.upArrow) {
         idxRef.current = Math.max(0, idxRef.current - 1);
         bump((n) => n + 1);
@@ -128,9 +127,8 @@ export function MultiSelect({
   const idxRef = useRef(0);
   const checkedRef = useRef(items.map((i) => i.checked));
   const [, bump] = useState(0);
-  useInput(
+  useGuardedInput(
     (input, key) => {
-      if (isMouseInput(input)) return;
       if (key.upArrow) {
         idxRef.current = Math.max(0, idxRef.current - 1);
         onFocusChange(idxRef.current);

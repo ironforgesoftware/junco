@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { TextField } from "./TextField.js";
 import { Spinner } from "./Spinner.js";
+import { useGuardedInput } from "../useGuardedInput.js";
 
 export function AddRepoForm({
   error,
@@ -20,7 +21,7 @@ export function AddRepoForm({
   const [field, setField] = useState<"nwo" | "path">("nwo");
   const busy = busyText !== null;
 
-  useInput((_i, key) => {
+  useGuardedInput((_i, key) => {
     if (key.escape) onCancel();
   });
 

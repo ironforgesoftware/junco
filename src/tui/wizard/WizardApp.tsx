@@ -4,12 +4,12 @@
  * can be typed into paths. Outcome is reported exactly once via onOutcome,
  * then the app exits (runInitWizard maps it to an exit code). */
 import React, { useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp } from "ink";
 import { CHAPTERS, type WizardAnswers } from "../../wizard/flow.js";
 import type { WizardIO, WizardOutcome, WriteResult } from "../../wizard/io.js";
 import { theme } from "../theme.js";
 import { useTerminalSize, type TerminalSize } from "../useTerminalSize.js";
-import { isMouseInput } from "../mouse.js";
+import { useGuardedInput } from "../useGuardedInput.js";
 import { Welcome } from "./chapters/Welcome.js";
 import { Workspace } from "./chapters/Workspace.js";
 import { Model } from "./chapters/Model.js";
@@ -78,8 +78,7 @@ export function WizardApp({
   };
   const done = (): void => finishWith(result?.written ? "written" : "unchanged");
 
-  useInput((input, key) => {
-    if (isMouseInput(input)) return;
+  useGuardedInput((input, key) => {
     if (key.ctrl && input === "c") return result !== null ? done() : cancel();
     if (result !== null) {
       if (input === "q") return done(); // config already written — q finishes

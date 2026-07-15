@@ -1,6 +1,6 @@
 import React from "react";
-import { Text, useInput } from "ink";
-import { isMouseInput } from "../mouse.js";
+import { Text } from "ink";
+import { useGuardedInput } from "../useGuardedInput.js";
 
 /** Minimal single-line input: printable chars append, backspace deletes,
  * enter submits. Only listens while `focus` is true. `mask` renders every
@@ -22,9 +22,8 @@ export function TextField({
   placeholder: string;
   mask?: boolean;
 }): React.JSX.Element {
-  useInput(
+  useGuardedInput(
     (input, key) => {
-      if (isMouseInput(input)) return;
       if (key.return) return onSubmit();
       if (key.backspace || key.delete) return onChange(value.slice(0, -1));
       if (input && !key.ctrl && !key.meta && !key.escape) onChange(value + input);

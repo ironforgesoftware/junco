@@ -7,7 +7,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, type Key } from "ink";
 import type { DashboardClient, HealthInfo } from "./ghClient.js";
 import type { DashAction, DashIssue } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
@@ -45,7 +45,8 @@ import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
 import { useMouse } from "./useMouse.js";
 import { hitTest, type HitContext } from "./hitTest.js";
-import { isMouseInput, type MouseEvent as TuiMouseEvent } from "./mouse.js";
+import { type MouseEvent as TuiMouseEvent } from "./mouse.js";
+import { useGuardedInput } from "./useGuardedInput.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -1304,10 +1305,7 @@ export function App(props: AppProps): React.JSX.Element {
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
 
-  const handleLocalInput = (
-    input: string,
-    key: Parameters<Parameters<typeof useInput>[0]>[1],
-  ): void => {
+  const handleLocalInput = (input: string, key: Key): void => {
     // The help modal owns the screen while open — any key closes it, mirroring
     // the github cascade's "any key closes help" rule (view === "help" there).
     // Without this branch keys fell through to rail/body handling underneath
@@ -1427,11 +1425,7 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
   };
 
-  useInput((input, key) => {
-    // Mouse reporting leaks SGR sequences into useInput as keypresses (ink
-    // strips the ESC) — drop them; onMouseEvent owns the real events via stdin.
-    if (isMouseInput(input)) return; // layer 1
-
+  useGuardedInput((input, key) => {
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return; // layer 2 (text field owns input)
 

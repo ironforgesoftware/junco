@@ -2,12 +2,12 @@
  * revealed one line at a time (Astro-style pacing; failures never block:
  * the config is already on disk and every ✗ names its fix). */
 import React, { useEffect, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { ReceiptList } from "../controls.js";
 import { Spinner } from "../../components/Spinner.js";
 import { NEXT_STEPS, TIPS, BIRD } from "../../../wizard/tips.js";
 import { theme } from "../../theme.js";
-import { isMouseInput } from "../../mouse.js";
+import { useGuardedInput } from "../../useGuardedInput.js";
 import type { CheckResult } from "../../../wizard/detect.js";
 import type { WriteResult, WizardIO } from "../../../wizard/io.js";
 
@@ -34,8 +34,7 @@ export function Finale({ result, io, onDone, revealMs = 150 }: FinaleProps): Rea
     const id = setTimeout(() => setShown((n) => n + 1), revealMs);
     return () => clearTimeout(id);
   }, [checks, shown, revealMs]);
-  useInput((input, key) => {
-    if (isMouseInput(input)) return;
+  useGuardedInput((_input, key) => {
     if (key.return) onDone();
   });
   return (
