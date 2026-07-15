@@ -120,6 +120,9 @@ export interface CliDeps {
   runRestartFn?: (configPath: string) => Promise<number>;
   /** Injected by tests: the dispatch core (default lazily used from externalDispatch.js). */
   dispatchIssueFn?: typeof import("./externalDispatch.js").dispatchIssue;
+  /** Injected by tests: the outbox list/flush core (default lazily from outboxCmd.js).
+   *  A seam so the flush path's bot-auth attach is observable without real state. */
+  runOutboxCommandFn?: typeof import("./outboxCmd.js").runOutboxCommand;
   /** Largest ticket timeout (seconds) currently reachable in the queue, used to
    *  size the `service` stop-timeout so a long ticket isn't SIGKILLed mid-drain
    *  (#118). Default: a best-effort scan of inbox/ + processing/. */
@@ -581,8 +584,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "outbox") {
     const cfg = loadConfigFn(configPath);
-    const { runOutboxCommand } = await import("./outboxCmd.js");
-    return runOutboxCommand(cfg, positionals.slice(1), { printFn });
+    // `flush` REPLAYS daemon-enqueued ops (comments, label flips, branch pushes,
+    // PR creates) and runs its own `gh api user` dedup — it is daemon traffic, so
+    // it must speak as the bot, not the operator running the manual flush. Attach
+    // (and refuse loud, mirroring start/run-once) only for `flush`; bare
+    // `junco outbox` is a local-only listing that needs no identity.
+    let cfgForOutbox = cfg;
+    if (positionals[1] === "flush") {
+      try {
+        cfgForOutbox = await withBotAuthFn(cfg);
+      } catch (e) {
+        process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+        return 1;
+      }
+    }
+    const runOutboxCommandFn =
+      deps.runOutboxCommandFn ?? (await import("./outboxCmd.js")).runOutboxCommand;
+    return runOutboxCommandFn(cfgForOutbox, positionals.slice(1), { printFn });
   }
 
   // ------------------------------------------------------------

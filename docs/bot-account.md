@@ -80,11 +80,13 @@ The config surface is additive and off by default:
   inside the worktree — the agent's own commits and Junco's `commitLeftovers` sweep alike —
   authors as the bot, while your host git identity is never touched.
 - **The `git.ts` auth seam.** `runCmd` accepts an `env` option merged over `process.env`; `gh()`
-  injects `GH_CONFIG_DIR` whenever the resolved config carries a bot identity, and `git()` does
-  the same plus pins a credential helper for remote operations (`-c credential.helper=` to clear
-  any inherited helper, then `-c credential.helper=!<gh> auth git-credential`) so pushes and
-  fetches authenticate as the bot regardless of your own global gitconfig. This is applied
-  uniformly and is harmless on local-only git operations.
+  injects `GH_CONFIG_DIR` whenever the resolved config carries a bot identity (and clears
+  `GH_TOKEN`/`GITHUB_TOKEN`, which gh would otherwise prefer over the `GH_CONFIG_DIR`-stored
+  login), and `git()` does the same plus pins a credential helper for remote operations
+  (`-c credential.helper=` to clear any inherited helper, then
+  `-c credential.helper=!<gh> auth git-credential`) so pushes and fetches authenticate as the bot
+  regardless of your own global gitconfig. This is applied uniformly and is harmless on local-only
+  git operations.
 - **Refuse-to-start posture.** If `botAccount.enabled` is `true` but the bot's login is missing
   or expired, `junco start` and `junco run-once` refuse to run at all — they resolve the auth
   context _before_ taking the daemon lock or touching the log file, and exit with a message

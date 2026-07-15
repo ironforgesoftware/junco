@@ -54,7 +54,10 @@ export async function resolveBotAuth(
   if (!cfg.botAccount.enabled) return null;
   const execFn = deps.execFn ?? defaultExecWithEnv;
   const r = await execFn(cfg.ghBin, ["api", "user"], {
-    env: { GH_CONFIG_DIR: cfg.botAccount.configDir },
+    // Clear GH_TOKEN/GITHUB_TOKEN (see git.ts ghAuthEnv): gh gives them
+    // precedence over GH_CONFIG_DIR creds, so an ambient token would make this
+    // very verification resolve to the wrong identity and defeat refuse-to-start.
+    env: { GH_CONFIG_DIR: cfg.botAccount.configDir, GH_TOKEN: "", GITHUB_TOKEN: "" },
   });
   if (r.code !== 0) {
     throw new Error(
@@ -99,7 +102,10 @@ export async function detectBotLogin(
 ): Promise<string | null> {
   const execFn = deps.execFn ?? defaultExecWithEnv;
   try {
-    const r = await execFn(ghBin, ["api", "user"], { env: { GH_CONFIG_DIR: configDir } });
+    const r = await execFn(ghBin, ["api", "user"], {
+      // Clear GH_TOKEN/GITHUB_TOKEN so an ambient token can't spoof the probe.
+      env: { GH_CONFIG_DIR: configDir, GH_TOKEN: "", GITHUB_TOKEN: "" },
+    });
     if (r.code !== 0) return null;
     return (JSON.parse(r.stdout) as { login: string }).login ?? null;
   } catch {

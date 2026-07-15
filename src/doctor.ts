@@ -188,7 +188,12 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // 4b. bot account (only when enabled): identity under the isolated config
     // dir; same-login means the bot identity is doing nothing.
     if (cfg.botAccount.enabled && ghVer.code === 0) {
-      const botEnv = { env: { GH_CONFIG_DIR: cfg.botAccount.configDir } };
+      // Clear GH_TOKEN/GITHUB_TOKEN (see git.ts ghAuthEnv): gh prefers them over
+      // GH_CONFIG_DIR creds, so an ambient token would make the probe report the
+      // wrong identity and mask a missing/misconfigured bot login.
+      const botEnv = {
+        env: { GH_CONFIG_DIR: cfg.botAccount.configDir, GH_TOKEN: "", GITHUB_TOKEN: "" },
+      };
       const bot = await execFn(cfg.ghBin, ["api", "user"], botEnv);
       if (bot.code !== 0) {
         report(
@@ -446,7 +451,9 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           const perm = await execFn(
             cfg.ghBin,
             ["repo", "view", repo.nwo, "--json", "viewerPermission"],
-            { env: { GH_CONFIG_DIR: cfg.botAccount.configDir } },
+            // Clear GH_TOKEN/GITHUB_TOKEN so the permission check runs as the bot,
+            // not as whatever token the daemon shell happens to export.
+            { env: { GH_CONFIG_DIR: cfg.botAccount.configDir, GH_TOKEN: "", GITHUB_TOKEN: "" } },
           );
           let level: string | null = null;
           try {

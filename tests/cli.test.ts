@@ -451,6 +451,27 @@ describe("bot auth at daemon entrypoints", () => {
     expect(assembleFn(disabledParsed).ghAuth).toBeUndefined();
   });
 
+  it("start's watcher never FABRICATES ghAuth: bot disabled at startup, reload enables it → still no ghAuth", async () => {
+    const watchConfigFn = vi.fn(() => ({ close: vi.fn() }));
+    // Bot disabled at startup → withBotAuthFn resolves no ghAuth (passthrough).
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => c,
+      watchConfigFn,
+    });
+    await run(["start"], deps);
+
+    const [, , watchDeps] = (watchConfigFn as MockedFunction<any>).mock.calls[0];
+    const assembleFn = watchDeps.assembleFn as (d: ConfigParsed) => Config;
+
+    // A live edit turns the bot ON, but there is no startup-resolved context to
+    // attach — the assembler must NOT invent one (only a restart resolves auth).
+    const enabledParsed = ConfigSchema.parse({
+      vaultRoot: "/tmp/x",
+      botAccount: { enabled: true, configDir: "/tmp/gh" },
+    });
+    expect(assembleFn(enabledParsed).ghAuth).toBeUndefined();
+  });
+
   it("run-once refuses to run when bot auth resolution throws", async () => {
     const deps = makeDeps({
       withBotAuthFn: async () => {
@@ -984,6 +1005,43 @@ describe("run(['outbox'])", () => {
     });
     expect(code).toBe(0);
     expect(captured.join("")).toMatch(/sent 0 · dead 0 · remaining 0/);
+  });
+
+  it("outbox flush attaches bot auth and hands the attached config to the flush path", async () => {
+    // Flush replays daemon-enqueued ops (comments, label flips, pushes, PR
+    // creates) — it must speak as the bot, not the operator running the flush.
+    let seen: Config | undefined;
+    const withBotAuthFn = vi.fn(async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }));
+    const runOutboxCommandFn = vi.fn(async (c: Config) => {
+      seen = c;
+      return 0;
+    });
+    const code = await run(["outbox", "flush"], makeDeps({ withBotAuthFn, runOutboxCommandFn }));
+    expect(code).toBe(0);
+    expect(withBotAuthFn).toHaveBeenCalledTimes(1);
+    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
+  });
+
+  it("outbox flush refuses (exit 1) when bot auth resolution throws — never replays as human", async () => {
+    const runOutboxCommandFn = vi.fn(async () => 0);
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("botAccount.enabled is true but no working gh login exists");
+      },
+      runOutboxCommandFn,
+    });
+    const code = await run(["outbox", "flush"], deps);
+    expect(code).toBe(1);
+    expect(runOutboxCommandFn).not.toHaveBeenCalled();
+  });
+
+  it("bare outbox listing is local-only — does NOT attach bot auth", async () => {
+    const runOutboxCommandFn = vi.fn(async () => 0);
+    const deps = makeDeps({ runOutboxCommandFn });
+    const code = await run(["outbox"], deps);
+    expect(code).toBe(0);
+    expect(deps.withBotAuthFn).not.toHaveBeenCalled();
+    expect(runOutboxCommandFn).toHaveBeenCalledTimes(1);
   });
 });
 

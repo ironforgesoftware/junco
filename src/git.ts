@@ -210,12 +210,21 @@ export async function runWithRetry<T>(
  * that script network failures don't eat seconds of real backoff. */
 export type GitCallOpts = RunOpts & { retryNetwork?: boolean; retryBaseDelayMs?: number };
 
-/** Child-env pair for bot-authenticated gh/git calls: point gh (and gh's git
+/** Child-env for bot-authenticated gh/git calls: point gh (and gh's git
  * credential helper, which inherits the child env) at the bot's isolated
- * config dir, and forbid interactive credential prompts so a missing token
- * fails loud instead of hanging a daemon subprocess. */
+ * config dir, forbid interactive credential prompts so a missing token fails
+ * loud instead of hanging a daemon subprocess, and CLEAR GH_TOKEN/GITHUB_TOKEN.
+ *
+ * gh gives GH_TOKEN/GITHUB_TOKEN precedence over GH_CONFIG_DIR-stored creds
+ * (verified locally: `GH_TOKEN=bogus gh api user` → "Bad credentials"; `GH_TOKEN=
+ * gh api user` falls back to the stored login), so a daemon shell that exports
+ * either would resolve every "bot" call — including the startup verification that
+ * refuse-to-start relies on — to the token's identity. Empty string = unset to
+ * gh (its lookup checks non-empty); under runCmd's { ...process.env, ...opts.env }
+ * merge an empty string cleanly overrides the inherited value (undefined would
+ * not — spawn env undefineds are unreliable). */
 export function ghAuthEnv(ctx: GhAuthContext): Record<string, string> {
-  return { GH_CONFIG_DIR: ctx.configDir, GIT_TERMINAL_PROMPT: "0" };
+  return { GH_CONFIG_DIR: ctx.configDir, GIT_TERMINAL_PROMPT: "0", GH_TOKEN: "", GITHUB_TOKEN: "" };
 }
 
 /**

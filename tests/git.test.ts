@@ -286,18 +286,56 @@ const CTX: GhAuthContext = {
 function writeEnvEcho(path: string): void {
   writeFileSync(
     path,
-    `#!/bin/sh\necho "cfgdir=\${GH_CONFIG_DIR:-unset} prompt=\${GIT_TERMINAL_PROMPT:-unset}"\necho "argv=$*"\n`,
+    // `${GH_TOKEN-unset}` (single-dash) prints the empty string when GH_TOKEN is
+    // SET-but-empty and the literal "unset" only when it is truly unset — the
+    // distinction that proves ghAuthEnv's empty-string override reached the child.
+    `#!/bin/sh\necho "cfgdir=\${GH_CONFIG_DIR:-unset} prompt=\${GIT_TERMINAL_PROMPT:-unset} token=[\${GH_TOKEN-unset}] ghtoken=[\${GITHUB_TOKEN-unset}]"\necho "argv=$*"\n`,
     "utf8",
   );
   chmodSync(path, 0o755);
 }
 
 describe("bot auth env injection", () => {
-  it("ghAuthEnv builds the child env pair", () => {
+  it("ghAuthEnv builds the child env pair (and clears inherited GH_TOKEN/GITHUB_TOKEN)", () => {
     expect(ghAuthEnv(CTX)).toEqual({
       GH_CONFIG_DIR: "/sbx/junco-gh",
       GIT_TERMINAL_PROMPT: "0",
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
     });
+  });
+
+  it("clears an inherited GH_TOKEN/GITHUB_TOKEN so gh falls back to the bot's stored creds", async () => {
+    // gh gives GH_TOKEN/GITHUB_TOKEN precedence over GH_CONFIG_DIR-stored creds;
+    // a daemon shell exporting either would otherwise make every bot call resolve
+    // to the token's identity. runCmd merges { ...process.env, ...opts.env }, so
+    // ghAuthEnv's empty string must cleanly override the inherited parent value.
+    const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
+    const fake = join(dir, "fake-gh");
+    writeEnvEcho(fake);
+    const prevGh = process.env.GH_TOKEN;
+    const prevGithub = process.env.GITHUB_TOKEN;
+    process.env.GH_TOKEN = "bogus-parent-token";
+    process.env.GITHUB_TOKEN = "bogus-parent-github-token";
+    try {
+      const r = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"]);
+      expect(r.stdout).toContain("token=[] ghtoken=[]");
+    } finally {
+      if (prevGh === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = prevGh;
+      if (prevGithub === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prevGithub;
+    }
+  });
+
+  it("caller opts.env wins over ghAuthEnv on a key conflict (T2-triage pin)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
+    const fake = join(dir, "fake-gh");
+    writeEnvEcho(fake);
+    const r = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"], {
+      env: { GH_CONFIG_DIR: "/caller/override" },
+    });
+    expect(r.stdout).toContain("cfgdir=/caller/override");
   });
 
   it("gh() injects GH_CONFIG_DIR when cfg carries ghAuth, not otherwise", async () => {

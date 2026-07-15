@@ -40,7 +40,11 @@ describe("resolveBotAuth", () => {
       email: "987654+junco-agent@users.noreply.github.com",
       credentialHelper: "!gh auth git-credential",
     });
-    expect(calls[0].env).toEqual({ GH_CONFIG_DIR: "/sbx/junco-gh" });
+    expect(calls[0].env).toEqual({
+      GH_CONFIG_DIR: "/sbx/junco-gh",
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+    });
   });
 
   it("throws an actionable error when enabled but not logged in", async () => {

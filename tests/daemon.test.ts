@@ -502,6 +502,32 @@ describe("overlayFrozenRestartFields", () => {
     expect(result.pollIntervalSeconds).toBe(live.pollIntervalSeconds);
     expect(result.model.id).toBe(live.model.id);
   });
+
+  it("pins the frozen botAccount and ghAuth — a live botAccount.enabled flip can't drop the bot identity mid-run", () => {
+    const frozenCtx = {
+      configDir: "/frozen/gh",
+      login: "junco-agent",
+      email: "987654+junco-agent@users.noreply.github.com",
+      credentialHelper: "!gh auth git-credential",
+    };
+    const frozen = makeConfig({
+      botAccount: { enabled: true, configDir: "/frozen/gh" },
+      ghAuth: frozenCtx,
+    });
+    // A hot edit disables the bot and (naturally) carries no runtime-resolved
+    // ghAuth — the exact silent-revert hazard the freeze exists to prevent.
+    const live = makeConfig({
+      botAccount: { enabled: false, configDir: "/live/gh" },
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    // botAccount.enabled AND botAccount.configDir are both reload:"restart".
+    expect(result.botAccount).toEqual(frozen.botAccount);
+    // The attached identity survives the flip — child gh/git keep authenticating
+    // as the bot until an actual restart re-resolves it.
+    expect(result.ghAuth).toEqual(frozenCtx);
+  });
 });
 
 // ---------------------------------------------------------------------------
