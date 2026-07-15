@@ -3,6 +3,8 @@ import { Box, Text } from "ink";
 import { TextField } from "./TextField.js";
 import { Spinner } from "./Spinner.js";
 import { useGuardedInput } from "../useGuardedInput.js";
+import { ClickableBox } from "../ClickableBox.js";
+import { theme } from "../theme.js";
 
 export function AddRepoForm({
   error,
@@ -31,7 +33,7 @@ export function AddRepoForm({
         Watch a repository so its issues show up here and the daemon acts on them.
       </Text>
       <Text dimColor>Paste an owner/repo or a full github.com URL.</Text>
-      <Box gap={1}>
+      <ClickableBox gap={1} hoverBg={theme.hoverBg} onPress={() => !busy && setField("nwo")}>
         <Text dimColor>owner/repo:</Text>
         <TextField
           value={nwo}
@@ -40,8 +42,8 @@ export function AddRepoForm({
           focus={!busy && field === "nwo"}
           placeholder="acme/api or https://github.com/acme/api"
         />
-      </Box>
-      <Box gap={1}>
+      </ClickableBox>
+      <ClickableBox gap={1} hoverBg={theme.hoverBg} onPress={() => !busy && setField("path")}>
         <Text dimColor>local clone:</Text>
         <TextField
           value={path}
@@ -52,7 +54,7 @@ export function AddRepoForm({
           focus={!busy && field === "path"}
           placeholder="empty = clone for me · or ~/code/api"
         />
-      </Box>
+      </ClickableBox>
       <Text dimColor>Leave the clone path empty and junco clones the repo for you.</Text>
       {busyText && (
         <Text color="cyan">

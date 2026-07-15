@@ -2,6 +2,8 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { PaletteCommand } from "../cliRunner.js";
 import { TextField } from "./TextField.js";
+import { ClickableBox } from "../ClickableBox.js";
+import { theme } from "../theme.js";
 
 /** Prefix-ish filter: name starts with the query, or query appears in it. */
 export function filterCommands(commands: PaletteCommand[], filter: string): PaletteCommand[] {
@@ -19,6 +21,7 @@ export function CommandPalette({
   onFilter,
   onArgs,
   onCancel,
+  onRowPress,
 }: {
   commands: PaletteCommand[];
   filter: string;
@@ -28,6 +31,7 @@ export function CommandPalette({
   onFilter: (v: string) => void;
   onArgs: (v: string) => void;
   onCancel: () => void;
+  onRowPress?: (index: number) => void;
 }): React.JSX.Element {
   const visible = filterCommands(commands, filter);
   const current = visible[Math.min(selected, Math.max(0, visible.length - 1))];
@@ -47,7 +51,12 @@ export function CommandPalette({
       </Box>
       {visible.length === 0 && <Text dimColor>no matching command</Text>}
       {visible.map((c, i) => (
-        <Box key={c.name} gap={1}>
+        <ClickableBox
+          key={c.name}
+          gap={1}
+          hoverBg={theme.hoverBg}
+          onPress={onRowPress ? () => onRowPress(i) : undefined}
+        >
           <Text color={i === selected ? "cyan" : undefined} dimColor={c.excluded !== null}>
             {i === selected ? "▸ " : "  "}
             {c.name}
@@ -57,7 +66,7 @@ export function CommandPalette({
           <Text dimColor wrap="truncate-end">
             {c.excluded ?? c.description}
           </Text>
-        </Box>
+        </ClickableBox>
       ))}
       {argsMode && current && (
         <Box gap={1} marginTop={1}>

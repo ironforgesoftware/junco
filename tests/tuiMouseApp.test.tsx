@@ -60,6 +60,26 @@ describe("mouse row/wheel in GITHUB", () => {
   });
 });
 
+describe("modal-ish views: mouse", () => {
+  it("help modal: any click closes it", async () => {
+    const r = renderApp({ initialUiMode: "github" });
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes("junco dashboard"));
+    r.stdin.write(press(2, 2)); // anywhere — HelpModal registers no regions
+    await until(() => !(r.lastFrame() ?? "").includes("junco dashboard — "));
+  });
+
+  it("addRepo modal: click outside cancels back to main", async () => {
+    const r = renderApp({ initialUiMode: "github" });
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    r.stdin.write("w");
+    await until(() => (r.lastFrame() ?? "").includes("add repo to watchlist"));
+    r.stdin.write(press(0, 5)); // far left — outside the centered modal box
+    await until(() => !(r.lastFrame() ?? "").includes("add repo to watchlist"));
+  });
+});
+
 describe("header mode tabs", () => {
   it("a header-band click toggles the mode", async () => {
     const r = renderApp({ initialUiMode: "github" });

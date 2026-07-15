@@ -43,7 +43,7 @@ import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
-import { useOnAnyMousePress } from "./MouseProvider.js";
+import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 
@@ -1318,6 +1318,18 @@ export function App(props: AppProps): React.JSX.Element {
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
 
+  // A press that hit no region. Modal-ish views read it as esc/cancel; the
+  // confirm modal deliberately IGNORES it (destructive confirmation stays
+  // keyboard-only). Everything else: no-op.
+  const onMouseMiss = useMemo(() => {
+    if (confirm !== null) return null;
+    if (view === "help") return () => setView("main");
+    if (view === "palette") return () => setView("main");
+    if (view === "addRepo") return () => setView("main");
+    return null;
+  }, [confirm, view]);
+  useOnMouseMiss(onMouseMiss);
+
   // Press-dismisses toasts app-wide (parity with the old dismissToast()-on-press;
   // unlike the old path this also covers LOCAL and modal views — deliberate).
   useOnAnyMousePress(dismissToast);
@@ -2011,6 +2023,10 @@ export function App(props: AppProps): React.JSX.Element {
     },
     onArgs: setPaletteArgs,
     onCancel: () => setView("main"),
+    onRowPress: (i: number) => {
+      if (i === paletteSel) return void paletteEnter();
+      setPaletteSel(i);
+    },
   };
   const addRepoProps = {
     error: addRepoError,
