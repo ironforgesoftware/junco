@@ -5,6 +5,7 @@ import { Text } from "ink";
 import { render } from "ink-testing-library";
 import { useMouse } from "../src/tui/useMouse.js";
 import type { MouseEvent } from "../src/tui/mouse.js";
+import { MOUSE_DISABLE, MOUSE_ENABLE } from "../src/tui/mouse.js";
 import { until } from "./helpers/until.js";
 
 function Probe({ events }: { events: MouseEvent[] }): React.JSX.Element {
@@ -18,12 +19,12 @@ describe("useMouse", () => {
     const r = render(<Probe events={events} />);
     await until(() => r.stdout.frames.some((f) => f.includes("probe")));
     // Mount wrote the enable sequence to stdout.
-    expect(r.stdout.frames.some((f) => f.includes("\u001b[?1000;1006h"))).toBe(true);
+    expect(r.stdout.frames.some((f) => f.includes(MOUSE_ENABLE))).toBe(true);
     r.stdin.write("\u001b[<0;30;4M");
     await until(() => events.length === 1);
     expect(events[0]).toEqual({ kind: "press", x: 29, y: 3 });
     r.unmount();
-    await until(() => r.stdout.frames.some((f) => f.includes("\u001b[?1000;1006l")));
+    await until(() => r.stdout.frames.some((f) => f.includes(MOUSE_DISABLE)));
   });
 
   it("multiple events in one chunk all arrive, in order", async () => {

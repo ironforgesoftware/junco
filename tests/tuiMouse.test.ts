@@ -36,9 +36,29 @@ describe("isMouseInput", () => {
   });
 });
 
+describe("motion (SGR 1003)", () => {
+  it("parses button-less motion (b=35) as a move event", () => {
+    expect(parseMouse("\u001b[<35;10;5M")).toEqual([{ kind: "move", x: 9, y: 4 }]);
+  });
+
+  it("drops drag-motion (left button held, b=32)", () => {
+    expect(parseMouse("\u001b[<32;10;5M")).toEqual([]);
+  });
+
+  it("still parses press/release/wheel alongside moves in one chunk", () => {
+    const events = parseMouse("\u001b[<35;2;2M\u001b[<0;3;3M\u001b[<0;3;3m\u001b[<64;4;4M");
+    expect(events.map((e) => e.kind)).toEqual(["move", "press", "release", "wheelUp"]);
+  });
+
+  it("enable/disable strings request 1000+1003+1006", () => {
+    expect(MOUSE_ENABLE).toBe("\u001b[?1000;1003;1006h");
+    expect(MOUSE_DISABLE).toBe("\u001b[?1000;1003;1006l");
+  });
+});
+
 describe("enable/disable", () => {
-  it("uses DECSET 1000 (click+wheel) + 1006 (SGR)", () => {
-    expect(MOUSE_ENABLE).toBe("\u001b[?1000;1006h");
-    expect(MOUSE_DISABLE).toBe("\u001b[?1000;1006l");
+  it("uses DECSET 1000 (click+wheel) + 1003 (any-motion) + 1006 (SGR)", () => {
+    expect(MOUSE_ENABLE).toBe("\u001b[?1000;1003;1006h");
+    expect(MOUSE_DISABLE).toBe("\u001b[?1000;1003;1006l");
   });
 });
