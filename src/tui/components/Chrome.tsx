@@ -8,6 +8,7 @@ import { relTime, relTimeShort } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
 import type { UiMode } from "../geometry.js";
 import type { LocalSection } from "../localSnapshot.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 export type HintView =
   | "main"
@@ -51,6 +52,7 @@ export function Header({
   refreshedAt,
   uiMode,
   githubEnabled,
+  onModeTab,
 }: {
   repoNwo: string | null;
   /** Extended /health snapshot, null before the first poll resolves. */
@@ -80,6 +82,8 @@ export function Header({
   uiMode?: UiMode;
   /** When false the GITHUB tab dims (the mode is off in config). */
   githubEnabled?: boolean;
+  /** Click handler for the GITHUB/LOCAL tabs (region-based; Task 5). */
+  onModeTab?: (m: UiMode) => void;
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -94,12 +98,11 @@ export function Header({
   const lastTaskAt = health?.lastTaskAt ?? null;
   const totalTokensOut = health?.totalTokensOut ?? null;
   const bridgeErrors = health?.bridgeErrors ?? null;
-  // Fixed-width tab labels — mirror geometry.ts's headerTabBands ghWidth/
-  // loWidth exactly ("[GITHUB]"/"[G]" = 8/3, "[LOCAL]"/"[L]" = 7/3) so the
-  // inactive (unbracketed, shorter) label pads out to the SAME column width
-  // as the active one. Without the padEnd, "github"/"g" would be 2 columns
-  // shorter than their slot and the local tab would render 2 columns early,
-  // drifting away from headerTabBands' hit-test bands (Task 16 clicks them).
+  // Fixed-width tab labels ("[GITHUB]"/"[G]" = 8/3, "[LOCAL]"/"[L]" = 7/3): the
+  // inactive (unbracketed, shorter) label pads out to the SAME column width as
+  // the active one so toggling modes never reflows the row. Purely
+  // presentational now — clicks resolve against each tab's own ClickableBox
+  // region (no mirrored hit-test bands to keep in lockstep).
   const ghWidth = wide ? 8 : 3;
   const loWidth = wide ? 7 : 3;
   const ghLabel =
@@ -117,17 +120,27 @@ export function Header({
       </Box>
       {uiMode !== undefined && (
         <Box flexShrink={0}>
-          <Text
-            color={uiMode === "github" ? theme.accent : undefined}
-            bold={uiMode === "github"}
-            dimColor={githubEnabled === false}
+          <ClickableBox
+            onPress={onModeTab ? () => onModeTab("github") : undefined}
+            hoverBg={theme.hoverBg}
           >
-            {ghLabel}
-          </Text>
+            <Text
+              color={uiMode === "github" ? theme.accent : undefined}
+              bold={uiMode === "github"}
+              dimColor={githubEnabled === false}
+            >
+              {ghLabel}
+            </Text>
+          </ClickableBox>
           <Text> </Text>
-          <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
-            {loLabel}
-          </Text>
+          <ClickableBox
+            onPress={onModeTab ? () => onModeTab("local") : undefined}
+            hoverBg={theme.hoverBg}
+          >
+            <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
+              {loLabel}
+            </Text>
+          </ClickableBox>
         </Box>
       )}
       <Box flexShrink={1} minWidth={0}>
@@ -194,19 +207,41 @@ export function Toast({
   );
 }
 
-/** Row n: context key hints — accent key, muted label, graceful truncation. */
-export function Footer({ hints }: { hints: [string, string][] }): React.JSX.Element {
+/** Row n: context key hints — accent key, muted label. Each hint is a
+ * flexShrink-0 chip; a chip whose hint KEY has an `actions` entry is
+ * clickable (mouse-driven ftue), the rest render inert. Overflow clips
+ * (no ellipsis) rather than truncating — the row is informational and the
+ * layout invariant (height 1, no wrap) still holds. */
+export function Footer({
+  hints,
+  actions,
+}: {
+  hints: [string, string][];
+  actions?: Record<string, () => void>;
+}): React.JSX.Element {
   return (
-    <Box paddingX={1} height={1}>
-      <Text wrap="truncate-end">
-        {hints.map(([k, label], i) => (
-          <Text key={k}>
-            {i > 0 ? <Text dimColor> · </Text> : null}
+    <Box paddingX={1} height={1} overflow="hidden">
+      {hints.map(([k, label], i) => {
+        const run = actions?.[k];
+        const chip = (
+          <Text>
             <Text color={theme.accent}>{k}</Text>
             <Text dimColor> {label}</Text>
           </Text>
-        ))}
-      </Text>
+        );
+        return (
+          <Box key={k} flexShrink={0}>
+            {i > 0 ? <Text dimColor> · </Text> : null}
+            {run ? (
+              <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
+                {chip}
+              </ClickableBox>
+            ) : (
+              chip
+            )}
+          </Box>
+        );
+      })}
     </Box>
   );
 }

@@ -148,14 +148,16 @@ Requires **Node ≥ 22.19**, plus `git` and an authenticated `gh` for PR flows. 
 npx @ironforgesoftware/junco   # first run → setup wizard; afterwards → starts the daemon
 ```
 
-`junco init` walks you through setup in a full-screen guided tour — workspace,
-model setup (an inference endpoint with live discovery, or a hosted provider
-from the built-in catalog), repo containment, the GitHub bridge, and the
-recommended extras — then creates the queue and verifies the result with a
-flight check. Re-run it anytime to tune an existing
-config (it only writes what you change). `junco init --yes` scaffolds
-defaults non-interactively. (Prefer a global install:
-`npm install -g @ironforgesoftware/junco`, then the command is just `junco`.)
+`junco dashboard` (or bare `junco` on a first run) opens a full-screen guided
+walkthrough — workspace, model setup (an inference endpoint with live
+discovery, or a hosted provider from the built-in catalog), repo containment,
+the GitHub bridge, and the recommended extras — then creates the queue,
+verifies the result with a flight check, and lands you in the dashboard.
+Re-run it anytime from the command palette ("setup") to tune an existing
+config (it only writes what you change). `junco config init` scaffolds
+defaults non-interactively — the headless equivalent for scripted setups.
+(Prefer a global install: `npm install -g @ironforgesoftware/junco`, then the
+command is just `junco`.)
 
 ```bash
 junco dashboard                # the cockpit: watch repos, dispatch, approve, monitor PRs
@@ -201,7 +203,7 @@ frontmatter contract, `examples/` has templates, and the bundled
 | `junco retry <name…\|--all>`                                  | move failed tickets back to the inbox                                                                           |
 | `junco outbox [flush]`                                        | inspect or push the offline GitHub backlog                                                                      |
 | `junco doctor`                                                | preflight config, git/gh auth, endpoint, model                                                                  |
-| `junco init` / `junco schema` / `junco service`               | wizard, ticket schema, service install                                                                          |
+| `junco config` / `junco schema` / `junco service`             | config get/set/init, ticket schema, service install                                                             |
 
 ## Contributing
 

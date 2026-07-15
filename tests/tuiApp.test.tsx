@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { App } from "../src/tui/App.js";
+import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { NWO_MAX_WIDTH } from "../src/tui/components/PrList.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
 import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
@@ -13,10 +14,10 @@ import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
-import { until } from "./helpers/until.js";
+import { until, fireUntil } from "./helpers/until.js";
 
-// Every App mount registers a `process.on("exit")` listener via useMouse; this
-// file's ~57 renders never unmount on their own, which trips Node's
+// Every App mount registers a `process.on("exit")` listener via MouseProvider;
+// this file's ~57 renders never unmount on their own, which trips Node's
 // MaxListenersExceededWarning. Unmount after each test so listeners are freed.
 afterEach(cleanup);
 
@@ -306,33 +307,36 @@ function renderApp(
   refreshPollMs = 999999,
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
   queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
+  onExit: () => void = () => {},
 ) {
   return render(
-    <App
-      client={client}
-      trigger="junco"
-      branchPrefix="junco/"
-      configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
-      watchlistFile={watchlistFile}
-      configPath="/x/config.json"
-      clonesDir={CLONES_DIR}
-      refreshPollMs={refreshPollMs}
-      healthPollMs={999999}
-      queuePollMs={999999}
-      queueFn={queueFn}
-      localCheapFn={async () => LOCAL_CHEAP}
-      localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
-      localCheapPollMs={999999}
-      localHeavyPollMs={999999}
-      initialUiMode="github"
-      githubEnabled
-      runCliFn={runCliFn}
-      // Medium layout: single body pane, so enter still opens the detail view
-      // (the legacy flows the App-level tests exercise); wide-mode tests below
-      // opt into 130 cols explicitly.
-      sizeOverride={{ columns: 100, rows: 30 }}
-      onExit={() => {}}
-    />,
+    <MouseProvider>
+      <App
+        client={client}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+        watchlistFile={watchlistFile}
+        configPath="/x/config.json"
+        clonesDir={CLONES_DIR}
+        refreshPollMs={refreshPollMs}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={queueFn}
+        localCheapFn={async () => LOCAL_CHEAP}
+        localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+        localCheapPollMs={999999}
+        localHeavyPollMs={999999}
+        initialUiMode="github"
+        githubEnabled
+        runCliFn={runCliFn}
+        // Medium layout: single body pane, so enter still opens the detail view
+        // (the legacy flows the App-level tests exercise); wide-mode tests below
+        // opt into 130 cols explicitly.
+        sizeOverride={{ columns: 100, rows: 30 }}
+        onExit={onExit}
+      />
+    </MouseProvider>,
   );
 }
 const tick = () => new Promise((r) => setTimeout(r, 30));
@@ -583,6 +587,23 @@ describe("App", () => {
     expect(r.lastFrame()).toContain("act on issue");
   });
 
+  // Ctrl-C quits the dashboard. In production the host renders with
+  // exitOnCtrlC:false (so the wizard it also hosts can see Ctrl-C — see
+  // INK_RENDER_OPTIONS), which means ink no longer auto-quits; App's own
+  // dedicated Ctrl-C handler must. ink-testing-library also uses
+  // exitOnCtrlC:false, so this exercises that handler at production parity.
+  it("Ctrl-C quits the dashboard via App's dedicated handler", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    let exited = false;
+    const r = renderApp(client, wl(), 999999, undefined, undefined, () => {
+      exited = true;
+    });
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("\x03"); // Ctrl-C
+    await until(() => exited);
+    expect(exited).toBe(true);
+  });
+
   // Fix 1(a): selection is anchored to the issue NUMBER, so a poll that re-sorts
   // the list must not slide a DIFFERENT issue under the cursor — an action key
   // has to keep hitting the issue the operator actually selected.
@@ -761,11 +782,12 @@ describe("App", () => {
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
       // Issue rows start at absolute y=4 (1-based): header(1) + border(2) + title(3).
-      r.stdin.write(click(30, 4)); // pane was 1 → this click only focuses + selects
-      await wait(50); // openDetail would flip the view synchronously — a beat is plenty
+      // From pane 1 this click only focuses pane 2 + selects (never opens detail);
+      // the pane-2 footer hint ("d dispatch") is the observable that it landed.
+      await fireUntil(r.stdin, click(30, 4), () => (r.lastFrame() ?? "").includes("d dispatch"));
       expect(r.lastFrame() ?? "").not.toContain("the body"); // still the list
-      r.stdin.write(click(30, 4)); // now pane 2 + already selected → Enter → detail (medium)
-      await until(() => (r.lastFrame() ?? "").includes("the body"));
+      // Now pane 2 + already selected → a second click on the same row = Enter → detail.
+      await fireUntil(r.stdin, click(30, 4), () => (r.lastFrame() ?? "").includes("the body"));
     });
 
     it("click on a rail row switches repos", async () => {
@@ -777,8 +799,8 @@ describe("App", () => {
       writeWatchlist(file, [{ nwo: "beta/web", path: "/c/web" }]);
       const r = renderApp(client, file);
       await until(() => (r.lastFrame() ?? "").includes("#7"));
-      r.stdin.write(click(3, 5)); // rail row 2 (y=5 → index 1) → beta/web
-      await until(() => (r.lastFrame() ?? "").includes("Beta bug"));
+      // rail row 2 (y=5 → index 1) → beta/web; setRepoIdx(1) is idempotent.
+      await fireUntil(r.stdin, click(3, 5), () => (r.lastFrame() ?? "").includes("Beta bug"));
     });
 
     it("wheel over the issue list moves the selection down one row", async () => {
@@ -791,8 +813,9 @@ describe("App", () => {
       const issueBarOn = (line: number): boolean =>
         ((r.lastFrame() ?? "").split("\n")[line] ?? "").slice(26).includes("▌");
       await until(() => issueBarOn(3));
-      r.stdin.write(wheelDown(30, 5));
-      await until(() => issueBarOn(4) && !issueBarOn(3));
+      // wheelDown moves the selection down one row; the mover clamps at the last
+      // row, so re-sending is idempotent.
+      await fireUntil(r.stdin, wheelDown(30, 5), () => issueBarOn(4) && !issueBarOn(3));
     });
 
     it("prs view: click the selected row opens the PR; ↗ link line opens it too (wide)", async () => {
@@ -801,27 +824,29 @@ describe("App", () => {
         { prsByRepo: { "acme/api": [makePr()] } },
       );
       const r = render(
-        <App
-          client={client}
-          trigger="junco"
-          branchPrefix="junco/"
-          configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
-          watchlistFile={wl()}
-          configPath="/x/config.json"
-          clonesDir={CLONES_DIR}
-          refreshPollMs={999999}
-          healthPollMs={999999}
-          queuePollMs={999999}
-          queueFn={async () => QUEUE_SNAP}
-          localCheapFn={async () => LOCAL_CHEAP}
-          localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
-          localCheapPollMs={999999}
-          localHeavyPollMs={999999}
-          initialUiMode="github"
-          githubEnabled
-          sizeOverride={{ columns: 130, rows: 30 }}
-          onExit={() => {}}
-        />,
+        <MouseProvider>
+          <App
+            client={client}
+            trigger="junco"
+            branchPrefix="junco/"
+            configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+            watchlistFile={wl()}
+            configPath="/x/config.json"
+            clonesDir={CLONES_DIR}
+            refreshPollMs={999999}
+            healthPollMs={999999}
+            queuePollMs={999999}
+            queueFn={async () => QUEUE_SNAP}
+            localCheapFn={async () => LOCAL_CHEAP}
+            localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+            localCheapPollMs={999999}
+            localHeavyPollMs={999999}
+            initialUiMode="github"
+            githubEnabled
+            sizeOverride={{ columns: 130, rows: 30 }}
+            onExit={() => {}}
+          />
+        </MouseProvider>,
       );
       // The PR title can only appear once the view actually switches to "prs"
       // (the side PrPreview card), so the readiness wait belongs after the
@@ -830,15 +855,17 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("pull requests"));
       await until(() => (r.lastFrame() ?? "").includes("Some PR"));
       // Click-again = enter: row 0 is selected from mount, so the click opens
-      // the fullscreen PR overlay (its footer is the unique marker).
-      r.stdin.write(click(30, 4));
-      await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
+      // the fullscreen PR overlay (its footer is the unique marker). Opening the
+      // overlay unmounts the row, so the retry self-terminates.
+      await fireUntil(r.stdin, click(30, 4), () =>
+        (r.lastFrame() ?? "").includes("esc back · o browser"),
+      );
       r.stdin.write(ESC); // back to the prs view, side card visible again
       await until(() => (r.lastFrame() ?? "").includes("pull requests"));
       // 130 cols wide → preview band starts at x=79 (1-based); the side card's
-      // ↗ link line (y=5) opens the browser directly.
-      r.stdin.write(click(85, 5));
-      await until(() => prCalls.length === 1);
+      // ↗ link line (y=5) opens the browser directly (counted with === 1, so the
+      // retry stops after the first landed click).
+      await fireUntil(r.stdin, click(85, 5), () => prCalls.length === 1);
       expect(prCalls[0]).toEqual(["acme/api", 100]);
       r.unmount();
     });
@@ -849,27 +876,29 @@ describe("App", () => {
         { prsByRepo: { "acme/api": [makePr(), makePr({ number: 101, title: "Second PR" })] } },
       );
       const r = render(
-        <App
-          client={client}
-          trigger="junco"
-          branchPrefix="junco/"
-          configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
-          watchlistFile={wl()}
-          configPath="/x/config.json"
-          clonesDir={CLONES_DIR}
-          refreshPollMs={999999}
-          healthPollMs={999999}
-          queuePollMs={999999}
-          queueFn={async () => QUEUE_SNAP}
-          localCheapFn={async () => LOCAL_CHEAP}
-          localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
-          localCheapPollMs={999999}
-          localHeavyPollMs={999999}
-          initialUiMode="github"
-          githubEnabled
-          sizeOverride={{ columns: 130, rows: 30 }}
-          onExit={() => {}}
-        />,
+        <MouseProvider>
+          <App
+            client={client}
+            trigger="junco"
+            branchPrefix="junco/"
+            configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+            watchlistFile={wl()}
+            configPath="/x/config.json"
+            clonesDir={CLONES_DIR}
+            refreshPollMs={999999}
+            healthPollMs={999999}
+            queuePollMs={999999}
+            queueFn={async () => QUEUE_SNAP}
+            localCheapFn={async () => LOCAL_CHEAP}
+            localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
+            localCheapPollMs={999999}
+            localHeavyPollMs={999999}
+            initialUiMode="github"
+            githubEnabled
+            sizeOverride={{ columns: 130, rows: 30 }}
+            onExit={() => {}}
+          />
+        </MouseProvider>,
       );
       await until(() => (r.lastFrame() ?? "").includes("3 PRs"));
       await until(() => (r.lastFrame() ?? "").includes("Some PR"));
@@ -878,15 +907,17 @@ describe("App", () => {
       const pane3BarOn = (line: number): boolean =>
         ((r.lastFrame() ?? "").split("\n")[line] ?? "").slice(78).includes("▌");
       await until(() => pane3BarOn(3)); // row 0 selected on load
-      r.stdin.write(click(85, 5)); // 1-based y=5 → row 1: focus pane 3 + select
-      await until(() => pane3BarOn(4) && !pane3BarOn(3));
-      r.stdin.write(click(85, 5)); // click-again = enter → fullscreen PR overlay
-      await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
+      // 1-based y=5 → row 1: focus pane 3 + select (idempotent to the fixed row).
+      await fireUntil(r.stdin, click(85, 5), () => pane3BarOn(4) && !pane3BarOn(3));
+      // click-again = enter → fullscreen PR overlay (unmounts the row → self-terminates).
+      await fireUntil(r.stdin, click(85, 5), () =>
+        (r.lastFrame() ?? "").includes("esc back · o browser"),
+      );
       r.stdin.write(ESC); // back to main; pane-3 selection intact
       await until(() => (r.lastFrame() ?? "").includes("3 PRs"));
       await until(() => pane3BarOn(4));
-      r.stdin.write(`\u001b[<64;85;5M`); // wheelUp over the monitor moves the selection up
-      await until(() => pane3BarOn(3) && !pane3BarOn(4));
+      // wheelUp over the monitor moves the selection up; the mover clamps at row 0.
+      await fireUntil(r.stdin, `\u001b[<64;85;5M`, () => pane3BarOn(3) && !pane3BarOn(4));
       r.unmount();
     });
 
@@ -918,8 +949,9 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
       r.stdin.write("\r"); // open the issue detail
       await until(() => (r.lastFrame() ?? "").includes("the body"));
-      r.stdin.write(click(30, 5)); // ↗ metadata row: 1-based y=5, middle band
-      await until(() => issueOpens.length === 1);
+      // ↗ metadata row: 1-based y=5, middle band; counted with === 1 so the retry
+      // stops after the first landed click.
+      await fireUntil(r.stdin, click(30, 5), () => issueOpens.length === 1);
       expect(issueOpens).toEqual([7]);
     });
 
@@ -933,8 +965,9 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("Some PR"));
       r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
       await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
-      r.stdin.write(click(30, 5)); // ↗ metadata row of the overlay card
-      await until(() => prCalls.length === 1);
+      // ↗ metadata row of the overlay card; counted with === 1 so the retry stops
+      // after the first landed click.
+      await fireUntil(r.stdin, click(30, 5), () => prCalls.length === 1);
       expect(prCalls[0]).toEqual(["acme/api", 100]);
     });
 
@@ -1430,11 +1463,13 @@ describe("command palette + focus keys", () => {
     await tick();
     r.stdin.write(":");
     await tick();
-    r.stdin.write("init");
+    // "dashboard" is excluded ("already running") and, unlike "start" (which
+    // "restart" also matches), filters uniquely to its own excluded row.
+    r.stdin.write("dashboard");
     await tick();
     r.stdin.write("\r");
     // Exclusion reason is now an auto-expiring toast under the modal.
-    await until(() => (r.lastFrame() ?? "").includes("can't nest inside the dashboard"));
+    await until(() => (r.lastFrame() ?? "").includes("already running"));
     expect(runs).toHaveLength(0);
   });
 

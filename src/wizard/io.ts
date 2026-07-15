@@ -15,7 +15,7 @@ export interface WriteResult {
 }
 
 /** Everything the Ink app needs from the outside world. Built by
- * runInitWizard; faked wholesale in component tests. */
+ * buildWizardIO (wizard.ts); faked wholesale in component tests. */
 export interface WizardIO {
   mode: "fresh" | "rerun";
   configPath: string;

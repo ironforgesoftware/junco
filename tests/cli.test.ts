@@ -330,11 +330,11 @@ describe("run([]) — first-run aware bare invocation", () => {
     expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
   });
 
-  it("runs the setup wizard (not start) when no config exists", async () => {
-    const wizard = vi.fn(async () => 0);
-    const deps = makeDeps({ existsFn: () => false, runInitWizardFn: wizard });
+  it("routes to the dashboard FTUE (not start) when no config exists", async () => {
+    const dash = vi.fn(async () => 0);
+    const deps = makeDeps({ existsFn: () => false, runDashboardFn: dash });
     expect(await run([], deps)).toBe(0);
-    expect(wizard).toHaveBeenCalledTimes(1);
+    expect(dash).toHaveBeenCalledWith(null, expect.any(String));
     expect(deps.mainLoopFn).not.toHaveBeenCalled();
   });
 });
@@ -766,111 +766,64 @@ describe("run(['submit']) — missing file argument", () => {
   });
 });
 
-// --- init ---
+// --- init (removed — dashboard FTUE is the interactive path, `config init`
+// the headless scaffold; see tests/dashboardCmd.test.ts + tests/configCmd.test.ts) ---
 
-describe("run(['init', '--config', p])", () => {
-  it("returns 0", async () => {
-    const { configPath } = freshDispatchVault();
-    const captured: string[] = [];
-    const code = await run(["init", "--config", configPath], {
-      printFn: (s) => captured.push(s),
-    });
-    expect(code).toBe(0);
-  });
-
-  it("creates the four queue dirs under the vault", async () => {
-    const { configPath, vaultRoot } = freshDispatchVault();
-    await run(["init", "--config", configPath], {
-      printFn: () => {},
-    });
-    for (const dir of ["inbox", "processing", "done", "failed"]) {
-      expect(existsSync(join(vaultRoot, "Junco", dir))).toBe(true);
-    }
-  });
-
-  it("prints a summary mentioning dirs", async () => {
-    const { configPath } = freshDispatchVault();
-    const captured: string[] = [];
-    await run(["init", "--config", configPath], {
-      printFn: (s) => captured.push(s),
-    });
-    const out = captured.join("");
-    expect(out.length).toBeGreaterThan(0);
+describe("run(['init'])", () => {
+  it("init is gone: unknown subcommand, exit 2", async () => {
+    const { configPath } = freshDispatchVault(); // config present — routing must not matter
+    const code = await run(["init", "--config", configPath], { printFn: () => {} });
+    expect(code).toBe(2);
   });
 });
 
-describe("run(['init']) — wizard routing", () => {
-  it("runs the wizard when no config exists (and passes yes:false)", async () => {
-    const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
-    const code = await run(["init", "--config", "/nope/config.json"], {
-      existsFn: () => false,
-      runInitWizardFn: wizard,
-      printFn: () => {},
+// An unknown flag must not crash: strict parseArgs throws
+// ERR_PARSE_ARGS_UNKNOWN_OPTION, which would otherwise escape to the top-level
+// fatal catch (exit 1 + structured error log). run() catches it and returns a
+// graceful usage error (exit 2 + the parse message + USAGE on stderr) for
+// EVERY unknown flag — e.g. the removed `junco init --yes` scripted form.
+describe("run — unknown flags", () => {
+  function captureStderr(): { text: () => string; restore: () => void } {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
     });
-    expect(code).toBe(0);
-    expect(wizard).toHaveBeenCalledTimes(1);
-    expect(wizard.mock.calls[0][1]).toEqual({ yes: false });
-  });
+    return { text: () => lines.join(""), restore: () => spy.mockRestore() };
+  }
 
-  it("passes --yes through to the wizard", async () => {
-    const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
-    await run(["init", "--yes", "--config", "/nope/config.json"], {
-      existsFn: () => false,
-      runInitWizardFn: wizard,
-      printFn: () => {},
-    });
-    expect(wizard.mock.calls[0][1]).toEqual({ yes: true });
-  });
-
-  it("init with existing config routes into the wizard (re-run mode)", async () => {
-    const { configPath } = freshDispatchVault(); // config present
-    const calls: Array<{ cp: string; yes?: boolean }> = [];
-    const code = await run(["init", "--config", configPath], {
-      runInitWizardFn: async (cp, o) => {
-        calls.push({ cp, yes: o.yes });
-        return 0;
-      },
-      printFn: () => {},
-    });
-    expect(code).toBe(0);
-    expect(calls.length).toBe(1);
-    expect(calls[0].yes).toBeFalsy();
-  });
-
-  it("init --yes with existing config repairs dirs and does NOT run the wizard", async () => {
-    const { configPath, vaultRoot } = freshDispatchVault(); // config present
-    const before = readFileSync(configPath, "utf8");
-    const wizard = vi.fn(async () => 0);
-    const code = await run(["init", "--yes", "--config", configPath], {
-      runInitWizardFn: wizard,
-      printFn: () => {},
-    });
-    expect(code).toBe(0);
-    expect(wizard).not.toHaveBeenCalled();
-    expect(readFileSync(configPath, "utf8")).toBe(before);
-    expect(existsSync(join(vaultRoot, "Junco", "inbox"))).toBe(true);
-  });
-
-  it("guards a non-TTY first run (no askFn / wizard / --yes) and writes nothing", async () => {
-    const origTTY = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+  it("`init --yes` exits 2, naming the unknown option and showing usage", async () => {
+    const cap = captureStderr();
+    let code: number;
     try {
-      const code = await run(["init", "--config", "/nope/config.json"], {
-        existsFn: () => false,
-        printFn: () => {},
-      });
-      expect(code).toBe(1);
+      code = await run(["init", "--yes"], { printFn: () => {} });
     } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: origTTY, configurable: true });
+      cap.restore();
     }
+    expect(code).toBe(2);
+    expect(cap.text()).toContain("--yes");
+    expect(cap.text()).toContain("Usage: junco");
+  });
+
+  it("a bare unknown top-level flag exits 2 (never silently routes to start/dashboard)", async () => {
+    const cap = captureStderr();
+    let code: number;
+    try {
+      code = await run(["--definitely-not-a-flag"], { printFn: () => {} });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(2);
+    expect(cap.text()).toContain("--definitely-not-a-flag");
   });
 });
 
 describe("run(['dashboard']) — routing", () => {
-  it("routes `dashboard` to runDashboardFn with the loaded config", async () => {
+  it("routes `dashboard` to runDashboardFn with the loaded config when one exists", async () => {
     const { cfg } = freshDispatchVault(); // the file's existing full-Config helper
     let got: Config | null = null;
     const code = await run(["dashboard", "--config", "/x/config.json"], {
+      existsFn: () => true, // config present → config-loaded path
       loadConfigFn: () => cfg,
       runDashboardFn: async (c) => {
         got = c;
@@ -879,6 +832,22 @@ describe("run(['dashboard']) — routing", () => {
     });
     expect(code).toBe(0);
     expect(got).not.toBeNull();
+  });
+
+  it("routes `dashboard` with NO config to the FTUE path (null cfg, config never loaded)", async () => {
+    let got: Config | null | undefined = undefined;
+    const code = await run(["dashboard", "--config", "/x/config.json"], {
+      existsFn: () => false, // no config → dashboard hosts the wizard
+      loadConfigFn: () => {
+        throw new Error("config must not be loaded on the FTUE path");
+      },
+      runDashboardFn: async (c) => {
+        got = c;
+        return 0;
+      },
+    });
+    expect(code).toBe(0);
+    expect(got).toBeNull();
   });
 });
 

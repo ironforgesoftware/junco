@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ConfigView } from "../src/tui/components/ConfigView.js";
-import { until } from "./helpers/until.js";
+import { MouseProvider } from "../src/tui/MouseProvider.js";
+import { until, fireUntil } from "./helpers/until.js";
 
 afterEach(cleanup);
 
@@ -40,6 +41,34 @@ function fixture(obj: unknown): string {
 
 function readCfg(p: string): Record<string, unknown> {
   return JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+}
+
+// SGR mouse sequences at 0-based cell (x,y) — mirrors tuiClickable.test.tsx's
+// and tuiMouseApp.test.tsx's helpers (b=0 press, b=65 wheel-down; a JS `\u`
+// escape, not a raw ESC byte, so file edits never drop it). Named `click`
+// rather than `press` — this file's `press(stdin, ...keys)` above already
+// owns that name for keyboard sequences.
+const click = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
+const wheelDown = (x: number, y: number): string => `\u001b[<65;${x + 1};${y + 1}M`;
+
+const lineOf = (frame: string, needle: string): number =>
+  frame.split("\n").findIndex((l) => l.includes(needle));
+
+/** Mounts ConfigView under a MouseProvider (mouse dispatch requires the
+ * context) with a small deterministic `visibleRows` window, mirroring the
+ * plain `fixture()` + `render()` pairing above. Exposes the tmp config path
+ * as `configPath` for file-content assertions. */
+function renderConfigViewInProvider(opts?: {
+  configObj?: unknown;
+  visibleRows?: number;
+}): ReturnType<typeof render> & { configPath: string } {
+  const p = fixture(opts?.configObj ?? { vaultRoot: "/v" });
+  const r = render(
+    <MouseProvider>
+      <ConfigView configPath={p} onExit={() => {}} visibleRows={opts?.visibleRows ?? 8} />
+    </MouseProvider>,
+  );
+  return Object.assign(r, { configPath: p });
 }
 
 describe("ConfigView", () => {
@@ -263,5 +292,145 @@ describe("ConfigView", () => {
     f = lastFrame() ?? "";
     expect(f).toMatch(/cost\.output\s+0/); // focused lever scrolled into view
     expect(f).not.toMatch(/id\s+local\/my-model/); // scrolled off the top
+  });
+});
+
+describe("ConfigView mouse", () => {
+  it("clicking a section in the left pane switches sections", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    const y = lineOf(r.lastFrame() ?? "", "worker");
+    await fireUntil(
+      r.stdin,
+      click(3, y),
+      () => (r.lastFrame() ?? "").split("\n")[y]?.includes("▌ worker") ?? false,
+    );
+  });
+
+  it("clicking a lever row focuses it (not the auto-focused one); clicking the focused row activates (boolean toggles)", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    const sandboxY = lineOf(r.lastFrame() ?? "", "sandbox");
+    await fireUntil(r.stdin, click(3, sandboxY), () => (r.lastFrame() ?? "").includes("▌ sandbox"));
+    // Switching sections resets fieldIdx to 0, so `sandbox.enabled` (row 0)
+    // is ALREADY focused here. Click a different row first, so the next
+    // click on `enabled` is a genuine "focus a non-focused row" case rather
+    // than one that happens to already be focused.
+    const backendY = lineOf(r.lastFrame() ?? "", "backend");
+    await fireUntil(
+      r.stdin,
+      click(30, backendY),
+      () => (r.lastFrame() ?? "").split("\n")[backendY]?.includes("▌ backend") ?? false,
+    );
+    expect(r.lastFrame() ?? "").not.toMatch(/Saved/);
+    const enabledY = lineOf(r.lastFrame() ?? "", "enabled");
+    // First click on the (currently unfocused) `enabled` row: focus only.
+    r.stdin.write(click(30, enabledY));
+    await until(() => (r.lastFrame() ?? "").split("\n")[enabledY]?.includes("▌ enabled") ?? false);
+    expect(r.lastFrame() ?? "").not.toMatch(/Saved/);
+    // Second click on the now-focused row: activate (toggle the boolean).
+    r.stdin.write(click(30, enabledY));
+    await until(() => (r.lastFrame() ?? "").includes("Saved"));
+  });
+
+  it("wheel over the lever pane moves the field cursor", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    // The first lever row (vaultRoot) carries the `▌` focus marker initially.
+    // Anchor on "▌ vaultRoot" specifically, not a bare "▌" — the left pane's
+    // OWN section marker ("▌ general", always selected here) lands on this
+    // same terminal row and would otherwise make the check vacuously true.
+    const firstRowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
+    expect((r.lastFrame() ?? "").split("\n")[firstRowY]).toContain("▌ vaultRoot");
+    // wheelDown is monotone and clamped (never wraps back to row 0), so
+    // re-sending on a lost/raced first event is safe — fireUntil's
+    // "clamped wheel" case.
+    await fireUntil(
+      r.stdin,
+      wheelDown(30, firstRowY),
+      () => !((r.lastFrame() ?? "").split("\n")[firstRowY]?.includes("▌ vaultRoot") ?? false),
+    );
+  });
+
+  it("wheel over the lever pane does nothing while editing", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    // vaultRoot (row 0) is already focused at mount, so a single click on it
+    // activates the inline editor directly.
+    const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
+    await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
+    const before = r.lastFrame() ?? "";
+    r.stdin.write(wheelDown(30, rowY));
+    await new Promise((res) => setTimeout(res, 60));
+    expect(r.lastFrame() ?? "").toBe(before); // unchanged: no field movement, no scroll
+  });
+
+  it("clicking a secret lever opens an empty edit buffer (masking preserved)", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    const modelY = lineOf(r.lastFrame() ?? "", "model");
+    await fireUntil(r.stdin, click(3, modelY), () => (r.lastFrame() ?? "").includes("▌ model"));
+    await until(() => /••••/.test(r.lastFrame() ?? ""));
+    const apiKeyY = lineOf(r.lastFrame() ?? "", "apiKey");
+    // First click focuses apiKey (not the section's auto-focused row 0: `id`).
+    await fireUntil(
+      r.stdin,
+      click(30, apiKeyY),
+      () => (r.lastFrame() ?? "").split("\n")[apiKeyY]?.includes("▌ apiKey") ?? false,
+    );
+    // Second click activates: opens the inline editor with an EMPTY buffer
+    // (startEdit's existing secret-type branch), never the plaintext value.
+    r.stdin.write(click(30, apiKeyY));
+    await until(() => (r.lastFrame() ?? "").split("\n")[apiKeyY]?.includes("█") ?? false);
+    const line = (r.lastFrame() ?? "").split("\n")[apiKeyY] ?? "";
+    expect(line).not.toContain("••••");
+  });
+
+  it("left-pane wheel during an open edit cancels the edit (no commit to the new section's lever)", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    // vaultRoot (row 0) is focused at mount — one click activates the edit.
+    const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
+    await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
+    await press(r.stdin, "XYZ"); // distinctive buffer: "/vXYZ"
+    await until(() => (r.lastFrame() ?? "").includes("/vXYZ"));
+    const before = readFileSync(r.configPath, "utf8");
+    // Wheel over the LEFT pane while the edit is open. Without moveSection
+    // cancelling the edit, the buffer survives the section switch, rebinds
+    // to the new section's field 0, and a later Enter commits "/vXYZ" to the
+    // wrong lever. The condition anchors on the buffer disappearing — it is
+    // monotone under repeated wheel events, so fireUntil re-sends are safe.
+    const leftY = lineOf(r.lastFrame() ?? "", "worker");
+    await fireUntil(r.stdin, wheelDown(3, leftY), () => !(r.lastFrame() ?? "").includes("/vXYZ"));
+    const f = r.lastFrame() ?? "";
+    expect(f).not.toContain("▌ general"); // the section DID switch...
+    expect(f).not.toMatch(/█/); // ...but no editor is open anymore
+    // Enter now starts a FRESH edit on the new section's focused lever — it
+    // must not commit the abandoned buffer anywhere.
+    await press(r.stdin, ENTER);
+    await new Promise((res) => setTimeout(res, 60));
+    expect(r.lastFrame() ?? "").not.toMatch(/Saved/);
+    expect(readFileSync(r.configPath, "utf8")).toBe(before); // untouched
+  });
+
+  it("clicking a different lever row during an open edit cancels the edit and does nothing else", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
+    await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
+    await press(r.stdin, "ZZZ"); // distinctive buffer: "/vZZZ"
+    await until(() => (r.lastFrame() ?? "").includes("/vZZZ"));
+    const before = readFileSync(r.configPath, "utf8");
+    // ONE click on a DIFFERENT row while editing: the row onPress must
+    // cancel the edit and return — no focus move, no activation, no save.
+    const otherY = lineOf(r.lastFrame() ?? "", "juncoSubdir");
+    r.stdin.write(click(30, otherY));
+    await until(() => !(r.lastFrame() ?? "").includes("/vZZZ"));
+    const f = r.lastFrame() ?? "";
+    expect(f.split("\n")[rowY]).toContain("▌ vaultRoot"); // focus unmoved
+    expect(f.split("\n")[otherY]).not.toContain("▌ juncoSubdir"); // not focused
+    expect(f).not.toMatch(/█/); // no editor open anywhere
+    expect(f).not.toMatch(/Saved/);
+    expect(readFileSync(r.configPath, "utf8")).toBe(before); // untouched
   });
 });

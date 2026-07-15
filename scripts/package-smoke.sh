@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Package smoke test: pack the npm tarball, install it into a scratch prefix,
 # and drive the installed CLI in a sandboxed HOME. This exercises the `files`
-# allowlist, bin wiring, and init scaffold — the surface unit tests never see.
-# Requires a prior `npm run build` (npm pack ships dist/ as-built).
+# allowlist, bin wiring, and config-init scaffold — the surface unit tests
+# never see. Requires a prior `npm run build` (npm pack ships dist/ as-built).
 set -euo pipefail
 
 cd "$(dirname "$0")/.." # npm pack packs the cwd — anchor to the repo root
@@ -24,9 +24,9 @@ export XDG_CONFIG_HOME="$SB/.config"
 
 "$JUNCO" --help >/dev/null
 
-"$JUNCO" init --yes
+"$JUNCO" config init
 CONFIG="$SB/.config/junco/config.json"
-[ -f "$CONFIG" ] || { echo "FAIL: init --yes did not write $CONFIG"; exit 1; }
+[ -f "$CONFIG" ] || { echo "FAIL: config init did not write $CONFIG"; exit 1; }
 
 "$JUNCO" schema | node -e "JSON.parse(require('node:fs').readFileSync(0, 'utf8'))" \
   || { echo "FAIL: schema did not print valid JSON"; exit 1; }

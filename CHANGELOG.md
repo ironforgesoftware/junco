@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Full-TUI mouse control with hover feedback: config editor, command palette, queue, review, help, add-repo, LOCAL dashboard, plus clickable footer hint chips in every view.
+- First-run setup lives in the dashboard: `junco dashboard` (or bare `junco`) with no config opens the guided walkthrough, then lands in the dashboard. Re-run it anytime from the command palette ("setup").
+- `junco config init` — headless default-config scaffold (the old `junco init --yes`).
+- Mouse support in the setup walkthrough: clickable choices, back/quit chips, click-to-finish.
+
+### Changed
+
+- Dashboard mouse protocol upgraded to SGR any-motion tracking (hover); click targets now resolve via a render-time hit-region registry.
+
+### Removed
+
+- **Breaking:** the `junco init` subcommand. Interactive setup → `junco dashboard`; scripted scaffold → `junco config init`.
+
 ## [0.7.0] - 2026-07-12
 
 ### Added

@@ -5,10 +5,11 @@
  * chapter component implements.
  */
 import React, { useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { BIRD } from "../../wizard/tips.js";
-import { isMouseInput } from "../mouse.js";
+import { useGuardedInput } from "../useGuardedInput.js";
+import { ClickableBox } from "../ClickableBox.js";
 import type { CheckResult } from "../../wizard/detect.js";
 import type { WizardAnswers } from "../../wizard/flow.js";
 import type { WizardIO } from "../../wizard/io.js";
@@ -76,9 +77,8 @@ export function Select({
   // mutated value; `bump` just forces the re-render that reads it back out.
   const idxRef = useRef(initial);
   const [, bump] = useState(0);
-  useInput(
+  useGuardedInput(
     (input, key) => {
-      if (isMouseInput(input)) return;
       if (key.upArrow) {
         idxRef.current = Math.max(0, idxRef.current - 1);
         bump((n) => n + 1);
@@ -94,11 +94,25 @@ export function Select({
   return (
     <Box flexDirection="column">
       {options.map((o, i) => (
-        <Text key={o.value} color={i === idxRef.current ? theme.accent : undefined}>
-          {i === idxRef.current ? "▌ " : "  "}
-          {o.label}
-          {o.hint ? <Text dimColor> ({o.hint})</Text> : null}
-        </Text>
+        <ClickableBox
+          key={o.value}
+          hoverBg={theme.hoverBg}
+          onPress={
+            focus
+              ? () => {
+                  idxRef.current = i;
+                  bump((n) => n + 1);
+                  onSubmit(o.value); // click = choose + advance (enter parity)
+                }
+              : undefined
+          }
+        >
+          <Text color={i === idxRef.current ? theme.accent : undefined}>
+            {i === idxRef.current ? "▌ " : "  "}
+            {o.label}
+            {o.hint ? <Text dimColor> ({o.hint})</Text> : null}
+          </Text>
+        </ClickableBox>
       ))}
     </Box>
   );
@@ -128,9 +142,8 @@ export function MultiSelect({
   const idxRef = useRef(0);
   const checkedRef = useRef(items.map((i) => i.checked));
   const [, bump] = useState(0);
-  useInput(
+  useGuardedInput(
     (input, key) => {
-      if (isMouseInput(input)) return;
       if (key.upArrow) {
         idxRef.current = Math.max(0, idxRef.current - 1);
         onFocusChange(idxRef.current);
@@ -152,11 +165,26 @@ export function MultiSelect({
   return (
     <Box flexDirection="column">
       {items.map((o, i) => (
-        <Text key={o.value} color={i === idxRef.current ? theme.accent : undefined}>
-          {i === idxRef.current ? "▌ " : "  "}
-          {checkedRef.current[i] ? "[x] " : "[ ] "}
-          {o.label}
-        </Text>
+        <ClickableBox
+          key={o.value}
+          hoverBg={theme.hoverBg}
+          onPress={
+            focus
+              ? () => {
+                  idxRef.current = i;
+                  checkedRef.current = checkedRef.current.map((v, j) => (j === i ? !v : v));
+                  onFocusChange(i);
+                  bump((n) => n + 1);
+                }
+              : undefined
+          }
+        >
+          <Text color={i === idxRef.current ? theme.accent : undefined}>
+            {i === idxRef.current ? "▌ " : "  "}
+            {checkedRef.current[i] ? "[x] " : "[ ] "}
+            {o.label}
+          </Text>
+        </ClickableBox>
       ))}
     </Box>
   );

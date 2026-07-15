@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
+import { ClickableBox } from "../ClickableBox.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
 import { QueueView } from "./QueueView.js";
 import { windowSlice } from "../window.js";
@@ -59,6 +60,7 @@ export function SectionRail({
   height,
   now,
   refreshedAt,
+  onSectionPress,
 }: {
   section: LocalSection;
   focus: "rail" | "body";
@@ -68,6 +70,7 @@ export function SectionRail({
   height: number;
   now: Date;
   refreshedAt?: string | null;
+  onSectionPress?: (s: LocalSection) => void;
 }): React.JSX.Element {
   const idx = SECTIONS.indexOf(section);
   return (
@@ -86,13 +89,19 @@ export function SectionRail({
         const sel = i === idx;
         const badge = sectionBadge(s, cheap, heavy);
         return (
-          <Box key={s} width="100%" backgroundColor={sel ? theme.selectionBg : undefined}>
+          <ClickableBox
+            key={s}
+            width="100%"
+            backgroundColor={sel ? theme.selectionBg : undefined}
+            hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+            onPress={onSectionPress ? () => onSectionPress(s) : undefined}
+          >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             <Text wrap="truncate">
               {s}
               {badge ? `  ${badge}` : ""}
             </Text>
-          </Box>
+          </ClickableBox>
         );
       })}
       <Text dimColor>
@@ -143,6 +152,7 @@ export function OutboxSection({
   height,
   focused,
   now,
+  onRowPress,
 }: {
   outbox: LocalCheap["outbox"] | null;
   cursor: number;
@@ -150,6 +160,7 @@ export function OutboxSection({
   height: number;
   focused: boolean;
   now: Date;
+  onRowPress?: (index: number) => void;
 }): React.JSX.Element {
   const border = (
     <Box
@@ -190,13 +201,19 @@ export function OutboxSection({
     const sel = idx === cursor;
     const target = s.issueKey ?? "?";
     rows.push(
-      <Box key={s.id} width="100%" backgroundColor={sel ? theme.selectionBg : undefined}>
+      <ClickableBox
+        key={s.id}
+        width="100%"
+        backgroundColor={sel ? theme.selectionBg : undefined}
+        hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+        onPress={onRowPress ? () => onRowPress(idx) : undefined}
+      >
         <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
         <Text wrap="truncate-end">
           {fmtAge(s.createdAt, now)} {s.op.kind} {target}
           <Text dimColor> attempts={s.attempts}</Text>
         </Text>
-      </Box>,
+      </ClickableBox>,
     );
     if (sel && s.lastError !== null) {
       rows.push(
@@ -241,6 +258,7 @@ export function ReposSection({
   window,
   height,
   focused,
+  onRowPress,
 }: {
   repos: LocalRepo[] | null;
   error: string | null;
@@ -248,6 +266,7 @@ export function ReposSection({
   window: { start: number; end: number };
   height: number;
   focused: boolean;
+  onRowPress?: (index: number) => void;
 }): React.JSX.Element {
   return (
     <Box
@@ -272,7 +291,13 @@ export function ReposSection({
         const idx = window.start + i;
         const sel = idx === cursor;
         return (
-          <Box key={r.path} width="100%" backgroundColor={sel ? theme.selectionBg : undefined}>
+          <ClickableBox
+            key={r.path}
+            width="100%"
+            backgroundColor={sel ? theme.selectionBg : undefined}
+            hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+            onPress={onRowPress ? () => onRowPress(idx) : undefined}
+          >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             <Text wrap="truncate-end">
               <Text bold>{r.nwo ?? "⟨no nwo⟩"}</Text>
@@ -293,7 +318,7 @@ export function ReposSection({
                 </>
               )}
             </Text>
-          </Box>
+          </ClickableBox>
         );
       })}
       {repos !== null && repos.length > window.end - window.start && (
@@ -314,6 +339,7 @@ export function WorktreesSection({
   window,
   height,
   focused,
+  onRowPress,
 }: {
   worktrees: LocalWorktree[] | null;
   error: string | null;
@@ -321,6 +347,7 @@ export function WorktreesSection({
   window: { start: number; end: number };
   height: number;
   focused: boolean;
+  onRowPress?: (index: number) => void;
 }): React.JSX.Element {
   return (
     <Box
@@ -346,7 +373,13 @@ export function WorktreesSection({
         const sel = idx === cursor;
         const dim = w.kind === "backup";
         return (
-          <Box key={w.path} width="100%" backgroundColor={sel ? theme.selectionBg : undefined}>
+          <ClickableBox
+            key={w.path}
+            width="100%"
+            backgroundColor={sel ? theme.selectionBg : undefined}
+            hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+            onPress={onRowPress ? () => onRowPress(idx) : undefined}
+          >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             <Text wrap="truncate-end" dimColor={dim}>
               {w.repoNwo ?? "⟨unmapped⟩"} {w.slug} <Text dimColor>{w.kind}</Text>
@@ -354,7 +387,7 @@ export function WorktreesSection({
               <Text dimColor>{fmtDur(w.ageSeconds)}</Text>
               {w.error !== null ? <Text color={theme.warn}> {w.error}</Text> : null}
             </Text>
-          </Box>
+          </ClickableBox>
         );
       })}
       {worktrees !== null && worktrees.length > window.end - window.start && (
@@ -374,20 +407,23 @@ export function DaemonSection({
   scroll,
   height,
   focused,
+  onWheel,
 }: {
   daemon: DaemonDetail | null;
   scroll: number;
   height: number;
   focused: boolean;
+  onWheel?: (dir: 1 | -1) => void;
 }): React.JSX.Element {
   const border = (
-    <Box
+    <ClickableBox
       flexDirection="column"
       borderStyle="round"
       borderColor={focused ? theme.accent : theme.border}
       paddingX={1}
       flexGrow={1}
       height={height}
+      onWheel={onWheel}
     />
   );
   if (daemon === null) {
@@ -497,6 +533,9 @@ export default function LocalDashboard({
   layout,
   now,
   refreshedAt,
+  onSectionPress,
+  onRowPress,
+  onDaemonWheel,
 }: {
   cheap: LocalCheap | null;
   heavy: LocalHeavy | null;
@@ -508,6 +547,9 @@ export default function LocalDashboard({
   now: Date;
   /** Cheap-poll completion stamp — pinned as the `↻ <age>` line in the rail. */
   refreshedAt?: string | null;
+  onSectionPress?: (s: LocalSection) => void;
+  onRowPress?: (index: number) => void;
+  onDaemonWheel?: (dir: 1 | -1) => void;
 }): React.JSX.Element {
   const bodyFocused = focus === "body";
   const h = layout.bodyRows;
@@ -543,6 +585,7 @@ export default function LocalDashboard({
         selectable
         selectedRow={cursor}
         counts={cheap?.counts ?? null}
+        onRowPress={onRowPress}
       />
     ) : section === "outbox" ? (
       <OutboxSection
@@ -552,6 +595,7 @@ export default function LocalDashboard({
         height={h}
         focused={bodyFocused}
         now={now}
+        onRowPress={onRowPress}
       />
     ) : section === "repos" ? (
       <ReposSection
@@ -561,6 +605,7 @@ export default function LocalDashboard({
         window={win}
         height={h}
         focused={bodyFocused}
+        onRowPress={onRowPress}
       />
     ) : section === "worktrees" ? (
       <WorktreesSection
@@ -570,6 +615,7 @@ export default function LocalDashboard({
         window={win}
         height={h}
         focused={bodyFocused}
+        onRowPress={onRowPress}
       />
     ) : (
       <DaemonSection
@@ -577,6 +623,7 @@ export default function LocalDashboard({
         scroll={scroll}
         height={h}
         focused={bodyFocused}
+        onWheel={onDaemonWheel}
       />
     );
 
@@ -591,6 +638,7 @@ export default function LocalDashboard({
         height={h}
         now={now}
         refreshedAt={refreshedAt}
+        onSectionPress={onSectionPress}
       />
       <Box flexGrow={1}>{body}</Box>
     </Box>

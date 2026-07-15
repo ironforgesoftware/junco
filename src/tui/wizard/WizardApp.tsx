@@ -1,15 +1,16 @@
 /** The walkthrough shell: chapter rail (✓/▶), chapter router, footer legend,
  * and global navigation keys. Chapters own Enter; this component owns
  * q/Esc/←/Ctrl-C. `textEditing` mutes q while a TextField is focused so "q"
- * can be typed into paths. Outcome is reported exactly once via onOutcome,
- * then the app exits (runInitWizard maps it to an exit code). */
+ * can be typed into paths. Outcome is reported exactly once via onOutcome;
+ * the HOST — Root — swaps views or exits. */
 import React, { useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text } from "ink";
 import { CHAPTERS, type WizardAnswers } from "../../wizard/flow.js";
 import type { WizardIO, WizardOutcome, WriteResult } from "../../wizard/io.js";
 import { theme } from "../theme.js";
 import { useTerminalSize, type TerminalSize } from "../useTerminalSize.js";
-import { isMouseInput } from "../mouse.js";
+import { useGuardedInput } from "../useGuardedInput.js";
+import { ClickableBox } from "../ClickableBox.js";
 import { Welcome } from "./chapters/Welcome.js";
 import { Workspace } from "./chapters/Workspace.js";
 import { Model } from "./chapters/Model.js";
@@ -32,7 +33,6 @@ export function WizardApp({
   sizeOverride,
   revealMs,
 }: WizardAppProps): React.JSX.Element {
-  const { exit } = useApp();
   const size = useTerminalSize(sizeOverride);
   const narrow = size.columns < 80;
   const [answers, setAnswers] = useState<WizardAnswers>(io.initialAnswers);
@@ -46,7 +46,6 @@ export function WizardApp({
     if (reported.current) return;
     reported.current = true;
     onOutcome(o);
-    exit();
   };
   const cancel = (): void => finishWith("cancelled");
   const patch = (p: Partial<WizardAnswers>): void => setAnswers((a) => ({ ...a, ...p }));
@@ -78,8 +77,7 @@ export function WizardApp({
   };
   const done = (): void => finishWith(result?.written ? "written" : "unchanged");
 
-  useInput((input, key) => {
-    if (isMouseInput(input)) return;
+  useGuardedInput((input, key) => {
     if (key.ctrl && input === "c") return result !== null ? done() : cancel();
     if (result !== null) {
       if (input === "q") return done(); // config already written — q finishes
@@ -148,7 +146,34 @@ export function WizardApp({
         </Box>
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>enter continue · ← back · q quit</Text>
+        <Text dimColor>enter continue · </Text>
+        <ClickableBox
+          hoverBg={theme.hoverBg}
+          onPress={result === null && idx > 0 ? back : undefined}
+        >
+          <Text dimColor>← back</Text>
+        </ClickableBox>
+        <Text dimColor> · </Text>
+        <ClickableBox
+          hoverBg={theme.hoverBg}
+          // NOT `textEditing.current ? undefined : cancel` — that ternary
+          // resolves to a snapshot at WizardApp's last render. textEditing
+          // flips inside a chapter's mount effect (e.g. Workspace.tsx),
+          // which commits without itself triggering a WizardApp re-render,
+          // so a click landing in that window would still fire the
+          // pre-effect snapshot's `cancel`. The wrapped closure instead
+          // dereferences the ref at CALL time — same live-read guarantee
+          // the keyboard branch above already gets for free from useInput.
+          onPress={
+            result !== null
+              ? done
+              : () => {
+                  if (!textEditing.current) cancel();
+                }
+          }
+        >
+          <Text dimColor>q quit</Text>
+        </ClickableBox>
       </Box>
     </Box>
   );

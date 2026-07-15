@@ -1,11 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import React from "react";
-import { render } from "ink-testing-library";
+import { render, cleanup } from "ink-testing-library";
 import { CommandPalette } from "../src/tui/components/CommandPalette.js";
 import { CommandOutput } from "../src/tui/components/CommandOutput.js";
 import { PALETTE_COMMANDS } from "../src/tui/cliRunner.js";
+import { renderApp } from "./helpers/localFixtures.js";
+import { until, fireUntil } from "./helpers/until.js";
 
 const noop = (): void => {};
+
+afterEach(cleanup);
+
+// SGR mouse press at 0-based cell (x,y) — mirrors tuiMouseApp.test.tsx's
+// press() (b=0 press; a JS \u escape, not a raw ESC byte, so edits never drop it).
+const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
 
 describe("CommandPalette", () => {
   const base = {
@@ -24,8 +32,11 @@ describe("CommandPalette", () => {
     const f = lastFrame()!;
     expect(f).toContain("status");
     expect(f).toContain("queue health");
-    expect(f).toContain("init");
-    expect(f).toContain("can't nest inside the dashboard");
+    // "setup" is a runnable in-process row (Root swaps to the wizard).
+    expect(f).toContain("setup");
+    expect(f).toContain("Guided setup walkthrough");
+    // "dashboard" stays excluded-with-reason ("already running").
+    expect(f).toContain("already running");
   });
 
   it("filter narrows the visible rows", () => {
@@ -42,6 +53,39 @@ describe("CommandPalette", () => {
     const f = lastFrame()!;
     expect(f).toContain("args:");
     expect(f).toContain("<name…|--all>");
+  });
+});
+
+describe("CommandPalette mouse (App integration)", () => {
+  it("clicking a row moves selection; clicking it again runs the command", async () => {
+    const runCliFn = vi.fn(async (_name: string, _extraArgs: string[]) => ({
+      code: 0,
+      output: "ok",
+      timedOut: false,
+    }));
+    const r = renderApp({ initialUiMode: "github", runCliFn });
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    r.stdin.write(":");
+    await until(() => (r.lastFrame() ?? "").includes("run a junco command"));
+    // "doctor" has no argsHint, so entering on it runs immediately (unlike
+    // "list"/"retry", which would stop in the args step) — and it is not the
+    // default selection (index 0 = "status"), so the first click has to move
+    // the cursor before the second click can run it.
+    const frameBefore = r.lastFrame() ?? "";
+    const rowsBefore = frameBefore.split("\n");
+    const y = rowsBefore.findIndex((l) => l.includes("doctor"));
+    expect(y).toBeGreaterThan(-1);
+    const x = rowsBefore[y].indexOf("doctor");
+    // First click selects "doctor" (the ▸ marker moves onto its row).
+    await fireUntil(r.stdin, press(x, y), () =>
+      ((r.lastFrame() ?? "").split("\n")[y] ?? "").includes("▸"),
+    );
+    expect(runCliFn).not.toHaveBeenCalled();
+    // Second click on the now-selected row runs it exactly once — the palette
+    // unmounts into the cmdOutput view, so a retried click lands nowhere.
+    await fireUntil(r.stdin, press(x, y), () => runCliFn.mock.calls.length > 0);
+    expect(runCliFn).toHaveBeenCalledTimes(1);
+    expect(runCliFn).toHaveBeenCalledWith("doctor", []);
   });
 });
 

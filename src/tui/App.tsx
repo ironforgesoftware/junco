@@ -7,7 +7,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, type Key } from "ink";
 import type { DashboardClient, HealthInfo } from "./ghClient.js";
 import type { DashAction, DashIssue } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
@@ -20,7 +20,7 @@ import type { GithubRepoMapping } from "../types.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
 import { computeLayout } from "./layout.js";
 import { windowSlice } from "./window.js";
-import { headerTabBands, listRowsHeight, railListHeight } from "./geometry.js";
+import { listRowsHeight, railListHeight } from "./geometry.js";
 import type { UiMode } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
 import { Header, hintsFor, localHintsFor, type HintView } from "./components/Chrome.js";
@@ -43,9 +43,9 @@ import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
-import { useMouse } from "./useMouse.js";
-import { hitTest, type HitContext } from "./hitTest.js";
-import { isMouseInput, type MouseEvent as TuiMouseEvent } from "./mouse.js";
+import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
+import { ClickableBox } from "./ClickableBox.js";
+import { useGuardedInput } from "./useGuardedInput.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -79,6 +79,9 @@ export interface AppProps {
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>;
   /** Fixed terminal size (tests) — ink-testing-library has no resizable stdout. */
   sizeOverride?: TerminalSize;
+  /** Palette "setup" hook: the Root host swaps to the setup walkthrough
+   * in-process (no subprocess). Absent when App is mounted standalone. */
+  onRequestWizard?: () => void;
   onExit: () => void;
 }
 
@@ -1062,6 +1065,14 @@ export function App(props: AppProps): React.JSX.Element {
     const visible = filterCommands(PALETTE_COMMANDS, paletteFilter);
     const current = visible[Math.min(paletteSel, Math.max(0, visible.length - 1))];
     if (!current) return;
+    if (current.name === "setup") {
+      // In-process: swap the Root host to the wizard instead of spawning a
+      // subprocess (there's no `junco setup` subcommand — the wizard can't
+      // nest a second Ink render inside this one).
+      setView("main");
+      props.onRequestWizard?.();
+      return;
+    }
     if (current.excluded !== null) {
       showToast("info", `${current.name}: ${current.excluded}`);
       return;
@@ -1073,7 +1084,15 @@ export function App(props: AppProps): React.JSX.Element {
     const typed = paletteArgs.split(/\s+/).filter(Boolean);
     const extraArgs = typed.length > 0 ? typed : current.defaultArgs;
     runPaletteCommand(current.name, extraArgs);
-  }, [paletteFilter, paletteSel, paletteArgsMode, paletteArgs, runPaletteCommand, showToast]);
+  }, [
+    paletteFilter,
+    paletteSel,
+    paletteArgsMode,
+    paletteArgs,
+    runPaletteCommand,
+    showToast,
+    props,
+  ]);
 
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
   // cursor's LocalRepo.nwo). The config-vs-watchlist decision comes from the
@@ -1286,7 +1305,8 @@ export function App(props: AppProps): React.JSX.Element {
   };
 
   // Dismiss an active toast on the next input (keyboard keystroke or mouse
-  // press) — shared so both useInput and onMouseEvent apply the same rule.
+  // press) — shared so both useGuardedInput and the mouse press-observer
+  // (useOnAnyMousePress below) apply the same rule.
   const dismissToast = (): void => {
     if (!toast) return;
     setToast(null);
@@ -1300,14 +1320,54 @@ export function App(props: AppProps): React.JSX.Element {
   // or the confirm modal owns input — so `m` can never eat a typed character.
   const canToggleMode = (): boolean =>
     !filtering && view !== "addRepo" && view !== "config" && view !== "palette" && confirm === null;
+  // Region-based tab clicks (Header). Guarded like the `m` key: inert while
+  // the confirm modal owns input; github-disabled taps toast instead of switch.
+  const handleModeTab = (m: UiMode): void => {
+    if (confirm !== null) return;
+    if (m === uiMode) return;
+    if (m === "github" && !props.githubEnabled) {
+      dismissToast();
+      showToast("info", "github mode is off ([github] enabled=false)");
+      return;
+    }
+    dismissToast();
+    setUiMode(m);
+  };
   // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
 
-  const handleLocalInput = (
-    input: string,
-    key: Parameters<Parameters<typeof useInput>[0]>[1],
-  ): void => {
+  // A press that hit no region. Modal-ish views read it as esc/cancel; the
+  // confirm modal deliberately IGNORES it (destructive confirmation stays
+  // keyboard-only). Everything else: no-op.
+  const onMouseMiss = useMemo(() => {
+    if (confirm !== null) return null;
+    if (view === "help") return () => setView("main");
+    if (view === "palette") return () => setView("main");
+    if (view === "addRepo") return () => setView("main");
+    return null;
+  }, [confirm, view]);
+  useOnMouseMiss(onMouseMiss);
+
+  // Press-dismisses toasts app-wide (parity with the old dismissToast()-on-press;
+  // unlike the old path this also covers LOCAL and modal views — deliberate).
+  useOnAnyMousePress(dismissToast);
+
+  // App's FIRST input hook: a dedicated Ctrl-C quit for the dashboard surface.
+  // The host renders with exitOnCtrlC:false (so the setup walkthrough it also
+  // hosts can see Ctrl-C — see dashboardCmd's INK_RENDER_OPTIONS), which means
+  // ink no longer quits on Ctrl-C for us. This hook replaces that built-in for
+  // the App: every ink input subscriber receives every event, so it fires
+  // regardless of which view or text field currently owns focus. Same
+  // exit()/onExit() pair the `q` handler uses.
+  useGuardedInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      exit();
+      onExit();
+    }
+  });
+
+  const handleLocalInput = (input: string, key: Key): void => {
     // The help modal owns the screen while open — any key closes it, mirroring
     // the github cascade's "any key closes help" rule (view === "help" there).
     // Without this branch keys fell through to rail/body handling underneath
@@ -1427,11 +1487,11 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
   };
 
-  useInput((input, key) => {
-    // Mouse reporting leaks SGR sequences into useInput as keypresses (ink
-    // strips the ESC) — drop them; onMouseEvent owns the real events via stdin.
-    if (isMouseInput(input)) return; // layer 1
-
+  useGuardedInput((input, key) => {
+    // Ctrl-C is owned by the dedicated first hook above (quit). Bail before the
+    // cascade so it can never be misread as a plain `c` (e.g. the analyze
+    // binding) now that exitOnCtrlC:false lets Ctrl-C reach these handlers.
+    if (key.ctrl && input === "c") return;
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return; // layer 2 (text field owns input)
 
@@ -1978,140 +2038,298 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "o") return void openBrowser();
   });
 
-  const onMouseEvent = (ev: TuiMouseEvent): void => {
-    // Resolve the clickable header tab band FIRST — before any per-view guard —
-    // so a mode switch works from every view. headerTabBands takes the TERMINAL
-    // columns (the same value computeLayout gave Header its `mode`), so the
-    // bands line up with the rendered tab regardless of layout mode.
-    if (ev.y === 0 && ev.kind === "press") {
-      const m = headerTabBands(size.columns).hit(ev.x);
-      if (m && m !== uiMode) {
-        if (m === "github" && !props.githubEnabled) {
-          dismissToast();
-          showToast("info", "github mode is off ([github] enabled=false)");
-          return;
-        }
-        dismissToast();
-        setUiMode(m);
-        return;
-      }
-    }
-    if (confirm) return; // the confirm modal owns the screen
-    if (uiMode === "local") return; // the LOCAL body is keyboard-first in v1
-
-    // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
-    if (
-      view === "help" ||
-      view === "palette" ||
-      view === "addRepo" ||
-      view === "review" ||
-      view === "config"
-    )
-      return;
-    if (ev.kind === "release") return; // presses act on press, not release
-    if (ev.kind === "press") dismissToast();
-
-    // Full-body scroll views with no click targets: wheel scrolls only.
-    if (view === "queue" || view === "cmdOutput") {
-      if (ev.kind === "wheelDown") setScroll((s) => s + 1);
-      if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
-      return;
-    }
-
-    // The two detail views: wheel scrolls the issue detail (the PR overlay has
-    // nothing to scroll); a press on the ↗ metadata line opens the browser.
-    if (view === "detail" || view === "prDetail") {
-      if (view === "detail") {
-        if (ev.kind === "wheelDown") setScroll((s) => s + 1);
-        if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
-      }
-      if (ev.kind === "press") {
-        const hit = hitTest(
-          {
-            layout,
-            columns: size.columns,
-            view,
-            repoCount: repoMappings.length,
-            listCount: 0,
-            railStart: 0,
-            listStart: 0,
-            pane3Count: 0,
-            pane3Start: 0,
-            hasPreviewTarget: false,
+  // Review-view mouse handlers — duplicate the key recipes EXACTLY (same
+  // setReviewState transitions as key.return, space, and j/k above) so mouse
+  // and keyboard can never diverge on what a click/scroll does.
+  const reviewRowPress = (idx: number): void => {
+    if (confirm !== null) return;
+    setReviewState((s) => {
+      if (s.open) return s;
+      if (idx !== s.cursor) return { ...s, cursor: idx };
+      if (idx < s.batches.length) {
+        const batch = s.batches[idx];
+        if (!batch) return s;
+        return {
+          ...s,
+          open: {
+            kind: "batch",
+            batchIdx: idx,
+            findingCursor: 0,
+            checked: new Set(batch.findings.map((f) => f.fingerprint)),
           },
-          ev.x,
-          ev.y,
-        );
-        if (hit.type === "linkLine") {
-          if (view === "detail") openDetailIssueInBrowser();
-          else openPrDetailInBrowser();
-        }
+        };
       }
-      return;
-    }
-
-    const ctx: HitContext = {
-      layout,
-      columns: size.columns,
-      view: view === "prs" ? "prs" : "main",
-      repoCount: repoMappings.length,
-      listCount: view === "prs" ? prs.length : filteredIssues.length,
-      railStart: railWindow.start,
-      listStart: view === "prs" ? prWindow.start : issueWindow.start,
-      pane3Count: repoPrs.length,
-      pane3Start: pane3Window.start,
-      hasPreviewTarget: layout.mode === "wide" && view === "prs" && selectedPr !== null,
-    };
-    const hit = hitTest(ctx, ev.x, ev.y);
-
-    if (ev.kind === "wheelUp" || ev.kind === "wheelDown") {
-      const d = ev.kind === "wheelDown" ? 1 : -1;
-      if (hit.type === "repoRow" || (hit.type === "pane" && hit.pane === 1)) {
-        setRepoIdx((i) => Math.max(0, Math.min(i + d, repoMappings.length - 1)));
-      } else if (hit.type === "issueRow" || (hit.type === "pane" && hit.pane === 2)) {
-        moveIssue(d);
-      } else if (hit.type === "prRow") {
-        movePr(d);
-      } else if (hit.type === "pane3Row" || (hit.type === "pane" && hit.pane === 3)) {
-        movePane3(d); // pane 3 is the repo-scoped PR monitor — wheel moves its selection
-      }
-      return;
-    }
-
-    // ev.kind === "press"
-    switch (hit.type) {
-      case "repoRow":
-        setPane(1);
-        setRepoIdx(hit.index);
-        return;
-      case "issueRow":
-        if (pane === 2 && hit.index === issueIdxSafe) return void openDetail();
-        setPane(2);
-        moveIssueTo(hit.index);
-        return;
-      case "prRow":
-        // Click-again = enter, matching the keyboard: the fullscreen PR overlay.
-        if (hit.index === prIdxSafe) return void openPrDetail(selectedPr, "prs");
-        movePrTo(hit.index);
-        return;
-      case "pane3Row":
-        if (pane === 3 && hit.index === pane3IdxSafe) {
-          return void openPrDetail(selectedPane3Pr, "main");
-        }
-        setPane(3);
-        movePane3To(hit.index);
-        return;
-      case "linkLine":
-        // Only the prs view renders a preview card (PrPreview) with a ↗ line.
-        return void openSelectedPr();
-      case "pane":
-        setPane(hit.pane);
-        return;
-      case "none":
-        return;
-    }
+      const draftIdx = idx - s.batches.length;
+      if (!s.drafts[draftIdx]) return s;
+      return { ...s, open: { kind: "draft", draftIdx, scroll: 0 } };
+    });
   };
-  useMouse(onMouseEvent);
+  const reviewFindingPress = (idx: number): void => {
+    if (confirm !== null) return;
+    setReviewState((s) => {
+      if (!s.open || s.open.kind !== "batch") return s;
+      const batch = s.batches[s.open.batchIdx];
+      if (!batch) return s;
+      const checked = new Set(s.open.checked);
+      const fp = batch.findings[idx]?.fingerprint;
+      if (fp) {
+        if (checked.has(fp)) checked.delete(fp);
+        else checked.add(fp);
+      }
+      return { ...s, open: { ...s.open, findingCursor: idx, checked } };
+    });
+  };
+  const reviewDraftWheel = (d: 1 | -1): void => {
+    setReviewState((s) => {
+      if (!s.open || s.open.kind !== "draft") return s;
+      const dft = s.drafts[s.open.draftIdx];
+      const max = dft ? Math.max(0, dft.draft.split("\n").length - 1) : 0;
+      return { ...s, open: { ...s.open, scroll: Math.max(0, Math.min(max, s.open.scroll + d)) } };
+    });
+  };
+
+  // LOCAL-dashboard mouse handlers — mirror the rail/body key recipes above.
+  const localSectionPress = (s: LocalSection): void => {
+    if (confirm !== null) return;
+    if (localSection === s) {
+      setLocalFocus("body"); // click-again = enter (the l/→/enter key)
+      return;
+    }
+    setLocalSection(s);
+    setLocalScroll(0);
+    setLocalFocus("rail");
+  };
+  const localRowPress = (idx: number): void => {
+    if (confirm !== null) return;
+    setLocalFocus("body");
+    if (idx === localCursorSafe && localSection === "repos") {
+      const t = localTarget;
+      if (t?.kind === "repo") openRepoBrowser(t.repo.nwo ?? "");
+      return; // click-again on a repo row = the nondestructive `o` action
+    }
+    setLocalCursor((m) => ({ ...m, [localSection]: idx }));
+  };
+
+  // Footer chip click targets: hint KEY → the same handler its keyboard
+  // recipe already calls (mouse and keyboard can never diverge on what a key
+  // does — same discipline as the review-view mouse handlers above). A key
+  // with no entry here renders as an inert chip (movement/typing hints).
+  // "main" is pane-aware exactly where the keyboard cascade is: `o`/`enter`
+  // mean different things per pane (repo / issue / PR) and `d`/`a` carry the
+  // external-repo gate — each entry below duplicates its keyboard branch
+  // verbatim, including the guards.
+  const footerActions: Record<string, () => void> = useMemo((): Record<string, () => void> => {
+    if (confirm !== null) return {}; // destructive confirm owns input — every chip inert
+    // LOCAL's help modal (like github's) leaves the rail/body hint row showing
+    // underneath it (a pre-existing hints-computation quirk — LOCAL's `hints`
+    // never special-cases view==="help" the way github's hintsFor("help",...)
+    // does), so without this exclusion the STALE rail chips (q, r, m, ←)
+    // would stay clickable while help is open — most alarmingly `q`, which
+    // would quit the app instead of the keyboard's "any key closes help".
+    // Falls through to the `case "help": return {}` below, same as github.
+    if (uiMode === "local" && view !== "config" && view !== "help") {
+      return {
+        q: () => {
+          exit();
+          onExit();
+        },
+        "?": () => setView("help"),
+        r: () => void forceLocalRefresh(),
+        m: () => handleModeTab("github"),
+        "←": () => setLocalFocus("rail"),
+      };
+    }
+    switch (view) {
+      case "detail":
+        return {
+          o: openDetailIssueInBrowser,
+          esc: () => {
+            setScroll(0);
+            setView("main");
+          },
+        };
+      case "prDetail":
+        return { esc: () => setView(prDetail?.from ?? "main"), o: openPrDetailInBrowser };
+      case "queue":
+        return {
+          "esc/t": () => {
+            setScroll(0);
+            setView("main");
+          },
+        };
+      case "prs":
+        return {
+          enter: () => openPrDetail(selectedPr, "prs"),
+          o: openSelectedPr,
+          "esc/p": () => {
+            setScroll(0);
+            setView("main");
+          },
+        };
+      case "cmdOutput":
+        return {
+          esc: () => {
+            setScroll(0);
+            setView("palette");
+          },
+          ...(cmd && !cmd.running ? { r: () => runPaletteCommand(cmd.name, cmd.extraArgs) } : {}),
+        };
+      case "palette":
+        return { esc: () => setView("main"), enter: () => paletteEnter() };
+      case "addRepo":
+        return { esc: () => setView("main") };
+      case "config":
+        return { esc: () => setView("main") };
+      case "review":
+        return { esc: () => setView("main") };
+      case "help":
+        return {};
+      case "main": {
+        const currentExternal = currentRepo?.external === true;
+        return {
+          q: () => {
+            exit();
+            onExit();
+          },
+          "?": () => setView("help"),
+          t: () => {
+            setScroll(0);
+            setView("queue");
+          },
+          p: () => {
+            setScroll(0);
+            setView("prs");
+            void refreshAll({ scope: "monitor" });
+          },
+          ":": () => {
+            setPaletteFilter("");
+            setPaletteSel(0);
+            setPaletteArgsMode(false);
+            setPaletteArgs("");
+            setView("palette");
+          },
+          ",": () => setView("config"),
+          m: () => handleModeTab("local"),
+          w: () => {
+            if (watchlistError)
+              return void showToast("error", "watchlist unreadable — fix it before adding");
+            setAddRepoError(null);
+            setView("addRepo");
+          },
+          r: () => {
+            setRefreshing(true);
+            void refreshAll().finally(() => setRefreshing(false));
+          },
+          // Pane 3's "enter detail" chip opens the selected PR's overlay (the
+          // pane-3 key.return branch); the pane-2 chip opens the issue detail.
+          // Pane 1 is an explicit no-op — its hint set has no enter chip, and
+          // the keyboard cascade's pane-1 branch has no key.return handler.
+          enter: () => {
+            if (pane === 3) return void openPrDetail(selectedPane3Pr, "main");
+            if (pane === 2) void openDetail();
+          },
+          // `s` chip covers BOTH hint rows that carry it — pane 1 ("assess",
+          // repo-scoped) and pane 2 ("assess issue", issue-scoped) — via the
+          // same pane gate as the keyboard `s` branch. The `S` auto-plan
+          // variant has no hint chip, so autoPlan is always false here.
+          s: () => {
+            if (pane === 2 && currentNwo && currentIssue) {
+              return void runAssess(false, `${currentNwo}#${currentIssue.number}`);
+            }
+            void runAssess(false);
+          },
+          // `d`/`a` chips render only in pane 2's hint set — duplicate that
+          // pane's keyboard branches verbatim, external-repo gate included.
+          d: () => {
+            if (!currentExternal) return void runAction("dispatch");
+            if (!currentNwo || !currentIssue) return;
+            const num = currentIssue.number;
+            showToast("info", `dispatching ${currentNwo}#${num}…`);
+            void client.dispatchTicket(currentNwo, num).then((res) => {
+              if (!aliveRef.current) return;
+              if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
+              else showToast("error", res.error);
+            });
+          },
+          a: () => {
+            if (currentExternal) {
+              return void showToast(
+                "error",
+                "not available for external repos — d dispatches a fork-PR ticket",
+              );
+            }
+            void runAction("approve");
+          },
+          // "c analyze" renders only in pane 2's hint set — the keyboard `c`
+          // branch verbatim (works on owned AND external repos, no gate).
+          c: () => {
+            if (!currentNwo || !currentIssue) return;
+            const num = currentIssue.number;
+            showToast("info", `drafting analysis for ${currentNwo}#${num}…`);
+            void client.analyzeIssue(currentNwo, num).then((res) => {
+              if (!aliveRef.current) return;
+              if (res.ok)
+                showToast("success", `analysis queued: ${res.value.id} · v to review when parked`);
+              else showToast("error", res.error);
+            });
+          },
+          // "o browser" opens a different resource per pane: 1 → the selected
+          // repo, 3 → the selected PR, 2 → the selected issue — each arm is
+          // its pane's keyboard `o` branch verbatim.
+          o: () => {
+            if (pane === 1)
+              return void (currentRepo ? openRepoBrowser(currentRepo.nwo) : undefined);
+            if (pane === 3) {
+              if (selectedPane3Pr) {
+                const { nwo, number } = selectedPane3Pr;
+                void client.openPrInBrowser(nwo, number).then((res) => {
+                  if (!aliveRef.current) return;
+                  if (!res.ok) showToast("error", res.error);
+                });
+              }
+              return;
+            }
+            void openBrowser();
+          },
+          "/": () => {
+            setFiltering(true);
+            setPane(2);
+          },
+        };
+      }
+    }
+  }, [
+    confirm,
+    uiMode,
+    view,
+    cmd,
+    prDetail,
+    selectedPr,
+    watchlistError,
+    pane,
+    currentRepo,
+    currentNwo,
+    currentIssue,
+    selectedPane3Pr,
+    client,
+    exit,
+    onExit,
+    forceLocalRefresh,
+    handleModeTab,
+    openDetailIssueInBrowser,
+    openPrDetailInBrowser,
+    openPrDetail,
+    openSelectedPr,
+    openRepoBrowser,
+    runPaletteCommand,
+    paletteEnter,
+    refreshAll,
+    showToast,
+    openDetail,
+    runAction,
+    runAssess,
+    openBrowser,
+  ]);
 
   const hints =
     view === "config"
@@ -2135,6 +2353,10 @@ export function App(props: AppProps): React.JSX.Element {
     },
     onArgs: setPaletteArgs,
     onCancel: () => setView("main"),
+    onRowPress: (i: number) => {
+      if (i === paletteSel) return void paletteEnter();
+      setPaletteSel(i);
+    },
   };
   const addRepoProps = {
     error: addRepoError,
@@ -2189,10 +2411,12 @@ export function App(props: AppProps): React.JSX.Element {
           refreshedAt={refreshedAt}
           uiMode={uiMode}
           githubEnabled={props.githubEnabled}
+          onModeTab={handleModeTab}
         />
       }
       toast={toast}
       hints={hints}
+      footerActions={footerActions}
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}
     >
@@ -2212,9 +2436,19 @@ export function App(props: AppProps): React.JSX.Element {
           layout={layout}
           now={queueNow}
           refreshedAt={localRefreshedAt}
+          onSectionPress={localSectionPress}
+          onRowPress={localRowPress}
+          onDaemonWheel={(d) => setLocalScroll((s) => Math.max(0, s + d))}
         />
       ) : view === "review" ? (
-        <ReviewView state={reviewState} height={listHeight} focused />
+        <ReviewView
+          state={reviewState}
+          height={listHeight}
+          focused
+          onRowPress={reviewRowPress}
+          onFindingPress={reviewFindingPress}
+          onDraftWheel={reviewDraftWheel}
+        />
       ) : (
         <>
           <Rail
@@ -2225,26 +2459,41 @@ export function App(props: AppProps): React.JSX.Element {
             width={layout.railWidth}
             height={listHeight}
             window={railWindow}
+            onRowPress={(i) => {
+              if (confirm !== null || view !== "main") return;
+              setPane(1);
+              setRepoIdx(i);
+            }}
+            onPanePress={view === "main" && confirm === null ? () => setPane(1) : undefined}
+            onWheel={(d) =>
+              view === "main"
+                ? setRepoIdx((i) => Math.max(0, Math.min(i + d, repoMappings.length - 1)))
+                : undefined
+            }
           />
           {view === "queue" ? (
-            <QueueView
-              snap={queueSnap}
-              scroll={scroll}
-              now={queueNow}
-              height={listHeight}
-              focused
-            />
+            <ClickableBox flexGrow={1} onWheel={(d) => setScroll((s) => Math.max(0, s + d))}>
+              <QueueView
+                snap={queueSnap}
+                scroll={scroll}
+                now={queueNow}
+                height={listHeight}
+                focused
+              />
+            </ClickableBox>
           ) : view === "cmdOutput" && cmd ? (
-            <CommandOutput
-              title={cmd.title}
-              running={cmd.running}
-              elapsedS={cmdElapsed}
-              output={cmd.output}
-              scroll={scroll}
-              exitCode={cmd.exitCode}
-              timedOut={cmd.timedOut}
-              height={listHeight}
-            />
+            <ClickableBox flexGrow={1} onWheel={(d) => setScroll((s) => Math.max(0, s + d))}>
+              <CommandOutput
+                title={cmd.title}
+                running={cmd.running}
+                elapsedS={cmdElapsed}
+                output={cmd.output}
+                scroll={scroll}
+                exitCode={cmd.exitCode}
+                timedOut={cmd.timedOut}
+                height={listHeight}
+              />
+            </ClickableBox>
           ) : view === "detail" && detail ? (
             <Preview
               issue={detail.issue}
@@ -2256,6 +2505,8 @@ export function App(props: AppProps): React.JSX.Element {
               scroll={scroll}
               focused
               height={listHeight}
+              onLinkPress={openDetailIssueInBrowser}
+              onWheel={(d) => setScroll((s) => Math.max(0, s + d))}
             />
           ) : view === "prDetail" && prDetail ? (
             <PrPreview
@@ -2265,6 +2516,7 @@ export function App(props: AppProps): React.JSX.Element {
               height={listHeight}
               focused
               titleLabel="pr"
+              onLinkPress={openPrDetailInBrowser}
             />
           ) : view === "prs" ? (
             <PrList
@@ -2275,6 +2527,12 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={prStaleAt}
               window={prWindow}
+              onRowPress={(i) => {
+                if (confirm !== null) return;
+                if (i === prIdxSafe) return void openPrDetail(selectedPr, "prs");
+                movePrTo(i);
+              }}
+              onWheel={(d) => movePr(d)}
             />
           ) : (
             <IssueList
@@ -2289,6 +2547,14 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
+              onRowPress={(i) => {
+                if (confirm !== null) return;
+                if (pane === 2 && i === issueIdxSafe) return void openDetail();
+                setPane(2);
+                moveIssueTo(i);
+              }}
+              onPanePress={confirm === null ? () => setPane(2) : undefined}
+              onWheel={(d) => moveIssue(d)}
             />
           )}
           {layout.mode === "wide" &&
@@ -2300,6 +2566,7 @@ export function App(props: AppProps): React.JSX.Element {
                 height={listHeight}
                 width={layout.previewWidth}
                 focused={false}
+                onLinkPress={selectedPr ? openSelectedPr : undefined}
               />
             ) : view === "main" ? (
               <Box width={layout.previewWidth} height={listHeight}>
@@ -2314,6 +2581,16 @@ export function App(props: AppProps): React.JSX.Element {
                   window={pane3Window}
                   title={pane3Title}
                   emptyText="no junco PRs for this repo"
+                  onRowPress={(i) => {
+                    if (confirm !== null) return;
+                    if (pane === 3 && i === pane3IdxSafe) {
+                      return void openPrDetail(selectedPane3Pr, "main");
+                    }
+                    setPane(3);
+                    movePane3To(i);
+                  }}
+                  onPanePress={confirm === null ? () => setPane(3) : undefined}
+                  onWheel={(d) => movePane3(d)}
                 />
               </Box>
             ) : null)}

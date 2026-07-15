@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
+import { ClickableBox } from "../ClickableBox.js";
 import type { PendingAssess } from "../../assessReview.js";
 import { ANALYSIS_FOOTER, type PendingComment } from "../../commentReview.js";
 
@@ -55,10 +56,16 @@ export function ReviewView({
   state,
   height,
   focused,
+  onRowPress,
+  onFindingPress,
+  onDraftWheel,
 }: {
   state: ReviewState;
   height: number;
   focused: boolean;
+  onRowPress?: (index: number) => void;
+  onFindingPress?: (index: number) => void;
+  onDraftWheel?: (dir: 1 | -1) => void;
 }): React.JSX.Element {
   const rows = Math.max(1, height - 2);
   if (state.loading) {
@@ -93,7 +100,7 @@ export function ReviewView({
     // the visible lines by one immediately — no cursor-centering dead-zone.
     const scroll = state.open.scroll;
     return (
-      <Box flexDirection="column" paddingX={1}>
+      <ClickableBox flexDirection="column" paddingX={1} onWheel={onDraftWheel}>
         <Text wrap="truncate-end">
           <Text color={theme.accent}>{`${draft.nwo}#${draft.issue}`}</Text>
           <Text
@@ -111,7 +118,7 @@ export function ReviewView({
           </Text>
         )}
         <Text dimColor>f post · x discard · esc back</Text>
-      </Box>
+      </ClickableBox>
     );
   }
 
@@ -140,11 +147,13 @@ export function ReviewView({
           const sel = idx === findingCursor && focused;
           const on = checked.has(f.fingerprint);
           return (
-            <Box
+            <ClickableBox
               key={f.fingerprint}
               width="100%"
               backgroundColor={sel ? theme.selectionBg : undefined}
+              hoverBg={sel ? theme.selectionBg : theme.hoverBg}
               gap={1}
+              onPress={onFindingPress ? () => onFindingPress(idx) : undefined}
             >
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
               <Text>{on ? "[x]" : "[ ]"}</Text>
@@ -154,7 +163,7 @@ export function ReviewView({
                   {f.title}
                 </Text>
               </Box>
-            </Box>
+            </ClickableBox>
           );
         })}
       </Box>
@@ -183,11 +192,13 @@ export function ReviewView({
         if (idx < batchCount) {
           const b = state.batches[idx];
           return (
-            <Box
+            <ClickableBox
               key={b.id}
               width="100%"
               backgroundColor={sel ? theme.selectionBg : undefined}
+              hoverBg={sel ? theme.selectionBg : theme.hoverBg}
               gap={1}
+              onPress={onRowPress ? () => onRowPress(idx) : undefined}
             >
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
               <Box flexGrow={1} minWidth={0}>
@@ -197,16 +208,18 @@ export function ReviewView({
               </Box>
               <Text dimColor>{b.external ? "external" : "owned"}</Text>
               <Text color={theme.accent}>{`${b.findings.length}`}</Text>
-            </Box>
+            </ClickableBox>
           );
         }
         const d = state.drafts[idx - batchCount];
         return (
-          <Box
+          <ClickableBox
             key={d.id}
             width="100%"
             backgroundColor={sel ? theme.selectionBg : undefined}
+            hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             gap={1}
+            onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             <Text dimColor={!sel}>{`${d.nwo}#${d.issue}`}</Text>
@@ -216,7 +229,7 @@ export function ReviewView({
               </Text>
             </Box>
             <Text dimColor>comment</Text>
-          </Box>
+          </ClickableBox>
         );
       })}
     </Box>

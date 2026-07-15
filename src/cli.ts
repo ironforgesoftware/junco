@@ -3,13 +3,15 @@
  * Junco CLI — M4 restructure.
  *
  * Subcommands:
- *   junco init [--config <path>] [--yes]     — guided setup walkthrough (writes
- *                                              config + queue; re-run it anytime
- *                                              to tune settings)
  *   junco start [--config <path>] [--once]   — daemon (acquire lock, run mainLoop)
  *   junco run-once [--config <path>]         — dev/cron one-shot (no lock)
- *   junco                                    — bare → wizard on first run (no
- *                                              config yet), else start
+ *   junco                                    — bare → dashboard setup walkthrough
+ *                                              on first run (no config yet), else
+ *                                              start
+ *   junco dashboard [--config <path>]        — interactive dashboard; first run
+ *                                              opens the guided setup walkthrough
+ *   junco config init [--config <path>]      — headless: scaffold a default
+ *                                              config.json + queue dirs, no prompts
  *   junco --help | -h                        — usage
  *
  * `run(argv, deps)` is a pure-ish function that returns an exit code without
@@ -50,7 +52,6 @@ import {
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { describeTicketSchema } from "./ticketSchema.js";
-import { runInitWizard } from "./wizard.js";
 import { runStatusCommand } from "./statusCmd.js";
 import { runListCommand } from "./listCmd.js";
 import { runRetryCommand } from "./retryCmd.js";
@@ -84,16 +85,16 @@ export interface CliDeps {
     holder: ConfigHolder,
     deps?: { onApplied?: () => void },
   ) => { close(): void };
-  /** Output function for the `service`, `inbox-path`, `schema`, `submit`, `init` subcommands. Default: process.stdout.write. */
+  /** Output function for the `service`, `inbox-path`, `schema`, `submit` subcommands. Default: process.stdout.write. */
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
   readStdinFn?: () => Promise<string>;
   /** Existence check for first-run detection (tests control routing). Default: fs.existsSync. */
   existsFn?: (path: string) => boolean;
-  /** The init wizard (tests inject a spy to assert routing without touching the fs). */
-  runInitWizardFn?: (configPath: string, opts: { yes?: boolean }) => Promise<number>;
-  /** The dashboard command (tests inject a spy; default lazily imports dashboardCmd.js). */
-  runDashboardFn?: (cfg: Config, configPath: string) => Promise<number>;
+  /** The dashboard command (tests inject a spy; default lazily imports
+   * dashboardCmd.js). `cfg` is null on the FTUE path (no config on disk yet —
+   * the dashboard hosts the setup walkthrough). */
+  runDashboardFn?: (cfg: Config | null, configPath: string) => Promise<number>;
   /** The restart command (takes the RESOLVED config path — it matches service
    * units and the worker.lock by path, not by parsed config). */
   runRestartFn?: (configPath: string) => Promise<number>;
@@ -146,7 +147,6 @@ const USAGE = `\
 Usage: junco <subcommand> [options]
 
 Subcommands:
-  init         Guided setup walkthrough — writes config.json + creates the queue (re-run it anytime to tune settings)
   start        Start the daemon
   run-once     Process one task and exit (dev/cron convenience; no lock)
   service      Render a service file to stdout (launchd plist or systemd unit)
@@ -157,7 +157,7 @@ Subcommands:
   rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
-  config path|list|get <path>|set <path> <value>  Inspect/edit config.json knobs
+  config path|list|get <path>|set <path> <value>|init  Inspect/edit config.json knobs; init scaffolds defaults
   assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
@@ -167,7 +167,7 @@ Subcommands:
   analyze post <id> [--no-footer]        post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
-  dashboard    Interactive GitHub-mode dashboard — watchlist, issues, dispatch/approve
+  dashboard    Interactive dashboard — first run opens the guided setup walkthrough
   restart      Restart the supervised daemon (picks up config + code changes)
   worktree prune <path>  Prune a stale/backup worktree (lock-guarded; refuses live)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
@@ -175,18 +175,46 @@ Subcommands:
                   for it — forks & clones unowned repos automatically
   schema       Print the ticket frontmatter JSON Schema and exit
 
-  (no subcommand) → runs the setup wizard on first run (no config yet),
-                    otherwise starts the daemon.
+  (no subcommand) → opens the dashboard setup walkthrough on first run
+                    (no config yet), otherwise starts the daemon.
 
 Options:
   --config <path>       Path to config.json
                         [default: ./config.json if present, else ~/.config/junco/config.json]
-  --yes, -y             (init) Scaffold a default config without prompting
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
   --help, -h            Show this help message
 `;
+
+// ---------------------------------------------------------------------------
+// Argv parsing (strict) — extracted so run() can wrap it in try/catch. With
+// strict:true parseArgs throws ERR_PARSE_ARGS_UNKNOWN_OPTION on any unrecognized
+// flag; run() turns that into a graceful usage error (exit 2) instead of letting
+// it escape to the top-level fatal catch (exit 1 + structured error log).
+// ---------------------------------------------------------------------------
+
+function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
+  return parseArgs({
+    args: argv,
+    options: {
+      config: { type: "string" },
+      once: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+      platform: { type: "string" },
+      all: { type: "boolean", default: false },
+      only: { type: "string" },
+      follow: { type: "boolean", short: "f", default: false },
+      lines: { type: "string", short: "n" },
+      json: { type: "boolean", default: false },
+      human: { type: "boolean", default: false },
+      "auto-plan": { type: "boolean", default: false },
+      "no-footer": { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: true,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Daemon-mode log plumbing
@@ -241,27 +269,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     deps.runOnceFn ??
     ((c: Config) => runOnce(c, { reporter: c.github.enabled ? makeGithubReporter(c) : undefined }));
 
-  // Parse argv
-  const { values, positionals } = parseArgs({
-    args: argv,
-    options: {
-      config: { type: "string" },
-      once: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
-      platform: { type: "string" },
-      yes: { type: "boolean", short: "y", default: false },
-      all: { type: "boolean", default: false },
-      only: { type: "string" },
-      follow: { type: "boolean", short: "f", default: false },
-      lines: { type: "string", short: "n" },
-      json: { type: "boolean", default: false },
-      human: { type: "boolean", default: false },
-      "auto-plan": { type: "boolean", default: false },
-      "no-footer": { type: "boolean", default: false },
-    },
-    allowPositionals: true,
-    strict: false,
-  });
+  // Parse argv (strict). An unknown flag throws ERR_PARSE_ARGS_UNKNOWN_OPTION;
+  // report it gracefully (message + usage, exit 2) rather than letting it reach
+  // the top-level fatal catch. Covers the removed `junco init --yes` scripted
+  // form and every other unrecognized flag.
+  let parsed: ReturnType<typeof parseCli>;
+  try {
+    parsed = parseCli(argv);
+  } catch (e) {
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n\n${USAGE}`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
 
   // --help / -h
   if (values.help) {
@@ -273,9 +292,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Resolve the config path ONCE: explicit --config → ./config.json when
   // present → the user-level default (~/.config/junco/config.json).
   const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
-  // First-run aware: a bare invocation runs the setup wizard when there's no
-  // config yet, and starts the daemon once one exists.
-  const subcommand = positionals[0] ?? (existsFn(configPath) ? "start" : "init");
+  // First-run aware: a bare invocation opens the dashboard's setup walkthrough
+  // when there's no config yet, and starts the daemon once one exists.
+  const subcommand = positionals[0] ?? (existsFn(configPath) ? "start" : "dashboard");
 
   // Resolve injected print function (defaults to process.stdout.write)
   const printFn = deps.printFn ?? ((s: string) => process.stdout.write(s));
@@ -606,14 +625,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // React-free).
   // ------------------------------------------------------------
   if (subcommand === "dashboard") {
-    const cfg = loadConfigFn(configPath);
-    setLogLevel(cfg.logLevel);
     const runDashboardFn =
       deps.runDashboardFn ??
-      (async (c: Config, p: string) => {
+      (async (c: Config | null, p: string) => {
         const { runDashboard } = await import("./dashboardCmd.js");
         return runDashboard(c, p);
       });
+    if (!existsFn(resolve(configPath))) {
+      // FTUE: the dashboard hosts the setup walkthrough (spec §4) — no config
+      // to load yet, so pass null and let the Ink Root open the wizard first.
+      return runDashboardFn(null, configPath);
+    }
+    const cfg = loadConfigFn(configPath);
+    setLogLevel(cfg.logLevel);
     return runDashboardFn(cfg, configPath);
   }
 
@@ -753,49 +777,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       process.stderr.write(`junco dispatch: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
-  }
-
-  // ------------------------------------------------------------
-  // init: guided setup walkthrough. Fresh config → full wizard; existing
-  // config + interactive → the wizard's re-run (tune-up) mode; existing
-  // config + --yes/non-TTY → just ensure the queue dirs (never overwrite).
-  // ------------------------------------------------------------
-  if (subcommand === "init") {
-    const wantYes = values.yes as boolean;
-    const exists = existsFn(resolve(configPath));
-    // An injected runInitWizardFn counts as "interactive" (test seam).
-    const interactive = Boolean(deps.runInitWizardFn) || Boolean(process.stdin.isTTY);
-
-    if (!exists && !wantYes && !interactive) {
-      process.stderr.write(
-        `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
-          `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.json.\n`,
-      );
-      return 1;
-    }
-
-    if (exists && (wantYes || !interactive)) {
-      // Config already present — ensure the queue dirs, never overwrite.
-      const cfg = loadConfigFn(configPath);
-      const paths = queuePaths(cfg);
-      for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
-        mkdirSync(d, { recursive: true });
-      }
-      printFn(
-        `Config already exists at ${resolve(configPath)}; ensured queue directories:\n` +
-          `  inbox:      ${paths.inbox}\n` +
-          `  processing: ${paths.processing}\n` +
-          `  done:       ${paths.done}\n` +
-          `  failed:     ${paths.failed}\n` +
-          `  worktrees:  ${cfg.worktreeRoot}\n`,
-      );
-      return 0;
-    }
-
-    const runWizard =
-      deps.runInitWizardFn ??
-      ((cp: string, o: { yes?: boolean }) => runInitWizard(cp, { yes: o.yes, printFn }));
-    return runWizard(configPath, { yes: wantYes });
   }
 
   // ------------------------------------------------------------

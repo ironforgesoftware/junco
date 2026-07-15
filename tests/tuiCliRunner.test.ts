@@ -36,7 +36,7 @@ function deps(child: ReturnType<typeof fakeChild>, timeoutMs = 5_000) {
 }
 
 describe("PALETTE_COMMANDS roster", () => {
-  it("carries 16 runnable and 3 excluded-with-reason entries", () => {
+  it("carries 17 runnable and 2 excluded-with-reason entries", () => {
     const runnable = PALETTE_COMMANDS.filter((c) => c.excluded === null);
     const excluded = PALETTE_COMMANDS.filter((c) => c.excluded !== null);
     expect(runnable.map((c) => c.name).sort()).toEqual(
@@ -54,12 +54,13 @@ describe("PALETTE_COMMANDS roster", () => {
         "run-once",
         "schema",
         "service",
+        "setup",
         "status",
         "submit",
         "worktree",
       ].sort(),
     );
-    expect(excluded.map((c) => c.name).sort()).toEqual(["dashboard", "init", "start"]);
+    expect(excluded.map((c) => c.name).sort()).toEqual(["dashboard", "start"]);
     for (const c of excluded) expect((c.excluded ?? "").length).toBeGreaterThan(4);
   });
 
@@ -121,11 +122,18 @@ describe("runCliCommand", () => {
 });
 
 describe("roster ↔ CLI USAGE consistency", () => {
+  // "setup" is intercepted in-process by App (Root swaps the host to the
+  // wizard) and never spawns a subprocess, so by design it has NO cli.ts
+  // USAGE row — every other runnable roster name maps to a real subcommand.
+  const IN_PROCESS_ONLY = new Set(["setup"]);
+
   it("every runnable roster name is a documented cli.ts subcommand", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8");
     const usage = src.slice(src.indexOf("Subcommands:"), src.indexOf("Options:"));
-    for (const c of PALETTE_COMMANDS.filter((c) => c.excluded === null)) {
+    for (const c of PALETTE_COMMANDS.filter(
+      (c) => c.excluded === null && !IN_PROCESS_ONLY.has(c.name),
+    )) {
       expect(usage, `roster entry '${c.name}' missing from cli.ts USAGE`).toMatch(
         new RegExp(`^\\s{2}${c.name}(\\s|$)`, "m"),
       );

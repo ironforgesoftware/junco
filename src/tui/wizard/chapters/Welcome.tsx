@@ -1,12 +1,12 @@
 /** Chapter 0 — greeting + machine preflight (detect-then-offer: what the
  * machine already has right is shown as receipts, never asked). */
 import React, { useEffect, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { Tip, ReceiptList, type ChapterProps } from "../controls.js";
 import { Spinner } from "../../components/Spinner.js";
 import { TIPS, pickGreeting } from "../../../wizard/tips.js";
 import { theme } from "../../theme.js";
-import { isMouseInput } from "../../mouse.js";
+import { useGuardedInput } from "../../useGuardedInput.js";
 import type { CheckResult } from "../../../wizard/detect.js";
 
 export function Welcome({ io, onNext }: ChapterProps): React.JSX.Element {
@@ -21,8 +21,7 @@ export function Welcome({ io, onNext }: ChapterProps): React.JSX.Element {
       alive = false;
     };
   }, [io]);
-  useInput((input, key) => {
-    if (isMouseInput(input)) return;
+  useGuardedInput((_input, key) => {
     if (key.return) onNext();
   });
   return (

@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
 import { fmtClock } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 function checksToString(checks: {
   pass: number;
@@ -35,6 +36,12 @@ export interface PrListProps {
   showNwo?: boolean; // show nwo cell; default true for multi-repo view
   title?: string; // pane title; default "p pull requests · N"
   emptyText?: string; // empty-state message; default the cross-repo copy below
+  /** Mouse: press on a PR row (registry index into prs). */
+  onRowPress?: (index: number) => void;
+  /** Mouse: press on the pane background (no row). */
+  onPanePress?: () => void;
+  /** Mouse: wheel over the pane (down → +1, up → −1). */
+  onWheel?: (dir: 1 | -1) => void;
 }
 
 /** Pane 2: windowed PR rows with full-row selection bars and aligned
@@ -50,15 +57,20 @@ export function PrList({
   showNwo = true,
   title,
   emptyText,
+  onRowPress,
+  onPanePress,
+  onWheel,
 }: PrListProps): React.JSX.Element {
   return (
-    <Box
+    <ClickableBox
       flexDirection="column"
       borderStyle="round"
       borderColor={focused ? theme.accent : theme.border}
       paddingX={1}
       flexGrow={1}
       height={height}
+      onPress={onPanePress}
+      onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
         {title ?? `p pull requests · ${prs.length}`}
@@ -87,11 +99,13 @@ export function PrList({
         // guarantee): a row must never wrap to a second line, or the height and
         // windowing math above corrupts. The title is the ONLY flexible cell.
         return (
-          <Box
+          <ClickableBox
             key={`${prItem.nwo}#${prItem.number}`}
             width="100%"
             backgroundColor={sel ? theme.selectionBg : undefined}
+            hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             gap={1}
+            onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
             <Box flexShrink={0}>
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
@@ -123,7 +137,7 @@ export function PrList({
             <Box flexShrink={0}>
               <Text dimColor>{relTime(prItem.updatedAt, now)}</Text>
             </Box>
-          </Box>
+          </ClickableBox>
         );
       })}
       <Box flexGrow={1} />
@@ -132,6 +146,6 @@ export function PrList({
           {Math.min(selected + 1, prs.length)}/{prs.length}
         </Text>
       )}
-    </Box>
+    </ClickableBox>
   );
 }

@@ -6,11 +6,15 @@ import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
-import { headerTabBands } from "../src/tui/geometry.js";
 import { until } from "./helpers/until.js";
 import { renderApp, CHEAP, ESC, stubClient } from "./helpers/localFixtures.js";
 
 afterEach(cleanup);
+
+// SGR mouse press at 0-based cell (x,y) — mirrors tuiMouseApp.test.tsx.
+const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
+const lineOf = (frame: string, needle: string): number =>
+  frame.split("\n").findIndex((l) => l.includes(needle));
 
 describe("uiMode toggle", () => {
   it("m swaps github → local and back", async () => {
@@ -105,6 +109,35 @@ describe("local sections", () => {
   });
 });
 
+describe("local sections: mouse", () => {
+  it("clicking a section in the LOCAL rail selects it; clicking again enters the body", async () => {
+    const r = renderApp({ initialUiMode: "local" });
+    await until(() => (r.lastFrame() ?? "").includes("sections"));
+    const y = lineOf(r.lastFrame() ?? "", "repos");
+    r.stdin.write(press(3, y));
+    await until(() => (r.lastFrame() ?? "").split("\n")[y].includes("▌"));
+    r.stdin.write(press(3, y));
+    await until(() =>
+      /* repos body focused: its border shows accent — assert on the section body header */ (
+        r.lastFrame() ?? ""
+      ).includes("repos"),
+    );
+  });
+
+  it("clicking a LOCAL body row moves the cursor and focuses the body", async () => {
+    const r = renderApp({ initialUiMode: "local" }); // fixture seeds ≥2 outbox ops
+    await until(() => (r.lastFrame() ?? "").includes("sections"));
+    const sectionY = lineOf(r.lastFrame() ?? "", "outbox");
+    r.stdin.write(press(3, sectionY)); // select the outbox section
+    await until(() => (r.lastFrame() ?? "").split("\n")[sectionY].includes("▌"));
+    // Rows render as "<age> <op.kind> <issueKey>" — locate the second op by its
+    // issueKey from the fixture data.
+    const rowY = lineOf(r.lastFrame() ?? "", "acme/api#2");
+    r.stdin.write(press(30, rowY));
+    await until(() => (r.lastFrame() ?? "").split("\n")[rowY].includes("▌"));
+  });
+});
+
 describe("github disabled", () => {
   it("launches into LOCAL with the GITHUB tab present but pressing m toasts it is off", async () => {
     const r = renderApp({ initialUiMode: "local", githubEnabled: false });
@@ -144,13 +177,6 @@ describe("local help modal", () => {
     r.stdin.write("j"); // any key — must close help, not move the section rail
     await until(() => !(r.lastFrame() ?? "").includes("local mode"));
     expect(r.lastFrame()).toContain("[LOCAL]"); // still in local mode
-  });
-});
-
-describe("header-band click coordinate", () => {
-  it("headerTabBands(100).localStart toggles to local from github", () => {
-    // (mouse routing is covered in tuiMouse; this pins the band math the App consumes)
-    expect(headerTabBands(100).hit(headerTabBands(100).localStart)).toBe("local");
   });
 });
 

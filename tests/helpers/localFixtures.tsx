@@ -6,8 +6,10 @@
 import React from "react";
 import { render } from "ink-testing-library";
 import { App, type AppProps } from "../../src/tui/App.js";
+import { MouseProvider } from "../../src/tui/MouseProvider.js";
 import type { LocalCheap, LocalHeavy } from "../../src/tui/localSnapshot.js";
 import type { DashboardClient, Result } from "../../src/tui/ghClient.js";
+import type { DashIssue } from "../../src/tui/state.js";
 import type { QueueSnapshot } from "../../src/tui/queueSnapshot.js";
 
 export const okv = <T,>(v: T): Result<T> => ({ ok: true, value: v });
@@ -61,7 +63,36 @@ export const CHEAP: LocalCheap = {
     ],
   },
   counts: { done: 12, failed: 3 },
-  outbox: { depth: 2, dead: 1, ops: [], deadOps: [], error: null },
+  outbox: {
+    depth: 2,
+    dead: 1,
+    // ≥2 ops with locatable issueKeys — the mouse row-click specs locate the
+    // second row by its "acme/api#2" target text.
+    ops: [
+      {
+        id: "op-acme-api-1",
+        path: "/x/github-outbox/op-acme-api-1.json",
+        createdAt: "2026-07-07T09:59:00Z",
+        origin: "dashboard",
+        issueKey: "acme/api#1",
+        attempts: 1,
+        lastError: null,
+        op: { kind: "labels", nwo: "acme/api", issue: 1, add: [], remove: [] },
+      },
+      {
+        id: "op-acme-api-2",
+        path: "/x/github-outbox/op-acme-api-2.json",
+        createdAt: "2026-07-07T09:58:00Z",
+        origin: "dashboard",
+        issueKey: "acme/api#2",
+        attempts: 1,
+        lastError: null,
+        op: { kind: "labels", nwo: "acme/api", issue: 2, add: [], remove: [] },
+      },
+    ],
+    deadOps: [],
+    error: null,
+  },
   daemon: {
     up: true,
     pid: 4242,
@@ -113,8 +144,28 @@ export const HEAVY: LocalHeavy = {
   error: null,
 };
 
+/** Two GitHub issues for the selected repo — the mouse row-click specs need
+ * ≥2 rows (and one numbered #2). Returned for every repo since the stub ignores
+ * nwo; LOCAL-mode suites never render this list. */
+export const ISSUES: DashIssue[] = [
+  {
+    number: 1,
+    title: "First issue",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T10:00:00Z",
+    url: "https://github.com/acme/api/issues/1",
+  },
+  {
+    number: 2,
+    title: "Second issue",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T09:00:00Z",
+    url: "https://github.com/acme/api/issues/2",
+  },
+];
+
 export const stubClient: DashboardClient = {
-  listIssues: async () => okv({ issues: [], staleAt: null }),
+  listIssues: async () => okv({ issues: ISSUES, staleAt: null }),
   listPrs: async () => okv({ prs: [], staleAt: null }),
   cloneRepo: async () => okv(undefined),
   issueDetail: async () => okv({ body: "", planComment: null }),
@@ -148,32 +199,45 @@ export const stubClient: DashboardClient = {
   }),
 };
 
-export function renderApp(over: Partial<AppProps> = {}): ReturnType<typeof render> {
+/** The full fake AppProps set `renderApp` mounts, as a plain object. Exported
+ * so callers that host `App` themselves (e.g. the Root FTUE switcher tests,
+ * which feed this as `buildAppProps`) get the identical prop set without the
+ * MouseProvider wrapper. */
+export function makeAppProps(over: Partial<AppProps> = {}): AppProps {
   const runCli: AppProps["runCliFn"] =
     over.runCliFn ?? (async () => ({ code: 0, output: "ok", timedOut: false }));
+  return {
+    client: stubClient,
+    trigger: "junco",
+    branchPrefix: "junco/",
+    configRepos: [
+      { nwo: "acme/api", path: "/c/api" },
+      { nwo: "beta/two", path: "/c/two" },
+    ],
+    watchlistFile: "/tmp/wl.json",
+    configPath: "/x/config.json",
+    clonesDir: "/x/state/repos",
+    refreshPollMs: 999999,
+    healthPollMs: 999999,
+    queuePollMs: 999999,
+    queueFn: async () => EMPTY_QUEUE,
+    localCheapFn: async () => CHEAP,
+    localHeavyFn: async () => HEAVY,
+    localCheapPollMs: 999999,
+    localHeavyPollMs: 999999,
+    initialUiMode: "github",
+    githubEnabled: true,
+    runCliFn: runCli,
+    sizeOverride: { columns: WIDE_COLS_TEST, rows: 30 },
+    onExit: () => {},
+    ...over,
+  };
+}
+
+export function renderApp(over: Partial<AppProps> = {}): ReturnType<typeof render> {
   return render(
-    <App
-      client={stubClient}
-      trigger="junco"
-      branchPrefix="junco/"
-      configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
-      watchlistFile="/tmp/wl.json"
-      configPath="/x/config.json"
-      clonesDir="/x/state/repos"
-      refreshPollMs={999999}
-      healthPollMs={999999}
-      queuePollMs={999999}
-      queueFn={async () => EMPTY_QUEUE}
-      localCheapFn={async () => CHEAP}
-      localHeavyFn={async () => HEAVY}
-      localCheapPollMs={999999}
-      localHeavyPollMs={999999}
-      initialUiMode="github"
-      githubEnabled
-      runCliFn={runCli}
-      sizeOverride={{ columns: WIDE_COLS_TEST, rows: 30 }}
-      onExit={() => {}}
-      {...over}
-    />,
+    <MouseProvider>
+      <App {...makeAppProps(over)} />
+    </MouseProvider>,
   );
 }

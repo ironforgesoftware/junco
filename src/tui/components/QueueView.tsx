@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { QueueSnapshot, QueueWaiting } from "../queueSnapshot.js";
 import { queueLabel, progressLine, fmtAge, fmtClock } from "../queueFmt.js";
 import { theme } from "../theme.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 function waitingNote(w: QueueWaiting): string {
   const parts: string[] = [];
@@ -30,6 +31,7 @@ export function QueueView({
   selectable,
   selectedRow,
   counts,
+  onRowPress,
 }: {
   snap: QueueSnapshot | null;
   scroll: number;
@@ -41,6 +43,10 @@ export function QueueView({
   /** Full done/failed totals (LOCAL queue section only); absent for the GitHub
    * `t` view, which then renders byte-identically. */
   counts?: { done: number; failed: number } | null;
+  /** Actionable-row index: waiting `i`, recent `waiting.length + j`. Only
+   * wired when `selectable` — absent/false keeps the GitHub `t` view's rows
+   * bare (byte-identical). */
+  onRowPress?: (row: number) => void;
 }): React.JSX.Element {
   if (snap === null) {
     return (
@@ -80,6 +86,28 @@ export function QueueView({
       </Text>,
     );
   };
+
+  // Wraps an actionable row's Text in a ClickableBox when `selectable` — the
+  // non-selectable GitHub `t` view never wraps, so its rows stay byte-
+  // identical to before mouse support existed. Hover on the selected row keeps
+  // its selectionBg (the binding rule everywhere: sel ? selectionBg : hoverBg).
+  const pressable = (
+    row: number,
+    sel: boolean,
+    child: React.JSX.Element,
+    key: string,
+  ): React.JSX.Element =>
+    selectable === true && onRowPress ? (
+      <ClickableBox
+        key={key}
+        hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+        onPress={() => onRowPress(row)}
+      >
+        {child}
+      </ClickableBox>
+    ) : (
+      child
+    );
 
   rows.push(
     <Text key="title" bold color={focused ? theme.accent : undefined}>
@@ -126,12 +154,17 @@ export function QueueView({
     const sel = selectable === true && selectedRow === i;
     if (sel) selRowIndex = rows.length;
     rows.push(
-      <Text key={`w-${w.id}`} wrap="truncate-end">
-        {gutter(sel)}
-        {i + 1}. <Text bold>{queueLabel(w.github, w.id)}</Text>
-        <Text dimColor> {w.github ? w.id : w.kind}</Text>
-        {note !== "" ? <Text color="yellow"> {note}</Text> : null}
-      </Text>,
+      pressable(
+        i,
+        sel,
+        <Text key={`w-${w.id}`} wrap="truncate-end">
+          {gutter(sel)}
+          {i + 1}. <Text bold>{queueLabel(w.github, w.id)}</Text>
+          <Text dimColor> {w.github ? w.id : w.kind}</Text>
+          {note !== "" ? <Text color="yellow"> {note}</Text> : null}
+        </Text>,
+        `w-${w.id}`,
+      ),
     );
   });
 
@@ -161,14 +194,19 @@ export function QueueView({
     const sel = selectable === true && selectedRow === snap.waiting.length + j;
     if (sel) selRowIndex = rows.length;
     rows.push(
-      <Text key={`f-${r.id}-${r.finishedAt}`} wrap="truncate-end">
-        {gutter(sel)}
-        <Text color={r.status === "done" ? "green" : "red"}>
-          {r.status === "done" ? "✓" : "✗"}{" "}
-        </Text>
-        {queueLabel(r.github, r.id)}
-        <Text dimColor> {fmtAge(r.finishedAt, now)}</Text>
-      </Text>,
+      pressable(
+        snap.waiting.length + j,
+        sel,
+        <Text key={`f-${r.id}-${r.finishedAt}`} wrap="truncate-end">
+          {gutter(sel)}
+          <Text color={r.status === "done" ? "green" : "red"}>
+            {r.status === "done" ? "✓" : "✗"}{" "}
+          </Text>
+          {queueLabel(r.github, r.id)}
+          <Text dimColor> {fmtAge(r.finishedAt, now)}</Text>
+        </Text>,
+        `f-${r.id}-${r.finishedAt}`,
+      ),
     );
   });
 
