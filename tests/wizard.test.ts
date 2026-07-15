@@ -152,4 +152,65 @@ describe("buildWizardIO", () => {
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toMatch(/EPERM/);
   });
+
+  it("fresh mode: botGhConfigDir is the expanded DEFAULT_GH_CONFIG_DIR default", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const r = buildWizardIO(cp, { existsFn: () => false });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.botGhConfigDir).not.toContain("~");
+    expect(r.io.botGhConfigDir.endsWith(".config/junco/gh")).toBe(true);
+  });
+
+  it("rerun mode: botGhConfigDir reads botAccount.configDir / git.ghBin from the raw config", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    writeFileSync(
+      cp,
+      JSON.stringify({
+        vaultRoot: join(dir, "vault"),
+        juncoSubdir: "",
+        model: { id: "p/m" },
+        botAccount: { configDir: join(dir, "custom-gh") },
+        git: { ghBin: "/opt/homebrew/bin/gh" },
+      }),
+      "utf8",
+    );
+    let seenGhBin = "";
+    let seenConfigDir = "";
+    const r = buildWizardIO(cp, {
+      detectBotLoginFn: async (ghBin, configDir) => {
+        seenGhBin = ghBin;
+        seenConfigDir = configDir;
+        return "junco-agent";
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.botGhConfigDir).toBe(join(dir, "custom-gh"));
+    return r.io.detectBotLogin().then((login) => {
+      expect(login).toBe("junco-agent");
+      expect(seenGhBin).toBe("/opt/homebrew/bin/gh");
+      expect(seenConfigDir).toBe(join(dir, "custom-gh"));
+    });
+  });
+
+  it("wires io.runGhLogin to the injected runGhLoginFn with (ghBin, botGhConfigDir)", async () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    let seenArgs: [string, string] | null = null;
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      runGhLoginFn: async (ghBin, configDir) => {
+        seenArgs = [ghBin, configDir];
+        return 0;
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    const code = await r.io.runGhLogin();
+    expect(code).toBe(0);
+    expect(seenArgs).toEqual(["gh", r.io.botGhConfigDir]);
+  });
 });

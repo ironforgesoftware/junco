@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -652,6 +652,44 @@ describe("labels_exist", () => {
     try {
       const result = lintTicket(VALID_BODY, fm, { repoNwo, checkLabels: true, ghBin: fakeGh });
       // All ticket labels (bug, enhancement) are present → no labels_exist violation.
+      expect(result.violations.filter((v) => v.rule === "labels_exist")).toHaveLength(0);
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  // Regression: the daemon's bot GH_CONFIG_DIR must reach this one
+  // execFileSync bypass of git.ts — closes the last gh subprocess bypass.
+  it("threads ghEnv into the label fetch (bot GH_CONFIG_DIR)", () => {
+    const binDir = mkdtempSync(join(tmpdir(), "junco-lint-ghenv-"));
+    const fakeGh = join(binDir, "gh");
+    const envOut = join(binDir, "env.txt");
+    writeFileSync(
+      fakeGh,
+      `#!/bin/sh\necho "\${GH_CONFIG_DIR:-unset}" > ${JSON.stringify(envOut)}\nprintf 'bug\\nenhancement\\n'\n`,
+      { mode: 0o755 },
+    );
+    try {
+      const result = lintTicket(VALID_BODY, fm, {
+        repoNwo,
+        checkLabels: true,
+        ghBin: fakeGh,
+        ghEnv: { GH_CONFIG_DIR: "/sbx/junco-gh" },
+      });
+      expect(result.violations.filter((v) => v.rule === "labels_exist")).toHaveLength(0);
+      expect(readFileSync(envOut, "utf8").trim()).toBe("/sbx/junco-gh");
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  // A ghEnv-free call must still work (env stays undefined → inherits process.env).
+  it("ghEnv-free call still works (no env threaded)", () => {
+    const binDir = mkdtempSync(join(tmpdir(), "junco-lint-noghenv-"));
+    const fakeGh = join(binDir, "gh");
+    writeFileSync(fakeGh, "#!/bin/sh\nprintf 'bug\\nenhancement\\n'\n", { mode: 0o755 });
+    try {
+      const result = lintTicket(VALID_BODY, fm, { repoNwo, checkLabels: true, ghBin: fakeGh });
       expect(result.violations.filter((v) => v.rule === "labels_exist")).toHaveLength(0);
     } finally {
       rmSync(binDir, { recursive: true, force: true });

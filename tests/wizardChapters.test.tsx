@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import React from "react";
+import { Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
 import { until } from "./helpers/until.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
@@ -9,9 +10,11 @@ import { Workspace } from "../src/tui/wizard/chapters/Workspace.js";
 import { Model } from "../src/tui/wizard/chapters/Model.js";
 import { RepoSafety } from "../src/tui/wizard/chapters/RepoSafety.js";
 import { Github } from "../src/tui/wizard/chapters/Github.js";
+import { Account } from "../src/tui/wizard/chapters/Account.js";
 import { Extras } from "../src/tui/wizard/chapters/Extras.js";
 import { Review } from "../src/tui/wizard/chapters/Review.js";
 import { Finale } from "../src/tui/wizard/chapters/Finale.js";
+import { useSuspend } from "../src/tui/useSuspend.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
@@ -246,6 +249,9 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
       changes: [],
     }),
     flightCheck: async () => [],
+    botGhConfigDir: "/sbx/junco-gh",
+    detectBotLogin: async () => null,
+    runGhLogin: async () => 0,
     ...over,
   };
 }
@@ -1095,5 +1101,123 @@ describe("Finale", () => {
     await until(() => (r.lastFrame() ?? "").includes("enter to finish"));
     r.stdin.write(mousePress(2, 1));
     await until(() => onDone.mock.calls.length === 1);
+  });
+});
+
+describe("useSuspend", () => {
+  it("under a fake non-TTY stdout, writes no mouse/alt-screen escapes and still runs+returns the wrapped fn", async () => {
+    let result: string | null = null;
+    function Probe(): React.JSX.Element {
+      const suspend = useSuspend();
+      React.useEffect(() => {
+        void suspend(async () => "done").then((v) => {
+          result = v;
+        });
+      }, []);
+      return <Text>probe</Text>;
+    }
+    const { lastFrame, frames } = render(<Probe />);
+    await until(() => result !== null);
+    expect(result).toBe("done");
+    expect(lastFrame()).toContain("probe");
+    // ink-testing-library's fake stdout has no isTTY (Boolean(undefined) ===
+    // false), so the TTY-gated branch must never write — a raw write() there
+    // is indistinguishable from a real frame and would clobber lastFrame().
+    const written = frames.join("\n");
+    expect(written).not.toContain("\x1b[?1000"); // MOUSE_ENABLE/MOUSE_DISABLE share this prefix
+    expect(written).not.toContain("\x1b[?1049"); // ALT_SCREEN_ENTER/LEAVE share this prefix
+  });
+});
+
+describe("Account chapter", () => {
+  it("default choice keeps ambient identity and advances", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Account
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo()}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
+    expect(lastFrame()).toContain("Your gh login");
+    await press(stdin, ENTER); // "Your gh login" is first/default
+    await until(() => advanced);
+    expect(answers.botAccount).toBe(false);
+  });
+
+  it("bot choice with an existing login shows acting-as, then Continue advances", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Account
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo({ detectBotLogin: async () => "junco-agent" })}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
+    await press(stdin, DOWN, ENTER); // "A dedicated bot account"
+    await until(() => (lastFrame() ?? "").includes("acting as junco-agent"));
+    expect(answers.botAccount).toBe(true);
+    await press(stdin, ENTER); // Continue
+    await until(() => advanced);
+  });
+
+  it("bot choice without a login offers Log in now / Skip; Skip patches botAccount:true and advances", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Account
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo({ detectBotLogin: async () => null })}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
+    await press(stdin, DOWN, ENTER); // "A dedicated bot account"
+    await until(() => (lastFrame() ?? "").includes("Log in now"));
+    expect(lastFrame()).toContain("Skip");
+    await press(stdin, DOWN, ENTER); // Skip
+    await until(() => advanced);
+    expect(answers.botAccount).toBe(true);
+  });
+
+  it("Log in now runs io.runGhLogin then re-detects", async () => {
+    let loggedIn = false;
+    const io = fakeIo({
+      detectBotLogin: async () => (loggedIn ? "junco-agent" : null),
+      runGhLogin: async () => {
+        loggedIn = true;
+        return 0;
+      },
+    });
+    const { lastFrame, stdin } = render(
+      <Account {...noopChapter} answers={defaultAnswers()} io={io} onNext={() => {}} />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
+    await press(stdin, DOWN, ENTER); // "A dedicated bot account"
+    await until(() => (lastFrame() ?? "").includes("Log in now"));
+    await press(stdin, ENTER); // "Log in now" is first/default
+    await until(() => (lastFrame() ?? "").includes("acting as junco-agent"), 200);
   });
 });

@@ -59,4 +59,9 @@ describe("scrubEnv", () => {
       expect(out[k], k).toBeUndefined();
     }
   });
+
+  it("drops GH_CONFIG_DIR and GH_TOKEN by construction", () => {
+    const env = scrubEnv({ PATH: "/bin", GH_CONFIG_DIR: "/x", GH_TOKEN: "t", GITHUB_TOKEN: "t" });
+    expect(env).toEqual({ PATH: "/bin" });
+  });
 });

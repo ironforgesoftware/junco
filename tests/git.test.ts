@@ -4,7 +4,19 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { GitOpError, runCmd, isNetworkError, runWithRetry, git, gh } from "../src/git.js";
+import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  GitOpError,
+  runCmd,
+  isNetworkError,
+  runWithRetry,
+  git,
+  gh,
+  ghAuthEnv,
+} from "../src/git.js";
+import type { GhAuthContext } from "../src/types.js";
 
 // ---------------------------------------------------------------------------
 // GitOpError
@@ -257,5 +269,96 @@ describe("gh", () => {
       retryNetwork: true,
     });
     expect(result.stdout).toBe("gh-retry-ok");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bot auth env injection
+// ---------------------------------------------------------------------------
+
+const CTX: GhAuthContext = {
+  configDir: "/sbx/junco-gh",
+  login: "junco-agent",
+  email: "1234+junco-agent@users.noreply.github.com",
+  credentialHelper: "!gh auth git-credential",
+};
+
+function writeEnvEcho(path: string): void {
+  writeFileSync(
+    path,
+    // `${GH_TOKEN-unset}` (single-dash) prints the empty string when GH_TOKEN is
+    // SET-but-empty and the literal "unset" only when it is truly unset — the
+    // distinction that proves ghAuthEnv's empty-string override reached the child.
+    `#!/bin/sh\necho "cfgdir=\${GH_CONFIG_DIR:-unset} prompt=\${GIT_TERMINAL_PROMPT:-unset} token=[\${GH_TOKEN-unset}] ghtoken=[\${GITHUB_TOKEN-unset}]"\necho "argv=$*"\n`,
+    "utf8",
+  );
+  chmodSync(path, 0o755);
+}
+
+describe("bot auth env injection", () => {
+  it("ghAuthEnv builds the child env pair (and clears inherited GH_TOKEN/GITHUB_TOKEN)", () => {
+    expect(ghAuthEnv(CTX)).toEqual({
+      GH_CONFIG_DIR: "/sbx/junco-gh",
+      GIT_TERMINAL_PROMPT: "0",
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+    });
+  });
+
+  it("clears an inherited GH_TOKEN/GITHUB_TOKEN so gh falls back to the bot's stored creds", async () => {
+    // gh gives GH_TOKEN/GITHUB_TOKEN precedence over GH_CONFIG_DIR-stored creds;
+    // a daemon shell exporting either would otherwise make every bot call resolve
+    // to the token's identity. runCmd merges { ...process.env, ...opts.env }, so
+    // ghAuthEnv's empty string must cleanly override the inherited parent value.
+    const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
+    const fake = join(dir, "fake-gh");
+    writeEnvEcho(fake);
+    const prevGh = process.env.GH_TOKEN;
+    const prevGithub = process.env.GITHUB_TOKEN;
+    process.env.GH_TOKEN = "bogus-parent-token";
+    process.env.GITHUB_TOKEN = "bogus-parent-github-token";
+    try {
+      const r = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"]);
+      expect(r.stdout).toContain("token=[] ghtoken=[]");
+    } finally {
+      if (prevGh === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = prevGh;
+      if (prevGithub === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prevGithub;
+    }
+  });
+
+  it("caller opts.env wins over ghAuthEnv on a key conflict (T2-triage pin)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
+    const fake = join(dir, "fake-gh");
+    writeEnvEcho(fake);
+    const r = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"], {
+      env: { GH_CONFIG_DIR: "/caller/override" },
+    });
+    expect(r.stdout).toContain("cfgdir=/caller/override");
+  });
+
+  it("gh() injects GH_CONFIG_DIR when cfg carries ghAuth, not otherwise", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
+    const fake = join(dir, "fake-gh");
+    writeEnvEcho(fake);
+    const withAuth = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"]);
+    expect(withAuth.stdout).toContain("cfgdir=/sbx/junco-gh");
+    expect(withAuth.stdout).toContain("prompt=0");
+    const without = await gh({ ghBin: fake }, ["api", "user"]);
+    expect(without.stdout).toContain("cfgdir=unset");
+  });
+
+  it("git() injects env AND pins the credential helper before the subcommand", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
+    const fake = join(dir, "fake-git");
+    writeEnvEcho(fake);
+    const r = await git({ gitBin: fake, ghAuth: CTX }, ["push", "origin", "b"]);
+    expect(r.stdout).toContain("cfgdir=/sbx/junco-gh");
+    expect(r.stdout).toContain(
+      "argv=-c credential.helper= -c credential.helper=!gh auth git-credential push origin b",
+    );
+    const plain = await git({ gitBin: fake }, ["push", "origin", "b"]);
+    expect(plain.stdout).toContain("argv=push origin b");
   });
 });

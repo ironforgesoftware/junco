@@ -37,6 +37,8 @@ import { greetingName, preflightChecks, flightChecks, type DetectDeps } from "./
 import { fetchModels, parseModelsJson } from "./wizard/models.js";
 import { listCatalogProviders, type CatalogEntry } from "./agent/session.js";
 import { NEXT_STEPS } from "./wizard/tips.js";
+import { getAtPath } from "./configLevers.js";
+import { detectBotLogin, runGhLogin, DEFAULT_GH_CONFIG_DIR } from "./ghAuth.js";
 
 export interface WizardDeps {
   detectDeps?: DetectDeps;
@@ -52,6 +54,8 @@ export interface WizardDeps {
   existsFn?: (path: string) => boolean;
   loadConfigFn?: (path: string) => Config;
   mkdirFn?: (path: string) => void;
+  detectBotLoginFn?: typeof detectBotLogin;
+  runGhLoginFn?: typeof runGhLogin;
 }
 
 export type WizardIoResult =
@@ -101,6 +105,12 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
     }
     raw = parsed as Record<string, unknown>;
   }
+
+  const rawBotDir =
+    raw !== null ? (getAtPath(raw, "botAccount.configDir") as string | undefined) : undefined;
+  const rawGhBin = raw !== null ? (getAtPath(raw, "git.ghBin") as string | undefined) : undefined;
+  const botGhConfigDir = expandHome(rawBotDir ?? DEFAULT_GH_CONFIG_DIR);
+  const wizGhBin = rawGhBin ?? "gh";
 
   const io: WizardIO = {
     mode,
@@ -158,6 +168,9 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
       return { written, configPath: resolved, queueRoot, changes };
     },
     flightCheck: () => flightChecks(loadConfigFn(resolved), deps.detectDeps),
+    botGhConfigDir,
+    detectBotLogin: () => (deps.detectBotLoginFn ?? detectBotLogin)(wizGhBin, botGhConfigDir),
+    runGhLogin: () => (deps.runGhLoginFn ?? runGhLogin)(wizGhBin, botGhConfigDir),
   };
 
   return { ok: true, io, mode };

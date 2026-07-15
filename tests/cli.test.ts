@@ -21,6 +21,16 @@ import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
 import { run } from "../src/cli.js";
+import { ConfigSchema } from "../src/config.js";
+import type { ConfigParsed } from "../src/config.js";
+
+/** Same literal as Task 2's CTX / ghAuth.test.ts's GhAuthContext fixture. */
+const FAKE_CTX = {
+  configDir: "/sbx/junco-gh",
+  login: "junco-agent",
+  email: "1234+junco-agent@users.noreply.github.com",
+  credentialHelper: "!gh auth git-credential",
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,6 +72,10 @@ function makeDeps(
     runOnceFn: vi.fn(async () => true),
     // Never touch a real fs.watch — the stub config path may not exist on disk.
     watchConfigFn: vi.fn(() => ({ close: vi.fn() })),
+    // stubConfig() returns `{}` — no botAccount — so the real withBotAuth
+    // would throw reading `.enabled` off undefined. Default to a no-op
+    // pass-through; tests that care about bot-auth wiring override it.
+    withBotAuthFn: vi.fn(async (c: Config) => c),
     ...overrides,
   };
 }
@@ -369,6 +383,122 @@ describe("run(['run-once'])", () => {
 });
 
 // ---------------------------------------------------------------------------
+// bot auth at daemon entrypoints — Task 6
+// ---------------------------------------------------------------------------
+
+describe("bot auth at daemon entrypoints", () => {
+  it("start refuses to run when bot auth resolution throws", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("botAccount.enabled is true but no working gh login exists");
+      },
+    });
+    const code = await run(["start"], deps);
+    expect(code).toBe(1);
+    expect(deps.mainLoopFn).not.toHaveBeenCalled();
+    expect(deps.acquireLockFn).not.toHaveBeenCalled();
+  });
+
+  it("start's refusal prints the failure to stderr", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("botAccount.enabled is true but no working gh login exists");
+      },
+    });
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    try {
+      await run(["start"], deps);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("")).toContain("botAccount.enabled is true but no working gh login exists");
+  });
+
+  it("start passes the bot-attached config through to mainLoopFn", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+    });
+    await run(["start"], deps);
+    const [seenCfg] = (deps.mainLoopFn as MockedFunction<any>).mock.calls[0];
+    expect((seenCfg as Config).ghAuth?.login).toBe(FAKE_CTX.login);
+  });
+
+  it("start's watcher re-attaches the startup ghAuth context while the reload keeps botAccount enabled, and drops it when the reload disables botAccount", async () => {
+    const watchConfigFn = vi.fn(() => ({ close: vi.fn() }));
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      watchConfigFn,
+    });
+    await run(["start"], deps);
+
+    const [, , watchDeps] = (watchConfigFn as MockedFunction<any>).mock.calls[0];
+    const assembleFn = watchDeps.assembleFn as (d: ConfigParsed) => Config;
+
+    const enabledParsed = ConfigSchema.parse({
+      vaultRoot: "/tmp/x",
+      botAccount: { enabled: true, configDir: "/tmp/gh" },
+    });
+    expect(assembleFn(enabledParsed).ghAuth?.login).toBe(FAKE_CTX.login);
+
+    const disabledParsed = ConfigSchema.parse({
+      vaultRoot: "/tmp/x",
+      botAccount: { enabled: false },
+    });
+    expect(assembleFn(disabledParsed).ghAuth).toBeUndefined();
+  });
+
+  it("start's watcher never FABRICATES ghAuth: bot disabled at startup, reload enables it → still no ghAuth", async () => {
+    const watchConfigFn = vi.fn(() => ({ close: vi.fn() }));
+    // Bot disabled at startup → withBotAuthFn resolves no ghAuth (passthrough).
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => c,
+      watchConfigFn,
+    });
+    await run(["start"], deps);
+
+    const [, , watchDeps] = (watchConfigFn as MockedFunction<any>).mock.calls[0];
+    const assembleFn = watchDeps.assembleFn as (d: ConfigParsed) => Config;
+
+    // A live edit turns the bot ON, but there is no startup-resolved context to
+    // attach — the assembler must NOT invent one (only a restart resolves auth).
+    const enabledParsed = ConfigSchema.parse({
+      vaultRoot: "/tmp/x",
+      botAccount: { enabled: true, configDir: "/tmp/gh" },
+    });
+    expect(assembleFn(enabledParsed).ghAuth).toBeUndefined();
+  });
+
+  it("run-once refuses to run when bot auth resolution throws", async () => {
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("boom");
+      },
+    });
+    const code = await run(["run-once"], deps);
+    expect(code).toBe(1);
+    expect(deps.runOnceFn).not.toHaveBeenCalled();
+  });
+
+  it("run-once hands the attached config to runOnceFn", async () => {
+    let seen: Config | undefined;
+    const deps = makeDeps({
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      runOnceFn: async (c: Config) => {
+        seen = c;
+        return false;
+      },
+    });
+    const code = await run(["run-once"], deps);
+    expect(code).toBe(0);
+    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // unknown subcommand
 // ---------------------------------------------------------------------------
 
@@ -635,6 +765,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     extraDenyRead: [],
     extraAllowWrite: [],
   },
+  botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
 };
 
 let dispatchTmpDirs: string[] = [];
@@ -875,6 +1006,43 @@ describe("run(['outbox'])", () => {
     expect(code).toBe(0);
     expect(captured.join("")).toMatch(/sent 0 · dead 0 · remaining 0/);
   });
+
+  it("outbox flush attaches bot auth and hands the attached config to the flush path", async () => {
+    // Flush replays daemon-enqueued ops (comments, label flips, pushes, PR
+    // creates) — it must speak as the bot, not the operator running the flush.
+    let seen: Config | undefined;
+    const withBotAuthFn = vi.fn(async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }));
+    const runOutboxCommandFn = vi.fn(async (c: Config) => {
+      seen = c;
+      return 0;
+    });
+    const code = await run(["outbox", "flush"], makeDeps({ withBotAuthFn, runOutboxCommandFn }));
+    expect(code).toBe(0);
+    expect(withBotAuthFn).toHaveBeenCalledTimes(1);
+    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
+  });
+
+  it("outbox flush refuses (exit 1) when bot auth resolution throws — never replays as human", async () => {
+    const runOutboxCommandFn = vi.fn(async () => 0);
+    const deps = makeDeps({
+      withBotAuthFn: async () => {
+        throw new Error("botAccount.enabled is true but no working gh login exists");
+      },
+      runOutboxCommandFn,
+    });
+    const code = await run(["outbox", "flush"], deps);
+    expect(code).toBe(1);
+    expect(runOutboxCommandFn).not.toHaveBeenCalled();
+  });
+
+  it("bare outbox listing is local-only — does NOT attach bot auth", async () => {
+    const runOutboxCommandFn = vi.fn(async () => 0);
+    const deps = makeDeps({ runOutboxCommandFn });
+    const code = await run(["outbox"], deps);
+    expect(code).toBe(0);
+    expect(deps.withBotAuthFn).not.toHaveBeenCalled();
+    expect(runOutboxCommandFn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("run(['prs'])", () => {
@@ -1003,5 +1171,49 @@ describe("run(['dispatch', ref])", () => {
     const loadConfigFn = vi.fn(() => ({}) as Config);
     await run(["dispatch"], { loadConfigFn });
     expect(loadConfigFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// auth subcommand — gh-bot-account Task 9. The cli.ts block lazy-imports
+// authCmd with NO injectable dep (deps: {}), so these exercise the real
+// routing into runAuthCommand; process.stderr is spied (the :409 precedent)
+// because runAuthCommand's printErr defaults to process.stderr.write.
+// ---------------------------------------------------------------------------
+
+describe("run(['auth']) — routing", () => {
+  async function runCapturingStderr(argv: string[]): Promise<{ code: number; err: string }> {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      lines.push(String(s));
+      return true;
+    });
+    try {
+      const code = await run(argv, {});
+      return { code, err: lines.join("") };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("`auth login` with no config on disk routes into runAuthCommand: exit 1 + dashboard hint", async () => {
+    const { code, err } = await runCapturingStderr([
+      "auth",
+      "login",
+      "--config",
+      "/nonexistent/junco-cli-auth/config.json",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("junco dashboard");
+  });
+
+  it("verb-free `auth` is a usage error: exit 2 + the auth usage line", async () => {
+    const { code, err } = await runCapturingStderr([
+      "auth",
+      "--config",
+      "/nonexistent/junco-cli-auth/config.json",
+    ]);
+    expect(code).toBe(2);
+    expect(err).toMatch(/usage: junco auth login/i);
   });
 });

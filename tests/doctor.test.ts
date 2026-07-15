@@ -28,7 +28,17 @@ const okConfig = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
+  botAccount: { enabled: false, configDir: "/tmp/junco-doc-gh" },
 } as unknown as Config;
+
+/** okConfig with the bot account enabled under an isolated GH_CONFIG_DIR. */
+function botConfig(over: Partial<Config> = {}): Config {
+  return {
+    ...okConfig,
+    botAccount: { enabled: true, configDir: "/sbx/junco-gh" },
+    ...over,
+  } as Config;
+}
 
 /** okConfig with the bridge enabled and the given repo mappings. */
 function githubConfig(repos: { nwo: string; path: string }[]): Config {
@@ -763,6 +773,220 @@ describe("runDoctor github checks", () => {
     expect(code).toBe(0);
     expect(lines.join("")).toContain("✓ github repo alx/coral");
     expect(lines.join("")).toContain("watchlist");
+  });
+});
+
+describe("runDoctor bot account checks", () => {
+  it("does not report bot account when disabled (default)", async () => {
+    const lines: string[] = [];
+    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
+    expect(lines.join("")).not.toMatch(/bot account/i);
+  });
+
+  it("bot mode: reports identity when the bot login differs from the ambient login", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => botConfig(),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          const key = args.join(" ");
+          if (key === "api user" && opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh") {
+            return { code: 0, stdout: JSON.stringify({ login: "junco-agent" }), stderr: "" };
+          }
+          if (key === "api user") {
+            return { code: 0, stdout: JSON.stringify({ login: "human" }), stderr: "" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ bot account — acting as junco-agent/);
+  });
+
+  it("bot mode: warns when the bot login equals the ambient login", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => botConfig(),
+        // Both the bot-env call and the ambient call resolve to the same
+        // login here — simulates a bot account that is really just the
+        // operator's own gh login, which defeats the point of a separate
+        // identity.
+        execFn: async (_cmd: string, args: string[]) => {
+          const key = args.join(" ");
+          if (key === "api user") {
+            return { code: 0, stdout: JSON.stringify({ login: "human" }), stderr: "" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/⚠ bot account.*equals your personal gh login/);
+  });
+
+  it("bot mode: fails the bot-account check when not logged in", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => botConfig(),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          const key = args.join(" ");
+          if (key === "api user" && opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh") {
+            return { code: 1, stdout: "", stderr: "not logged in" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("")).toMatch(/✗ bot account.*not logged in under \/sbx\/junco-gh/);
+    expect(lines.join("")).toMatch(/junco auth login/);
+  });
+
+  it("bot mode: skips the bot-account check entirely when gh itself is not installed", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => botConfig(),
+        execFn: async (cmd: string, args: string[]) =>
+          cmd === "gh" && args[0] === "--version"
+            ? { code: 127, stdout: "", stderr: "not found" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/bot account/i);
+  });
+
+  it("bot mode: reports ok bot access for a watched repo with write permission", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () =>
+          botConfig({
+            github: {
+              ...okConfig.github,
+              enabled: true,
+              repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
+            },
+          }),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          if (args.includes("get-url")) {
+            return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
+          }
+          if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
+            // WRITE only under the bot's GH_CONFIG_DIR — ambient auth would
+            // read code 1 → "unknown" warn, flipping the ✓ assertion below.
+            // Pins that the permission probe runs as the bot, not just arg shape.
+            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+              ? { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" }
+              : { code: 1, stdout: "", stderr: "wrong identity" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ bot access: acme\/api — write/);
+  });
+
+  it("bot mode: warns with invite guidance on TRIAGE permission for a watched repo", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () =>
+          botConfig({
+            github: {
+              ...okConfig.github,
+              enabled: true,
+              repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
+            },
+          }),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          if (args.includes("get-url")) {
+            return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
+          }
+          if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
+            // TRIAGE only under the bot's GH_CONFIG_DIR — ambient auth reads
+            // WRITE (→ ok), which would flip the ⚠ triage assertion below.
+            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+              ? { code: 0, stdout: JSON.stringify({ viewerPermission: "TRIAGE" }), stderr: "" }
+              : { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(
+      /⚠ bot access: acme\/api — triage.*branch pushes will fail.*invite the bot with write/,
+    );
+  });
+
+  it("bot mode: warns to invite the bot as a collaborator on NONE permission for a watched repo", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () =>
+          botConfig({
+            github: {
+              ...okConfig.github,
+              enabled: true,
+              repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
+            },
+          }),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          if (args.includes("get-url")) {
+            return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
+          }
+          if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
+            // NONE only under the bot's GH_CONFIG_DIR — ambient auth reads
+            // WRITE (→ ok), which would flip the ⚠ NONE assertion below.
+            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+              ? { code: 0, stdout: JSON.stringify({ viewerPermission: "NONE" }), stderr: "" }
+              : { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(
+      /⚠ bot access: acme\/api — NONE — invite the bot as a collaborator/,
+    );
+  });
+
+  it("non-bot mode: does not check per-repo bot permission at all", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => githubConfig([{ nwo: "acme/api", path: "/tmp/clone" }]),
+        execFn: async (_cmd: string, args: string[]) =>
+          args.includes("get-url")
+            ? { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/bot access/i);
   });
 });
 

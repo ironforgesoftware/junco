@@ -179,6 +179,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       extraDenyRead: [],
       extraAllowWrite: [],
     },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     stateDir: join(h.root, "state"),
     logToFile: false,
     transcriptsEnabled: false,

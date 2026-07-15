@@ -116,6 +116,28 @@ describe("LEVERS ↔ schema bijection", () => {
   });
 });
 
+describe("botAccount levers", () => {
+  it("registers botAccount.enabled as a restart boolean lever defaulting to false", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("botAccount.enabled")).toMatchObject({
+      type: "boolean",
+      default: false,
+      reload: "restart",
+      editable: true,
+    });
+  });
+
+  it("registers botAccount.configDir as a restart string lever", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("botAccount.configDir")).toMatchObject({
+      type: "string",
+      default: "~/.config/junco/gh",
+      reload: "restart",
+      editable: true,
+    });
+  });
+});
+
 describe("path helpers", () => {
   it("gets and sets nested dotted paths", () => {
     const obj: Record<string, unknown> = {};

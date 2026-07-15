@@ -175,6 +175,7 @@ function makeConfig(work: string, ghBin: string): Config {
       extraDenyRead: [],
       extraAllowWrite: [],
     },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     stateDir: "/tmp/junco-repo-test-state",
     logToFile: false,
     transcriptsEnabled: false,

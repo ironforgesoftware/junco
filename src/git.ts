@@ -10,6 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
+import type { GhAuthContext } from "./types.js";
 import { log } from "./logging.js";
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,8 @@ export interface RunOpts {
   timeoutMs?: number;
   /** When true (default), a non-zero exit code throws GitOpError. */
   check?: boolean;
+  /** Extra child env, merged OVER process.env (bot auth injection point). */
+  env?: Record<string, string>;
 }
 
 /**
@@ -61,6 +64,7 @@ export async function runCmd(argv: string[], opts: RunOpts = {}): Promise<CmdRes
       proc = spawn(bin, args, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
+        env: opts.env ? { ...process.env, ...opts.env } : undefined,
       });
     } catch (e) {
       // FileNotFoundError equivalent
@@ -206,23 +210,50 @@ export async function runWithRetry<T>(
  * that script network failures don't eat seconds of real backoff. */
 export type GitCallOpts = RunOpts & { retryNetwork?: boolean; retryBaseDelayMs?: number };
 
+/** Child-env for bot-authenticated gh/git calls: point gh (and gh's git
+ * credential helper, which inherits the child env) at the bot's isolated
+ * config dir, forbid interactive credential prompts so a missing token fails
+ * loud instead of hanging a daemon subprocess, and CLEAR GH_TOKEN/GITHUB_TOKEN.
+ *
+ * gh gives GH_TOKEN/GITHUB_TOKEN precedence over GH_CONFIG_DIR-stored creds
+ * (verified locally: `GH_TOKEN=bogus gh api user` → "Bad credentials"; `GH_TOKEN=
+ * gh api user` falls back to the stored login), so a daemon shell that exports
+ * either would resolve every "bot" call — including the startup verification that
+ * refuse-to-start relies on — to the token's identity. Empty string = unset to
+ * gh (its lookup checks non-empty); under runCmd's { ...process.env, ...opts.env }
+ * merge an empty string cleanly overrides the inherited value (undefined would
+ * not — spawn env undefineds are unreliable). */
+export function ghAuthEnv(ctx: GhAuthContext): Record<string, string> {
+  return { GH_CONFIG_DIR: ctx.configDir, GIT_TERMINAL_PROMPT: "0", GH_TOKEN: "", GITHUB_TOKEN: "" };
+}
+
 /**
  * Run a git command via `cfg.gitBin`.
  * If `retryNetwork` is true, wraps in `runWithRetry` with label `git <subcommand>`.
  */
 export async function git(
-  cfg: { gitBin: string },
+  cfg: { gitBin: string; ghAuth?: GhAuthContext },
   args: string[],
   opts?: GitCallOpts,
 ): Promise<CmdResult> {
   const { retryNetwork, retryBaseDelayMs, ...runOpts } = opts ?? {};
-  const argv = [cfg.gitBin, ...args];
+  // Bot mode: pin gh's credential helper (clearing any inherited helpers) so
+  // remote ops authenticate as the bot regardless of the user's global
+  // gitconfig. Harmless on local-only ops. `-c` flags are global — they must
+  // precede the subcommand.
+  const authArgs = cfg.ghAuth
+    ? ["-c", "credential.helper=", "-c", `credential.helper=${cfg.ghAuth.credentialHelper}`]
+    : [];
+  const argv = [cfg.gitBin, ...authArgs, ...args];
   const label = `git ${args[0] ?? ""}`;
+  const finalOpts = cfg.ghAuth
+    ? { ...runOpts, env: { ...ghAuthEnv(cfg.ghAuth), ...runOpts.env } }
+    : runOpts;
 
   if (retryNetwork) {
-    return runWithRetry(label, () => runCmd(argv, runOpts), { baseDelayMs: retryBaseDelayMs });
+    return runWithRetry(label, () => runCmd(argv, finalOpts), { baseDelayMs: retryBaseDelayMs });
   }
-  return runCmd(argv, runOpts);
+  return runCmd(argv, finalOpts);
 }
 
 /**
@@ -230,16 +261,19 @@ export async function git(
  * If `retryNetwork` is true, wraps in `runWithRetry` with label `gh <sub> <sub2>`.
  */
 export async function gh(
-  cfg: { ghBin: string },
+  cfg: { ghBin: string; ghAuth?: GhAuthContext },
   args: string[],
   opts?: GitCallOpts,
 ): Promise<CmdResult> {
   const { retryNetwork, retryBaseDelayMs, ...runOpts } = opts ?? {};
   const argv = [cfg.ghBin, ...args];
   const label = `gh ${args.slice(0, 2).join(" ")}`;
+  const finalOpts = cfg.ghAuth
+    ? { ...runOpts, env: { ...ghAuthEnv(cfg.ghAuth), ...runOpts.env } }
+    : runOpts;
 
   if (retryNetwork) {
-    return runWithRetry(label, () => runCmd(argv, runOpts), { baseDelayMs: retryBaseDelayMs });
+    return runWithRetry(label, () => runCmd(argv, finalOpts), { baseDelayMs: retryBaseDelayMs });
   }
-  return runCmd(argv, runOpts);
+  return runCmd(argv, finalOpts);
 }

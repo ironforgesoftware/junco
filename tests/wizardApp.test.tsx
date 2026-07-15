@@ -105,6 +105,8 @@ async function driveToReview(
     LONG_TRIES,
   );
   await press(stdin, ENTER); // Off
+  await until(() => (lastFrame() ?? "").includes("Who should junco act as"), LONG_TRIES);
+  await press(stdin, ENTER); // ambient gh login (default)
   await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
   await press(stdin, ENTER); // keep recommended set
   await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);
@@ -142,6 +144,9 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
       return { written: true, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };
     },
     flightCheck: async () => [{ verdict: "ok", label: "inference endpoint", detail: "up" }],
+    botGhConfigDir: "/sbx/junco-gh",
+    detectBotLogin: async () => null,
+    runGhLogin: async () => 0,
     ...over,
   };
 }
@@ -188,6 +193,8 @@ describe("WizardApp", () => {
       LONG_TRIES,
     );
     await press(stdin, ENTER); // Off
+    await until(() => (lastFrame() ?? "").includes("Who should junco act as"), LONG_TRIES);
+    await press(stdin, ENTER); // ambient gh login (default)
     await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
     await press(stdin, ENTER); // keep recommended set
     await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);
@@ -302,7 +309,7 @@ describe("WizardApp", () => {
     const { lastFrame } = render(
       <WizardApp io={fakeIo()} onOutcome={() => {}} sizeOverride={{ columns: 60, rows: 32 }} />,
     );
-    await until(() => (lastFrame() ?? "").includes("1/7"));
+    await until(() => (lastFrame() ?? "").includes("1/8"));
     expect(lastFrame()).not.toContain("▶ Welcome");
   });
 
@@ -479,6 +486,8 @@ describe("WizardApp", () => {
     await press(stdin, ENTER); // empty nwo field → skip straight to approval
     await until(() => (lastFrame() ?? "").includes("approval"), LONG_TRIES);
     await press(stdin, ENTER); // approval preselected Yes (requireApproval: true)
+    await until(() => (lastFrame() ?? "").includes("Who should junco act as"), LONG_TRIES);
+    await press(stdin, ENTER); // ambient gh login preselected (botAccount: false, unchanged)
     await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
     await press(stdin, ENTER); // recommended set unchanged
     await until(() => (lastFrame() ?? "").includes("Nothing changed"), LONG_TRIES);

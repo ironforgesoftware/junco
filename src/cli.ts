@@ -29,8 +29,16 @@ import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
 import { acquireSingletonLock, readLockHolder } from "./lock.js";
-import { loadConfig, queuePaths, resolveConfigPath, isLoopbackHost } from "./config.js";
+import {
+  loadConfig,
+  queuePaths,
+  resolveConfigPath,
+  isLoopbackHost,
+  assembleConfig,
+} from "./config.js";
+import type { ConfigParsed } from "./config.js";
 import { parseTicket } from "./ticket.js";
+import { withBotAuth } from "./ghAuth.js";
 import {
   StopFlag,
   installSignalHandlers,
@@ -74,16 +82,28 @@ export interface CliDeps {
     deps?: MainLoopDeps,
   ) => Promise<void>;
   runOnceFn?: (cfg: Config) => Promise<boolean>;
+  /** Resolve (and attach) the daemon's bot-account GitHub auth context onto
+   * Config before `start`/`run-once` proceed (Task 6, gh-bot-account spec).
+   * A disabled botAccount returns cfg unchanged; enabled-but-unauthed throws
+   * — the caller must refuse to start BEFORE the lock is taken or logs are
+   * set up. Default: the real withBotAuth. (Typed monomorphically over
+   * Config rather than `typeof withBotAuth` — that signature is generic over
+   * `C extends Pick<Config, "botAccount" | "ghBin">`, which a plain test fake
+   * typed at `Config` can't satisfy; the real generic withBotAuth still
+   * satisfies this narrower shape.) */
+  withBotAuthFn?: (cfg: Config) => Promise<Config>;
   /** Config hot-reload watcher for `start` (Task 6). Injected so tests never
    * touch a real fs.watch on a config path that may not exist on disk.
    * Default: the real watchConfig. The optional third param carries
    * `onApplied` (Task 10) — the daemon wires it to the shared provider
    * gate's `clearLatched()` so a successful reload (bad key fixed, quota
-   * lifted) drops a stale latch without a restart. */
+   * lifted) drops a stale latch without a restart — and `assembleFn`
+   * (Task 6), which the daemon wires to re-attach the startup-resolved bot
+   * auth context in lockstep with each reload's botAccount.enabled. */
   watchConfigFn?: (
     configPath: string,
     holder: ConfigHolder,
-    deps?: { onApplied?: () => void },
+    deps?: { onApplied?: () => void; assembleFn?: (d: ConfigParsed) => Config },
   ) => { close(): void };
   /** Output function for the `service`, `inbox-path`, `schema`, `submit` subcommands. Default: process.stdout.write. */
   printFn?: (s: string) => void;
@@ -100,6 +120,9 @@ export interface CliDeps {
   runRestartFn?: (configPath: string) => Promise<number>;
   /** Injected by tests: the dispatch core (default lazily used from externalDispatch.js). */
   dispatchIssueFn?: typeof import("./externalDispatch.js").dispatchIssue;
+  /** Injected by tests: the outbox list/flush core (default lazily from outboxCmd.js).
+   *  A seam so the flush path's bot-auth attach is observable without real state. */
+  runOutboxCommandFn?: typeof import("./outboxCmd.js").runOutboxCommand;
   /** Largest ticket timeout (seconds) currently reachable in the queue, used to
    *  size the `service` stop-timeout so a long ticket isn't SIGKILLed mid-drain
    *  (#118). Default: a best-effort scan of inbox/ + processing/. */
@@ -166,6 +189,7 @@ Subcommands:
   analyze edit <id>                       edit a pending draft in $EDITOR
   analyze post <id> [--no-footer]        post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
+  auth login   Log the junco bot account in (isolated gh config dir; daemon acts as it)
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive dashboard — first run opens the guided setup walkthrough
   restart      Restart the supervised daemon (picks up config + code changes)
@@ -268,6 +292,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const runOnceFn =
     deps.runOnceFn ??
     ((c: Config) => runOnce(c, { reporter: c.github.enabled ? makeGithubReporter(c) : undefined }));
+  // Wrapped (rather than `deps.withBotAuthFn ?? withBotAuth` inline) because
+  // withBotAuth is generic over `C extends Pick<Config, ...>` — calling a
+  // union of that generic signature and CliDeps' monomorphic-over-Config
+  // fake infers C from the constraint, not from the Config argument, and
+  // fails to typecheck. A monomorphic wrapper sidesteps it.
+  const withBotAuthFn = deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c));
 
   // Parse argv (strict). An unknown flag throws ERR_PARSE_ARGS_UNKNOWN_OPTION;
   // report it gracefully (message + usage, exit 2) rather than letting it reach
@@ -371,12 +401,24 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "run-once") {
     const cfg = loadConfigFn(configPath);
-    setLogLevel(cfg.logLevel);
+
+    // Refuse-to-run guard (Task 6): resolve the bot-account auth context
+    // before anything else — an enabled-but-unauthed botAccount fails loud
+    // rather than silently falling back to the operator's own identity.
+    let cfgAuthed: Config;
+    try {
+      cfgAuthed = await withBotAuthFn(cfg);
+    } catch (e) {
+      process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+
+    setLogLevel(cfgAuthed.logLevel);
     // No singleton lock here (see the banner above), so never rotate worker.log
     // — a live daemon may own it; append only (#76).
-    const teardownLogs = setupLogOutputs(cfg, { rotate: false });
+    const teardownLogs = setupLogOutputs(cfgAuthed, { rotate: false });
     try {
-      const handled = await runOnceFn(cfg);
+      const handled = await runOnceFn(cfgAuthed);
       log.info("run-once complete", { handled });
       return 0;
     } finally {
@@ -389,7 +431,20 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "start") {
     const cfg = loadConfigFn(configPath);
-    setLogLevel(cfg.logLevel);
+
+    // Refuse-to-start guard (Task 6): resolve the bot-account auth context
+    // BEFORE the singleton lock is taken or worker.log is rotated — a bad or
+    // expired bot login must not silently fall back to the operator's own
+    // identity, and its failure must leave no trace of a started daemon.
+    let cfgAuthed: Config;
+    try {
+      cfgAuthed = await withBotAuthFn(cfg);
+    } catch (e) {
+      process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+
+    setLogLevel(cfgAuthed.logLevel);
 
     // Derive lock path: mirror Python args.config.resolve().parent / "worker.lock"
     const lockPath = join(dirname(resolve(configPath)), "worker.lock");
@@ -405,7 +460,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     // Set up the rotating worker.log sink now that we own the daemon slot —
     // rotation is the lock holder's exclusive job (#76).
-    const teardownLogs = setupLogOutputs(cfg, { rotate: true });
+    const teardownLogs = setupLogOutputs(cfgAuthed, { rotate: true });
 
     // Loud warning when /health binds a non-loopback address (#44): the metrics
     // body is unauthenticated and leaks in-flight ticket ids + operational
@@ -413,10 +468,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // No truthy `&& cfg.healthHost` guard: an empty/unparseable host is
     // non-loopback (isLoopbackHost("") → false), so a value that bypassed the
     // config normalization still triggers the warning instead of evading it (#71).
-    if (cfg.healthEnabled && !isLoopbackHost(cfg.healthHost)) {
+    if (cfgAuthed.healthEnabled && !isLoopbackHost(cfgAuthed.healthHost)) {
       log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
-        healthHost: cfg.healthHost,
-        healthPort: cfg.healthPort,
+        healthHost: cfgAuthed.healthHost,
+        healthPort: cfgAuthed.healthPort,
         advice: "bind healthHost to 127.0.0.1 unless it is firewalled",
       });
     }
@@ -428,7 +483,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // health wiring and the hot-reload watcher below, so a successful config
     // edit (bad key fixed, quota lifted, model id corrected) clears a stale
     // latch without requiring a restart.
-    const gate = makeProviderGate(cfg);
+    const gate = makeProviderGate(cfgAuthed);
 
     // Live-reload (Task 6): the holder starts seeded with the config we just
     // loaded; the watcher re-parses config.json on change and swaps in a new
@@ -437,10 +492,21 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // unsupported FS) must NOT crash the daemon, matching the health server's
     // graceful-degrade pattern below: log a warning and continue with the
     // holder seeded but never updated (hot-reload disabled until restart).
-    const holder = makeConfigHolder(cfg);
+    const holder = makeConfigHolder(cfgAuthed);
     let watcher: { close(): void } | null = null;
     try {
-      watcher = watchConfigFn(configPath, holder, { onApplied: () => gate.clearLatched() });
+      watcher = watchConfigFn(configPath, holder, {
+        onApplied: () => gate.clearLatched(),
+        // Hot reload must not silently drop (or fabricate) the bot identity:
+        // re-attach the STARTUP-resolved context while the file still enables
+        // it; a flip either way is a restart-kind lever (configLevers).
+        assembleFn: (d) => {
+          const next = assembleConfig(d);
+          return next.botAccount.enabled && cfgAuthed.ghAuth
+            ? { ...next, ghAuth: cfgAuthed.ghAuth }
+            : next;
+        },
+      });
     } catch (e) {
       log.warn("config watcher failed to start; hot-reload disabled until restart", {
         error: e instanceof Error ? e.message : String(e),
@@ -449,7 +515,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     try {
       await mainLoopFn(
-        cfg,
+        cfgAuthed,
         stopFlag,
         { once: values.once as boolean },
         { configHolder: holder, gate },
@@ -518,8 +584,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "outbox") {
     const cfg = loadConfigFn(configPath);
-    const { runOutboxCommand } = await import("./outboxCmd.js");
-    return runOutboxCommand(cfg, positionals.slice(1), { printFn });
+    // `flush` REPLAYS daemon-enqueued ops (comments, label flips, branch pushes,
+    // PR creates) and runs its own `gh api user` dedup — it is daemon traffic, so
+    // it must speak as the bot, not the operator running the manual flush. Attach
+    // (and refuse loud, mirroring start/run-once) only for `flush`; bare
+    // `junco outbox` is a local-only listing that needs no identity.
+    let cfgForOutbox = cfg;
+    if (positionals[1] === "flush") {
+      try {
+        cfgForOutbox = await withBotAuthFn(cfg);
+      } catch (e) {
+        process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+        return 1;
+      }
+    }
+    const runOutboxCommandFn =
+      deps.runOutboxCommandFn ?? (await import("./outboxCmd.js")).runOutboxCommand;
+    return runOutboxCommandFn(cfgForOutbox, positionals.slice(1), { printFn });
   }
 
   // ------------------------------------------------------------
@@ -777,6 +858,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       process.stderr.write(`junco dispatch: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
+  }
+
+  // ------------------------------------------------------------
+  // auth login: log the bot account in (isolated GH_CONFIG_DIR). Lazy import
+  // keeps it off every other subcommand's require graph.
+  // ------------------------------------------------------------
+  if (subcommand === "auth") {
+    const { runAuthCommand } = await import("./authCmd.js");
+    return runAuthCommand(positionals.slice(1), configPath, {});
   }
 
   // ------------------------------------------------------------

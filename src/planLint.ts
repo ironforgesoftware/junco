@@ -408,12 +408,16 @@ export class LabelCache {
   }
 }
 
-function _fetchRepoLabels(nwo: string, ghBin = "gh"): Set<string> {
+function _fetchRepoLabels(nwo: string, ghBin = "gh", ghEnv?: Record<string, string>): Set<string> {
   /**
    * Call `gh label list --repo <nwo>`. Returns a set of label names.
    *
    * `ghBin` defaults to PATH-resolved "gh" (NOT an absolute path), so the check
    * works on Linux / Intel-mac / custom installs; the worker threads `cfg.ghBin`.
+   * `ghEnv` merges over process.env so the daemon's bot GH_CONFIG_DIR reaches
+   * this one execFileSync bypass of git.ts (lintTicket is synchronous and
+   * widely called, so it threads env rather than migrating onto the async
+   * gh() wrapper — see the Task 4 spec amendment).
    * Returns empty set on any failure (timeout, gh not found, non-zero exit).
    * The checkLabelsExist function treats empty as "could not validate" and
    * emits a warning, not an error — better to let the ticket through than
@@ -423,7 +427,11 @@ function _fetchRepoLabels(nwo: string, ghBin = "gh"): Set<string> {
     const stdout = execFileSync(
       ghBin,
       ["label", "list", "--repo", nwo, "--limit", "200", "--json", "name", "-q", ".[].name"],
-      { encoding: "utf8", timeout: 30_000 },
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: ghEnv ? { ...process.env, ...ghEnv } : undefined,
+      },
     );
     const names = new Set<string>();
     for (const line of stdout.split("\n")) {
@@ -443,6 +451,7 @@ function checkLabelsExist(
     labelCache?: LabelCache;
     fetchLabels?: (nwo: string) => Set<string>;
     ghBin?: string;
+    ghEnv?: Record<string, string>;
   } = {},
 ): LintViolation[] {
   const rawLabels = frontmatter["labels"];
@@ -460,7 +469,7 @@ function checkLabelsExist(
 
   const cache = opts.labelCache ?? null;
   const ghBin = opts.ghBin ?? "gh";
-  const fetchFn = opts.fetchLabels ?? ((nwo: string) => _fetchRepoLabels(nwo, ghBin));
+  const fetchFn = opts.fetchLabels ?? ((nwo: string) => _fetchRepoLabels(nwo, ghBin, opts.ghEnv));
 
   let repoLabels: Set<string>;
   const cached = cache ? cache.get(repoNwo) : null;
@@ -514,6 +523,8 @@ export interface LintTicketOpts {
   fetchLabels?: (nwo: string) => Set<string>;
   /** gh binary for the label-existence check; defaults to PATH-resolved "gh". */
   ghBin?: string;
+  /** Extra env (e.g. bot GH_CONFIG_DIR) merged over process.env for the gh call. */
+  ghEnv?: Record<string, string>;
 }
 
 export function lintTicket(
@@ -527,7 +538,7 @@ export function lintTicket(
    * Pass `checkLabels: false` to skip the network call to GitHub.
    * Pass `repoPath` (string) to enable filesystem-aware Files-table validation.
    */
-  const { repoNwo, repoPath, checkLabels = true, labelCache, fetchLabels, ghBin } = opts;
+  const { repoNwo, repoPath, checkLabels = true, labelCache, fetchLabels, ghBin, ghEnv } = opts;
 
   const violations: LintViolation[] = [];
   violations.push(...checkNoCdInVerification(body));
@@ -538,7 +549,9 @@ export function lintTicket(
   violations.push(...checkNoForbiddenPhrases(body));
   violations.push(...checkNoCdInSteps(body));
   if (checkLabels) {
-    violations.push(...checkLabelsExist(frontmatter, repoNwo, { labelCache, fetchLabels, ghBin }));
+    violations.push(
+      ...checkLabelsExist(frontmatter, repoNwo, { labelCache, fetchLabels, ghBin, ghEnv }),
+    );
   }
   return new LintResult(violations);
 }

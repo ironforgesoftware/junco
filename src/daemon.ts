@@ -179,6 +179,13 @@ export function overlayFrozenRestartFields(frozen: Config, live: Config): Config
     stateDir: frozen.stateDir,
     logToFile: frozen.logToFile,
     transcriptsEnabled: frozen.transcriptsEnabled,
+    // botAccount.enabled + botAccount.configDir are both reload:"restart" — pin
+    // the whole object. And pin the runtime-resolved ghAuth alongside it: it's
+    // attached at startup from botAccount, never re-parsed from the file, so a
+    // live spread would silently DROP it the moment an edit touches botAccount
+    // (identity revert) or leave it pointing at a configDir the edit just moved.
+    botAccount: frozen.botAccount,
+    ghAuth: frozen.ghAuth,
     github: {
       ...live.github,
       enabled: frozen.github.enabled,

@@ -30,9 +30,15 @@ describe("chapters", () => {
       "Model",
       "Repo safety",
       "GitHub",
+      "Account",
       "Extras",
       "Review",
     ]);
+  });
+
+  it("CHAPTERS includes Account between GitHub and Extras", () => {
+    expect(CHAPTERS.indexOf("Account")).toBe(CHAPTERS.indexOf("GitHub") + 1);
+    expect(CHAPTERS.indexOf("Extras")).toBe(CHAPTERS.indexOf("Account") + 1);
   });
 });
 
@@ -232,7 +238,7 @@ describe("re-run mode", () => {
   });
 
   it("COVERED_LEVER_COUNT is mode-independent and matches the covered surface", () => {
-    expect(COVERED_LEVER_COUNT).toBe(13);
+    expect(COVERED_LEVER_COUNT).toBe(14);
     // The pin makes coverage changes conscious: it must be updated when the
     // wizard's covered-lever surface expands or contracts.
   });
@@ -240,6 +246,25 @@ describe("re-run mode", () => {
   it("regression: inline config rerun still writes model.baseUrl (an unrelated change doesn't drop it)", () => {
     const out = applyAnswers(raw, { ...answersFromConfig(raw), modelId: "prov/m2" });
     expect((out.model as { baseUrl: string }).baseUrl).toBe("http://h:1/v1");
+  });
+
+  it("botAccount answer round-trips: build, prefill, diff", () => {
+    const a = { ...defaultAnswers(), botAccount: true };
+    const obj = buildConfigObject(a);
+    expect(obj.botAccount).toEqual({ enabled: true });
+    // fresh default omits the block entirely
+    expect(buildConfigObject(defaultAnswers()).botAccount).toBeUndefined();
+    // prefill
+    expect(answersFromConfig({ vaultRoot: "/v", botAccount: { enabled: true } }).botAccount).toBe(
+      true,
+    );
+    expect(answersFromConfig({ vaultRoot: "/v" }).botAccount).toBe(false);
+    // rerun diff: flipping it registers exactly one change at the lever path
+    const diffs = diffAnswers(
+      { vaultRoot: "/v" },
+      { ...answersFromConfig({ vaultRoot: "/v" }), botAccount: true },
+    );
+    expect(diffs).toEqual([{ path: "botAccount.enabled", from: undefined, to: true }]);
   });
 });
 

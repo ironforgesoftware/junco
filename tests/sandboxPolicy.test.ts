@@ -55,4 +55,23 @@ describe("buildPolicy", () => {
     const pol = buildPolicy({ ...base, cwd: "/sbxroot/work/../work/tree" });
     expect(pol.writableRoots[0]).toBe("/sbxroot/work/tree");
   });
+
+  it("denies reads of the bot gh config dir when provided", () => {
+    const p = buildPolicy({
+      cfg: {
+        enabled: true,
+        backend: "none",
+        network: "deny",
+        extraDenyRead: [],
+        extraAllowWrite: [],
+      },
+      cwd: "/sbxroot/wt",
+      scratchDir: "/sbxroot/scratch",
+      home: "/sbxroot/home",
+      stateDir: "/sbxroot/state",
+      network: false,
+      botGhConfigDir: "/sbxroot/home/.config/junco/gh",
+    });
+    expect(p.readDenyPaths).toContain("/sbxroot/home/.config/junco/gh");
+  });
 });

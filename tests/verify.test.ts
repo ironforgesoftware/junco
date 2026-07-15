@@ -94,6 +94,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
       extraDenyRead: [],
       extraAllowWrite: [],
     },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     ...overrides,
   };
 }

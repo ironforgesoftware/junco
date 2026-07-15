@@ -90,6 +90,7 @@ function makeFakeConfig(): Config {
       extraDenyRead: [],
       extraAllowWrite: [],
     },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     stateDir: "/tmp/q/state",
     logToFile: false,
     transcriptsEnabled: false,

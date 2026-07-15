@@ -27,6 +27,7 @@ export type TipKey =
   | "githubOff"
   | "githubOn"
   | "githubApproval"
+  | "account"
   | "extras"
   | "review"
   | "signoff";
@@ -45,6 +46,8 @@ export const TIPS: Record<TipKey, string> = {
     "Adding no repos now is fine — `junco doctor` will remind you, and the dashboard's `a` key adds them later.",
   githubApproval:
     "With approval required, a plan-ready ticket waits for you; without it, plans auto-execute on the next sweep.",
+  account:
+    "A dedicated bot account keeps junco's PRs, comments, and labels attributed to the bot — and since the bot can never approve its own work, your approval labels stay meaningful. Your personal gh login stays untouched for everything you run by hand.",
   extras:
     "The recommended set is pre-checked. Space toggles, Enter continues — each row explains itself below.",
   review: "more levers keep their safe defaults — `junco config list` shows every one.",

@@ -30,6 +30,9 @@ function fakeIo(overrides: Partial<WizardIO> = {}): WizardIO {
       changes: [],
     })),
     flightCheck: async () => [],
+    botGhConfigDir: "/sbx/junco-gh",
+    detectBotLogin: async () => null,
+    runGhLogin: async () => 0,
     ...overrides,
   };
 }
@@ -95,6 +98,8 @@ async function driveToWritten(
     LONG_TRIES,
   );
   await press(stdin, ENTER); // Off
+  await until(() => (lastFrame() ?? "").includes("Who should junco act as"), LONG_TRIES);
+  await press(stdin, ENTER); // ambient gh login (default)
   await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
   await press(stdin, ENTER); // keep recommended set
   await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);

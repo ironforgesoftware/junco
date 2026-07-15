@@ -690,6 +690,25 @@ export const LEVERS: Lever[] = [
     description: "Explicit list of watched GitHub repos (owner/repo name-with-owner + local path).",
   },
 
+  // --- botAccount.* ---
+  {
+    path: "botAccount.enabled",
+    type: "boolean",
+    default: false,
+    editable: true,
+    reload: "restart",
+    description:
+      "Act as a dedicated bot account for all daemon GitHub traffic (log it in with: junco auth login).",
+  },
+  {
+    path: "botAccount.configDir",
+    type: "string",
+    default: "~/.config/junco/gh",
+    editable: true,
+    reload: "restart",
+    description: "Isolated gh config dir holding the bot login (GH_CONFIG_DIR for daemon gh/git).",
+  },
+
   // --- assess.* ---
   {
     path: "assess.maxIssuesPerRun",
