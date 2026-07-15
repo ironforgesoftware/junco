@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run setup lives in the dashboard: `junco dashboard` (or bare `junco`) with no config opens the guided walkthrough, then lands in the dashboard. Re-run it anytime from the command palette ("setup").
 - `junco config init` — headless default-config scaffold (the old `junco init --yes`).
 - Mouse support in the setup walkthrough: clickable choices, back/quit chips, click-to-finish.
+- Dedicated bot-account identity for daemon GitHub traffic (`junco auth login`, wizard Account
+  chapter, `botAccount` config block).
 
 ### Changed
 

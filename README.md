@@ -100,6 +100,10 @@ $ junco logs -f
 - **Local-first by design** — your machine, your git, your `gh` auth, your choice
   of inference endpoint. There is no third service in the loop unless you choose
   one.
+- **Its own GitHub identity, if you want one** — `junco auth login` (or the
+  setup wizard's Account chapter) gives the daemon a dedicated bot account, so
+  PRs, comments, and commits are attributed to the bot instead of you, and the
+  account that approves work is not the one that dispatched it.
 
 ## It audits, you decide what to file
 
@@ -185,6 +189,7 @@ frontmatter contract, `examples/` has templates, and the bundled
 | [Vulnerability assessment](docs/assess.md) | `junco assess` — audit any watched repo, review parked findings, file the ones you confirm              |
 | [Analysis comments](docs/analyze.md)       | `junco analyze` — investigate an issue read-only, review the drafted comment, post the ones you confirm |
 | [Dashboard](docs/dashboard.md)             | Every pane, key, and the command palette                                                                |
+| [Bot account](docs/bot-account.md)         | Give the daemon its own GitHub identity — setup, how it works, doctor checks, migration notes           |
 | [Operations](docs/operations.md)           | Health endpoint, running as a service, security model, troubleshooting                                  |
 | [ARCHITECTURE.md](ARCHITECTURE.md)         | The runtime, module by module — accurate and maintained                                                 |
 
@@ -203,6 +208,7 @@ frontmatter contract, `examples/` has templates, and the bundled
 | `junco retry <name…\|--all>`                                  | move failed tickets back to the inbox                                                                           |
 | `junco outbox [flush]`                                        | inspect or push the offline GitHub backlog                                                                      |
 | `junco doctor`                                                | preflight config, git/gh auth, endpoint, model                                                                  |
+| `junco auth login`                                            | log the bot account in ([bot account guide](docs/bot-account.md))                                               |
 | `junco config` / `junco schema` / `junco service`             | config get/set/init, ticket schema, service install                                                             |
 
 ## Contributing
