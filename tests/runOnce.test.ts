@@ -100,6 +100,7 @@ function cfg(root: string): Config {
       extraDenyRead: [],
       extraAllowWrite: [],
     },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,

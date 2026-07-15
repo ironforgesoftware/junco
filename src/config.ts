@@ -291,6 +291,12 @@ export const ConfigSchema = z.object({
       npmBin: z.string().min(1).default("npm"),
     })
     .default({}),
+  botAccount: z
+    .object({
+      enabled: z.boolean().default(false),
+      configDir: z.string().min(1).default("~/.config/junco/gh"),
+    })
+    .default({}),
 });
 
 export type ConfigParsed = z.infer<typeof ConfigSchema>;
@@ -432,6 +438,10 @@ export function assembleConfig(
       network: d.sandbox.network,
       extraDenyRead: d.sandbox.extraDenyRead.map(expandHome),
       extraAllowWrite: d.sandbox.extraAllowWrite.map(expandHome),
+    },
+    botAccount: {
+      enabled: d.botAccount.enabled,
+      configDir: expandHome(d.botAccount.configDir),
     },
   };
 }

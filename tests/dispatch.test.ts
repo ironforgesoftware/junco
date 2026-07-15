@@ -101,6 +101,7 @@ const CONFIG_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
     extraDenyRead: [],
     extraAllowWrite: [],
   },
+  botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
 };
 
 function makeConfig(vaultRoot: string): Config {

@@ -168,6 +168,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
       extraDenyRead: [],
       extraAllowWrite: [],
     },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
   };
 }
 

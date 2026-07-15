@@ -63,6 +63,20 @@ export interface AssessConfig {
   minSeverity: "critical" | "high" | "medium" | "low"; // findings below this are dropped
   npmBin: string; // binary for the dependency scan (`npm audit --json`)
 }
+/** [botAccount] — dedicated machine-account identity for daemon GitHub traffic. */
+export interface BotAccountConfig {
+  enabled: boolean; // false = today's ambient-gh-auth behavior
+  configDir: string; // isolated GH_CONFIG_DIR holding the bot login (expanded)
+}
+/** Runtime-resolved bot auth context (src/ghAuth.ts) — attached to Config by
+ * entrypoints, never parsed from config.json. Carried by cfg into git()/gh()
+ * so child processes authenticate as the bot. */
+export interface GhAuthContext {
+  configDir: string; // GH_CONFIG_DIR for child gh/git processes
+  login: string; // bot account login
+  email: string; // <id>+<login>@users.noreply.github.com
+  credentialHelper: string; // "!<ghBin> auth git-credential" (inherits child env)
+}
 export interface SandboxConfig {
   // Master switch. false = current behavior (no sandbox, full env, no jail).
   enabled: boolean;
@@ -147,6 +161,10 @@ export interface Config {
   assess: AssessConfig;
   // Agent execution sandbox (native OS isolation of tool subprocesses).
   sandbox: SandboxConfig;
+  // Dedicated bot identity for daemon GitHub traffic (spec 2026-07-15).
+  botAccount: BotAccountConfig;
+  // Resolved at entrypoints when botAccount.enabled — NOT part of config.json.
+  ghAuth?: GhAuthContext;
 }
 export interface Paths {
   inbox: string;

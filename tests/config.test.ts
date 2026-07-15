@@ -9,6 +9,9 @@ import {
   defaultUserConfigPath,
   isLoopbackHost,
   resolveApiKey,
+  assembleConfig,
+  ConfigSchema,
+  expandHome,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -477,6 +480,26 @@ describe("[assess] config section", () => {
     expect(() =>
       loadConfig(writeJson({ vaultRoot: "/tmp/v", assess: { minSeverity: "extreme" } })),
     ).toThrow();
+  });
+});
+
+describe("botAccount config", () => {
+  it("defaults to disabled with the standard config dir", () => {
+    const cfg = assembleConfig(ConfigSchema.parse({ vaultRoot: "/tmp/v" }));
+    expect(cfg.botAccount.enabled).toBe(false);
+    expect(cfg.botAccount.configDir).toBe(expandHome("~/.config/junco/gh"));
+    expect(cfg.ghAuth).toBeUndefined();
+  });
+
+  it("expands ~ in botAccount.configDir and honors enabled", () => {
+    const cfg = assembleConfig(
+      ConfigSchema.parse({
+        vaultRoot: "/tmp/v",
+        botAccount: { enabled: true, configDir: "~/custom/gh" },
+      }),
+    );
+    expect(cfg.botAccount.enabled).toBe(true);
+    expect(cfg.botAccount.configDir).toBe(expandHome("~/custom/gh"));
   });
 });
 

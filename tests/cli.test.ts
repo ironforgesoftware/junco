@@ -635,6 +635,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
     extraDenyRead: [],
     extraAllowWrite: [],
   },
+  botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
 };
 
 let dispatchTmpDirs: string[] = [];

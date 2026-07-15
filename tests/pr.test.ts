@@ -152,6 +152,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
       extraDenyRead: [],
       extraAllowWrite: [],
     },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
   };
 }
 
