@@ -64,7 +64,7 @@ export interface WizardDeps {
   isInteractiveFn?: () => boolean;
 }
 
-function summary(configPath: string, queueRoot: string, wrote: boolean): string {
+export function summary(configPath: string, queueRoot: string, wrote: boolean): string {
   const flag = configPath === resolveConfigPath(undefined) ? "" : ` (--config ${configPath})`;
   const head = wrote ? `✓ Wrote config:  ${configPath}\n` : `✓ Config untouched: ${configPath}\n`;
   return (

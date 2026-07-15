@@ -157,7 +157,7 @@ Subcommands:
   rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
-  config path|list|get <path>|set <path> <value>  Inspect/edit config.json knobs
+  config path|list|get <path>|set <path> <value>|init  Inspect/edit config.json knobs; init scaffolds defaults
   assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues

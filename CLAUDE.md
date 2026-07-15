@@ -49,7 +49,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 
 ```bash
 SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
-  node /path/to/junco/dist/cli.js init --yes && <smoke> ; cd / && rm -rf "$SB"
+  node /path/to/junco/dist/cli.js config init && <smoke> ; cd / && rm -rf "$SB"
 ```
 
 Parallel dev sessions: `claude -w <topic>` from the repo root, or a manual worktree under the

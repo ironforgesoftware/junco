@@ -6,8 +6,8 @@
  * `Lever` entry (enforced in bijection by tests/configLevers.test.ts) — no
  * per-field code lives here.
  */
-import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import {
   LEVERS,
   getAtPath,
@@ -16,7 +16,10 @@ import {
   coerceLever,
   type Lever,
 } from "./configLevers.js";
-import { validateConfigObject } from "./config.js";
+import { loadConfig, queuePaths, validateConfigObject } from "./config.js";
+import type { Config } from "./types.js";
+import { renderConfigJson, defaultAnswers } from "./wizard/flow.js";
+import { summary } from "./wizard.js";
 
 export interface ConfigCmdDeps {
   readFileFn?: (p: string) => string;
@@ -27,6 +30,8 @@ export interface ConfigCmdDeps {
   /** True when the daemon is currently running — gates the "restart to apply"
    * hint on `set` for `reload: "restart"` levers. */
   daemonRunningFn?: () => boolean;
+  mkdirFn?: (p: string) => void;
+  loadConfigFn?: (p: string) => Config;
 }
 
 /** Secrets never print their raw value outside of an explicit `get` on that
@@ -129,6 +134,34 @@ export function runConfigCommand(
     return 0;
   }
 
-  err(`config: unknown subcommand '${sub ?? ""}' (path|list|get|set)\n`);
+  if (sub === "init") {
+    // Headless scaffold — the old `junco init --yes` contract verbatim:
+    // fresh → default config + queue dirs; existing → ensure dirs, NEVER
+    // overwrite. (The interactive walkthrough lives in `junco dashboard`.)
+    const mkdir = deps.mkdirFn ?? ((p: string) => mkdirSync(p, { recursive: true }));
+    const loadConfigFn = deps.loadConfigFn ?? loadConfig;
+    const resolved = resolve(configPath);
+    const ensureDirs = (cfg: Config): string => {
+      const paths = queuePaths(cfg);
+      for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
+        mkdir(d);
+      }
+      return dirname(paths.inbox);
+    };
+    if (exists(resolved)) {
+      const queueRoot = ensureDirs(loadConfigFn(resolved));
+      print(
+        `Config already exists at ${resolved}; ensured queue directories under ${queueRoot}.\n`,
+      );
+      return 0;
+    }
+    mkdir(dirname(resolved));
+    writeFile(resolved, renderConfigJson(defaultAnswers()));
+    const queueRoot = ensureDirs(loadConfigFn(resolved));
+    print(summary(resolved, queueRoot, true));
+    return 0;
+  }
+
+  err(`config: unknown subcommand '${sub ?? ""}' (path|list|get|set|init)\n`);
   return 1;
 }
