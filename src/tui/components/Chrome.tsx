@@ -207,19 +207,41 @@ export function Toast({
   );
 }
 
-/** Row n: context key hints — accent key, muted label, graceful truncation. */
-export function Footer({ hints }: { hints: [string, string][] }): React.JSX.Element {
+/** Row n: context key hints — accent key, muted label. Each hint is a
+ * flexShrink-0 chip; a chip whose hint KEY has an `actions` entry is
+ * clickable (mouse-driven ftue), the rest render inert. Overflow clips
+ * (no ellipsis) rather than truncating — the row is informational and the
+ * layout invariant (height 1, no wrap) still holds. */
+export function Footer({
+  hints,
+  actions,
+}: {
+  hints: [string, string][];
+  actions?: Record<string, () => void>;
+}): React.JSX.Element {
   return (
-    <Box paddingX={1} height={1}>
-      <Text wrap="truncate-end">
-        {hints.map(([k, label], i) => (
-          <Text key={k}>
-            {i > 0 ? <Text dimColor> · </Text> : null}
+    <Box paddingX={1} height={1} overflow="hidden">
+      {hints.map(([k, label], i) => {
+        const run = actions?.[k];
+        const chip = (
+          <Text>
             <Text color={theme.accent}>{k}</Text>
             <Text dimColor> {label}</Text>
           </Text>
-        ))}
-      </Text>
+        );
+        return (
+          <Box key={k} flexShrink={0}>
+            {i > 0 ? <Text dimColor> · </Text> : null}
+            {run ? (
+              <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
+                {chip}
+              </ClickableBox>
+            ) : (
+              chip
+            )}
+          </Box>
+        );
+      })}
     </Box>
   );
 }

@@ -14,6 +14,7 @@ export function Workspace({
   header,
   toast,
   hints,
+  footerActions,
   modal,
   modalAlign = "center",
   children,
@@ -23,6 +24,8 @@ export function Workspace({
   header: React.ReactNode;
   toast: { kind: ToastKind; text: string } | null;
   hints: [string, string][];
+  /** Hint KEY → handler; a chip with a matching entry is clickable. */
+  footerActions?: Record<string, () => void>;
   modal: React.ReactNode | null;
   /** Vertical alignment for the modal body — "top" for modals taller than
    * common terminal heights, where centering would clip the title. */
@@ -44,7 +47,7 @@ export function Workspace({
         )}
       </Box>
       <Toast toast={toast} />
-      <Footer hints={hints} />
+      <Footer hints={hints} actions={footerActions} />
     </Box>
   );
 }

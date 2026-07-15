@@ -4,7 +4,7 @@
 // specs exercise the GITHUB surface (issue rows, the rail wheel) and the header
 // mode tabs; renderApp mounts at the wide breakpoint (WIDE_COLS_TEST) so the
 // bracketed `[GITHUB]`/`[LOCAL]` tabs render and the pane bands are stable.
-import { describe, it, afterEach } from "vitest";
+import { describe, it, afterEach, expect } from "vitest";
 import { cleanup } from "ink-testing-library";
 import { until, fireUntil } from "./helpers/until.js";
 import { renderApp, okv, stubClient } from "./helpers/localFixtures.js";
@@ -182,5 +182,138 @@ describe("review view: mouse", () => {
     const clickedLine = (r.lastFrame() ?? "").split("\n")[fy] ?? "";
     if (!clickedLine.includes("▌"))
       throw new Error(`finding cursor did not follow the click: ${clickedLine}`);
+  });
+});
+
+describe("footer chips: mouse", () => {
+  it("footer chip: clicking 't queue' opens the queue view; 'esc/t' closes it", async () => {
+    const r = renderApp({ initialUiMode: "github" });
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    // Mount lands on pane 1 (rail) whose hint set has no "t" entry — "t queue"
+    // only appears once pane 2 (issues) is focused, mirroring how a user
+    // would actually reach it.
+    r.stdin.write("l");
+    await until(() => (r.lastFrame() ?? "").includes("t queue"));
+    const f = r.lastFrame() ?? "";
+    const footerY = f.split("\n").length - 1;
+    const x = f.split("\n")[footerY].indexOf("t queue");
+    r.stdin.write(press(x, footerY));
+    await until(() => (r.lastFrame() ?? "").includes("RUNNING"));
+    const f2 = r.lastFrame() ?? "";
+    const x2 = f2.split("\n")[footerY].indexOf("esc/t");
+    r.stdin.write(press(x2, footerY));
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+  });
+
+  it("pane 3 focused: the 'enter detail' chip opens the PR overlay, not the issue detail", async () => {
+    // One junco PR for the selected repo so pane 3 has a selected row.
+    const pr = {
+      number: 100,
+      title: "Some PR",
+      url: "https://github.com/acme/api/pull/100",
+      headRefName: "junco/some-slug",
+      baseRefName: "main",
+      isDraft: false,
+      state: "OPEN",
+      reviewDecision: null,
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+      checks: { pass: 1, fail: 0, pending: 0, total: 1 },
+      additions: 10,
+      deletions: 2,
+      changedFiles: 3,
+      createdAt: "2026-07-05T10:00:00Z",
+      updatedAt: "2026-07-06T10:00:00Z",
+      mergedAt: null,
+      author: "junco-bot",
+      labels: [],
+      nwo: "acme/api",
+    };
+    const client = {
+      ...stubClient,
+      listPrs: async (nwo: string) => okv({ prs: nwo === "acme/api" ? [pr] : [], staleAt: null }),
+    };
+    const r = renderApp({ initialUiMode: "github", client });
+    await until(() => (r.lastFrame() ?? "").includes("#100")); // PR row loaded in pane 3
+    r.stdin.write("3"); // focus pane 3 (wide layout)
+    await until(() => (r.lastFrame() ?? "").includes("enter detail")); // pane-3 hint set
+    const f = r.lastFrame() ?? "";
+    const footerY = f.split("\n").length - 1;
+    const x = f.split("\n")[footerY].indexOf("enter detail");
+    // Landing opens the PR overlay (unmounts the chip row's main-view set, so
+    // the retry self-terminates); the issue-detail overlay would say
+    // "preview · #1" instead — assert the PR one specifically.
+    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("pr · #100"));
+    expect(r.lastFrame() ?? "").not.toContain("preview · #");
+  });
+
+  it("pane 1 (mount default): the 'o browser' chip opens the REPO, never the selected issue", async () => {
+    let repoOpens = 0;
+    let issueOpens = 0;
+    const client = {
+      ...stubClient,
+      openRepoInBrowser: async () => {
+        repoOpens++;
+        return okv(undefined);
+      },
+      openInBrowser: async () => {
+        issueOpens++;
+        return okv(undefined);
+      },
+    };
+    const r = renderApp({ initialUiMode: "github", client });
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    const f = r.lastFrame() ?? "";
+    const footerY = f.split("\n").length - 1;
+    const x = f.split("\n")[footerY].indexOf("o browser"); // pane-1 hint set at mount
+    await fireUntil(r.stdin, press(x, footerY), () => repoOpens === 1); // counted-once = idempotent-safe
+    expect(repoOpens).toBe(1);
+    expect(issueOpens).toBe(0); // the old flat map would have opened the issue here
+  });
+
+  it("pane 2: the 'c analyze' chip drafts an analysis for the selected issue", async () => {
+    let analyzeCalls = 0;
+    const client = {
+      ...stubClient,
+      analyzeIssue: async () => {
+        analyzeCalls++;
+        return okv({ id: "analyze-acme-api-1" });
+      },
+    };
+    const r = renderApp({ initialUiMode: "github", client });
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    r.stdin.write("l"); // pane 2 — the only hint set carrying "c analyze"
+    await until(() => (r.lastFrame() ?? "").includes("c analyze"));
+    const f = r.lastFrame() ?? "";
+    const footerY = f.split("\n").length - 1;
+    const x = f.split("\n")[footerY].indexOf("c analyze");
+    await fireUntil(r.stdin, press(x, footerY), () => analyzeCalls === 1); // counted-once = idempotent-safe
+    expect(analyzeCalls).toBe(1);
+    // The keyboard recipe's success toast lands once the stubbed promise
+    // resolves — same copy, proving the chip ran the verbatim branch.
+    await until(() =>
+      (r.lastFrame() ?? "").includes("analysis queued: analyze-acme-api-1 · v to review"),
+    );
+  });
+
+  it("LOCAL help modal: the stale rail chip underneath 'q' stays inert — closes help, does not quit", async () => {
+    let exited = false;
+    const r = renderApp({ initialUiMode: "local", onExit: () => (exited = true) });
+    await until(() => (r.lastFrame() ?? "").includes("q quit"));
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes("junco dashboard"));
+    // LOCAL's `hints` computation doesn't special-case view==="help" (unlike
+    // github's, which swaps to hintsFor("help",...)) so the rail's hint row —
+    // "q quit" included — is still the last frame line while the modal is up.
+    // The "q" chip must render inert there (no footerActions entry for
+    // view==="help"): a press with no region under it falls through to the
+    // pre-existing onMouseMiss("help") handler, which closes the modal —
+    // exactly "any key closes help", never a quit.
+    const f = r.lastFrame() ?? "";
+    const footerY = f.split("\n").length - 1;
+    const x = f.split("\n")[footerY].indexOf("q quit");
+    r.stdin.write(press(x, footerY));
+    await until(() => !(r.lastFrame() ?? "").includes("junco dashboard"));
+    expect(exited).toBe(false);
   });
 });

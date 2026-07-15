@@ -2073,6 +2073,227 @@ export function App(props: AppProps): React.JSX.Element {
     setLocalCursor((m) => ({ ...m, [localSection]: idx }));
   };
 
+  // Footer chip click targets: hint KEY → the same handler its keyboard
+  // recipe already calls (mouse and keyboard can never diverge on what a key
+  // does — same discipline as the review-view mouse handlers above). A key
+  // with no entry here renders as an inert chip (movement/typing hints).
+  // "main" is pane-aware exactly where the keyboard cascade is: `o`/`enter`
+  // mean different things per pane (repo / issue / PR) and `d`/`a` carry the
+  // external-repo gate — each entry below duplicates its keyboard branch
+  // verbatim, including the guards.
+  const footerActions: Record<string, () => void> = useMemo((): Record<string, () => void> => {
+    if (confirm !== null) return {}; // destructive confirm owns input — every chip inert
+    // LOCAL's help modal (like github's) leaves the rail/body hint row showing
+    // underneath it (a pre-existing hints-computation quirk — LOCAL's `hints`
+    // never special-cases view==="help" the way github's hintsFor("help",...)
+    // does), so without this exclusion the STALE rail chips (q, r, m, ←)
+    // would stay clickable while help is open — most alarmingly `q`, which
+    // would quit the app instead of the keyboard's "any key closes help".
+    // Falls through to the `case "help": return {}` below, same as github.
+    if (uiMode === "local" && view !== "config" && view !== "help") {
+      return {
+        q: () => {
+          exit();
+          onExit();
+        },
+        "?": () => setView("help"),
+        r: () => void forceLocalRefresh(),
+        m: () => handleModeTab("github"),
+        "←": () => setLocalFocus("rail"),
+      };
+    }
+    switch (view) {
+      case "detail":
+        return {
+          o: openDetailIssueInBrowser,
+          esc: () => {
+            setScroll(0);
+            setView("main");
+          },
+        };
+      case "prDetail":
+        return { esc: () => setView(prDetail?.from ?? "main"), o: openPrDetailInBrowser };
+      case "queue":
+        return {
+          "esc/t": () => {
+            setScroll(0);
+            setView("main");
+          },
+        };
+      case "prs":
+        return {
+          enter: () => openPrDetail(selectedPr, "prs"),
+          o: openSelectedPr,
+          "esc/p": () => {
+            setScroll(0);
+            setView("main");
+          },
+        };
+      case "cmdOutput":
+        return {
+          esc: () => {
+            setScroll(0);
+            setView("palette");
+          },
+          ...(cmd && !cmd.running ? { r: () => runPaletteCommand(cmd.name, cmd.extraArgs) } : {}),
+        };
+      case "palette":
+        return { esc: () => setView("main"), enter: () => paletteEnter() };
+      case "addRepo":
+        return { esc: () => setView("main") };
+      case "config":
+        return { esc: () => setView("main") };
+      case "review":
+        return { esc: () => setView("main") };
+      case "help":
+        return {};
+      case "main": {
+        const currentExternal = currentRepo?.external === true;
+        return {
+          q: () => {
+            exit();
+            onExit();
+          },
+          "?": () => setView("help"),
+          t: () => {
+            setScroll(0);
+            setView("queue");
+          },
+          p: () => {
+            setScroll(0);
+            setView("prs");
+            void refreshAll({ scope: "monitor" });
+          },
+          ":": () => {
+            setPaletteFilter("");
+            setPaletteSel(0);
+            setPaletteArgsMode(false);
+            setPaletteArgs("");
+            setView("palette");
+          },
+          ",": () => setView("config"),
+          m: () => handleModeTab("local"),
+          w: () => {
+            if (watchlistError)
+              return void showToast("error", "watchlist unreadable — fix it before adding");
+            setAddRepoError(null);
+            setView("addRepo");
+          },
+          r: () => {
+            setRefreshing(true);
+            void refreshAll().finally(() => setRefreshing(false));
+          },
+          // Pane 3's "enter detail" chip opens the selected PR's overlay (the
+          // pane-3 key.return branch); the pane-2 chip opens the issue detail.
+          // Pane 1 is an explicit no-op — its hint set has no enter chip, and
+          // the keyboard cascade's pane-1 branch has no key.return handler.
+          enter: () => {
+            if (pane === 3) return void openPrDetail(selectedPane3Pr, "main");
+            if (pane === 2) void openDetail();
+          },
+          // `s` chip covers BOTH hint rows that carry it — pane 1 ("assess",
+          // repo-scoped) and pane 2 ("assess issue", issue-scoped) — via the
+          // same pane gate as the keyboard `s` branch. The `S` auto-plan
+          // variant has no hint chip, so autoPlan is always false here.
+          s: () => {
+            if (pane === 2 && currentNwo && currentIssue) {
+              return void runAssess(false, `${currentNwo}#${currentIssue.number}`);
+            }
+            void runAssess(false);
+          },
+          // `d`/`a` chips render only in pane 2's hint set — duplicate that
+          // pane's keyboard branches verbatim, external-repo gate included.
+          d: () => {
+            if (!currentExternal) return void runAction("dispatch");
+            if (!currentNwo || !currentIssue) return;
+            const num = currentIssue.number;
+            showToast("info", `dispatching ${currentNwo}#${num}…`);
+            void client.dispatchTicket(currentNwo, num).then((res) => {
+              if (!aliveRef.current) return;
+              if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
+              else showToast("error", res.error);
+            });
+          },
+          a: () => {
+            if (currentExternal) {
+              return void showToast(
+                "error",
+                "not available for external repos — d dispatches a fork-PR ticket",
+              );
+            }
+            void runAction("approve");
+          },
+          // "c analyze" renders only in pane 2's hint set — the keyboard `c`
+          // branch verbatim (works on owned AND external repos, no gate).
+          c: () => {
+            if (!currentNwo || !currentIssue) return;
+            const num = currentIssue.number;
+            showToast("info", `drafting analysis for ${currentNwo}#${num}…`);
+            void client.analyzeIssue(currentNwo, num).then((res) => {
+              if (!aliveRef.current) return;
+              if (res.ok)
+                showToast("success", `analysis queued: ${res.value.id} · v to review when parked`);
+              else showToast("error", res.error);
+            });
+          },
+          // "o browser" opens a different resource per pane: 1 → the selected
+          // repo, 3 → the selected PR, 2 → the selected issue — each arm is
+          // its pane's keyboard `o` branch verbatim.
+          o: () => {
+            if (pane === 1)
+              return void (currentRepo ? openRepoBrowser(currentRepo.nwo) : undefined);
+            if (pane === 3) {
+              if (selectedPane3Pr) {
+                const { nwo, number } = selectedPane3Pr;
+                void client.openPrInBrowser(nwo, number).then((res) => {
+                  if (!aliveRef.current) return;
+                  if (!res.ok) showToast("error", res.error);
+                });
+              }
+              return;
+            }
+            void openBrowser();
+          },
+          "/": () => {
+            setFiltering(true);
+            setPane(2);
+          },
+        };
+      }
+    }
+  }, [
+    confirm,
+    uiMode,
+    view,
+    cmd,
+    prDetail,
+    selectedPr,
+    watchlistError,
+    pane,
+    currentRepo,
+    currentNwo,
+    currentIssue,
+    selectedPane3Pr,
+    client,
+    exit,
+    onExit,
+    forceLocalRefresh,
+    handleModeTab,
+    openDetailIssueInBrowser,
+    openPrDetailInBrowser,
+    openPrDetail,
+    openSelectedPr,
+    openRepoBrowser,
+    runPaletteCommand,
+    paletteEnter,
+    refreshAll,
+    showToast,
+    openDetail,
+    runAction,
+    runAssess,
+    openBrowser,
+  ]);
+
   const hints =
     view === "config"
       ? // Mode-agnostic, like the view === "config" render branch above: the
@@ -2158,6 +2379,7 @@ export function App(props: AppProps): React.JSX.Element {
       }
       toast={toast}
       hints={hints}
+      footerActions={footerActions}
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}
     >
