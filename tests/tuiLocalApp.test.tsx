@@ -11,6 +11,11 @@ import { renderApp, CHEAP, ESC, stubClient } from "./helpers/localFixtures.js";
 
 afterEach(cleanup);
 
+// SGR mouse press at 0-based cell (x,y) — mirrors tuiMouseApp.test.tsx.
+const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
+const lineOf = (frame: string, needle: string): number =>
+  frame.split("\n").findIndex((l) => l.includes(needle));
+
 describe("uiMode toggle", () => {
   it("m swaps github → local and back", async () => {
     const r = renderApp();
@@ -101,6 +106,35 @@ describe("local sections", () => {
     await until(() => (r.lastFrame() ?? "").includes("1/5"));
     r.stdin.write("j"); // → outbox (its snapshot error renders "unavailable")
     await until(() => (r.lastFrame() ?? "").includes("unavailable"));
+  });
+});
+
+describe("local sections: mouse", () => {
+  it("clicking a section in the LOCAL rail selects it; clicking again enters the body", async () => {
+    const r = renderApp({ initialUiMode: "local" });
+    await until(() => (r.lastFrame() ?? "").includes("sections"));
+    const y = lineOf(r.lastFrame() ?? "", "repos");
+    r.stdin.write(press(3, y));
+    await until(() => (r.lastFrame() ?? "").split("\n")[y].includes("▌"));
+    r.stdin.write(press(3, y));
+    await until(() =>
+      /* repos body focused: its border shows accent — assert on the section body header */ (
+        r.lastFrame() ?? ""
+      ).includes("repos"),
+    );
+  });
+
+  it("clicking a LOCAL body row moves the cursor and focuses the body", async () => {
+    const r = renderApp({ initialUiMode: "local" }); // fixture seeds ≥2 outbox ops
+    await until(() => (r.lastFrame() ?? "").includes("sections"));
+    const sectionY = lineOf(r.lastFrame() ?? "", "outbox");
+    r.stdin.write(press(3, sectionY)); // select the outbox section
+    await until(() => (r.lastFrame() ?? "").split("\n")[sectionY].includes("▌"));
+    // Rows render as "<age> <op.kind> <issueKey>" — locate the second op by its
+    // issueKey from the fixture data.
+    const rowY = lineOf(r.lastFrame() ?? "", "acme/api#2");
+    r.stdin.write(press(30, rowY));
+    await until(() => (r.lastFrame() ?? "").split("\n")[rowY].includes("▌"));
   });
 });
 

@@ -7,7 +7,8 @@
 import { describe, it, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import { until, fireUntil } from "./helpers/until.js";
-import { renderApp } from "./helpers/localFixtures.js";
+import { renderApp, okv, stubClient } from "./helpers/localFixtures.js";
+import type { PendingAssess } from "../src/assessReview.js";
 
 afterEach(cleanup);
 
@@ -99,5 +100,87 @@ describe("header mode tabs", () => {
     await fireUntil(r.stdin, press(LOCAL_TAB_START, 0), () =>
       (r.lastFrame() ?? "").includes("[LOCAL]"),
     );
+  });
+});
+
+describe("review view: mouse", () => {
+  // Two batches so the combined-list cursor (starts at 0, on the first batch)
+  // differs from the row we click — the first click only moves the cursor,
+  // the second opens the checklist (mirrors the GITHUB issue-row spec above).
+  const batch1: PendingAssess = {
+    id: "assess-1",
+    nwo: "o/r1",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    findings: [
+      {
+        fingerprint: "g1",
+        kind: "code",
+        severity: "low",
+        ruleId: "R",
+        title: "minor issue",
+        description: "",
+        references: [],
+      },
+    ],
+  };
+  const batch2: PendingAssess = {
+    id: "assess-2",
+    nwo: "o/r2",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    findings: [
+      {
+        fingerprint: "f1",
+        kind: "code",
+        severity: "high",
+        ruleId: "R",
+        title: "SQL injection",
+        description: "",
+        references: [],
+      },
+      {
+        fingerprint: "f2",
+        kind: "code",
+        severity: "low",
+        ruleId: "R",
+        title: "stale dep",
+        description: "",
+        references: [],
+      },
+    ],
+  };
+
+  it("review: click a batch row twice to open it; click a finding to toggle its checkbox", async () => {
+    const client = { ...stubClient, listReview: async () => okv([batch1, batch2]) };
+    const r = renderApp({ initialUiMode: "github", client });
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r2")); // both batches listed
+    const x = 5;
+    const y = lineOf(r.lastFrame() ?? "", "o/r2");
+    // First press: cursor (initially on batch1, row 0) moves onto batch2's row.
+    await fireUntil(
+      r.stdin,
+      press(x, y),
+      () => (r.lastFrame() ?? "").split("\n")[y]?.includes("▌") ?? false,
+    );
+    // Second press on the now-selected row opens batch2's checklist.
+    await fireUntil(r.stdin, press(x, y), () => (r.lastFrame() ?? "").includes("stale dep"));
+    // Every finding starts checked — click "stale dep" (index 1): the checkbox
+    // flips to unchecked AND the `▌` cursor moves onto its row.
+    const fy = lineOf(r.lastFrame() ?? "", "stale dep");
+    await fireUntil(
+      r.stdin,
+      press(x, fy),
+      () => (r.lastFrame() ?? "").split("\n")[fy]?.includes("[ ]") ?? false,
+    );
+    const clickedLine = (r.lastFrame() ?? "").split("\n")[fy] ?? "";
+    if (!clickedLine.includes("▌"))
+      throw new Error(`finding cursor did not follow the click: ${clickedLine}`);
   });
 });

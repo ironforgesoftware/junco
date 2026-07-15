@@ -63,7 +63,36 @@ export const CHEAP: LocalCheap = {
     ],
   },
   counts: { done: 12, failed: 3 },
-  outbox: { depth: 2, dead: 1, ops: [], deadOps: [], error: null },
+  outbox: {
+    depth: 2,
+    dead: 1,
+    // ≥2 ops with locatable issueKeys — the mouse row-click specs locate the
+    // second row by its "acme/api#2" target text.
+    ops: [
+      {
+        id: "op-acme-api-1",
+        path: "/x/github-outbox/op-acme-api-1.json",
+        createdAt: "2026-07-07T09:59:00Z",
+        origin: "dashboard",
+        issueKey: "acme/api#1",
+        attempts: 1,
+        lastError: null,
+        op: { kind: "labels", nwo: "acme/api", issue: 1, add: [], remove: [] },
+      },
+      {
+        id: "op-acme-api-2",
+        path: "/x/github-outbox/op-acme-api-2.json",
+        createdAt: "2026-07-07T09:58:00Z",
+        origin: "dashboard",
+        issueKey: "acme/api#2",
+        attempts: 1,
+        lastError: null,
+        op: { kind: "labels", nwo: "acme/api", issue: 2, add: [], remove: [] },
+      },
+    ],
+    deadOps: [],
+    error: null,
+  },
   daemon: {
     up: true,
     pid: 4242,

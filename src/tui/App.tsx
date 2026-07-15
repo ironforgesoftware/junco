@@ -2001,6 +2001,78 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "o") return void openBrowser();
   });
 
+  // Review-view mouse handlers — duplicate the key recipes EXACTLY (same
+  // setReviewState transitions as key.return, space, and j/k above) so mouse
+  // and keyboard can never diverge on what a click/scroll does.
+  const reviewRowPress = (idx: number): void => {
+    if (confirm !== null) return;
+    setReviewState((s) => {
+      if (s.open) return s;
+      if (idx !== s.cursor) return { ...s, cursor: idx };
+      if (idx < s.batches.length) {
+        const batch = s.batches[idx];
+        if (!batch) return s;
+        return {
+          ...s,
+          open: {
+            kind: "batch",
+            batchIdx: idx,
+            findingCursor: 0,
+            checked: new Set(batch.findings.map((f) => f.fingerprint)),
+          },
+        };
+      }
+      const draftIdx = idx - s.batches.length;
+      if (!s.drafts[draftIdx]) return s;
+      return { ...s, open: { kind: "draft", draftIdx, scroll: 0 } };
+    });
+  };
+  const reviewFindingPress = (idx: number): void => {
+    if (confirm !== null) return;
+    setReviewState((s) => {
+      if (!s.open || s.open.kind !== "batch") return s;
+      const batch = s.batches[s.open.batchIdx];
+      if (!batch) return s;
+      const checked = new Set(s.open.checked);
+      const fp = batch.findings[idx]?.fingerprint;
+      if (fp) {
+        if (checked.has(fp)) checked.delete(fp);
+        else checked.add(fp);
+      }
+      return { ...s, open: { ...s.open, findingCursor: idx, checked } };
+    });
+  };
+  const reviewDraftWheel = (d: 1 | -1): void => {
+    setReviewState((s) => {
+      if (!s.open || s.open.kind !== "draft") return s;
+      const dft = s.drafts[s.open.draftIdx];
+      const max = dft ? Math.max(0, dft.draft.split("\n").length - 1) : 0;
+      return { ...s, open: { ...s.open, scroll: Math.max(0, Math.min(max, s.open.scroll + d)) } };
+    });
+  };
+
+  // LOCAL-dashboard mouse handlers — mirror the rail/body key recipes above.
+  const localSectionPress = (s: LocalSection): void => {
+    if (confirm !== null) return;
+    if (localSection === s) {
+      setLocalFocus("body"); // click-again = enter (the l/→/enter key)
+      return;
+    }
+    setLocalSection(s);
+    setLocalScroll(0);
+    setLocalFocus("rail");
+  };
+  const localRowPress = (idx: number): void => {
+    if (confirm !== null) return;
+    setLocalFocus("body");
+    if (idx === localCursorSafe && localSection === "repos") {
+      const t = localTarget;
+      if (t?.kind === "repo") openRepoBrowser(t.repo.nwo ?? "");
+      return; // click-again on a repo row = the nondestructive `o` action
+    }
+    setLocalCursor((m) => ({ ...m, [localSection]: idx }));
+  };
+
   const hints =
     view === "config"
       ? // Mode-agnostic, like the view === "config" render branch above: the
@@ -2105,9 +2177,19 @@ export function App(props: AppProps): React.JSX.Element {
           layout={layout}
           now={queueNow}
           refreshedAt={localRefreshedAt}
+          onSectionPress={localSectionPress}
+          onRowPress={localRowPress}
+          onDaemonWheel={(d) => setLocalScroll((s) => Math.max(0, s + d))}
         />
       ) : view === "review" ? (
-        <ReviewView state={reviewState} height={listHeight} focused />
+        <ReviewView
+          state={reviewState}
+          height={listHeight}
+          focused
+          onRowPress={reviewRowPress}
+          onFindingPress={reviewFindingPress}
+          onDraftWheel={reviewDraftWheel}
+        />
       ) : (
         <>
           <Rail
