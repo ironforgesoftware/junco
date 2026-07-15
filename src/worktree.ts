@@ -139,6 +139,32 @@ export function linkNodeModules(repoPath: string, wtPath: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// seedBotIdentity
+// ---------------------------------------------------------------------------
+
+/** Bot mode: stamp the bot's identity into PER-WORKTREE git config so every
+ * process committing here (the agent's bash tool — sandboxed or not — and
+ * commitLeftovers) authors as the bot, while the parent clone's identity is
+ * untouched. Requires extensions.worktreeConfig (git ≥ 2.20); enabling it
+ * writes one inert flag into the parent's .git/config — the only mutation the
+ * parent ever sees. No-op when cfg.ghAuth is absent. */
+async function seedBotIdentity(cfg: Config, repoPath: string, wtPath: string): Promise<void> {
+  if (!cfg.ghAuth) return;
+  await git(cfg, ["config", "extensions.worktreeConfig", "true"], {
+    cwd: repoPath,
+    timeoutMs: 30_000,
+  });
+  await git(cfg, ["config", "--worktree", "user.name", cfg.ghAuth.login], {
+    cwd: wtPath,
+    timeoutMs: 30_000,
+  });
+  await git(cfg, ["config", "--worktree", "user.email", cfg.ghAuth.email], {
+    cwd: wtPath,
+    timeoutMs: 30_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // prepareWorktree
 // ---------------------------------------------------------------------------
 
@@ -245,6 +271,7 @@ export async function prepareWorktree(
         }
       }
 
+      await seedBotIdentity(cfg, ctx.repo, wtPath);
       linkNodeModules(ctx.repo, wtPath);
       return wtPath;
     }
@@ -295,6 +322,7 @@ export async function prepareWorktree(
       }
     }
 
+    await seedBotIdentity(cfg, ctx.repo, wtPath);
     linkNodeModules(ctx.repo, wtPath);
     return wtPath;
   } finally {

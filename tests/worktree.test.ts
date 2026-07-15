@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 import {
   worktreeSlug,
@@ -464,6 +464,74 @@ describe("prepareWorktree — fresh mode", () => {
     const base = run(["git", "-C", work, "rev-parse", "origin/main"]).trim();
     expect(head).toBe(base);
     expect(existsSync(join(wtPath, "stale.txt"))).toBe(false);
+  }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// prepareWorktree — bot commit identity (per-worktree git config)
+// ---------------------------------------------------------------------------
+
+describe("prepareWorktree — bot commit identity", () => {
+  it("seeds bot identity into the worktree config, leaving the parent repo untouched", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg: Config = {
+      ...makeConfig(work, wtsRoot),
+      ghAuth: {
+        configDir: join(work, "gh"),
+        login: "junco-agent",
+        email: "987654+junco-agent@users.noreply.github.com",
+        credentialHelper: "!gh auth git-credential",
+      },
+    };
+    const ctx = makeContext(work);
+
+    const wt = await prepareWorktree(cfg, ctx, "task-bot-id");
+
+    const wtName = execFileSync("git", ["-C", wt, "config", "user.name"], {
+      encoding: "utf8",
+    }).trim();
+    const wtEmail = execFileSync("git", ["-C", wt, "config", "user.email"], {
+      encoding: "utf8",
+    }).trim();
+    expect(wtName).toBe("junco-agent");
+    expect(wtEmail).toBe("987654+junco-agent@users.noreply.github.com");
+
+    // Parent clone identity untouched: its local user.name is still the
+    // harness's own ("CI", set by setupGitHarness) — seedBotIdentity never
+    // clobbers it with the bot's identity. (The only mutation the parent's
+    // .git/config sees is the inert extensions.worktreeConfig=true flag.)
+    const parentLocal = spawnSync("git", ["-C", ctx.repo, "config", "--local", "user.name"], {
+      encoding: "utf8",
+    });
+    expect(parentLocal.status).toBe(0);
+    expect(parentLocal.stdout.trim()).toBe("CI");
+
+    // A commit made inside the worktree is authored AND committed as the bot
+    // (no env-based identity override here — this must come from git config).
+    writeFileSync(join(wt, "f.txt"), "x");
+    execFileSync("git", ["-C", wt, "add", "-A"], { encoding: "utf8" });
+    execFileSync("git", ["-C", wt, "commit", "-m", "seed"], { encoding: "utf8" });
+    const [author, committer] = execFileSync(
+      "git",
+      ["-C", wt, "log", "-1", "--format=%an <%ae>%n%cn <%ce>"],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n");
+    expect(author).toBe("junco-agent <987654+junco-agent@users.noreply.github.com>");
+    expect(committer).toBe("junco-agent <987654+junco-agent@users.noreply.github.com>");
+  }, 30000);
+
+  it("seeds nothing when cfg.ghAuth is absent", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const cfg = makeConfig(work, wtsRoot);
+    const ctx = makeContext(work);
+
+    const wt = await prepareWorktree(cfg, ctx, "task-no-id");
+    const r = spawnSync("git", ["-C", wt, "config", "--worktree", "user.name"], {
+      encoding: "utf8",
+    });
+    expect(r.status).not.toBe(0);
   }, 30000);
 });
 
