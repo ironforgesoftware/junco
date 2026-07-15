@@ -307,6 +307,7 @@ function renderApp(
   refreshPollMs = 999999,
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
   queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
+  onExit: () => void = () => {},
 ) {
   return render(
     <MouseProvider>
@@ -333,7 +334,7 @@ function renderApp(
         // (the legacy flows the App-level tests exercise); wide-mode tests below
         // opt into 130 cols explicitly.
         sizeOverride={{ columns: 100, rows: 30 }}
-        onExit={() => {}}
+        onExit={onExit}
       />
     </MouseProvider>,
   );
@@ -584,6 +585,23 @@ describe("App", () => {
     // it so the title survives even though the bottom clips.
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
     expect(r.lastFrame()).toContain("act on issue");
+  });
+
+  // Ctrl-C quits the dashboard. In production the host renders with
+  // exitOnCtrlC:false (so the wizard it also hosts can see Ctrl-C — see
+  // INK_RENDER_OPTIONS), which means ink no longer auto-quits; App's own
+  // dedicated Ctrl-C handler must. ink-testing-library also uses
+  // exitOnCtrlC:false, so this exercises that handler at production parity.
+  it("Ctrl-C quits the dashboard via App's dedicated handler", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    let exited = false;
+    const r = renderApp(client, wl(), 999999, undefined, undefined, () => {
+      exited = true;
+    });
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("\x03"); // Ctrl-C
+    await until(() => exited);
+    expect(exited).toBe(true);
   });
 
   // Fix 1(a): selection is anchored to the issue NUMBER, so a poll that re-sorts

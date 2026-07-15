@@ -148,6 +148,9 @@ export function createMouseStore(): MouseStore {
       set.add(cb);
       return () => {
         set.delete(cb);
+        // Prune the now-empty Set so the map doesn't retain a per-id entry for
+        // a region whose subscribers have all unmounted.
+        if (set.size === 0) subscribers.delete(id);
       };
     },
   };

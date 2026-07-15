@@ -188,6 +188,35 @@ Options:
 `;
 
 // ---------------------------------------------------------------------------
+// Argv parsing (strict) — extracted so run() can wrap it in try/catch. With
+// strict:true parseArgs throws ERR_PARSE_ARGS_UNKNOWN_OPTION on any unrecognized
+// flag; run() turns that into a graceful usage error (exit 2) instead of letting
+// it escape to the top-level fatal catch (exit 1 + structured error log).
+// ---------------------------------------------------------------------------
+
+function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
+  return parseArgs({
+    args: argv,
+    options: {
+      config: { type: "string" },
+      once: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+      platform: { type: "string" },
+      all: { type: "boolean", default: false },
+      only: { type: "string" },
+      follow: { type: "boolean", short: "f", default: false },
+      lines: { type: "string", short: "n" },
+      json: { type: "boolean", default: false },
+      human: { type: "boolean", default: false },
+      "auto-plan": { type: "boolean", default: false },
+      "no-footer": { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: true,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Daemon-mode log plumbing
 // ---------------------------------------------------------------------------
 
@@ -240,26 +269,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     deps.runOnceFn ??
     ((c: Config) => runOnce(c, { reporter: c.github.enabled ? makeGithubReporter(c) : undefined }));
 
-  // Parse argv
-  const { values, positionals } = parseArgs({
-    args: argv,
-    options: {
-      config: { type: "string" },
-      once: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
-      platform: { type: "string" },
-      all: { type: "boolean", default: false },
-      only: { type: "string" },
-      follow: { type: "boolean", short: "f", default: false },
-      lines: { type: "string", short: "n" },
-      json: { type: "boolean", default: false },
-      human: { type: "boolean", default: false },
-      "auto-plan": { type: "boolean", default: false },
-      "no-footer": { type: "boolean", default: false },
-    },
-    allowPositionals: true,
-    strict: false,
-  });
+  // Parse argv (strict). An unknown flag throws ERR_PARSE_ARGS_UNKNOWN_OPTION;
+  // report it gracefully (message + usage, exit 2) rather than letting it reach
+  // the top-level fatal catch. Covers the removed `junco init --yes` scripted
+  // form and every other unrecognized flag.
+  let parsed: ReturnType<typeof parseCli>;
+  try {
+    parsed = parseCli(argv);
+  } catch (e) {
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n\n${USAGE}`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
 
   // --help / -h
   if (values.help) {

@@ -64,7 +64,11 @@ export function Root({
     return <Text color="red">✗ {wizard.error}</Text>;
   }
   if (wizard !== null) return <WizardApp io={wizard.io} onOutcome={onOutcome} />;
-  if (cfg === null) return <Text> </Text>; // transient frame after cancel-exit
+  // Defensive, and unreachable in practice: a FTUE cancel exits with the wizard
+  // still mounted (the `wizard !== null` branch above returns first), and every
+  // non-cancel outcome sets cfg before clearing wizard. This guards the
+  // Config | null type so App is never handed a null config.
+  if (cfg === null) return <Text> </Text>;
   return (
     <App
       {...buildAppProps(cfg)}

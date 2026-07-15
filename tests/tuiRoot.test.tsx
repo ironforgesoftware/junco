@@ -125,6 +125,32 @@ describe("Root FTUE switcher", () => {
     expect(onCode).toHaveBeenCalledWith(130);
   });
 
+  it("no config → Ctrl-C in the wizard is a truthful FTUE cancel (exit 130)", async () => {
+    // Production renders the host with exitOnCtrlC:false so WizardApp's own
+    // Ctrl-C branch runs (it maps a pre-write Ctrl-C → cancel). A fresh-mode
+    // cancel has nothing to fall back to, so Root reports 130.
+    // ink-testing-library also uses exitOnCtrlC:false → production parity.
+    const onCode = vi.fn();
+    const r = render(
+      <Root
+        configPath="/tmp/x/config.json"
+        initialConfig={null}
+        buildAppProps={() => {
+          throw new Error("App must not mount before a config exists");
+        }}
+        makeWizardIo={() => ({ ok: true, io: fakeIo(), mode: "fresh" })}
+        loadConfigFn={() => {
+          throw new Error("unused");
+        }}
+        onFinalExitCode={onCode}
+      />,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("junco setup"));
+    r.stdin.write("\x03"); // Ctrl-C in the Welcome chapter (result still null)
+    await until(() => onCode.mock.calls.length === 1);
+    expect(onCode).toHaveBeenCalledWith(130);
+  });
+
   it("config present → renders the App props straight away", async () => {
     const r = render(
       <Root

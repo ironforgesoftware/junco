@@ -777,6 +777,47 @@ describe("run(['init'])", () => {
   });
 });
 
+// An unknown flag must not crash: strict parseArgs throws
+// ERR_PARSE_ARGS_UNKNOWN_OPTION, which would otherwise escape to the top-level
+// fatal catch (exit 1 + structured error log). run() catches it and returns a
+// graceful usage error (exit 2 + the parse message + USAGE on stderr) for
+// EVERY unknown flag — e.g. the removed `junco init --yes` scripted form.
+describe("run — unknown flags", () => {
+  function captureStderr(): { text: () => string; restore: () => void } {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    return { text: () => lines.join(""), restore: () => spy.mockRestore() };
+  }
+
+  it("`init --yes` exits 2, naming the unknown option and showing usage", async () => {
+    const cap = captureStderr();
+    let code: number;
+    try {
+      code = await run(["init", "--yes"], { printFn: () => {} });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(2);
+    expect(cap.text()).toContain("--yes");
+    expect(cap.text()).toContain("Usage: junco");
+  });
+
+  it("a bare unknown top-level flag exits 2 (never silently routes to start/dashboard)", async () => {
+    const cap = captureStderr();
+    let code: number;
+    try {
+      code = await run(["--definitely-not-a-flag"], { printFn: () => {} });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(2);
+    expect(cap.text()).toContain("--definitely-not-a-flag");
+  });
+});
+
 describe("run(['dashboard']) — routing", () => {
   it("routes `dashboard` to runDashboardFn with the loaded config when one exists", async () => {
     const { cfg } = freshDispatchVault(); // the file's existing full-Config helper

@@ -1353,6 +1353,20 @@ export function App(props: AppProps): React.JSX.Element {
   // unlike the old path this also covers LOCAL and modal views — deliberate).
   useOnAnyMousePress(dismissToast);
 
+  // App's FIRST input hook: a dedicated Ctrl-C quit for the dashboard surface.
+  // The host renders with exitOnCtrlC:false (so the setup walkthrough it also
+  // hosts can see Ctrl-C — see dashboardCmd's INK_RENDER_OPTIONS), which means
+  // ink no longer quits on Ctrl-C for us. This hook replaces that built-in for
+  // the App: every ink input subscriber receives every event, so it fires
+  // regardless of which view or text field currently owns focus. Same
+  // exit()/onExit() pair the `q` handler uses.
+  useGuardedInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      exit();
+      onExit();
+    }
+  });
+
   const handleLocalInput = (input: string, key: Key): void => {
     // The help modal owns the screen while open — any key closes it, mirroring
     // the github cascade's "any key closes help" rule (view === "help" there).
@@ -1474,6 +1488,10 @@ export function App(props: AppProps): React.JSX.Element {
   };
 
   useGuardedInput((input, key) => {
+    // Ctrl-C is owned by the dedicated first hook above (quit). Bail before the
+    // cascade so it can never be misread as a plain `c` (e.g. the analyze
+    // binding) now that exitOnCtrlC:false lets Ctrl-C reach these handlers.
+    if (key.ctrl && input === "c") return;
     // The AddRepoForm (+ its TextFields) own all input while open.
     if (view === "addRepo") return; // layer 2 (text field owns input)
 

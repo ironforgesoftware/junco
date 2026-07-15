@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runDashboard } from "../src/dashboardCmd.js";
+import { runDashboard, INK_RENDER_OPTIONS } from "../src/dashboardCmd.js";
 import type { Config } from "../src/types.js";
 
 const cfg = {
@@ -177,6 +177,25 @@ describe("lazy loading discipline", () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../src/dashboardCmd.ts", import.meta.url), "utf8");
     expect(src).toContain("alternateScreen: true");
+  });
+});
+
+// The dashboard hosts the setup walkthrough inside ONE Ink render. ink 7.1.0's
+// use-input.js SKIPS every registered useInput handler for Ctrl-C when
+// exitOnCtrlC is true and exits directly ("If app is supposed to exit on
+// Ctrl+C, skip input listeners"). That would make WizardApp's Ctrl-C branch
+// dead (a post-write Ctrl-C could no longer report written/unchanged) and an
+// FTUE cancel could never report 130 through onOutcome → onFinalExitCode. The
+// host therefore renders with exitOnCtrlC:false; the App installs its own
+// Ctrl-C quit handler (see tests/tuiApp.test.tsx). ink-testing-library
+// hardcodes exitOnCtrlC:false, so this constant is the ONLY place the
+// production value is asserted — the test library can't observe it for us.
+describe("INK_RENDER_OPTIONS (Ctrl-C must reach the hosted wizard/App handlers)", () => {
+  it("disables ink's built-in exitOnCtrlC so useInput handlers see Ctrl-C", () => {
+    expect(INK_RENDER_OPTIONS.exitOnCtrlC).toBe(false);
+  });
+  it("keeps the fullscreen alternate-screen buffer", () => {
+    expect(INK_RENDER_OPTIONS.alternateScreen).toBe(true);
   });
 
   it("localSnapshot factories are pulled through the same lazy Promise.all", async () => {

@@ -15,6 +15,22 @@ import type { Config } from "./types.js";
 import type { AppProps } from "./tui/App.js";
 import type React from "react";
 
+/**
+ * Ink render options for the dashboard host (do NOT flip exitOnCtrlC back to
+ * true). In ink 7.1.0 `exitOnCtrlC: true` makes use-input SKIP every registered
+ * useInput handler for Ctrl-C and exit directly (node_modules/ink/build/hooks/
+ * use-input.js: "If app is supposed to exit on Ctrl+C, skip input listeners").
+ * This one render also hosts the setup walkthrough, so that would make
+ * WizardApp's Ctrl-C branch dead: a post-write Ctrl-C could no longer report
+ * written/unchanged, and an FTUE cancel could never fire onOutcome → Root would
+ * never call onFinalExitCode(130). So Ink must NOT intercept Ctrl-C — WizardApp
+ * handles its own (WizardApp.tsx) and the dashboard App installs a dedicated
+ * Ctrl-C quit handler (App.tsx's first input hook). Mirrors the deleted
+ * inkCollect host's rationale. `alternateScreen`: fullscreen alt buffer, zero
+ * scrollback pollution, terminal restored on exit.
+ */
+export const INK_RENDER_OPTIONS = { exitOnCtrlC: false, alternateScreen: true } as const;
+
 export interface DashboardDeps {
   isTTY?: boolean;
   renderFn?: (element: React.ReactElement) => { waitUntilExit: () => Promise<void> };
@@ -69,11 +85,11 @@ export async function runDashboard(
     import("react"),
     import("ink"),
   ]);
-  // Alt buffer — fullscreen, zero scrollback pollution, terminal restored on
-  // exit; a no-op when non-interactive, and the TTY guard exits before this anyway.
+  // INK_RENDER_OPTIONS is the single source of truth for the host options
+  // (exitOnCtrlC:false is load-bearing — see the constant's doc); a no-op when
+  // non-interactive, and the TTY guard exits before this anyway.
   const renderFn =
-    deps.renderFn ??
-    ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true, alternateScreen: true }));
+    deps.renderFn ?? ((el: React.ReactElement) => ink.render(el, INK_RENDER_OPTIONS));
 
   // The exact prop assembly that used to live inline — now per-config so the
   // FTUE handoff (and future config re-runs) rebuild the client stack fresh.
@@ -123,10 +139,13 @@ export async function runDashboard(
     // already on disk. Existence-check at PRINT time rather than unconditionally
     // claiming nothing was written.
     const printOut = deps.printOut ?? ((s: string) => process.stdout.write(s));
-    const exists = (deps.existsFn ?? existsSync)(resolve(configPath));
+    // Print the RESOLVED path the existence check actually probed, so the
+    // message never names a relative path that differs from what was checked.
+    const resolved = resolve(configPath);
+    const exists = (deps.existsFn ?? existsSync)(resolved);
     printOut(
       exists
-        ? `Setup did not finish — but a config exists at ${configPath}. Run junco doctor to verify it.\n`
+        ? `Setup did not finish — but a config exists at ${resolved}. Run junco doctor to verify it.\n`
         : "Setup cancelled — nothing written.\n",
     );
   }
