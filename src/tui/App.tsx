@@ -20,7 +20,7 @@ import type { GithubRepoMapping } from "../types.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
 import { computeLayout } from "./layout.js";
 import { windowSlice } from "./window.js";
-import { headerTabBands, listRowsHeight, railListHeight } from "./geometry.js";
+import { listRowsHeight, railListHeight } from "./geometry.js";
 import type { UiMode } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
 import { Header, hintsFor, localHintsFor, type HintView } from "./components/Chrome.js";
@@ -1301,6 +1301,19 @@ export function App(props: AppProps): React.JSX.Element {
   // or the confirm modal owns input — so `m` can never eat a typed character.
   const canToggleMode = (): boolean =>
     !filtering && view !== "addRepo" && view !== "config" && view !== "palette" && confirm === null;
+  // Region-based tab clicks (Header). Guarded like the `m` key: inert while
+  // the confirm modal owns input; github-disabled taps toast instead of switch.
+  const handleModeTab = (m: UiMode): void => {
+    if (confirm !== null) return;
+    if (m === uiMode) return;
+    if (m === "github" && !props.githubEnabled) {
+      dismissToast();
+      showToast("info", "github mode is off ([github] enabled=false)");
+      return;
+    }
+    dismissToast();
+    setUiMode(m);
+  };
   // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
@@ -1973,23 +1986,6 @@ export function App(props: AppProps): React.JSX.Element {
   });
 
   const onMouseEvent = (ev: TuiMouseEvent): void => {
-    // Resolve the clickable header tab band FIRST — before any per-view guard —
-    // so a mode switch works from every view. headerTabBands takes the TERMINAL
-    // columns (the same value computeLayout gave Header its `mode`), so the
-    // bands line up with the rendered tab regardless of layout mode.
-    if (ev.y === 0 && ev.kind === "press") {
-      const m = headerTabBands(size.columns).hit(ev.x);
-      if (m && m !== uiMode) {
-        if (m === "github" && !props.githubEnabled) {
-          dismissToast();
-          showToast("info", "github mode is off ([github] enabled=false)");
-          return;
-        }
-        dismissToast();
-        setUiMode(m);
-        return;
-      }
-    }
     if (confirm) return; // the confirm modal owns the screen
     if (uiMode === "local") return; // the LOCAL body is keyboard-first in v1
 
@@ -2183,6 +2179,7 @@ export function App(props: AppProps): React.JSX.Element {
           refreshedAt={refreshedAt}
           uiMode={uiMode}
           githubEnabled={props.githubEnabled}
+          onModeTab={handleModeTab}
         />
       }
       toast={toast}

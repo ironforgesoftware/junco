@@ -8,6 +8,7 @@ import { relTime, relTimeShort } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
 import type { UiMode } from "../geometry.js";
 import type { LocalSection } from "../localSnapshot.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 export type HintView =
   | "main"
@@ -51,6 +52,7 @@ export function Header({
   refreshedAt,
   uiMode,
   githubEnabled,
+  onModeTab,
 }: {
   repoNwo: string | null;
   /** Extended /health snapshot, null before the first poll resolves. */
@@ -80,6 +82,8 @@ export function Header({
   uiMode?: UiMode;
   /** When false the GITHUB tab dims (the mode is off in config). */
   githubEnabled?: boolean;
+  /** Click handler for the GITHUB/LOCAL tabs (region-based; Task 5). */
+  onModeTab?: (m: UiMode) => void;
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -117,17 +121,27 @@ export function Header({
       </Box>
       {uiMode !== undefined && (
         <Box flexShrink={0}>
-          <Text
-            color={uiMode === "github" ? theme.accent : undefined}
-            bold={uiMode === "github"}
-            dimColor={githubEnabled === false}
+          <ClickableBox
+            onPress={onModeTab ? () => onModeTab("github") : undefined}
+            hoverBg={theme.hoverBg}
           >
-            {ghLabel}
-          </Text>
+            <Text
+              color={uiMode === "github" ? theme.accent : undefined}
+              bold={uiMode === "github"}
+              dimColor={githubEnabled === false}
+            >
+              {ghLabel}
+            </Text>
+          </ClickableBox>
           <Text> </Text>
-          <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
-            {loLabel}
-          </Text>
+          <ClickableBox
+            onPress={onModeTab ? () => onModeTab("local") : undefined}
+            hoverBg={theme.hoverBg}
+          >
+            <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
+              {loLabel}
+            </Text>
+          </ClickableBox>
         </Box>
       )}
       <Box flexShrink={1} minWidth={0}>

@@ -6,6 +6,7 @@
 import React from "react";
 import { render } from "ink-testing-library";
 import { App, type AppProps } from "../../src/tui/App.js";
+import { MouseProvider } from "../../src/tui/MouseProvider.js";
 import type { LocalCheap, LocalHeavy } from "../../src/tui/localSnapshot.js";
 import type { DashboardClient, Result } from "../../src/tui/ghClient.js";
 import type { QueueSnapshot } from "../../src/tui/queueSnapshot.js";
@@ -152,28 +153,30 @@ export function renderApp(over: Partial<AppProps> = {}): ReturnType<typeof rende
   const runCli: AppProps["runCliFn"] =
     over.runCliFn ?? (async () => ({ code: 0, output: "ok", timedOut: false }));
   return render(
-    <App
-      client={stubClient}
-      trigger="junco"
-      branchPrefix="junco/"
-      configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
-      watchlistFile="/tmp/wl.json"
-      configPath="/x/config.json"
-      clonesDir="/x/state/repos"
-      refreshPollMs={999999}
-      healthPollMs={999999}
-      queuePollMs={999999}
-      queueFn={async () => EMPTY_QUEUE}
-      localCheapFn={async () => CHEAP}
-      localHeavyFn={async () => HEAVY}
-      localCheapPollMs={999999}
-      localHeavyPollMs={999999}
-      initialUiMode="github"
-      githubEnabled
-      runCliFn={runCli}
-      sizeOverride={{ columns: WIDE_COLS_TEST, rows: 30 }}
-      onExit={() => {}}
-      {...over}
-    />,
+    <MouseProvider>
+      <App
+        client={stubClient}
+        trigger="junco"
+        branchPrefix="junco/"
+        configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+        watchlistFile="/tmp/wl.json"
+        configPath="/x/config.json"
+        clonesDir="/x/state/repos"
+        refreshPollMs={999999}
+        healthPollMs={999999}
+        queuePollMs={999999}
+        queueFn={async () => EMPTY_QUEUE}
+        localCheapFn={async () => CHEAP}
+        localHeavyFn={async () => HEAVY}
+        localCheapPollMs={999999}
+        localHeavyPollMs={999999}
+        initialUiMode="github"
+        githubEnabled
+        runCliFn={runCli}
+        sizeOverride={{ columns: WIDE_COLS_TEST, rows: 30 }}
+        onExit={() => {}}
+        {...over}
+      />
+    </MouseProvider>,
   );
 }

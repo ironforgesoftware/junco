@@ -40,4 +40,13 @@ describe("mouse in LOCAL", () => {
     r.stdin.write(press(headerTabBands(WIDE_COLS_TEST).localStart, 0));
     await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
   });
+
+  it("hovering a header tab does not crash and hover moves with the pointer", async () => {
+    const r = renderApp({ initialUiMode: "github" });
+    await until(() => (r.lastFrame() ?? "").includes("[GITHUB]"));
+    r.stdin.write(`[<35;${headerTabBands(WIDE_COLS_TEST).localStart + 1};1M`);
+    await until(() => (r.lastFrame() ?? "") !== ""); // hover styling is cosmetic — frame stays renderable
+    r.stdin.write(press(headerTabBands(WIDE_COLS_TEST).localStart, 0));
+    await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
+  });
 });

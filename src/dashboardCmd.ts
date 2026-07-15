@@ -31,6 +31,7 @@ export async function runDashboard(
 
   const [
     { App },
+    { MouseProvider },
     { makeGhDashboardClient },
     { watchlistPath },
     { makeQueueSnapshotFn },
@@ -39,6 +40,7 @@ export async function runDashboard(
     ink,
   ] = await Promise.all([
     import("./tui/App.js"),
+    import("./tui/MouseProvider.js"),
     import("./tui/ghClient.js"),
     import("./watchlist.js"),
     import("./tui/queueSnapshot.js"),
@@ -54,27 +56,31 @@ export async function runDashboard(
 
   const client = makeGhDashboardClient(cfg);
   const instance = renderFn(
-    react.createElement(App, {
-      client,
-      trigger: cfg.github.triggerLabel,
-      branchPrefix: cfg.branchPrefix,
-      configRepos: cfg.github.repos,
-      watchlistFile: watchlistPath(cfg),
-      // The palette spawns CLI subcommands against this same config.
-      configPath,
-      // Managed clones for the add-repo "empty path = clone for me" flow.
-      clonesDir: join(cfg.stateDir, "repos"),
-      queueFn: makeQueueSnapshotFn(cfg),
-      // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
-      localCheapFn: makeLocalCheapFn(cfg),
-      localHeavyFn: makeLocalHeavyFn(cfg),
-      // GitHub disabled -> land on LOCAL; the daemon still won't sweep GitHub,
-      // but there's a live local surface to show instead of refusing to launch.
-      initialUiMode: cfg.github.enabled ? "github" : "local",
-      githubEnabled: cfg.github.enabled,
-      // App drives useApp().exit() itself; this stays a no-op hook point.
-      onExit: () => {},
-    }),
+    react.createElement(
+      MouseProvider,
+      null,
+      react.createElement(App, {
+        client,
+        trigger: cfg.github.triggerLabel,
+        branchPrefix: cfg.branchPrefix,
+        configRepos: cfg.github.repos,
+        watchlistFile: watchlistPath(cfg),
+        // The palette spawns CLI subcommands against this same config.
+        configPath,
+        // Managed clones for the add-repo "empty path = clone for me" flow.
+        clonesDir: join(cfg.stateDir, "repos"),
+        queueFn: makeQueueSnapshotFn(cfg),
+        // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
+        localCheapFn: makeLocalCheapFn(cfg),
+        localHeavyFn: makeLocalHeavyFn(cfg),
+        // GitHub disabled -> land on LOCAL; the daemon still won't sweep GitHub,
+        // but there's a live local surface to show instead of refusing to launch.
+        initialUiMode: cfg.github.enabled ? "github" : "local",
+        githubEnabled: cfg.github.enabled,
+        // App drives useApp().exit() itself; this stays a no-op hook point.
+        onExit: () => {},
+      }),
+    ),
   );
   await instance.waitUntilExit();
   return 0;
