@@ -482,6 +482,7 @@ export async function resolveSandbox(
     home,
     stateDir: cfg.stateDir,
     network,
+    botGhConfigDir: cfg.botAccount.configDir,
   });
   return { backend, policy };
 }

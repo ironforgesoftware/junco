@@ -4,9 +4,13 @@ import { SandboxUnavailableError } from "../src/agent/sandbox/index.js";
 import type { Config } from "../src/types.js";
 
 function cfgWith(sandbox: Partial<Config["sandbox"]>): Config {
-  // resolveSandbox only reads cfg.sandbox and cfg.stateDir.
+  // resolveSandbox only reads cfg.sandbox, cfg.stateDir, and cfg.botAccount.configDir.
   return {
     stateDir: "/tmp/state",
+    botAccount: {
+      enabled: false,
+      configDir: "/sbxroot/junco-gh",
+    },
     sandbox: {
       enabled: true,
       backend: "none",
@@ -44,6 +48,10 @@ describe("resolveSandbox", () => {
     expect(r?.policy.writableRoots).toContain("/sbxroot/work");
     expect(r?.policy.scratchDir).toBe("/sbxroot/scratch");
     expect(r?.policy.network).toBe(false);
+    // The bot gh config dir is denied even with botAccount.enabled=false in the
+    // fixture — a token may sit in the dir while the feature is off, so the
+    // pass-through must stay unconditional.
+    expect(r?.policy.readDenyPaths).toContain("/sbxroot/junco-gh");
   });
 
   it("per-ticket network override widens egress", async () => {
