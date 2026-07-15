@@ -21,6 +21,7 @@ import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Box, Text, useStdout } from "ink";
 import { theme } from "../theme.js";
+import { ClickableBox } from "../ClickableBox.js";
 import { TextField } from "./TextField.js";
 import { LEVERS, getAtPath, setAtPath, coerceLever, type Lever } from "../../configLevers.js";
 import { validateConfigObject } from "../../config.js";
@@ -264,6 +265,30 @@ export function ConfigView({
     commit(target, c.value);
   };
 
+  /** Move focus within the current section's field list by `d` — shared by
+   * the up/down arrow keys and the right pane's wheel. */
+  const moveField = (d: 1 | -1): void => {
+    setFieldIdx((i) => {
+      const next = Math.max(0, Math.min(fields.length - 1, i + d));
+      setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
+      return next;
+    });
+  };
+
+  /** Move the selected section by `d`, resetting focus to that section's
+   * first field — shared by the left/right arrow keys and the left pane's
+   * wheel. Cancels any in-progress edit first (same invariant as the
+   * section-click handler): a section switch re-binds the TextField to the
+   * new section's field 0, and a surviving buffer would then commit the old
+   * text to the wrong lever on Enter. The arrow keys can't reach here while
+   * editing (useGuardedInput returns early), but the left pane's wheel can. */
+  const moveSection = (d: 1 | -1): void => {
+    if (editing !== null) setEditing(null);
+    setSectionIdx((i) => Math.max(0, Math.min(SECTIONS.length - 1, i + d)));
+    setFieldIdx(0);
+    setScrollOffset(0);
+  };
+
   useGuardedInput((_input, key) => {
     if (editing !== null) {
       // Typing/backspace/submit belong to the inline TextField below (it has
@@ -276,31 +301,19 @@ export function ConfigView({
       return;
     }
     if (key.upArrow) {
-      setFieldIdx((i) => {
-        const next = Math.max(0, i - 1);
-        setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
-        return next;
-      });
+      moveField(-1);
       return;
     }
     if (key.downArrow) {
-      setFieldIdx((i) => {
-        const next = Math.min(fields.length - 1, i + 1);
-        setScrollOffset((o) => clampScrollOffset(o, next, visibleCount, fields.length));
-        return next;
-      });
+      moveField(1);
       return;
     }
     if (key.leftArrow) {
-      setSectionIdx((i) => Math.max(0, i - 1));
-      setFieldIdx(0);
-      setScrollOffset(0);
+      moveSection(-1);
       return;
     }
     if (key.rightArrow) {
-      setSectionIdx((i) => Math.min(SECTIONS.length - 1, i + 1));
-      setFieldIdx(0);
-      setScrollOffset(0);
+      moveSection(1);
       return;
     }
     if (key.return) startEdit();
@@ -312,28 +325,43 @@ export function ConfigView({
         config <Text dimColor>{configPath}</Text>
       </Text>
       <Box flexGrow={1}>
-        <Box flexDirection="column" width={20} borderStyle="round" borderColor={theme.border}>
+        <ClickableBox
+          flexDirection="column"
+          width={20}
+          borderStyle="round"
+          borderColor={theme.border}
+          onWheel={(d) => moveSection(d)}
+        >
           {SECTIONS.map((s, i) => {
             const sel = i === sectionIdx;
             return (
-              <Text
+              <ClickableBox
                 key={s.key}
-                color={sel ? theme.accent : undefined}
-                bold={sel}
-                wrap="truncate-end"
+                hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+                onPress={() => {
+                  if (editing !== null) setEditing(null);
+                  setSectionIdx(i);
+                  setFieldIdx(0);
+                  setScrollOffset(0);
+                }}
               >
-                {sel ? "▌ " : "  "}
-                {s.key}
-              </Text>
+                <Text color={sel ? theme.accent : undefined} bold={sel} wrap="truncate-end">
+                  {sel ? "▌ " : "  "}
+                  {s.key}
+                </Text>
+              </ClickableBox>
             );
           })}
-        </Box>
-        <Box
+        </ClickableBox>
+        <ClickableBox
           flexDirection="column"
           flexGrow={1}
           borderStyle="round"
           borderColor={theme.accent}
           paddingX={1}
+          onWheel={(d) => {
+            if (editing === null) moveField(d);
+          }}
         >
           {hiddenAbove > 0 && <Text dimColor>▲ {hiddenAbove} more</Text>}
           {visibleFields.map((l, visibleI) => {
@@ -341,11 +369,24 @@ export function ConfigView({
             const sel = i === fieldIdxSafe;
             const isEditingThis = sel && editing !== null;
             return (
-              <Box
+              <ClickableBox
                 key={l.path}
                 width="100%"
                 backgroundColor={sel ? theme.selectionBg : undefined}
+                hoverBg={sel ? theme.selectionBg : theme.hoverBg}
                 gap={1}
+                onPress={() => {
+                  if (editing !== null) {
+                    setEditing(null); // click during edit cancels FIRST (spec §3)
+                    return;
+                  }
+                  if (i === fieldIdxSafe) {
+                    startEdit();
+                    return;
+                  }
+                  setFieldIdx(i);
+                  setScrollOffset((o) => clampScrollOffset(o, i, visibleCount, fields.length));
+                }}
               >
                 <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
                 <Box width={26}>
@@ -371,11 +412,11 @@ export function ConfigView({
                   )}
                 </Box>
                 {l.reload === "restart" && <Text color={theme.warn}>↻ restart</Text>}
-              </Box>
+              </ClickableBox>
             );
           })}
           {hiddenBelow > 0 && <Text dimColor>▼ {hiddenBelow} more</Text>}
-        </Box>
+        </ClickableBox>
       </Box>
       <Text dimColor wrap="truncate-end">
         {lever.description}
