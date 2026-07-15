@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import React from "react";
 import { render, cleanup } from "ink-testing-library";
 import { until } from "./helpers/until.js";
+import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { Tip, ReceiptList, Select, MultiSelect } from "../src/tui/wizard/controls.js";
 import { Welcome } from "../src/tui/wizard/chapters/Welcome.js";
 import { Workspace } from "../src/tui/wizard/chapters/Workspace.js";
@@ -39,6 +40,14 @@ async function press(stdin: { write: (s: string) => void }, ...keys: string[]): 
     await tick();
   }
 }
+
+// SGR mouse press at 0-based cell (x, y) — a JS `\u001b` escape (not a raw ESC byte) so
+// file edits never drop it. Named mousePress (not `press`) to avoid
+// colliding with this file's keyboard press(stdin, ...keys) helper above;
+// mirrors tests/tuiClickable.test.tsx / tests/tuiMouseApp.test.tsx.
+const mousePress = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
+const lineOf = (frame: string, needle: string): number =>
+  frame.split("\n").findIndex((l) => l.includes(needle));
 
 describe("controls", () => {
   it("Tip renders the junco glyph and copy", () => {
@@ -148,6 +157,71 @@ describe("controls", () => {
     stdin.write(META_SPACE + ENTER);
     await until(() => result !== null);
     expect(result).toEqual(["verify"]);
+  });
+
+  it("Select: clicking an option chooses it (enter parity)", async () => {
+    const onSubmit = vi.fn();
+    const r = render(
+      <MouseProvider>
+        <Select
+          options={[
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta" },
+          ]}
+          onSubmit={onSubmit}
+          focus
+        />
+      </MouseProvider>,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("Beta"));
+    const y = lineOf(r.lastFrame() ?? "", "Beta");
+    r.stdin.write(mousePress(2, y));
+    await until(() => onSubmit.mock.calls.length === 1);
+    expect(onSubmit).toHaveBeenCalledWith("b");
+  });
+
+  it("Select: an unfocused option is not clickable", async () => {
+    const onSubmit = vi.fn();
+    const r = render(
+      <MouseProvider>
+        <Select
+          options={[
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta" },
+          ]}
+          onSubmit={onSubmit}
+          focus={false}
+        />
+      </MouseProvider>,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("Beta"));
+    const y = lineOf(r.lastFrame() ?? "", "Beta");
+    r.stdin.write(mousePress(2, y));
+    // Negative assertion: give a buggy handler a bounded window to fire.
+    await new Promise((res) => setTimeout(res, 50));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("MultiSelect: clicking an option toggles it without submitting", async () => {
+    const onSubmit = vi.fn();
+    const r = render(
+      <MouseProvider>
+        <MultiSelect
+          items={[
+            { value: "a", label: "Alpha", checked: false },
+            { value: "b", label: "Beta", checked: false },
+          ]}
+          onSubmit={onSubmit}
+          onFocusChange={() => {}}
+          focus
+        />
+      </MouseProvider>,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("Beta"));
+    const y = lineOf(r.lastFrame() ?? "", "Beta");
+    r.stdin.write(mousePress(4, y));
+    await until(() => (r.lastFrame() ?? "").split("\n")[y].includes("[x]"));
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });
 
@@ -1003,5 +1077,23 @@ describe("Finale", () => {
       />,
     );
     await until(() => (lastFrame() ?? "").includes("Config untouched"));
+  });
+
+  it("clicking the body finishes once revealed (enter parity)", async () => {
+    const onDone = vi.fn();
+    const r = render(
+      <MouseProvider>
+        <Finale
+          result={{ written: true, configPath: "/tmp/c.json", queueRoot: "/tmp/q", changes: [] }}
+          io={fakeIo()}
+          onDone={onDone}
+          revealMs={0}
+        />
+      </MouseProvider>,
+    );
+    // Wait for the signoff line (flight check resolved + steps revealed).
+    await until(() => (r.lastFrame() ?? "").includes("enter to finish"));
+    r.stdin.write(mousePress(2, 1));
+    await until(() => onDone.mock.calls.length === 1);
   });
 });

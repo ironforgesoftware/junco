@@ -9,6 +9,7 @@ import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { BIRD } from "../../wizard/tips.js";
 import { useGuardedInput } from "../useGuardedInput.js";
+import { ClickableBox } from "../ClickableBox.js";
 import type { CheckResult } from "../../wizard/detect.js";
 import type { WizardAnswers } from "../../wizard/flow.js";
 import type { WizardIO } from "../../wizard/io.js";
@@ -93,11 +94,25 @@ export function Select({
   return (
     <Box flexDirection="column">
       {options.map((o, i) => (
-        <Text key={o.value} color={i === idxRef.current ? theme.accent : undefined}>
-          {i === idxRef.current ? "▌ " : "  "}
-          {o.label}
-          {o.hint ? <Text dimColor> ({o.hint})</Text> : null}
-        </Text>
+        <ClickableBox
+          key={o.value}
+          hoverBg={theme.hoverBg}
+          onPress={
+            focus
+              ? () => {
+                  idxRef.current = i;
+                  bump((n) => n + 1);
+                  onSubmit(o.value); // click = choose + advance (enter parity)
+                }
+              : undefined
+          }
+        >
+          <Text color={i === idxRef.current ? theme.accent : undefined}>
+            {i === idxRef.current ? "▌ " : "  "}
+            {o.label}
+            {o.hint ? <Text dimColor> ({o.hint})</Text> : null}
+          </Text>
+        </ClickableBox>
       ))}
     </Box>
   );
@@ -150,11 +165,26 @@ export function MultiSelect({
   return (
     <Box flexDirection="column">
       {items.map((o, i) => (
-        <Text key={o.value} color={i === idxRef.current ? theme.accent : undefined}>
-          {i === idxRef.current ? "▌ " : "  "}
-          {checkedRef.current[i] ? "[x] " : "[ ] "}
-          {o.label}
-        </Text>
+        <ClickableBox
+          key={o.value}
+          hoverBg={theme.hoverBg}
+          onPress={
+            focus
+              ? () => {
+                  idxRef.current = i;
+                  checkedRef.current = checkedRef.current.map((v, j) => (j === i ? !v : v));
+                  onFocusChange(i);
+                  bump((n) => n + 1);
+                }
+              : undefined
+          }
+        >
+          <Text color={i === idxRef.current ? theme.accent : undefined}>
+            {i === idxRef.current ? "▌ " : "  "}
+            {checkedRef.current[i] ? "[x] " : "[ ] "}
+            {o.label}
+          </Text>
+        </ClickableBox>
       ))}
     </Box>
   );

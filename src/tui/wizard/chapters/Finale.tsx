@@ -8,6 +8,7 @@ import { Spinner } from "../../components/Spinner.js";
 import { NEXT_STEPS, TIPS, BIRD } from "../../../wizard/tips.js";
 import { theme } from "../../theme.js";
 import { useGuardedInput } from "../../useGuardedInput.js";
+import { ClickableBox } from "../../ClickableBox.js";
 import type { CheckResult } from "../../../wizard/detect.js";
 import type { WriteResult, WizardIO } from "../../../wizard/io.js";
 
@@ -38,7 +39,7 @@ export function Finale({ result, io, onDone, revealMs = 150 }: FinaleProps): Rea
     if (key.return) onDone();
   });
   return (
-    <Box flexDirection="column">
+    <ClickableBox flexDirection="column" onPress={onDone}>
       <Text>
         <Text color={theme.success}>✓</Text>{" "}
         {result.written
@@ -77,6 +78,6 @@ export function Finale({ result, io, onDone, revealMs = 150 }: FinaleProps): Rea
           </Text>
         </Box>
       )}
-    </Box>
+    </ClickableBox>
   );
 }

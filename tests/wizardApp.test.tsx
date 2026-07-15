@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { render, cleanup } from "ink-testing-library";
 import { until } from "./helpers/until.js";
+import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { WizardApp } from "../src/tui/wizard/WizardApp.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
@@ -17,6 +18,14 @@ async function press(stdin: { write: (s: string) => void }, ...keys: string[]): 
     await tick();
   }
 }
+
+// SGR mouse press at 0-based cell (x, y) — a JS `\u001b` escape (not a raw
+// ESC byte) so file edits never drop it. Named mousePress (not `press`) to
+// avoid colliding with this file's keyboard press(stdin, ...keys) helper
+// above; mirrors tests/tuiClickable.test.tsx / tests/tuiMouseApp.test.tsx.
+const mousePress = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
+const lineOf = (frame: string, needle: string): number =>
+  frame.split("\n").findIndex((l) => l.includes(needle));
 
 /**
  * Press `key` repeatedly — but only while `fromMarker` is still showing —
@@ -249,6 +258,33 @@ describe("WizardApp", () => {
     await press(stdin, "q");
     expect(outcome).toBe("none");
     await until(() => (lastFrame() ?? "").includes("~/Juncoq"));
+  });
+
+  it("clicking the q quit legend chip immediately on a text-editing chapter does NOT cancel", async () => {
+    // Regression: textEditing is a ref, flipped inside a chapter's mount
+    // effect (Workspace.tsx's `setTextEditing(true)`), which commits WITHOUT
+    // itself triggering a WizardApp re-render. A "q quit" onPress computed as
+    // a plain ternary (`textEditing.current ? undefined : cancel`) bakes in
+    // whatever textEditing.current read as at WizardApp's LAST render — which
+    // is still `false` (pre-effect) the instant Workspace first mounts. A
+    // click landing in that window, before any keystroke forces a re-render
+    // (e.g. via patch → setAnswers), would fire the stale `cancel`. The fix
+    // wraps the handler in a closure that dereferences the ref at call time.
+    let outcome = "none";
+    const r = render(
+      <MouseProvider>
+        <WizardApp io={fakeIo()} onOutcome={(o) => (outcome = o)} sizeOverride={SIZE} />
+      </MouseProvider>,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("Ada"));
+    r.stdin.write(ENTER); // → Workspace (text field focused), no tick yielded
+    await until(() => (r.lastFrame() ?? "").includes("Where should junco"));
+    const y = lineOf(r.lastFrame() ?? "", "q quit");
+    const x = (r.lastFrame() ?? "").split("\n")[y].indexOf("q quit") + 1;
+    r.stdin.write(mousePress(x, y));
+    await tick();
+    await tick();
+    expect(outcome).toBe("none");
   });
 
   it("← goes back a chapter", async () => {

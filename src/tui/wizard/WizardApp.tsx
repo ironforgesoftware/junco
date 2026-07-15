@@ -10,6 +10,7 @@ import type { WizardIO, WizardOutcome, WriteResult } from "../../wizard/io.js";
 import { theme } from "../theme.js";
 import { useTerminalSize, type TerminalSize } from "../useTerminalSize.js";
 import { useGuardedInput } from "../useGuardedInput.js";
+import { ClickableBox } from "../ClickableBox.js";
 import { Welcome } from "./chapters/Welcome.js";
 import { Workspace } from "./chapters/Workspace.js";
 import { Model } from "./chapters/Model.js";
@@ -145,7 +146,34 @@ export function WizardApp({
         </Box>
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>enter continue · ← back · q quit</Text>
+        <Text dimColor>enter continue · </Text>
+        <ClickableBox
+          hoverBg={theme.hoverBg}
+          onPress={result === null && idx > 0 ? back : undefined}
+        >
+          <Text dimColor>← back</Text>
+        </ClickableBox>
+        <Text dimColor> · </Text>
+        <ClickableBox
+          hoverBg={theme.hoverBg}
+          // NOT `textEditing.current ? undefined : cancel` — that ternary
+          // resolves to a snapshot at WizardApp's last render. textEditing
+          // flips inside a chapter's mount effect (e.g. Workspace.tsx),
+          // which commits without itself triggering a WizardApp re-render,
+          // so a click landing in that window would still fire the
+          // pre-effect snapshot's `cancel`. The wrapped closure instead
+          // dereferences the ref at CALL time — same live-read guarantee
+          // the keyboard branch above already gets for free from useInput.
+          onPress={
+            result !== null
+              ? done
+              : () => {
+                  if (!textEditing.current) cancel();
+                }
+          }
+        >
+          <Text dimColor>q quit</Text>
+        </ClickableBox>
       </Box>
     </Box>
   );
