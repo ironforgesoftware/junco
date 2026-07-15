@@ -16,6 +16,7 @@ import { Workspace } from "./chapters/Workspace.js";
 import { Model } from "./chapters/Model.js";
 import { RepoSafety } from "./chapters/RepoSafety.js";
 import { Github } from "./chapters/Github.js";
+import { Account } from "./chapters/Account.js";
 import { Extras } from "./chapters/Extras.js";
 import { Review } from "./chapters/Review.js";
 import { Finale } from "./chapters/Finale.js";
@@ -103,6 +104,8 @@ export function WizardApp({
     ) : idx === 4 ? (
       <Github {...chapterProps} />
     ) : idx === 5 ? (
+      <Account {...chapterProps} />
+    ) : idx === 6 ? (
       <Extras {...chapterProps} />
     ) : (
       <Review {...chapterProps} onWrite={write} onCancel={cancel} />

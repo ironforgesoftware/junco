@@ -33,4 +33,10 @@ export interface WizardIO {
   listCatalogProviders(): Promise<CatalogEntry[]>;
   write(a: WizardAnswers): WriteResult;
   flightCheck(): Promise<CheckResult[]>;
+  /** Isolated gh config dir the Account chapter logs the bot into. */
+  botGhConfigDir: string;
+  /** Bot login under botGhConfigDir, or null. Never throws. */
+  detectBotLogin(): Promise<string | null>;
+  /** Interactive gh device-flow login (caller suspends Ink around it). */
+  runGhLogin(): Promise<number>;
 }

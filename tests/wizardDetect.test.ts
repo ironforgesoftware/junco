@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { greetingName, preflightChecks, flightChecks } from "../src/wizard/detect.js";
+import {
+  greetingName,
+  preflightChecks,
+  flightChecks,
+  botLoginCheck,
+} from "../src/wizard/detect.js";
 import { loadConfig } from "../src/config.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -149,5 +154,44 @@ describe("flightChecks", () => {
       label: "sandbox",
       detail: "backend=none — env scrub + fs jail only",
     });
+  });
+});
+
+describe("botLoginCheck", () => {
+  it("ok with login when authed under the config dir", async () => {
+    const execFn = async (
+      _c: string,
+      args: string[],
+      opts?: { env?: Record<string, string> },
+    ): Promise<{ code: number; stdout: string; stderr: string }> => {
+      expect(args).toEqual(["api", "user"]);
+      expect(opts?.env?.GH_CONFIG_DIR).toBe("/sbx/junco-gh");
+      return { code: 0, stdout: JSON.stringify({ login: "junco-agent", id: 1 }), stderr: "" };
+    };
+    const r = await botLoginCheck("gh", "/sbx/junco-gh", { execFn });
+    expect(r.login).toBe("junco-agent");
+    expect(r.check.verdict).toBe("ok");
+  });
+
+  it("warn with null login when unauthenticated", async () => {
+    const execFn = async (): Promise<{ code: number; stdout: string; stderr: string }> => ({
+      code: 1,
+      stdout: "",
+      stderr: "",
+    });
+    const r = await botLoginCheck("gh", "/sbx/junco-gh", { execFn });
+    expect(r.login).toBeNull();
+    expect(r.check.verdict).toBe("warn");
+  });
+
+  it("warn with null login when the identity JSON can't be parsed", async () => {
+    const execFn = async (): Promise<{ code: number; stdout: string; stderr: string }> => ({
+      code: 0,
+      stdout: "not json",
+      stderr: "",
+    });
+    const r = await botLoginCheck("gh", "/sbx/junco-gh", { execFn });
+    expect(r.login).toBeNull();
+    expect(r.check.verdict).toBe("warn");
   });
 });

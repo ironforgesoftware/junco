@@ -17,6 +17,7 @@ describe("wizard copy registry", () => {
       "githubOff",
       "githubOn",
       "githubApproval",
+      "account",
       "extras",
       "review",
       "signoff",

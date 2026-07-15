@@ -25,6 +25,8 @@ export interface WizardAnswers {
   modelsJson?: string; // models_json mode
   repoRoots: string[];
   github: { enabled: boolean; repos: WatchedRepoAnswer[]; requireApproval: boolean };
+  /** Bot-account enable flag only — configDir stays the schema default (YAGNI). */
+  botAccount: boolean;
   extras: { sandbox: boolean; verify: boolean; health: boolean; transcripts: boolean };
 }
 
@@ -35,6 +37,7 @@ export const CHAPTERS = [
   "Model",
   "Repo safety",
   "GitHub",
+  "Account",
   "Extras",
   "Review",
 ] as const;
@@ -51,6 +54,7 @@ export function defaultAnswers(): WizardAnswers {
     apiKey: "1234",
     repoRoots: [],
     github: { enabled: false, repos: [], requireApproval: true },
+    botAccount: false,
     extras: { sandbox: true, verify: true, health: true, transcripts: true },
   };
 }
@@ -88,6 +92,7 @@ export function buildConfigObject(a: WizardAnswers): Record<string, unknown> {
       requireApproval: a.github.requireApproval,
     };
   }
+  if (a.botAccount) obj.botAccount = { enabled: true };
   if (!a.extras.sandbox) obj.sandbox = { enabled: false };
   if (!a.extras.verify) obj.verify = { enabled: false };
   const obs: Record<string, unknown> = {};
@@ -142,6 +147,7 @@ function coveredPaths(a: WizardAnswers): { path: string; value: unknown }[] {
     { path: "github.enabled", value: a.github.enabled },
     { path: "github.repos", value: a.github.repos },
     { path: "github.requireApproval", value: a.github.requireApproval },
+    { path: "botAccount.enabled", value: a.botAccount },
     { path: "sandbox.enabled", value: a.extras.sandbox },
     { path: "verify.enabled", value: a.extras.verify },
     { path: "observability.healthEnabled", value: a.extras.health },
@@ -194,6 +200,7 @@ export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {
       repos: (g("github.repos") as WatchedRepoAnswer[]) ?? d.github.repos,
       requireApproval: (g("github.requireApproval") as boolean) ?? d.github.requireApproval,
     },
+    botAccount: (g("botAccount.enabled") as boolean) ?? false,
     extras: {
       sandbox: (g("sandbox.enabled") as boolean) ?? d.extras.sandbox,
       verify: (g("verify.enabled") as boolean) ?? d.extras.verify,
