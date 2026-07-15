@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import type { Config, Ticket, RunResult, Usage } from "./types.js";
 import type { RepoContext } from "./repoContext.js";
 import { isAmend } from "./repoContext.js";
-import { GitOpError, git, gh, isNetworkError } from "./git.js";
+import { GitOpError, git, gh, isNetworkError, ghAuthEnv } from "./git.js";
 import { validateRepoContext, resolveAmendTarget, type AmendTarget } from "./repo.js";
 import { prepareWorktree, cleanupWorktree, currentHeadSha } from "./worktree.js";
 import {
@@ -412,6 +412,7 @@ export async function runPrFlow(
       checkLabels: cfg.planLintCheckLabels,
       labelCache: LABEL_CACHE,
       ghBin: cfg.ghBin,
+      ghEnv: cfg.ghAuth ? ghAuthEnv(cfg.ghAuth) : undefined,
     });
     for (const w of lint.warnings) {
       log.warn(`plan-lint warning [${w.rule}] for ${task.id}: ${w.message}`);
