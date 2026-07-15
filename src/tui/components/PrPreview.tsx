@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, ticketSlugFromBranch, type DashPr } from "../prState.js";
 import { hyperlink } from "../links.js";
 import { relTime } from "./IssueList.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 export interface PrPreviewProps {
   pr: DashPr | null;
@@ -13,6 +14,8 @@ export interface PrPreviewProps {
   width?: number; // set → fixed width; undefined → flexGrow 1
   focused: boolean;
   titleLabel?: string; // pane title prefix; default "3 pr" for the p-view's pane-3 slot
+  /** Mouse: press on the ↗ metadata line (opens the PR in the browser). */
+  onLinkPress?: () => void;
 }
 
 function reviewDecisionToString(reviewDecision: string | null): string {
@@ -59,6 +62,7 @@ export function PrPreview({
   width,
   focused,
   titleLabel = "3 pr",
+  onLinkPress,
 }: PrPreviewProps): React.JSX.Element {
   // Height budget (mirrors Preview.tsx): borders ×2 + pane title. Content rows
   // are built most-important-first so that slicing drops the least important
@@ -74,11 +78,13 @@ export function PrPreview({
       <Text key="heading" bold wrap="truncate">
         #{pr.number} {pr.title} <Text color={meta.color}>[{meta.badge}]</Text>
       </Text>,
-      <Transform key="link" transform={(s) => hyperlink(s, pr.url)}>
-        <Text dimColor wrap="truncate">
-          ↗ {pr.nwo}#{pr.number}
-        </Text>
-      </Transform>,
+      <ClickableBox key="link" onPress={onLinkPress} hoverBg={theme.hoverBg}>
+        <Transform transform={(s) => hyperlink(s, pr.url)}>
+          <Text dimColor wrap="truncate">
+            ↗ {pr.nwo}#{pr.number}
+          </Text>
+        </Transform>
+      </ClickableBox>,
       <Text key="checks" wrap="truncate-end" color={checksColor(pr.checks)}>
         checks: {checksToString(pr.checks)}
       </Text>,

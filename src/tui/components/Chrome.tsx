@@ -98,12 +98,11 @@ export function Header({
   const lastTaskAt = health?.lastTaskAt ?? null;
   const totalTokensOut = health?.totalTokensOut ?? null;
   const bridgeErrors = health?.bridgeErrors ?? null;
-  // Fixed-width tab labels — mirror geometry.ts's headerTabBands ghWidth/
-  // loWidth exactly ("[GITHUB]"/"[G]" = 8/3, "[LOCAL]"/"[L]" = 7/3) so the
-  // inactive (unbracketed, shorter) label pads out to the SAME column width
-  // as the active one. Without the padEnd, "github"/"g" would be 2 columns
-  // shorter than their slot and the local tab would render 2 columns early,
-  // drifting away from headerTabBands' hit-test bands (Task 16 clicks them).
+  // Fixed-width tab labels ("[GITHUB]"/"[G]" = 8/3, "[LOCAL]"/"[L]" = 7/3): the
+  // inactive (unbracketed, shorter) label pads out to the SAME column width as
+  // the active one so toggling modes never reflows the row. Purely
+  // presentational now — clicks resolve against each tab's own ClickableBox
+  // region (no mirrored hit-test bands to keep in lockstep).
   const ghWidth = wide ? 8 : 3;
   const loWidth = wide ? 7 : 3;
   const ghLabel =

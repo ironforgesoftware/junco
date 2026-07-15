@@ -45,7 +45,7 @@ export function parseMouse(data: string): MouseEvent[] {
 /** True when a `useInput` string is a leaked mouse sequence: with reporting
  * enabled, ink parses `ESC[<b;x;yM` as one CSI keypress, strips the ESC, and
  * hands "[<b;x;yM" to handlers — which would otherwise land in text fields.
- * Input handlers drop these; useMouse owns the real events via stdin. */
+ * useGuardedInput drops these; MouseProvider owns the real events via stdin. */
 export function isMouseInput(input: string): boolean {
   return /^\[<\d+;\d+;\d+[Mm]/.test(input);
 }

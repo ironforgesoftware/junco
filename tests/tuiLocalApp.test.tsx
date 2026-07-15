@@ -6,7 +6,6 @@ import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
-import { headerTabBands } from "../src/tui/geometry.js";
 import { until } from "./helpers/until.js";
 import { renderApp, CHEAP, ESC, stubClient } from "./helpers/localFixtures.js";
 
@@ -144,13 +143,6 @@ describe("local help modal", () => {
     r.stdin.write("j"); // any key — must close help, not move the section rail
     await until(() => !(r.lastFrame() ?? "").includes("local mode"));
     expect(r.lastFrame()).toContain("[LOCAL]"); // still in local mode
-  });
-});
-
-describe("header-band click coordinate", () => {
-  it("headerTabBands(100).localStart toggles to local from github", () => {
-    // (mouse routing is covered in tuiMouse; this pins the band math the App consumes)
-    expect(headerTabBands(100).hit(headerTabBands(100).localStart)).toBe("local");
   });
 });
 

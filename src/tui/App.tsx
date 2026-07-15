@@ -43,9 +43,8 @@ import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
-import { useMouse } from "./useMouse.js";
-import { hitTest, type HitContext } from "./hitTest.js";
-import { type MouseEvent as TuiMouseEvent } from "./mouse.js";
+import { useOnAnyMousePress } from "./MouseProvider.js";
+import { ClickableBox } from "./ClickableBox.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 
 export interface AppProps {
@@ -1287,7 +1286,8 @@ export function App(props: AppProps): React.JSX.Element {
   };
 
   // Dismiss an active toast on the next input (keyboard keystroke or mouse
-  // press) — shared so both useInput and onMouseEvent apply the same rule.
+  // press) — shared so both useGuardedInput and the mouse press-observer
+  // (useOnAnyMousePress below) apply the same rule.
   const dismissToast = (): void => {
     if (!toast) return;
     setToast(null);
@@ -1317,6 +1317,10 @@ export function App(props: AppProps): React.JSX.Element {
   // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
+
+  // Press-dismisses toasts app-wide (parity with the old dismissToast()-on-press;
+  // unlike the old path this also covers LOCAL and modal views — deliberate).
+  useOnAnyMousePress(dismissToast);
 
   const handleLocalInput = (input: string, key: Key): void => {
     // The help modal owns the screen while open — any key closes it, mirroring
@@ -1985,124 +1989,6 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "o") return void openBrowser();
   });
 
-  const onMouseEvent = (ev: TuiMouseEvent): void => {
-    if (confirm) return; // the confirm modal owns the screen
-    if (uiMode === "local") return; // the LOCAL body is keyboard-first in v1
-
-    // Modal-ish views own the screen; the mouse is keyboard-only territory (v1).
-    if (
-      view === "help" ||
-      view === "palette" ||
-      view === "addRepo" ||
-      view === "review" ||
-      view === "config"
-    )
-      return;
-    if (ev.kind === "release") return; // presses act on press, not release
-    if (ev.kind === "press") dismissToast();
-
-    // Full-body scroll views with no click targets: wheel scrolls only.
-    if (view === "queue" || view === "cmdOutput") {
-      if (ev.kind === "wheelDown") setScroll((s) => s + 1);
-      if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
-      return;
-    }
-
-    // The two detail views: wheel scrolls the issue detail (the PR overlay has
-    // nothing to scroll); a press on the ↗ metadata line opens the browser.
-    if (view === "detail" || view === "prDetail") {
-      if (view === "detail") {
-        if (ev.kind === "wheelDown") setScroll((s) => s + 1);
-        if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
-      }
-      if (ev.kind === "press") {
-        const hit = hitTest(
-          {
-            layout,
-            columns: size.columns,
-            view,
-            repoCount: repoMappings.length,
-            listCount: 0,
-            railStart: 0,
-            listStart: 0,
-            pane3Count: 0,
-            pane3Start: 0,
-            hasPreviewTarget: false,
-          },
-          ev.x,
-          ev.y,
-        );
-        if (hit.type === "linkLine") {
-          if (view === "detail") openDetailIssueInBrowser();
-          else openPrDetailInBrowser();
-        }
-      }
-      return;
-    }
-
-    const ctx: HitContext = {
-      layout,
-      columns: size.columns,
-      view: view === "prs" ? "prs" : "main",
-      repoCount: repoMappings.length,
-      listCount: view === "prs" ? prs.length : filteredIssues.length,
-      railStart: railWindow.start,
-      listStart: view === "prs" ? prWindow.start : issueWindow.start,
-      pane3Count: repoPrs.length,
-      pane3Start: pane3Window.start,
-      hasPreviewTarget: layout.mode === "wide" && view === "prs" && selectedPr !== null,
-    };
-    const hit = hitTest(ctx, ev.x, ev.y);
-
-    if (ev.kind === "wheelUp" || ev.kind === "wheelDown") {
-      const d = ev.kind === "wheelDown" ? 1 : -1;
-      if (hit.type === "repoRow" || (hit.type === "pane" && hit.pane === 1)) {
-        setRepoIdx((i) => Math.max(0, Math.min(i + d, repoMappings.length - 1)));
-      } else if (hit.type === "issueRow" || (hit.type === "pane" && hit.pane === 2)) {
-        moveIssue(d);
-      } else if (hit.type === "prRow") {
-        movePr(d);
-      } else if (hit.type === "pane3Row" || (hit.type === "pane" && hit.pane === 3)) {
-        movePane3(d); // pane 3 is the repo-scoped PR monitor — wheel moves its selection
-      }
-      return;
-    }
-
-    // ev.kind === "press"
-    switch (hit.type) {
-      case "repoRow":
-        setPane(1);
-        setRepoIdx(hit.index);
-        return;
-      case "issueRow":
-        if (pane === 2 && hit.index === issueIdxSafe) return void openDetail();
-        setPane(2);
-        moveIssueTo(hit.index);
-        return;
-      case "prRow":
-        // Click-again = enter, matching the keyboard: the fullscreen PR overlay.
-        if (hit.index === prIdxSafe) return void openPrDetail(selectedPr, "prs");
-        movePrTo(hit.index);
-        return;
-      case "pane3Row":
-        if (pane === 3 && hit.index === pane3IdxSafe) {
-          return void openPrDetail(selectedPane3Pr, "main");
-        }
-        setPane(3);
-        movePane3To(hit.index);
-        return;
-      case "linkLine":
-        // Only the prs view renders a preview card (PrPreview) with a ↗ line.
-        return void openSelectedPr();
-      case "pane":
-        setPane(hit.pane);
-        return;
-      case "none":
-        return;
-    }
-  };
-  useMouse(onMouseEvent);
-
   const hints =
     view === "config"
       ? // Mode-agnostic, like the view === "config" render branch above: the
@@ -2216,26 +2102,41 @@ export function App(props: AppProps): React.JSX.Element {
             width={layout.railWidth}
             height={listHeight}
             window={railWindow}
+            onRowPress={(i) => {
+              if (confirm !== null || view !== "main") return;
+              setPane(1);
+              setRepoIdx(i);
+            }}
+            onPanePress={view === "main" && confirm === null ? () => setPane(1) : undefined}
+            onWheel={(d) =>
+              view === "main"
+                ? setRepoIdx((i) => Math.max(0, Math.min(i + d, repoMappings.length - 1)))
+                : undefined
+            }
           />
           {view === "queue" ? (
-            <QueueView
-              snap={queueSnap}
-              scroll={scroll}
-              now={queueNow}
-              height={listHeight}
-              focused
-            />
+            <ClickableBox flexGrow={1} onWheel={(d) => setScroll((s) => Math.max(0, s + d))}>
+              <QueueView
+                snap={queueSnap}
+                scroll={scroll}
+                now={queueNow}
+                height={listHeight}
+                focused
+              />
+            </ClickableBox>
           ) : view === "cmdOutput" && cmd ? (
-            <CommandOutput
-              title={cmd.title}
-              running={cmd.running}
-              elapsedS={cmdElapsed}
-              output={cmd.output}
-              scroll={scroll}
-              exitCode={cmd.exitCode}
-              timedOut={cmd.timedOut}
-              height={listHeight}
-            />
+            <ClickableBox flexGrow={1} onWheel={(d) => setScroll((s) => Math.max(0, s + d))}>
+              <CommandOutput
+                title={cmd.title}
+                running={cmd.running}
+                elapsedS={cmdElapsed}
+                output={cmd.output}
+                scroll={scroll}
+                exitCode={cmd.exitCode}
+                timedOut={cmd.timedOut}
+                height={listHeight}
+              />
+            </ClickableBox>
           ) : view === "detail" && detail ? (
             <Preview
               issue={detail.issue}
@@ -2247,6 +2148,8 @@ export function App(props: AppProps): React.JSX.Element {
               scroll={scroll}
               focused
               height={listHeight}
+              onLinkPress={openDetailIssueInBrowser}
+              onWheel={(d) => setScroll((s) => Math.max(0, s + d))}
             />
           ) : view === "prDetail" && prDetail ? (
             <PrPreview
@@ -2256,6 +2159,7 @@ export function App(props: AppProps): React.JSX.Element {
               height={listHeight}
               focused
               titleLabel="pr"
+              onLinkPress={openPrDetailInBrowser}
             />
           ) : view === "prs" ? (
             <PrList
@@ -2266,6 +2170,12 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={prStaleAt}
               window={prWindow}
+              onRowPress={(i) => {
+                if (confirm !== null) return;
+                if (i === prIdxSafe) return void openPrDetail(selectedPr, "prs");
+                movePrTo(i);
+              }}
+              onWheel={(d) => movePr(d)}
             />
           ) : (
             <IssueList
@@ -2280,6 +2190,14 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
+              onRowPress={(i) => {
+                if (confirm !== null) return;
+                if (pane === 2 && i === issueIdxSafe) return void openDetail();
+                setPane(2);
+                moveIssueTo(i);
+              }}
+              onPanePress={confirm === null ? () => setPane(2) : undefined}
+              onWheel={(d) => moveIssue(d)}
             />
           )}
           {layout.mode === "wide" &&
@@ -2291,6 +2209,7 @@ export function App(props: AppProps): React.JSX.Element {
                 height={listHeight}
                 width={layout.previewWidth}
                 focused={false}
+                onLinkPress={selectedPr ? openSelectedPr : undefined}
               />
             ) : view === "main" ? (
               <Box width={layout.previewWidth} height={listHeight}>
@@ -2305,6 +2224,16 @@ export function App(props: AppProps): React.JSX.Element {
                   window={pane3Window}
                   title={pane3Title}
                   emptyText="no junco PRs for this repo"
+                  onRowPress={(i) => {
+                    if (confirm !== null) return;
+                    if (pane === 3 && i === pane3IdxSafe) {
+                      return void openPrDetail(selectedPane3Pr, "main");
+                    }
+                    setPane(3);
+                    movePane3To(i);
+                  }}
+                  onPanePress={confirm === null ? () => setPane(3) : undefined}
+                  onWheel={(d) => movePane3(d)}
                 />
               </Box>
             ) : null)}

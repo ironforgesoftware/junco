@@ -9,6 +9,7 @@ import { App, type AppProps } from "../../src/tui/App.js";
 import { MouseProvider } from "../../src/tui/MouseProvider.js";
 import type { LocalCheap, LocalHeavy } from "../../src/tui/localSnapshot.js";
 import type { DashboardClient, Result } from "../../src/tui/ghClient.js";
+import type { DashIssue } from "../../src/tui/state.js";
 import type { QueueSnapshot } from "../../src/tui/queueSnapshot.js";
 
 export const okv = <T,>(v: T): Result<T> => ({ ok: true, value: v });
@@ -114,8 +115,28 @@ export const HEAVY: LocalHeavy = {
   error: null,
 };
 
+/** Two GitHub issues for the selected repo — the mouse row-click specs need
+ * ≥2 rows (and one numbered #2). Returned for every repo since the stub ignores
+ * nwo; LOCAL-mode suites never render this list. */
+export const ISSUES: DashIssue[] = [
+  {
+    number: 1,
+    title: "First issue",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T10:00:00Z",
+    url: "https://github.com/acme/api/issues/1",
+  },
+  {
+    number: 2,
+    title: "Second issue",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T09:00:00Z",
+    url: "https://github.com/acme/api/issues/2",
+  },
+];
+
 export const stubClient: DashboardClient = {
-  listIssues: async () => okv({ issues: [], staleAt: null }),
+  listIssues: async () => okv({ issues: ISSUES, staleAt: null }),
   listPrs: async () => okv({ prs: [], staleAt: null }),
   cloneRepo: async () => okv(undefined),
   issueDetail: async () => okv({ body: "", planComment: null }),
@@ -158,7 +179,10 @@ export function renderApp(over: Partial<AppProps> = {}): ReturnType<typeof rende
         client={stubClient}
         trigger="junco"
         branchPrefix="junco/"
-        configRepos={[{ nwo: "acme/api", path: "/c/api" }]}
+        configRepos={[
+          { nwo: "acme/api", path: "/c/api" },
+          { nwo: "beta/two", path: "/c/two" },
+        ]}
         watchlistFile="/tmp/wl.json"
         configPath="/x/config.json"
         clonesDir="/x/state/repos"

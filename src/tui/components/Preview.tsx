@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
 import { hyperlink, shortResourceRef } from "../links.js";
 import { Spinner } from "./Spinner.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 export interface PreviewProps {
   issue: DashIssue;
@@ -16,6 +17,10 @@ export interface PreviewProps {
   focused: boolean;
   height: number;
   width?: number;
+  /** Mouse: press on the ↗ metadata line (opens the issue in the browser). */
+  onLinkPress?: () => void;
+  /** Mouse: wheel over the pane (down → +1, up → −1). */
+  onWheel?: (dir: 1 | -1) => void;
 }
 
 /** The fullscreen issue-detail view's body — issue heading, body text, and any
@@ -32,6 +37,8 @@ export function Preview({
   focused,
   height,
   width,
+  onLinkPress,
+  onWheel,
 }: PreviewProps): React.JSX.Element {
   // Reserved rows: borders ×2, pane title, issue heading, the ↗ link line
   // (LINK_LINE_ROW in geometry.ts), footer line.
@@ -43,7 +50,7 @@ export function Preview({
   const visible = lines.slice(scroll, scroll + viewHeight);
   const st = deriveState(issue.labels, trigger);
   return (
-    <Box
+    <ClickableBox
       flexDirection="column"
       borderStyle="round"
       borderColor={focused ? theme.accent : theme.border}
@@ -51,6 +58,7 @@ export function Preview({
       height={height}
       width={width}
       flexGrow={width === undefined ? 1 : undefined}
+      onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
         preview · #{issue.number}
@@ -59,11 +67,13 @@ export function Preview({
         #{issue.number} {issue.title}{" "}
         <Text color={stateMeta(st).color}>[{stateMeta(st).badge}]</Text>
       </Text>
-      <Transform transform={(s) => hyperlink(s, issue.url)}>
-        <Text dimColor wrap="truncate">
-          ↗ {shortResourceRef(issue.url)}
-        </Text>
-      </Transform>
+      <ClickableBox onPress={onLinkPress} hoverBg={theme.hoverBg}>
+        <Transform transform={(s) => hyperlink(s, issue.url)}>
+          <Text dimColor wrap="truncate">
+            ↗ {shortResourceRef(issue.url)}
+          </Text>
+        </Transform>
+      </ClickableBox>
       {loading && (
         <Text dimColor>
           <Spinner /> loading issue details…
@@ -81,6 +91,6 @@ export function Preview({
           ↑/↓ scroll · {scroll + 1}-{Math.min(scroll + viewHeight, lines.length)}/{lines.length}
         </Text>
       )}
-    </Box>
+    </ClickableBox>
   );
 }

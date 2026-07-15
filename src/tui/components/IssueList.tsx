@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
 import { Spinner } from "./Spinner.js";
 import { fmtClock } from "../queueFmt.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 export function relTime(iso: string, now: Date): string {
   const ms = now.getTime() - (Date.parse(iso) || now.getTime());
@@ -37,6 +38,12 @@ export interface IssueListProps {
   /** listIssues' cache-served fetchedAt (offline) — null when the list is fresh. */
   staleAt: string | null;
   window: { start: number; end: number };
+  /** Mouse: press on an issue row (registry index into the filtered list). */
+  onRowPress?: (index: number) => void;
+  /** Mouse: press on the pane background (no row). */
+  onPanePress?: () => void;
+  /** Mouse: wheel over the pane (down → +1, up → −1). */
+  onWheel?: (dir: 1 | -1) => void;
 }
 
 /** Pane 2: windowed issue rows with full-row selection bars and aligned
@@ -53,15 +60,20 @@ export function IssueList({
   now,
   staleAt,
   window,
+  onRowPress,
+  onPanePress,
+  onWheel,
 }: IssueListProps): React.JSX.Element {
   return (
-    <Box
+    <ClickableBox
       flexDirection="column"
       borderStyle="round"
       borderColor={focused ? theme.accent : theme.border}
       paddingX={1}
       flexGrow={1}
       height={height}
+      onPress={onPanePress}
+      onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined}>
         2 issues · {issues.length}
@@ -93,11 +105,13 @@ export function IssueList({
         const st = deriveState(iss.labels, trigger);
         const meta = stateMeta(st);
         return (
-          <Box
+          <ClickableBox
             key={iss.number}
             width="100%"
             backgroundColor={sel ? theme.selectionBg : undefined}
+            hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             gap={1}
+            onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             <Text color={meta.color}>{meta.glyph}</Text>
@@ -107,7 +121,7 @@ export function IssueList({
             </Box>
             <Text color={meta.color}>{meta.badge}</Text>
             <Text dimColor>{relTime(iss.updatedAt, now)}</Text>
-          </Box>
+          </ClickableBox>
         );
       })}
       <Box flexGrow={1} />
@@ -116,6 +130,6 @@ export function IssueList({
           {Math.min(selected + 1, issues.length)}/{issues.length}
         </Text>
       )}
-    </Box>
+    </ClickableBox>
   );
 }

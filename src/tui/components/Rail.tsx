@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { stateMeta, type IssueLifecycle } from "../state.js";
 import type { QueueSnapshot } from "../queueSnapshot.js";
 import { queueLabel } from "../queueFmt.js";
+import { ClickableBox } from "../ClickableBox.js";
 
 export interface RailRepo {
   nwo: string;
@@ -19,6 +20,12 @@ export interface RailProps {
   width: number;
   height: number;
   window: { start: number; end: number };
+  /** Mouse: press on a repo row (registry index into repos). */
+  onRowPress?: (index: number) => void;
+  /** Mouse: press on the pane background (no row). */
+  onPanePress?: () => void;
+  /** Mouse: wheel over the pane (down → +1, up → −1). */
+  onWheel?: (dir: 1 | -1) => void;
 }
 
 const COUNT_ORDER: IssueLifecycle[] = ["plan-ready", "working", "failed"];
@@ -33,16 +40,21 @@ export function Rail({
   width,
   height,
   window,
+  onRowPress,
+  onPanePress,
+  onWheel,
 }: RailProps): React.JSX.Element {
   const running = queue?.running ?? [];
   return (
-    <Box
+    <ClickableBox
       flexDirection="column"
       borderStyle="round"
       borderColor={focused ? theme.accent : theme.border}
       paddingX={1}
       width={width}
       height={height}
+      onPress={onPanePress}
+      onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined}>
         1 repos
@@ -55,14 +67,20 @@ export function Rail({
           .map((s) => `${r.counts[s]}${stateMeta(s).glyph}`)
           .join(" ");
         return (
-          <Box key={r.nwo} width="100%" backgroundColor={sel ? theme.selectionBg : undefined}>
+          <ClickableBox
+            key={r.nwo}
+            width="100%"
+            backgroundColor={sel ? theme.selectionBg : undefined}
+            hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+            onPress={onRowPress ? () => onRowPress(idx) : undefined}
+          >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             <Text wrap="truncate">
               {r.nwo}
               {r.fromConfig ? " (cfg)" : ""}
               {badges ? `  ${badges}` : ""}
             </Text>
-          </Box>
+          </ClickableBox>
         );
       })}
       {repos.length > window.end - window.start && (
@@ -96,6 +114,6 @@ export function Rail({
           {!queue.daemonUp && <Text color={theme.warn}>daemon ○ down</Text>}
         </>
       )}
-    </Box>
+    </ClickableBox>
   );
 }

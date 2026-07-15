@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { Header, Toast, Footer, hintsFor, localHintsFor } from "../src/tui/components/Chrome.js";
-import { headerTabBands } from "../src/tui/geometry.js";
 import type { HealthInfo } from "../src/tui/ghClient.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
@@ -493,13 +492,17 @@ describe("Header mode tabs", () => {
     expect(lines).toHaveLength(1);
   });
 
-  it("tab labels align with headerTabBands click bands", () => {
-    const bands = headerTabBands(100);
-    // Both bands land inside the printed header width and are ordered g < l.
-    expect(bands.githubStart).toBeLessThan(bands.localStart);
-    expect(bands.hit(bands.githubStart)).toBe("github");
-    expect(bands.hit(bands.localStart)).toBe("local");
-    expect(bands.hit(0)).toBe(null); // brand region is dead
+  it("renders the tabs after the brand, GITHUB before LOCAL", () => {
+    // Presentational ordering only — clicks resolve against each tab's own
+    // ClickableBox region now (headerTabBands is gone), so this just pins the
+    // draw order the region rects inherit: brand < GITHUB < LOCAL.
+    const f = render(<Header {...base} mode="wide" uiMode="github" githubEnabled />).lastFrame()!;
+    const brandAt = f.indexOf("junco");
+    const ghAt = f.indexOf("[GITHUB]");
+    const loAt = f.indexOf("local");
+    expect(brandAt).toBeGreaterThanOrEqual(0);
+    expect(ghAt).toBeGreaterThan(brandAt);
+    expect(loAt).toBeGreaterThan(ghAt);
   });
 });
 
