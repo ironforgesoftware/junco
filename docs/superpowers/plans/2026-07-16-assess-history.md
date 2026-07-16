@@ -801,35 +801,33 @@ Add `now` to the destructured params, and beside `COUNT_ORDER`:
 const ASSESS_COL = 8;
 ```
 
-Replace the row body (the `<Text color={theme.accent}>` + `<Text wrap="truncate">` pair) with:
+Replace the row body — the `<Text color={theme.accent}>{sel ? "▌" : " "}</Text>` and
+`<Text wrap="truncate">…</Text>` pair currently inside the row's `ClickableBox` — with the three
+children below. They are the row's JSX **children**, not standalone statements: keep them inside the
+existing `<ClickableBox key={r.nwo} …>` element and do not add semicolons between them.
 
+<!-- prettier-ignore -->
 ```tsx
-{
-  /* Pinned: the ▌ NO_COLOR selection fallback (theme.ts:4). Without
-                flexShrink={0} Ink squeezes it to zero on a long nwo — the row
-                then has no visible selection at all (#193). */
-}
+{/* Pinned: the ▌ NO_COLOR selection fallback (theme.ts:4). Without
+    flexShrink={0} Ink squeezes it to zero on a long nwo — the row then
+    has no visible selection at all (#193). */}
 <Box flexShrink={0}>
   <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
-</Box>;
-{
-  /* Shrinks: nwo + (cfg) + lifecycle badges truncate together, as
-                they already did before the indicator existed. */
-}
+</Box>
+{/* Shrinks: nwo + (cfg) + lifecycle badges truncate together, exactly as
+    they already did before the indicator existed. */}
 <Box flexGrow={1} flexShrink={1} overflow="hidden">
   <Text wrap="truncate">
     {r.nwo}
     {r.fromConfig ? " (cfg)" : ""}
     {badges ? `  ${badges}` : ""}
   </Text>
-</Box>;
-{
-  /* Pinned: the assess column is the point of the row — it must
-                never be the thing that truncates. */
-}
+</Box>
+{/* Pinned: the assess column is the point of the row — it must never be
+    the thing that truncates. */}
 <Box flexShrink={0} minWidth={ASSESS_COL} justifyContent="flex-end">
   <Text dimColor={!sel}>{fmtAssessIndicator(r.assess ?? null, now)}</Text>
-</Box>;
+</Box>
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -871,18 +869,55 @@ the row and let the nwo shrink between them."
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/dashboardCmd.test.ts` (mirror whatever assertion style that file already uses for `queueFn`):
+**Where this is tested (resolved — do not re-litigate).** `tests/dashboardCmd.test.ts` covers
+`runDashboard` only coarsely (non-TTY exits 1, TTY renders, FTUE null-config) and has **no `queueFn`
+wiring assertion to mirror**, so do not add one there. Cover the wiring in `tests/tuiApp.test.tsx`,
+which already renders `<App>` with a fake `queueFn`.
 
-```ts
-it("wires an assessHistoryFn that reads the per-repo assess history store", async () => {
-  // Arrange: a state dir holding one history record, written via the store.
-  // Assert: the fn dashboardCmd hands App returns that record.
-  // (Follow this file's existing harness for building cfg + capturing the
-  // props dashboardCmd passes to App — do not invent a new one.)
+`tests/tuiApp.test.tsx` renders `<App>` in three places: a helper around line 312 (which takes
+`queueFn` as a parameter defaulting to `async () => QUEUE_SNAP`) and two ad-hoc renders around lines
+830 and 882. **A new required prop breaks all three** — give the helper an `assessHistoryFn`
+parameter defaulting to `async () => []`, and add `assessHistoryFn={async () => []}` to the two
+ad-hoc renders. Read the helper first and match however it actually takes overrides; the calls below
+are illustrative of intent, not its signature.
+
+Add to `tests/tuiApp.test.tsx`:
+
+```tsx
+it("renders the assess indicator in the rail from assessHistoryFn", async () => {
+  const h: AssessHistory = {
+    id: "acme/api", // must match a watched repo in the fixture's config
+    lastSuccessAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    lastFound: 4,
+    lastParked: 4,
+    lastFailureAt: null,
+    lastFailureReason: null,
+  };
+  const r = renderApp({ assessHistoryFn: async () => [h] });
+  // The poll fires on mount and lands via setState. Loop-until-condition with a
+  // bounded retry — never one fixed tick: a slow CI runner races React's commit
+  // and a fixed timeout flakes (CLAUDE.md Ink gotcha; this flaked a release gate).
+  for (let i = 0; i < 50; i++) {
+    if (r.lastFrame()?.includes("4⚠")) break;
+    await new Promise((res) => setTimeout(res, 10));
+  }
+  expect(r.lastFrame()).toContain("4⚠");
+});
+
+it("renders the never-assessed dash for a watched repo with no history record", async () => {
+  const r = renderApp({ assessHistoryFn: async () => [] });
+  for (let i = 0; i < 50; i++) {
+    if (r.lastFrame()?.includes("—")) break;
+    await new Promise((res) => setTimeout(res, 10));
+  }
+  expect(r.lastFrame()).toContain("—");
 });
 ```
 
-> **Implementer:** replace the comment body with a real assertion in the idiom of the neighbouring `queueFn` test in this file. If `dashboardCmd.test.ts` has no `queueFn` coverage to mirror, cover the wiring in `tests/tuiApp.test.tsx` instead by passing a fake `assessHistoryFn` and asserting the rendered rail shows the indicator — and say so in the commit body.
+Import: `import type { AssessHistory } from "../src/assessHistory.js";`
+
+**These are async state changes, unlike Task 4's pure `Rail` renders** — the loop-until-condition is
+required here and a fixed `setTimeout` assertion is not acceptable.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -994,19 +1029,59 @@ assess:    o/other never assessed · last attempt failed 2026-07-16
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/statusCmd.test.ts` (match the file's existing harness for building cfg + capturing `print`):
+**Harness (already read — use it, don't re-derive).** `tests/statusCmd.test.ts` has a `beforeEach`
+building `cfg` (with `stateDir: join(root, "state")`) and an `out: string[]` collected by a `print`
+fn; tests call `await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null })`
+and assert on `out.join("")`. Seed history with `recordRun` from `src/assessHistory.js`, exactly as
+the neighbouring tests seed with `writePending`. The two existing assess-review tests
+("omits the assess review line when nothing is pending" / "shows the pending assess-review count")
+are the pattern to mirror.
+
+Add to `tests/statusCmd.test.ts`:
 
 ```ts
-it("prints an assess line per repo with history, and nothing when the store is empty", () => {
-  // empty store → no "assess:" line at all
-  // one success record → "assess:" line naming the repo, found and parked
-  // Follow this file's existing assess-review assertion idiom.
+it("omits the assess line when no repo has history", async () => {
+  const fetchFn = (async () => {
+    throw new Error("ECONNREFUSED");
+  }) as unknown as typeof fetch;
+  await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+  expect(out.join("")).not.toMatch(/^assess:/m);
+});
+
+it("prints an assess line per repo with history", async () => {
+  recordRun(cfg, "o/r", { ok: true, at: "2026-07-16T00:00:00.000Z", found: 4, parked: 3 });
+  const fetchFn = (async () => {
+    throw new Error("ECONNREFUSED");
+  }) as unknown as typeof fetch;
+  await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+  const text = out.join("");
+  expect(text).toContain("o/r");
+  expect(text).toMatch(/assessed 2026-07-16/);
+  expect(text).toMatch(/4 found/);
+  expect(text).toMatch(/3 parked/);
+});
+
+it("shows a failed last attempt without moving the assessed date", async () => {
+  recordRun(cfg, "o/r", { ok: true, at: "2026-07-15T00:00:00.000Z", found: 4, parked: 3 });
+  recordRun(cfg, "o/r", { ok: false, at: "2026-07-16T00:00:00.000Z", reason: "boom" });
+  const fetchFn = (async () => {
+    throw new Error("ECONNREFUSED");
+  }) as unknown as typeof fetch;
+  await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+  const text = out.join("");
+  expect(text).toMatch(/assessed 2026-07-15/); // the SUCCESS date, not the failure's
+  expect(text).toMatch(/last attempt failed 2026-07-16/);
 });
 ```
 
-Add the mirror to `tests/doctor.test.ts` asserting an informational (`ok`, not `warn`) report — a never-assessed repo is normal workflow state, not a health problem, exactly like the assess-review backlog at `doctor.ts:415-417`.
+Import `recordRun` from `../src/assessHistory.js`.
 
-> **Implementer:** replace both comment bodies with real assertions in each file's existing idiom.
+**`tests/doctor.test.ts`** collects `lines: string[]` via `deps({ printFn: (s) => lines.push(s) })`
+and asserts with regexes against `lines.join("")`. Add a mirror asserting the history line is
+reported **informationally (`ok`/`✓`, never `warn`/`✗`)** — a never-assessed repo is normal workflow
+state, not a health problem, exactly like the assess-review backlog at `doctor.ts:415-417`. Seed the
+same way, assert the repo name and `assessed`/`never assessed` text appear, and assert the line does
+**not** render as a warning.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1119,4 +1194,17 @@ git commit -m "docs(assess): document per-repo assess history + rail indicator"
 
 **Type consistency:** `AssessHistory` fields identical across T1/T2/T4; `recordRun`'s discriminated union matches its T3 call site; `RailRepo.assess?: AssessHistory | null` matches what T5 supplies; `fmtAssessIndicator(h: AssessHistory | null, now: Date)` matches its T4 call.
 
-**Known soft spots (flagged, not hidden):** T5's and T6's test steps say "follow this file's existing idiom" rather than shipping literal assertions — those harnesses (`dashboardCmd.test.ts`, `statusCmd.test.ts`, `doctor.test.ts`) were not read during planning, and inventing their fixtures blind would be worse than pointing at the neighbours. T3's `ticketContent(repo, { issue: 42 })` assumes an option the existing scoped-batch test may build differently; the step says to copy that test verbatim if so.
+**Known soft spots — RESOLVED during execution (2026-07-16), kept for provenance:**
+
+- T5/T6 test steps originally said "follow this file's existing idiom" instead of shipping literal
+  assertions. Fixed: the harnesses were read and real assertions now appear in both tasks. T5's
+  coverage moved from `dashboardCmd.test.ts` (which has no `queueFn` wiring test to mirror) to
+  `tests/tuiApp.test.tsx`.
+- T3's `ticketContent(repo, { issue: 42 })` assumed an option that does not exist — the real helper
+  takes a raw-frontmatter `extra: string`. Corrected during T3.
+- T3's TDZ regression test as originally written **did not discriminate**: `let nwo: string;`
+  executes as soon as Phase 1 passes, ending the temporal dead zone and binding `nwo` to `undefined`,
+  so a Phase-2 trigger would pass against the very bug it guards. The genuine TDZ window is Phase 1,
+  before the declaration executes. Corrected during T3 with a mutation check.
+- T4's JSX snippet was mangled by prettier into standalone semicolon-terminated statements when the
+  plan was formatted; it is now `<!-- prettier-ignore -->`d and labelled as row children.
