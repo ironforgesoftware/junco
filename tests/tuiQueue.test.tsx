@@ -9,8 +9,11 @@ import {
   fmtTokens,
   fmtClock,
   fmtCompact,
+  fmtAgeShort,
+  fmtAssessIndicator,
 } from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import type { AssessHistory } from "../src/assessHistory.js";
 
 const NOW = new Date("2026-07-07T10:05:00Z");
 
@@ -122,6 +125,66 @@ describe("queueFmt", () => {
     expect(fmtCompact(999_949)).toBe("999.9k"); // still rounds below 1000k
     expect(fmtCompact(999_950)).toBe("1M"); // would render "1000.0k" — rolled
     expect(fmtCompact(999_999)).toBe("1M"); // never "1000k"
+  });
+});
+
+const NOW2 = new Date("2026-07-16T12:00:00.000Z");
+function hist(p: Partial<AssessHistory>): AssessHistory {
+  return {
+    id: "o/r",
+    lastSuccessAt: null,
+    lastFound: null,
+    lastParked: null,
+    lastFailureAt: null,
+    lastFailureReason: null,
+    ...p,
+  };
+}
+
+describe("fmtAgeShort", () => {
+  it("compact buckets with no ' ago' suffix", () => {
+    expect(fmtAgeShort("2026-07-16T11:59:30.000Z", NOW2)).toBe("30s");
+    expect(fmtAgeShort("2026-07-16T11:30:00.000Z", NOW2)).toBe("30m");
+    expect(fmtAgeShort("2026-07-16T10:00:00.000Z", NOW2)).toBe("2h");
+    expect(fmtAgeShort("2026-06-25T12:00:00.000Z", NOW2)).toBe("21d");
+  });
+  it("caps at 99d+ so the fixed indicator column cannot be blown out", () => {
+    expect(fmtAgeShort("2020-01-01T00:00:00.000Z", NOW2)).toBe("99d+");
+  });
+  it("clamps a future timestamp to 0s rather than going negative", () => {
+    expect(fmtAgeShort("2027-01-01T00:00:00.000Z", NOW2)).toBe("0s");
+  });
+});
+
+describe("fmtAssessIndicator", () => {
+  it("never assessed", () => {
+    expect(fmtAssessIndicator(null, NOW2)).toBe("—");
+  });
+  it("clean audit", () => {
+    const h = hist({ lastSuccessAt: "2026-07-16T10:00:00.000Z", lastFound: 0, lastParked: 0 });
+    expect(fmtAssessIndicator(h, NOW2)).toBe("2h 0✓");
+  });
+  it("audit with findings", () => {
+    const h = hist({ lastSuccessAt: "2026-06-25T12:00:00.000Z", lastFound: 4, lastParked: 3 });
+    expect(fmtAssessIndicator(h, NOW2)).toBe("21d 4⚠");
+  });
+  it("failed last attempt marks the age but does not move it", () => {
+    const h = hist({
+      lastSuccessAt: "2026-06-25T12:00:00.000Z",
+      lastFound: 4,
+      lastParked: 3,
+      lastFailureAt: "2026-07-16T11:00:00.000Z",
+      lastFailureReason: "boom",
+    });
+    expect(fmtAssessIndicator(h, NOW2)).toBe("21d! 4⚠");
+  });
+  it("failed with no prior success", () => {
+    const h = hist({ lastFailureAt: "2026-07-16T11:00:00.000Z", lastFailureReason: "boom" });
+    expect(fmtAssessIndicator(h, NOW2)).toBe("— !");
+  });
+  it("caps the count at 99+ to bound the column", () => {
+    const h = hist({ lastSuccessAt: "2026-07-16T10:00:00.000Z", lastFound: 250, lastParked: 250 });
+    expect(fmtAssessIndicator(h, NOW2)).toBe("2h 99+⚠");
   });
 });
 
