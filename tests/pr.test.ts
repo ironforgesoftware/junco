@@ -74,6 +74,9 @@ function setupGitHarness(tmpRoot: string): {
 
 function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
   return {
+    dataDir: "/tmp/vault/state",
+    queueRoot: "/tmp/vault/Junco",
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {

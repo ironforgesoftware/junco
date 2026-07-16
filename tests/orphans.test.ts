@@ -11,6 +11,9 @@ function makeConfig(): { cfg: Config; root: string } {
   const root = mkdtempSync(join(tmpdir(), "junco-orphans-"));
   roots.push(root);
   const cfg: Config = {
+    dataDir: root,
+    queueRoot: join(root, "Junco"),
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     vaultRoot: root,
     juncoSubdir: "Junco",
     model: {

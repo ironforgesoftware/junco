@@ -47,6 +47,15 @@ export function setAtPath(obj: Record<string, unknown>, path: string, value: unk
  * traversal rules (ZodObject recurses; ZodArray/ZodRecord is a leaf). */
 export const LEVERS: Lever[] = [
   {
+    path: "dataDir",
+    type: "string",
+    default: undefined,
+    editable: true,
+    reload: "restart",
+    description:
+      "Unified data root — queue, reviews, outbox, mirror, clones, worktrees, transcripts.",
+  },
+  {
     path: "vaultRoot",
     type: "string",
     default: undefined,
@@ -393,10 +402,10 @@ export const LEVERS: Lever[] = [
   {
     path: "git.worktreeRoot",
     type: "string",
-    default: "~/junco/worktrees",
+    default: undefined,
     editable: true,
     reload: "live",
-    description: "Root directory under which per-ticket git worktrees are created.",
+    description: "Deprecated: overrides dataDir for per-ticket git worktrees only.",
   },
   {
     path: "git.removeWorktreeOnSuccess",
@@ -599,10 +608,10 @@ export const LEVERS: Lever[] = [
   {
     path: "observability.stateDir",
     type: "string",
-    default: "~/.local/state/junco",
+    default: undefined,
     editable: true,
     reload: "restart",
-    description: "Directory for daemon-owned state (worker.log, per-ticket transcripts).",
+    description: "Deprecated: overrides dataDir for the entire data root.",
   },
   {
     path: "observability.logToFile",

@@ -688,6 +688,9 @@ describe("lock path derivation", () => {
  * real FS (inbox-path, submit, init).  vaultRoot is overridden per test.
  */
 const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
+  dataDir: "/tmp/junco-cli-dispatch-data",
+  queueRoot: "/tmp/junco-cli-dispatch-data/queue",
+  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   juncoSubdir: "Junco",
   model: {
     id: "test-model",

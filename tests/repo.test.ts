@@ -100,6 +100,9 @@ esac
 
 function makeConfig(work: string, ghBin: string): Config {
   return {
+    dataDir: "/tmp/vault/state",
+    queueRoot: "/tmp/vault/Junco",
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     vaultRoot: "/tmp/vault",
     juncoSubdir: "Junco",
     model: {

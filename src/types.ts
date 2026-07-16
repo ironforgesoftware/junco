@@ -77,6 +77,15 @@ export interface GhAuthContext {
   email: string; // <id>+<login>@users.noreply.github.com
   credentialHelper: string; // "!<ghBin> auth git-credential" (inherits child env)
 }
+/** Which deprecated (legacy) path keys are explicitly set in config.json —
+ * drives `configDeprecations` warnings and per-subtree override provenance
+ * (spec 2026-07-16). */
+export interface LegacyPathFlags {
+  vaultRoot: boolean;
+  stateDir: boolean;
+  worktreeRoot: boolean;
+  externalReposRoot: boolean;
+}
 export interface SandboxConfig {
   // Master switch. false = current behavior (no sandbox, full env, no jail).
   enabled: boolean;
@@ -93,6 +102,13 @@ export interface SandboxConfig {
   extraAllowWrite: string[];
 }
 export interface Config {
+  /** Unified data root (spec 2026-07-16). Every junco path resolves under here
+   * unless a legacy key overrides its subtree. */
+  dataDir: string;
+  /** Resolved queue root: <vaultRoot>/<juncoSubdir> when legacy, else <dataDir>/queue. */
+  queueRoot: string;
+  /** Which deprecated path keys are explicitly set (drives warnings + provenance). */
+  legacy: LegacyPathFlags;
   vaultRoot: string;
   juncoSubdir: string;
   model: ModelConfig;

@@ -104,6 +104,9 @@ esac
 
 function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
   return {
+    dataDir: h.root,
+    queueRoot: join(h.root, "Junco"),
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     vaultRoot: h.root,
     juncoSubdir: "Junco",
     model: {

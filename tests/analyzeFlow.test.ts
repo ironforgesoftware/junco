@@ -15,6 +15,9 @@ import type { Config, Ticket } from "../src/types.js";
 
 function cfg(root: string): Config {
   return {
+    dataDir: root,
+    queueRoot: join(root, "Junco"),
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     vaultRoot: root,
     juncoSubdir: "Junco",
     model: {

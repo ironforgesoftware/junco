@@ -15,6 +15,9 @@ function fixture(obj: unknown): string {
 /** Minimal Config literal for `config init` tests — queue paths under /tmp/q. */
 function makeFakeConfig(): Config {
   return {
+    dataDir: "/tmp/q",
+    queueRoot: "/tmp/q/Junco",
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     vaultRoot: "/tmp/q",
     juncoSubdir: "Junco",
     model: {

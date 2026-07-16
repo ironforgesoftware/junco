@@ -121,7 +121,8 @@ export function resolveApiKey(
 }
 
 export const ConfigSchema = z.object({
-  vaultRoot: z.string({ required_error: "config: vaultRoot is required" }),
+  dataDir: z.string().optional(), // unified data root; default applied at assembly
+  vaultRoot: z.string().optional(), // DEPRECATED: legacy queue-root override
   juncoSubdir: z.string().default("Junco"),
   tools: z.array(z.string()).default(DEFAULT_TOOLS),
   model: z
@@ -202,7 +203,7 @@ export const ConfigSchema = z.object({
       ghBin: z.string().default("gh"),
       defaultBaseBranch: z.string().default("main"),
       branchPrefix: z.string().default("junco/"),
-      worktreeRoot: z.string().default("~/junco/worktrees"),
+      worktreeRoot: z.string().optional(), // DEPRECATED: legacy override; default <dataDir>/worktrees
       removeWorktreeOnSuccess: z.boolean().default(true),
       allowedRepoRoots: z.array(z.string()).default([]),
     })
@@ -260,7 +261,7 @@ export const ConfigSchema = z.object({
       healthPort: z.number().int().min(1).max(65535).default(8787),
       logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
       // Daemon-owned state (worker.log, per-ticket transcripts) lives here.
-      stateDir: z.string().default("~/.local/state/junco"),
+      stateDir: z.string().optional(), // DEPRECATED: legacy alias for dataDir
       logToFile: z.boolean().default(true),
       transcripts: z.boolean().default(true),
     })
@@ -342,9 +343,25 @@ export function assembleConfig(
   const baseUrlExplicit = d.model.baseUrl !== undefined;
   const eligible = catalogEligible({ source: d.model.source, id: d.model.id, baseUrlExplicit });
   const resolvedKey = resolveApiKey(d.model.apiKey, env);
+  // Unified data root (spec 2026-07-16): legacy observability.stateDir wins
+  // over dataDir for the whole root; legacy vaultRoot/juncoSubdir wins the
+  // queue root only. See LegacyPathFlags for which override each key drives.
+  const dataDir = expandHome(d.observability.stateDir ?? d.dataDir ?? "~/.local/state/junco");
+  const queueRoot = d.vaultRoot
+    ? join(expandHome(d.vaultRoot), d.juncoSubdir)
+    : join(dataDir, "queue");
+  const legacy = {
+    vaultRoot: d.vaultRoot !== undefined,
+    stateDir: d.observability.stateDir !== undefined,
+    worktreeRoot: d.git.worktreeRoot !== undefined,
+    externalReposRoot: d.github.externalReposRoot !== undefined,
+  };
   return {
-    vaultRoot: expandHome(d.vaultRoot),
-    juncoSubdir: d.juncoSubdir,
+    dataDir,
+    queueRoot,
+    legacy,
+    vaultRoot: d.vaultRoot ? expandHome(d.vaultRoot) : dataDir, // kept until Task 2 removes it
+    juncoSubdir: d.vaultRoot ? d.juncoSubdir : "queue", // kept until Task 2 removes it
     tools: d.tools,
     model: {
       id: d.model.id,
@@ -394,7 +411,7 @@ export function assembleConfig(
     ghBin: d.git.ghBin,
     defaultBaseBranch: d.git.defaultBaseBranch,
     branchPrefix: d.git.branchPrefix,
-    worktreeRoot: expandHome(d.git.worktreeRoot),
+    worktreeRoot: d.git.worktreeRoot ? expandHome(d.git.worktreeRoot) : join(dataDir, "worktrees"),
     removeWorktreeOnSuccess: d.git.removeWorktreeOnSuccess,
     allowedRepoRoots: d.git.allowedRepoRoots.map(expandHome),
     draftByDefault: d.pr.draftByDefault,
@@ -412,7 +429,7 @@ export function assembleConfig(
     healthHost: d.observability.healthHost,
     healthPort: d.observability.healthPort,
     logLevel: d.observability.logLevel,
-    stateDir: expandHome(d.observability.stateDir),
+    stateDir: dataDir, // kept until Task 2 removes it
     logToFile: d.observability.logToFile,
     transcriptsEnabled: d.observability.transcripts,
     github: {
@@ -422,9 +439,9 @@ export function assembleConfig(
       pollIntervalSeconds: d.github.pollIntervalSeconds,
       requireApproval: d.github.requireApproval,
       plannerModelId: d.github.plannerModelId ?? null,
-      externalReposRoot: expandHome(
-        d.github.externalReposRoot ?? join(d.observability.stateDir, "external"),
-      ),
+      externalReposRoot: d.github.externalReposRoot
+        ? expandHome(d.github.externalReposRoot)
+        : join(dataDir, "clones", "external"),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
     },
     assess: {
@@ -469,4 +486,26 @@ export function queuePaths(cfg: Config): Paths {
     done: join(root, "done"),
     failed: join(root, "failed"),
   };
+}
+
+/** One human-readable deprecation per legacy path key set in config.json.
+ * Surfaced by daemon startup, `junco doctor`, and `junco data` (spec §5). */
+export function configDeprecations(cfg: Config): string[] {
+  const out: string[] = [];
+  const hint = "run 'junco data migrate' to unify (docs/configuration.md)";
+  if (cfg.legacy.vaultRoot)
+    out.push(
+      `config: vaultRoot/juncoSubdir are deprecated — the queue lives at <dataDir>/queue; ${hint}`,
+    );
+  if (cfg.legacy.stateDir)
+    out.push(`config: observability.stateDir is deprecated — use top-level dataDir; ${hint}`);
+  if (cfg.legacy.worktreeRoot)
+    out.push(
+      `config: git.worktreeRoot is deprecated — worktrees live at <dataDir>/worktrees; ${hint}`,
+    );
+  if (cfg.legacy.externalReposRoot)
+    out.push(
+      `config: github.externalReposRoot is deprecated — external clones live at <dataDir>/clones/external; ${hint}`,
+    );
+  return out;
 }

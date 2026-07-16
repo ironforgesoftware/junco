@@ -12,6 +12,7 @@ import {
   assembleConfig,
   ConfigSchema,
   expandHome,
+  configDeprecations,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -89,12 +90,12 @@ describe("loadConfig (JSON)", () => {
     );
     expect(cfg.vaultRoot).not.toContain("~");
     expect(cfg.github.askLabel).toBe("bot:ask");
-    expect(cfg.github.externalReposRoot).toBe("/state/external");
+    expect(cfg.github.externalReposRoot).toBe("/state/clones/external");
     expect(cfg.github.plannerModelId).toBeNull();
   });
 
-  it("throws a clear error when vaultRoot is missing", () => {
-    expect(() => loadConfig(writeJson({ model: { id: "x" } }))).toThrow(/vaultRoot/);
+  it("vaultRoot is optional — a config with no keys at all parses (unified data root)", () => {
+    expect(() => loadConfig(writeJson({ model: { id: "x" } }))).not.toThrow();
   });
 
   it("throws a friendly error on malformed JSON", () => {
@@ -377,7 +378,7 @@ describe("[github] config section", () => {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
-      externalReposRoot: join(homedir(), ".local/state/junco/external"),
+      externalReposRoot: join(homedir(), ".local/state/junco/clones/external"),
     });
   });
 
@@ -431,11 +432,11 @@ describe("[github] config section", () => {
 });
 
 describe("github.externalReposRoot", () => {
-  it("defaults to <stateDir>/external", () => {
+  it("defaults to <dataDir>/clones/external", () => {
     const cfg = loadConfig(
       writeJson({ vaultRoot: "/tmp/vault", observability: { stateDir: "/tmp/junco-state" } }),
     );
-    expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/external");
+    expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/clones/external");
   });
 
   it("expands ~ in an explicit value", () => {
@@ -677,5 +678,72 @@ describe("worker.endpointProbe", () => {
     expect(() =>
       loadConfig(writeJson({ vaultRoot: "/v", worker: { endpointProbe: "sometimes" } })),
     ).toThrow();
+  });
+});
+
+describe("dataDir resolution (unified data root)", () => {
+  const XDG_DEFAULT = join(homedir(), ".local/state/junco");
+  const parse = (raw: object) => assembleConfig(ConfigSchema.parse(raw), {});
+
+  it("defaults dataDir to ~/.local/state/junco and derives every root", () => {
+    const cfg = parse({});
+    expect(cfg.dataDir).toBe(XDG_DEFAULT);
+    expect(cfg.queueRoot).toBe(join(XDG_DEFAULT, "queue"));
+    expect(cfg.worktreeRoot).toBe(join(XDG_DEFAULT, "worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(XDG_DEFAULT, "clones", "external"));
+    expect(cfg.legacy).toEqual({
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+    });
+  });
+
+  it("explicit dataDir moves every derived root", () => {
+    const cfg = parse({ dataDir: "~/jdata" });
+    const root = join(homedir(), "jdata");
+    expect(cfg.dataDir).toBe(root);
+    expect(cfg.queueRoot).toBe(join(root, "queue"));
+    expect(cfg.worktreeRoot).toBe(join(root, "worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(root, "clones", "external"));
+  });
+
+  it("legacy vaultRoot/juncoSubdir wins the queue root only", () => {
+    const cfg = parse({ dataDir: "~/jdata", vaultRoot: "~/vault", juncoSubdir: "Junco" });
+    expect(cfg.queueRoot).toBe(join(homedir(), "vault", "Junco"));
+    expect(cfg.dataDir).toBe(join(homedir(), "jdata")); // untouched
+    expect(cfg.legacy.vaultRoot).toBe(true);
+  });
+
+  it("legacy observability.stateDir wins over dataDir for the whole root", () => {
+    const cfg = parse({ dataDir: "~/jdata", observability: { stateDir: "~/state" } });
+    expect(cfg.dataDir).toBe(join(homedir(), "state"));
+    expect(cfg.legacy.stateDir).toBe(true);
+  });
+
+  it("legacy git.worktreeRoot and github.externalReposRoot win their subtrees", () => {
+    const cfg = parse({
+      git: { worktreeRoot: "~/wt" },
+      github: { externalReposRoot: "~/ext" },
+    });
+    expect(cfg.worktreeRoot).toBe(join(homedir(), "wt"));
+    expect(cfg.github.externalReposRoot).toBe(join(homedir(), "ext"));
+    expect(cfg.legacy.worktreeRoot).toBe(true);
+    expect(cfg.legacy.externalReposRoot).toBe(true);
+  });
+
+  it("configDeprecations names each set legacy key and is empty when clean", () => {
+    expect(configDeprecations(parse({}))).toEqual([]);
+    const warns = configDeprecations(
+      parse({ vaultRoot: "~/vault", observability: { stateDir: "~/state" } }),
+    );
+    expect(warns).toHaveLength(2);
+    expect(warns[0]).toContain("vaultRoot");
+    expect(warns[1]).toContain("stateDir");
+    for (const w of warns) expect(w).toContain("junco data migrate");
+  });
+
+  it("a config with no keys at all is valid (vaultRoot no longer required)", () => {
+    expect(() => ConfigSchema.parse({})).not.toThrow();
   });
 });

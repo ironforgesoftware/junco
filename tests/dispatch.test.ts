@@ -25,6 +25,9 @@ import { inboxPath, submitTicket } from "../src/dispatch.js";
 // ---------------------------------------------------------------------------
 
 const CONFIG_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
+  dataDir: "/tmp/junco-dispatch-data",
+  queueRoot: "/tmp/junco-dispatch-data/queue",
+  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   model: {
     id: "test-model",
     source: "auto",
