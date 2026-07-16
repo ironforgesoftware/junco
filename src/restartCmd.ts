@@ -116,12 +116,38 @@ export async function discoverService(
   return null;
 }
 
+/**
+ * Relaunch a discovered service unit unconditionally. `launchctl kickstart -k`
+ * and `systemctl --user restart` both start a stopped unit and restart a running
+ * one, so this doubles as "ensure up" for a down daemon. Shared by
+ * runRestartCommand and ensureDaemon so the platform command shapes live in one
+ * place.
+ *
+ * systemd `--no-block` returns as soon as the restart job is ENQUEUED instead of
+ * waiting out the unit's TimeoutStopSec (sized to the ticket timeout, potentially
+ * minutes) — which would outlive defaultExec's 15s budget, get killed
+ * (err.code=null → exit 1), and be misreported as a failed restart. The caller's
+ * lock poll is what actually confirms the relaunch. (#117)
+ */
+export function kickstartService(
+  svc: ServiceRef,
+  deps: RestartDeps = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const execFn = deps.execFn ?? defaultExec;
+  return svc.platform === "launchd"
+    ? execFn("launchctl", [
+        "kickstart",
+        "-k",
+        `gui/${deps.uid ?? process.getuid?.() ?? 0}/${svc.id}`,
+      ])
+    : execFn("systemctl", ["--user", "--no-block", "restart", svc.id]);
+}
+
 /** Restart the discovered unit and verify the lock holder changed. */
 export async function runRestartCommand(
   configPath: string,
   deps: RestartDeps = {},
 ): Promise<number> {
-  const execFn = deps.execFn ?? defaultExec;
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const lockHolderFn = deps.lockHolderFn ?? readLockHolder;
   const sleepFn = deps.sleepFn ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -142,19 +168,7 @@ export async function runRestartCommand(
 
   const oldPid = lockHolderFn(lockPath);
 
-  const kick =
-    svc.platform === "launchd"
-      ? await execFn("launchctl", [
-          "kickstart",
-          "-k",
-          `gui/${deps.uid ?? process.getuid?.() ?? 0}/${svc.id}`,
-        ])
-      : // `--no-block` returns as soon as the restart job is ENQUEUED instead of
-        // waiting out the unit's TimeoutStopSec (sized to the ticket timeout,
-        // potentially minutes) — which would outlive defaultExec's 15s budget,
-        // get killed (err.code=null → exit 1), and be misreported as a failed
-        // restart. The pid-poll below is what actually confirms the relaunch. (#117)
-        await execFn("systemctl", ["--user", "--no-block", "restart", svc.id]);
+  const kick = await kickstartService(svc, deps);
   if (kick.code !== 0) {
     print(`restart failed for ${svc.id}: ${kick.stderr.trim() || `exit ${kick.code}`}\n`);
     return 1;
