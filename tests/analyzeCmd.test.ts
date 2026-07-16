@@ -33,9 +33,7 @@ const NONEXISTENT_STATE_DIR = "/nonexistent-junco-analyzecmd-state";
 
 function cfg(stateDir: string = NONEXISTENT_STATE_DIR): Config {
   return {
-    vaultRoot: "/vault",
-    juncoSubdir: "Junco",
-    stateDir,
+    dataDir: stateDir,
     github: {
       enabled: false,
       triggerLabel: "junco",

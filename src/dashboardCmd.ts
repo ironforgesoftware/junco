@@ -102,7 +102,7 @@ export async function runDashboard(
     // The palette spawns CLI subcommands against this same config.
     configPath,
     // Managed clones for the add-repo "empty path = clone for me" flow.
-    clonesDir: join(c.stateDir, "repos"),
+    clonesDir: join(c.dataDir, "repos"),
     queueFn: makeQueueSnapshotFn(c),
     // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
     localCheapFn: makeLocalCheapFn(c),

@@ -7,9 +7,8 @@ import type { Config } from "../src/types.js";
 
 function makeCfg(root: string): Config {
   return {
-    vaultRoot: join(root, "vault"),
-    juncoSubdir: "q",
-    stateDir: join(root, "state"),
+    dataDir: join(root, "state"),
+    queueRoot: join(root, "vault", "q"),
     worktreeRoot: join(root, "wt"),
     defaultTimeoutMinutes: 30,
     maxConcurrent: 1,
@@ -70,8 +69,8 @@ describe("makeLocalCheapFn", () => {
   it("counts (done/failed) are computed ONLY when section === 'queue'", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-cheap2-"));
     const cfg = makeCfg(root);
-    const done = join(cfg.vaultRoot, "q", "done");
-    const failed = join(cfg.vaultRoot, "q", "failed");
+    const done = join(cfg.queueRoot, "done");
+    const failed = join(cfg.queueRoot, "failed");
     mkdirSync(done, { recursive: true });
     mkdirSync(failed, { recursive: true });
     writeFileSync(join(done, "a.md"), "x");
@@ -85,7 +84,7 @@ describe("makeLocalCheapFn", () => {
   it("outbox: live + dead split via listOpsFrom", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-cheap3-"));
     const cfg = makeCfg(root);
-    const obx = join(cfg.stateDir, "github-outbox");
+    const obx = join(cfg.dataDir, "github-outbox");
     const dead = join(obx, "dead");
     mkdirSync(dead, { recursive: true });
     writeFileSync(

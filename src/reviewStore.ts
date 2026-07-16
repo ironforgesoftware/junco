@@ -2,7 +2,7 @@
  * Generic durable review-queue factory — the storage layer lifted out of
  * assessReview.ts (see that file's history) so a second review kind (pending
  * comment drafts, SP-2) can reuse the same durable-queue pattern: one JSON
- * file per entry under <state_dir>/<subdir>/ (atomic tmp+rename,
+ * file per entry under <dataDir>/<subdir>/ (atomic tmp+rename,
  * watchlist/outbox pattern). Never throws on read: missing → empty/null,
  * corrupt or shape-invalid (missing required fields — see requiredFields
  * below) → skipped (list) / `error` (read). Removed entries archive into a
@@ -38,7 +38,7 @@ export interface ReviewStore<T extends { id: string }> {
 /**
  * Filename for an entry id, confined to a single inert path component
  * (issue #32 class — see slug.ts). Applied at every read/write/remove call
- * site so the id can never escape <state_dir>/<subdir>/.
+ * site so the id can never escape <dataDir>/<subdir>/.
  */
 function entryFileName(id: string): string {
   return `${slugifyId(id)}.json`;
@@ -63,7 +63,7 @@ export function makeReviewStore<T extends { id: string }>(
   requiredFields: readonly string[] = ["id"],
 ): ReviewStore<T> {
   function dir(cfg: Config): string {
-    return join(cfg.stateDir, subdir);
+    return join(cfg.dataDir, subdir);
   }
 
   function archiveDir(cfg: Config, sub: string): string {

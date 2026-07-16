@@ -20,7 +20,7 @@ export interface WatchlistEntry {
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
 
 export function watchlistPath(cfg: Config): string {
-  return join(cfg.stateDir, "github-watchlist.json");
+  return join(cfg.dataDir, "github-watchlist.json");
 }
 
 /** Never throws: missing → empty; corrupt/invalid → empty + error message

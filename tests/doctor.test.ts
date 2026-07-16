@@ -12,10 +12,9 @@ import type { ResolvedModelInfo } from "../src/agent/session.js";
 
 const okConfig = {
   model: { id: "local/m", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "k", modelsJson: null },
-  vaultRoot: "/tmp/junco-doc-vault",
-  juncoSubdir: "",
+  dataDir: "/tmp/junco-doc-state",
+  queueRoot: "/tmp/junco-doc-vault",
   worktreeRoot: "/tmp/junco-doc-wt",
-  stateDir: "/tmp/junco-doc-state",
   gitBin: "git",
   ghBin: "gh",
   github: {
@@ -762,7 +761,7 @@ describe("runDoctor github checks", () => {
     const code = await runDoctor(
       "/x/config.json",
       deps({
-        loadConfigFn: () => ({ ...githubConfig([]), stateDir }) as Config,
+        loadConfigFn: () => ({ ...githubConfig([]), dataDir: stateDir }) as Config,
         execFn: async (_cmd: string, args: string[]) =>
           args.includes("get-url")
             ? { code: 0, stdout: "https://github.com/alx/coral.git\n", stderr: "" }
@@ -1091,14 +1090,17 @@ describe("runDoctor outbox checks", () => {
 
   it("warns on a queued backlog (does not fail doctor)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obx-"));
-    const { dir } = outboxPaths({ stateDir } as unknown as Config);
+    const { dir } = outboxPaths({ dataDir: stateDir } as unknown as Config);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "1-a-labels.json"), "{}", "utf8");
     writeFileSync(join(dir, "2-b-labels.json"), "{}", "utf8");
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/⚠ outbox backlog — 2 queued \(junco outbox flush\)/);
@@ -1106,13 +1108,16 @@ describe("runDoctor outbox checks", () => {
 
   it("warns on dead-letters, mentioning the dead/ dir (does not fail doctor)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obxdead-"));
-    const { dead } = outboxPaths({ stateDir } as unknown as Config);
+    const { dead } = outboxPaths({ dataDir: stateDir } as unknown as Config);
     mkdirSync(dead, { recursive: true });
     writeFileSync(join(dead, "1-a-labels.json"), "{}", "utf8");
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/⚠ outbox dead-letters/);
@@ -1130,7 +1135,7 @@ describe("runDoctor assess review checks", () => {
 
   it("reports pending reviews as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-review-"));
-    writePending({ stateDir } as unknown as Config, {
+    writePending({ dataDir: stateDir } as unknown as Config, {
       id: "a",
       nwo: "o/r",
       external: true,
@@ -1142,7 +1147,10 @@ describe("runDoctor assess review checks", () => {
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the review count must still surface.
@@ -1161,7 +1169,7 @@ describe("runDoctor analyze review checks", () => {
 
   it("reports pending drafts as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-draft-"));
-    writeDraft({ stateDir } as unknown as Config, {
+    writeDraft({ dataDir: stateDir } as unknown as Config, {
       id: "a",
       nwo: "o/r",
       issue: 1,
@@ -1175,7 +1183,10 @@ describe("runDoctor analyze review checks", () => {
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the draft count must still surface.

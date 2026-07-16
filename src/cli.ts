@@ -260,8 +260,8 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
   if (process.stdout.isTTY && process.env.JUNCO_LOG_JSON !== "1") setLogFormat("human");
   if (!cfg.logToFile) return () => {};
   try {
-    const logPath = join(cfg.stateDir, "worker.log");
-    mkdirSync(cfg.stateDir, { recursive: true });
+    const logPath = join(cfg.dataDir, "worker.log");
+    mkdirSync(cfg.dataDir, { recursive: true });
     const sink = opts.rotate ? openRotatingLogSink(logPath) : openAppendLogSink(logPath);
     setLogSink((l) => sink.write(l));
     return () => {
@@ -363,7 +363,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         maxQueuedTimeoutSecondsFn(cfg),
       );
       stopTimeoutSeconds = timeoutSeconds + 10 * 60;
-      logDir = cfg.stateDir;
+      logDir = cfg.dataDir;
     } catch {
       /* fall back to renderer defaults */
     }

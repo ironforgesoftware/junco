@@ -18,8 +18,6 @@ function cfg(root: string): Config {
     dataDir: root,
     queueRoot: join(root, "Junco"),
     legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    vaultRoot: root,
-    juncoSubdir: "Junco",
     model: {
       id: "m",
       source: "auto",
@@ -94,7 +92,6 @@ function cfg(root: string): Config {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
   };

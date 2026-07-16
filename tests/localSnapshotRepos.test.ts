@@ -6,11 +6,11 @@ import { enumerateRepos, collectRepoCandidates } from "../src/tui/localSnapshot.
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import type { Config } from "../src/types.js";
 
-/** Minimal Config over a sandboxed stateDir; only the fields the enumerators
+/** Minimal Config over a sandboxed dataDir; only the fields the enumerators
  * read are populated (same cast style as queueSnapshot.test.ts). */
 function makeCfg(root: string, overrides: Partial<Config> = {}): Config {
   return {
-    stateDir: join(root, "state"),
+    dataDir: join(root, "state"),
     worktreeRoot: join(root, "wt"),
     gitBin: "git",
     ghBin: "gh",
@@ -59,7 +59,7 @@ describe("collectRepoCandidates", () => {
       { nwo: "up/stream", path: join(root, "extclone"), external: true },
       { nwo: "owner/repo", path: join(root, "cfgrepo") }, // dup of config → config wins
     ]);
-    const clonesDir = join(cfg.stateDir, "repos");
+    const clonesDir = join(cfg.dataDir, "repos");
     const readdirFn = fakeReaddir({
       [cfg.github.externalReposRoot]: ["acme"],
       [join(cfg.github.externalReposRoot, "acme")]: ["widget"],
@@ -138,7 +138,7 @@ describe("enumerateRepos", () => {
     const repos = await enumerateRepos(cfg, {
       readdirFn: fakeReaddir({
         [cfg.github.externalReposRoot]: THROW,
-        [join(cfg.stateDir, "repos")]: THROW,
+        [join(cfg.dataDir, "repos")]: THROW,
       }),
       gitFn,
     });

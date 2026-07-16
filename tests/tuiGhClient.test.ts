@@ -18,7 +18,7 @@ const cfg = {
   healthEnabled: true,
   healthHost: "127.0.0.1",
   healthPort: 8787,
-  stateDir: mkdtempSync(join(tmpdir(), "junco-ghclient-state-")),
+  dataDir: mkdtempSync(join(tmpdir(), "junco-ghclient-state-")),
   branchPrefix: "junco/",
   github: {
     enabled: true,
@@ -132,7 +132,7 @@ describe("listIssues", () => {
 
   it("listIssues success writes the cache and returns staleAt null", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-cache-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const issues = [
       { number: 1, title: "T", labels: [], updatedAt: "2026-07-06T10:00:00Z", url: "u" },
     ];
@@ -144,7 +144,7 @@ describe("listIssues", () => {
 
   it("listIssues offline serves the cache with staleAt set", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-stale-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const issues = [
       { number: 1, title: "T", labels: [], updatedAt: "2026-07-06T10:00:00Z", url: "u" },
     ];
@@ -165,7 +165,7 @@ describe("listIssues", () => {
 
   it("listIssues offline with a wrong-shape cache treats it as absent → ok:false, no crash", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-badcache-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const path = cachePathFor(c2, "acme/api");
     mkdirSync(dirname(path), { recursive: true });
     // Valid JSON, wrong shape: `issues` is not an array.
@@ -181,7 +181,7 @@ describe("listIssues", () => {
 
   it("listIssues offline with no cache is an error (today's behavior)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-nocache-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const f = fakes({ failArgs: "issue list", failErr: NET });
     const r = await makeGhDashboardClient(c2, f).listIssues("acme/api");
     expect(r.ok).toBe(false);
@@ -300,7 +300,7 @@ describe("listPrs", () => {
 
   it("listPrs success writes the prs- cache and returns staleAt null", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prcache-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const r = await makeGhDashboardClient(c2, fakes({ prs: [rawPr()] })).listPrs("acme/api");
     expect(r.ok && r.value.staleAt).toBe(null);
     const path = join(stateDir, "github-cache", "prs-acme__api.json");
@@ -310,7 +310,7 @@ describe("listPrs", () => {
 
   it("listPrs offline serves the cache with staleAt set", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prstale-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const first = await makeGhDashboardClient(c2, fakes({ prs: [rawPr()] })).listPrs("acme/api");
     const path = join(stateDir, "github-cache", "prs-acme__api.json");
     const cachedFetchedAt = (JSON.parse(readFileSync(path, "utf8")) as { fetchedAt: string })
@@ -326,7 +326,7 @@ describe("listPrs", () => {
 
   it("listPrs offline with no cache is an error (today's behavior)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prnocache-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const f = fakes({ failArgs: "pr list", failErr: NET });
     const r = await makeGhDashboardClient(c2, f).listPrs("acme/api");
     expect(r.ok).toBe(false);
@@ -334,7 +334,7 @@ describe("listPrs", () => {
 
   it("permanent (non-network) error never reads the cache, even if one exists", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-prpermanent-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     // Seed a valid cache first.
     await makeGhDashboardClient(c2, fakes({ prs: [rawPr()] })).listPrs("acme/api");
     const forbidden = new GitOpError("gh failed", "HTTP 403: Forbidden", 1);
@@ -453,7 +453,7 @@ describe("applyAction label mapping", () => {
 
   it("applyAction offline queues a labels op and reports queued:true", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-offline-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const f = fakes({ failArgs: "issue edit", failErr: NET });
     const r = await makeGhDashboardClient(c2, f).applyAction("acme/api", 42, "dispatch", []);
     expect(r).toEqual({ ok: true, value: { queued: true } });
@@ -464,7 +464,7 @@ describe("applyAction label mapping", () => {
 
   it("applyAction permanent failure still returns ok:false and queues nothing", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-403-"));
-    const c2 = { ...cfg, stateDir } as Config;
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
     const forbidden = new GitOpError("gh failed", "HTTP 403: Forbidden", 1);
     const f = fakes({ failArgs: "issue edit", failErr: forbidden });
     const r = await makeGhDashboardClient(c2, f).applyAction("acme/api", 42, "dispatch", []);

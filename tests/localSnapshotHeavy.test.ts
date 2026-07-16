@@ -7,7 +7,7 @@ import type { Config } from "../src/types.js";
 
 function makeCfg(root: string): Config {
   return {
-    stateDir: join(root, "state"),
+    dataDir: join(root, "state"),
     worktreeRoot: join(root, "wt"),
     gitBin: "git",
     ghBin: "gh",

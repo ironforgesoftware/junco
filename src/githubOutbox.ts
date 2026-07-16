@@ -1,6 +1,6 @@
 /**
  * GitHub outbox — durable store-and-forward for GitHub side effects when the
- * network is down. One JSON file per op under <state_dir>/github-outbox/
+ * network is down. One JSON file per op under <dataDir>/github-outbox/
  * (atomic tmp+rename, watchlist pattern); filename
  * <epoch-ms>-<seq>-<rand>-<kind> makes lexicographic order the FIFO (and
  * per-issue) replay order — the random suffix only guards against two
@@ -92,7 +92,7 @@ export interface OutboxDeps {
 let seq = 0; // same-ms tiebreaker; module-lifetime monotonic
 
 export function outboxPaths(cfg: Config): { dir: string; dead: string } {
-  const dir = join(cfg.stateDir, "github-outbox");
+  const dir = join(cfg.dataDir, "github-outbox");
   return { dir, dead: join(dir, "dead") };
 }
 

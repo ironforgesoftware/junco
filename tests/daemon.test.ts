@@ -122,8 +122,6 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     dataDir: "/tmp/vault/state",
     queueRoot: "/tmp/vault/Junco",
     legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    vaultRoot: "/tmp/vault",
-    juncoSubdir: "Junco",
     model: {
       id: "omlx/test-model",
       source: "auto",
@@ -179,7 +177,6 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 0,
     logLevel: "info",
-    stateDir: "/tmp/vault/state",
     logToFile: false,
     transcriptsEnabled: false,
     github: {
@@ -446,13 +443,13 @@ describe("installSignalHandlers", () => {
 describe("overlayFrozenRestartFields", () => {
   it('pins every reload:"restart" lever to frozen; passes live-kind fields through', () => {
     const frozen = makeConfig({
-      vaultRoot: "/frozen/vault",
-      juncoSubdir: "FrozenJunco",
+      dataDir: "/frozen/state",
+      queueRoot: "/frozen/vault/FrozenJunco",
+      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
       maxConcurrent: 1,
       healthEnabled: false,
       healthHost: "127.0.0.1",
       healthPort: 8787,
-      stateDir: "/frozen/state",
       logToFile: false,
       transcriptsEnabled: false,
       pollIntervalSeconds: 15,
@@ -464,13 +461,13 @@ describe("overlayFrozenRestartFields", () => {
       },
     });
     const live = makeConfig({
-      vaultRoot: "/live/vault",
-      juncoSubdir: "LiveJunco",
+      dataDir: "/live/state",
+      queueRoot: "/live/vault/LiveJunco",
+      legacy: { vaultRoot: false, stateDir: true, worktreeRoot: false, externalReposRoot: false },
       maxConcurrent: 10,
       healthEnabled: true,
       healthHost: "0.0.0.0",
       healthPort: 9999,
-      stateDir: "/live/state",
       logToFile: true,
       transcriptsEnabled: true,
       pollIntervalSeconds: 42,
@@ -486,13 +483,13 @@ describe("overlayFrozenRestartFields", () => {
     const result = overlayFrozenRestartFields(frozen, live);
 
     // Restart-kind flat fields: pinned to frozen, never the live edit.
-    expect(result.vaultRoot).toBe(frozen.vaultRoot);
-    expect(result.juncoSubdir).toBe(frozen.juncoSubdir);
+    expect(result.dataDir).toBe(frozen.dataDir);
+    expect(result.queueRoot).toBe(frozen.queueRoot);
+    expect(result.legacy).toEqual(frozen.legacy);
     expect(result.maxConcurrent).toBe(frozen.maxConcurrent);
     expect(result.healthEnabled).toBe(frozen.healthEnabled);
     expect(result.healthHost).toBe(frozen.healthHost);
     expect(result.healthPort).toBe(frozen.healthPort);
-    expect(result.stateDir).toBe(frozen.stateDir);
     expect(result.logToFile).toBe(frozen.logToFile);
     expect(result.transcriptsEnabled).toBe(frozen.transcriptsEnabled);
     expect(result.github.enabled).toBe(frozen.github.enabled);
@@ -700,7 +697,7 @@ describe("mainLoop — provider gate wiring", () => {
         mkdirSync(join(j, d), { recursive: true });
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-      const cfg = makeConfig({ vaultRoot: root });
+      const cfg = makeConfig({ queueRoot: j });
       const stop = new StopFlag();
       const { deps } = makeDeps({
         // Leave runOnceFn undefined so mainLoop builds its own default, which
@@ -737,7 +734,7 @@ describe("mainLoop — provider gate wiring", () => {
         mkdirSync(join(j, d), { recursive: true });
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-      const cfg = makeConfig({ vaultRoot: root, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+      const cfg = makeConfig({ queueRoot: j, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
       const stop = new StopFlag();
       const { deps } = makeDeps({
         // Leave claimFn/executeFn undefined so runScheduler builds its own
@@ -868,7 +865,7 @@ describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
         mkdirSync(join(j, d), { recursive: true });
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-      const cfg = makeConfig({ vaultRoot: root, dailyBudgetUsd: 3 });
+      const cfg = makeConfig({ queueRoot: j, dailyBudgetUsd: 3 });
       const stop = new StopFlag();
       // A real gate (not the static fakeGate) so reportBudgetExhausted
       // actually latches state that claimBlockReason() then observes.
@@ -903,7 +900,7 @@ describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
   it("blocks claiming with a real ProviderGate + SpendLedger once exceeded, and resumes once BOTH the gate's until and the ledger's calendar day roll past midnight", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-daemon-budget-real-"));
     const stateDir = join(root, "state");
-    const cfg = makeConfig({ vaultRoot: root, stateDir, dailyBudgetUsd: 3 });
+    const cfg = makeConfig({ dataDir: stateDir, dailyBudgetUsd: 3 });
     const stop = new StopFlag();
 
     // Single shared, mutable clock driving BOTH the gate's auto-expiry and
@@ -969,7 +966,7 @@ describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
 // runOnceBox/executeClaimedBox passthrough boxes declared at the top of this
 // file) to inspect the deps object daemon.ts actually constructs — proving
 // both the DEFAULT ledger's construction (absent deps.spend, built from
-// cfg.stateDir) and its threading into both the serial and scheduler paths.
+// cfg.dataDir) and its threading into both the serial and scheduler paths.
 // ---------------------------------------------------------------------------
 
 describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
@@ -978,10 +975,10 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
   // `finally` — the boxes must stay on the real passthrough for every other
   // test in this file (see the vi.mock factory at the top).
 
-  it("serial mode: absent deps.spend → mainLoop builds a REAL makeSpendLedger(cfg.stateDir) and threads it into the DEFAULT runOnceFn", async () => {
+  it("serial mode: absent deps.spend → mainLoop builds a REAL makeSpendLedger(cfg.dataDir) and threads it into the DEFAULT runOnceFn", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-serial-"));
     const stateDir = join(root, "state");
-    const cfg = makeConfig({ vaultRoot: root, stateDir });
+    const cfg = makeConfig({ dataDir: stateDir });
     const stop = new StopFlag();
     const captured: unknown[] = [];
     const realRunOnce = runOnceBox.current;
@@ -1004,7 +1001,7 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
       const passedSpend = (captured[0] as { spend?: { recordUsd: (usd: number) => void } }).spend;
       expect(passedSpend).toBeDefined();
       expect(typeof passedSpend?.recordUsd).toBe("function");
-      // Prove it's a genuinely WORKING makeSpendLedger(cfg.stateDir) instance
+      // Prove it's a genuinely WORKING makeSpendLedger(cfg.dataDir) instance
       // (not a stub) — record through it and read the persisted file back.
       passedSpend!.recordUsd(1.5);
       const ledger = JSON.parse(readFileSync(join(stateDir, "spend.json"), "utf8")) as {
@@ -1025,8 +1022,8 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
     writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
     const stateDir = join(root, "state");
     const cfg = makeConfig({
-      vaultRoot: root,
-      stateDir,
+      queueRoot: j,
+      dataDir: stateDir,
       maxConcurrent: 2,
       pollIntervalSeconds: 0.001,
     });
@@ -1070,7 +1067,7 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
     // Serial mode.
     {
       const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-explicit-serial-"));
-      const cfg = makeConfig({ vaultRoot: root, stateDir: join(root, "state") });
+      const cfg = makeConfig({ dataDir: join(root, "state") });
       const stop = new StopFlag();
       const captured: unknown[] = [];
       const realRunOnce = runOnceBox.current;
@@ -1102,8 +1099,8 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
       const cfg = makeConfig({
-        vaultRoot: root,
-        stateDir: join(root, "state"),
+        queueRoot: j,
+        dataDir: join(root, "state"),
         maxConcurrent: 2,
         pollIntervalSeconds: 0.001,
       });
@@ -1285,23 +1282,23 @@ describe("mainLoop — observability", () => {
 
   it("mainLoop hot-applies a live lever edit but pins a restart-kind lever to the frozen startup cfg", async () => {
     // A live edit to model.id (reload:"live") must reach the very next
-    // runOnceFn; a simultaneous edit to vaultRoot (reload:"restart") must
-    // NEVER reach it — runOnce derives queue paths from cfg.vaultRoot, so a
+    // runOnceFn; a simultaneous edit to queueRoot (reload:"restart") must
+    // NEVER reach it — runOnce derives queue paths from cfg.queueRoot, so a
     // hot-applied edit there would silently move the daemon onto a different
     // (likely nonexistent) queue mid-run.
-    const startCfg = makeConfig({ vaultRoot: "/frozen/vault", pollIntervalSeconds: 1 });
+    const startCfg = makeConfig({ queueRoot: "/frozen/queue", pollIntervalSeconds: 1 });
     const holder = makeConfigHolder(startCfg);
     const stop = new StopFlag();
-    const seenVaultRoots: string[] = [];
+    const seenQueueRoots: string[] = [];
     const seenModelIds: string[] = [];
     let n = 0;
     const runOnceFn = async (c: Config) => {
-      seenVaultRoots.push(c.vaultRoot);
+      seenQueueRoots.push(c.queueRoot);
       seenModelIds.push(c.model.id);
       if (n === 0) {
         holder.current = {
           ...holder.current,
-          vaultRoot: "/live/vault", // restart-kind — must NOT reach the next runOnceFn
+          queueRoot: "/live/queue", // restart-kind — must NOT reach the next runOnceFn
           model: { ...holder.current.model, id: "model-v2" }, // live-kind — must
         };
       }
@@ -1329,7 +1326,7 @@ describe("mainLoop — observability", () => {
       },
     );
     expect(seenModelIds).toEqual([startCfg.model.id, "model-v2"]);
-    expect(seenVaultRoots).toEqual([startCfg.vaultRoot, startCfg.vaultRoot]);
+    expect(seenQueueRoots).toEqual([startCfg.queueRoot, startCfg.queueRoot]);
   });
 });
 
@@ -1473,7 +1470,7 @@ describe("runScheduler", () => {
       mkdirSync(join(j, d), { recursive: true });
     }
     writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-    const cfg = makeConfig({ vaultRoot: root, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const cfg = makeConfig({ queueRoot: j, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
     const stop = new StopFlag();
     const executeFn = (c: Config, w: ClaimedWork): Promise<void> =>
       executeClaimed(c, w, {
@@ -1699,11 +1696,11 @@ describe("outbox drain (local mode)", () => {
 
   /** Real fs: enqueueOp/outboxDepth are not injected through MainLoopDeps
    * (they're cheap direct fs calls, mirrored on the bridge sweep's own
-   * throttle), so these tests use a real tmp stateDir rather than a fake. */
+   * throttle), so these tests use a real tmp dataDir rather than a fake. */
   const tmpStateDir = (): string => mkdtempSync(join(tmpdir(), "junco-daemon-obx-"));
 
   it("github disabled + depth > 0: drain fn is called on the throttle cadence", async () => {
-    const cfg = makeConfig({ stateDir: tmpStateDir(), github: disabledGithub(3600) });
+    const cfg = makeConfig({ dataDir: tmpStateDir(), github: disabledGithub(3600) });
     enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
     expect(outboxDepth(cfg)).toBe(1);
 
@@ -1729,7 +1726,7 @@ describe("outbox drain (local mode)", () => {
   });
 
   it("github disabled + depth 0: drain fn is never called (nothing to flush)", async () => {
-    const cfg = makeConfig({ github: disabledGithub(3600) }); // no stateDir → depth 0
+    const cfg = makeConfig({ github: disabledGithub(3600) }); // no dataDir override → depth 0
     let drains = 0;
     const stop = new StopFlag();
     const { deps } = makeDeps({
@@ -1749,7 +1746,7 @@ describe("outbox drain (local mode)", () => {
   });
 
   it("github enabled: the standalone drain is never used (the bridge sweep already flushes first)", async () => {
-    const cfg = makeConfig({ stateDir: tmpStateDir(), github: enabledGithub(3600) });
+    const cfg = makeConfig({ dataDir: tmpStateDir(), github: enabledGithub(3600) });
     enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
 
     let drains = 0;
@@ -1772,7 +1769,7 @@ describe("outbox drain (local mode)", () => {
   });
 
   it("a drain error does not crash the loop", async () => {
-    const cfg = makeConfig({ stateDir: tmpStateDir(), github: disabledGithub(60) });
+    const cfg = makeConfig({ dataDir: tmpStateDir(), github: disabledGithub(60) });
     enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
 
     const stop = new StopFlag();
@@ -1791,7 +1788,7 @@ describe("outbox drain (local mode)", () => {
 
   it("scheduler mode (max_concurrent > 1) also drains when github is disabled", async () => {
     const cfg = makeConfig({
-      stateDir: tmpStateDir(),
+      dataDir: tmpStateDir(),
       github: disabledGithub(3600),
       maxConcurrent: 2,
     });

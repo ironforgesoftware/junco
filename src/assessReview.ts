@@ -1,6 +1,6 @@
 /**
  * Durable review queue for `junco assess` — one JSON file per audit batch under
- * <state_dir>/assess-review/ (atomic tmp+rename, watchlist/outbox pattern). The
+ * <dataDir>/assess-review/ (atomic tmp+rename, watchlist/outbox pattern). The
  * audit (assessFlow.ts) PARKS findings here; a human-confirmed file step
  * (assessFiling.ts, via the CLI) files them. Never throws on read: missing →
  * empty, corrupt → skipped/`error`. Reviewed batches archive to filed/.

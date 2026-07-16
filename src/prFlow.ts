@@ -475,7 +475,7 @@ export async function runPrFlow(
     : undefined;
   // Per-ticket event transcript (worker + corrective append to one file).
   const transcriptPath = cfg.transcriptsEnabled
-    ? transcriptPathFor(cfg.stateDir, task.id)
+    ? transcriptPathFor(cfg.dataDir, task.id)
     : undefined;
   // A ticket-level `tools:` overrides the configured allowlist for THIS
   // ticket's sessions (worker + corrective). Everything else keeps cfg.

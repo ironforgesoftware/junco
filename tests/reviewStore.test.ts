@@ -10,7 +10,7 @@ interface Item {
   note: string;
 }
 const store = makeReviewStore<Item>("test-review");
-const cfg = (stateDir: string): Config => ({ stateDir }) as unknown as Config;
+const cfg = (stateDir: string): Config => ({ dataDir: stateDir }) as unknown as Config;
 
 describe("makeReviewStore", () => {
   it("writes, lists, reads, and archives to a named subdir", () => {

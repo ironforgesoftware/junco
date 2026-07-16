@@ -109,8 +109,6 @@ export interface Config {
   queueRoot: string;
   /** Which deprecated path keys are explicitly set (drives warnings + provenance). */
   legacy: LegacyPathFlags;
-  vaultRoot: string;
-  juncoSubdir: string;
   model: ModelConfig;
   tools: string[];
   defaultTimeoutMinutes: number;
@@ -167,8 +165,6 @@ export interface Config {
   healthHost: string;
   healthPort: number;
   logLevel: "debug" | "info" | "warn" | "error";
-  // Daemon-owned state (worker.log + transcripts/) lives under stateDir.
-  stateDir: string;
   logToFile: boolean;
   transcriptsEnabled: boolean;
   // GitHub-integrated inbox mode (issues → tickets bridge). See githubInbox.ts.

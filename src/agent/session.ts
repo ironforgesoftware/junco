@@ -480,7 +480,7 @@ export async function resolveSandbox(
     cwd,
     scratchDir,
     home,
-    stateDir: cfg.stateDir,
+    stateDir: cfg.dataDir,
     network,
     botGhConfigDir: cfg.botAccount.configDir,
   });

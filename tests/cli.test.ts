@@ -616,8 +616,7 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
     writeFileSync(join(inbox, "big.md"), "---\ntimeout_minutes: 180\n---\nbody\n");
     const captured: string[] = [];
     const cfg = {
-      vaultRoot: dir,
-      juncoSubdir: "",
+      queueRoot: dir,
       defaultTimeoutMinutes: 30,
     } as unknown as Config;
     const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
@@ -638,8 +637,7 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
     writeFileSync(join(dir, "inbox", "small.md"), "---\ntimeout_minutes: 10\n---\nbody\n");
     const captured: string[] = [];
     const cfg = {
-      vaultRoot: dir,
-      juncoSubdir: "",
+      queueRoot: dir,
       defaultTimeoutMinutes: 30,
     } as unknown as Config;
     const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
@@ -685,13 +683,11 @@ describe("lock path derivation", () => {
 
 /**
  * Full Config object satisfying all required fields for tests that touch the
- * real FS (inbox-path, submit, init).  vaultRoot is overridden per test.
+ * real FS (inbox-path, submit, init). dataDir/queueRoot are overridden per
+ * test in freshDispatchVault() so they track that test's own tmpdir.
  */
-const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
-  dataDir: "/tmp/junco-cli-dispatch-data",
-  queueRoot: "/tmp/junco-cli-dispatch-data/queue",
+const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = {
   legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-  juncoSubdir: "Junco",
   model: {
     id: "test-model",
     source: "auto",
@@ -747,7 +743,6 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   logLevel: "info",
-  stateDir: "/tmp/vault/state",
   logToFile: false,
   transcriptsEnabled: false,
   github: {
@@ -776,7 +771,11 @@ let dispatchTmpDirs: string[] = [];
 function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: string } {
   const vaultRoot = mkdtempSync(join(tmpdir(), "junco-cli-dispatch-"));
   dispatchTmpDirs.push(vaultRoot);
-  const cfg: Config = { ...DISPATCH_CONFIG_BASE, vaultRoot };
+  const cfg: Config = {
+    ...DISPATCH_CONFIG_BASE,
+    dataDir: vaultRoot,
+    queueRoot: join(vaultRoot, "Junco"),
+  };
   // write a real config.json so loadConfig can load it
   const configPath = join(vaultRoot, "config.json");
   writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
@@ -988,10 +987,10 @@ describe("run(['dashboard']) — routing", () => {
 describe("run(['outbox'])", () => {
   it("returns 0 and prints 'outbox empty' when nothing is queued", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["outbox", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -1000,10 +999,10 @@ describe("run(['outbox'])", () => {
 
   it("routes `outbox flush` to the flush path (exit 0 on a clean flush of nothing)", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["outbox", "flush", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -1051,10 +1050,10 @@ describe("run(['outbox'])", () => {
 describe("run(['prs'])", () => {
   it("returns 0 and prints the no-watched-repos guidance when none are configured", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["prs", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -1068,10 +1067,10 @@ describe("run(['assess']) — routing", () => {
   it("routes `assess <path> --auto-plan` to runAssessCommand, threading the flag into the queued ticket", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
     const repoDir = mkdtempSync(join(tmpdir(), "junco-cli-assess-repo-"));
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["assess", repoDir, "--auto-plan", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -1087,10 +1086,10 @@ describe("run(['assess']) — routing", () => {
 
   it("no target -> exit 2, usage line", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["assess", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(2);

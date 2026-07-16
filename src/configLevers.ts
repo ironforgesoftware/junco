@@ -619,7 +619,7 @@ export const LEVERS: Lever[] = [
     default: true,
     editable: true,
     reload: "restart",
-    description: "Write daemon logs to a file under stateDir.",
+    description: "Write daemon logs to a file under dataDir.",
   },
   {
     path: "observability.transcripts",
@@ -627,7 +627,7 @@ export const LEVERS: Lever[] = [
     default: true,
     editable: true,
     reload: "restart",
-    description: "Write per-ticket event transcripts under stateDir.",
+    description: "Write per-ticket event transcripts under dataDir.",
   },
 
   // --- github.* ---

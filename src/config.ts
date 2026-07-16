@@ -360,8 +360,6 @@ export function assembleConfig(
     dataDir,
     queueRoot,
     legacy,
-    vaultRoot: d.vaultRoot ? expandHome(d.vaultRoot) : dataDir, // kept until Task 2 removes it
-    juncoSubdir: d.vaultRoot ? d.juncoSubdir : "queue", // kept until Task 2 removes it
     tools: d.tools,
     model: {
       id: d.model.id,
@@ -429,7 +427,6 @@ export function assembleConfig(
     healthHost: d.observability.healthHost,
     healthPort: d.observability.healthPort,
     logLevel: d.observability.logLevel,
-    stateDir: dataDir, // kept until Task 2 removes it
     logToFile: d.observability.logToFile,
     transcriptsEnabled: d.observability.transcripts,
     github: {
@@ -479,7 +476,7 @@ export function validateConfigObject(obj: unknown): void {
 }
 
 export function queuePaths(cfg: Config): Paths {
-  const root = join(cfg.vaultRoot, cfg.juncoSubdir);
+  const root = cfg.queueRoot;
   return {
     inbox: join(root, "inbox"),
     processing: join(root, "processing"),

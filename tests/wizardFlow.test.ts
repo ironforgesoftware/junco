@@ -106,7 +106,7 @@ describe("buildConfigObject / renderConfigJson", () => {
 
   it("escapes JSON-hostile strings", () => {
     const a = { ...defaultAnswers(), vaultRoot: '/tmp/we"ird\\path' };
-    expect(loadRendered(a).vaultRoot).toBe('/tmp/we"ird\\path');
+    expect(loadRendered(a).queueRoot).toBe('/tmp/we"ird\\path');
   });
 });
 

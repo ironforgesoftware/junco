@@ -20,9 +20,7 @@ const NONEXISTENT_STATE_DIR = "/nonexistent-junco-assesscmd-state";
 
 function cfg(repos: GithubRepoMapping[] = [], stateDir: string = NONEXISTENT_STATE_DIR): Config {
   return {
-    vaultRoot: "/vault",
-    juncoSubdir: "Junco",
-    stateDir,
+    dataDir: stateDir,
     github: {
       enabled: false,
       triggerLabel: "junco",

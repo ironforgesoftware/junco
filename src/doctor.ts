@@ -391,7 +391,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     for (const [label, dir] of [
       ["queue", dirname(paths.inbox)],
       ["worktree root", cfg.worktreeRoot],
-      ["state dir", cfg.stateDir],
+      ["state dir", cfg.dataDir],
     ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
     }

@@ -18,8 +18,6 @@ function makeFakeConfig(): Config {
     dataDir: "/tmp/q",
     queueRoot: "/tmp/q/Junco",
     legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    vaultRoot: "/tmp/q",
-    juncoSubdir: "Junco",
     model: {
       id: "m",
       source: "auto",
@@ -94,7 +92,6 @@ function makeFakeConfig(): Config {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: "/tmp/q/state",
     logToFile: false,
     transcriptsEnabled: false,
   };

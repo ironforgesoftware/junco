@@ -28,8 +28,6 @@ function cfg(root: string): Config {
     dataDir: root,
     queueRoot: join(root, "Junco"),
     legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    vaultRoot: root,
-    juncoSubdir: "Junco",
     model: {
       id: "m",
       source: "auto",
@@ -104,7 +102,6 @@ function cfg(root: string): Config {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
   };
@@ -1018,18 +1015,18 @@ describe("transcript path sanitization (issue #32)", () => {
     ["inbox", "processing", "done", "failed"].forEach((d) =>
       mkdirSync(join(j, d), { recursive: true }),
     );
-    // A hostile id that would escape stateDir/transcripts/ if used verbatim.
+    // A hostile id that would escape dataDir/transcripts/ if used verbatim.
     writeFileSync(
       join(j, "inbox", "evil.md"),
       "---\nid: ../../../../pwned\n---\n# Q\nask\n",
       "utf8",
     );
     const stateDir = join(root, "state");
-    const c: Config = { ...cfg(root), stateDir, transcriptsEnabled: true };
+    const c: Config = { ...cfg(root), dataDir: stateDir, transcriptsEnabled: true };
 
     await runOnce(c, { sessionFactoryFor: () => fakeFactory() });
 
-    // The transcript must live inside stateDir/transcripts/ as a single inert
+    // The transcript must live inside dataDir/transcripts/ as a single inert
     // filename — never at the traversal target. Poll until the async stream
     // flushes it rather than asserting on a single synchronous readdirSync
     // (issue #157).

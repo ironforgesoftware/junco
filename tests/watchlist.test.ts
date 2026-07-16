@@ -16,7 +16,7 @@ function tmp(): string {
 }
 function cfgWith(stateDir: string, repos: { nwo: string; path: string }[]): Config {
   return {
-    stateDir,
+    dataDir: stateDir,
     github: {
       enabled: true,
       triggerLabel: "junco",

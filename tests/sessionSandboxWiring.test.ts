@@ -4,9 +4,9 @@ import { SandboxUnavailableError } from "../src/agent/sandbox/index.js";
 import type { Config } from "../src/types.js";
 
 function cfgWith(sandbox: Partial<Config["sandbox"]>): Config {
-  // resolveSandbox only reads cfg.sandbox, cfg.stateDir, and cfg.botAccount.configDir.
+  // resolveSandbox only reads cfg.sandbox, cfg.dataDir, and cfg.botAccount.configDir.
   return {
-    stateDir: "/tmp/state",
+    dataDir: "/sbxroot/state",
     botAccount: {
       enabled: false,
       configDir: "/sbxroot/junco-gh",

@@ -31,8 +31,7 @@ function writeRaw(basename: string, body: string): string {
 describe("loadConfig (JSON)", () => {
   it("parses a minimal config and fills defaults", () => {
     const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/vault" }));
-    expect(cfg.vaultRoot).toBe("/tmp/vault");
-    expect(cfg.juncoSubdir).toBe("Junco");
+    expect(cfg.queueRoot).toBe(join("/tmp/vault", "Junco"));
     expect(cfg.model.id).toBe("local/my-model");
     expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
     expect(cfg.model.api).toBe("openai-completions");
@@ -88,7 +87,7 @@ describe("loadConfig (JSON)", () => {
         github: { enabled: true, triggerLabel: "bot" },
       }),
     );
-    expect(cfg.vaultRoot).not.toContain("~");
+    expect(cfg.queueRoot).not.toContain("~");
     expect(cfg.github.askLabel).toBe("bot:ask");
     expect(cfg.github.externalReposRoot).toBe("/state/clones/external");
     expect(cfg.github.plannerModelId).toBeNull();
@@ -158,8 +157,8 @@ describe("loadConfig (JSON)", () => {
 
   it("expands a leading ~ in vaultRoot to the home dir", () => {
     const cfg = loadConfig(writeJson({ vaultRoot: "~/vault" }));
-    expect(cfg.vaultRoot).not.toContain("~");
-    expect(cfg.vaultRoot).toBe(join(homedir(), "vault"));
+    expect(cfg.queueRoot).not.toContain("~");
+    expect(cfg.queueRoot).toBe(join(homedir(), "vault", "Junco"));
   });
 
   it("applies supervisor defaults when supervisor is absent", () => {
@@ -285,7 +284,7 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.maxTransientRetries).toBe(2);
     expect(cfg.retryBackoffSeconds).toBe(60);
     expect(cfg.maxConcurrent).toBe(1);
-    expect(cfg.stateDir).toBe(join(homedir(), ".local/state/junco"));
+    expect(cfg.dataDir).toBe(join(homedir(), ".local/state/junco"));
     expect(cfg.logToFile).toBe(true);
     expect(cfg.transcriptsEnabled).toBe(true);
     expect(cfg.allowedRepoRoots).toEqual([]);
@@ -311,7 +310,7 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.maxTransientRetries).toBe(0);
     expect(cfg.retryBackoffSeconds).toBe(5);
     expect(cfg.maxConcurrent).toBe(3);
-    expect(cfg.stateDir).toBe(join(homedir(), "x"));
+    expect(cfg.dataDir).toBe(join(homedir(), "x"));
     expect(cfg.logToFile).toBe(false);
     expect(cfg.transcriptsEnabled).toBe(false);
     expect(cfg.allowedRepoRoots).toEqual([join(homedir(), "code")]);
@@ -563,8 +562,8 @@ describe("resolveConfigPath / defaultUserConfigPath", () => {
 });
 
 describe("queuePaths", () => {
-  it("derives queue paths under vaultRoot/juncoSubdir", () => {
-    const paths = queuePaths({ vaultRoot: "/v", juncoSubdir: "Junco" } as any);
+  it("derives queue paths under queueRoot", () => {
+    const paths = queuePaths({ queueRoot: "/v/Junco" } as any);
     expect(paths.inbox).toBe("/v/Junco/inbox");
     expect(paths.failed).toBe("/v/Junco/failed");
   });
