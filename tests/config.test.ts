@@ -293,6 +293,11 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.dailyBudgetUsd).toBe(0);
   });
 
+  it("updateCheck defaults true and honors an explicit false", () => {
+    expect(loadConfig(writeJson({ vaultRoot: "/v" })).updateCheck).toBe(true);
+    expect(loadConfig(writeJson({ vaultRoot: "/v", updateCheck: false })).updateCheck).toBe(false);
+  });
+
   it("resilience keys are configurable", () => {
     const cfg = loadConfig(
       writeJson({

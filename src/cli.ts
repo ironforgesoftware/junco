@@ -195,6 +195,7 @@ Subcommands:
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive dashboard — first run opens the guided setup walkthrough
   restart      Restart the supervised daemon (picks up config + code changes)
+  update       Update junco to the latest npm release (drains, then restarts the daemon)
   worktree prune <path>  Prune a stale/backup worktree (lock-guarded; refuses live)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
@@ -211,6 +212,7 @@ Options:
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
   --help, -h            Show this help message
+  --version             Print junco's version and exit
 `;
 
 // ---------------------------------------------------------------------------
@@ -227,6 +229,7 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       config: { type: "string" },
       once: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
+      version: { type: "boolean", default: false },
       platform: { type: "string" },
       all: { type: "boolean", default: false },
       only: { type: "string" },
@@ -319,6 +322,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // --help / -h
   if (values.help) {
     process.stdout.write(USAGE);
+    return 0;
+  }
+
+  // --version (bare version only — junco update's post-install verify parses it)
+  if (values.version) {
+    const { getSelfPackage } = await import("./updateCheck.js");
+    (deps.printFn ?? ((s: string) => process.stdout.write(s)))(`${getSelfPackage().version}\n`);
     return 0;
   }
 
@@ -752,6 +762,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       deps.runRestartFn ??
       (async (p: string) => (await import("./restartCmd.js")).runRestartCommand(p));
     return runRestartFn(configPath);
+  }
+
+  // ------------------------------------------------------------
+  // update: npm-install the latest release, drain-restart the daemon. Lazy
+  // import keeps npm/child_process plumbing off every other subcommand.
+  // ------------------------------------------------------------
+  if (subcommand === "update") {
+    const { runUpdateCommand } = await import("./updateCmd.js");
+    return runUpdateCommand(configPath, {});
   }
 
   // ------------------------------------------------------------

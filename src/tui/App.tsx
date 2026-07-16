@@ -17,6 +17,7 @@ import { readWatchlist, writeWatchlist } from "../watchlist.js";
 import { expandHome } from "../config.js";
 import { join } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
+import type { UpdateInfo } from "../updateCheck.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
 import { computeLayout } from "./layout.js";
 import { windowSlice } from "./window.js";
@@ -88,6 +89,8 @@ export interface AppProps {
    * in-process (no subprocess). Absent when App is mounted standalone. */
   onRequestWizard?: () => void;
   onExit: () => void;
+  /** Best-effort npm update check (spec 2026-07-16); absent in tests → no chip. */
+  checkUpdateFn?: () => Promise<UpdateInfo | null>;
 }
 
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
@@ -309,6 +312,9 @@ export function App(props: AppProps): React.JSX.Element {
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
   const [localRefreshedAt, setLocalRefreshedAt] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // Latest npm version when newer than the running one (header chip + help
+  // line); null when no update is known/available.
+  const [updateLatest, setUpdateLatest] = useState<string | null>(null);
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
 
@@ -811,6 +817,28 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [assessHistoryFn, assessHistoryPollMs]);
+
+  // Update-check polling: fires once on mount (never blocks first paint —
+  // async post-mount) and every 24h thereafter. Absent checkUpdateFn (tests,
+  // or a config with updateCheck disabled upstream) → chip/help line stay off.
+  useEffect(() => {
+    const fn = props.checkUpdateFn;
+    if (!fn) return;
+    let cancelled = false;
+    const tick = (): void => {
+      void fn()
+        .then((info) => {
+          if (!cancelled) setUpdateLatest(info !== null && info.available ? info.latest : null);
+        })
+        .catch(() => {}); // checkForUpdate never throws; belt for injected fakes
+    };
+    tick();
+    const t = setInterval(tick, 24 * 60 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [props.checkUpdateFn]);
 
   // Full sweep on mount and whenever the watchlist changes (refreshAll's
   // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
@@ -2379,6 +2407,7 @@ export function App(props: AppProps): React.JSX.Element {
       trigger={trigger}
       uiMode={uiMode}
       localSection={localSection}
+      updateLatest={updateLatest}
     />
   ) : view === "palette" ? (
     <Modal title="run a junco command" minWidth={64}>
@@ -2411,6 +2440,7 @@ export function App(props: AppProps): React.JSX.Element {
           uiMode={uiMode}
           githubEnabled={props.githubEnabled}
           onModeTab={handleModeTab}
+          updateLatest={updateLatest}
         />
       }
       toast={toast}

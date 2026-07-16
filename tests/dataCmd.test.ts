@@ -328,6 +328,16 @@ describe("runData — text mode", () => {
     expect(out).toContain("$3.50 today");
   });
 
+  it("lists update-check.json in the files section", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const out = captured.join("");
+    expect(out).toContain("update-check.json");
+  });
+
   it("reports $0.00 today for a STALE spend.json (previous local day) — todayUsd semantics", () => {
     // src/spendLedger.ts read(): a non-matching date is a day rollover → 0.
     // `junco data` must agree with todayUsd(), not reprint yesterday's total.

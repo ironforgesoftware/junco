@@ -49,6 +49,7 @@ interface DataCounts {
   assessHistory: { repos: number };
   transcripts: { files: number; bytes: number };
   watchlistFile: FileInfo;
+  updateCheckFile: FileInfo;
   spendFile: FileInfo & { usd: number | null };
   metricsFile: FileInfo;
   logFile: FileInfo;
@@ -272,6 +273,7 @@ function computeCounts(
     assessHistory: { repos: countJson(p.assessHistory, readdirFn) },
     transcripts: flatFilesAndBytes(p.transcripts, readdirFn, statFn),
     watchlistFile: fileInfo(p.watchlistFile, existsFn, statFn),
+    updateCheckFile: fileInfo(p.updateCheckFile, existsFn, statFn),
     spendFile: {
       ...fileInfo(p.spendFile, existsFn, statFn),
       usd: readSpendUsd(cfg.dataDir, p.spendFile, existsFn, readFileFn),
@@ -389,6 +391,7 @@ function renderText(
     );
   };
   fileLine("watchlist.json", p.watchlistFile, counts.watchlistFile);
+  fileLine("update-check.json", p.updateCheckFile, counts.updateCheckFile);
   fileLine(
     "spend.json",
     p.spendFile,

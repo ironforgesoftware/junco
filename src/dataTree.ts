@@ -18,6 +18,7 @@ export const CLONES_WATCHED_SUBDIR = "clones/watched";
 export const CLONES_EXTERNAL_SUBDIR = "clones/external";
 export const ASSESS_HISTORY_SUBDIR = "assess-history";
 export const WATCHLIST_FILENAME = "watchlist.json";
+export const UPDATE_CHECK_FILENAME = "update-check.json";
 
 export interface DataTreePaths {
   root: string;
@@ -32,6 +33,7 @@ export interface DataTreePaths {
   assessHistory: string; // per-repo `junco assess` history (one file per repo)
   transcripts: string;
   watchlistFile: string;
+  updateCheckFile: string; // npm update-check cache (spec 2026-07-16)
   spendFile: string;
   metricsFile: string; // PR 3 writes it; listed now
   logFile: string;
@@ -53,6 +55,7 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     assessHistory: join(r, ASSESS_HISTORY_SUBDIR),
     transcripts: join(r, "transcripts"),
     watchlistFile: join(r, WATCHLIST_FILENAME),
+    updateCheckFile: join(r, UPDATE_CHECK_FILENAME),
     spendFile: join(r, "spend.json"),
     metricsFile: join(r, "metrics.json"),
     logFile: join(r, "worker.log"),
@@ -86,7 +89,14 @@ export function sandboxDenyPaths(cfg: Config): { dirs: string[]; files: string[]
       // in PR 2) — not in dataTreePaths, but present under real data roots.
       join(p.root, "github-cache"),
     ],
-    files: [p.watchlistFile, p.spendFile, p.metricsFile, p.logFile, p.migratedFile],
+    files: [
+      p.watchlistFile,
+      p.updateCheckFile,
+      p.spendFile,
+      p.metricsFile,
+      p.logFile,
+      p.migratedFile,
+    ],
   };
 }
 

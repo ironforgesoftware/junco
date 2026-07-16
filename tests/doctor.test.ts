@@ -84,6 +84,10 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     accessOkFn: () => true,
     lockHolderFn: () => null,
     printFn: () => {},
+    // Default to "skipped" (never hits the real network/fs cache) — every
+    // pre-existing test that doesn't care about the update check stays
+    // hermetic; the version-check describe block below overrides this.
+    checkUpdateFn: async () => null,
     ...over,
   };
 }
@@ -1347,6 +1351,54 @@ describe("runDoctor assess history checks", () => {
     expect(lines.join("")).toMatch(
       /✓ assess history — o\/other: never assessed \(last attempt failed\)/,
     );
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+});
+
+describe("runDoctor version check", () => {
+  it("doctor reports an available update as a warning", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        checkUpdateFn: async () => ({ current: "0.7.0", latest: "0.8.0", available: true }),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(lines.join("")).toContain(
+      "⚠ junco version — v0.7.0 — v0.8.0 available (run: junco update)",
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/1 warning\(s\)/);
+  });
+
+  it("doctor reports latest as ok", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        checkUpdateFn: async () => ({ current: "0.7.0", latest: "0.7.0", available: false }),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(lines.join("")).toContain("✓ junco version — v0.7.0 (latest)");
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+
+  it("doctor reports a skipped check as ok", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        checkUpdateFn: async () => null,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(lines.join("")).toMatch(
+      /✓ junco version — v\S+ \(update check skipped — offline or disabled\)/,
+    );
+    expect(code).toBe(0);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });

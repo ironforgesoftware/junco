@@ -211,6 +211,8 @@ frontmatter contract, `examples/` has templates, and the bundled
 | `junco auth login`                                            | log the bot account in ([bot account guide](docs/bot-account.md))                                                 |
 | `junco auth grant <owner/repo>`                               | grant the bot push access to a repo — invite as you, accept as the bot ([bot account guide](docs/bot-account.md)) |
 | `junco config` / `junco schema` / `junco service`             | config get/set/init, ticket schema, service install                                                               |
+| `junco update`                                                | install the latest release and drain-restart the supervised daemon                                                |
+| `junco --version`                                             | print the running version                                                                                         |
 
 ## Contributing
 

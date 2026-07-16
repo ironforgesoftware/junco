@@ -118,6 +118,13 @@ describe("dataTreePaths", () => {
     expect(p.watchlistFile).toBe("/sbxroot/data/watchlist.json");
     expect(p.migratedFile).toBe("/sbxroot/data/migrated.json");
   });
+
+  it("registers update-check.json at the root and denies it to the sandbox", () => {
+    const cfg = makeConfig({ dataDir: "/sbxroot/data", queueRoot: "/sbxroot/data/queue" });
+    const p = dataTreePaths(cfg);
+    expect(p.updateCheckFile).toBe("/sbxroot/data/update-check.json");
+    expect(sandboxDenyPaths(cfg).files).toContain(p.updateCheckFile);
+  });
 });
 
 describe("sandboxDenyPaths", () => {

@@ -107,6 +107,9 @@ export interface Config {
   dataDir: string;
   /** Resolved queue root: <vaultRoot>/<juncoSubdir> when legacy, else <dataDir>/queue. */
   queueRoot: string;
+  /** npm update-check opt-out (default true). Optional so test fixtures that
+   * build full Config literals keep compiling; loaders always set it. */
+  updateCheck?: boolean;
   /** Which deprecated path keys are explicitly set (drives warnings + provenance). */
   legacy: LegacyPathFlags;
   model: ModelConfig;
