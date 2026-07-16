@@ -71,6 +71,7 @@ export async function runDashboard(
     { watchlistPath },
     { makeQueueSnapshotFn },
     { makeLocalCheapFn, makeLocalHeavyFn },
+    { listHistory },
     react,
     ink,
   ] = await Promise.all([
@@ -83,6 +84,7 @@ export async function runDashboard(
     import("./watchlist.js"),
     import("./tui/queueSnapshot.js"),
     import("./tui/localSnapshot.js"),
+    import("./assessHistory.js"),
     import("react"),
     import("ink"),
   ]);
@@ -105,6 +107,8 @@ export async function runDashboard(
     // Managed clones for the add-repo "empty path = clone for me" flow.
     clonesDir: join(c.dataDir, CLONES_WATCHED_SUBDIR),
     queueFn: makeQueueSnapshotFn(c),
+    // Per-repo assess history for the rail's audit-age indicator (#193).
+    assessHistoryFn: () => Promise.resolve(listHistory(c)),
     // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
     localCheapFn: makeLocalCheapFn(c),
     localHeavyFn: makeLocalHeavyFn(c),

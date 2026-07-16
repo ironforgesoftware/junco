@@ -1,8 +1,8 @@
 /**
  * The single source of truth for the unified data tree's shape (spec
  * 2026-07-16 §4). Subdir constants are imported by the stores
- * (assessReview/commentReview/githubOutbox/watchlist/dashboard) so the tree
- * and its writers can never drift; ensureDataTree materializes everything
+ * (assessReview/commentReview/assessHistory/githubOutbox/watchlist/dashboard)
+ * so the tree and its writers can never drift; ensureDataTree materializes everything
  * eagerly at daemon startup so no directory is invisible-until-first-use.
  */
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
@@ -16,6 +16,7 @@ export const OUTBOX_SUBDIR = "outbox";
 export const MIRROR_SUBDIR = "mirror";
 export const CLONES_WATCHED_SUBDIR = "clones/watched";
 export const CLONES_EXTERNAL_SUBDIR = "clones/external";
+export const ASSESS_HISTORY_SUBDIR = "assess-history";
 export const WATCHLIST_FILENAME = "watchlist.json";
 
 export interface DataTreePaths {
@@ -28,6 +29,7 @@ export interface DataTreePaths {
   clonesWatched: string;
   clonesExternal: string; // NOTE: cfg.github.externalReposRoot (legacy-overridable)
   worktrees: string; // NOTE: cfg.worktreeRoot (legacy-overridable)
+  assessHistory: string; // per-repo `junco assess` history (one file per repo)
   transcripts: string;
   watchlistFile: string;
   spendFile: string;
@@ -48,6 +50,7 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     clonesWatched: join(r, CLONES_WATCHED_SUBDIR),
     clonesExternal: cfg.github.externalReposRoot,
     worktrees: cfg.worktreeRoot,
+    assessHistory: join(r, ASSESS_HISTORY_SUBDIR),
     transcripts: join(r, "transcripts"),
     watchlistFile: join(r, WATCHLIST_FILENAME),
     spendFile: join(r, "spend.json"),
@@ -75,6 +78,7 @@ export function sandboxDenyPaths(cfg: Config): { dirs: string[]; files: string[]
     dirs: [
       cfg.queueRoot,
       dirname(p.reviewAssess), // <dataDir>/review (assess + comments)
+      p.assessHistory, // daemon-owned audit history; agent has no reason to read it
       p.outbox,
       p.mirror,
       p.transcripts,
@@ -119,6 +123,7 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
     join(p.outbox, "dead"),
     p.mirror,
     p.clonesWatched,
+    p.assessHistory,
     p.transcripts,
   ];
   for (const d of dirs) mkdirFn(d);

@@ -6,6 +6,7 @@ import { runStatusCommand, fmtUptime } from "../src/statusCmd.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
+import { recordRun } from "../src/assessHistory.js";
 import type { Config } from "../src/types.js";
 
 describe("fmtUptime", () => {
@@ -305,6 +306,39 @@ describe("runStatusCommand", () => {
     const text = out.join("");
     expect(text).toContain("assess review");
     expect(text).toMatch(/1 pending \(junco assess review\)/);
+  });
+
+  it("omits the assess line when no repo has history", async () => {
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    expect(out.join("")).not.toMatch(/^assess:/m);
+  });
+
+  it("prints an assess line per repo with history", async () => {
+    recordRun(cfg, "o/r", { ok: true, at: "2026-07-16T00:00:00.000Z", found: 4, parked: 3 });
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    const text = out.join("");
+    expect(text).toContain("o/r");
+    expect(text).toMatch(/assessed 2026-07-16/);
+    expect(text).toMatch(/4 found/);
+    expect(text).toMatch(/3 parked/);
+  });
+
+  it("shows a failed last attempt without moving the assessed date", async () => {
+    recordRun(cfg, "o/r", { ok: true, at: "2026-07-15T00:00:00.000Z", found: 4, parked: 3 });
+    recordRun(cfg, "o/r", { ok: false, at: "2026-07-16T00:00:00.000Z", reason: "boom" });
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
+    const text = out.join("");
+    expect(text).toMatch(/assessed 2026-07-15/); // the SUCCESS date, not the failure's
+    expect(text).toMatch(/last attempt failed 2026-07-16/);
   });
 
   it("omits the analyze review line when nothing is pending", async () => {

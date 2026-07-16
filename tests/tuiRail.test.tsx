@@ -5,6 +5,21 @@ import { Rail } from "../src/tui/components/Rail.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 import { windowSlice } from "../src/tui/window.js";
 import { railListHeight } from "../src/tui/geometry.js";
+import { fmtAssessIndicator } from "../src/tui/queueFmt.js";
+import type { AssessHistory } from "../src/assessHistory.js";
+
+const NOW = new Date("2026-07-16T12:00:00.000Z");
+function hist(p: Partial<AssessHistory>): AssessHistory {
+  return {
+    id: "o/r",
+    lastSuccessAt: null,
+    lastFound: null,
+    lastParked: null,
+    lastFailureAt: null,
+    lastFailureReason: null,
+    ...p,
+  };
+}
 
 const QUEUE: QueueSnapshot = {
   daemonUp: true,
@@ -46,20 +61,27 @@ const QUEUE: QueueSnapshot = {
 };
 
 const repos = [
-  { nwo: "acme/api", fromConfig: false, counts: { "plan-ready": 2 } },
-  { nwo: "acme/web", fromConfig: true, counts: {} },
+  { nwo: "acme/api", fromConfig: false, counts: { "plan-ready": 2 }, assess: null },
+  { nwo: "acme/web", fromConfig: true, counts: {}, assess: null },
 ];
 
 describe("Rail", () => {
   it("numbered title, selection bar, config marker, badges, queue card", () => {
+    // width 30: the pinned assess column (ASSESS_COL=8) now claims part of the
+    // 22-column content box a 26-wide pane leaves, so "acme/web (cfg)" (14
+    // chars) no longer fits the ~13 columns left for nwo+badges at RAIL_WIDTH.
+    // Widen the pane here (this test is about feature presence, not the
+    // width-26 truncation boundary — that is covered by the dedicated
+    // "no row exceeds the pane width" test below).
     const f = render(
       <Rail
         repos={repos}
         selected={0}
         focused={true}
         queue={QUEUE}
-        width={26}
+        width={30}
         height={20}
+        now={NOW}
         window={{ start: 0, end: repos.length }}
       />,
     ).lastFrame()!;
@@ -83,6 +105,7 @@ describe("Rail", () => {
         queue={down}
         width={26}
         height={20}
+        now={NOW}
         window={{ start: 0, end: 0 }}
       />,
     ).lastFrame()!;
@@ -130,6 +153,7 @@ describe("Rail", () => {
         queue={busy}
         width={26}
         height={16}
+        now={NOW}
         window={windowSlice(many.length, railListHeight(16), 29, 0)}
       />,
     ).lastFrame()!;
@@ -151,6 +175,7 @@ describe("Rail", () => {
         queue={errored}
         width={30}
         height={20}
+        now={NOW}
         window={{ start: 0, end: repos.length }}
       />,
     ).lastFrame()!;
@@ -170,11 +195,113 @@ describe("Rail", () => {
         queue={null}
         width={26}
         height={16}
+        now={NOW}
         window={windowSlice(many.length, railListHeight(16), 29, 0)}
       />,
     ).lastFrame()!;
     expect(f).toContain("o/r29"); // cursor stays visible
     expect(f).not.toContain("o/r0"); // top scrolled out
     expect(f).toContain("30/30");
+  });
+});
+
+describe("Rail assess indicator", () => {
+  // REGRESSION (#193): before the row was restructured, a 23-char nwo
+  // flex-shrank the ▌ sibling to zero — the NO_COLOR selection fallback
+  // (theme.ts:4) vanished exactly on the maintainer's own repos. The old test
+  // missed it because its fixture was the 8-char "acme/api".
+  it("keeps the selection bar visible for a long nwo at the real RAIL_WIDTH", () => {
+    const repos = [{ nwo: "ironforgesoftware/junco", fromConfig: true, counts: {}, assess: null }];
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={QUEUE}
+        width={26}
+        height={14}
+        now={NOW}
+        window={{ start: 0, end: 1 }}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("▌");
+  });
+
+  it("shows the indicator for long nwos — it is pinned, never truncated away", () => {
+    const repos = [
+      {
+        nwo: "ironforgesoftware/junco",
+        fromConfig: true,
+        counts: {},
+        assess: hist({ lastSuccessAt: "2026-07-16T10:00:00.000Z", lastFound: 0, lastParked: 0 }),
+      },
+      {
+        nwo: "ironforgesoftware/junco-site",
+        fromConfig: true,
+        counts: {},
+        assess: hist({ lastSuccessAt: "2026-06-25T12:00:00.000Z", lastFound: 4, lastParked: 4 }),
+      },
+    ];
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={QUEUE}
+        width={26}
+        height={14}
+        now={NOW}
+        window={{ start: 0, end: 2 }}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain(fmtAssessIndicator(repos[0].assess, NOW)); // "2h 0✓"
+    expect(f).toContain(fmtAssessIndicator(repos[1].assess, NOW)); // "21d 4⚠"
+  });
+
+  it("never-assessed renders an em dash", () => {
+    const repos = [{ nwo: "acme/api", fromConfig: false, counts: {}, assess: null }];
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={QUEUE}
+        width={26}
+        height={14}
+        now={NOW}
+        window={{ start: 0, end: 1 }}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("—");
+  });
+
+  it("no row exceeds the pane width (fixed column must not overflow)", () => {
+    const repos = [
+      {
+        nwo: "ironforgesoftware/junco",
+        fromConfig: true,
+        counts: { "plan-ready": 2 as number },
+        assess: hist({
+          lastSuccessAt: "2026-06-25T12:00:00.000Z",
+          lastFound: 250,
+          lastParked: 250,
+          lastFailureAt: "2026-07-16T11:00:00.000Z",
+          lastFailureReason: "boom",
+        }),
+      },
+    ];
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={QUEUE}
+        width={26}
+        height={14}
+        now={NOW}
+        window={{ start: 0, end: 1 }}
+      />,
+    ).lastFrame()!;
+    for (const line of f.split("\n")) expect(line.length).toBeLessThanOrEqual(26);
   });
 });

@@ -7,6 +7,7 @@ import { writeWatchlist } from "../src/watchlist.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
+import { recordRun } from "../src/assessHistory.js";
 import { WATCHLIST_FILENAME } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
 import type { ResolvedModelInfo } from "../src/agent/session.js";
@@ -1300,6 +1301,52 @@ describe("runDoctor analyze review checks", () => {
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the draft count must still surface.
     expect(lines.join("")).toMatch(/✓ analyze drafts — 1 pending \(junco analyze review\)/);
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+});
+
+describe("runDoctor assess history checks", () => {
+  it("no repo has assess history → no assess history line", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/assess history/);
+  });
+
+  it("reports per-repo assess history informationally — never as a warning", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-"));
+    recordRun({ dataDir } as unknown as Config, "o/r", {
+      ok: true,
+      at: "2026-07-16T00:00:00.000Z",
+      found: 4,
+      parked: 3,
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ assess history — o\/r: assessed 2026-07-16/);
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+
+  it("shows a failed last attempt as informational, not a warning — never assessed", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-fail-"));
+    recordRun({ dataDir } as unknown as Config, "o/other", {
+      ok: false,
+      at: "2026-07-16T00:00:00.000Z",
+      reason: "boom",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(
+      /✓ assess history — o\/other: never assessed \(last attempt failed\)/,
+    );
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });

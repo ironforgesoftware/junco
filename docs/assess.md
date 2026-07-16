@@ -191,6 +191,43 @@ Presence of the `assess:` mapping is what selects this flavor (see the flavor ta
 
 The pending review batch is keyed by this ticket's `id`, so a transient requeue (crash, transient agent failure) that re-runs the same ticket **overwrites** the same batch rather than creating a duplicate — `junco assess review <id>` always reflects the latest audit for that ticket.
 
+## Assess history — the rail indicator
+
+Every whole-repo `junco assess` run records one history entry for that repo when it finishes — success or failure. Three surfaces read it: the dashboard rail (a compact indicator next to each repo), and `junco status`/`junco doctor` (a plain-text line with the full breakdown). Nothing is recorded until a whole-repo run finishes; a ticket that dies before the repo is resolved records nothing either.
+
+In the dashboard rail (pane 1), each watched repo's row ends with a fixed-width indicator:
+
+| Indicator | Meaning                                                                                            |
+| --------- | -------------------------------------------------------------------------------------------------- |
+| `—`       | Never assessed — no whole-repo run has ever finished, success or failure.                          |
+| `2h 0✓`   | Last successful whole-repo audit finished 2 hours ago and found nothing.                           |
+| `21d 4⚠`  | Last successful whole-repo audit finished 21 days ago and found 4 findings.                        |
+| `21d! 4⚠` | Same as above, but the most recent attempt (since that success) failed — the `!` suffixes the age. |
+| `— !`     | The repo has never had a successful whole-repo audit, and the most recent attempt failed.          |
+
+Age caps at `99d+`, the finding count at `99+`, so a long-neglected repo can't blow out the rail's fixed-width column.
+
+**The age always tracks the last _successful_ whole-repo audit — never a failed attempt.** A failed run appends the `!` marker so a broken audit doesn't go unnoticed, but it never moves the age or the finding count: a repo whose audits keep failing stays visibly distinct from one that was genuinely re-audited, and a crashed run can never make a stale repo look freshly checked.
+
+**Issue-scoped runs (`junco assess owner/repo#N`) deliberately do not update this history at all.** They audit only the code the referenced issue implicates rather than sweeping the whole repo, so folding their result into the repo's freshness indicator would overstate how much of the repo was actually covered. Only a whole-repo `junco assess <path|owner/repo>` run writes a history entry; an issue-scoped run leaves the rail, `status`, and `doctor` output for that repo untouched.
+
 ## Visibility
 
 `junco status` and `junco doctor` both print `assess review: N pending (junco assess review)` whenever the pending-review store is non-empty, so a backlog of unreviewed findings doesn't go unnoticed between audits.
+
+They also print the same per-repo assess history the rail shows, as plain text, once per repo that has ever been assessed (silent when none has). `junco status`:
+
+```
+assess:    <owner/repo> assessed 2026-07-14 · 4 found · 4 parked
+assess:    <owner/repo> assessed 2026-07-14 · 4 found · 4 parked · last attempt failed 2026-07-16
+assess:    <owner/repo> never assessed · last attempt failed 2026-07-16
+```
+
+`junco doctor` reports the same repos as informational lines — always `ok`, never a warning, since a stale or never-assessed repo is normal workflow state, not a health problem:
+
+```
+✓ assess history — <owner/repo>: assessed 2026-07-14 (last attempt failed)
+✓ assess history — <owner/repo>: never assessed
+```
+
+Both the date printed (`assessed YYYY-MM-DD`) and the `last attempt failed` marker trace back to the same fields the rail indicator reads, so the rail, `status`, and `doctor` always agree with each other.

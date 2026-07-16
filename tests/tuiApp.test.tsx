@@ -14,6 +14,7 @@ import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
+import type { AssessHistory } from "../src/assessHistory.js";
 import { until, fireUntil } from "./helpers/until.js";
 
 // Every App mount registers a `process.on("exit")` listener via MouseProvider;
@@ -311,6 +312,7 @@ function renderApp(
   runCliFn?: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
   queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
   onExit: () => void = () => {},
+  assessHistoryFn: () => Promise<AssessHistory[]> = async () => [],
 ) {
   return render(
     <MouseProvider>
@@ -326,6 +328,7 @@ function renderApp(
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={queueFn}
+        assessHistoryFn={assessHistoryFn}
         localCheapFn={async () => LOCAL_CHEAP}
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
@@ -354,6 +357,70 @@ describe("App", () => {
     // Initial listIssues is async — bounded until-loop, never a fixed tick.
     await until(() => (r.lastFrame() ?? "").includes("#7 Fix uploads"));
     expect(r.lastFrame()).toContain("plan-ready"); // sorted: #9 first, but both visible
+  });
+
+  it("renders the assess indicator in the rail from assessHistoryFn", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const h: AssessHistory = {
+      id: "acme/api", // must match a watched repo in the fixture's config
+      lastSuccessAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      lastFound: 4,
+      lastParked: 4,
+      lastFailureAt: null,
+      lastFailureReason: null,
+    };
+    const r = renderApp(
+      client,
+      wl(),
+      999999,
+      undefined,
+      async () => QUEUE_SNAP,
+      () => {},
+      async () => [h],
+    );
+    // The poll fires on mount and lands via setState. Loop-until-condition with a
+    // bounded retry — never one fixed tick: a slow CI runner races React's commit
+    // and a fixed timeout flakes (CLAUDE.md Ink gotcha; this flaked a release gate).
+    for (let i = 0; i < 50; i++) {
+      if ((r.lastFrame() ?? "").includes("4⚠")) break;
+      await new Promise((res) => setTimeout(res, 10));
+    }
+    expect(r.lastFrame()).toContain("4⚠");
+  });
+
+  it("renders a clean-audit indicator (0✓) in the rail from assessHistoryFn", async () => {
+    // "—" (never-assessed vs. broken wiring) is indistinguishable by design —
+    // see fmtAssessIndicator (queueFmt.ts) and Rail's `r.assess ?? null`
+    // fallback — so a "—" assertion here can never prove the poll/threading
+    // actually works. "0✓" only reaches the frame through a real, non-null
+    // AssessHistory record with lastFound: 0, so it discriminates the same
+    // way "4⚠" above does. The never-assessed "—" rendering is already
+    // covered at the right level: fmtAssessIndicator(null) in
+    // tests/tuiQueue.test.tsx (Task 2) and Rail's own "never-assessed renders
+    // an em dash" in tests/tuiRail.test.tsx (Task 4).
+    const { client } = makeClient({ "acme/api": [] });
+    const h: AssessHistory = {
+      id: "acme/api",
+      lastSuccessAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      lastFound: 0,
+      lastParked: 0,
+      lastFailureAt: null,
+      lastFailureReason: null,
+    };
+    const r = renderApp(
+      client,
+      wl(),
+      999999,
+      undefined,
+      async () => QUEUE_SNAP,
+      () => {},
+      async () => [h],
+    );
+    for (let i = 0; i < 50; i++) {
+      if ((r.lastFrame() ?? "").includes("0✓")) break;
+      await new Promise((res) => setTimeout(res, 10));
+    }
+    expect(r.lastFrame()).toContain("0✓");
   });
 
   it("o on the rail opens the repository page", async () => {
@@ -841,6 +908,7 @@ describe("App", () => {
             healthPollMs={999999}
             queuePollMs={999999}
             queueFn={async () => QUEUE_SNAP}
+            assessHistoryFn={async () => []}
             localCheapFn={async () => LOCAL_CHEAP}
             localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
             localCheapPollMs={999999}
@@ -893,6 +961,7 @@ describe("App", () => {
             healthPollMs={999999}
             queuePollMs={999999}
             queueFn={async () => QUEUE_SNAP}
+            assessHistoryFn={async () => []}
             localCheapFn={async () => LOCAL_CHEAP}
             localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
             localCheapPollMs={999999}
@@ -1578,6 +1647,7 @@ describe("assess hotkey (s/S)", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
@@ -2201,6 +2271,7 @@ describe("workspace wide mode", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
@@ -2305,6 +2376,7 @@ describe("workspace wide mode", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
@@ -2492,6 +2564,7 @@ describe("workspace wide mode", () => {
         healthPollMs={999999}
         queuePollMs={999999}
         queueFn={async () => QUEUE_SNAP}
+        assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}

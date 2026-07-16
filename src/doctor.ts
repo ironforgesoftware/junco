@@ -27,6 +27,7 @@ import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
 import { draftCount } from "./commentReview.js";
+import { listHistory } from "./assessHistory.js";
 import { defaultExec, defaultAccessOk } from "./execProbe.js";
 import { SAML_MARKER } from "./botAccess.js";
 
@@ -568,6 +569,14 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     const reviews = pendingCount(cfg);
     if (reviews > 0) {
       report("ok", "assess review", `${reviews} pending (junco assess review)`);
+    }
+
+    // 7d-bis. Per-repo assess history — informational only (a never-assessed
+    // repo is normal workflow state, not a health problem), mirroring 7d.
+    for (const h of listHistory(cfg)) {
+      const when = h.lastSuccessAt ? `assessed ${h.lastSuccessAt.slice(0, 10)}` : "never assessed";
+      const failed = h.lastFailureAt ? ` (last attempt failed)` : "";
+      report("ok", "assess history", `${h.id}: ${when}${failed}`);
     }
 
     // 7e. analyze comment-draft backlog — informational only (normal workflow

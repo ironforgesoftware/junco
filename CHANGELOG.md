@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **auto-onboards** that repo permanently into the watchlist (bridge-swept from then on, no
   confirmation step); this includes `junco assess` scoped to a single issue on such a repo.
   Fork-PR mode is unchanged for public repos the bot can't push to.
+- `junco assess` now records a per-repo history (last successful audit, its finding counts, and a
+  marker when the most recent attempt failed), surfaced as a column in the dashboard rail and in
+  `junco status` / `junco doctor`. Issue-scoped runs (`junco assess owner/repo#N`) deliberately do
+  not refresh a repo's freshness — they audit only the code the issue implicates. The history lives
+  at `<dataDir>/assess-history/` (one file per repo).
 - **Unified data root:** a new top-level `dataDir` config key (default `~/.local/state/junco`)
   that every on-disk path — the ticket queue, parked `assess`/`analyze` review items, the GitHub
   outbox, cloned repos, PR-flow worktrees, transcripts, and watchlist/spend/metrics/log files —
@@ -73,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `junco doctor`/`junco data`: `vaultRoot` + `juncoSubdir` (queue root), `observability.stateDir`
   (the whole data root), `git.worktreeRoot` (worktrees root), and `github.externalReposRoot`
   (external-clones root). Run `junco data migrate` to drop them and unify onto `dataDir`.
+
+### Fixed
+
+- Dashboard rail: the `▌` selection bar could be squeezed to zero width by a long `owner/repo`
+  name, leaving no visible selection — and no fallback on `NO_COLOR` terminals, where `▌` is the
+  only selection cue. The rail row now pins the selection bar and the assess column and truncates
+  the repo name between them.
 
 ### Removed
 

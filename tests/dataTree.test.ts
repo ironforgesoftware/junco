@@ -113,6 +113,7 @@ describe("dataTreePaths", () => {
     expect(p.mirror).toBe("/sbxroot/data/mirror");
     expect(p.clonesWatched).toBe("/sbxroot/data/clones/watched");
     expect(p.worktrees).toBe("/sbxroot/wt-legacy"); // legacy override respected
+    expect(p.assessHistory).toBe("/sbxroot/data/assess-history");
     expect(p.transcripts).toBe("/sbxroot/data/transcripts");
     expect(p.watchlistFile).toBe("/sbxroot/data/watchlist.json");
     expect(p.migratedFile).toBe("/sbxroot/data/migrated.json");
@@ -132,6 +133,7 @@ describe("sandboxDenyPaths", () => {
     expect(deny.dirs).toContain("/sbxroot/data/review");
     expect(deny.dirs).toContain("/sbxroot/data/outbox");
     expect(deny.dirs).toContain("/sbxroot/data/mirror");
+    expect(deny.dirs).toContain("/sbxroot/data/assess-history");
     expect(deny.dirs).toContain("/sbxroot/data/transcripts");
     expect(deny.dirs).toContain("/sbxroot/data/github-cache");
     expect(deny.files).toContain("/sbxroot/data/watchlist.json");
@@ -182,6 +184,7 @@ describe("ensureDataTree", () => {
       "/sbxroot/data/outbox/dead",
       "/sbxroot/data/mirror",
       "/sbxroot/data/clones/watched",
+      "/sbxroot/data/assess-history",
       "/sbxroot/data/transcripts",
     ])
       expect(made).toContain(d);
