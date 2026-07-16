@@ -1644,21 +1644,8 @@ export function App(props: AppProps): React.JSX.Element {
       if (rs.open && rs.open.kind === "draft") {
         const draft = rs.drafts[rs.open.draftIdx];
         if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
-        if (input === "k" || key.upArrow) {
-          return void setReviewState((s) =>
-            s.open && s.open.kind === "draft"
-              ? { ...s, open: { ...s.open, scroll: Math.max(0, s.open.scroll - 1) } }
-              : s,
-          );
-        }
-        if (input === "j" || key.downArrow) {
-          return void setReviewState((s) => {
-            if (!s.open || s.open.kind !== "draft") return s;
-            const d = s.drafts[s.open.draftIdx];
-            const max = d ? Math.max(0, d.draft.split("\n").length - 1) : 0;
-            return { ...s, open: { ...s.open, scroll: Math.min(max, s.open.scroll + 1) } };
-          });
-        }
+        if (input === "k" || key.upArrow) return void scrollBy(-1);
+        if (input === "j" || key.downArrow) return void scrollBy(1);
         // Optimistic removal shared by post and discard: drop the draft, close
         // the preview, clamp the cursor to the (shrunk) combined list.
         const dropDraft = (id: string): void => {
@@ -1820,7 +1807,7 @@ export function App(props: AppProps): React.JSX.Element {
           }
           const draftIdx = s.cursor - s.batches.length;
           if (!s.drafts[draftIdx]) return s;
-          return { ...s, open: { kind: "draft", draftIdx, scroll: 0 } };
+          return { ...s, open: { kind: "draft", draftIdx } };
         });
       }
       return;
@@ -2068,7 +2055,7 @@ export function App(props: AppProps): React.JSX.Element {
       }
       const draftIdx = idx - s.batches.length;
       if (!s.drafts[draftIdx]) return s;
-      return { ...s, open: { kind: "draft", draftIdx, scroll: 0 } };
+      return { ...s, open: { kind: "draft", draftIdx } };
     });
   };
   const reviewFindingPress = (idx: number): void => {
@@ -2086,14 +2073,7 @@ export function App(props: AppProps): React.JSX.Element {
       return { ...s, open: { ...s.open, findingCursor: idx, checked } };
     });
   };
-  const reviewDraftWheel = (d: 1 | -1): void => {
-    setReviewState((s) => {
-      if (!s.open || s.open.kind !== "draft") return s;
-      const dft = s.drafts[s.open.draftIdx];
-      const max = dft ? Math.max(0, dft.draft.split("\n").length - 1) : 0;
-      return { ...s, open: { ...s.open, scroll: Math.max(0, Math.min(max, s.open.scroll + d)) } };
-    });
-  };
+  const reviewDraftWheel = (d: 1 | -1): void => scrollBy(d);
 
   // LOCAL-dashboard mouse handlers — mirror the rail/body key recipes above.
   const localSectionPress = (s: LocalSection): void => {
@@ -2434,11 +2414,13 @@ export function App(props: AppProps): React.JSX.Element {
       ) : view === "review" ? (
         <ReviewView
           state={reviewState}
+          scroll={scroll}
           height={listHeight}
           focused
           onRowPress={reviewRowPress}
           onFindingPress={reviewFindingPress}
           onDraftWheel={reviewDraftWheel}
+          onScrollMax={onScrollMax}
         />
       ) : (
         <>
