@@ -169,6 +169,20 @@ function buildFixtureTree(root: string): void {
 
   // mirror: deliberately absent — no mkdir.
 
+  // assess-history: one per-repo history file (one .json per repo).
+  mkdirSync(join(root, "assess-history"), { recursive: true });
+  writeFileSync(
+    join(root, "assess-history", "owner-repo.json"),
+    JSON.stringify({
+      id: "owner/repo",
+      lastSuccessAt: "2026-07-16T00:00:00.000Z",
+      lastFound: 0,
+      lastParked: 0,
+      lastFailureAt: null,
+      lastFailureReason: null,
+    }),
+  );
+
   // Legacy pre-unification leftover: triggers pendingMigrations() for the
   // assess-review -> review/assess pair (src/dataMigrate.ts stateTreeMigrations).
   mkdirSync(join(root, "assess-review"), { recursive: true });
@@ -202,6 +216,7 @@ describe("runData — text mode", () => {
     const out = captured.join("");
     expect(out).toContain("assess    1 pending · 1 filed");
     expect(out).toContain("comments  0 pending · 0 posted · 0 discarded");
+    expect(out).toContain("assess-history 1 repos");
   });
 
   it("prints the outbox dead-op count as 'dead 1', excluding the dead file from the live op count", () => {
@@ -346,6 +361,7 @@ describe("runData — --json mode", () => {
       counts: {
         queue: { inbox: number; processing: number; done: number; failed: number };
         reviewAssess: { pending: number; filed: number };
+        assessHistory: { repos: number };
         outbox: { ops: number; dead: number };
         mirror: { repos: number; files: number };
       };
@@ -357,6 +373,7 @@ describe("runData — --json mode", () => {
     expect(parsed.counts.queue.inbox).toBe(2);
     expect(parsed.counts.queue.processing).toBe(0);
     expect(parsed.counts.reviewAssess).toEqual({ pending: 1, filed: 1 });
+    expect(parsed.counts.assessHistory).toEqual({ repos: 1 });
     expect(parsed.counts.outbox).toEqual({ ops: 0, dead: 1 });
     expect(parsed.counts.mirror).toEqual({ repos: 0, files: 0 });
     expect(parsed.pendingMigrations).toEqual([

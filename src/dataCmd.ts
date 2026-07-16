@@ -46,6 +46,7 @@ interface DataCounts {
   clonesWatched: { repos: number };
   clonesExternal: { repos: number };
   worktrees: { dirs: number };
+  assessHistory: { repos: number };
   transcripts: { files: number; bytes: number };
   watchlistFile: FileInfo;
   spendFile: FileInfo & { usd: number | null };
@@ -268,6 +269,7 @@ function computeCounts(
     clonesWatched: { repos: countOwnerRepoDirs(p.clonesWatched, readdirFn, statFn) },
     clonesExternal: { repos: countOwnerRepoDirs(p.clonesExternal, readdirFn, statFn) },
     worktrees: { dirs: countSubdirs(p.worktrees, readdirFn, statFn) },
+    assessHistory: { repos: countJson(p.assessHistory, readdirFn) },
     transcripts: flatFilesAndBytes(p.transcripts, readdirFn, statFn),
     watchlistFile: fileInfo(p.watchlistFile, existsFn, statFn),
     spendFile: {
@@ -364,6 +366,12 @@ function renderText(
     `\nworktrees  ${
       existsFn(p.worktrees) ? `${counts.worktrees.dirs} dirs` : "(absent)"
     }   ${p.worktrees}${suf("worktreeRoot")}\n`,
+  );
+
+  print(
+    `\nassess-history ${
+      existsFn(p.assessHistory) ? `${counts.assessHistory.repos} repos` : "(absent)"
+    }   ${p.assessHistory}\n`,
   );
 
   print(
