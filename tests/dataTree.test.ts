@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { Config } from "../src/types.js";
-import { dataTreePaths, ensureDataTree } from "../src/dataTree.js";
+import { dataTreePaths, ensureDataTree, sandboxDenyPaths } from "../src/dataTree.js";
 
 /** Full-Config fixture (same shape as tests/daemon.test.ts's makeConfig) —
  * only dataDir/queueRoot/worktreeRoot/github.externalReposRoot/legacy matter
@@ -116,6 +116,44 @@ describe("dataTreePaths", () => {
     expect(p.transcripts).toBe("/sbxroot/data/transcripts");
     expect(p.watchlistFile).toBe("/sbxroot/data/watchlist.json");
     expect(p.migratedFile).toBe("/sbxroot/data/migrated.json");
+  });
+});
+
+describe("sandboxDenyPaths", () => {
+  it("denies the daemon-state subtrees and root receipt files, never worktrees/ or clones/", () => {
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/data",
+      queueRoot: "/sbxroot/data/queue",
+      worktreeRoot: "/sbxroot/data/worktrees",
+      github: { ...makeConfig().github, externalReposRoot: "/sbxroot/data/clones/external" },
+    });
+    const deny = sandboxDenyPaths(cfg);
+    expect(deny.dirs).toContain("/sbxroot/data/queue");
+    expect(deny.dirs).toContain("/sbxroot/data/review");
+    expect(deny.dirs).toContain("/sbxroot/data/outbox");
+    expect(deny.dirs).toContain("/sbxroot/data/mirror");
+    expect(deny.dirs).toContain("/sbxroot/data/transcripts");
+    expect(deny.dirs).toContain("/sbxroot/data/github-cache");
+    expect(deny.files).toContain("/sbxroot/data/watchlist.json");
+    expect(deny.files).toContain("/sbxroot/data/spend.json");
+    expect(deny.files).toContain("/sbxroot/data/metrics.json");
+    expect(deny.files).toContain("/sbxroot/data/worker.log");
+    expect(deny.files).toContain("/sbxroot/data/migrated.json");
+    // The agent's own execution roots stay readable: never the dataDir root,
+    // never worktrees/ (the agent's cwd lives there), never clones/.
+    const all = [...deny.dirs, ...deny.files];
+    expect(all).not.toContain("/sbxroot/data");
+    expect(all.some((p) => p.startsWith("/sbxroot/data/worktrees"))).toBe(false);
+    expect(all.some((p) => p.startsWith("/sbxroot/data/clones"))).toBe(false);
+  });
+
+  it("denies the legacy vault queue root when vaultRoot is set (tickets are sensitive wherever they live)", () => {
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/data",
+      queueRoot: "/sbxroot/vault/Junco",
+      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    });
+    expect(sandboxDenyPaths(cfg).dirs).toContain("/sbxroot/vault/Junco");
   });
 });
 

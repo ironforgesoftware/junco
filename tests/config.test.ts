@@ -742,6 +742,26 @@ describe("dataDir resolution (unified data root)", () => {
     for (const w of warns) expect(w).toContain("junco data migrate");
   });
 
+  it("configDeprecations: git.worktreeRoot gets a remove-the-key hint, NOT the migrate hint (migrate doesn't move worktrees)", () => {
+    const warns = configDeprecations(parse({ git: { worktreeRoot: "~/wt" } }));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("git.worktreeRoot");
+    expect(warns[0]).toContain("remove the key");
+    expect(warns[0]).toContain("<dataDir>/worktrees");
+    // 'junco data migrate' does NOT unify this key — pointing at it loops the
+    // operator (the warning would survive the migrate forever).
+    expect(warns[0]).not.toContain("junco data migrate");
+  });
+
+  it("configDeprecations: github.externalReposRoot gets a remove-the-key hint, NOT the migrate hint", () => {
+    const warns = configDeprecations(parse({ github: { externalReposRoot: "~/ext" } }));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("github.externalReposRoot");
+    expect(warns[0]).toContain("remove the key");
+    expect(warns[0]).toContain("<dataDir>/clones/external");
+    expect(warns[0]).not.toContain("junco data migrate");
+  });
+
   it("a config with no keys at all is valid (vaultRoot no longer required)", () => {
     expect(() => ConfigSchema.parse({})).not.toThrow();
   });

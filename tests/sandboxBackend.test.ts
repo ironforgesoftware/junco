@@ -13,10 +13,22 @@ import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 const denyNet: SandboxPolicy = {
   writableRoots: ["/work/tree", "/tmp/scratch"],
   readDenyPaths: ["/home/x/.ssh"],
+  readDenyFiles: [],
   network: false,
   scratchDir: "/tmp/scratch",
 };
 const allowNet: SandboxPolicy = { ...denyNet, network: true };
+
+// The C1 regression shape: the worktree (cwd) and clones live UNDER the data
+// root; only the sensitive subtrees/files are denied — never the root itself.
+const dataDir = "/sbxroot/home/x/.local/state/junco";
+const dataPolicy: SandboxPolicy = {
+  writableRoots: [`${dataDir}/worktrees/tkt-1`, "/sbxroot/scratch"],
+  readDenyPaths: [`${dataDir}/queue`, `${dataDir}/review`, `${dataDir}/transcripts`],
+  readDenyFiles: [`${dataDir}/watchlist.json`],
+  network: false,
+  scratchDir: "/sbxroot/scratch",
+};
 
 describe("seatbeltProfile", () => {
   it("denies default, allows writes only under the roots, and denies network", () => {
@@ -33,6 +45,15 @@ describe("seatbeltProfile", () => {
     expect(p).toContain("(allow network*)");
     expect(p).not.toContain("(deny network*)");
   });
+  it("denies the sensitive data subtrees (subpath) + files (literal), never the data root", () => {
+    const p = seatbeltProfile(dataPolicy);
+    expect(p).toContain(`(deny file-read* (subpath "${dataDir}/queue"))`);
+    expect(p).toContain(`(deny file-read* (subpath "${dataDir}/review"))`);
+    expect(p).toContain(`(deny file-read* (literal "${dataDir}/watchlist.json"))`);
+    // The root itself is NOT denied — the worktree the agent runs in and the
+    // clone gitdirs live under it, and a subpath deny overrides the broad allow.
+    expect(p).not.toContain(`(deny file-read* (subpath "${dataDir}"))`);
+  });
 });
 
 describe("seatbeltBackend.spawnArgv", () => {
@@ -47,7 +68,7 @@ describe("seatbeltBackend.spawnArgv", () => {
 
 describe("bwrapArgs", () => {
   it("ro-binds root, rw-binds writable roots, masks denials, unshares net when denied", () => {
-    const a = bwrapArgs(denyNet).join(" ");
+    const a = bwrapArgs(denyNet, () => true).join(" ");
     expect(a).toContain("--ro-bind / /");
     expect(a).toContain("--bind /work/tree /work/tree");
     expect(a).toContain("--bind /tmp/scratch /tmp/scratch");
@@ -55,7 +76,33 @@ describe("bwrapArgs", () => {
     expect(a).toContain("--unshare-net");
   });
   it("does not unshare net when network is allowed", () => {
-    expect(bwrapArgs(allowNet).join(" ")).not.toContain("--unshare-net");
+    expect(bwrapArgs(allowNet, () => true).join(" ")).not.toContain("--unshare-net");
+  });
+  it("never tmpfs-masks the data root — the worktree bind must not be shadowed", () => {
+    const args = bwrapArgs(dataPolicy, () => true);
+    const a = args.join(" ");
+    // The worktree stays rw-bound and NO tmpfs mounts over it or any of its
+    // ancestors (mounts apply in argv order — a later tmpfs of an ancestor
+    // would mount OVER the bind and the worktree would appear empty).
+    expect(a).toContain(`--bind ${dataDir}/worktrees/tkt-1 ${dataDir}/worktrees/tkt-1`);
+    const tmpfsTargets = args.flatMap((v, i) => (args[i - 1] === "--tmpfs" ? [v] : []));
+    expect(tmpfsTargets).not.toContain(dataDir);
+    for (const t of tmpfsTargets) {
+      expect(`${dataDir}/worktrees/tkt-1/`.startsWith(`${t}/`)).toBe(false);
+    }
+    // The sensitive subtrees are still masked.
+    expect(tmpfsTargets).toContain(`${dataDir}/queue`);
+    expect(tmpfsTargets).toContain(`${dataDir}/review`);
+  });
+  it("masks denied files that exist with a /dev/null ro-bind; skips missing paths", () => {
+    const exists = (p: string): boolean => p !== `${dataDir}/review`;
+    const a = bwrapArgs(dataPolicy, exists).join(" ");
+    expect(a).toContain(`--ro-bind /dev/null ${dataDir}/watchlist.json`);
+    // A missing deny target gets no mount: bwrap cannot create mountpoints
+    // under the read-only root bind, and a path that does not exist cannot
+    // be read anyway (the JS jail still denies it by name).
+    expect(a).not.toContain(`--tmpfs ${dataDir}/review`);
+    expect(a).toContain(`--tmpfs ${dataDir}/queue`);
   });
 });
 

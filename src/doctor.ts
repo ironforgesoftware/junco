@@ -202,10 +202,12 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       report("warn", "unmigrated data dirs", `${list} — run 'junco data migrate' to unify`);
     }
 
-    // 2c. legacy worktree-root leftovers (spec §7): worktrees are disposable
-    // and deliberately excluded from the in-place migration above — nothing
-    // renames them automatically, so doctor only hints that the old location
-    // still holds something.
+    // 2c. legacy worktree-root override (spec §7): while git.worktreeRoot is
+    // SET, that dir is the ACTIVE root — the override wins over
+    // <dataDir>/worktrees, so its contents may be live tickets' worktrees and
+    // are NOT deletable yet. Worktrees are deliberately excluded from the
+    // in-place migration above (they're disposable once the override is
+    // gone), so doctor only points at the removal path.
     if (cfg.legacy.worktreeRoot && existsFn(cfg.worktreeRoot)) {
       let hasEntries = false;
       try {
@@ -217,7 +219,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         report(
           "ok",
           "legacy worktree root",
-          `old worktrees remain at ${cfg.worktreeRoot} (git.worktreeRoot) — disposable, safe to delete; new worktrees use <dataDir>/worktrees`,
+          `worktrees currently live at ${cfg.worktreeRoot} via the deprecated git.worktreeRoot override — after removing the key (with the daemon idle), any leftovers there are disposable and new worktrees go under <dataDir>/worktrees`,
         );
       }
     }

@@ -56,7 +56,7 @@ export interface AppProps {
   watchlistFile: string; // read/write via watchlist.ts
   /** Resolved config path — spawned palette commands target the same config. */
   configPath: string;
-  /** Managed clones root (<state_dir>/repos) — auto-clone destination. */
+  /** Managed clones root (<dataDir>/clones/watched) — auto-clone destination. */
   clonesDir: string;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */

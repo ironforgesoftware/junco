@@ -6,7 +6,7 @@
  * eagerly at daemon startup so no directory is invisible-until-first-use.
  */
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import type { Config, Paths } from "./types.js";
 import { queuePaths } from "./config.js";
 
@@ -54,6 +54,35 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     metricsFile: join(r, "metrics.json"),
     logFile: join(r, "worker.log"),
     migratedFile: join(r, "migrated.json"),
+  };
+}
+
+/**
+ * The data-tree paths the agent sandbox must not read (threaded into
+ * `buildPolicy` by `agent/session.ts`): daemon-owned state — tickets, review
+ * queues, outbox ops, transcripts, the GitHub mirror/cache, and the root
+ * receipt files. Deliberately NOT the dataDir root: the default layout puts
+ * `worktrees/` (the agent's own cwd) and `clones/` (gitdirs the agent's git
+ * reads) under it, so a root-level deny would wall the agent out of its own
+ * working tree. Split dirs/files because the backends enforce them
+ * differently (Seatbelt subpath vs literal; bwrap tmpfs vs /dev/null bind).
+ * `queueRoot` is used as-is so a legacy vaultRoot queue is denied wherever
+ * it lives.
+ */
+export function sandboxDenyPaths(cfg: Config): { dirs: string[]; files: string[] } {
+  const p = dataTreePaths(cfg);
+  return {
+    dirs: [
+      cfg.queueRoot,
+      dirname(p.reviewAssess), // <dataDir>/review (assess + comments)
+      p.outbox,
+      p.mirror,
+      p.transcripts,
+      // Legacy TUI cache (tui/ghClient.ts still owns it; mirror/ replaces it
+      // in PR 2) — not in dataTreePaths, but present under real data roots.
+      join(p.root, "github-cache"),
+    ],
+    files: [p.watchlistFile, p.spendFile, p.metricsFile, p.logFile, p.migratedFile],
   };
 }
 

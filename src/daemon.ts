@@ -172,6 +172,12 @@ export function overlayFrozenRestartFields(frozen: Config, live: Config): Config
     dataDir: frozen.dataDir,
     queueRoot: frozen.queueRoot,
     legacy: frozen.legacy,
+    // worktreeRoot derives from dataDir (restart-kind) whenever the legacy
+    // git.worktreeRoot key is unset — pin the derived value so a live dataDir
+    // edit can't move new worktrees while everything else stays frozen. An
+    // EXPLICIT live git.worktreeRoot is a reload:"live" lever and keeps its
+    // hot-apply semantics. (Same rule for github.externalReposRoot below.)
+    worktreeRoot: live.legacy.worktreeRoot ? live.worktreeRoot : frozen.worktreeRoot,
     maxConcurrent: frozen.maxConcurrent,
     healthEnabled: frozen.healthEnabled,
     healthHost: frozen.healthHost,
@@ -194,6 +200,11 @@ export function overlayFrozenRestartFields(frozen: Config, live: Config): Config
       // prefix (#162). Both are reload:"restart".
       triggerLabel: frozen.github.triggerLabel,
       askLabel: frozen.github.askLabel,
+      // Derived-from-dataDir unless the legacy key is explicitly set — see
+      // the worktreeRoot pin above for the rationale.
+      externalReposRoot: live.legacy.externalReposRoot
+        ? live.github.externalReposRoot
+        : frozen.github.externalReposRoot,
     },
   };
 }
@@ -552,11 +563,18 @@ export async function mainLoop(
   // Migrate BEFORE mkdirs: ensureDataTree mkdir-p's the whole new tree, so if
   // it ran first every old-name pair's destination would already exist (as an
   // empty dir) by the time migrateStateTree looked — turning every ordinary
-  // rename into the crash-repair path for no reason, or worse, papering over
-  // a real conflict. See dataMigrate.ts's empty-dst repair rule for the
-  // narrow case that's actually meant to catch (a genuine crash between mkdir
-  // and rename), not routine startup ordering.
+  // rename into the repair path for no reason. See dataMigrate.ts's
+  // recursively-empty-dst repair rule for the cases that path actually means
+  // to catch (a crash between mkdir and rename, or scaffolding a rolled-back
+  // version materialized), not routine startup ordering.
   const mig = migrateFn(cfg);
+  for (const step of mig.steps) {
+    // One receipt per pair that actually moved — worker.log evidence of what
+    // the automatic migration did (the durable journal is migrated.json).
+    if (step.action === "renamed") {
+      log.info("state-tree migration: renamed", { from: step.from, to: step.to });
+    }
+  }
   for (const conflict of mig.conflicts) {
     log.warn("state-tree migration conflict; manual resolution required", { conflict });
   }

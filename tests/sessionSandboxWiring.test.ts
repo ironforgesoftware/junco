@@ -4,9 +4,15 @@ import { SandboxUnavailableError } from "../src/agent/sandbox/index.js";
 import type { Config } from "../src/types.js";
 
 function cfgWith(sandbox: Partial<Config["sandbox"]>): Config {
-  // resolveSandbox only reads cfg.sandbox, cfg.dataDir, and cfg.botAccount.configDir.
+  // resolveSandbox reads cfg.sandbox, cfg.botAccount.configDir, and the data
+  // tree fields consumed by dataTree.sandboxDenyPaths (dataDir, queueRoot,
+  // worktreeRoot, github.externalReposRoot, legacy).
   return {
     dataDir: "/sbxroot/state",
+    queueRoot: "/sbxroot/state/queue",
+    worktreeRoot: "/sbxroot/state/worktrees",
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    github: { externalReposRoot: "/sbxroot/state/clones/external" },
     botAccount: {
       enabled: false,
       configDir: "/sbxroot/junco-gh",
@@ -52,6 +58,20 @@ describe("resolveSandbox", () => {
     // fixture — a token may sit in the dir while the feature is off, so the
     // pass-through must stay unconditional.
     expect(r?.policy.readDenyPaths).toContain("/sbxroot/junco-gh");
+  });
+
+  it("denies the sensitive data subtrees but NOT the data root (worktrees/clones live under it)", async () => {
+    const r = await resolveSandbox(
+      cfgWith({ backend: "none" }),
+      "/sbxroot/state/worktrees/tkt-1",
+      undefined,
+      okDeps,
+    );
+    expect(r?.policy.readDenyPaths).toContain("/sbxroot/state/queue");
+    expect(r?.policy.readDenyPaths).toContain("/sbxroot/state/review");
+    expect(r?.policy.readDenyPaths).toContain("/sbxroot/state/transcripts");
+    expect(r?.policy.readDenyFiles).toContain("/sbxroot/state/watchlist.json");
+    expect(r?.policy.readDenyPaths).not.toContain("/sbxroot/state");
   });
 
   it("per-ticket network override widens egress", async () => {

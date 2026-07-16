@@ -131,18 +131,18 @@ comment-review         → review/comments         repos         → clones/watc
 external                → clones/external         github-watchlist.json → watchlist.json
 ```
 
-(`external → clones/external` is skipped when `github.externalReposRoot` is legacy-set — there's nothing under `dataDir` to move in that case.) Renames are same-directory and atomic; each completed step is journaled to `<dataDir>/migrated.json` so re-running is a no-op; a name collision (both old and new already exist with real content) is left untouched and reported by `junco doctor` / `junco data` instead of being guessed at — nothing is ever deleted. This step never touches the ticket queue (see below), and it does not touch `github-cache/` (replaced by `mirror/` in a follow-up release, not renamed here).
+(`external → clones/external` is skipped when `github.externalReposRoot` is legacy-set — there's nothing under `dataDir` to move in that case.) Renames are same-directory and atomic; each completed step is journaled to `<dataDir>/migrated.json` so re-running is a no-op. A destination that already exists but contains no files anywhere (only empty directories — e.g. scaffolding an earlier startup materialized) is replaced by the rename; a name collision (the destination holds at least one real file) is left untouched and reported by `junco doctor` / `junco data` instead of being guessed at — file-holding data is never deleted. This step never touches the ticket queue (see below), and it does not touch `github-cache/` (replaced by `mirror/` in a follow-up release, not renamed here).
 
 ### `junco data migrate` — the opt-in full unification
 
 The ticket queue itself never moves automatically: `vaultRoot` is required by every config that predates this release, so leaving it set is always safe, and nothing silently relocates a live queue. `junco data migrate` is the explicit, opt-in command that finishes the job for a config still carrying legacy keys — it moves the queue directories into `<dataDir>/queue` (rename, falling back to copy+verify+delete across filesystems), runs the same in-place state-tree normalization described above, then rewrites `config.json` to drop `vaultRoot` / `juncoSubdir` / `observability.stateDir` (only the ones present) and set a customized `dataDir` (only if it isn't already the default) — through the same validated read/mutate/write path as `junco config set`.
 
-It refuses to run while the daemon appears to be up (any `/health` response at all, even non-200, counts as "up"; pass `--force` if health is intentionally disabled) and holds a `<dataDir>/migrate.lock` for the whole run so two migrations can't race:
+It refuses to run while the daemon appears to be up — any `/health` response at all (even non-200) counts as "up", and so does a live-held `worker.lock` next to `config.json` (which catches daemons running with health disabled). Pass `--force` to skip both checks. It also holds a `<dataDir>/migrate.lock` for the whole run so two migrations can't race:
 
 ```bash
 junco data migrate --dry-run   # print the plan; change nothing
 junco data migrate             # do it
-junco data migrate --force     # skip the daemon-up probe (health disabled)
+junco data migrate --force     # skip the daemon-up checks (health probe + pidfile)
 ```
 
 ```
@@ -165,7 +165,7 @@ config.json:
 state tree journal: /Users/you/.local/state/junco/migrated.json
 ```
 
-A real (non-dry-run) run prints a matching receipt in place of the plan — what moved, what the state tree did, and what changed in `config.json` — and exits non-zero if any state-tree pair conflicted (both old and new names existed with real content on both sides). Nothing already moved is ever rolled back, so fixing a conflict by hand and re-running picks up exactly where it left off.
+A real (non-dry-run) run prints a matching receipt in place of the plan — what moved, what the state tree did, and what changed in `config.json` — and exits non-zero if any state-tree pair conflicted (both old and new names existed and the destination held real files; a destination containing only empty directories is repaired automatically). Nothing already moved is ever rolled back, so fixing a conflict by hand and re-running picks up exactly where it left off.
 
 ## Model resolution
 

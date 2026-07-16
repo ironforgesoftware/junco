@@ -507,6 +507,50 @@ describe("overlayFrozenRestartFields", () => {
     expect(result.model.id).toBe(live.model.id);
   });
 
+  it("pins the dataDir-derived worktreeRoot/externalReposRoot — a live dataDir edit must not move them", () => {
+    // Neither legacy override key is set, so both roots derive from dataDir —
+    // which is reload:"restart". Without the pin, a live dataDir/stateDir edit
+    // would move NEW worktrees + external-clone resolution while the queue,
+    // transcripts, etc. stay frozen (the #186 partial-application class).
+    const frozen = makeConfig({
+      dataDir: "/frozen/state",
+      worktreeRoot: "/frozen/state/worktrees",
+      github: { ...makeConfig().github, externalReposRoot: "/frozen/state/clones/external" },
+    });
+    const live = makeConfig({
+      dataDir: "/live/state",
+      worktreeRoot: "/live/state/worktrees",
+      github: { ...makeConfig().github, externalReposRoot: "/live/state/clones/external" },
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    expect(result.worktreeRoot).toBe("/frozen/state/worktrees");
+    expect(result.github.externalReposRoot).toBe("/frozen/state/clones/external");
+  });
+
+  it("an explicitly-set legacy override keeps its own live-reload semantics", () => {
+    // git.worktreeRoot / github.externalReposRoot are reload:"live" levers —
+    // when the LIVE parse sets them explicitly, the edit hot-applies; only the
+    // dataDir-DERIVED values are pinned.
+    const frozen = makeConfig({
+      dataDir: "/frozen/state",
+      worktreeRoot: "/frozen/state/worktrees",
+      github: { ...makeConfig().github, externalReposRoot: "/frozen/state/clones/external" },
+    });
+    const live = makeConfig({
+      dataDir: "/frozen/state",
+      worktreeRoot: "/custom/wt",
+      github: { ...makeConfig().github, externalReposRoot: "/custom/ext" },
+      legacy: { vaultRoot: false, stateDir: false, worktreeRoot: true, externalReposRoot: true },
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    expect(result.worktreeRoot).toBe("/custom/wt");
+    expect(result.github.externalReposRoot).toBe("/custom/ext");
+  });
+
   it("pins the frozen botAccount and ghAuth — a live botAccount.enabled flip can't drop the bot identity mid-run", () => {
     const frozenCtx = {
       configDir: "/frozen/gh",
@@ -584,6 +628,82 @@ describe("mainLoop", () => {
     expect(deps.pruneFn).toHaveBeenCalledWith(cfg.worktreeRoot);
     expect(deps.waitForEndpointFn).toHaveBeenCalledTimes(1);
     expect(deps.waitForEndpointFn).toHaveBeenCalledWith(cfg, stop);
+  });
+
+  it("logs one warn per state-tree migration conflict at startup", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        migrateFn: vi.fn(() => ({
+          steps: [
+            {
+              from: "/d/assess-review",
+              to: "/d/review/assess",
+              action: "skipped-conflict" as const,
+            },
+            {
+              from: "/d/comment-review",
+              to: "/d/review/comments",
+              action: "skipped-conflict" as const,
+            },
+          ],
+          conflicts: [
+            "/d/assess-review -> /d/review/assess: destination already exists and is not empty",
+            "/d/comment-review -> /d/review/comments: destination already exists and is not empty",
+          ],
+        })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      const conflictWarns = warnSpy.mock.calls.filter(
+        (c) => String(c[0]) === "state-tree migration conflict; manual resolution required",
+      );
+      expect(conflictWarns).toHaveLength(2);
+      expect(conflictWarns[0]?.[1]).toEqual({
+        conflict:
+          "/d/assess-review -> /d/review/assess: destination already exists and is not empty",
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs one info receipt per RENAMED migration pair at startup (worker.log evidence)", async () => {
+    const { log } = await import("../src/logging.js");
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        migrateFn: vi.fn(() => ({
+          steps: [
+            { from: "/d/github-outbox", to: "/d/outbox", action: "renamed" as const },
+            { from: "/d/repos", to: "/d/clones/watched", action: "noop" as const },
+          ],
+          conflicts: [],
+        })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      const renameLogs = infoSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("state-tree migration: renamed"),
+      );
+      expect(renameLogs).toHaveLength(1); // one per renamed pair, none for noops
+      expect(renameLogs[0]?.[1]).toEqual({ from: "/d/github-outbox", to: "/d/outbox" });
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 
   it("once=true breaks after a single handled task; sleep never called", async () => {

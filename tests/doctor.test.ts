@@ -400,6 +400,12 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/✓ legacy worktree root/);
     expect(lines.join("")).toContain(okConfig.worktreeRoot);
+    // While git.worktreeRoot is SET it is the ACTIVE root (the override wins)
+    // — the hint must say so, and must NOT claim the worktrees there are
+    // already disposable or that new worktrees go under <dataDir>/worktrees.
+    expect(lines.join("")).toMatch(/currently live at/);
+    expect(lines.join("")).toMatch(/after removing the key/);
+    expect(lines.join("")).not.toMatch(/safe to delete/);
     // Exactly one warning: the co-occurring deprecated-key finding, not this hint.
     expect(lines.join("")).toMatch(/1 warning\(s\)/);
   });

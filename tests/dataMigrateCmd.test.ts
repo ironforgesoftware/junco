@@ -261,6 +261,71 @@ describe("runDataMigrate — daemon-up refusal", () => {
   });
 });
 
+describe("runDataMigrate — daemon pidfile refusal (health-disabled daemons)", () => {
+  it("refuses when <config dir>/worker.lock is held by a live pid, even with /health unreachable", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    // Hold the daemon's pidfile with THIS live process — the exact state a
+    // healthEnabled:false daemon leaves: /health rejects, worker.lock is live.
+    const daemonLock = acquirePidfileLock(join(root, "worker.lock"));
+    expect(daemonLock).not.toBeNull();
+    try {
+      let renameCalls = 0;
+      const out: string[] = [];
+      const code = await runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: false, force: false },
+        {
+          fetchFn: fetchDown(),
+          renameFn: () => {
+            renameCalls++;
+          },
+          printFn: (s) => out.push(s),
+        },
+      );
+
+      expect(code).toBe(1);
+      expect(renameCalls).toBe(0);
+      expect(out.join("")).toMatch(/refus/i);
+      expect(out.join("")).toMatch(/worker\.lock/);
+      // Never reached the migration-lock step.
+      expect(existsSync(join(dataDir, "migrate.lock"))).toBe(false);
+    } finally {
+      daemonLock?.release();
+    }
+  });
+
+  it("--force skips the pidfile check too", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const daemonLock = acquirePidfileLock(join(root, "worker.lock"));
+    expect(daemonLock).not.toBeNull();
+    try {
+      const out: string[] = [];
+      const code = await runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: false, force: true },
+        { printFn: (s) => out.push(s) },
+      );
+      expect(code).toBe(0);
+    } finally {
+      daemonLock?.release();
+    }
+  });
+});
+
 describe("runDataMigrate — migration lock", () => {
   it("refuses (exit 1) when another migrate already holds the lock", async () => {
     const root = trackRoot(freshRoot());

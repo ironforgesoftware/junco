@@ -486,7 +486,12 @@ export function queuePaths(cfg: Config): Paths {
 }
 
 /** One human-readable deprecation per legacy path key set in config.json.
- * Surfaced by daemon startup, `junco doctor`, and `junco data` (spec §5). */
+ * Surfaced by daemon startup, `junco doctor`, and `junco data` (spec §5).
+ * The migrate hint is reserved for the keys `junco data migrate` actually
+ * unifies (vaultRoot/juncoSubdir, observability.stateDir); worktreeRoot and
+ * externalReposRoot are NOT moved by it, so their hints are key-specific
+ * removal instructions — pointing those at the migrate would loop the
+ * operator (the warning would survive every run). */
 export function configDeprecations(cfg: Config): string[] {
   const out: string[] = [];
   const hint = "run 'junco data migrate' to unify (docs/configuration.md)";
@@ -498,11 +503,15 @@ export function configDeprecations(cfg: Config): string[] {
     out.push(`config: observability.stateDir is deprecated — use top-level dataDir; ${hint}`);
   if (cfg.legacy.worktreeRoot)
     out.push(
-      `config: git.worktreeRoot is deprecated — worktrees live at <dataDir>/worktrees; ${hint}`,
+      "config: git.worktreeRoot is deprecated — remove the key (with the daemon idle); " +
+        "worktrees are disposable and will be recreated under <dataDir>/worktrees " +
+        "(docs/configuration.md)",
     );
   if (cfg.legacy.externalReposRoot)
     out.push(
-      `config: github.externalReposRoot is deprecated — external clones live at <dataDir>/clones/external; ${hint}`,
+      "config: github.externalReposRoot is deprecated — remove the key; external clones " +
+        "re-clone under <dataDir>/clones/external on next use (or move them there first) " +
+        "(docs/configuration.md)",
     );
   return out;
 }

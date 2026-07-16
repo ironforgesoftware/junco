@@ -161,6 +161,43 @@ describe("migrateStateTree", () => {
     expect(res.conflicts).toEqual([]);
   });
 
+  it("recursively-empty nested dst scaffolding (ensureDataTree's own tree) is repaired", () => {
+    // The real-world shape: ensureDataTree materialized the NEW tree (nested,
+    // dirs only) while the old-name dir still holds the data — e.g. a version
+    // rollback or an old CLI writing post-upgrade. A flat-emptiness check
+    // sees review/assess containing "filed" and declares a permanent
+    // conflict; the fix treats a dst with zero FILES anywhere as repairable.
+    const root = freshRoot();
+    mkdirSync(join(root, "assess-review"), { recursive: true });
+    writeFileSync(join(root, "assess-review", "a.json"), "{}");
+    mkdirSync(join(root, "review", "assess", "filed"), { recursive: true }); // nested, file-free
+    mkdirSync(join(root, "comment-review"), { recursive: true });
+    writeFileSync(join(root, "comment-review", "draft.json"), "{}");
+    mkdirSync(join(root, "review", "comments", "posted"), { recursive: true });
+    mkdirSync(join(root, "review", "comments", "discarded"), { recursive: true });
+    const res = migrateStateTree(makeConfig({ dataDir: root, queueRoot: join(root, "queue") }));
+    expect(res.conflicts).toEqual([]);
+    expect(existsSync(join(root, "review/assess/a.json"))).toBe(true);
+    expect(existsSync(join(root, "review/comments/draft.json"))).toBe(true);
+    expect(existsSync(join(root, "assess-review"))).toBe(false);
+    expect(existsSync(join(root, "comment-review"))).toBe(false);
+    // The empty scaffolding was replaced wholesale by the renamed src (which
+    // held no filed/posted dirs) — nothing fabricates them back here.
+    expect(existsSync(join(root, "review/assess/filed"))).toBe(false);
+  });
+
+  it("nested dst with ONE file anywhere inside → skipped-conflict, nothing destroyed", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "comment-review"), { recursive: true });
+    writeFileSync(join(root, "comment-review", "draft.json"), "{}");
+    mkdirSync(join(root, "review", "comments", "posted"), { recursive: true });
+    writeFileSync(join(root, "review", "comments", "posted", "deep.json"), "{}");
+    const res = migrateStateTree(makeConfig({ dataDir: root, queueRoot: join(root, "queue") }));
+    expect(res.conflicts).toHaveLength(1);
+    expect(existsSync(join(root, "comment-review", "draft.json"))).toBe(true);
+    expect(existsSync(join(root, "review", "comments", "posted", "deep.json"))).toBe(true);
+  });
+
   it("non-empty both sides → skipped-conflict, nothing destroyed", () => {
     const root = freshRoot();
     mkdirSync(join(root, "assess-review"), { recursive: true });
@@ -221,6 +258,24 @@ describe("migrateStateTree", () => {
     expect(renamed.length).toBe(2);
     expect(renamed.some((s: { from: string }) => s.from.endsWith("github-outbox"))).toBe(true);
     expect(renamed.some((s: { from: string }) => s.from.endsWith("comment-review"))).toBe(true);
+  });
+
+  it("does not re-append an identical skipped-conflict on every run (startup would grow the journal forever)", () => {
+    const root = freshRoot();
+    // A permanent conflict: files on both sides.
+    mkdirSync(join(root, "assess-review"), { recursive: true });
+    writeFileSync(join(root, "assess-review", "old.json"), "{}");
+    mkdirSync(join(root, "review", "assess"), { recursive: true });
+    writeFileSync(join(root, "review", "assess", "new.json"), "{}");
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    migrateStateTree(cfg);
+    migrateStateTree(cfg);
+    migrateStateTree(cfg);
+    const journal = JSON.parse(readFileSync(join(root, "migrated.json"), "utf8"));
+    const conflicts = journal.steps.filter(
+      (s: { action: string }) => s.action === "skipped-conflict",
+    );
+    expect(conflicts).toHaveLength(1); // journaled once, not once per startup
   });
 
   it("never journals routine noops — a from-scratch dataDir with nothing to migrate writes no journal", () => {

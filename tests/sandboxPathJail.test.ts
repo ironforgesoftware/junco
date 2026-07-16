@@ -12,7 +12,8 @@ import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 // helpers is a deterministic no-op across machines.
 const policy: SandboxPolicy = {
   writableRoots: ["/sbxroot/work/tree", "/sbxroot/scratch"],
-  readDenyPaths: ["/sbxroot/home/x/.ssh", "/sbxroot/home/x/.local/state/junco"],
+  readDenyPaths: ["/sbxroot/home/x/.ssh", "/sbxroot/data/queue"],
+  readDenyFiles: ["/sbxroot/data/watchlist.json"],
   network: false,
   scratchDir: "/sbxroot/scratch",
 };
@@ -63,5 +64,17 @@ describe("assertReadAllowed", () => {
     expect(() =>
       assertReadAllowed("/sbxroot/home/x/.ssh/id_rsa", "/sbxroot/work/tree", policy),
     ).toThrow(SandboxViolation);
+    expect(() =>
+      assertReadAllowed("/sbxroot/data/queue/inbox/x.md", "/sbxroot/work/tree", policy),
+    ).toThrow(SandboxViolation);
+  });
+  it("blocks reads of exact denied files, but not their siblings", () => {
+    expect(() =>
+      assertReadAllowed("/sbxroot/data/watchlist.json", "/sbxroot/work/tree", policy),
+    ).toThrow(SandboxViolation);
+    // A sibling under the same parent is NOT denied — file denies are exact.
+    expect(assertReadAllowed("/sbxroot/data/other.json", "/sbxroot/work/tree", policy)).toBe(
+      "/sbxroot/data/other.json",
+    );
   });
 });

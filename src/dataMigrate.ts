@@ -21,7 +21,7 @@ import {
   existsSync,
   renameSync,
   readdirSync,
-  rmdirSync,
+  rmSync,
   readFileSync,
   writeFileSync,
   mkdirSync,
@@ -44,8 +44,12 @@ export interface MigrateResult {
 export interface MigrateDeps {
   existsFn?: (p: string) => boolean;
   renameFn?: (from: string, to: string) => void;
-  readdirFn?: (d: string) => string[];
-  rmdirFn?: (d: string) => void;
+  /** Typed readdir (withFileTypes) — the recursive emptiness check needs to
+   * tell files from directories. Default: readdirSync(d, {withFileTypes}). */
+  readdirTypedFn?: (d: string) => Array<{ name: string; isDirectory(): boolean }>;
+  /** Recursive directory removal for a repairable (file-free) dst.
+   * Default: rmSync(d, {recursive: true}). */
+  rmFn?: (d: string) => void;
   readFileFn?: (p: string) => string;
   writeFileFn?: (p: string, s: string) => void;
 }
@@ -86,16 +90,30 @@ export function pendingMigrations(
   return stateTreeMigrations(cfg).filter((m) => existsFn(m.from));
 }
 
-/** readdir-based emptiness check: an ENOTDIR (dst is a file, not a
- * directory — the watchlist pair) is never "empty"; any other error (EACCES
- * etc.) is a genuine fs error and propagates rather than being swallowed. */
-function isEmptyDir(dst: string, readdirFn: (d: string) => string[]): boolean {
+/** RECURSIVE emptiness check: true when the subtree holds directories only —
+ * zero files anywhere. That is exactly what ensureDataTree materializes
+ * (nested archive dirs like review/assess/filed), so a dst in that state is
+ * scaffolding, not data, and is safe to replace; any file anywhere makes it
+ * real data. Non-directory entries (files, symlinks — never followed) count
+ * as content. An ENOTDIR at the top (dst is a file — the watchlist pair) is
+ * never "empty"; any other error (EACCES etc.) is a genuine fs error and
+ * propagates rather than being swallowed. */
+function isRecursivelyEmptyDir(
+  dst: string,
+  readdirTypedFn: (d: string) => Array<{ name: string; isDirectory(): boolean }>,
+): boolean {
+  let entries: Array<{ name: string; isDirectory(): boolean }>;
   try {
-    return readdirFn(dst).length === 0;
+    entries = readdirTypedFn(dst);
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === "ENOTDIR") return false;
     throw e;
   }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) return false;
+    if (!isRecursivelyEmptyDir(join(dst, entry.name), readdirTypedFn)) return false;
+  }
+  return true;
 }
 
 function readJournal(path: string, readFileFn: (p: string) => string): Journal {
@@ -119,7 +137,20 @@ function appendJournal(
   renameFn: (from: string, to: string) => void,
 ): void {
   const existing = readJournal(path, readFileFn);
-  const journal: Journal = { version: 1, steps: [...existing.steps, ...newSteps] };
+  // A PERSISTENT conflict re-surfaces on every startup until the operator
+  // resolves it — journal it once, not once per run (the journal is a receipt
+  // of distinct outcomes, not a heartbeat). "renamed" entries always append:
+  // the same pair can genuinely rename twice (operator restores a backup).
+  const seen = new Set(
+    existing.steps
+      .filter((s) => s.action === "skipped-conflict")
+      .map((s) => `${s.from}\u0000${s.to}`),
+  );
+  const fresh = newSteps.filter(
+    (s) => s.action !== "skipped-conflict" || !seen.has(`${s.from}\u0000${s.to}`),
+  );
+  if (fresh.length === 0) return; // nothing new — don't rewrite the file
+  const journal: Journal = { version: 1, steps: [...existing.steps, ...fresh] };
   const tmp = `${path}.tmp`;
   writeFileFn(tmp, JSON.stringify(journal, null, 2) + "\n");
   renameFn(tmp, path); // atomic tmp+rename — same pattern as reviewStore/watchlist writes
@@ -129,12 +160,16 @@ function appendJournal(
  * Runs the migration for every pending pair. Decision rules per pair:
  *   - src missing                      → "noop" (dst, if any, is untouched)
  *   - dst missing                      → mkdir(dirname(to)), rename, "renamed"
- *   - dst exists and is an EMPTY dir   → rmdir(dst), rename, "renamed"
- *                                        (repairs a crash-after-mkdir-before-
- *                                        rename from a previous partial run)
- *   - dst exists and is non-empty      → "skipped-conflict" (pushed to
- *     (or is a file — the watchlist      conflicts; nothing destroyed on
- *     pair)                              either side)
+ *   - dst exists, RECURSIVELY empty    → rm -r dst, rename, "renamed"
+ *     (directories only, zero files      (repairs a crash-after-mkdir from a
+ *     anywhere in the subtree)           previous partial run AND
+ *                                        ensureDataTree's own nested
+ *                                        scaffolding materialized while the
+ *                                        old-name dir still held the data —
+ *                                        version rollback, old-CLI writes)
+ *   - dst has any FILE anywhere        → "skipped-conflict" (pushed to
+ *     (or is itself a file — the         conflicts; nothing destroyed on
+ *     watchlist pair)                    either side)
  * Never throws for a conflict — it is reported, not raised. Genuine fs
  * errors (EACCES etc.) may still propagate — but the journal write runs in
  * a `finally`, so pairs that DID rename before the throw still get their
@@ -144,8 +179,9 @@ function appendJournal(
 export function migrateStateTree(cfg: Config, deps: MigrateDeps = {}): MigrateResult {
   const existsFn = deps.existsFn ?? existsSync;
   const renameFn = deps.renameFn ?? renameSync;
-  const readdirFn = deps.readdirFn ?? readdirSync;
-  const rmdirFn = deps.rmdirFn ?? rmdirSync;
+  const readdirTypedFn =
+    deps.readdirTypedFn ?? ((d: string) => readdirSync(d, { withFileTypes: true }));
+  const rmFn = deps.rmFn ?? ((d: string) => rmSync(d, { recursive: true }));
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
 
@@ -169,8 +205,8 @@ export function migrateStateTree(cfg: Config, deps: MigrateDeps = {}): MigrateRe
         steps.push({ from, to, action: "renamed" });
         continue;
       }
-      if (isEmptyDir(to, readdirFn)) {
-        rmdirFn(to);
+      if (isRecursivelyEmptyDir(to, readdirTypedFn)) {
+        rmFn(to);
         renameFn(from, to);
         steps.push({ from, to, action: "renamed" });
         continue;

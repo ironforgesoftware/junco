@@ -2,13 +2,15 @@
  * `junco data migrate` — explicit, opt-in full unification of the legacy
  * vaultRoot queue + state-tree subdirs + config.json legacy keys into the
  * unified data root (spec 2026-07-16 §7 "Explicit"). Refuses while the
- * daemon appears to be running: ANY /health response (even non-200) means
- * something is listening on that port, so we back off rather than race the
- * daemon's own in-flight fs mutations. `--force` skips that probe entirely
- * (documented escape hatch for health-disabled setups, where the probe can
- * never observe a live daemon). A pidfile lock (`<dataDir>/migrate.lock`),
- * held for the whole run and released in a `finally`, keeps two concurrent
- * migrates from racing each other.
+ * daemon appears to be running, judged two ways: ANY /health response (even
+ * non-200) means something is listening on that port, and a live-held
+ * `<config dir>/worker.lock` pidfile (the daemon's single-instance lock, see
+ * cli.ts) catches healthEnabled:false daemons the probe can never observe.
+ * Either signal → back off rather than race the daemon's own in-flight fs
+ * mutations. `--force` skips both checks (documented escape hatch). A
+ * pidfile lock (`<dataDir>/migrate.lock`), held for the whole run and
+ * released in a `finally`, keeps two concurrent migrates from racing each
+ * other.
  *
  * Order of operations: probe → plan (read-only) → (`--dry-run`: print + stop,
  * exit 0 — BEFORE the lock, whose acquisition mkdirs cfg.dataDir as a side
@@ -30,7 +32,7 @@ import {
   statSync,
   readdirSync,
 } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import type { Config, Paths } from "./types.js";
 import {
   HEALTH_TIMEOUT_MS,
@@ -41,7 +43,7 @@ import {
 } from "./config.js";
 import { migrateStateTree, pendingMigrations, type MigrateResult } from "./dataMigrate.js";
 import { dataTreePaths } from "./dataTree.js";
-import { acquirePidfileLock } from "./pidfileLock.js";
+import { acquirePidfileLock, readPidfileHolder } from "./pidfileLock.js";
 
 const QUEUE_DIR_KEYS: (keyof Paths)[] = ["inbox", "processing", "done", "failed"];
 
@@ -64,6 +66,9 @@ export interface DataMigrateDeps {
   migrateFn?: (cfg: Config) => MigrateResult;
   /** Recursive directory copy for the EXDEV fallback. Default: fs.cpSync. */
   copyDirFn?: (from: string, to: string) => void;
+  /** Daemon-pidfile liveness probe (the /health-independent "is the daemon
+   * up" signal). Default: the real readPidfileHolder. */
+  pidfileHolderFn?: (lockPath: string) => number | null;
 }
 
 interface QueueStep {
@@ -200,7 +205,9 @@ function printReceipt(
   if (state === "not-run") {
     print("\nstate tree: not attempted\n");
   } else if (state === "interrupted") {
-    print(`\nstate tree: interrupted — completed steps journaled in ${migratedFile}\n`);
+    // "any completed steps": accurate even when the throw came before the
+    // first pair completed and the journal holds nothing from this run.
+    print(`\nstate tree: interrupted — any completed steps are journaled in ${migratedFile}\n`);
   } else {
     const acted = state.steps.filter((s) => s.action !== "noop");
     print(
@@ -238,15 +245,31 @@ export async function runDataMigrate(
   const migrateFn = deps.migrateFn ?? ((c: Config) => migrateStateTree(c));
   const copyDirFn =
     deps.copyDirFn ?? ((from: string, to: string) => cpSync(from, to, { recursive: true }));
+  const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
 
-  // 1a. Daemon-up refusal — skipped entirely by --force.
-  if (!opts.force && (await daemonIsUp(cfg, fetchFn))) {
-    print(
-      `junco data migrate: refusing — the daemon appears to be running ` +
-        `(http://${cfg.healthHost}:${cfg.healthPort}/health responded). ` +
-        `Stop it first, or pass --force if health is intentionally disabled.\n`,
-    );
-    return 1;
+  // 1a. Daemon-up refusal — both signals skipped entirely by --force.
+  if (!opts.force) {
+    if (await daemonIsUp(cfg, fetchFn)) {
+      print(
+        `junco data migrate: refusing — the daemon appears to be running ` +
+          `(http://${cfg.healthHost}:${cfg.healthPort}/health responded). ` +
+          `Stop it first, or pass --force to skip this check.\n`,
+      );
+      return 1;
+    }
+    // A health-disabled daemon never answers the probe — check its
+    // single-instance pidfile instead. Same path derivation as `junco start`
+    // (cli.ts): the lock lives next to config.json, not under dataDir.
+    const workerLock = join(dirname(resolve(configPath)), "worker.lock");
+    const holder = pidfileHolderFn(workerLock);
+    if (holder !== null) {
+      print(
+        `junco data migrate: refusing — the daemon appears to be running ` +
+          `(pid ${holder} holds ${workerLock}). ` +
+          `Stop it first, or pass --force to skip this check.\n`,
+      );
+      return 1;
+    }
   }
 
   // 2. Plan — read-only (existsFn probes only), so it runs BEFORE the lock:
