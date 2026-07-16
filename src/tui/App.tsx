@@ -298,7 +298,6 @@ export function App(props: AppProps): React.JSX.Element {
     worktrees: 0,
     daemon: 0,
   });
-  const [localScroll, setLocalScroll] = useState(0);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
   const [localRefreshedAt, setLocalRefreshedAt] = useState<string | null>(null);
@@ -311,7 +310,7 @@ export function App(props: AppProps): React.JSX.Element {
   // instance serves them all; the key is the mounted surface's content identity,
   // and a key change is what resets the offset — this replaces the 18
   // hand-written offset-reset calls (this hook's github-side setter here, plus
-  // local mode's own scroll state folded in by a later task) that used to
+  // LOCAL mode's own scroll state, folded into this same instance) that used to
   // stand in for a lifecycle.
   const scrollKey = useMemo(() => {
     if (uiMode === "local") return `local:${localSection}`;
@@ -383,7 +382,6 @@ export function App(props: AppProps): React.JSX.Element {
     const i = LOCAL_SECTIONS.indexOf(localSection);
     const next = Math.max(0, Math.min(i + delta, LOCAL_SECTIONS.length - 1));
     setLocalSection(LOCAL_SECTIONS[next]);
-    setLocalScroll(0); // section switch resets the daemon-panel scroll
   };
 
   const showToast = useCallback((kind: ToastKind, text: string) => {
@@ -1421,8 +1419,8 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (localSection === "daemon") {
-        if (input === "[" || key.upArrow) return void setLocalScroll((s) => Math.max(0, s - 1));
-        if (input === "]" || key.downArrow) return void setLocalScroll((s) => s + 1);
+        if (input === "[" || key.upArrow) return void scrollBy(-1);
+        if (input === "]" || key.downArrow) return void scrollBy(1);
         if (input === "X") {
           const n = localCheap?.daemon.currentTickets.length ?? 0;
           return void askConfirm({
@@ -1501,12 +1499,10 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "k" || key.upArrow) return void moveLocalSection(-1);
     if (input === "g") {
       setLocalSection("queue");
-      setLocalScroll(0);
       return;
     }
     if (input === "G") {
       setLocalSection("daemon");
-      setLocalScroll(0);
       return;
     }
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
@@ -2107,7 +2103,6 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     setLocalSection(s);
-    setLocalScroll(0);
     setLocalFocus("rail");
   };
   const localRowPress = (idx: number): void => {
@@ -2427,13 +2422,14 @@ export function App(props: AppProps): React.JSX.Element {
           section={localSection}
           focus={localFocus}
           cursor={localCursorSafe}
-          scroll={localScroll}
+          scroll={scroll}
           layout={layout}
           now={queueNow}
           refreshedAt={localRefreshedAt}
           onSectionPress={localSectionPress}
           onRowPress={localRowPress}
-          onDaemonWheel={(d) => setLocalScroll((s) => Math.max(0, s + d))}
+          onDaemonWheel={(d) => scrollBy(d)}
+          onScrollMax={onScrollMax}
         />
       ) : view === "review" ? (
         <ReviewView
