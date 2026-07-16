@@ -226,6 +226,10 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     pruneFn: vi.fn(() => {}),
     waitForEndpointFn: vi.fn(async () => {}),
     sleep: vi.fn(async () => {}),
+    // Real migrateStateTree touches the filesystem; these fixture dataDirs
+    // ("/tmp/vault/state" etc.) aren't real tmp roots, so default every test
+    // to a no-op migration unless a test overrides it to exercise the wiring.
+    migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
     mkdirs: vi.fn(() => {}),
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
@@ -541,6 +545,13 @@ describe("mainLoop", () => {
     const order: string[] = [];
 
     const { deps } = makeDeps({
+      // migrate BEFORE mkdirs is load-bearing (Task 4): an eager
+      // ensureDataTree would fabricate empty destinations for every
+      // old-name pair, turning routine renames into the crash-repair path.
+      migrateFn: vi.fn(() => {
+        order.push("migrate");
+        return { steps: [], conflicts: [] };
+      }),
       mkdirs: vi.fn(() => {
         order.push("mkdirs");
       }),
@@ -565,7 +576,8 @@ describe("mainLoop", () => {
 
     await mainLoop(cfg, stop, {}, deps);
 
-    expect(order.slice(0, 5)).toEqual(["mkdirs", "recover", "prune", "wait", "runOnce"]);
+    expect(order.slice(0, 6)).toEqual(["migrate", "mkdirs", "recover", "prune", "wait", "runOnce"]);
+    expect(deps.migrateFn).toHaveBeenCalledTimes(1);
     expect(deps.mkdirs).toHaveBeenCalledTimes(1);
     expect(deps.recoverOrphansFn).toHaveBeenCalledTimes(1);
     expect(deps.pruneFn).toHaveBeenCalledTimes(1);
@@ -1273,6 +1285,7 @@ describe("mainLoop — observability", () => {
         recoverOrphansFn: () => {},
         pruneFn: () => {},
         waitForEndpointFn: async () => {},
+        migrateFn: () => ({ steps: [], conflicts: [] }),
         mkdirs: () => {},
         startHealthServerFn: async () => null as unknown as HealthServerHandle,
       },
@@ -1321,6 +1334,7 @@ describe("mainLoop — observability", () => {
         recoverOrphansFn: () => {},
         pruneFn: () => {},
         waitForEndpointFn: async () => {},
+        migrateFn: () => ({ steps: [], conflicts: [] }),
         mkdirs: () => {},
         startHealthServerFn: async () => null as unknown as HealthServerHandle,
       },

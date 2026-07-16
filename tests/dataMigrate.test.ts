@@ -1,0 +1,293 @@
+/**
+ * Tests for src/dataMigrate.ts — journaled, idempotent, in-place migration of
+ * old-name state subdirs into the unified data tree (spec 2026-07-16 §7).
+ * Written FIRST (TDD). Real mkdtempSync tmp roots — same pattern as
+ * tests/dataTree.test.ts / other repo fs-touching suites.
+ */
+
+import { describe, it, expect } from "vitest";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Config } from "../src/types.js";
+import { migrateStateTree, pendingMigrations, stateTreeMigrations } from "../src/dataMigrate.js";
+
+function freshRoot(): string {
+  return mkdtempSync(join(tmpdir(), "junco-dm-"));
+}
+
+/** Full-Config fixture (same shape as tests/daemon.test.ts's makeConfig), but
+ * — unlike that fixture — derives queueRoot/github.externalReposRoot from
+ * dataDir by default, matching real resolveConfig's non-legacy behavior: this
+ * suite's migrations only make sense relative to a single tmp-root dataDir,
+ * so "external" must default to "<dataDir>/clones/external" rather than an
+ * unrelated fixed path. Callers still override either field wholesale via
+ * `overrides`. */
+function makeConfig(overrides: Partial<Config> = {}): Config {
+  const dataDir = overrides.dataDir ?? "/tmp/vault/state";
+  return {
+    dataDir,
+    queueRoot: join(dataDir, "queue"),
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    model: {
+      id: "omlx/test-model",
+      source: "auto",
+      baseUrlExplicit: false,
+      retry: { maxRetries: null, baseDelayMs: null },
+      modelsJson: null,
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "test-key",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 131072,
+      maxTokens: 49152,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      thinkingLevel: "medium",
+      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+    },
+    tools: [],
+    defaultTimeoutMinutes: 30,
+    pollIntervalSeconds: 15,
+    startupPollSeconds: 30,
+    startupWait: true,
+    endpointProbe: "auto",
+    maxTransientRetries: 2,
+    retryBackoffSeconds: 60,
+    maxConcurrent: 1,
+    dailyBudgetUsd: 0,
+    supervisorEnabled: false,
+    supervisorBudgetPerKind: 1,
+    supervisorEscalationWindow: 3,
+    supervisorOutputBudgetPerTurn: 12000,
+    supervisorOutputBudgetPostCommit: 24000,
+    gitBin: "git",
+    ghBin: "gh",
+    defaultBaseBranch: "main",
+    branchPrefix: "junco/",
+    worktreeRoot: "/tmp/worktrees",
+    removeWorktreeOnSuccess: true,
+    allowedRepoRoots: [],
+    draftByDefault: true,
+    defaultLabels: [],
+    verifyEnabled: true,
+    verifyCommandTimeout: 60,
+    verifyBlockOnFail: false,
+    criticEnabled: true,
+    criticMaxRetries: 1,
+    criticThinking: "minimal",
+    planLintEnabled: true,
+    planLintBlockOnError: true,
+    planLintCheckLabels: true,
+    commitLeftoversEnabled: false,
+    healthEnabled: false,
+    healthHost: "127.0.0.1",
+    healthPort: 0,
+    logLevel: "info",
+    logToFile: false,
+    transcriptsEnabled: false,
+    github: {
+      enabled: false,
+      triggerLabel: "junco",
+      askLabel: "junco:ask",
+      pollIntervalSeconds: 60,
+      repos: [],
+      requireApproval: true,
+      plannerModelId: null,
+      externalReposRoot: join(dataDir, "clones", "external"),
+    },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
+    sandbox: {
+      enabled: false,
+      backend: "auto",
+      network: "deny",
+      extraDenyRead: [],
+      extraAllowWrite: [],
+    },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
+    ...overrides,
+  };
+}
+
+const base = makeConfig();
+
+describe("migrateStateTree", () => {
+  it("renames every old-name subdir into the new tree and journals", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "assess-review", "filed"), { recursive: true });
+    writeFileSync(join(root, "assess-review", "a.json"), "{}");
+    mkdirSync(join(root, "github-outbox", "dead"), { recursive: true });
+    mkdirSync(join(root, "repos", "o", "r"), { recursive: true });
+    mkdirSync(join(root, "external", "o2"), { recursive: true });
+    mkdirSync(join(root, "comment-review"), { recursive: true });
+    writeFileSync(join(root, "github-watchlist.json"), "[]");
+    const res = migrateStateTree(makeConfig({ dataDir: root, queueRoot: join(root, "queue") }));
+    expect(existsSync(join(root, "review/assess/a.json"))).toBe(true);
+    expect(existsSync(join(root, "review/assess/filed"))).toBe(true);
+    expect(existsSync(join(root, "outbox/dead"))).toBe(true);
+    expect(existsSync(join(root, "clones/watched/o/r"))).toBe(true);
+    expect(existsSync(join(root, "clones/external/o2"))).toBe(true);
+    expect(existsSync(join(root, "review/comments"))).toBe(true);
+    expect(existsSync(join(root, "watchlist.json"))).toBe(true);
+    expect(existsSync(join(root, "assess-review"))).toBe(false);
+    expect(res.conflicts).toEqual([]);
+    const journal = JSON.parse(readFileSync(join(root, "migrated.json"), "utf8"));
+    expect(journal.steps.filter((s: { action: string }) => s.action === "renamed").length).toBe(6);
+  });
+
+  it("is idempotent — a second run is all noops", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "github-outbox"), { recursive: true });
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    migrateStateTree(cfg);
+    const res2 = migrateStateTree(cfg);
+    expect(res2.steps.every((s) => s.action === "noop")).toBe(true);
+  });
+
+  it("empty destination is removed and the rename proceeds (crash-after-mkdir)", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "assess-review"), { recursive: true });
+    writeFileSync(join(root, "assess-review", "a.json"), "{}");
+    mkdirSync(join(root, "review", "assess"), { recursive: true }); // empty dst
+    const res = migrateStateTree(makeConfig({ dataDir: root, queueRoot: join(root, "queue") }));
+    expect(existsSync(join(root, "review/assess/a.json"))).toBe(true);
+    expect(res.conflicts).toEqual([]);
+  });
+
+  it("non-empty both sides → skipped-conflict, nothing destroyed", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "assess-review"), { recursive: true });
+    writeFileSync(join(root, "assess-review", "old.json"), "{}");
+    mkdirSync(join(root, "review", "assess"), { recursive: true });
+    writeFileSync(join(root, "review", "assess", "new.json"), "{}");
+    const res = migrateStateTree(makeConfig({ dataDir: root, queueRoot: join(root, "queue") }));
+    expect(res.conflicts).toHaveLength(1);
+    expect(existsSync(join(root, "assess-review/old.json"))).toBe(true);
+    expect(existsSync(join(root, "review/assess/new.json"))).toBe(true);
+  });
+
+  it("watchlist file→file conflict: dst exists alone → skipped-conflict (no empty-dir repair)", () => {
+    const root = freshRoot();
+    writeFileSync(join(root, "github-watchlist.json"), '["old"]');
+    writeFileSync(join(root, "watchlist.json"), '["new"]');
+    const res = migrateStateTree(makeConfig({ dataDir: root, queueRoot: join(root, "queue") }));
+    const step = res.steps.find((s) => s.from.endsWith("github-watchlist.json"));
+    expect(step?.action).toBe("skipped-conflict");
+    expect(res.conflicts).toHaveLength(1);
+    expect(readFileSync(join(root, "watchlist.json"), "utf8")).toBe('["new"]');
+    expect(existsSync(join(root, "github-watchlist.json"))).toBe(true);
+  });
+
+  it("src missing → noop, dst untouched", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "review", "assess"), { recursive: true });
+    writeFileSync(join(root, "review", "assess", "keep.json"), "{}");
+    const res = migrateStateTree(makeConfig({ dataDir: root, queueRoot: join(root, "queue") }));
+    const step = res.steps.find((s) => s.to.endsWith("review/assess"));
+    expect(step?.action).toBe("noop");
+    expect(existsSync(join(root, "review/assess/keep.json"))).toBe(true);
+  });
+
+  it("legacy-overridden subtrees are excluded from the migration list", () => {
+    const root = freshRoot();
+    const cfg = makeConfig({
+      dataDir: root,
+      queueRoot: join(root, "queue"),
+      github: { ...base.github, externalReposRoot: "/sbxroot/custom-ext" },
+      legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: true },
+    });
+    expect(pendingMigrations(cfg).some((m) => m.from.endsWith("/external"))).toBe(false);
+    expect(stateTreeMigrations(cfg).some((m) => m.from.endsWith("/external"))).toBe(false);
+  });
+
+  it("journal accumulates across separate migration runs (append, not overwrite)", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "github-outbox"), { recursive: true });
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    migrateStateTree(cfg); // renames github-outbox -> outbox
+    // Simulate a later, separate legacy directory appearing (e.g. an operator
+    // restoring an old backup) and a second migration run picking it up.
+    mkdirSync(join(root, "comment-review"), { recursive: true });
+    migrateStateTree(cfg); // renames comment-review -> review/comments
+    const journal = JSON.parse(readFileSync(join(root, "migrated.json"), "utf8"));
+    const renamed = journal.steps.filter((s: { action: string }) => s.action === "renamed");
+    expect(renamed.length).toBe(2);
+    expect(renamed.some((s: { from: string }) => s.from.endsWith("github-outbox"))).toBe(true);
+    expect(renamed.some((s: { from: string }) => s.from.endsWith("comment-review"))).toBe(true);
+  });
+
+  it("never journals routine noops — a from-scratch dataDir with nothing to migrate writes no journal", () => {
+    const root = freshRoot();
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const res = migrateStateTree(cfg);
+    expect(res.steps.every((s) => s.action === "noop")).toBe(true);
+    expect(existsSync(join(root, "migrated.json"))).toBe(false);
+  });
+
+  it("journals steps completed before a mid-run fs error (receipts survive the throw)", () => {
+    const root = freshRoot();
+    // First pair (assess-review) will rename cleanly; the third pair
+    // (github-outbox) hits a simulated EACCES mid-run. The filesystem stays
+    // consistent (rename is atomic, the failed pair is left in place), but
+    // the receipt for the pair that DID move must still land in
+    // migrated.json — on the next run its src is gone, so the step resolves
+    // to "noop" and the journal entry could never be back-filled.
+    mkdirSync(join(root, "assess-review"), { recursive: true });
+    writeFileSync(join(root, "assess-review", "a.json"), "{}");
+    mkdirSync(join(root, "github-outbox"), { recursive: true });
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const boom = (from: string, to: string): void => {
+      if (from.endsWith("github-outbox")) {
+        const e = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        e.code = "EACCES";
+        throw e;
+      }
+      renameSync(from, to);
+    };
+    expect(() => migrateStateTree(cfg, { renameFn: boom })).toThrow(/EACCES/);
+    // The first pair really did move on disk before the throw...
+    expect(existsSync(join(root, "review/assess/a.json"))).toBe(true);
+    expect(existsSync(join(root, "github-outbox"))).toBe(true); // failed pair untouched
+    // ...and its receipt survived the aborted run.
+    const journal = JSON.parse(readFileSync(join(root, "migrated.json"), "utf8"));
+    const renamed = journal.steps.filter((s: { action: string }) => s.action === "renamed");
+    expect(renamed).toHaveLength(1);
+    expect(renamed[0].from.endsWith("assess-review")).toBe(true);
+  });
+
+  it("corrupt journal is treated as fresh rather than thrown", () => {
+    const root = freshRoot();
+    writeFileSync(join(root, "migrated.json"), "{ not json");
+    mkdirSync(join(root, "github-outbox"), { recursive: true });
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    expect(() => migrateStateTree(cfg)).not.toThrow();
+    const journal = JSON.parse(readFileSync(join(root, "migrated.json"), "utf8"));
+    expect(journal.version).toBe(1);
+    expect(journal.steps.filter((s: { action: string }) => s.action === "renamed").length).toBe(1);
+  });
+});
+
+describe("stateTreeMigrations", () => {
+  it("lists all 6 pairs when nothing is legacy-overridden", () => {
+    const cfg = makeConfig({ dataDir: "/sbxroot/data", queueRoot: "/sbxroot/data/queue" });
+    expect(stateTreeMigrations(cfg)).toHaveLength(6);
+  });
+});
+
+describe("pendingMigrations", () => {
+  it("filters to only pairs whose source currently exists", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "github-outbox"), { recursive: true });
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const pending = pendingMigrations(cfg);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].from).toBe(join(root, "github-outbox"));
+  });
+});

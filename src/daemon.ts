@@ -16,6 +16,7 @@
 import type { Config } from "./types.js";
 import type { ConfigHolder } from "./configWatcher.js";
 import { ensureDataTree } from "./dataTree.js";
+import { migrateStateTree, type MigrateResult } from "./dataMigrate.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
@@ -214,6 +215,10 @@ export interface MainLoopDeps {
   pruneFn?: (worktreeRoot: string) => void;
   waitForEndpointFn?: (cfg: Config, stopFlag: StopFlagLike) => Promise<void>;
   sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
+  /** In-place state-tree migration (Task 4), run BEFORE mkdirs — an eager
+   * mkdir would otherwise fabricate empty destinations for pairs whose old
+   * name still holds the real data. Defaults to the real migrateStateTree. */
+  migrateFn?: (cfg: Config) => MigrateResult;
   mkdirs?: (cfg: Config) => void;
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
@@ -540,9 +545,21 @@ export async function mainLoop(
   const waitForEndpointFn =
     deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
+  const migrateFn = deps.migrateFn ?? migrateStateTree;
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
+  // Migrate BEFORE mkdirs: ensureDataTree mkdir-p's the whole new tree, so if
+  // it ran first every old-name pair's destination would already exist (as an
+  // empty dir) by the time migrateStateTree looked — turning every ordinary
+  // rename into the crash-repair path for no reason, or worse, papering over
+  // a real conflict. See dataMigrate.ts's empty-dst repair rule for the
+  // narrow case that's actually meant to catch (a genuine crash between mkdir
+  // and rename), not routine startup ordering.
+  const mig = migrateFn(cfg);
+  for (const conflict of mig.conflicts) {
+    log.warn("state-tree migration conflict; manual resolution required", { conflict });
+  }
   mkdirs(cfg);
   // Stamp the start time once the queue dirs exist; the health server reports
   // uptime off this. Idempotent — first call wins.
