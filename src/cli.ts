@@ -180,6 +180,7 @@ Subcommands:
   rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
+  data         Print the data tree; 'data migrate' unifies legacy roots
   config path|list|get <path>|set <path> <value>|init  Inspect/edit config.json knobs; init scaffolds defaults
   assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
@@ -234,6 +235,8 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       human: { type: "boolean", default: false },
       "auto-plan": { type: "boolean", default: false },
       "no-footer": { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -754,6 +757,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return runWorktreePruneCommand(cfg, positionals.slice(2), { printFn });
     }
     process.stderr.write(`Usage: junco worktree prune <path>\n`);
+    return 2;
+  }
+
+  // ------------------------------------------------------------
+  // data: unified-data-root inspection/migration (src/dataMigrateCmd.ts).
+  // `data migrate` is the explicit, opt-in full unification (queue move +
+  // state tree + config rewrite); the plain `data` view lands in a later
+  // task — for now a bare `junco data` just prints a usage stub.
+  // ------------------------------------------------------------
+  if (subcommand === "data") {
+    if (positionals[1] === "migrate") {
+      const cfg = loadConfigFn(configPath);
+      const { runDataMigrate } = await import("./dataMigrateCmd.js");
+      return runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: values["dry-run"] as boolean, force: values.force as boolean },
+        { printFn },
+      );
+    }
+    printFn(`Usage: junco data migrate [--dry-run] [--force]\n`);
     return 2;
   }
 
