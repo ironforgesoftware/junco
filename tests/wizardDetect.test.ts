@@ -157,6 +157,85 @@ describe("flightChecks", () => {
   });
 });
 
+describe("flightChecks bot-access receipts", () => {
+  it("bot mode: ok receipt per watched repo with push access", async () => {
+    const cfg = tmpCfg({
+      sandbox: { enabled: false },
+      botAccount: { enabled: true, configDir: "/sbx/junco-gh" },
+      github: { repos: [{ nwo: "acme/api", path: "/r" }] },
+    });
+    const res = await flightChecks(cfg, {
+      reachableFn: async () => true,
+      fetchModelsFn: async () => [],
+      accessOkFn: () => true,
+      execFn: async (
+        _cmd: string,
+        args: string[],
+        opts?: { env?: Record<string, string> },
+      ): Promise<{ code: number; stdout: string; stderr: string }> => {
+        if (args.join(" ") === "repo view acme/api --json viewerPermission") {
+          // WRITE only under the bot's GH_CONFIG_DIR — ambient auth would
+          // flip the "ok" assertion below if the probe ran without it.
+          return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+            ? { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" }
+            : { code: 1, stdout: "", stderr: "wrong identity" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    });
+    expect(res.find((r) => r.label === "bot access: acme/api")).toEqual({
+      verdict: "ok",
+      label: "bot access: acme/api",
+      detail: "write",
+    });
+  });
+
+  it("bot mode: warns with the grant command when the bot lacks push access", async () => {
+    const cfg = tmpCfg({
+      sandbox: { enabled: false },
+      botAccount: { enabled: true, configDir: "/sbx/junco-gh" },
+      github: { repos: [{ nwo: "acme/api", path: "/r" }] },
+    });
+    const res = await flightChecks(cfg, {
+      reachableFn: async () => true,
+      fetchModelsFn: async () => [],
+      accessOkFn: () => true,
+      execFn: async (
+        _cmd: string,
+        args: string[],
+        opts?: { env?: Record<string, string> },
+      ): Promise<{ code: number; stdout: string; stderr: string }> => {
+        if (args.join(" ") === "repo view acme/api --json viewerPermission") {
+          // READ only under the bot's GH_CONFIG_DIR — ambient auth reads WRITE,
+          // which would flip the "warn" assertion below.
+          return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+            ? { code: 0, stdout: JSON.stringify({ viewerPermission: "READ" }), stderr: "" }
+            : { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    });
+    const receipt = res.find((r) => r.label === "bot access: acme/api");
+    expect(receipt?.verdict).toBe("warn");
+    expect(receipt?.detail).toMatch(/junco auth grant acme\/api/);
+  });
+
+  it("non-bot mode: no bot-access receipts at all", async () => {
+    const cfg = tmpCfg({
+      sandbox: { enabled: false },
+      botAccount: { enabled: false },
+      github: { repos: [{ nwo: "acme/api", path: "/r" }] },
+    });
+    const res = await flightChecks(cfg, {
+      reachableFn: async () => true,
+      fetchModelsFn: async () => [],
+      accessOkFn: () => true,
+      execFn: okExec({}),
+    });
+    expect(res.some((r) => r.label.startsWith("bot access:"))).toBe(false);
+  });
+});
+
 describe("botLoginCheck", () => {
   it("ok with login when authed under the config dir", async () => {
     const execFn = async (

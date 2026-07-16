@@ -182,5 +182,33 @@ export async function flightChecks(cfg: Config, deps: DetectDeps = {}): Promise<
       );
     }
   }
+
+  // Bot mode: one receipt per watched repo — can the DAEMON's identity push?
+  // Read-only (the wizard never mutates GitHub); the fix is the CLI command.
+  if (cfg.botAccount.enabled) {
+    for (const repo of cfg.github.repos) {
+      const r = await execFn(cfg.ghBin, ["repo", "view", repo.nwo, "--json", "viewerPermission"], {
+        env: { GH_CONFIG_DIR: cfg.botAccount.configDir, GH_TOKEN: "", GITHUB_TOKEN: "" },
+      });
+      let level: string | null = null;
+      try {
+        level =
+          r.code === 0
+            ? (JSON.parse(r.stdout) as { viewerPermission: string | null }).viewerPermission
+            : null;
+      } catch {
+        /* inconclusive → warn below */
+      }
+      out.push(
+        level === "ADMIN" || level === "MAINTAIN" || level === "WRITE"
+          ? { verdict: "ok", label: `bot access: ${repo.nwo}`, detail: level.toLowerCase() }
+          : {
+              verdict: "warn",
+              label: `bot access: ${repo.nwo}`,
+              detail: `no push — run: junco auth grant ${repo.nwo}`,
+            },
+      );
+    }
+  }
   return out;
 }

@@ -133,6 +133,7 @@ function makeClient(
     },
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    ensureBotAccess: async () => okv({ skipped: true }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -185,6 +186,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     openRepoInBrowser: async () => okv(undefined),
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    ensureBotAccess: async () => okv({ skipped: true }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -240,6 +242,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
     openRepoInBrowser: async () => okv(undefined),
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+    ensureBotAccess: async () => okv({ skipped: true }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -651,6 +654,7 @@ describe("App", () => {
       openRepoInBrowser: async () => okv(undefined),
       repoPermission: async () => okv({ canPush: true }),
       prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
+      ensureBotAccess: async () => okv({ skipped: true }),
       dispatchTicket: async (nwo, num) =>
         okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
       listReview: async () => okv([]),
@@ -1910,6 +1914,62 @@ describe("auto-clone add-repo", () => {
     // (flaked on CI: assertion ran before the clone rejection committed).
     await until(() => (r.lastFrame() ?? "").includes("clone exploded"));
     expect(readWatchlist(file).entries).toEqual([]);
+  });
+});
+
+// Task 5: after an owned-repo add succeeds, handleAddRepo's tail calls
+// client.ensureBotAccess so the daemon's own identity gets a push grant too —
+// the operator's own permission check earlier says nothing about the bot's.
+describe("bot access after adding an owned repo", () => {
+  const wl5 = () => join(mkdtempSync(join(tmpdir(), "junco-bot-")), "wl.json");
+
+  const addOwnedRepo = (r: ReturnType<typeof renderApp>) => {
+    r.stdin.write("w");
+    return tick()
+      .then(() => r.stdin.write("alx/coral"))
+      .then(tick)
+      .then(() => r.stdin.write("\r")) // -> path field
+      .then(tick)
+      .then(() => r.stdin.write("/c/coral"))
+      .then(tick)
+      .then(() => r.stdin.write("\r")); // submit
+  };
+
+  it("a grant success toasts the bot login, on top of the watching toast", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    client.ensureBotAccess = async () => okv({ skipped: false, login: "junco-agent" });
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    await until(() => (r.lastFrame() ?? "").includes("junco-agent"));
+    expect(r.lastFrame()).toContain("bot");
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  it("a grant failure surfaces the underlying error instead of a fixed prescription", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    client.ensureBotAccess = async () => ({ ok: false, error: "needs admin — ask an org admin" });
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    await until(() => (r.lastFrame() ?? "").includes("needs admin — ask an org admin"));
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  it("a skipped grant (bot mode off / already has access) shows no extra toast", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    client.ensureBotAccess = async () => okv({ skipped: true });
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    await until(() => (r.lastFrame() ?? "").includes("watching alx/coral"));
+    expect(r.lastFrame()).not.toContain("bot ");
   });
 });
 

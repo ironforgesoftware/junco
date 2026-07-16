@@ -10,6 +10,7 @@ import { GitOpError } from "../src/git.js";
 import type { PendingAssess } from "../src/assessReview.js";
 import type { FileResult } from "../src/assessFiling.js";
 import type { PendingComment } from "../src/commentReview.js";
+import type { RepoAccess } from "../src/botAccess.js";
 
 const cfg = {
   ghBin: "gh",
@@ -39,6 +40,12 @@ const FAKE_CTX = {
   email: "1234+junco-agent@users.noreply.github.com",
   credentialHelper: "!gh auth git-credential",
 };
+
+/** botAccount.enabled=true — ensureBotAccess's non-short-circuit paths need
+ * this; withBotAuthFn is always injected alongside it so the real withBotAuth
+ * (which spawns the real `gh` binary) never runs in these tests. */
+const enabledCfg = { ...cfg, botAccount: { enabled: true, configDir: "/tmp/junco-gh" } } as Config;
+const attachFakeCtx = async (c: Config): Promise<Config> => ({ ...c, ghAuth: FAKE_CTX });
 
 const NET = new GitOpError("gh failed", "connect: network is unreachable", 1);
 
@@ -917,5 +924,68 @@ describe("analyzeIssue", () => {
       7,
     );
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("ensureBotAccess", () => {
+  it("skips when botAccount disabled", async () => {
+    const grantFn = vi.fn(async () => ({ login: "junco-agent" }));
+    const client = makeGhDashboardClient(cfg, { ...fakes(), grantFn });
+    const r = await client.ensureBotAccess("acme/api");
+    expect(r).toEqual({ ok: true, value: { skipped: true } });
+    expect(grantFn).not.toHaveBeenCalled();
+  });
+
+  it("skips when the bot already has push", async () => {
+    const classifyFn = vi.fn(async (): Promise<RepoAccess> => ({ mode: "direct" }));
+    const grantFn = vi.fn(async () => ({ login: "junco-agent" }));
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...fakes(),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn,
+      grantFn,
+    });
+    const r = await client.ensureBotAccess("acme/api");
+    expect(r).toEqual({ ok: true, value: { skipped: true } });
+    expect(classifyFn).toHaveBeenCalledWith(
+      expect.objectContaining({ ghAuth: FAKE_CTX }),
+      "acme/api",
+      expect.anything(),
+    );
+    expect(grantFn).not.toHaveBeenCalled();
+  });
+
+  it("grants when the bot lacks push", async () => {
+    const classifyFn = vi.fn(
+      async (): Promise<RepoAccess> => ({ mode: "blocked", reason: "no-access" }),
+    );
+    const grantFn = vi.fn(async () => ({ login: "junco-agent" }));
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...fakes(),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn,
+      grantFn,
+    });
+    const r = await client.ensureBotAccess("acme/api");
+    expect(r).toEqual({ ok: true, value: { skipped: false, login: "junco-agent" } });
+    expect(grantFn).toHaveBeenCalledWith(enabledCfg, "acme/api", expect.anything());
+  });
+
+  it("grant failure → error Result (never throws)", async () => {
+    const classifyFn = vi.fn(
+      async (): Promise<RepoAccess> => ({ mode: "blocked", reason: "no-access" }),
+    );
+    const grantFn = vi.fn(async () => {
+      throw new Error("granting on acme/api needs admin — ask an org admin");
+    });
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...fakes(),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn,
+      grantFn,
+    });
+    const r = await client.ensureBotAccess("acme/api");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/needs admin/);
   });
 });

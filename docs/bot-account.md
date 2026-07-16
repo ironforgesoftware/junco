@@ -93,6 +93,77 @@ The config surface is additive and off by default:
   pointing at `junco auth login`. There is no silent fallback to your personal identity: that
   would quietly undo both the attribution and the approval-separation properties above.
 
+## Working in an organization
+
+Org repos are usually private, and fork-PR mode either doesn't apply (org policy commonly
+forbids private forks) or isn't what you want for repos you already control. For those, the
+bot needs its own collaborator grant — either one repo at a time or once via a team.
+
+### `junco auth grant <owner/repo>`
+
+One command drives both identities junco holds:
+
+1. **Invite as you.** Junco calls GitHub as your own ambient login —
+   `PUT repos/<owner>/<repo>/collaborators/<bot-login>` with `permission=push`. You need
+   **admin** on the repo (or an org admin willing to run the command for you); anything less
+   fails with a message pointing that out.
+2. **Accept as the bot.** Junco switches to the bot's isolated `GH_CONFIG_DIR`, lists its
+   pending invitations, and accepts the one matching this repo (bounded retry — invitation
+   propagation can lag a moment).
+3. **Verify.** A final check under the bot's identity confirms it now has push before the
+   command reports success (`✓ <bot-login> has write on <owner/repo>`).
+
+Idempotent: if the bot is already a collaborator, step 1's invite call comes back empty
+(GitHub's "already a collaborator" response) and the command skips straight to verifying —
+re-running `junco auth grant` on an already-granted repo is a safe no-op.
+
+The dashboard does this for you automatically: after you add a repo to the watchlist with
+`botAccount.enabled` on, junco checks whether the bot already has push and, if not, runs the
+same grant in the background. A grant failure shows a toast naming the `junco auth grant
+<owner/repo>` fix — it never un-adds the repo you just watched.
+
+### SSO / SAML-enforced orgs
+
+If the org enforces SAML SSO, the grant's API calls fail with a **SAML enforcement** error
+from `gh`, regardless of which identity performed them. That isn't a permission problem —
+it's a one-time **authorization** step, and it has to happen in the bot's own browser
+session: sign in as the bot on github.com and authorize its `gh` OAuth token for the org
+(GitHub prompts for this the first time a SAML org is touched). Nothing junco does can
+automate that click-through. `junco auth grant` and `junco doctor` both recognize the SAML
+error and print this guidance instead of a generic access-denied message; the setup wizard's
+read-only flight check does not distinguish the cause — a SAML-blocked bot shows the same
+generic "no push — run: junco auth grant" hint there as any other access gap.
+
+### Seats
+
+Outside collaborators added to **private** repos count toward the per-seat billing on
+GitHub plans that meter seats (Team/Enterprise). Granting the bot access to many private
+repos one at a time can add up in seats — check your plan before granting broadly, or use
+the team route below, which is one membership instead of N collaborator grants.
+
+### Alternative: add the bot to a team
+
+Instead of granting repo by repo, add the bot account to a GitHub team that already has
+write access to the repos it needs — a one-time step in GitHub's own UI (org → Teams →
+members), not something junco automates or has a command for. Once the bot has push via
+team membership, `classifyRepoAccess` sees it exactly like a direct collaborator grant, so
+those repos already read as `direct` and `junco auth grant` has nothing to do on them.
+
+### Unwatched-repo dispatch: what happens without a grant
+
+`junco dispatch`, `junco analyze`, and `junco assess <owner/repo#N>` all resolve an
+unwatched repo the same way, classifying the bot's access before touching anything:
+
+| Repo state (bot's access)                                         | Mode        | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push access (granted, team membership, or already a collaborator) | **direct**  | Fork-less clone; branches push straight to the repo. **The repo is auto-onboarded**: added to the watchlist as a first-class entry (`external: false`) — from then on the bridge sweeps it for trigger labels exactly like a repo you configured yourself, permanently, with **no confirmation step**. This includes `junco assess` scoped to one issue: even that nominally read-only audit leaves a push-accessible unwatched repo watched afterward. |
+| Public, no push access                                            | **fork**    | Unchanged fork-PR mode: the bot forks the repo to its own account, clones the fork, and opens the PR upstream. Also recorded in the watchlist, but as `external: true` — that flag excludes it from the bridge's label sweep, so it's watched only for PR listing, not lifecycle automation.                                                                                                                                                            |
+| Private, no push access                                           | **blocked** | Fails loud before cloning anything. With the bot account enabled, the error names the fix — `junco auth grant <owner/repo>` (or the SSO guidance above, if that's the cause); with it disabled, you get a plain access-denied message, since there's no bot to grant. Nothing is added to the watchlist.                                                                                                                                                |
+
+If an auto-onboarded repo isn't one you meant junco to watch permanently, unwatch it from
+the dashboard (`x` on the repo) or remove its entry from `<stateDir>/github-watchlist.json`
+by hand.
+
 ## Doctor
 
 `junco doctor` checks the bot identity whenever `botAccount.enabled` is `true`:

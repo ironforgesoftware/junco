@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mouse support in the setup walkthrough: clickable choices, back/quit chips, click-to-finish.
 - Dedicated bot-account identity for daemon GitHub traffic (`junco auth login`, wizard Account
   chapter, `botAccount` config block).
+- Permission-aware repo access: `junco auth grant <owner/repo>` (invite as you, accept as the
+  bot), dashboard auto-grant after adding a watched repo, and doctor/wizard grant hints. Dispatch
+  to an unwatched repo the bot can push to now goes direct instead of forking — and
+  **auto-onboards** that repo permanently into the watchlist (bridge-swept from then on, no
+  confirmation step); this includes `junco assess` scoped to a single issue on such a repo.
+  Fork-PR mode is unchanged for public repos the bot can't push to.
 
 ### Changed
 

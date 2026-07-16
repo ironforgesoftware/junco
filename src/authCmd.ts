@@ -8,13 +8,17 @@
 
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { expandHome, validateConfigObject } from "./config.js";
+import { expandHome, validateConfigObject, loadConfig } from "./config.js";
 import { getAtPath, setAtPath } from "./configLevers.js";
 import { DEFAULT_GH_CONFIG_DIR, detectBotLogin, runGhLogin } from "./ghAuth.js";
+import { grantBotAccess } from "./botAccess.js";
+import type { Config } from "./types.js";
 
 export interface AuthCmdDeps {
   runGhLoginFn?: typeof runGhLogin;
   detectBotLoginFn?: typeof detectBotLogin;
+  grantFn?: typeof grantBotAccess;
+  loadConfigFn?: (p: string) => Config;
   printFn?: (s: string) => void;
   printErrFn?: (s: string) => void;
   existsFn?: (p: string) => boolean;
@@ -24,7 +28,8 @@ export interface AuthCmdDeps {
   unlinkFn?: (p: string) => void;
 }
 
-const USAGE = "Usage: junco auth login   (log the bot account in; see docs/bot-account.md)\n";
+const USAGE =
+  "Usage: junco auth login | junco auth grant <owner/repo>   (see docs/bot-account.md)\n";
 
 export async function runAuthCommand(
   args: string[],
@@ -33,12 +38,43 @@ export async function runAuthCommand(
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const printErr = deps.printErrFn ?? ((s: string) => process.stderr.write(s));
-  if (args[0] !== "login") {
+  if (args[0] !== "login" && args[0] !== "grant") {
     printErr(USAGE);
     return 2;
   }
   const resolved = resolve(configPath);
   const existsFn = deps.existsFn ?? existsSync;
+
+  if (args[0] === "grant") {
+    const nwo = args[1];
+    if (!nwo || !/^[\w.-]+\/[\w.-]+$/.test(nwo)) {
+      printErr(USAGE);
+      return 2;
+    }
+    if (!existsFn(resolved)) {
+      printErr(
+        `no config at ${resolved} — run \`junco dashboard\` or \`junco config init\` first\n`,
+      );
+      return 1;
+    }
+    // grant needs the assembled Config (botAccount defaults, ghBin, expandHome).
+    let cfg: Config;
+    try {
+      cfg = (deps.loadConfigFn ?? loadConfig)(resolved);
+    } catch (e) {
+      printErr(`config unreadable: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+    try {
+      const { login } = await (deps.grantFn ?? grantBotAccess)(cfg, nwo);
+      print(`✓ ${login} has write on ${nwo}\n`);
+      return 0;
+    } catch (e) {
+      printErr(`${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+  }
+
   if (!existsFn(resolved)) {
     printErr(
       `no config at ${resolved} — run \`junco dashboard\` (guided setup) or \`junco config init\` first\n`,
