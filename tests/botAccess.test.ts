@@ -96,3 +96,151 @@ describe("classifyRepoAccess", () => {
     });
   });
 });
+
+import { grantBotAccess } from "../src/botAccess.js";
+
+type Responder =
+  | Partial<CmdResult>
+  | ((call: { hadAuth: boolean; args: string[] }) => Partial<CmdResult>);
+
+function fakeGh2(script: Record<string, Responder>) {
+  const calls: Array<{ hadAuth: boolean; args: string[] }> = [];
+  const ghFn = async (
+    cfg: { ghBin: string; ghAuth?: GhAuthContext },
+    args: string[],
+  ): Promise<CmdResult> => {
+    const call = { hadAuth: cfg.ghAuth !== undefined, args };
+    calls.push(call);
+    const raw = script[args.join(" ")] ?? { code: 1, stdout: "", stderr: "HTTP 404" };
+    const hit = typeof raw === "function" ? raw(call) : raw;
+    return { code: hit.code ?? 0, stdout: hit.stdout ?? "", stderr: hit.stderr ?? "" };
+  };
+  return { ghFn: ghFn as never, calls };
+}
+
+const AMBIENT_CFG = {
+  ghBin: "gh",
+  botAccount: { enabled: true, configDir: "/sbx/junco-gh" },
+} as unknown as Config;
+const withBotAuthFn = async (c: Config) => ({ ...c, ghAuth: CTX });
+
+const PUT = "api repos/acme/api/collaborators/junco-agent -X PUT -f permission=push";
+const LIST = "api /user/repository_invitations";
+const ACCEPT = "api /user/repository_invitations/77 -X PATCH";
+const VIEW_KEY = "repo view acme/api --json viewerPermission,isPrivate";
+
+describe("grantBotAccess", () => {
+  it("201 invite → accepted as the bot → verified", async () => {
+    const { ghFn, calls } = fakeGh2({
+      [PUT]: { code: 0, stdout: JSON.stringify({ id: 77 }) }, // 201: body on stdout
+      [LIST]: {
+        code: 0,
+        stdout: JSON.stringify([{ id: 77, repository: { full_name: "acme/api" } }]),
+      },
+      [ACCEPT]: { code: 0, stdout: "" },
+      [VIEW_KEY]: {
+        code: 0,
+        stdout: JSON.stringify({ viewerPermission: "WRITE", isPrivate: true }),
+      },
+    });
+    const r = await grantBotAccess(AMBIENT_CFG, "acme/api", { ghFn, withBotAuthFn });
+    expect(r).toEqual({ login: "junco-agent" });
+    // Identity pinning: the invite ran ambient; list/accept/verify ran as bot.
+    const byKey = Object.fromEntries(calls.map((c) => [c.args.join(" "), c.hadAuth]));
+    expect(byKey[PUT]).toBe(false);
+    expect(byKey[LIST]).toBe(true);
+    expect(byKey[ACCEPT]).toBe(true);
+    expect(byKey[VIEW_KEY]).toBe(true);
+  });
+
+  it("204 already-collaborator (empty stdout) → skips accept, verifies", async () => {
+    const { ghFn, calls } = fakeGh2({
+      [PUT]: { code: 0, stdout: "" }, // 204: no body
+      [VIEW_KEY]: {
+        code: 0,
+        stdout: JSON.stringify({ viewerPermission: "WRITE", isPrivate: true }),
+      },
+    });
+    await grantBotAccess(AMBIENT_CFG, "acme/api", { ghFn, withBotAuthFn });
+    expect(calls.some((c) => c.args.join(" ") === LIST)).toBe(false);
+  });
+
+  it("invitation not visible on first list → bounded retry then success", async () => {
+    let listCount = 0;
+    let sleepCalls = 0;
+    const { ghFn } = fakeGh2({
+      [PUT]: { code: 0, stdout: JSON.stringify({ id: 77 }) },
+      [LIST]: () => {
+        listCount += 1;
+        return listCount < 2
+          ? { code: 0, stdout: "[]" }
+          : {
+              code: 0,
+              stdout: JSON.stringify([{ id: 77, repository: { full_name: "acme/api" } }]),
+            };
+      },
+      [ACCEPT]: { code: 0 },
+      [VIEW_KEY]: {
+        code: 0,
+        stdout: JSON.stringify({ viewerPermission: "WRITE", isPrivate: true }),
+      },
+    });
+    await grantBotAccess(AMBIENT_CFG, "acme/api", {
+      ghFn,
+      withBotAuthFn,
+      retryDelayMs: 1,
+      sleepFn: async () => {
+        sleepCalls += 1;
+      },
+    });
+    expect(listCount).toBe(2);
+    expect(sleepCalls).toBe(1); // one sleep before the second attempt, none before the first
+  });
+
+  it("403 without admin → actionable error, no accept attempted", async () => {
+    const { ghFn, calls } = fakeGh2({
+      [PUT]: { code: 1, stderr: "HTTP 403: Must have admin rights" },
+    });
+    await expect(grantBotAccess(AMBIENT_CFG, "acme/api", { ghFn, withBotAuthFn })).rejects.toThrow(
+      /admin/,
+    );
+    expect(calls.some((c) => c.args.join(" ") === LIST)).toBe(false);
+  });
+
+  it("SAML 403 → SSO guidance", async () => {
+    const { ghFn } = fakeGh2({
+      [PUT]: { code: 1, stderr: "HTTP 403: Resource protected by organization SAML enforcement" },
+    });
+    await expect(grantBotAccess(AMBIENT_CFG, "acme/api", { ghFn, withBotAuthFn })).rejects.toThrow(
+      /SAML/,
+    );
+  });
+
+  it("botAccount disabled → refuses with junco auth login pointer", async () => {
+    const off = { ...AMBIENT_CFG, botAccount: { enabled: false, configDir: "/x" } } as Config;
+    await expect(grantBotAccess(off, "acme/api", { ghFn: fakeGh2({}).ghFn })).rejects.toThrow(
+      /junco auth login/,
+    );
+  });
+
+  it("accept never succeeds → error names manual acceptance and the bot login", async () => {
+    let sleepCalls = 0;
+    const { ghFn, calls } = fakeGh2({
+      [PUT]: { code: 0, stdout: JSON.stringify({ id: 77 }) },
+      [LIST]: { code: 0, stdout: "[]" },
+    });
+    await expect(
+      grantBotAccess(AMBIENT_CFG, "acme/api", {
+        ghFn,
+        withBotAuthFn,
+        retryDelayMs: 1,
+        sleepFn: async () => {
+          sleepCalls += 1;
+        },
+      }),
+    ).rejects.toThrow(/junco-agent/);
+    // Retry bound: exactly 3 list attempts, sleeps only BETWEEN attempts.
+    expect(calls.filter((c) => c.args.join(" ") === LIST)).toHaveLength(3);
+    expect(sleepCalls).toBe(2);
+  });
+});
