@@ -11,6 +11,7 @@ import { submitTicket } from "./dispatch.js";
 import { ensureExternalClone, type ExternalRepoDeps } from "./externalRepo.js";
 import { readWatchlist, writeWatchlist, watchlistPath, resolveWatchedRepos } from "./watchlist.js";
 import { withBotAuth } from "./ghAuth.js";
+import { classifyRepoAccess } from "./botAccess.js";
 import type { Config } from "./types.js";
 
 const GH_TIMEOUT = 60_000;
@@ -25,6 +26,10 @@ export interface ExternalDispatchDeps extends ExternalRepoDeps {
    * CliDeps.withBotAuthFn for why `typeof withBotAuth` itself doesn't work
    * here.) */
   withBotAuthFn?: (cfg: Config) => Promise<Config>;
+  /** Decide which flow an unwatched repo takes under the bot's identity —
+   * push access, public-fork, or blocked (bot-repo-access spec). Default: the
+   * real classifyRepoAccess. */
+  classifyFn?: typeof classifyRepoAccess;
 }
 
 /** `owner/repo#123` or a github.com issue URL. Null = unusable. */
@@ -131,21 +136,40 @@ export async function resolveIssueTarget(
 
   let clonePath: string;
   let forkNwo: string | null = null;
-  const external = owned === undefined;
+  let external = false;
   if (owned !== undefined) {
     clonePath = owned.path;
   } else {
-    // The fork this provisions is the DAEMON's future push target — it must
-    // live on the bot's account even though this runs human-triggered (spec:
-    // boundary exception). The issue-view read above stays ambient.
+    // Provisioning acts as the BOT (spec: boundary exception — anything this
+    // creates is the daemon's future push target). Classification decides the
+    // flow: push access → direct branches (fork-less clone, auto-onboarded as
+    // a first-class watched repo — the bridge will sweep it); public without
+    // push → fork-PR mode (the open-source path, unchanged); private without
+    // push → fail loud with the fix.
     const botCfg = await withBotAuthFn(cfg);
-    const provisioned = await ensureCloneFn(botCfg, ref.nwo, deps, opts);
+    const access = await (deps.classifyFn ?? classifyRepoAccess)(botCfg, ref.nwo, deps);
+    if (access.mode === "blocked") {
+      if (access.reason === "sso") {
+        throw new Error(
+          `the bot's token is blocked by SAML enforcement for ${ref.nwo} — authorize gh for ` +
+            `the org in the bot's browser session, then retry`,
+        );
+      }
+      throw new Error(
+        botCfg.ghAuth !== undefined
+          ? `no access to ${ref.nwo} (private) — run: junco auth grant ${ref.nwo}`
+          : `you don't have push access to ${ref.nwo} (private)`,
+      );
+    }
+    external = access.mode === "fork";
+    const wantFork = (opts.fork ?? true) && external;
+    const provisioned = await ensureCloneFn(botCfg, ref.nwo, deps, { fork: wantFork });
     clonePath = provisioned.path;
     forkNwo = provisioned.forkNwo;
     const file = watchlistPath(cfg);
     const { entries } = readWatchlist(file);
     if (!entries.some((e) => e.nwo.toLowerCase() === ref.nwo.toLowerCase())) {
-      writeWatchlist(file, [...entries, { nwo: ref.nwo, path: clonePath, external: true }]);
+      writeWatchlist(file, [...entries, { nwo: ref.nwo, path: clonePath, external }]);
     }
   }
 

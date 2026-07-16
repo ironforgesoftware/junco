@@ -179,6 +179,7 @@ describe("dispatchIssue", () => {
     const cfg = freshCfg();
     const r = await dispatchIssue(cfg, "up/stream#7", {
       ghFn,
+      classifyFn: async () => ({ mode: "fork" as const }),
       ensureCloneFn: async () => ({ path: "/ext/up/stream", forkNwo: "me/stream" }),
     });
     expect(r).toMatchObject({ external: true, forkNwo: "me/stream", id: "gh-up-stream-7" });
@@ -190,10 +191,12 @@ describe("dispatchIssue", () => {
     const cfg = freshCfg();
     await dispatchIssue(cfg, "up/stream#7", {
       ghFn,
+      classifyFn: async () => ({ mode: "fork" as const }),
       ensureCloneFn: async () => ({ path: "/ext/up/stream", forkNwo: "me/stream" }),
     });
     await dispatchIssue(cfg, "up/stream#9", {
       ghFn,
+      classifyFn: async () => ({ mode: "fork" as const }),
       ensureCloneFn: async () => ({ path: "/ext/up/stream", forkNwo: "me/stream" }),
     });
     const wl = readWatchlist(watchlistPath(cfg));
@@ -290,6 +293,7 @@ describe("resolveIssueTarget", () => {
     const cfg = freshCfg();
     const t = await resolveIssueTarget(cfg, "up/stream#3", {
       ghFn,
+      classifyFn: async () => ({ mode: "fork" as const }),
       ensureCloneFn: async () => ({ path: "/clones/up/stream", forkNwo: "me/stream" }),
     });
     expect(t.external).toBe(true);
@@ -329,6 +333,7 @@ describe("resolveIssueTarget", () => {
       "up/stream#3",
       {
         ghFn,
+        classifyFn: async () => ({ mode: "fork" as const }),
         ensureCloneFn: async (_cfg, _nwo, _deps, opts) => {
           receivedFork = opts?.fork;
           return { path: "/clones/up/stream", forkNwo: null };
@@ -345,12 +350,16 @@ describe("resolveIssueTarget", () => {
     let receivedFork: boolean | undefined;
     await resolveIssueTarget(cfg, "up/stream#3", {
       ghFn,
+      classifyFn: async () => ({ mode: "fork" as const }),
       ensureCloneFn: async (_cfg, _nwo, _deps, opts) => {
         receivedFork = opts?.fork;
         return { path: "/clones/up/stream", forkNwo: "me/stream" };
       },
     });
-    expect(receivedFork).toBeUndefined(); // resolveIssueTarget forwards `opts` as-is; ensureExternalClone itself defaults fork to true
+    // resolveIssueTarget now computes `(opts.fork ?? true) && external` itself
+    // (rather than forwarding `opts` as-is) so a `fork` classification without
+    // an explicit opts.fork still resolves to a concrete `true`.
+    expect(receivedFork).toBe(true);
   });
 
   // --- bot-account provisioning (Task 6): the fork this provisions is the
@@ -362,6 +371,7 @@ describe("resolveIssueTarget", () => {
     const cloneCfgs: Array<Config> = [];
     const t = await resolveIssueTarget(cfg, "up/stream#3", {
       ghFn,
+      classifyFn: async () => ({ mode: "fork" as const }),
       ensureCloneFn: async (c) => {
         cloneCfgs.push(c);
         return { path: "/clones/up/stream", forkNwo: "junco-agent/stream" };
@@ -384,5 +394,121 @@ describe("resolveIssueTarget", () => {
       },
     });
     expect(botAuthCalled).toBe(false);
+  });
+
+  // --- permission-aware provisioning (bot-repo-access spec): classifyFn
+  // decides the flow for an unwatched repo — push access auto-onboards it as
+  // a first-class watched repo (fork-less), public-without-push keeps today's
+  // fork-PR path, private-without-push fails loud with the fix. ---
+
+  describe("permission-aware provisioning (classifyFn)", () => {
+    it("unwatched + direct → fork-less clone, watchlist external:false, non-external target", async () => {
+      const cfg = freshCfg();
+      const cloneCalls: Array<{ hadAuth: boolean; fork: boolean | undefined }> = [];
+      const t = await resolveIssueTarget(cfg, "up/stream#1", {
+        ghFn,
+        withBotAuthFn: async (c) => ({ ...c, ghAuth: FAKE_CTX }),
+        classifyFn: async () => ({ mode: "direct" as const }),
+        ensureCloneFn: async (c, _nwo, _deps, o) => {
+          cloneCalls.push({ hadAuth: c.ghAuth !== undefined, fork: o?.fork });
+          return { path: "/clones/up/stream", forkNwo: null };
+        },
+      });
+      expect(cloneCalls[0]).toEqual({ hadAuth: true, fork: false });
+      expect(t.external).toBe(false);
+      expect(t.forkNwo).toBeNull();
+      const wl = readWatchlist(watchlistPath(cfg));
+      const entry = wl.entries.find((e) => e.nwo === "up/stream");
+      expect(entry).toBeDefined();
+      // readWatchlist round-trips external:false as an absent key (only
+      // `true` survives — see WatchlistEntry/resolveWatched), so "not
+      // external" is the correct read-side assertion, not a literal `false`.
+      expect(entry?.external).not.toBe(true);
+    });
+
+    it("unwatched + fork → today's fork path unchanged", async () => {
+      const cfg = freshCfg();
+      let receivedFork: boolean | undefined;
+      const t = await resolveIssueTarget(cfg, "up/stream#2", {
+        ghFn,
+        classifyFn: async () => ({ mode: "fork" as const }),
+        ensureCloneFn: async (_c, _nwo, _deps, o) => {
+          receivedFork = o?.fork;
+          return { path: "/clones/up/stream", forkNwo: "junco-agent/stream" };
+        },
+      });
+      expect(receivedFork).toBe(true);
+      expect(t.external).toBe(true);
+      expect(t.forkNwo).toBe("junco-agent/stream");
+      const wl = readWatchlist(watchlistPath(cfg));
+      expect(wl.entries.find((e) => e.nwo === "up/stream")?.external).toBe(true);
+    });
+
+    it("unwatched + blocked/no-access with bot auth → throws naming junco auth grant", async () => {
+      const cfg = freshCfg();
+      let ensureCloneCalled = false;
+      await expect(
+        resolveIssueTarget(cfg, "up/stream#3", {
+          ghFn,
+          withBotAuthFn: async (c) => ({ ...c, ghAuth: FAKE_CTX }),
+          classifyFn: async () => ({ mode: "blocked" as const, reason: "no-access" as const }),
+          ensureCloneFn: async () => {
+            ensureCloneCalled = true;
+            return { path: "/should/not/be/used", forkNwo: null };
+          },
+        }),
+      ).rejects.toThrow(/junco auth grant up\/stream/);
+      expect(ensureCloneCalled).toBe(false);
+    });
+
+    it("unwatched + blocked in ambient mode → throws WITHOUT the grant hint", async () => {
+      const cfg = freshCfg();
+      const deps = {
+        ghFn,
+        withBotAuthFn: async (c: Config) => c, // ambient: no ghAuth attached — bot mode off
+        classifyFn: async () => ({ mode: "blocked" as const, reason: "no-access" as const }),
+      };
+      let message = "";
+      try {
+        await resolveIssueTarget(cfg, "up/stream#4", deps);
+        throw new Error("expected resolveIssueTarget to throw");
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/you don't have push access to up\/stream \(private\)/);
+      expect(message).not.toContain("auth grant");
+    });
+
+    it("unwatched + blocked/sso → SSO guidance", async () => {
+      const cfg = freshCfg();
+      await expect(
+        resolveIssueTarget(cfg, "up/stream#5", {
+          ghFn,
+          classifyFn: async () => ({ mode: "blocked" as const, reason: "sso" as const }),
+        }),
+      ).rejects.toThrow(/SAML/);
+    });
+
+    it("assess override: opts.fork=false + fork classification → clone-only, external:true", async () => {
+      const cfg = freshCfg();
+      let receivedFork: boolean | undefined;
+      const t = await resolveIssueTarget(
+        cfg,
+        "up/stream#6",
+        {
+          ghFn,
+          classifyFn: async () => ({ mode: "fork" as const }),
+          ensureCloneFn: async (_c, _nwo, _deps, o) => {
+            receivedFork = o?.fork;
+            return { path: "/clones/up/stream", forkNwo: null };
+          },
+        },
+        { fork: false },
+      );
+      expect(receivedFork).toBe(false);
+      expect(t.external).toBe(true);
+      const wl = readWatchlist(watchlistPath(cfg));
+      expect(wl.entries.find((e) => e.nwo === "up/stream")?.external).toBe(true);
+    });
   });
 });
