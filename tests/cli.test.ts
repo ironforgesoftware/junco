@@ -23,6 +23,7 @@ import type { SingletonLock } from "../src/lock.js";
 import { run } from "../src/cli.js";
 import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
+import type { EnsureResult } from "../src/ensureDaemon.js";
 
 /** Same literal as Task 2's CTX / ghAuth.test.ts's GhAuthContext fixture. */
 const FAKE_CTX = {
@@ -394,22 +395,74 @@ describe("run(['start']) — watchConfigFn throws (Fix A)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// bare invocation → defaults to start
+// bare invocation → ensure the daemon, then dashboard
 // ---------------------------------------------------------------------------
 
-describe("run([]) — first-run aware bare invocation", () => {
-  it("starts the daemon when a config already exists", async () => {
-    const deps = makeDeps({ existsFn: () => true });
+describe("run([]) — bare invocation ensures the daemon, then dashboard", () => {
+  it("ensures the daemon THEN opens the dashboard when a config exists (bare, TTY)", async () => {
+    const { cfg } = freshDispatchVault();
+    const ensure = vi.fn(async (): Promise<EnsureResult> => ({ state: "running", pid: 7 }));
+    const dash = vi.fn(async () => 0);
+    const deps = makeDeps({
+      existsFn: () => true,
+      isTTYFn: () => true,
+      loadConfigFn: () => cfg,
+      ensureDaemonFn: ensure,
+      runDashboardFn: dash,
+    });
     expect(await run([], deps)).toBe(0);
-    expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(dash).toHaveBeenCalledTimes(1);
+    // ordering: ensured BEFORE the dashboard opened
+    expect(ensure.mock.invocationCallOrder[0]).toBeLessThan(dash.mock.invocationCallOrder[0]);
+    expect(deps.mainLoopFn).not.toHaveBeenCalled();
   });
 
-  it("routes to the dashboard FTUE (not start) when no config exists", async () => {
+  it("routes to the dashboard FTUE (no pre-flight) when no config exists", async () => {
+    const ensure = vi.fn(async (): Promise<EnsureResult> => ({ state: "running", pid: 1 }));
     const dash = vi.fn(async () => 0);
-    const deps = makeDeps({ existsFn: () => false, runDashboardFn: dash });
+    const deps = makeDeps({
+      existsFn: () => false,
+      isTTYFn: () => true,
+      ensureDaemonFn: ensure,
+      runDashboardFn: dash,
+    });
     expect(await run([], deps)).toBe(0);
     expect(dash).toHaveBeenCalledWith(null, expect.any(String));
+    expect(ensure).not.toHaveBeenCalled();
     expect(deps.mainLoopFn).not.toHaveBeenCalled();
+  });
+
+  it("bare + config but NON-TTY skips the pre-flight (no daemon started in pipes/CI)", async () => {
+    const { cfg } = freshDispatchVault();
+    const ensure = vi.fn(async (): Promise<EnsureResult> => ({ state: "running", pid: 1 }));
+    const dash = vi.fn(async () => 0);
+    const deps = makeDeps({
+      existsFn: () => true,
+      isTTYFn: () => false,
+      loadConfigFn: () => cfg,
+      ensureDaemonFn: ensure,
+      runDashboardFn: dash,
+    });
+    expect(await run([], deps)).toBe(0);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(dash).toHaveBeenCalledTimes(1);
+  });
+
+  it("explicit `dashboard` does NOT run the pre-flight (pure observer)", async () => {
+    const { cfg } = freshDispatchVault();
+    const ensure = vi.fn(async (): Promise<EnsureResult> => ({ state: "running", pid: 1 }));
+    const dash = vi.fn(async () => 0);
+    const deps = makeDeps({
+      existsFn: () => true,
+      isTTYFn: () => true,
+      loadConfigFn: () => cfg,
+      ensureDaemonFn: ensure,
+      runDashboardFn: dash,
+    });
+    expect(await run(["dashboard"], deps)).toBe(0);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(dash).toHaveBeenCalledTimes(1);
   });
 });
 

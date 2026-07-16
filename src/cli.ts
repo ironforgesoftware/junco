@@ -5,9 +5,10 @@
  * Subcommands:
  *   junco start [--config <path>] [--once]   — daemon (acquire lock, run mainLoop)
  *   junco run-once [--config <path>]         — dev/cron one-shot (no lock)
- *   junco                                    — bare → dashboard setup walkthrough
- *                                              on first run (no config yet), else
- *                                              start
+ *   junco                                    — bare → ensure the supervised daemon
+ *                                              is up (interactive TTY), then open
+ *                                              the dashboard; first run (no config)
+ *                                              opens the setup walkthrough
  *   junco dashboard [--config <path>]        — interactive dashboard; first run
  *                                              opens the guided setup walkthrough
  *   junco config init [--config <path>]      — headless: scaffold a default
@@ -128,6 +129,12 @@ export interface CliDeps {
    *  size the `service` stop-timeout so a long ticket isn't SIGKILLed mid-drain
    *  (#118). Default: a best-effort scan of inbox/ + processing/. */
   maxQueuedTimeoutSecondsFn?: (cfg: Config) => number;
+  /** Bare-invocation daemon pre-flight (bare `junco` on an interactive TTY only).
+   *  Default: lazily imports ensureDaemon.js so every other subcommand stays off
+   *  its (restartCmd → launchctl/systemd) require graph. */
+  ensureDaemonFn?: (configPath: string) => Promise<import("./ensureDaemon.js").EnsureResult>;
+  /** Interactivity probe gating the bare pre-flight. Default: stdout+stdin both TTY. */
+  isTTYFn?: () => boolean;
 }
 
 /**
@@ -202,8 +209,11 @@ Subcommands:
                   for it — forks & clones unowned repos automatically
   schema       Print the ticket frontmatter JSON Schema and exit
 
-  (no subcommand) → opens the dashboard setup walkthrough on first run
-                    (no config yet), otherwise starts the daemon.
+  (no subcommand) → ensures the supervised daemon is running (interactive
+                    terminal), then opens the dashboard; first run (no config)
+                    opens the setup walkthrough. Use 'junco start' for an
+                    explicit foreground daemon, 'junco dashboard' to observe
+                    without starting anything.
 
 Options:
   --config <path>       Path to config.json
@@ -305,6 +315,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // fake infers C from the constraint, not from the Config argument, and
   // fails to typecheck. A monomorphic wrapper sidesteps it.
   const withBotAuthFn = deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c));
+  // Bare-invocation daemon pre-flight collaborators (used only on the bare
+  // interactive dashboard path below). Lazy-imported by default so restartCmd's
+  // launchctl/systemd graph stays off every other subcommand.
+  const isTTYFn = deps.isTTYFn ?? (() => Boolean(process.stdout.isTTY && process.stdin.isTTY));
+  const ensureDaemonFn =
+    deps.ensureDaemonFn ??
+    (async (p: string) => (await import("./ensureDaemon.js")).ensureDaemon(p));
 
   // Parse argv (strict). An unknown flag throws ERR_PARSE_ARGS_UNKNOWN_OPTION;
   // report it gracefully (message + usage, exit 2) rather than letting it reach
@@ -336,9 +353,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Resolve the config path ONCE: explicit --config → ./config.json when
   // present → the user-level default (~/.config/junco/config.json).
   const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
-  // First-run aware: a bare invocation opens the dashboard's setup walkthrough
-  // when there's no config yet, and starts the daemon once one exists.
-  const subcommand = positionals[0] ?? (existsFn(configPath) ? "start" : "dashboard");
+  // Bare `junco` (no explicit subcommand) always heads to the dashboard; the
+  // dashboard branch adds a daemon pre-flight on the interactive bare path (no
+  // config yet → the dashboard hosts the setup walkthrough instead).
+  const bare = positionals[0] === undefined;
+  const subcommand = positionals[0] ?? "dashboard";
 
   // Resolve injected print function (defaults to process.stdout.write)
   const printFn = deps.printFn ?? ((s: string) => process.stdout.write(s));
@@ -740,6 +759,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     const cfg = loadConfigFn(configPath);
     setLogLevel(cfg.logLevel);
+    // Bare `junco` on an interactive TTY ensures the supervised daemon is up
+    // before the panel opens. Explicit `junco dashboard` stays a pure observer.
+    if (bare && isTTYFn()) {
+      await ensureDaemonFn(configPath);
+    }
     return runDashboardFn(cfg, configPath);
   }
 
