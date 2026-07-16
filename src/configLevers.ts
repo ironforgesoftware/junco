@@ -79,6 +79,14 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Tool allowlist granted to the coding agent.",
   },
+  {
+    path: "updateCheck",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description: "Enable periodic update checks for new Junco releases.",
+  },
 
   // --- model.* ---
   {
