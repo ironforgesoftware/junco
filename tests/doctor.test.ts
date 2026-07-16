@@ -7,6 +7,7 @@ import { writeWatchlist } from "../src/watchlist.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
+import { WATCHLIST_FILENAME } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
 import type { ResolvedModelInfo } from "../src/agent/session.js";
 
@@ -754,9 +755,7 @@ describe("runDoctor github checks", () => {
 
   it("validates watchlist entries alongside config mappings", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-wl-"));
-    writeWatchlist(join(stateDir, "github-watchlist.json"), [
-      { nwo: "alx/coral", path: "/tmp/coral" },
-    ]);
+    writeWatchlist(join(stateDir, WATCHLIST_FILENAME), [{ nwo: "alx/coral", path: "/tmp/coral" }]);
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",

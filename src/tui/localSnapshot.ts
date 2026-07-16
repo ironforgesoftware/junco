@@ -24,6 +24,7 @@ import type { SpendStatus } from "../healthServer.js";
 import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
 import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
+import { CLONES_WATCHED_SUBDIR } from "../dataTree.js";
 
 export interface LocalSnapshotDeps {
   readdirFn?: (dir: string) => string[];
@@ -139,7 +140,8 @@ export function collectRepoCandidates(cfg: Config, deps: LocalSnapshotDeps = {})
     add({ path: e.path, source: "watchlist", nwoHint: e.nwo });
   }
   for (const c of walkOwnerName(cfg.github.externalReposRoot, "external", readdirFn)) add(c);
-  for (const c of walkOwnerName(join(cfg.dataDir, "repos"), "clone", readdirFn)) add(c);
+  for (const c of walkOwnerName(join(cfg.dataDir, CLONES_WATCHED_SUBDIR), "clone", readdirFn))
+    add(c);
   return out;
 }
 

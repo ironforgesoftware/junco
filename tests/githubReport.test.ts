@@ -48,7 +48,7 @@ const cfg = {
   },
 } as unknown as Config;
 // Offline-outbox tests need a real dataDir (enqueueOp writes files under
-// <dataDir>/github-outbox/) — a per-test mkdtemp keeps them sandboxed.
+// <dataDir>/outbox/) — a per-test mkdtemp keeps them sandboxed.
 const repCfg = (root: string): Config => ({ ...cfg, dataDir: root }) as Config;
 function fakeGh() {
   const calls: string[][] = [];

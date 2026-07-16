@@ -13,10 +13,9 @@
  * cadence (sleepInterruptible) and the loop guard.
  */
 
-import { mkdirSync } from "node:fs";
 import type { Config } from "./types.js";
 import type { ConfigHolder } from "./configWatcher.js";
-import { queuePaths } from "./config.js";
+import { ensureDataTree } from "./dataTree.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
@@ -274,10 +273,7 @@ export function makeProviderGate(cfg: Config): ProviderGate {
 }
 
 function defaultMkdirs(cfg: Config): void {
-  const paths = queuePaths(cfg);
-  for (const dir of [paths.inbox, paths.processing, paths.done, paths.failed]) {
-    mkdirSync(dir, { recursive: true });
-  }
+  ensureDataTree(cfg);
 }
 
 export interface SchedulerDeps {

@@ -1,6 +1,6 @@
 /**
  * Durable review queue for `junco assess` — one JSON file per audit batch under
- * <dataDir>/assess-review/ (atomic tmp+rename, watchlist/outbox pattern). The
+ * <dataDir>/review/assess/ (atomic tmp+rename, watchlist/outbox pattern). The
  * audit (assessFlow.ts) PARKS findings here; a human-confirmed file step
  * (assessFiling.ts, via the CLI) files them. Never throws on read: missing →
  * empty, corrupt → skipped/`error`. Reviewed batches archive to filed/.
@@ -9,6 +9,7 @@
  * review kind (pending comment drafts, SP-2) can reuse the same pattern.
  */
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
+import { REVIEW_ASSESS_SUBDIR } from "./dataTree.js";
 import type { Config } from "./types.js";
 import type { Finding } from "./findings.js";
 
@@ -28,7 +29,7 @@ export type AssessReviewDeps = ReviewStoreDeps;
 // `issue` is the one optional PendingAssess field (scoping context, not
 // always present) — every other field is required for a batch to be usable
 // downstream (e.g. runAssessReviewCommand's `batch.findings.length`).
-const store = makeReviewStore<PendingAssess>("assess-review", [
+const store = makeReviewStore<PendingAssess>(REVIEW_ASSESS_SUBDIR, [
   "id",
   "nwo",
   "external",

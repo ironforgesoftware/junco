@@ -1,12 +1,12 @@
 /**
  * GitHub outbox — durable store-and-forward for GitHub side effects when the
- * network is down. One JSON file per op under <dataDir>/github-outbox/
+ * network is down. One JSON file per op under <dataDir>/outbox/
  * (atomic tmp+rename, watchlist pattern); filename
  * <epoch-ms>-<seq>-<rand>-<kind> makes lexicographic order the FIFO (and
  * per-issue) replay order — the random suffix only guards against two
  * processes (daemon + dashboard) enqueueing in the same millisecond; it
  * doesn't affect ordering, since epoch-ms then seq already dominate the sort
- * within a single process. Poisoned ops dead-letter into github-outbox/dead/
+ * within a single process. Poisoned ops dead-letter into outbox/dead/
  * — same philosophy as failed/.
  */
 
@@ -28,6 +28,7 @@ import { gh, git, GitOpError, isNetworkError } from "./git.js";
 import { acquirePidfileLock } from "./pidfileLock.js";
 import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
+import { OUTBOX_SUBDIR } from "./dataTree.js";
 
 export type OutboxOp =
   | { kind: "labels"; nwo: string; issue: number; add: string[]; remove: string[] }
@@ -92,7 +93,7 @@ export interface OutboxDeps {
 let seq = 0; // same-ms tiebreaker; module-lifetime monotonic
 
 export function outboxPaths(cfg: Config): { dir: string; dead: string } {
-  const dir = join(cfg.dataDir, "github-outbox");
+  const dir = join(cfg.dataDir, OUTBOX_SUBDIR);
   return { dir, dead: join(dir, "dead") };
 }
 
@@ -161,7 +162,7 @@ export function listOps(cfg: Config, deps: OutboxDeps = {}): StoredOp[] {
   return listOpsFrom(outboxPaths(cfg).dir, deps);
 }
 
-/** Poisoned ops parked in github-outbox/dead/ (empty [] until something has
+/** Poisoned ops parked in outbox/dead/ (empty [] until something has
  * dead-lettered) — same envelope/sort/skip-unparseable posture as listOps. */
 export function listDeadOps(cfg: Config, deps: OutboxDeps = {}): StoredOp[] {
   return listOpsFrom(outboxPaths(cfg).dead, deps);
@@ -176,7 +177,7 @@ export function outboxDepth(cfg: Config, deps: OutboxDeps = {}): number {
   }
 }
 
-/** Count of poisoned ops parked in github-outbox/dead/ (0 when the dir has
+/** Count of poisoned ops parked in outbox/dead/ (0 when the dir has
  * never been created — nothing has dead-lettered yet). */
 export function deadCount(cfg: Config, deps: OutboxDeps = {}): number {
   const readdirFn = deps.readdirFn ?? readdirSync;

@@ -83,7 +83,7 @@ describe("assessReview store", () => {
     const { dir: reviewDir } = assessReviewPaths(c);
 
     const dst = writePending(c, batch(evilId));
-    // The written file must stay inside the assess-review dir: a single inert
+    // The written file must stay inside the review/assess dir: a single inert
     // filename component, not a traversal out of it.
     expect(dst.startsWith(reviewDir + "/")).toBe(true);
     expect(dst.slice(reviewDir.length + 1)).not.toMatch(/[\\/]/);
