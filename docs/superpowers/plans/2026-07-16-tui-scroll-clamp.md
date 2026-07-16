@@ -616,7 +616,7 @@ git commit -m "fix(tui): clamp CommandOutput's scroll window and its footer coun
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/tuiPreview.test.tsx`, reusing that file's existing issue fixture (call it `ISSUE` below — substitute the fixture name already defined at the top of the file):
+Add to `tests/tuiPreview.test.tsx`, reusing that file's existing `ISSUE` fixture (`DashIssue`, declared at `:7`):
 
 ```tsx
 describe("Preview scroll clamp", () => {
@@ -1050,6 +1050,9 @@ In `tests/reviewView.test.tsx`, update the four `open: { kind: "draft", draftIdx
 
 ```tsx
 it("a past-the-end scroll clamps to the bottom instead of blanking the pane", () => {
+  // LONG_DRAFT is 10 lines (line-0..line-9), footer:false. height 10 → rows 8 →
+  // bodyRows 6 → max 4, so the bottom window is line-4..line-9.
+  const base = { batches: [], drafts: [LONG_DRAFT], cursor: 0 };
   const f = render(
     <ReviewView
       state={state({ ...base, open: { kind: "draft", draftIdx: 0 } })}
@@ -1058,13 +1061,12 @@ it("a past-the-end scroll clamps to the bottom instead of blanking the pane", ()
       focused
     />,
   ).lastFrame()!;
-  // The draft's last line stays on screen; the first scrolls away.
-  expect(f).toContain("line-6");
-  expect(f).not.toContain("line-0");
+  expect(f).toContain("line-9"); // the last line is on screen…
+  expect(f).not.toContain("line-0"); // …and the window stopped at the bottom
 });
 ```
 
-Adjust the two expected line labels to match this file's existing draft fixture (the comment at `:144` documents it: height 10 → rows 8 → no footer → `bodyRows` 6, and `scroll=0` shows `line-0..line-5`).
+Note `base` at `:127` is scoped inside its own `it` block — the new test declares its own, as above. The existing `scroll={1}` case at `:139` stays valid: 1 ≤ max 4, so it clamps to itself and the top-anchored assertion still holds.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
