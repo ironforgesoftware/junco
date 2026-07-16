@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any state-tree migration conflict it had to skip; `junco doctor` and `junco data` additionally
   report pending (not-yet-run) migrations as informational findings, pointing at
   `junco data migrate`.
+- Update notification: the dashboard header, `junco status`, and `junco doctor` now surface a newer
+  npm release (best-effort daily check against the npm registry, cached in
+  `<dataDir>/update-check.json`; opt out with `"updateCheck": false`).
+- `junco update` — install the latest release and drain-restart the supervised daemon.
+- `junco --version`.
 
 ### Changed
 

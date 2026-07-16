@@ -110,9 +110,12 @@ Single file `update-check.json` at the data root. Full dataTree checklist
 
 Optional `updateCheck?: boolean` (JSON, camelCase per schema convention) / `updateCheck?: boolean` (Config),
 default `true`. Optional-with-default → no test-fixture sweep. The daemon
-never reads it (it never checks), so it is neither a hot-reload lever nor a
-frozen-restart field — `configLevers.ts` and `overlayFrozenRestartFields` are
-untouched. Documented in the config reference as the phone-home opt-out.
+never reads it (it never checks), but `tests/configLevers.test.ts` enforces an
+exact bijection between `LEVERS` and every `ConfigSchema` leaf, so the lever
+IS registered in `configLevers.ts` (`reload: "live"`, `editable: true`) —
+`overlayFrozenRestartFields` remains untouched and the daemon still never
+reads the field. Documented in the config reference as the phone-home
+opt-out.
 
 ### 6.2 TUI dashboard
 
@@ -191,7 +194,7 @@ never hold `status`/`doctor` past the 2s fetch cap.
   fetch/fs/clock through the deps seam — fresh cache short-circuits network,
   stale triggers fetch + atomic rewrite, offline serves stale, offline+bare
   returns null, failure stamps `lastAttempt` and backs off for 1h,
-  `update_check: false` short-circuits, `forceFresh` bypasses cache.
+  `updateCheck: false` short-circuits, `forceFresh` bypasses cache.
 - `updateCmd.test.ts`: recording `execFn` — source-checkout refusal (no exec
   calls at all), up-to-date exits 0 pre-install, install failure aborts before
   restart, lock-held + unit found → kickstart invoked, lock-held + no unit →
@@ -208,5 +211,5 @@ never hold `status`/`doctor` past the 2s fetch cap.
 
 Single PR (`feat/update-notification`). Additive only: no ticket-schema
 change, no health-payload change, no daemon behavior change. Docs touched:
-config reference (`update_check`), README command table (`update`,
+config reference (`updateCheck`), README command table (`update`,
 `--version`), CHANGELOG under Unreleased.

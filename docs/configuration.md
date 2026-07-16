@@ -204,6 +204,16 @@ With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog 
 }
 ```
 
+## Update check
+
+`updateCheck` (default `true`) enables a best-effort daily check against the npm registry for a
+newer Junco release, surfaced in the dashboard header, `junco status`, and `junco doctor`. It's
+CLI/TUI-side only — the daemon never phones home. Set it to `false` to opt out:
+
+```json
+{ "updateCheck": false }
+```
+
 ## The full reference
 
 The full, always-current annotated reference is `junco config list` — every lever with its default, type, and one-line explanation:
