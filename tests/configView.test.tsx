@@ -392,8 +392,10 @@ describe("ConfigView mouse", () => {
     // vaultRoot (row 0) is focused at mount — one click activates the edit.
     const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
     await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
-    await press(r.stdin, "XYZ"); // distinctive buffer: "/vXYZ"
-    await until(() => (r.lastFrame() ?? "").includes("/vXYZ"));
+    // fireUntil, not press: the editor's TextInput just mounted, so a one-shot
+    // keystroke can land before its useInput attaches (the keyboard flavor of
+    // the region-registration race — flaked the 2026-07-16 macos merge gate).
+    await fireUntil(r.stdin, "XYZ", () => (r.lastFrame() ?? "").includes("/vXYZ")); // distinctive buffer
     const before = readFileSync(r.configPath, "utf8");
     // Wheel over the LEFT pane while the edit is open. Without moveSection
     // cancelling the edit, the buffer survives the section switch, rebinds
@@ -418,8 +420,9 @@ describe("ConfigView mouse", () => {
     await until(() => (r.lastFrame() ?? "").includes("general"));
     const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
     await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
-    await press(r.stdin, "ZZZ"); // distinctive buffer: "/vZZZ"
-    await until(() => (r.lastFrame() ?? "").includes("/vZZZ"));
+    // fireUntil, not press: same freshly-mounted-TextInput race as the wheel
+    // test above.
+    await fireUntil(r.stdin, "ZZZ", () => (r.lastFrame() ?? "").includes("/vZZZ")); // distinctive buffer
     const before = readFileSync(r.configPath, "utf8");
     // ONE click on a DIFFERENT row while editing: the row onPress must
     // cancel the edit and return — no focus move, no activation, no save.
