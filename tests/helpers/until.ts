@@ -17,9 +17,13 @@ export async function until(cond: () => boolean, tries = 50): Promise<void> {
 /**
  * Fire a one-shot input sequence, retrying until an observable condition holds.
  * A mouse press/wheel can race a freshly-mounted ClickableBox's registration
- * effect under load: the event resolves to no region and is silently dropped,
- * and no amount of polling recovers a lost event. Re-sending it makes it land
- * once the region registers. The 50ms spacing guarantees a LANDED event's frame
+ * effect under load — and a KEYSTROKE can race a freshly-mounted useInput's
+ * subscribe effect the same way (ink attaches input listeners in a passive
+ * useEffect, ink/build/hooks/use-input.js:115-123, so a frame is visible
+ * before any handler exists; ink-testing-library delivers stdin.write
+ * synchronously). Either way the event is silently dropped, and no amount of
+ * polling recovers a lost event. Re-sending it makes it land once the
+ * effect runs. The 50ms spacing guarantees a LANDED event's frame
  * commits before the next check, so `cond` flips and the loop stops before a
  * second event lands — safe only for idempotent / self-terminating sequences
  * (select-to-a-fixed-row, clamped wheel, a click that unmounts its own target,

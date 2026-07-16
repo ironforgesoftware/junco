@@ -392,8 +392,10 @@ describe("ConfigView mouse", () => {
     // vaultRoot (row 0) is focused at mount — one click activates the edit.
     const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
     await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
-    await press(r.stdin, "XYZ"); // distinctive buffer: "/vXYZ"
-    await until(() => (r.lastFrame() ?? "").includes("/vXYZ"));
+    // fireUntil, not press: the editor's TextInput just mounted, so a one-shot
+    // keystroke can land before its useInput attaches (the keyboard flavor of
+    // the region-registration race — flaked the 2026-07-16 macos merge gate).
+    await fireUntil(r.stdin, "XYZ", () => (r.lastFrame() ?? "").includes("/vXYZ")); // distinctive buffer
     const before = readFileSync(r.configPath, "utf8");
     // Wheel over the LEFT pane while the edit is open. Without moveSection
     // cancelling the edit, the buffer survives the section switch, rebinds
@@ -405,12 +407,41 @@ describe("ConfigView mouse", () => {
     const f = r.lastFrame() ?? "";
     expect(f).not.toContain("▌ general"); // the section DID switch...
     expect(f).not.toMatch(/█/); // ...but no editor is open anymore
-    // Enter now starts a FRESH edit on the new section's focused lever — it
-    // must not commit the abandoned buffer anywhere.
-    await press(r.stdin, ENTER);
-    await new Promise((res) => setTimeout(res, 60));
-    expect(r.lastFrame() ?? "").not.toMatch(/Saved/);
+    expect(f).not.toMatch(/Saved/);
     expect(readFileSync(r.configPath, "utf8")).toBe(before); // untouched
+    // Enter-after-cancel is covered deterministically by the same-chunk test
+    // below — a separately-timed Enter here can only reproduce the same race
+    // probabilistically (it flaked the 2026-07-16 macos gate doing exactly that).
+  });
+
+  it("Enter arriving right after a canceling wheel must not commit the abandoned buffer", async () => {
+    const r = renderConfigViewInProvider();
+    await until(() => (r.lastFrame() ?? "").includes("general"));
+    const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
+    await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
+    await fireUntil(r.stdin, "XYZ", () => (r.lastFrame() ?? "").includes("/vXYZ")); // distinctive buffer
+    const before = readFileSync(r.configPath, "utf8");
+    const leftY = lineOf(r.lastFrame() ?? "", "worker");
+    // TWO back-to-back writes with no await between them (NOT one chunk: in a
+    // single chunk ink's own stdin listener hands Enter to the still-open
+    // TextField BEFORE MouseProvider parses the wheel, which is a legitimate
+    // Enter-then-wheel commit, a different scenario). Sequential writes pin
+    // the CI ordering: the wheel's moveSection cancels the edit synchronously,
+    // but React's unmount of the TextField is still pending, so its useInput
+    // is STILL SUBSCRIBED when Enter's data event fires — the stale closure
+    // holds the abandoned buffer AND the old lever. Without commitEdit's
+    // editingRef guard this commits "/vXYZ" to vaultRoot ("Saved — restart to
+    // apply") — the deterministic replay of the cleanup-window race that
+    // failed the 2026-07-16 macos merge gates (useInput detaches in a PASSIVE
+    // cleanup, so the same window opens between any wheel-cancel and a fast
+    // following Enter).
+    r.stdin.write(wheelDown(3, leftY));
+    r.stdin.write(ENTER);
+    await until(() => (r.lastFrame() ?? "").includes("▌ model")); // wheel landed: general → model
+    await until(() => !(r.lastFrame() ?? "").includes("/vXYZ"));
+    const f = r.lastFrame() ?? "";
+    expect(f).not.toMatch(/Saved/);
+    expect(readFileSync(r.configPath, "utf8")).toBe(before); // buffer never committed anywhere
   });
 
   it("clicking a different lever row during an open edit cancels the edit and does nothing else", async () => {
@@ -418,8 +449,9 @@ describe("ConfigView mouse", () => {
     await until(() => (r.lastFrame() ?? "").includes("general"));
     const rowY = lineOf(r.lastFrame() ?? "", "vaultRoot");
     await fireUntil(r.stdin, click(30, rowY), () => (r.lastFrame() ?? "").includes("/v█"));
-    await press(r.stdin, "ZZZ"); // distinctive buffer: "/vZZZ"
-    await until(() => (r.lastFrame() ?? "").includes("/vZZZ"));
+    // fireUntil, not press: same freshly-mounted-TextInput race as the wheel
+    // test above.
+    await fireUntil(r.stdin, "ZZZ", () => (r.lastFrame() ?? "").includes("/vZZZ")); // distinctive buffer
     const before = readFileSync(r.configPath, "utf8");
     // ONE click on a DIFFERENT row while editing: the row onPress must
     // cancel the edit and return — no focus move, no activation, no save.

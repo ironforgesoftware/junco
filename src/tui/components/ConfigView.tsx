@@ -180,6 +180,19 @@ export function ConfigView({
   // number/string/secret lever (booleans toggle and enums cycle immediately,
   // with no intermediate buffer).
   const [editing, setEditing] = useState<string | null>(null);
+  // Synchronous mirror of `editing` for commitEdit's stale-handler guard: a
+  // cancel (wheel/click section switch, Esc) unmounts the TextField, but its
+  // useInput detaches in a PASSIVE cleanup — an Enter arriving after the
+  // cancel and before that cleanup still reaches the stale handler, whose
+  // closure holds the abandoned buffer and the OLD lever. State alone can't
+  // guard this (the stale closure sees the old state); the ref sees the
+  // cancel immediately. Caught by the 2026-07-16 macos merge gates; pinned by
+  // configView.test.tsx's wheel-then-Enter cancel-race test.
+  const editingRef = useRef<string | null>(null);
+  const updateEditing = (v: string | null): void => {
+    editingRef.current = v;
+    setEditing(v);
+  };
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -250,13 +263,14 @@ export function ConfigView({
       return;
     }
     // number | string | secret: inline TextField, committed on its Enter.
-    setEditing(lever.type === "secret" ? "" : String(currentValue(raw, lever) ?? ""));
+    updateEditing(lever.type === "secret" ? "" : String(currentValue(raw, lever) ?? ""));
   };
 
   const commitEdit = (): void => {
+    if (editingRef.current === null) return; // edit already canceled — stale submit, drop it
     const target = lever;
-    const buffer = editing ?? "";
-    setEditing(null);
+    const buffer = editingRef.current; // ref, not closure: reads through to the freshest buffer
+    updateEditing(null);
     const c = coerceLever(target, buffer);
     if ("error" in c) {
       showToast("error", c.error);
@@ -283,7 +297,7 @@ export function ConfigView({
    * text to the wrong lever on Enter. The arrow keys can't reach here while
    * editing (useGuardedInput returns early), but the left pane's wheel can. */
   const moveSection = (d: 1 | -1): void => {
-    if (editing !== null) setEditing(null);
+    if (editing !== null) updateEditing(null);
     setSectionIdx((i) => Math.max(0, Math.min(SECTIONS.length - 1, i + d)));
     setFieldIdx(0);
     setScrollOffset(0);
@@ -293,7 +307,7 @@ export function ConfigView({
     if (editing !== null) {
       // Typing/backspace/submit belong to the inline TextField below (it has
       // its own active useInput); this hook's only job while editing is Esc.
-      if (key.escape) setEditing(null);
+      if (key.escape) updateEditing(null);
       return;
     }
     if (key.escape) {
@@ -339,7 +353,7 @@ export function ConfigView({
                 key={s.key}
                 hoverBg={sel ? theme.selectionBg : theme.hoverBg}
                 onPress={() => {
-                  if (editing !== null) setEditing(null);
+                  if (editing !== null) updateEditing(null);
                   setSectionIdx(i);
                   setFieldIdx(0);
                   setScrollOffset(0);
@@ -377,7 +391,7 @@ export function ConfigView({
                 gap={1}
                 onPress={() => {
                   if (editing !== null) {
-                    setEditing(null); // click during edit cancels FIRST (spec §3)
+                    updateEditing(null); // click during edit cancels FIRST (spec §3)
                     return;
                   }
                   if (i === fieldIdxSafe) {
@@ -398,7 +412,7 @@ export function ConfigView({
                   {isEditingThis ? (
                     <TextField
                       value={editing ?? ""}
-                      onChange={setEditing}
+                      onChange={updateEditing}
                       onSubmit={commitEdit}
                       focus
                       mask={l.type === "secret"}
