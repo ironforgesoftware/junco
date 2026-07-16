@@ -179,11 +179,13 @@ describe("QueueView", () => {
   });
 
   it("scroll slices rendered rows", () => {
+    // FULL is 14 rows; height must keep the pane shorter than that so scroll=6
+    // is within maxScroll and actually slices (rather than clamping to 0).
     const top = render(
-      <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} />,
+      <QueueView snap={FULL} scroll={0} now={NOW} height={11} focused={false} />,
     ).lastFrame()!;
     const scrolled = render(
-      <QueueView snap={FULL} scroll={6} now={NOW} height={20} focused={false} />,
+      <QueueView snap={FULL} scroll={6} now={NOW} height={11} focused={false} />,
     ).lastFrame()!;
     expect(top).toContain("RUNNING");
     expect(scrolled).not.toContain("RUNNING (1/1)");
@@ -298,5 +300,45 @@ describe("QueueView", () => {
     expect(selLine!).toContain("▌");
     // …and the window actually moved (a top row scrolled off).
     expect(frame).not.toContain("wait-0 ");
+  });
+
+  it("a past-the-end scroll clamps to the bottom instead of blanking the pane", () => {
+    const many: QueueSnapshot = {
+      ...IDLE,
+      waiting: Array.from({ length: 12 }, (_, i) => ({
+        id: `manual-row-${String(i).padStart(2, "0")}`,
+        github: null,
+        kind: "pr" as const,
+        priority: "normal" as const,
+        retryCount: 0,
+        notBefore: null,
+        deferred: false,
+      })),
+    };
+    const f = render(
+      <QueueView snap={many} scroll={999} now={NOW} height={8} focused />,
+    ).lastFrame()!;
+    expect(f).toContain("row-11"); // the last row is on screen…
+    expect(f).not.toContain("row-00"); // …and the window really did stop at the bottom
+  });
+
+  it("reports its max scroll to the owner", () => {
+    let reported: number | null = null;
+    render(
+      <QueueView
+        snap={IDLE}
+        scroll={0}
+        now={NOW}
+        // IDLE still renders 9 fixed rows (title/headers/blank spacers/dashes
+        // for each empty section), so height must clear that floor for the
+        // queue to genuinely "fit" — height=15 gives visible=12.
+        height={15}
+        focused
+        onScrollMax={(m) => {
+          reported = m;
+        }}
+      />,
+    );
+    expect(reported).toBe(0); // an idle queue fits — nothing to scroll
   });
 });
