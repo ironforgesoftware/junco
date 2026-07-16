@@ -1236,6 +1236,16 @@ export function App(props: AppProps): React.JSX.Element {
       setWatchlistEntries(next);
       setView("main");
       showToast("success", `watching ${nwo}`);
+      // Bot mode: make sure the DAEMON's identity can push here too — the
+      // operator's own permission (checked above) says nothing about the
+      // bot's. Failure warns with the fix but never un-adds the repo.
+      const grant = await client.ensureBotAccess(nwo);
+      if (!aliveRef.current) return;
+      if (!grant.ok) {
+        showToast("error", `bot lacks access — run: junco auth grant ${nwo}`);
+      } else if (!grant.value.skipped) {
+        showToast("success", `bot ${grant.value.login} granted write on ${nwo}`);
+      }
     },
     [client, watchlistFile, watchlistError, clonesDir, showToast],
   );

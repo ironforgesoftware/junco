@@ -17,6 +17,7 @@ import { fetchJuncoPrs } from "../githubPrs.js";
 import { ensureExternalClone } from "../externalRepo.js";
 import { dispatchIssue } from "../externalDispatch.js";
 import { withBotAuth } from "../ghAuth.js";
+import { classifyRepoAccess, grantBotAccess } from "../botAccess.js";
 import { listPending, readPending, type PendingAssess } from "../assessReview.js";
 import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
@@ -142,6 +143,10 @@ export interface DashboardClient {
   repoPermission(nwo: string): Promise<Result<{ canPush: boolean }>>;
   /** Idempotently provision the managed clone (+fork +fork remote) for an unowned `nwo`. */
   prepareExternalRepo(nwo: string): Promise<Result<{ path: string; forkNwo: string }>>;
+  /** After adding a watched repo: make sure the BOT can push to it. Skips
+   * (ok, skipped:true) when bot mode is off or access already exists;
+   * otherwise runs the invite-as-operator/accept-as-bot grant. */
+  ensureBotAccess(nwo: string): Promise<Result<{ skipped: boolean; login?: string }>>;
   /** Build + submit a ticket for `nwo#num` via the shared dispatch core. */
   dispatchTicket(nwo: string, num: number): Promise<Result<{ id: string; destPath: string }>>;
   /** Parked `junco assess` batches awaiting human confirmation. */
@@ -177,6 +182,10 @@ export interface GhClientDeps {
    * spec) — same rule and monomorphic-over-Config typing as
    * ExternalDispatchDeps.withBotAuthFn (see externalDispatch.ts). */
   withBotAuthFn?: (cfg: Config) => Promise<Config>;
+  /** Task 5 (ensureBotAccess): swap the real repo-access classifier / bot
+   * grant for a spy without touching the module-level exports. */
+  classifyFn?: typeof classifyRepoAccess;
+  grantFn?: typeof grantBotAccess;
   dispatchIssueFn?: typeof dispatchIssue;
   listPendingFn?: typeof listPending;
   readPendingFn?: typeof readPending;
@@ -503,6 +512,17 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
           throw new Error(`${nwo}: expected a fork to be provisioned but got none`);
         }
         return { path: r.path, forkNwo: r.forkNwo };
+      });
+    },
+
+    ensureBotAccess(nwo) {
+      return attempt(async () => {
+        if (!cfg.botAccount.enabled) return { skipped: true };
+        const botCfg = await (deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c)))(cfg);
+        const access = await (deps.classifyFn ?? classifyRepoAccess)(botCfg, nwo, { ghFn });
+        if (access.mode === "direct") return { skipped: true };
+        const { login } = await (deps.grantFn ?? grantBotAccess)(cfg, nwo, { ghFn });
+        return { skipped: false, login };
       });
     },
 

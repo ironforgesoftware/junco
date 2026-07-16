@@ -176,6 +176,7 @@ export const stubClient: DashboardClient = {
   openRepoInBrowser: async () => okv(undefined),
   repoPermission: async () => okv({ canPush: true }),
   prepareExternalRepo: async (nwo) => okv({ path: `/r/${nwo}`, forkNwo: nwo }),
+  ensureBotAccess: async () => okv({ skipped: true }),
   dispatchTicket: async (nwo, num) => okv({ id: `gh-${nwo}-${num}`, destPath: "/x" }),
   listReview: async () => okv([]),
   fileReview: async () =>
