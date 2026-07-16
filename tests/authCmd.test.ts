@@ -70,3 +70,38 @@ describe("junco auth login", () => {
     expect(code).toBe(2);
   });
 });
+
+describe("junco auth grant", () => {
+  it("grants and prints the identity", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-auth-"));
+    const configPath = writeConfig(dir, { vaultRoot: "/tmp/v", botAccount: { enabled: true } });
+    const out: string[] = [];
+    const code = await runAuthCommand(["grant", "acme/api"], configPath, {
+      grantFn: async () => ({ login: "junco-agent" }),
+      printFn: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("junco-agent has write on acme/api");
+  });
+
+  it("malformed or missing nwo → usage, exit 2", async () => {
+    expect(await runAuthCommand(["grant"], "/nonexistent", { printErrFn: () => {} })).toBe(2);
+    expect(
+      await runAuthCommand(["grant", "not-a-repo"], "/nonexistent", { printErrFn: () => {} }),
+    ).toBe(2);
+  });
+
+  it("grant failure → exit 1 with the mapped message", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-auth-"));
+    const configPath = writeConfig(dir, { vaultRoot: "/tmp/v", botAccount: { enabled: true } });
+    const errs: string[] = [];
+    const code = await runAuthCommand(["grant", "acme/api"], configPath, {
+      grantFn: async () => {
+        throw new Error("granting on acme/api needs admin — ask an org admin");
+      },
+      printErrFn: (s) => errs.push(s),
+    });
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("needs admin");
+  });
+});

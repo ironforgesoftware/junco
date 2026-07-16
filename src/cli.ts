@@ -189,7 +189,7 @@ Subcommands:
   analyze edit <id>                       edit a pending draft in $EDITOR
   analyze post <id> [--no-footer]        post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
-  auth login   Log the junco bot account in (isolated gh config dir; daemon acts as it)
+  auth login | auth grant <owner/repo>   Bot-account login / grant the bot write access to a repo
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive dashboard — first run opens the guided setup walkthrough
   restart      Restart the supervised daemon (picks up config + code changes)
