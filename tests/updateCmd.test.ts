@@ -21,6 +21,7 @@ const harness = (o: {
   lockHolder?: number | null;
   restartCode?: number;
   verify?: { code: number; stdout: string };
+  discovered?: boolean;
 }): { deps: UpdateCmdDeps; rec: Rec } => {
   const rec: Rec = { runs: [], execs: [], restarts: [], out: [], err: [] };
   return {
@@ -45,6 +46,7 @@ const harness = (o: {
         rec.restarts.push(p);
         return o.restartCode ?? 0;
       },
+      discoverServiceFn: async () => ((o.discovered ?? true) ? {} : null),
     },
   };
 };
@@ -100,9 +102,24 @@ describe("runUpdateCommand", () => {
     expect(await runUpdateCommand(CONFIG_PATH, bad.deps)).toBe(1);
   });
 
+  it("lock held + no service unit → manual-restart guidance, exit 0, no restart invoked", async () => {
+    const { deps, rec } = harness({ check: UPD, lockHolder: 42, discovered: false });
+    expect(await runUpdateCommand(CONFIG_PATH, deps)).toBe(0);
+    expect(rec.restarts).toEqual([]);
+    expect(rec.out.join("")).toContain("restart it manually");
+  });
+
   it("verify failure is a warning, not a rollback", async () => {
     const { deps, rec } = harness({ check: UPD, verify: { code: 1, stdout: "" } });
     expect(await runUpdateCommand(CONFIG_PATH, deps)).toBe(0);
     expect(rec.out.join("")).toContain("could not verify");
+  });
+
+  it("verify reports a stale/shadowed PATH install as a warning, not a false success", async () => {
+    const { deps, rec } = harness({ check: UPD, verify: { code: 0, stdout: "0.7.0\n" } });
+    expect(await runUpdateCommand(CONFIG_PATH, deps)).toBe(0);
+    const out = rec.out.join("");
+    expect(out).toContain("may be shadowing");
+    expect(out).not.toContain("updated v0.7.0 → v0.7.0");
   });
 });

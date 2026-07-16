@@ -12,7 +12,7 @@ import { join, dirname, resolve } from "node:path";
 import type { Config } from "./types.js";
 import { loadConfig } from "./config.js";
 import { readLockHolder } from "./lock.js";
-import { runRestartCommand } from "./restartCmd.js";
+import { runRestartCommand, discoverService } from "./restartCmd.js";
 import {
   checkForUpdate,
   getSelfPackage,
@@ -34,6 +34,8 @@ export interface UpdateCmdDeps {
   ) => Promise<{ code: number; stdout: string; stderr: string }>;
   lockHolderFn?: (lockPath: string) => number | null;
   restartFn?: (configPath: string) => Promise<number>;
+  /** Service-unit discovery (launchd/systemd) by config path; null → no unit references it. */
+  discoverServiceFn?: (configPath: string) => Promise<unknown | null>;
   printFn?: (s: string) => void;
   errPrintFn?: (s: string) => void;
 }
@@ -107,19 +109,39 @@ export async function runUpdateCommand(
 
   // 4. Drain-restart, only when a daemon actually holds the lock (same
   // lockPath derivation as restartCmd/start: worker.lock beside config.json).
+  // A held lock with no discoverable service unit means a foreground
+  // `junco start` — restartCmd's own "nothing to restart" message is written
+  // for the truly-unsupervised case and would misreport a real, running
+  // daemon as nothing to do (spec §7.4/§8): discover first and only defer to
+  // runRestartCommand once a unit is confirmed.
   let exit = 0;
   const lockPath = join(dirname(resolve(configPath)), "worker.lock");
   const holder = (deps.lockHolderFn ?? readLockHolder)(lockPath);
   if (holder !== null) {
-    exit = await (deps.restartFn ?? runRestartCommand)(configPath);
+    const svc = await (deps.discoverServiceFn ?? discoverService)(configPath);
+    if (svc === null) {
+      print("daemon running outside a service manager — restart it manually\n");
+    } else {
+      exit = await (deps.restartFn ?? runRestartCommand)(configPath);
+    }
   } else {
     print("daemon not running — nothing to restart\n");
   }
 
-  // 5. Verify by exec'ing the freshly installed CLI (this process is old code).
+  // 5. Verify by exec'ing the freshly installed CLI (this process is old
+  // code). PATH may resolve to a stale shadowing install (nvm switch, an
+  // earlier prefix earlier in PATH) — only claim success when the reported
+  // version actually matches what we just installed.
   const ver = await (deps.execFn ?? defaultCapture)("junco", ["--version"]);
-  if (ver.code === 0 && ver.stdout.trim().length > 0) {
-    print(`updated v${info.current} → v${ver.stdout.trim()}\n`);
+  const got = ver.stdout.trim();
+  if (ver.code === 0 && got.length > 0) {
+    if (got === info.latest) {
+      print(`updated v${info.current} → v${got}\n`);
+    } else {
+      print(
+        `installed v${info.latest}, but \`junco\` on PATH reports v${got} — another install may be shadowing it\n`,
+      );
+    }
   } else {
     print("installed, but could not verify `junco --version` — check your PATH\n");
   }
