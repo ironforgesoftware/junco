@@ -195,6 +195,7 @@ Subcommands:
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive dashboard — first run opens the guided setup walkthrough
   restart      Restart the supervised daemon (picks up config + code changes)
+  update       Update junco to the latest npm release (drains, then restarts the daemon)
   worktree prune <path>  Prune a stale/backup worktree (lock-guarded; refuses live)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
@@ -761,6 +762,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       deps.runRestartFn ??
       (async (p: string) => (await import("./restartCmd.js")).runRestartCommand(p));
     return runRestartFn(configPath);
+  }
+
+  // ------------------------------------------------------------
+  // update: npm-install the latest release, drain-restart the daemon. Lazy
+  // import keeps npm/child_process plumbing off every other subcommand.
+  // ------------------------------------------------------------
+  if (subcommand === "update") {
+    const { runUpdateCommand } = await import("./updateCmd.js");
+    return runUpdateCommand(configPath, {});
   }
 
   // ------------------------------------------------------------
