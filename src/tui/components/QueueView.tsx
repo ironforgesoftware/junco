@@ -219,7 +219,7 @@ export function QueueView({
   // and 0 for the LOCAL queue), then nudge so a selected row past the fold stays
   // visible — mirrors windowSlice's clamp. The slice caps at `visible` rows, so
   // the frame never exceeds `height` (Ink duplicate-redraw hazard). Non-
-  // selectable → selRowIndex null → start === scroll (byte-identical).
+  // selectable → selRowIndex null → start clamped (byte-identical output).
   const visible = Math.max(1, height - 3);
   onScrollMax?.(maxScroll(rows.length, visible));
   // Clamp the base offset BEFORE the selected-row nudge below, so a stale or
