@@ -1133,6 +1133,25 @@ describe("run(['restart']) — routing", () => {
   });
 });
 
+describe("run(['data', <verb>]) — verb validation", () => {
+  it("an unknown data verb exits 2 with usage, never loading config or running a view", async () => {
+    let loaded = false;
+    const captured: string[] = [];
+    const code = await run(["data", "bogus"], {
+      loadConfigFn: () => {
+        loaded = true;
+        return stubConfig();
+      },
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(2);
+    expect(captured.join("")).toContain("Usage: junco data");
+    // Neither the view nor migrate ran: the stub `{}` config would have made
+    // either one throw, and config must not even be loaded for a bad verb.
+    expect(loaded).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // dispatch subcommand — SDD Task 12
 // ---------------------------------------------------------------------------
