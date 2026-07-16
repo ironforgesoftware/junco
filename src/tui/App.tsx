@@ -2468,6 +2468,7 @@ export function App(props: AppProps): React.JSX.Element {
             queue={queueSnap}
             width={layout.railWidth}
             height={listHeight}
+            now={queueNow}
             window={railWindow}
             onRowPress={(i) => {
               if (confirm !== null || view !== "main") return;
