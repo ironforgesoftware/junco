@@ -37,6 +37,7 @@ import {
   type Finding,
 } from "./findings.js";
 import { writePending, type PendingAssess } from "./assessReview.js";
+import { recordRun } from "./assessHistory.js";
 import { syncExternalClone } from "./externalRepo.js";
 import { log } from "./logging.js";
 
@@ -113,6 +114,13 @@ export async function runAssessFlow(
   };
   const warnings: string[] = [];
 
+  // nwo for the history record, tracked SEPARATELY from the Phase-2 `nwo`
+  // binding below. finalizeAssess is defined before `let nwo` is assigned, so
+  // an early-phase error that closed over `nwo` would throw a TDZ
+  // ReferenceError; this holder starts null and null means "skip the write"
+  // — exactly right for a run that died before nwo resolution (#193).
+  let recordNwo: string | null = null;
+
   const buildSummary = (phaseError: string | null): string => {
     const parts: string[] = ["## junco assess", `_Assessed ${nowFn().toISOString()}_`];
     if (phaseError) parts.push(`**Failed:** ${phaseError}`);
@@ -151,6 +159,22 @@ export async function runAssessFlow(
       errorMessage: phaseError ?? base.errorMessage,
     };
     const fin = finalize(claimedPath, result, dirs);
+    // Per-repo assess history (#193). Skipped for issue-scoped runs — they
+    // audit only the code the issue implicates, so letting one refresh the
+    // repo's freshness would overstate coverage — and for runs that died
+    // before nwo resolution (recordNwo === null: nothing to key on).
+    // Only "completed" routes to done/ (finalize.ts:19-23), so a timeout or a
+    // guard-kill correctly records as a failure and leaves the age alone.
+    if (recordNwo !== null && ticket.assess?.issue === undefined) {
+      const at = nowFn().toISOString();
+      recordRun(
+        cfg,
+        recordNwo,
+        fin.status === "completed"
+          ? { ok: true, at, found: counts.found, parked: counts.parked }
+          : { ok: false, at, reason: result.errorMessage ?? `assess ${fin.status}` },
+      );
+    }
     log.info("assess finalized", { dst: fin.dst, status: fin.status, ...counts });
     return {
       dst: fin.dst,
@@ -199,6 +223,7 @@ export async function runAssessFlow(
       return finalizeAssess(null, "assess: origin remote is not a parseable GitHub repo");
     }
     nwo = parsed;
+    recordNwo = parsed;
   } catch (e) {
     return finalizeAssess(null, `assess: could not read origin remote — ${describeError(e)}`);
   }
