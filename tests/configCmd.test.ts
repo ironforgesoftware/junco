@@ -15,8 +15,9 @@ function fixture(obj: unknown): string {
 /** Minimal Config literal for `config init` tests — queue paths under /tmp/q. */
 function makeFakeConfig(): Config {
   return {
-    vaultRoot: "/tmp/q",
-    juncoSubdir: "Junco",
+    dataDir: "/tmp/q",
+    queueRoot: "/tmp/q/Junco",
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     model: {
       id: "m",
       source: "auto",
@@ -91,7 +92,6 @@ function makeFakeConfig(): Config {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: "/tmp/q/state",
     logToFile: false,
     transcriptsEnabled: false,
   };

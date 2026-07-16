@@ -101,7 +101,7 @@ describe("buildExternalTicket", () => {
 
 describe("dispatchIssue", () => {
   // Minimal cfg cast (externalRepo.test.ts convention) — only the fields
-  // dispatchIssue's code path actually reads, but vaultRoot/stateDir are REAL
+  // dispatchIssue's code path actually reads, but queueRoot/dataDir are REAL
   // tmp dirs (dispatch.test.ts convention) since submitTicket/readWatchlist/
   // writeWatchlist do real fs I/O.
   let tmpDirs: string[] = [];
@@ -111,9 +111,8 @@ describe("dispatchIssue", () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-extdispatch-state-"));
     tmpDirs.push(vaultRoot, stateDir);
     return {
-      vaultRoot,
-      juncoSubdir: "Junco",
-      stateDir,
+      dataDir: stateDir,
+      queueRoot: join(vaultRoot, "Junco"),
       ghBin: "gh",
       gitBin: "git",
       github: {
@@ -223,9 +222,8 @@ describe("resolveIssueTarget", () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-extdispatch-state-"));
     tmpDirs.push(vaultRoot, stateDir);
     return {
-      vaultRoot,
-      juncoSubdir: "Junco",
-      stateDir,
+      dataDir: stateDir,
+      queueRoot: join(vaultRoot, "Junco"),
       ghBin: "gh",
       gitBin: "git",
       github: {

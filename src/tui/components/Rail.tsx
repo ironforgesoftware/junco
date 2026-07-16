@@ -3,13 +3,16 @@ import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { stateMeta, type IssueLifecycle } from "../state.js";
 import type { QueueSnapshot } from "../queueSnapshot.js";
-import { queueLabel } from "../queueFmt.js";
+import { queueLabel, fmtAssessIndicator } from "../queueFmt.js";
 import { ClickableBox } from "../ClickableBox.js";
+import type { AssessHistory } from "../../assessHistory.js";
 
 export interface RailRepo {
   nwo: string;
   fromConfig: boolean;
   counts: Partial<Record<IssueLifecycle, number>>;
+  /** Per-repo assess history (#193); null → never assessed. */
+  assess?: AssessHistory | null;
 }
 
 export interface RailProps {
@@ -19,6 +22,8 @@ export interface RailProps {
   queue: QueueSnapshot | null;
   width: number;
   height: number;
+  /** Polled wall clock for the assess age column — NOT a live clock. */
+  now: Date;
   window: { start: number; end: number };
   /** Mouse: press on a repo row (registry index into repos). */
   onRowPress?: (index: number) => void;
@@ -30,6 +35,11 @@ export interface RailProps {
 
 const COUNT_ORDER: IssueLifecycle[] = ["plan-ready", "working", "failed"];
 
+/** Reserved columns for the assess indicator. The slot is flexShrink={0} with
+ * this as a MINIMUM, so the rare over-long value (`99d+! 99+⚠`) grows the slot
+ * and shrinks the nwo instead of overflowing the pane. */
+const ASSESS_COL = 8;
+
 /** Pane 1: watched repos on top, a compact queue card pinned below.
  * Absorbs the old RepoList and QueueStrip. */
 export function Rail({
@@ -39,6 +49,7 @@ export function Rail({
   queue,
   width,
   height,
+  now,
   window,
   onRowPress,
   onPanePress,
@@ -74,12 +85,26 @@ export function Rail({
             hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
-            <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
-            <Text wrap="truncate">
-              {r.nwo}
-              {r.fromConfig ? " (cfg)" : ""}
-              {badges ? `  ${badges}` : ""}
-            </Text>
+            {/* Pinned: the ▌ NO_COLOR selection fallback (theme.ts:4). Without
+                flexShrink={0} Ink squeezes it to zero on a long nwo — the row then
+                has no visible selection at all (#193). */}
+            <Box flexShrink={0}>
+              <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
+            </Box>
+            {/* Shrinks: nwo + (cfg) + lifecycle badges truncate together, exactly as
+                they already did before the indicator existed. */}
+            <Box flexGrow={1} flexShrink={1} overflow="hidden">
+              <Text wrap="truncate">
+                {r.nwo}
+                {r.fromConfig ? " (cfg)" : ""}
+                {badges ? `  ${badges}` : ""}
+              </Text>
+            </Box>
+            {/* Pinned: the assess column is the point of the row — it must never be
+                the thing that truncates. */}
+            <Box flexShrink={0} minWidth={ASSESS_COL} justifyContent="flex-end">
+              <Text dimColor={!sel}>{fmtAssessIndicator(r.assess ?? null, now)}</Text>
+            </Box>
           </ClickableBox>
         );
       })}

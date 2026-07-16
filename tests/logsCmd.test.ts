@@ -13,7 +13,7 @@ describe("runLogsCommand", () => {
     JSON.stringify({ ts: "2026-06-10T12:00:00.000Z", level: "info", ticket: "-", msg }) + "\n";
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "junco-logs-"));
-    cfg = { stateDir: dir } as unknown as Config;
+    cfg = { dataDir: dir } as unknown as Config;
     out = [];
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));

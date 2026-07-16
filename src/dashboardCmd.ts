@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import type { Config } from "./types.js";
 import type { AppProps } from "./tui/App.js";
+import { CLONES_WATCHED_SUBDIR } from "./dataTree.js";
 import type React from "react";
 
 /**
@@ -70,6 +71,7 @@ export async function runDashboard(
     { watchlistPath },
     { makeQueueSnapshotFn },
     { makeLocalCheapFn, makeLocalHeavyFn },
+    { listHistory },
     react,
     ink,
   ] = await Promise.all([
@@ -82,6 +84,7 @@ export async function runDashboard(
     import("./watchlist.js"),
     import("./tui/queueSnapshot.js"),
     import("./tui/localSnapshot.js"),
+    import("./assessHistory.js"),
     import("react"),
     import("ink"),
   ]);
@@ -102,8 +105,10 @@ export async function runDashboard(
     // The palette spawns CLI subcommands against this same config.
     configPath,
     // Managed clones for the add-repo "empty path = clone for me" flow.
-    clonesDir: join(c.stateDir, "repos"),
+    clonesDir: join(c.dataDir, CLONES_WATCHED_SUBDIR),
     queueFn: makeQueueSnapshotFn(c),
+    // Per-repo assess history for the rail's audit-age indicator (#193).
+    assessHistoryFn: () => Promise.resolve(listHistory(c)),
     // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
     localCheapFn: makeLocalCheapFn(c),
     localHeavyFn: makeLocalHeavyFn(c),

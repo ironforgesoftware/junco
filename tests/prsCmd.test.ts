@@ -11,7 +11,7 @@ import type { DashPr } from "../src/tui/prState.js";
 function cfg(repos: GithubRepoMapping[] = []): Config {
   return {
     ghBin: "gh",
-    stateDir: mkdtempSync(join(tmpdir(), "junco-prscmd-state-")),
+    dataDir: mkdtempSync(join(tmpdir(), "junco-prscmd-state-")),
     branchPrefix: "junco/",
     github: {
       enabled: false,

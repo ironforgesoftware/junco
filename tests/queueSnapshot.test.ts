@@ -9,8 +9,7 @@ import type { Config } from "../src/types.js";
 /** Minimal config over a sandboxed queue root (same cast style as dashboardCmd.test.ts). */
 function makeQueueCfg(root: string, overrides: Partial<Config> = {}): Config {
   return {
-    vaultRoot: root,
-    juncoSubdir: "q",
+    queueRoot: join(root, "q"),
     defaultTimeoutMinutes: 30,
     maxConcurrent: 1,
     healthEnabled: true,
@@ -258,7 +257,7 @@ describe("outboxDepth", () => {
   it("counts queued outbox ops for the config's state dir; empty is 0", async () => {
     const d = setupDirs();
     const stateDir = join(d.root, "state");
-    const cfg = makeQueueCfg(d.root, { stateDir } as Partial<Config>);
+    const cfg = makeQueueCfg(d.root, { dataDir: stateDir } as Partial<Config>);
 
     const empty = await makeQueueSnapshotFn(cfg, { fetchFn: downFetch })();
     expect(empty.outboxDepth).toBe(0);

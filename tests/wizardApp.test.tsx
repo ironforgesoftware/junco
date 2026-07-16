@@ -85,7 +85,7 @@ async function driveToReview(
   await until(() => (lastFrame() ?? "").includes("Ada"), LONG_TRIES);
   await press(stdin, ENTER); // begin
   await until(() => (lastFrame() ?? "").includes("Where should junco"), LONG_TRIES);
-  await press(stdin, ENTER); // vaultRoot default
+  await press(stdin, ENTER); // dataDir default
   await until(() => (lastFrame() ?? "").includes("How is the model configured?"), LONG_TRIES);
   await press(stdin, ENTER); // inline
   await until(() => (lastFrame() ?? "").includes("Inference endpoint base URL"), LONG_TRIES);
@@ -109,7 +109,7 @@ async function driveToReview(
   await press(stdin, ENTER); // ambient gh login (default)
   await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
   await press(stdin, ENTER); // keep recommended set
-  await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("This is the exact config.json"), LONG_TRIES);
 }
 
 /**
@@ -173,7 +173,7 @@ describe("WizardApp", () => {
     await press(stdin, ENTER); // begin
     await until(() => (lastFrame() ?? "").includes("Where should junco"), LONG_TRIES);
     expect(lastFrame()).toContain("✓ Welcome");
-    await press(stdin, ENTER); // vaultRoot default
+    await press(stdin, ENTER); // dataDir default
     await until(() => (lastFrame() ?? "").includes("How is the model configured?"), LONG_TRIES);
     await press(stdin, ENTER); // inline
     await until(() => (lastFrame() ?? "").includes("Inference endpoint base URL"), LONG_TRIES);
@@ -197,7 +197,7 @@ describe("WizardApp", () => {
     await press(stdin, ENTER); // ambient gh login (default)
     await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
     await press(stdin, ENTER); // keep recommended set
-    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);
+    await until(() => (lastFrame() ?? "").includes("This is the exact config.json"), LONG_TRIES);
     await press(stdin, ENTER); // Write config
     await until(() => (lastFrame() ?? "").includes("The nest is ready"), LONG_TRIES);
     expect(lastFrame()).toContain("✓ Review");
@@ -264,7 +264,7 @@ describe("WizardApp", () => {
     await until(() => (lastFrame() ?? "").includes("Where should junco"));
     await press(stdin, "q");
     expect(outcome).toBe("none");
-    await until(() => (lastFrame() ?? "").includes("~/Juncoq"));
+    await until(() => (lastFrame() ?? "").includes("~/.local/state/juncoq"));
   });
 
   it("clicking the q quit legend chip immediately on a text-editing chapter does NOT cancel", async () => {
@@ -462,7 +462,7 @@ describe("WizardApp", () => {
     await until(() => (lastFrame() ?? "").includes("Ada"), LONG_TRIES);
     await press(stdin, ENTER); // begin
     await until(() => (lastFrame() ?? "").includes("Where should junco"), LONG_TRIES);
-    await press(stdin, ENTER); // vaultRoot unchanged
+    await press(stdin, ENTER); // dataDir unchanged (legacy vaultRoot untouched)
     await until(() => (lastFrame() ?? "").includes("How is the model configured?"), LONG_TRIES);
     await press(stdin, ENTER); // source: inline, preselected from mode
     await until(() => (lastFrame() ?? "").includes("Inference endpoint base URL"), LONG_TRIES);

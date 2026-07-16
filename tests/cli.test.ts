@@ -36,9 +36,13 @@ const FAKE_CTX = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Minimal stub Config — injected mainLoop / runOnce ignore it. */
+/** Minimal stub Config — injected mainLoop / runOnce ignore it. `legacy` is
+ * populated (all-clean) so the startup configDeprecations() call in the
+ * `start` arm doesn't throw on a bare `{}` stub. */
 function stubConfig(): Config {
-  return {} as Config;
+  return {
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+  } as Config;
 }
 
 /** A fake SingletonLock with a spy on release(). */
@@ -152,7 +156,7 @@ describe("run(['start']) — health bind warning", () => {
 
   it("warns loudly when health is enabled on a non-loopback host", async () => {
     const deps = makeDeps({
-      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "0.0.0.0" }) as Config),
+      loadConfigFn: vi.fn(() => ({ ...stubConfig(), healthEnabled: true, healthHost: "0.0.0.0" })),
     });
     const cap = captureStdout();
     try {
@@ -167,7 +171,11 @@ describe("run(['start']) — health bind warning", () => {
 
   it("does not warn for a loopback health_host", async () => {
     const deps = makeDeps({
-      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "127.0.0.1" }) as Config),
+      loadConfigFn: vi.fn(() => ({
+        ...stubConfig(),
+        healthEnabled: true,
+        healthHost: "127.0.0.1",
+      })),
     });
     const cap = captureStdout();
     try {
@@ -182,7 +190,7 @@ describe("run(['start']) — health bind warning", () => {
     // An empty host that bypassed config normalization must NOT evade the
     // warning: the old `&& cfg.healthHost` guard short-circuited on "".
     const deps = makeDeps({
-      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "" }) as Config),
+      loadConfigFn: vi.fn(() => ({ ...stubConfig(), healthEnabled: true, healthHost: "" })),
     });
     const cap = captureStdout();
     try {
@@ -191,6 +199,58 @@ describe("run(['start']) — health bind warning", () => {
       cap.restore();
     }
     expect(cap.lines.join("")).toMatch(/health bind is not loopback/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// start — deprecated legacy config keys (Unified Data Root spec §5)
+// ---------------------------------------------------------------------------
+
+describe("run(['start']) — deprecated config keys warning", () => {
+  function captureStdout(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    return { lines, restore: () => spy.mockRestore() };
+  }
+
+  it("logs a warning for each set legacy key", async () => {
+    const deps = makeDeps({
+      loadConfigFn: vi.fn(
+        () =>
+          ({
+            ...stubConfig(),
+            legacy: {
+              vaultRoot: true,
+              stateDir: false,
+              worktreeRoot: false,
+              externalReposRoot: false,
+            },
+          }) as Config,
+      ),
+    });
+    const cap = captureStdout();
+    try {
+      await run(["start"], deps);
+    } finally {
+      cap.restore();
+    }
+    const out = cap.lines.join("");
+    expect(out).toMatch(/vaultRoot\/juncoSubdir are deprecated/);
+    expect(out).toContain("junco data migrate");
+  });
+
+  it("does not warn for a clean (non-legacy) config", async () => {
+    const deps = makeDeps();
+    const cap = captureStdout();
+    try {
+      await run(["start"], deps);
+    } finally {
+      cap.restore();
+    }
+    expect(cap.lines.join("")).not.toMatch(/deprecated/i);
   });
 });
 
@@ -616,8 +676,7 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
     writeFileSync(join(inbox, "big.md"), "---\ntimeout_minutes: 180\n---\nbody\n");
     const captured: string[] = [];
     const cfg = {
-      vaultRoot: dir,
-      juncoSubdir: "",
+      queueRoot: dir,
       defaultTimeoutMinutes: 30,
     } as unknown as Config;
     const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
@@ -638,8 +697,7 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
     writeFileSync(join(dir, "inbox", "small.md"), "---\ntimeout_minutes: 10\n---\nbody\n");
     const captured: string[] = [];
     const cfg = {
-      vaultRoot: dir,
-      juncoSubdir: "",
+      queueRoot: dir,
       defaultTimeoutMinutes: 30,
     } as unknown as Config;
     const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
@@ -685,10 +743,11 @@ describe("lock path derivation", () => {
 
 /**
  * Full Config object satisfying all required fields for tests that touch the
- * real FS (inbox-path, submit, init).  vaultRoot is overridden per test.
+ * real FS (inbox-path, submit, init). dataDir/queueRoot are overridden per
+ * test in freshDispatchVault() so they track that test's own tmpdir.
  */
-const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
-  juncoSubdir: "Junco",
+const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = {
+  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   model: {
     id: "test-model",
     source: "auto",
@@ -744,7 +803,6 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "vaultRoot"> = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   logLevel: "info",
-  stateDir: "/tmp/vault/state",
   logToFile: false,
   transcriptsEnabled: false,
   github: {
@@ -773,7 +831,11 @@ let dispatchTmpDirs: string[] = [];
 function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: string } {
   const vaultRoot = mkdtempSync(join(tmpdir(), "junco-cli-dispatch-"));
   dispatchTmpDirs.push(vaultRoot);
-  const cfg: Config = { ...DISPATCH_CONFIG_BASE, vaultRoot };
+  const cfg: Config = {
+    ...DISPATCH_CONFIG_BASE,
+    dataDir: vaultRoot,
+    queueRoot: join(vaultRoot, "Junco"),
+  };
   // write a real config.json so loadConfig can load it
   const configPath = join(vaultRoot, "config.json");
   writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
@@ -985,10 +1047,10 @@ describe("run(['dashboard']) — routing", () => {
 describe("run(['outbox'])", () => {
   it("returns 0 and prints 'outbox empty' when nothing is queued", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["outbox", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -997,10 +1059,10 @@ describe("run(['outbox'])", () => {
 
   it("routes `outbox flush` to the flush path (exit 0 on a clean flush of nothing)", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["outbox", "flush", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -1048,10 +1110,10 @@ describe("run(['outbox'])", () => {
 describe("run(['prs'])", () => {
   it("returns 0 and prints the no-watched-repos guidance when none are configured", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["prs", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -1065,10 +1127,10 @@ describe("run(['assess']) — routing", () => {
   it("routes `assess <path> --auto-plan` to runAssessCommand, threading the flag into the queued ticket", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
     const repoDir = mkdtempSync(join(tmpdir(), "junco-cli-assess-repo-"));
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["assess", repoDir, "--auto-plan", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(0);
@@ -1084,10 +1146,10 @@ describe("run(['assess']) — routing", () => {
 
   it("no target -> exit 2, usage line", async () => {
     const { cfg, configPath, vaultRoot } = freshDispatchVault();
-    const cfgWithState: Config = { ...cfg, stateDir: join(vaultRoot, "state") };
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
     const code = await run(["assess", "--config", configPath], {
-      loadConfigFn: () => cfgWithState,
+      loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
     });
     expect(code).toBe(2);
@@ -1128,6 +1190,25 @@ describe("run(['restart']) — routing", () => {
     });
     expect(code).not.toBe(0);
     expect(ran).toBe(false);
+  });
+});
+
+describe("run(['data', <verb>]) — verb validation", () => {
+  it("an unknown data verb exits 2 with usage, never loading config or running a view", async () => {
+    let loaded = false;
+    const captured: string[] = [];
+    const code = await run(["data", "bogus"], {
+      loadConfigFn: () => {
+        loaded = true;
+        return stubConfig();
+      },
+      printFn: (s) => captured.push(s),
+    });
+    expect(code).toBe(2);
+    expect(captured.join("")).toContain("Usage: junco data");
+    // Neither the view nor migrate ran: the stub `{}` config would have made
+    // either one throw, and config must not even be loaded for a bad verb.
+    expect(loaded).toBe(false);
   });
 });
 

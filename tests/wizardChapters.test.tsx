@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import React from "react";
 import { Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
-import { until } from "./helpers/until.js";
+import { until, fireUntil } from "./helpers/until.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { Tip, ReceiptList, Select, MultiSelect } from "../src/tui/wizard/controls.js";
 import { Welcome } from "../src/tui/wizard/chapters/Welcome.js";
@@ -297,7 +297,7 @@ describe("Welcome", () => {
 });
 
 describe("Workspace", () => {
-  it("edits vaultRoot and advances on enter, refusing empty", async () => {
+  it("edits dataDir and advances on enter, refusing empty", async () => {
     let answers = defaultAnswers();
     let advanced = false;
     const view = (
@@ -315,7 +315,7 @@ describe("Workspace", () => {
     );
     const { stdin, rerender } = render(view);
     // wipe the default then type a path
-    for (let i = 0; i < "~/Junco".length; i++) {
+    for (let i = 0; i < defaultAnswers().dataDir.length; i++) {
       await press(stdin, BACKSPACE);
       rerender(
         <Workspace
@@ -350,7 +350,7 @@ describe("Workspace", () => {
     );
     await press(stdin, ENTER);
     await until(() => advanced);
-    expect(answers.vaultRoot).toBe("/tmp/nest");
+    expect(answers.dataDir).toBe("/tmp/nest");
   });
 });
 
@@ -943,15 +943,15 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    await until(() => (lastFrame() ?? "").includes("This is the exact config.json"));
     expect(lastFrame()).toContain("junco config list");
     await press(stdin, ENTER); // "Write config" is the first option
     await until(() => wrote);
   });
 
   it("rerun mode shows a diff, or the untouched note when nothing changed", async () => {
-    const raw = { vaultRoot: "/v", model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" } };
-    const changed = { ...answersFromConfig(raw), vaultRoot: "/v2" };
+    const raw = { dataDir: "/v", model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" } };
+    const changed = { ...answersFromConfig(raw), dataDir: "/v2" };
     const { lastFrame } = render(
       <Review
         {...noopChapter}
@@ -963,7 +963,7 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes("vaultRoot"));
+    await until(() => (lastFrame() ?? "").includes("dataDir"));
     expect(lastFrame()).toContain("/v → /v2");
 
     const same = render(
@@ -999,7 +999,7 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    await until(() => (lastFrame() ?? "").includes("This is the exact config.json"));
     expect(lastFrame()).toContain('"id": "anthropic/claude-fancy"');
     expect(lastFrame()).not.toContain("baseUrl");
     expect(lastFrame()).not.toContain("modelsJson");
@@ -1018,7 +1018,7 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    await until(() => (lastFrame() ?? "").includes("This is the exact config.json"));
     expect(lastFrame()).toContain("••••");
     expect(lastFrame()).not.toContain("sk-realkey");
   });
@@ -1148,8 +1148,11 @@ describe("Account chapter", () => {
     );
     await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
     expect(lastFrame()).toContain("Your gh login");
-    await press(stdin, ENTER); // "Your gh login" is first/default
-    await until(() => advanced);
+    // fireUntil, not press: every input in this describe follows a mount or
+    // view swap, and a one-shot keystroke can land in the window before the
+    // new view's useInput attaches (see fireUntil's doc) — this exact class
+    // flaked the 2026-07-16 macos merge gates (#191 configView, #194 here).
+    await fireUntil(stdin, ENTER, () => advanced); // "Your gh login" is first/default
     expect(answers.botAccount).toBe(false);
   });
 
@@ -1170,11 +1173,15 @@ describe("Account chapter", () => {
       />,
     );
     await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
-    await press(stdin, DOWN, ENTER); // "A dedicated bot account"
-    await until(() => (lastFrame() ?? "").includes("acting as junco-agent"));
+    // DOWN+ENTER as ONE chunk: the parser splits at the escape boundary and
+    // Select's idxRef handles both events in-order (pinned by the one-chunk
+    // tests above), so the pair can't half-land — it either lands or drops
+    // whole, which is what makes the re-send safe.
+    await fireUntil(stdin, DOWN + ENTER, () =>
+      (lastFrame() ?? "").includes("acting as junco-agent"),
+    ); // "A dedicated bot account"
     expect(answers.botAccount).toBe(true);
-    await press(stdin, ENTER); // Continue
-    await until(() => advanced);
+    await fireUntil(stdin, ENTER, () => advanced); // Continue
   });
 
   it("bot choice without a login offers Log in now / Skip; Skip patches botAccount:true and advances", async () => {
@@ -1194,11 +1201,9 @@ describe("Account chapter", () => {
       />,
     );
     await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
-    await press(stdin, DOWN, ENTER); // "A dedicated bot account"
-    await until(() => (lastFrame() ?? "").includes("Log in now"));
+    await fireUntil(stdin, DOWN + ENTER, () => (lastFrame() ?? "").includes("Log in now")); // "A dedicated bot account"
     expect(lastFrame()).toContain("Skip");
-    await press(stdin, DOWN, ENTER); // Skip
-    await until(() => advanced);
+    await fireUntil(stdin, DOWN + ENTER, () => advanced); // Skip
     expect(answers.botAccount).toBe(true);
   });
 
@@ -1215,9 +1220,9 @@ describe("Account chapter", () => {
       <Account {...noopChapter} answers={defaultAnswers()} io={io} onNext={() => {}} />,
     );
     await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
-    await press(stdin, DOWN, ENTER); // "A dedicated bot account"
-    await until(() => (lastFrame() ?? "").includes("Log in now"));
-    await press(stdin, ENTER); // "Log in now" is first/default
-    await until(() => (lastFrame() ?? "").includes("acting as junco-agent"), 200);
+    await fireUntil(stdin, DOWN + ENTER, () => (lastFrame() ?? "").includes("Log in now")); // "A dedicated bot account"
+    // Re-sent ENTER is idempotent here: a second "Log in now" just re-runs the
+    // fake login (loggedIn stays true) and re-detects — still converges.
+    await fireUntil(stdin, ENTER, () => (lastFrame() ?? "").includes("acting as junco-agent"), 200); // "Log in now" is first/default
   });
 });

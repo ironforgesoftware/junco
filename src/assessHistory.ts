@@ -1,0 +1,94 @@
+/**
+ * Durable per-repo assess history — one JSON file per repo under
+ * <dataDir>/assess-history/, keyed by nwo. assessFlow.ts writes one record
+ * per TERMINAL whole-repo run; the rail, `junco status` and `junco doctor`
+ * read it to answer "when was this last audited, and did it find anything?".
+ * Issue #193.
+ *
+ * Third instantiation of reviewStore.ts. That factory is named for review
+ * QUEUES and carries an archive-on-remove this store never calls; the reuse is
+ * for its durable keyed-upsert core (atomic tmp+rename, never-throw reads,
+ * slugifyId key confinement). Keyed by nwo rather than a ticket id, so `write`
+ * is an upsert: the newest terminal run for a repo replaces its record.
+ *
+ * ONE FILE PER REPO IS LOAD-BEARING. The daemon runs max_concurrent > 1, so a
+ * single shared map file would lose updates across DIFFERENT repos finalizing
+ * concurrently; per-repo files confine that risk to same-repo contention, and
+ * the write is atomic tmp+rename (via reviewStore.ts), so a record is never
+ * torn. Residual caveat: the scheduler serializes claims by repo PATH, not
+ * nwo (runOnce.ts), so two distinct local checkouts of the same upstream nwo
+ * can still interleave this file's read-modify-write — last-write-wins, and
+ * the next clean assess of either checkout self-heals it.
+ */
+import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
+import { ASSESS_HISTORY_SUBDIR } from "./dataTree.js";
+import type { Config } from "./types.js";
+
+export interface AssessHistory {
+  id: string; // = nwo ("owner/repo") — the store key
+  lastSuccessAt: string | null; // ISO; null until a whole-repo run succeeds
+  lastFound: number | null; // counts.found at that success
+  lastParked: number | null; // counts.parked at that success
+  lastFailureAt: string | null; // ISO; cleared by the next success
+  lastFailureReason: string | null; // cleared by the next success
+}
+
+export type AssessHistoryDeps = ReviewStoreDeps;
+
+// Only `id` is required: every other field is nullable BY DESIGN (a repo whose
+// only run failed has no lastSuccessAt), so a truncated or hand-edited file
+// still reads rather than being skipped wholesale.
+const store = makeReviewStore<AssessHistory>(ASSESS_HISTORY_SUBDIR, ["id"]);
+
+export function assessHistoryDir(cfg: Config): string {
+  return store.dir(cfg);
+}
+
+export function listHistory(cfg: Config, deps: AssessHistoryDeps = {}): AssessHistory[] {
+  return store.list(cfg, deps);
+}
+
+export function readHistory(
+  cfg: Config,
+  nwo: string,
+  deps: AssessHistoryDeps = {},
+): AssessHistory | null {
+  return store.read(cfg, nwo, deps).entry;
+}
+
+/** Record ONE terminal whole-repo assess run.
+ *
+ * Success stamps the success fields and CLEARS the failure fields; failure
+ * stamps the failure fields and leaves the last success untouched. That
+ * asymmetry is the whole point: the rail's age always tracks the last
+ * SUCCESSFUL audit, so a crashed run can never mark a repo fresh, while a
+ * repo whose audits keep failing stays visibly distinct from one nobody ran.
+ */
+export function recordRun(
+  cfg: Config,
+  nwo: string,
+  run:
+    | { ok: true; at: string; found: number; parked: number }
+    | { ok: false; at: string; reason: string },
+  deps: AssessHistoryDeps = {},
+): void {
+  const prev = readHistory(cfg, nwo, deps);
+  const next: AssessHistory = run.ok
+    ? {
+        id: nwo,
+        lastSuccessAt: run.at,
+        lastFound: run.found,
+        lastParked: run.parked,
+        lastFailureAt: null,
+        lastFailureReason: null,
+      }
+    : {
+        id: nwo,
+        lastSuccessAt: prev?.lastSuccessAt ?? null,
+        lastFound: prev?.lastFound ?? null,
+        lastParked: prev?.lastParked ?? null,
+        lastFailureAt: run.at,
+        lastFailureReason: run.reason,
+      };
+  store.write(cfg, next, deps);
+}

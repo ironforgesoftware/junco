@@ -1,6 +1,7 @@
 /** Pure presentation helpers shared by the Rail queue card and QueueView. */
 
 import type { TicketGithub } from "../types.js";
+import type { AssessHistory } from "../assessHistory.js";
 
 const ID_MAX = 24;
 
@@ -26,6 +27,34 @@ export function fmtAge(iso: string, now: Date): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+/** Compact sibling of fmtAge for width-starved columns: no " ago" suffix, and
+ * days cap at "99d+" so the rail's fixed indicator slot cannot be blown out by
+ * an ancient timestamp. */
+export function fmtAgeShort(iso: string, now: Date): string {
+  const s = Math.max(0, Math.floor((now.getTime() - Date.parse(iso)) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  const d = Math.floor(s / 86400);
+  return d > 99 ? "99d+" : `${d}d`;
+}
+
+/** The rail's assess column: `2h 0✓` · `21d 4⚠` · `21d! 4⚠` · `—` · `— !`.
+ *
+ * The age tracks the last SUCCESSFUL audit; `!` means the most recent attempt
+ * failed (issue #193). Every glyph is width-1 under string-width — `⚠` is bare
+ * U+26A0; emitting the VS16 form (⚠️) would make it width-2 and break the
+ * fixed column. */
+export function fmtAssessIndicator(h: AssessHistory | null, now: Date): string {
+  if (!h || (h.lastSuccessAt === null && h.lastFailureAt === null)) return "—";
+  const failed = h.lastFailureAt !== null;
+  if (h.lastSuccessAt === null) return "— !"; // failed, never succeeded
+  const age = fmtAgeShort(h.lastSuccessAt, now) + (failed ? "!" : "");
+  const n = h.lastFound ?? 0;
+  const count = n === 0 ? "0✓" : `${n > 99 ? "99+" : n}⚠`;
+  return `${age} ${count}`;
 }
 
 export function fmtTokens(n: number | null): string | null {

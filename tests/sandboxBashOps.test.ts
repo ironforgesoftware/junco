@@ -7,6 +7,7 @@ import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 const policy: SandboxPolicy = {
   writableRoots: ["/work/tree"],
   readDenyPaths: [],
+  readDenyFiles: [],
   network: false,
   scratchDir: "/tmp/scratch",
 };

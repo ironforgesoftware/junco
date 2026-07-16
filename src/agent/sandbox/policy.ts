@@ -17,8 +17,14 @@ export function builtinDenyReadPaths(home: string): string[] {
 export interface SandboxPolicy {
   /** Absolute roots the agent may write under (worktree, scratch, extras). */
   writableRoots: string[];
-  /** Absolute subpaths whose reads are denied (secrets, state, extras). */
+  /** Absolute subpaths whose reads are denied (secrets, sensitive data-tree
+   *  subtrees, extras). Subtree semantics: the path and everything under it. */
   readDenyPaths: string[];
+  /** Absolute files whose reads are denied exactly (the data root's receipt
+   *  files — watchlist/spend/metrics/log/journal). Separate from
+   *  readDenyPaths because the OS backends enforce files differently
+   *  (Seatbelt literal vs subpath; bwrap /dev/null bind vs tmpfs). */
+  readDenyFiles: string[];
   /** true = network egress permitted; false = denied. */
   network: boolean;
   /** Per-session scratch dir (also the redirected TMPDIR). */
@@ -30,11 +36,14 @@ export function buildPolicy(opts: {
   cwd: string;
   scratchDir: string;
   home: string;
-  stateDir: string;
+  /** Sensitive data-tree paths (from dataTree.sandboxDenyPaths) — the
+   *  SUBTREES/files to deny, never the dataDir root itself: the default
+   *  layout puts the worktree (cwd) and the clone gitdirs under that root. */
+  dataDenyPaths: { dirs: string[]; files: string[] };
   network: boolean;
   botGhConfigDir?: string;
 }): SandboxPolicy {
-  const { cfg, cwd, scratchDir, home, stateDir, network, botGhConfigDir } = opts;
+  const { cfg, cwd, scratchDir, home, dataDenyPaths, network, botGhConfigDir } = opts;
   // Canonicalize so the OS-sandbox profile and the JS jail agree with the
   // kernel's symlink-resolved view (macOS /var→/private/var, /tmp→/private/tmp).
   const writableRoots = [
@@ -44,9 +53,16 @@ export function buildPolicy(opts: {
   ];
   const readDenyPaths = [
     ...builtinDenyReadPaths(home).map(canonicalize),
-    canonicalize(stateDir),
+    ...dataDenyPaths.dirs.map(canonicalize),
     ...(botGhConfigDir ? [canonicalize(botGhConfigDir)] : []),
     ...cfg.extraDenyRead.map(canonicalize),
   ];
-  return { writableRoots, readDenyPaths, network, scratchDir: canonicalize(scratchDir) };
+  const readDenyFiles = dataDenyPaths.files.map(canonicalize);
+  return {
+    writableRoots,
+    readDenyPaths,
+    readDenyFiles,
+    network,
+    scratchDir: canonicalize(scratchDir),
+  };
 }

@@ -4,9 +4,17 @@
  * ✓ pass · ⚠ warning (degraded but workable) · ✗ failure (exit 1).
  */
 
+import { existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, parseConfigFile, queuePaths, isLoopbackHost } from "./config.js";
+import {
+  loadConfig,
+  parseConfigFile,
+  queuePaths,
+  isLoopbackHost,
+  configDeprecations,
+} from "./config.js";
+import { pendingMigrations } from "./dataMigrate.js";
 import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
@@ -19,6 +27,7 @@ import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
 import { draftCount } from "./commentReview.js";
+import { listHistory } from "./assessHistory.js";
 import { defaultExec, defaultAccessOk } from "./execProbe.js";
 import { SAML_MARKER } from "./botAccess.js";
 
@@ -53,6 +62,14 @@ export interface DoctorDeps {
    * source echo). Defaults to `process.env`; injectable so tests never read
    * or mutate the real environment. */
   env?: Record<string, string | undefined>;
+  /** Existence probe for `pendingMigrations` (Unified Data Root spec §5, §7)
+   * and the legacy-worktree-root leftover hint. Defaults to `fs.existsSync`. */
+  existsFn?: (p: string) => boolean;
+  /** Directory listing for the legacy-worktree-root leftover hint (spec §7) —
+   * emptiness is the only thing that matters, so a listing failure (ENOENT,
+   * not a directory) is treated as "nothing to hint about" rather than
+   * thrown. Defaults to `fs.readdirSync`. */
+  readdirFn?: (d: string) => string[];
 }
 
 type Verdict = "ok" | "warn" | "fail";
@@ -144,6 +161,8 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   const fetchFn = deps.fetchFn ?? fetch;
   const rawApiKeyFn = deps.rawApiKeyFn ?? defaultRawApiKey;
   const env = deps.env ?? process.env;
+  const existsFn = deps.existsFn ?? existsSync;
+  const readdirFn = deps.readdirFn ?? readdirSync;
 
   const results: Array<{ v: Verdict; label: string }> = [];
   const report = (v: Verdict, label: string, detail = ""): void => {
@@ -167,6 +186,45 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   else report("fail", "node", `${process.versions.node} < required 22.19`);
 
   if (cfg) {
+    // 2a. deprecated config keys (Unified Data Root spec §5) — informational
+    // only: doctor never fails on a legacy key, it just points at the
+    // migration. `junco start` logs this same list once at daemon startup
+    // (cli.ts) — this is doctor's mirror of that warning.
+    const deprecations = configDeprecations(cfg);
+    if (deprecations.length > 0) {
+      report("warn", "deprecated config keys", deprecations.join(" | "));
+    }
+
+    // 2b. pending state-tree migrations (spec §7) — old-name dirs still
+    // present under dataDir; `junco data migrate` renames them in place.
+    const pending = pendingMigrations(cfg, existsFn);
+    if (pending.length > 0) {
+      const list = pending.map((m) => `${m.from} -> ${m.to}`).join(", ");
+      report("warn", "unmigrated data dirs", `${list} — run 'junco data migrate' to unify`);
+    }
+
+    // 2c. legacy worktree-root override (spec §7): while git.worktreeRoot is
+    // SET, that dir is the ACTIVE root — the override wins over
+    // <dataDir>/worktrees, so its contents may be live tickets' worktrees and
+    // are NOT deletable yet. Worktrees are deliberately excluded from the
+    // in-place migration above (they're disposable once the override is
+    // gone), so doctor only points at the removal path.
+    if (cfg.legacy.worktreeRoot && existsFn(cfg.worktreeRoot)) {
+      let hasEntries = false;
+      try {
+        hasEntries = readdirFn(cfg.worktreeRoot).length > 0;
+      } catch {
+        hasEntries = false;
+      }
+      if (hasEntries) {
+        report(
+          "ok",
+          "legacy worktree root",
+          `worktrees currently live at ${cfg.worktreeRoot} via the deprecated git.worktreeRoot override — after removing the key (with the daemon idle), any leftovers there are disposable and new worktrees go under <dataDir>/worktrees`,
+        );
+      }
+    }
+
     // 3-4. git / gh
     const gitRes = await execFn(cfg.gitBin, ["--version"]);
     report(
@@ -391,7 +449,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     for (const [label, dir] of [
       ["queue", dirname(paths.inbox)],
       ["worktree root", cfg.worktreeRoot],
-      ["state dir", cfg.stateDir],
+      ["data dir", cfg.dataDir],
     ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
     }
@@ -511,6 +569,14 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     const reviews = pendingCount(cfg);
     if (reviews > 0) {
       report("ok", "assess review", `${reviews} pending (junco assess review)`);
+    }
+
+    // 7d-bis. Per-repo assess history — informational only (a never-assessed
+    // repo is normal workflow state, not a health problem), mirroring 7d.
+    for (const h of listHistory(cfg)) {
+      const when = h.lastSuccessAt ? `assessed ${h.lastSuccessAt.slice(0, 10)}` : "never assessed";
+      const failed = h.lastFailureAt ? ` (last attempt failed)` : "";
+      report("ok", "assess history", `${h.id}: ${when}${failed}`);
     }
 
     // 7e. analyze comment-draft backlog — informational only (normal workflow

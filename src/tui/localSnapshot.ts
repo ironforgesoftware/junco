@@ -24,6 +24,7 @@ import type { SpendStatus } from "../healthServer.js";
 import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
 import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
+import { CLONES_WATCHED_SUBDIR } from "../dataTree.js";
 
 export interface LocalSnapshotDeps {
   readdirFn?: (dir: string) => string[];
@@ -121,7 +122,7 @@ function walkOwnerName(
  * Union of the repos junco knows about, deduped by resolve(path) (first source
  * wins): (1) cfg.github.repos; (2) the RAW watchlist — readWatchlist, NOT
  * resolveWatchedRepos, so external:true forks survive (watchlist.ts:92);
- * (3) externalReposRoot walk; (4) <stateDir>/repos walk. Pure fs (no git), so
+ * (3) externalReposRoot walk; (4) <dataDir>/repos walk. Pure fs (no git), so
  * enumerateWorktrees can reuse it for the discriminator reverse-map.
  */
 export function collectRepoCandidates(cfg: Config, deps: LocalSnapshotDeps = {}): RepoCandidate[] {
@@ -139,7 +140,8 @@ export function collectRepoCandidates(cfg: Config, deps: LocalSnapshotDeps = {})
     add({ path: e.path, source: "watchlist", nwoHint: e.nwo });
   }
   for (const c of walkOwnerName(cfg.github.externalReposRoot, "external", readdirFn)) add(c);
-  for (const c of walkOwnerName(join(cfg.stateDir, "repos"), "clone", readdirFn)) add(c);
+  for (const c of walkOwnerName(join(cfg.dataDir, CLONES_WATCHED_SUBDIR), "clone", readdirFn))
+    add(c);
   return out;
 }
 

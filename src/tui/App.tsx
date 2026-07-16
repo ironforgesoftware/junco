@@ -27,6 +27,7 @@ import { Header, hintsFor, localHintsFor, type HintView } from "./components/Chr
 import LocalDashboard from "./components/LocalDashboard.js";
 import type { LocalCheap, LocalHeavy, LocalSection, LocalRepo } from "./localSnapshot.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
+import type { AssessHistory } from "../assessHistory.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
 import { PrList, NWO_MAX_WIDTH } from "./components/PrList.js";
@@ -57,7 +58,7 @@ export interface AppProps {
   watchlistFile: string; // read/write via watchlist.ts
   /** Resolved config path — spawned palette commands target the same config. */
   configPath: string;
-  /** Managed clones root (<state_dir>/repos) — auto-clone destination. */
+  /** Managed clones root (<dataDir>/clones/watched) — auto-clone destination. */
   clonesDir: string;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */
@@ -66,6 +67,9 @@ export interface AppProps {
   /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
   queueFn: () => Promise<QueueSnapshot>;
   queuePollMs?: number; // default 2_000
+  /** Per-repo assess history source (dashboardCmd wires makeAssessHistoryFn). */
+  assessHistoryFn: () => Promise<AssessHistory[]>;
+  assessHistoryPollMs?: number; // default 15_000 — assess runs take minutes
   /** LOCAL cheap snapshot (@3s): queue + counts + outbox + daemon detail. */
   localCheapFn: (opts?: { section?: LocalSection }) => Promise<LocalCheap>;
   /** LOCAL heavy snapshot (@15s, repos/worktrees sections only): repos + worktrees. */
@@ -203,11 +207,13 @@ export function App(props: AppProps): React.JSX.Element {
     configPath,
     clonesDir,
     queueFn,
+    assessHistoryFn,
     onExit,
   } = props;
   const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
   const queuePollMs = props.queuePollMs ?? 2_000;
+  const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
   const LOCAL_SECTIONS: LocalSection[] = ["queue", "outbox", "repos", "worktrees", "daemon"];
@@ -267,6 +273,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
   const [queueNow, setQueueNow] = useState<Date>(() => new Date());
+  const [assessHistory, setAssessHistory] = useState<Map<string, AssessHistory>>(new Map());
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
   const [paletteFilter, setPaletteFilter] = useState("");
@@ -519,7 +526,12 @@ export function App(props: AppProps): React.JSX.Element {
       const st = deriveState(iss.labels, trigger);
       counts[st] = (counts[st] ?? 0) + 1;
     }
-    return { nwo: r.nwo, fromConfig: r.fromConfig, counts };
+    return {
+      nwo: r.nwo,
+      fromConfig: r.fromConfig,
+      counts,
+      assess: assessHistory.get(r.nwo) ?? null,
+    };
   });
 
   // Header pulse: issues needing operator review (plan-ready or approved)
@@ -782,6 +794,23 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [queueFn, queuePollMs]);
+
+  // Assess-history polling (also fires once on mount). Slower than the queue
+  // cadence: a record only changes when an assess run finalizes (#193).
+  useEffect(() => {
+    let alive = true;
+    const run = async (): Promise<void> => {
+      const rows = await assessHistoryFn();
+      if (!alive) return;
+      setAssessHistory(new Map(rows.map((h) => [h.id, h])));
+    };
+    void run();
+    const id = setInterval(() => void run(), assessHistoryPollMs);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [assessHistoryFn, assessHistoryPollMs]);
 
   // Full sweep on mount and whenever the watchlist changes (refreshAll's
   // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
@@ -2431,6 +2460,7 @@ export function App(props: AppProps): React.JSX.Element {
             queue={queueSnap}
             width={layout.railWidth}
             height={listHeight}
+            now={queueNow}
             window={railWindow}
             onRowPress={(i) => {
               if (confirm !== null || view !== "main") return;

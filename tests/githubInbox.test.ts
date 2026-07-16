@@ -232,9 +232,8 @@ describe("pollGithubInbox", () => {
 
   const bridgeCfg = {
     ...cfg,
-    vaultRoot: NX_VAULT,
-    stateDir: NX_STATE_DIR,
-    juncoSubdir: "tickets",
+    dataDir: NX_STATE_DIR,
+    queueRoot: join(NX_VAULT, "tickets"),
     github: {
       ...cfg.github,
       repos: [{ nwo: "acme/api", path: "/home/u/code/api" }],
@@ -413,7 +412,7 @@ describe("pollGithubInbox", () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-originkey-"));
     const wlCfg = {
       ...bridgeCfg,
-      stateDir: dir,
+      dataDir: dir,
       github: { ...bridgeCfg.github, repos: [] },
     } as Config;
     const wlFile = watchlistPath(wlCfg);
@@ -755,7 +754,7 @@ describe("pollGithubInbox", () => {
         const done = join(root, "tickets", "done");
         mkdirSync(done, { recursive: true });
         writeFileSync(join(done, `1710000000000__${EXEC_ID}.md`), "old run", "utf8");
-        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
         const f = makeFakes({
           issues: [readyIssue],
           events: approvedAfter,
@@ -787,7 +786,7 @@ describe("pollGithubInbox", () => {
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the exec-ticket id (gh-acme-api-<hash>-42).
         writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
         const f = makeFakes({
           issues: [readyIssue],
           events: approvedAfter,
@@ -826,7 +825,7 @@ describe("pollGithubInbox", () => {
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the planning-ticket id (gh-acme-api-<hash>-42-plan).
         writeFileSync(join(processing, `1720000000000__${PLAN_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
         expect(n).toBe(1);
@@ -845,7 +844,7 @@ describe("pollGithubInbox", () => {
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the ask-ticket id (gh-acme-api-<hash>-42).
         writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
         const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
         const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
@@ -864,7 +863,7 @@ describe("pollGithubInbox", () => {
         const inbox = join(root, "tickets", "inbox");
         mkdirSync(inbox, { recursive: true });
         writeFileSync(join(inbox, `${PLAN_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, vaultRoot: root, juncoSubdir: "tickets" } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
         expect(n).toBe(1);
@@ -882,7 +881,7 @@ describe("pollGithubInbox", () => {
       const stateDir = mkdtempSync(joinPath(tmpdir(), "junco-wl-hot-"));
       const cfg = {
         ...bridgeCfg,
-        stateDir,
+        dataDir: stateDir,
         github: { ...bridgeCfg.github, repos: [] }, // nothing in config
       } as Config;
       const f = makeFakes({ issues: [] });

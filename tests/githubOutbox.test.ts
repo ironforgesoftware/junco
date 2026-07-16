@@ -34,7 +34,7 @@ import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
 
 function cfgAt(root: string): Config {
-  return { stateDir: root } as unknown as Config;
+  return { dataDir: root } as unknown as Config;
 }
 const LABELS: Extract<OutboxOp, { kind: "labels" }> = {
   kind: "labels",
@@ -341,7 +341,7 @@ describe("flushOutbox", () => {
 
   it("a created PR op that dead-letters preserves its finalize tail as a replayable op (#77)", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-77-"));
-    const cfg = { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
+    const cfg = { dataDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
     enqueueOp(cfg, "prflow", {
       kind: "pr",
       repoPath: "/repo",
@@ -416,7 +416,7 @@ describe("flushOutbox", () => {
   it("pr composite: push → create → finalize comment → labels, with checkpoint resume", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f5-"));
     const cfg = {
-      stateDir: root,
+      dataDir: root,
       github: { triggerLabel: "junco" },
     } as unknown as Config;
     enqueueOp(cfg, "prflow", {
@@ -506,7 +506,7 @@ describe("flushOutbox", () => {
 
   it("pr create 'already exists' resolves the URL via pr view", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f6-"));
-    const cfg = { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
+    const cfg = { dataDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
     enqueueOp(cfg, "prflow", {
       kind: "pr",
       repoPath: "/repo",
@@ -551,7 +551,7 @@ describe("flushOutbox", () => {
 
   it("pr op pushes to op.remote and creates with --head op.head", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-remote2-"));
-    const cfg = { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
+    const cfg = { dataDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
     enqueueOp(cfg, "prflow", {
       kind: "pr",
       repoPath: "/repo",

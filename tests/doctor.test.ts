@@ -7,15 +7,17 @@ import { writeWatchlist } from "../src/watchlist.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
+import { recordRun } from "../src/assessHistory.js";
+import { WATCHLIST_FILENAME } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
 import type { ResolvedModelInfo } from "../src/agent/session.js";
 
 const okConfig = {
   model: { id: "local/m", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "k", modelsJson: null },
-  vaultRoot: "/tmp/junco-doc-vault",
-  juncoSubdir: "",
+  dataDir: "/tmp/junco-doc-state",
+  queueRoot: "/tmp/junco-doc-vault",
   worktreeRoot: "/tmp/junco-doc-wt",
-  stateDir: "/tmp/junco-doc-state",
+  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   gitBin: "git",
   ghBin: "gh",
   github: {
@@ -332,6 +334,115 @@ describe("runDoctor", () => {
       }),
     );
     expect(lines.join("")).not.toMatch(/health bind/);
+  });
+});
+
+describe("runDoctor — deprecations + pending migrations (Unified Data Root spec §5, §7)", () => {
+  it("legacy-keyed cfg reports a 'deprecated config keys' warning listing vaultRoot", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      legacy: { ...okConfig.legacy, vaultRoot: true },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    expect(lines.join("")).toMatch(/⚠ deprecated config keys.*vaultRoot/);
+  });
+
+  it("a fake existsFn making <dataDir>/assess-review exist reports 'unmigrated data dirs' with the migrate hint", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => okConfig,
+        existsFn: (p: string) => p === join(okConfig.dataDir, "assess-review"),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    expect(lines.join("")).toMatch(/⚠ unmigrated data dirs/);
+    expect(lines.join("")).toContain(join(okConfig.dataDir, "assess-review"));
+    expect(lines.join("")).toContain("junco data migrate");
+  });
+
+  it("clean cfg reports neither deprecations nor unmigrated dirs", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => okConfig, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/deprecated config keys/);
+    expect(lines.join("")).not.toMatch(/unmigrated data dirs/);
+  });
+
+  it("legacy worktreeRoot dir with leftovers → info-level (✓) hint, itself not a warning", async () => {
+    const lines: string[] = [];
+    // legacy.worktreeRoot:true also trips the "deprecated config keys" WARN
+    // above (git.worktreeRoot is one of the four checked keys) — this test
+    // pins that the worktree-leftover hint ITSELF reports ok (✓), not warn,
+    // distinguishing "here's where the old stuff is" from "please fix this".
+    const cfg = {
+      ...okConfig,
+      legacy: { ...okConfig.legacy, worktreeRoot: true },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        existsFn: (p: string) => p === okConfig.worktreeRoot,
+        readdirFn: (d: string) => (d === okConfig.worktreeRoot ? ["some-ticket-wt"] : []),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ legacy worktree root/);
+    expect(lines.join("")).toContain(okConfig.worktreeRoot);
+    // While git.worktreeRoot is SET it is the ACTIVE root (the override wins)
+    // — the hint must say so, and must NOT claim the worktrees there are
+    // already disposable or that new worktrees go under <dataDir>/worktrees.
+    expect(lines.join("")).toMatch(/currently live at/);
+    expect(lines.join("")).toMatch(/after removing the key/);
+    expect(lines.join("")).not.toMatch(/safe to delete/);
+    // Exactly one warning: the co-occurring deprecated-key finding, not this hint.
+    expect(lines.join("")).toMatch(/1 warning\(s\)/);
+  });
+
+  it("legacy worktreeRoot dir present but EMPTY → no hint at all", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      legacy: { ...okConfig.legacy, worktreeRoot: true },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        existsFn: (p: string) => p === okConfig.worktreeRoot,
+        readdirFn: () => [],
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/legacy worktree root/);
+  });
+
+  it("worktreeRoot is NOT legacy → no hint even if the dir happens to exist and hold entries", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => okConfig,
+        existsFn: (p: string) => p === okConfig.worktreeRoot,
+        readdirFn: (d: string) => (d === okConfig.worktreeRoot ? ["leftover"] : []),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/legacy worktree root/);
   });
 });
 
@@ -755,14 +866,12 @@ describe("runDoctor github checks", () => {
 
   it("validates watchlist entries alongside config mappings", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-wl-"));
-    writeWatchlist(join(stateDir, "github-watchlist.json"), [
-      { nwo: "alx/coral", path: "/tmp/coral" },
-    ]);
+    writeWatchlist(join(stateDir, WATCHLIST_FILENAME), [{ nwo: "alx/coral", path: "/tmp/coral" }]);
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
       deps({
-        loadConfigFn: () => ({ ...githubConfig([]), stateDir }) as Config,
+        loadConfigFn: () => ({ ...githubConfig([]), dataDir: stateDir }) as Config,
         execFn: async (_cmd: string, args: string[]) =>
           args.includes("get-url")
             ? { code: 0, stdout: "https://github.com/alx/coral.git\n", stderr: "" }
@@ -1091,14 +1200,17 @@ describe("runDoctor outbox checks", () => {
 
   it("warns on a queued backlog (does not fail doctor)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obx-"));
-    const { dir } = outboxPaths({ stateDir } as unknown as Config);
+    const { dir } = outboxPaths({ dataDir: stateDir } as unknown as Config);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "1-a-labels.json"), "{}", "utf8");
     writeFileSync(join(dir, "2-b-labels.json"), "{}", "utf8");
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/⚠ outbox backlog — 2 queued \(junco outbox flush\)/);
@@ -1106,13 +1218,16 @@ describe("runDoctor outbox checks", () => {
 
   it("warns on dead-letters, mentioning the dead/ dir (does not fail doctor)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obxdead-"));
-    const { dead } = outboxPaths({ stateDir } as unknown as Config);
+    const { dead } = outboxPaths({ dataDir: stateDir } as unknown as Config);
     mkdirSync(dead, { recursive: true });
     writeFileSync(join(dead, "1-a-labels.json"), "{}", "utf8");
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/⚠ outbox dead-letters/);
@@ -1130,7 +1245,7 @@ describe("runDoctor assess review checks", () => {
 
   it("reports pending reviews as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-review-"));
-    writePending({ stateDir } as unknown as Config, {
+    writePending({ dataDir: stateDir } as unknown as Config, {
       id: "a",
       nwo: "o/r",
       external: true,
@@ -1142,7 +1257,10 @@ describe("runDoctor assess review checks", () => {
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the review count must still surface.
@@ -1161,7 +1279,7 @@ describe("runDoctor analyze review checks", () => {
 
   it("reports pending drafts as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-draft-"));
-    writeDraft({ stateDir } as unknown as Config, {
+    writeDraft({ dataDir: stateDir } as unknown as Config, {
       id: "a",
       nwo: "o/r",
       issue: 1,
@@ -1175,11 +1293,60 @@ describe("runDoctor analyze review checks", () => {
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, stateDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir: stateDir }),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the draft count must still surface.
     expect(lines.join("")).toMatch(/✓ analyze drafts — 1 pending \(junco analyze review\)/);
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+});
+
+describe("runDoctor assess history checks", () => {
+  it("no repo has assess history → no assess history line", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/assess history/);
+  });
+
+  it("reports per-repo assess history informationally — never as a warning", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-"));
+    recordRun({ dataDir } as unknown as Config, "o/r", {
+      ok: true,
+      at: "2026-07-16T00:00:00.000Z",
+      found: 4,
+      parked: 3,
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ assess history — o\/r: assessed 2026-07-16/);
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+
+  it("shows a failed last attempt as informational, not a warning — never assessed", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-fail-"));
+    recordRun({ dataDir } as unknown as Config, "o/other", {
+      ok: false,
+      at: "2026-07-16T00:00:00.000Z",
+      reason: "boom",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(
+      /✓ assess history — o\/other: never assessed \(last attempt failed\)/,
+    );
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });

@@ -119,8 +119,9 @@ function fakeSpend(todayUsd = 0): {
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
-    vaultRoot: "/tmp/vault",
-    juncoSubdir: "Junco",
+    dataDir: "/tmp/vault/state",
+    queueRoot: "/tmp/vault/Junco",
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     model: {
       id: "omlx/test-model",
       source: "auto",
@@ -176,7 +177,6 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     healthHost: "127.0.0.1",
     healthPort: 0,
     logLevel: "info",
-    stateDir: "/tmp/vault/state",
     logToFile: false,
     transcriptsEnabled: false,
     github: {
@@ -226,6 +226,10 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     pruneFn: vi.fn(() => {}),
     waitForEndpointFn: vi.fn(async () => {}),
     sleep: vi.fn(async () => {}),
+    // Real migrateStateTree touches the filesystem; these fixture dataDirs
+    // ("/tmp/vault/state" etc.) aren't real tmp roots, so default every test
+    // to a no-op migration unless a test overrides it to exercise the wiring.
+    migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
     mkdirs: vi.fn(() => {}),
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
@@ -443,13 +447,13 @@ describe("installSignalHandlers", () => {
 describe("overlayFrozenRestartFields", () => {
   it('pins every reload:"restart" lever to frozen; passes live-kind fields through', () => {
     const frozen = makeConfig({
-      vaultRoot: "/frozen/vault",
-      juncoSubdir: "FrozenJunco",
+      dataDir: "/frozen/state",
+      queueRoot: "/frozen/vault/FrozenJunco",
+      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
       maxConcurrent: 1,
       healthEnabled: false,
       healthHost: "127.0.0.1",
       healthPort: 8787,
-      stateDir: "/frozen/state",
       logToFile: false,
       transcriptsEnabled: false,
       pollIntervalSeconds: 15,
@@ -461,13 +465,13 @@ describe("overlayFrozenRestartFields", () => {
       },
     });
     const live = makeConfig({
-      vaultRoot: "/live/vault",
-      juncoSubdir: "LiveJunco",
+      dataDir: "/live/state",
+      queueRoot: "/live/vault/LiveJunco",
+      legacy: { vaultRoot: false, stateDir: true, worktreeRoot: false, externalReposRoot: false },
       maxConcurrent: 10,
       healthEnabled: true,
       healthHost: "0.0.0.0",
       healthPort: 9999,
-      stateDir: "/live/state",
       logToFile: true,
       transcriptsEnabled: true,
       pollIntervalSeconds: 42,
@@ -483,13 +487,13 @@ describe("overlayFrozenRestartFields", () => {
     const result = overlayFrozenRestartFields(frozen, live);
 
     // Restart-kind flat fields: pinned to frozen, never the live edit.
-    expect(result.vaultRoot).toBe(frozen.vaultRoot);
-    expect(result.juncoSubdir).toBe(frozen.juncoSubdir);
+    expect(result.dataDir).toBe(frozen.dataDir);
+    expect(result.queueRoot).toBe(frozen.queueRoot);
+    expect(result.legacy).toEqual(frozen.legacy);
     expect(result.maxConcurrent).toBe(frozen.maxConcurrent);
     expect(result.healthEnabled).toBe(frozen.healthEnabled);
     expect(result.healthHost).toBe(frozen.healthHost);
     expect(result.healthPort).toBe(frozen.healthPort);
-    expect(result.stateDir).toBe(frozen.stateDir);
     expect(result.logToFile).toBe(frozen.logToFile);
     expect(result.transcriptsEnabled).toBe(frozen.transcriptsEnabled);
     expect(result.github.enabled).toBe(frozen.github.enabled);
@@ -501,6 +505,50 @@ describe("overlayFrozenRestartFields", () => {
     // Live-kind fields: pass through from live.
     expect(result.pollIntervalSeconds).toBe(live.pollIntervalSeconds);
     expect(result.model.id).toBe(live.model.id);
+  });
+
+  it("pins the dataDir-derived worktreeRoot/externalReposRoot — a live dataDir edit must not move them", () => {
+    // Neither legacy override key is set, so both roots derive from dataDir —
+    // which is reload:"restart". Without the pin, a live dataDir/stateDir edit
+    // would move NEW worktrees + external-clone resolution while the queue,
+    // transcripts, etc. stay frozen (the #186 partial-application class).
+    const frozen = makeConfig({
+      dataDir: "/frozen/state",
+      worktreeRoot: "/frozen/state/worktrees",
+      github: { ...makeConfig().github, externalReposRoot: "/frozen/state/clones/external" },
+    });
+    const live = makeConfig({
+      dataDir: "/live/state",
+      worktreeRoot: "/live/state/worktrees",
+      github: { ...makeConfig().github, externalReposRoot: "/live/state/clones/external" },
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    expect(result.worktreeRoot).toBe("/frozen/state/worktrees");
+    expect(result.github.externalReposRoot).toBe("/frozen/state/clones/external");
+  });
+
+  it("an explicitly-set legacy override keeps its own live-reload semantics", () => {
+    // git.worktreeRoot / github.externalReposRoot are reload:"live" levers —
+    // when the LIVE parse sets them explicitly, the edit hot-applies; only the
+    // dataDir-DERIVED values are pinned.
+    const frozen = makeConfig({
+      dataDir: "/frozen/state",
+      worktreeRoot: "/frozen/state/worktrees",
+      github: { ...makeConfig().github, externalReposRoot: "/frozen/state/clones/external" },
+    });
+    const live = makeConfig({
+      dataDir: "/frozen/state",
+      worktreeRoot: "/custom/wt",
+      github: { ...makeConfig().github, externalReposRoot: "/custom/ext" },
+      legacy: { vaultRoot: false, stateDir: false, worktreeRoot: true, externalReposRoot: true },
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    expect(result.worktreeRoot).toBe("/custom/wt");
+    expect(result.github.externalReposRoot).toBe("/custom/ext");
   });
 
   it("pins the frozen botAccount and ghAuth — a live botAccount.enabled flip can't drop the bot identity mid-run", () => {
@@ -541,6 +589,13 @@ describe("mainLoop", () => {
     const order: string[] = [];
 
     const { deps } = makeDeps({
+      // migrate BEFORE mkdirs is load-bearing (Task 4): an eager
+      // ensureDataTree would fabricate empty destinations for every
+      // old-name pair, turning routine renames into the crash-repair path.
+      migrateFn: vi.fn(() => {
+        order.push("migrate");
+        return { steps: [], conflicts: [] };
+      }),
       mkdirs: vi.fn(() => {
         order.push("mkdirs");
       }),
@@ -565,13 +620,90 @@ describe("mainLoop", () => {
 
     await mainLoop(cfg, stop, {}, deps);
 
-    expect(order.slice(0, 5)).toEqual(["mkdirs", "recover", "prune", "wait", "runOnce"]);
+    expect(order.slice(0, 6)).toEqual(["migrate", "mkdirs", "recover", "prune", "wait", "runOnce"]);
+    expect(deps.migrateFn).toHaveBeenCalledTimes(1);
     expect(deps.mkdirs).toHaveBeenCalledTimes(1);
     expect(deps.recoverOrphansFn).toHaveBeenCalledTimes(1);
     expect(deps.pruneFn).toHaveBeenCalledTimes(1);
     expect(deps.pruneFn).toHaveBeenCalledWith(cfg.worktreeRoot);
     expect(deps.waitForEndpointFn).toHaveBeenCalledTimes(1);
     expect(deps.waitForEndpointFn).toHaveBeenCalledWith(cfg, stop);
+  });
+
+  it("logs one warn per state-tree migration conflict at startup", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        migrateFn: vi.fn(() => ({
+          steps: [
+            {
+              from: "/d/assess-review",
+              to: "/d/review/assess",
+              action: "skipped-conflict" as const,
+            },
+            {
+              from: "/d/comment-review",
+              to: "/d/review/comments",
+              action: "skipped-conflict" as const,
+            },
+          ],
+          conflicts: [
+            "/d/assess-review -> /d/review/assess: destination already exists and is not empty",
+            "/d/comment-review -> /d/review/comments: destination already exists and is not empty",
+          ],
+        })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      const conflictWarns = warnSpy.mock.calls.filter(
+        (c) => String(c[0]) === "state-tree migration conflict; manual resolution required",
+      );
+      expect(conflictWarns).toHaveLength(2);
+      expect(conflictWarns[0]?.[1]).toEqual({
+        conflict:
+          "/d/assess-review -> /d/review/assess: destination already exists and is not empty",
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs one info receipt per RENAMED migration pair at startup (worker.log evidence)", async () => {
+    const { log } = await import("../src/logging.js");
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        migrateFn: vi.fn(() => ({
+          steps: [
+            { from: "/d/github-outbox", to: "/d/outbox", action: "renamed" as const },
+            { from: "/d/repos", to: "/d/clones/watched", action: "noop" as const },
+          ],
+          conflicts: [],
+        })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      const renameLogs = infoSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("state-tree migration: renamed"),
+      );
+      expect(renameLogs).toHaveLength(1); // one per renamed pair, none for noops
+      expect(renameLogs[0]?.[1]).toEqual({ from: "/d/github-outbox", to: "/d/outbox" });
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 
   it("once=true breaks after a single handled task; sleep never called", async () => {
@@ -697,7 +829,7 @@ describe("mainLoop — provider gate wiring", () => {
         mkdirSync(join(j, d), { recursive: true });
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-      const cfg = makeConfig({ vaultRoot: root });
+      const cfg = makeConfig({ queueRoot: j });
       const stop = new StopFlag();
       const { deps } = makeDeps({
         // Leave runOnceFn undefined so mainLoop builds its own default, which
@@ -734,7 +866,7 @@ describe("mainLoop — provider gate wiring", () => {
         mkdirSync(join(j, d), { recursive: true });
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-      const cfg = makeConfig({ vaultRoot: root, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+      const cfg = makeConfig({ queueRoot: j, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
       const stop = new StopFlag();
       const { deps } = makeDeps({
         // Leave claimFn/executeFn undefined so runScheduler builds its own
@@ -865,7 +997,7 @@ describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
         mkdirSync(join(j, d), { recursive: true });
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-      const cfg = makeConfig({ vaultRoot: root, dailyBudgetUsd: 3 });
+      const cfg = makeConfig({ queueRoot: j, dailyBudgetUsd: 3 });
       const stop = new StopFlag();
       // A real gate (not the static fakeGate) so reportBudgetExhausted
       // actually latches state that claimBlockReason() then observes.
@@ -900,7 +1032,7 @@ describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
   it("blocks claiming with a real ProviderGate + SpendLedger once exceeded, and resumes once BOTH the gate's until and the ledger's calendar day roll past midnight", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-daemon-budget-real-"));
     const stateDir = join(root, "state");
-    const cfg = makeConfig({ vaultRoot: root, stateDir, dailyBudgetUsd: 3 });
+    const cfg = makeConfig({ dataDir: stateDir, dailyBudgetUsd: 3 });
     const stop = new StopFlag();
 
     // Single shared, mutable clock driving BOTH the gate's auto-expiry and
@@ -966,7 +1098,7 @@ describe("mainLoop — daily budget gate wiring (Phase 3 Task 5)", () => {
 // runOnceBox/executeClaimedBox passthrough boxes declared at the top of this
 // file) to inspect the deps object daemon.ts actually constructs — proving
 // both the DEFAULT ledger's construction (absent deps.spend, built from
-// cfg.stateDir) and its threading into both the serial and scheduler paths.
+// cfg.dataDir) and its threading into both the serial and scheduler paths.
 // ---------------------------------------------------------------------------
 
 describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
@@ -975,10 +1107,10 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
   // `finally` — the boxes must stay on the real passthrough for every other
   // test in this file (see the vi.mock factory at the top).
 
-  it("serial mode: absent deps.spend → mainLoop builds a REAL makeSpendLedger(cfg.stateDir) and threads it into the DEFAULT runOnceFn", async () => {
+  it("serial mode: absent deps.spend → mainLoop builds a REAL makeSpendLedger(cfg.dataDir) and threads it into the DEFAULT runOnceFn", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-serial-"));
     const stateDir = join(root, "state");
-    const cfg = makeConfig({ vaultRoot: root, stateDir });
+    const cfg = makeConfig({ dataDir: stateDir });
     const stop = new StopFlag();
     const captured: unknown[] = [];
     const realRunOnce = runOnceBox.current;
@@ -1001,7 +1133,7 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
       const passedSpend = (captured[0] as { spend?: { recordUsd: (usd: number) => void } }).spend;
       expect(passedSpend).toBeDefined();
       expect(typeof passedSpend?.recordUsd).toBe("function");
-      // Prove it's a genuinely WORKING makeSpendLedger(cfg.stateDir) instance
+      // Prove it's a genuinely WORKING makeSpendLedger(cfg.dataDir) instance
       // (not a stub) — record through it and read the persisted file back.
       passedSpend!.recordUsd(1.5);
       const ledger = JSON.parse(readFileSync(join(stateDir, "spend.json"), "utf8")) as {
@@ -1022,8 +1154,8 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
     writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
     const stateDir = join(root, "state");
     const cfg = makeConfig({
-      vaultRoot: root,
-      stateDir,
+      queueRoot: j,
+      dataDir: stateDir,
       maxConcurrent: 2,
       pollIntervalSeconds: 0.001,
     });
@@ -1067,7 +1199,7 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
     // Serial mode.
     {
       const root = mkdtempSync(join(tmpdir(), "junco-daemon-spend-explicit-serial-"));
-      const cfg = makeConfig({ vaultRoot: root, stateDir: join(root, "state") });
+      const cfg = makeConfig({ dataDir: join(root, "state") });
       const stop = new StopFlag();
       const captured: unknown[] = [];
       const realRunOnce = runOnceBox.current;
@@ -1099,8 +1231,8 @@ describe("mainLoop — spend ledger wiring (Phase 3 Task 4)", () => {
       }
       writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
       const cfg = makeConfig({
-        vaultRoot: root,
-        stateDir: join(root, "state"),
+        queueRoot: j,
+        dataDir: join(root, "state"),
         maxConcurrent: 2,
         pollIntervalSeconds: 0.001,
       });
@@ -1273,6 +1405,7 @@ describe("mainLoop — observability", () => {
         recoverOrphansFn: () => {},
         pruneFn: () => {},
         waitForEndpointFn: async () => {},
+        migrateFn: () => ({ steps: [], conflicts: [] }),
         mkdirs: () => {},
         startHealthServerFn: async () => null as unknown as HealthServerHandle,
       },
@@ -1282,23 +1415,23 @@ describe("mainLoop — observability", () => {
 
   it("mainLoop hot-applies a live lever edit but pins a restart-kind lever to the frozen startup cfg", async () => {
     // A live edit to model.id (reload:"live") must reach the very next
-    // runOnceFn; a simultaneous edit to vaultRoot (reload:"restart") must
-    // NEVER reach it — runOnce derives queue paths from cfg.vaultRoot, so a
+    // runOnceFn; a simultaneous edit to queueRoot (reload:"restart") must
+    // NEVER reach it — runOnce derives queue paths from cfg.queueRoot, so a
     // hot-applied edit there would silently move the daemon onto a different
     // (likely nonexistent) queue mid-run.
-    const startCfg = makeConfig({ vaultRoot: "/frozen/vault", pollIntervalSeconds: 1 });
+    const startCfg = makeConfig({ queueRoot: "/frozen/queue", pollIntervalSeconds: 1 });
     const holder = makeConfigHolder(startCfg);
     const stop = new StopFlag();
-    const seenVaultRoots: string[] = [];
+    const seenQueueRoots: string[] = [];
     const seenModelIds: string[] = [];
     let n = 0;
     const runOnceFn = async (c: Config) => {
-      seenVaultRoots.push(c.vaultRoot);
+      seenQueueRoots.push(c.queueRoot);
       seenModelIds.push(c.model.id);
       if (n === 0) {
         holder.current = {
           ...holder.current,
-          vaultRoot: "/live/vault", // restart-kind — must NOT reach the next runOnceFn
+          queueRoot: "/live/queue", // restart-kind — must NOT reach the next runOnceFn
           model: { ...holder.current.model, id: "model-v2" }, // live-kind — must
         };
       }
@@ -1321,12 +1454,13 @@ describe("mainLoop — observability", () => {
         recoverOrphansFn: () => {},
         pruneFn: () => {},
         waitForEndpointFn: async () => {},
+        migrateFn: () => ({ steps: [], conflicts: [] }),
         mkdirs: () => {},
         startHealthServerFn: async () => null as unknown as HealthServerHandle,
       },
     );
     expect(seenModelIds).toEqual([startCfg.model.id, "model-v2"]);
-    expect(seenVaultRoots).toEqual([startCfg.vaultRoot, startCfg.vaultRoot]);
+    expect(seenQueueRoots).toEqual([startCfg.queueRoot, startCfg.queueRoot]);
   });
 });
 
@@ -1470,7 +1604,7 @@ describe("runScheduler", () => {
       mkdirSync(join(j, d), { recursive: true });
     }
     writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-    const cfg = makeConfig({ vaultRoot: root, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const cfg = makeConfig({ queueRoot: j, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
     const stop = new StopFlag();
     const executeFn = (c: Config, w: ClaimedWork): Promise<void> =>
       executeClaimed(c, w, {
@@ -1696,11 +1830,11 @@ describe("outbox drain (local mode)", () => {
 
   /** Real fs: enqueueOp/outboxDepth are not injected through MainLoopDeps
    * (they're cheap direct fs calls, mirrored on the bridge sweep's own
-   * throttle), so these tests use a real tmp stateDir rather than a fake. */
+   * throttle), so these tests use a real tmp dataDir rather than a fake. */
   const tmpStateDir = (): string => mkdtempSync(join(tmpdir(), "junco-daemon-obx-"));
 
   it("github disabled + depth > 0: drain fn is called on the throttle cadence", async () => {
-    const cfg = makeConfig({ stateDir: tmpStateDir(), github: disabledGithub(3600) });
+    const cfg = makeConfig({ dataDir: tmpStateDir(), github: disabledGithub(3600) });
     enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
     expect(outboxDepth(cfg)).toBe(1);
 
@@ -1726,7 +1860,7 @@ describe("outbox drain (local mode)", () => {
   });
 
   it("github disabled + depth 0: drain fn is never called (nothing to flush)", async () => {
-    const cfg = makeConfig({ github: disabledGithub(3600) }); // no stateDir → depth 0
+    const cfg = makeConfig({ github: disabledGithub(3600) }); // no dataDir override → depth 0
     let drains = 0;
     const stop = new StopFlag();
     const { deps } = makeDeps({
@@ -1746,7 +1880,7 @@ describe("outbox drain (local mode)", () => {
   });
 
   it("github enabled: the standalone drain is never used (the bridge sweep already flushes first)", async () => {
-    const cfg = makeConfig({ stateDir: tmpStateDir(), github: enabledGithub(3600) });
+    const cfg = makeConfig({ dataDir: tmpStateDir(), github: enabledGithub(3600) });
     enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
 
     let drains = 0;
@@ -1769,7 +1903,7 @@ describe("outbox drain (local mode)", () => {
   });
 
   it("a drain error does not crash the loop", async () => {
-    const cfg = makeConfig({ stateDir: tmpStateDir(), github: disabledGithub(60) });
+    const cfg = makeConfig({ dataDir: tmpStateDir(), github: disabledGithub(60) });
     enqueueOp(cfg, "reporter", { kind: "push", repoPath: "/r", branch: "junco/x" });
 
     const stop = new StopFlag();
@@ -1788,7 +1922,7 @@ describe("outbox drain (local mode)", () => {
 
   it("scheduler mode (max_concurrent > 1) also drains when github is disabled", async () => {
     const cfg = makeConfig({
-      stateDir: tmpStateDir(),
+      dataDir: tmpStateDir(),
       github: disabledGithub(3600),
       maxConcurrent: 2,
     });

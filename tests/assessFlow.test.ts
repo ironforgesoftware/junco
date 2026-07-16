@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAssessFlow } from "../src/assessFlow.js";
 import { listPending, assessReviewPaths } from "../src/assessReview.js";
+import { listHistory, readHistory, recordRun } from "../src/assessHistory.js";
 import { parseTicket } from "../src/ticket.js";
 import { fingerprintFinding, findingMarker } from "../src/findings.js";
 import { GitOpError } from "../src/git.js";
@@ -17,8 +18,9 @@ import type { Config, Ticket } from "../src/types.js";
 
 function cfg(root: string): Config {
   return {
-    vaultRoot: root,
-    juncoSubdir: "Junco",
+    dataDir: root,
+    queueRoot: join(root, "Junco"),
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     model: {
       id: "m",
       source: "auto",
@@ -93,7 +95,6 @@ function cfg(root: string): Config {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
   };
@@ -801,5 +802,114 @@ describe("runAssessFlow", () => {
     });
 
     expect(r.status).toBe("completed");
+  });
+
+  // -------------------------------------------------------------------------
+  // Per-repo assess history (Task 3, #193) — recorded at the terminal choke
+  // point (finalizeAssess), keyed by nwo.
+  // -------------------------------------------------------------------------
+
+  it("records a per-repo history entry on a successful whole-repo run", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    const finalText = "found things\n\n" + findingsFence([codeFinding("XSS-1", "src/index.ts")]);
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: ghDedupEmpty().ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd(auditJson("high")),
+      sessionFactoryFor: () => fakeSession(finalText),
+      nowFn: () => new Date("2026-07-16T00:00:00.000Z"),
+    });
+    expect(r.status).toBe("completed");
+
+    const h = readHistory(cfg(root), "o/r")!;
+    expect(h.id).toBe("o/r");
+    expect(h.lastSuccessAt).toBe("2026-07-16T00:00:00.000Z");
+    expect(h.lastFound).toBe(2);
+    expect(h.lastParked).toBe(2);
+    expect(h.lastFailureAt).toBeNull();
+  });
+
+  it("records NOTHING for an issue-scoped run (it audits only the issue's code)", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    // Scoped-ticket construction copied verbatim from "threads the ticket's
+    // scoping issue into the parked batch" above — ticketContent's `extra` is
+    // a raw frontmatter string, not an `{ issue }` option.
+    const { path } = claim(j, ticketContent(repo, "assess:\n  issue: 42\n"));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    const finalText = "found things\n\n" + findingsFence([codeFinding("XSS-1", "src/index.ts")]);
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: ghDedupEmpty().ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd(auditJson("high")),
+      sessionFactoryFor: () => fakeSession(finalText),
+      nowFn: () => new Date("2026-07-16T00:00:00.000Z"),
+    });
+    expect(r.status).toBe("completed");
+    expect(listHistory(cfg(root))).toEqual([]); // scoped runs never touch history
+  });
+
+  it("a failed run stamps the failure and preserves the prior success", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    // Seed a prior success so we can prove the age does not move.
+    recordRun(cfg(root), "o/r", {
+      ok: true,
+      at: "2026-07-15T00:00:00.000Z",
+      found: 4,
+      parked: 3,
+    });
+
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    // A non-network dedup error is fatal → finalizeAssess(phaseError) → failed/.
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: fakeGh(() => {
+        throw PERM_ERR;
+      }).ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd(auditJson("high")),
+      sessionFactoryFor: () =>
+        fakeSession("x\n\n" + findingsFence([codeFinding("XSS-1", "src/index.ts")])),
+      nowFn: () => new Date("2026-07-16T00:00:00.000Z"),
+    });
+    expect(r.status).toBe("failed");
+
+    const h = readHistory(cfg(root), "o/r")!;
+    expect(h.lastSuccessAt).toBe("2026-07-15T00:00:00.000Z"); // unmoved
+    expect(h.lastFound).toBe(4);
+    expect(h.lastFailureAt).toBe("2026-07-16T00:00:00.000Z");
+    expect(h.lastFailureReason).toContain("dedup");
+  });
+
+  it("a phase error BEFORE `let nwo` executes records nothing and does not throw (TDZ regression)", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    // A Phase 2 origin-parse failure runs AFTER `let nwo` (assessFlow.ts:218)
+    // has already executed — declaring it (even unassigned) ends nwo's TDZ,
+    // so it cannot discriminate a closure over bare `nwo` (would just read
+    // `undefined`) from the fix (recordNwo === null). Only a Phase 1 failure
+    // genuinely predates that declaration and would throw ReferenceError on a
+    // bare-`nwo` closure. Reuses the containment construction from "path
+    // containment: a repo outside allowed_repo_roots → failed/..." above.
+    const c = { ...cfg(root), allowedRepoRoots: ["/somewhere-else-entirely"] };
+    const r = await runAssessFlow(c, ticket, path, {
+      ghFn: ghDedupEmpty().ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd(auditJson("high")),
+      sessionFactoryFor: () => fakeSession("x"),
+      nowFn: () => new Date("2026-07-16T00:00:00.000Z"),
+    });
+    expect(r.status).toBe("failed"); // did NOT throw ReferenceError
+    expect(listHistory(c)).toEqual([]);
   });
 });

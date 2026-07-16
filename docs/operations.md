@@ -22,7 +22,7 @@ All commands accept `--config <path>` to point at a non-default `config.json`. W
 | `junco list [box] [--config <path>]`                            | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses.                                                                                                                                                  |
 | `junco retry <name…\|--all> [--config <path>]`                  | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped.                                                                                                                            |
 | `junco outbox [flush] [--config <path>]`                        | List the offline GitHub backlog (operation type, target issue/branch, age, attempt count, dead-letter count), or `flush` to push it now instead of waiting for the next daemon sweep.                                                                   |
-| `junco doctor [--config <path>]`                                | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/state dirs writable.                                                                                                            |
+| `junco doctor [--config <path>]`                                | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/data dirs writable.                                                                                                             |
 | `junco dashboard [--config <path>]`                             | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. With no config yet, opens the guided setup walkthrough first (re-run anytime from the command palette's "setup"). Needs a real TTY.     |
 | `junco restart [--config <path>]`                               | Restart the supervised daemon so it picks up config and code changes: finds the launchd/systemd user unit referencing your config, kicks it with the platform-correct verb, verifies the pid changed.                                                   |
 | `junco logs [-f] [-n N] [--json\|--human] [--config <path>]`    | Tail (or follow with `-f`) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`; `--human` forces the readable format even when piped (used by the dashboard's command palette).                                              |
@@ -69,9 +69,9 @@ The interactive dashboard (`junco dashboard`) shows the gate as a colored dot on
 
 `metrics.totalCostUsd` (in the `/health` metrics block) and `spend.todayUsd` both track real dollars but can legitimately diverge: `totalCostUsd` only accumulates once a ticket reaches a terminal state (`finalize`'s `recordTask`) and resets on daemon restart, whereas the ledger records every session's cost immediately — including sessions whose ticket goes on to requeue — and persists across restarts, resetting only at local midnight. A ticket that requeues a few times before finishing shows up once in `totalCostUsd` but once per attempt in the ledger.
 
-**Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<stateDir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `observability.logLevel` to `debug` for verbose output, `info` for normal operation.
+**Logs** are structured JSON on stdout (colorized human format on a TTY; set `JUNCO_LOG_JSON=1` to force JSON) and are also written to `<dataDir>/worker.log` (default `~/.local/state/junco/worker.log`, rotated at 10 MB). `junco logs -f` follows them. Set `observability.logLevel` to `debug` for verbose output, `info` for normal operation.
 
-**Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<stateDir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `observability.transcripts = false`.
+**Transcripts:** every agent session appends its event stream (turns, tool calls, results — no token deltas) to `<dataDir>/transcripts/<ticket-id>.jsonl`, the debugging record for failed runs. Disable with `observability.transcripts = false`.
 
 **Concurrency:** `worker.maxConcurrent` (default 1) runs that many tickets in parallel. Tickets targeting the same `repo:` always serialize, and a graceful stop drains in-flight work.
 
@@ -157,7 +157,7 @@ Q&A tickets do not use `gh` and are unaffected.
 If the daemon crashed mid-run (power loss, OOM), a ticket can be stranded in `processing/`. On the next startup Junco detects orphaned claims and recovers them automatically. If you need to force it, move the file back to `inbox/`:
 
 ```bash
-mv <vaultRoot>/Junco/processing/<ticket.md> <vaultRoot>/Junco/inbox/
+mv <dataDir>/queue/processing/<ticket.md> <dataDir>/queue/inbox/
 ```
 
 Existing result frontmatter written by the worker is stripped; your original frontmatter is preserved.

@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config, GithubRepoMapping } from "./types.js";
 import { log } from "./logging.js";
+import { WATCHLIST_FILENAME } from "./dataTree.js";
 
 export interface WatchlistEntry {
   nwo: string;
@@ -20,7 +21,7 @@ export interface WatchlistEntry {
 const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
 
 export function watchlistPath(cfg: Config): string {
-  return join(cfg.stateDir, "github-watchlist.json");
+  return join(cfg.dataDir, WATCHLIST_FILENAME);
 }
 
 /** Never throws: missing → empty; corrupt/invalid → empty + error message

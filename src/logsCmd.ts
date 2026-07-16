@@ -39,10 +39,10 @@ export async function runLogsCommand(
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const json = opts.json ?? !process.stdout.isTTY;
-  const path = join(cfg.stateDir, "worker.log");
+  const path = join(cfg.dataDir, "worker.log");
   if (!existsSync(path)) {
     print(
-      `junco logs: no log file at ${path} (the daemon writes it once started; see [observability].state_dir)\n`,
+      `junco logs: no log file at ${path} (the daemon writes it once started; see dataDir in docs/configuration.md)\n`,
     );
     return 1;
   }
