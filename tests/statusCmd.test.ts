@@ -37,6 +37,7 @@ describe("runStatusCommand", () => {
       healthHost: "127.0.0.1",
       healthPort: 8787,
       dataDir: join(root, "state"),
+      updateCheck: false,
     } as unknown as Config;
     out = [];
   });
@@ -396,5 +397,37 @@ describe("runStatusCommand", () => {
     // The bug composed http://::1:8787/health, which new URL() rejects → false "daemon down".
     expect(seen).toBe("http://[::1]:8787/health");
     expect(() => new URL(seen)).not.toThrow();
+  });
+
+  it("prints an update line when a newer version is available", async () => {
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, {
+      fetchFn,
+      printFn: print,
+      lockHolderFn: () => null,
+      checkUpdateFn: async () => ({ current: "0.7.0", latest: "0.8.0", available: true }),
+    });
+    expect(out.join("")).toContain("update:    v0.8.0 available (run: junco update)");
+  });
+
+  it("stays silent when current, unavailable, or check-less", async () => {
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    for (const fn of [
+      async () => ({ current: "0.7.0", latest: "0.7.0", available: false }),
+      async () => null,
+    ]) {
+      out = [];
+      await runStatusCommand(cfg, {
+        fetchFn,
+        printFn: print,
+        lockHolderFn: () => null,
+        checkUpdateFn: fn,
+      });
+      expect(out.join("")).not.toContain("update:");
+    }
   });
 });

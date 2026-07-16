@@ -11,6 +11,7 @@ import { outboxDepth, deadCount } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
 import { draftCount } from "./commentReview.js";
 import { listHistory } from "./assessHistory.js";
+import { checkForUpdate, type UpdateInfo } from "./updateCheck.js";
 
 export interface StatusDeps {
   fetchFn?: typeof fetch;
@@ -19,6 +20,7 @@ export interface StatusDeps {
   /** Lock path (the CLI passes dirname(configPath)/worker.lock, mirroring `start`). */
   lockPath?: string;
   timeoutMs?: number;
+  checkUpdateFn?: (cfg: Config) => Promise<UpdateInfo | null>;
 }
 
 export function fmtUptime(totalSeconds: number): string {
@@ -127,6 +129,11 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   const drafts = draftCount(cfg);
   if (drafts > 0) {
     print(`analyze review: ${drafts} pending (junco analyze review)\n`);
+  }
+  // npm update nudge (spec 2026-07-16) — best-effort; silent unless newer.
+  const update = await (deps.checkUpdateFn ?? ((c: Config) => checkForUpdate(c)))(cfg);
+  if (update !== null && update.available) {
+    print(`update:    v${update.latest} available (run: junco update)\n`);
   }
   return 0;
 }
