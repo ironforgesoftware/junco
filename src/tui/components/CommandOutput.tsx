@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { Spinner } from "./Spinner.js";
+import { clampScroll, maxScroll } from "../window.js";
 
 export function CommandOutput({
   title,
@@ -11,6 +12,7 @@ export function CommandOutput({
   exitCode,
   timedOut,
   height,
+  onScrollMax,
 }: {
   title: string;
   running: boolean;
@@ -20,6 +22,7 @@ export function CommandOutput({
   exitCode: number | null;
   timedOut: boolean;
   height: number;
+  onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
   // Reserved rows: borders ×2, title, scroll line, footer line.
   const visibleLines = Math.max(1, height - 5);
@@ -29,7 +32,9 @@ export function CommandOutput({
       ? `timed out after ${elapsedS}s (killed)`
       : `exit ${exitCode ?? "?"}`;
   const lines = output === "" ? [] : output.split("\n");
-  const visible = lines.slice(scroll, scroll + visibleLines);
+  onScrollMax?.(maxScroll(lines.length, visibleLines));
+  const start = clampScroll(scroll, lines.length, visibleLines);
+  const visible = lines.slice(start, start + visibleLines);
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1} flexGrow={1}>
       <Text bold>
@@ -50,7 +55,7 @@ export function CommandOutput({
       ))}
       {lines.length > visibleLines && (
         <Text dimColor>
-          ↑/↓ scroll · {scroll + 1}-{Math.min(scroll + visibleLines, lines.length)}/{lines.length}
+          ↑/↓ scroll · {start + 1}-{Math.min(start + visibleLines, lines.length)}/{lines.length}
         </Text>
       )}
       <Text dimColor>esc back · r re-run</Text>
