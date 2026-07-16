@@ -196,4 +196,15 @@ describe("checkForUpdate", () => {
     expect(h.fetches.length).toBe(1);
     expect(r?.available).toBe(true);
   });
+
+  it("a throwing selfPkgFn resolves null (never rejects)", async () => {
+    const h = harness({ registry: { status: 200, body: { version: "0.8.0" } } });
+    const opts = {
+      ...h.opts,
+      selfPkgFn: () => {
+        throw new Error("boom");
+      },
+    };
+    await expect(checkForUpdate(cfg, opts)).resolves.toBeNull();
+  });
 });

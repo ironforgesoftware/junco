@@ -84,7 +84,12 @@ export async function checkForUpdate(
   opts: UpdateCheckOpts = {},
 ): Promise<UpdateInfo | null> {
   if (cfg.updateCheck === false) return null;
-  const self = (opts.selfPkgFn ?? getSelfPackage)();
+  let self: SelfPackage;
+  try {
+    self = (opts.selfPkgFn ?? getSelfPackage)();
+  } catch {
+    return null; // unreadable/corrupt own package.json — never throw
+  }
   const now = (opts.nowFn ?? (() => new Date()))();
   const readFileFn = opts.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const writeFileFn = opts.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
