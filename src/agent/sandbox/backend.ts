@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { SandboxPolicy } from "./policy.js";
 
 export type ExecProbe = (cmd: string, args: string[]) => Promise<{ code: number }>;
@@ -28,7 +29,7 @@ function q(p: string): string {
 }
 
 /** Generate an SBPL profile: deny by default; broad read minus denied
- *  subpaths; write only under the writable roots; network per policy. */
+ *  subpaths/files; write only under the writable roots; network per policy. */
 export function seatbeltProfile(policy: SandboxPolicy): string {
   const lines: string[] = [
     "(version 1)",
@@ -41,6 +42,7 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
     "(allow file-read*)",
   ];
   for (const d of policy.readDenyPaths) lines.push(`(deny file-read* (subpath ${q(d)}))`);
+  for (const f of policy.readDenyFiles) lines.push(`(deny file-read* (literal ${q(f)}))`);
   const writes = policy.writableRoots.map((r) => `(subpath ${q(r)})`).join(" ");
   lines.push(`(allow file-write* ${writes} (literal "/dev/null") (literal "/dev/dtracehelper"))`);
   lines.push(policy.network ? "(allow network*)" : "(deny network*)");
@@ -62,11 +64,31 @@ export const seatbeltBackend: SandboxBackend = {
 // ---- Linux bubblewrap ----------------------------------------------------
 
 /** bwrap args: read-only root, rw-bind writable roots, tmpfs-mask denied
- *  read paths, private /dev+/proc+/tmp, unshare net when denied. */
-export function bwrapArgs(policy: SandboxPolicy): string[] {
+ *  read dirs, /dev/null-mask denied files, private /dev+/proc+/tmp, unshare
+ *  net when denied. Deny mounts are emitted only for paths that EXIST
+ *  (`existsFn` injectable for tests): bwrap cannot create a mountpoint under
+ *  the read-only root bind, so a mount aimed at a missing path (e.g. a
+ *  github-cache/ nobody has populated, or an absent ~/.gnupg) would abort
+ *  the whole spawn — and a path that does not exist cannot be read anyway
+ *  (the JS path-jail still denies it by name if it appears later). Mounts
+ *  apply in argv order, which is why the denies come AFTER the writable-root
+ *  binds and why the deny list must never contain an ancestor of a writable
+ *  root (policy.ts denies the data root's sensitive SUBTREES, not the root):
+ *  a later tmpfs over an ancestor would shadow the bind entirely. */
+export function bwrapArgs(
+  policy: SandboxPolicy,
+  existsFn: (p: string) => boolean = existsSync,
+): string[] {
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
   for (const r of policy.writableRoots) args.push("--bind", r, r);
-  for (const d of policy.readDenyPaths) args.push("--tmpfs", d);
+  for (const d of policy.readDenyPaths) {
+    if (existsFn(d)) args.push("--tmpfs", d);
+  }
+  for (const f of policy.readDenyFiles) {
+    // tmpfs needs a directory; an existing file is masked by binding
+    // /dev/null over it (reads see empty content, the data is protected).
+    if (existsFn(f)) args.push("--ro-bind", "/dev/null", f);
+  }
   args.push("--unshare-pid");
   if (!policy.network) args.push("--unshare-net");
   args.push("--die-with-parent");

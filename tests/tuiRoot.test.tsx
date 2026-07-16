@@ -81,7 +81,7 @@ async function driveToWritten(
   await until(() => (lastFrame() ?? "").includes("friend"), LONG_TRIES);
   await press(stdin, ENTER); // begin
   await until(() => (lastFrame() ?? "").includes("Where should junco"), LONG_TRIES);
-  await press(stdin, ENTER); // vaultRoot default
+  await press(stdin, ENTER); // dataDir default
   await until(() => (lastFrame() ?? "").includes("How is the model configured?"), LONG_TRIES);
   await press(stdin, ENTER); // inline
   await until(() => (lastFrame() ?? "").includes("Inference endpoint base URL"), LONG_TRIES);
@@ -102,7 +102,7 @@ async function driveToWritten(
   await press(stdin, ENTER); // ambient gh login (default)
   await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
   await press(stdin, ENTER); // keep recommended set
-  await until(() => (lastFrame() ?? "").includes('"vaultRoot"'), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("This is the exact config.json"), LONG_TRIES);
   await press(stdin, ENTER); // Write config → io.write()
   await until(() => (lastFrame() ?? "").includes("Wrote config:"), LONG_TRIES);
 }

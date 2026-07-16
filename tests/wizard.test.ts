@@ -19,11 +19,11 @@ describe("buildWizardIO", () => {
     expect(r.io.mode).toBe("fresh");
     expect(r.io.currentRaw).toBeNull();
     expect(r.io.initialAnswers).toEqual(defaultAnswers());
-    const a = { ...r.io.initialAnswers, vaultRoot: join(dir, "vault") };
+    const a = { ...r.io.initialAnswers, dataDir: join(dir, "vault") };
     const result = r.io.write(a);
     expect(result.written).toBe(true);
-    expect(read(cp).vaultRoot).toBe(join(dir, "vault"));
-    expect(existsSync(join(dir, "vault", "inbox"))).toBe(true);
+    expect(read(cp).dataDir).toBe(join(dir, "vault"));
+    expect(existsSync(join(dir, "vault", "queue", "inbox"))).toBe(true);
   });
 
   it("rerun mode reads the existing raw config into initialAnswers", () => {

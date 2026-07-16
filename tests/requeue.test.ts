@@ -70,8 +70,7 @@ describe("requeueTicket", () => {
     mkdirSync(join(root, "inbox"), { recursive: true });
     mkdirSync(join(root, "processing"), { recursive: true });
     cfg = {
-      vaultRoot: root,
-      juncoSubdir: "",
+      queueRoot: root,
       maxTransientRetries: 2,
       retryBackoffSeconds: 60,
     } as unknown as Config;
@@ -181,8 +180,7 @@ describe("requeueTicketKeepBudget", () => {
     mkdirSync(join(root, "inbox"), { recursive: true });
     mkdirSync(join(root, "processing"), { recursive: true });
     cfg = {
-      vaultRoot: root,
-      juncoSubdir: "",
+      queueRoot: root,
       maxTransientRetries: 2,
       retryBackoffSeconds: 60,
     } as unknown as Config;

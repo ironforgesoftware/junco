@@ -23,7 +23,13 @@ afterEach(() => {
 });
 
 function policyFor(work: string, deny: string[] = []): SandboxPolicy {
-  return { writableRoots: [work], readDenyPaths: deny, network: false, scratchDir: work };
+  return {
+    writableRoots: [work],
+    readDenyPaths: deny,
+    readDenyFiles: [],
+    network: false,
+    scratchDir: work,
+  };
 }
 
 describe("jailed read", () => {

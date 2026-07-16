@@ -14,7 +14,7 @@ import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
 
 function cfgAt(root: string): Config {
-  return { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
+  return { dataDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
 }
 
 const LABELS: Extract<OutboxOp, { kind: "labels" }> = {

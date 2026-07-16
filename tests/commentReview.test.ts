@@ -16,7 +16,7 @@ import {
 import type { Config } from "../src/types.js";
 
 function cfg(stateDir: string): Config {
-  return { stateDir } as unknown as Config; // only stateDir is read by this module
+  return { dataDir: stateDir } as unknown as Config; // only dataDir is read by this module
 }
 
 function comment(id: string, overrides: Partial<PendingComment> = {}): PendingComment {

@@ -11,13 +11,18 @@ import { getAtPath, setAtPath } from "../configLevers.js";
 /** Repeated across buildConfigObject/coveredPaths for models_json mode. */
 const DEFAULT_MODELS_JSON = "~/.pi/agent/models.json";
 
+/** Matches config.ts's assembleConfig fallback
+ * (`d.observability.stateDir ?? d.dataDir ?? "~/.local/state/junco"`) and
+ * dataMigrateCmd.ts's own DEFAULT_DATA_DIR pin. */
+const DEFAULT_DATA_DIR = "~/.local/state/junco";
+
 export interface WatchedRepoAnswer {
   nwo: string;
   path: string;
 }
 
 export interface WizardAnswers {
-  vaultRoot: string;
+  dataDir: string;
   mode: "inline" | "models_json" | "hosted";
   modelId: string;
   baseUrl?: string; // inline mode
@@ -42,12 +47,12 @@ export const CHAPTERS = [
   "Review",
 ] as const;
 
-/** Defaults used by `--yes` and as the Enter-through path. The model pins
- * (~/Junco, local/my-model, :1234) are asserted by tests and the packaged
- * smoke test — change them only with the spec. */
+/** Defaults used by `--yes` and as the Enter-through path. The pins
+ * (~/.local/state/junco, local/my-model, :1234) are asserted by tests and the
+ * packaged smoke test — change them only with the spec. */
 export function defaultAnswers(): WizardAnswers {
   return {
-    vaultRoot: "~/Junco",
+    dataDir: DEFAULT_DATA_DIR,
     mode: "inline",
     modelId: "local/my-model",
     baseUrl: "http://127.0.0.1:1234/v1",
@@ -82,7 +87,11 @@ export function buildConfigObject(a: WizardAnswers): Record<string, unknown> {
     // write an empty string; consolidating this one would change behavior.
     model.apiKey = a.apiKey ?? "";
   }
-  const obj: Record<string, unknown> = { vaultRoot: a.vaultRoot, juncoSubdir: "", model };
+  // Never write vaultRoot/juncoSubdir (legacy, deprecated) — dataDir only
+  // materializes when it differs from the schema default, so a fully-default
+  // fresh config carries no path keys at all (never born deprecated).
+  const obj: Record<string, unknown> = { model };
+  if (a.dataDir !== DEFAULT_DATA_DIR) obj.dataDir = a.dataDir;
 
   if (a.repoRoots.length > 0) obj.git = { allowedRepoRoots: a.repoRoots };
   if (a.github.enabled) {
@@ -102,8 +111,9 @@ export function buildConfigObject(a: WizardAnswers): Record<string, unknown> {
   return obj;
 }
 
-/** Pure — output must round-trip through loadConfig. juncoSubdir:"" keeps the
- * queue directly under vaultRoot (today's wizard behavior). */
+/** Pure — output must round-trip through loadConfig. A dataDir left at the
+ * schema default writes no path key at all — the queue then resolves to
+ * <dataDir>/queue (config.ts's assembleConfig). */
 export function renderConfigJson(a: WizardAnswers): string {
   return JSON.stringify(buildConfigObject(a), null, 2) + "\n";
 }
@@ -140,7 +150,11 @@ function coveredPaths(a: WizardAnswers): { path: string; value: unknown }[] {
             { path: "model.apiKey", value: a.apiKey ?? "" },
           ];
   return [
-    { path: "vaultRoot", value: a.vaultRoot },
+    // undefined when at the default: an untouched rerun never materializes a
+    // dataDir key, and a legacy vaultRoot config's rerun never gets one
+    // spuriously added either — see answersFromConfig's doc comment and the
+    // "legacy vaultRoot rerun" describe block in wizardFlow.test.ts.
+    { path: "dataDir", value: a.dataDir === DEFAULT_DATA_DIR ? undefined : a.dataDir },
     { path: "model.id", value: a.modelId },
     ...model,
     { path: "git.allowedRepoRoots", value: a.repoRoots },
@@ -162,7 +176,12 @@ function coveredPaths(a: WizardAnswers): { path: string; value: unknown }[] {
 export const COVERED_LEVER_COUNT = coveredPaths(defaultAnswers()).length;
 
 /** Prefill answers from a raw parsed config.json (re-run mode). Missing keys
- * fall back to the schema defaults the fresh wizard uses. */
+ * fall back to the schema defaults the fresh wizard uses. A legacy config's
+ * `vaultRoot` is deliberately NOT prefilled into `dataDir` — the wizard must
+ * never treat a legacy path override as if it were the unified data root, and
+ * an untouched rerun over such a config must stay a true no-op (never
+ * deleting the user's vaultRoot behind their back). Migrating a legacy config
+ * onto dataDir is `junco data migrate`'s job, not the wizard's. */
 export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {
   const d = defaultAnswers();
   const g = (p: string): unknown => getAtPath(raw, p);
@@ -180,7 +199,7 @@ export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {
       ? "inline"
       : "hosted";
   return {
-    vaultRoot: (g("vaultRoot") as string) ?? d.vaultRoot,
+    dataDir: (g("dataDir") as string) ?? d.dataDir,
     mode,
     modelId: (g("model.id") as string) ?? d.modelId,
     // Hosted mode never prefills the localhost baseUrl default — that would

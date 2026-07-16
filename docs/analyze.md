@@ -145,7 +145,7 @@ The issue text an analysis run reads is untrusted input, and the resulting draft
 
 ## Offline behavior
 
-Posting goes through the same outbox as every other GitHub write junco makes. When `gh issue comment` fails for a network reason during `junco analyze post`, the comment is queued to `<state_dir>/github-outbox/` instead of failing the command — `junco outbox` lists what's queued, `junco outbox flush` (or the next bridge sweep) drains it, and the dashboard header shows a `⇡N unpushed` chip while anything is queued. Either way — sent live or queued — the draft archives to `posted/`, since the outbox delivery is durable from that point on.
+Posting goes through the same outbox as every other GitHub write junco makes. When `gh issue comment` fails for a network reason during `junco analyze post`, the comment is queued to `<dataDir>/outbox/` instead of failing the command — `junco outbox` lists what's queued, `junco outbox flush` (or the next bridge sweep) drains it, and the dashboard header shows a `⇡N unpushed` chip while anything is queued. Either way — sent live or queued — the draft archives to `posted/`, since the outbox delivery is durable from that point on.
 
 ## One draft per issue
 

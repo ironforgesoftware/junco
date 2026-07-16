@@ -297,7 +297,7 @@ describe("Welcome", () => {
 });
 
 describe("Workspace", () => {
-  it("edits vaultRoot and advances on enter, refusing empty", async () => {
+  it("edits dataDir and advances on enter, refusing empty", async () => {
     let answers = defaultAnswers();
     let advanced = false;
     const view = (
@@ -315,7 +315,7 @@ describe("Workspace", () => {
     );
     const { stdin, rerender } = render(view);
     // wipe the default then type a path
-    for (let i = 0; i < "~/Junco".length; i++) {
+    for (let i = 0; i < defaultAnswers().dataDir.length; i++) {
       await press(stdin, BACKSPACE);
       rerender(
         <Workspace
@@ -350,7 +350,7 @@ describe("Workspace", () => {
     );
     await press(stdin, ENTER);
     await until(() => advanced);
-    expect(answers.vaultRoot).toBe("/tmp/nest");
+    expect(answers.dataDir).toBe("/tmp/nest");
   });
 });
 
@@ -943,15 +943,15 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    await until(() => (lastFrame() ?? "").includes("This is the exact config.json"));
     expect(lastFrame()).toContain("junco config list");
     await press(stdin, ENTER); // "Write config" is the first option
     await until(() => wrote);
   });
 
   it("rerun mode shows a diff, or the untouched note when nothing changed", async () => {
-    const raw = { vaultRoot: "/v", model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" } };
-    const changed = { ...answersFromConfig(raw), vaultRoot: "/v2" };
+    const raw = { dataDir: "/v", model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" } };
+    const changed = { ...answersFromConfig(raw), dataDir: "/v2" };
     const { lastFrame } = render(
       <Review
         {...noopChapter}
@@ -963,7 +963,7 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes("vaultRoot"));
+    await until(() => (lastFrame() ?? "").includes("dataDir"));
     expect(lastFrame()).toContain("/v → /v2");
 
     const same = render(
@@ -999,7 +999,7 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    await until(() => (lastFrame() ?? "").includes("This is the exact config.json"));
     expect(lastFrame()).toContain('"id": "anthropic/claude-fancy"');
     expect(lastFrame()).not.toContain("baseUrl");
     expect(lastFrame()).not.toContain("modelsJson");
@@ -1018,7 +1018,7 @@ describe("Review chapter", () => {
         onCancel={() => {}}
       />,
     );
-    await until(() => (lastFrame() ?? "").includes('"vaultRoot"'));
+    await until(() => (lastFrame() ?? "").includes("This is the exact config.json"));
     expect(lastFrame()).toContain("••••");
     expect(lastFrame()).not.toContain("sk-realkey");
   });

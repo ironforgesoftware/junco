@@ -16,7 +16,7 @@ function tmp(): string {
 }
 function cfgWith(stateDir: string, repos: { nwo: string; path: string }[]): Config {
   return {
-    stateDir,
+    dataDir: stateDir,
     github: {
       enabled: true,
       triggerLabel: "junco",
@@ -32,7 +32,7 @@ function cfgWith(stateDir: string, repos: { nwo: string; path: string }[]): Conf
 
 describe("watchlistPath", () => {
   it("lives under the state dir", () => {
-    expect(watchlistPath(cfgWith("/s", []))).toBe("/s/github-watchlist.json");
+    expect(watchlistPath(cfgWith("/s", []))).toBe("/s/watchlist.json");
   });
 });
 

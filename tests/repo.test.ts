@@ -100,8 +100,9 @@ esac
 
 function makeConfig(work: string, ghBin: string): Config {
   return {
-    vaultRoot: "/tmp/vault",
-    juncoSubdir: "Junco",
+    dataDir: "/tmp/vault/state",
+    queueRoot: "/tmp/vault/Junco",
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     model: {
       id: "test/model",
       source: "auto",
@@ -176,7 +177,6 @@ function makeConfig(work: string, ghBin: string): Config {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: "/tmp/junco-repo-test-state",
     logToFile: false,
     transcriptsEnabled: false,
   };

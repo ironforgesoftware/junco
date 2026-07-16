@@ -220,7 +220,7 @@ export async function runAnalyzeFlow(
     abortSignal: deps.abortSignal,
     onProgress: deps.onProgress,
     onGuardDecision: deps.onGuardDecision,
-    transcriptPath: cfg.transcriptsEnabled ? transcriptPathFor(cfg.stateDir, ticket.id) : undefined,
+    transcriptPath: cfg.transcriptsEnabled ? transcriptPathFor(cfg.dataDir, ticket.id) : undefined,
   });
   // Record spend immediately, BEFORE any requeue/finalize branching below —
   // mirrors runOnce.ts's Q&A wire, prFlow's main-session record, and

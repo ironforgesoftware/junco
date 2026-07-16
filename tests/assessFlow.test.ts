@@ -17,8 +17,9 @@ import type { Config, Ticket } from "../src/types.js";
 
 function cfg(root: string): Config {
   return {
-    vaultRoot: root,
-    juncoSubdir: "Junco",
+    dataDir: root,
+    queueRoot: join(root, "Junco"),
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     model: {
       id: "m",
       source: "auto",
@@ -93,7 +94,6 @@ function cfg(root: string): Config {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
   };

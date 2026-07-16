@@ -153,7 +153,7 @@ Each filed finding becomes one GitHub issue:
 
 ## Offline behavior
 
-- **Issue creation goes through the same outbox as everything else GitHub.** When `gh issue create` fails for a network reason during `junco assess file`, the create is queued to `<stateDir>/github-outbox/` instead of failing the run. `junco outbox` lists what's queued, `junco outbox flush` (or the next bridge sweep) drains it, and the dashboard header shows a `⇡N unpushed` chip while anything is queued.
+- **Issue creation goes through the same outbox as everything else GitHub.** When `gh issue create` fails for a network reason during `junco assess file`, the create is queued to `<dataDir>/outbox/` instead of failing the run. `junco outbox` lists what's queued, `junco outbox flush` (or the next bridge sweep) drains it, and the dashboard header shows a `⇡N unpushed` chip while anything is queued.
 - **`npm audit` needs registry access.** A failure — offline or otherwise — never aborts the audit: it's recorded as a warning in the ticket's finalize summary, and the run continues with agent-only (code) findings, still parked for review.
 - **The GitHub-side dedup scan can itself be offline,** at either phase. During the audit (Phase A), a network failure degrades to an empty dedup set rather than failing the run — findings park as if new. During filing (Phase B), the same degrade applies — findings file as if new — and the outbox's fresh re-scan at flush time is what keeps that from duplicating. Any other dedup-scan failure (not network-shaped) is fatal to the run/file attempt, since junco won't risk mass-refiling against unknown upstream state.
 
@@ -165,11 +165,11 @@ Each filed finding becomes one GitHub issue:
 
 `assess.*` — knobs for `junco assess` runs (verified against `src/config.ts`):
 
-| Key                       | Default | Description                                                                                                                                                                                                                                                                                  |
-| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `assess.maxIssuesPerRun`  | `20`    | Historical cap on issues filed per run. Parking has no cap — your review pass at `junco assess file` is the volume gate now — so this field currently has no effect; it's kept for config compatibility and may resurface as a review-list pre-selection default in a future dashboard view. |
-| `assess.minSeverity`      | `"low"` | Findings ranked below this are dropped before parking. One of `critical`, `high`, `medium`, `low`.                                                                                                                                                                                           |
-| `assess.npmBin`           | `"npm"` | Binary used for the dependency scan (`<npmBin> audit --json`).                                                                                                                                                                                                                               |
+| Key                      | Default | Description                                                                                                                                                                                                                                                                                  |
+| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assess.maxIssuesPerRun` | `20`    | Historical cap on issues filed per run. Parking has no cap — your review pass at `junco assess file` is the volume gate now — so this field currently has no effect; it's kept for config compatibility and may resurface as a review-list pre-selection default in a future dashboard view. |
+| `assess.minSeverity`     | `"low"` | Findings ranked below this are dropped before parking. One of `critical`, `high`, `medium`, `low`.                                                                                                                                                                                           |
+| `assess.npmBin`          | `"npm"` | Binary used for the dependency scan (`<npmBin> audit --json`).                                                                                                                                                                                                                               |
 
 ## Ticket flavor
 

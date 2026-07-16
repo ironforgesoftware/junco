@@ -27,7 +27,7 @@ describe("runListCommand", () => {
       join(root, "failed", "f1.md"),
       "x\n---\n<!-- junco-result\nstatus: timeout\n-->\n",
     );
-    cfg = { vaultRoot: root, juncoSubdir: "" } as unknown as Config;
+    cfg = { queueRoot: root } as unknown as Config;
     out = [];
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));

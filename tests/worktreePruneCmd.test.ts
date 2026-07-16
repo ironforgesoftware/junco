@@ -11,8 +11,7 @@ const DISCR = "myrepo-abcd1234";
 
 function makeCfg(root: string, healthEnabled = false): Config {
   return {
-    vaultRoot: root,
-    juncoSubdir: "",
+    queueRoot: root,
     worktreeRoot: join(root, "worktrees"),
     defaultTimeoutMinutes: 30,
     healthEnabled,
