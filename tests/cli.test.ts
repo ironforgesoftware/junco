@@ -612,6 +612,22 @@ describe("run(['-h'])", () => {
 });
 
 // ---------------------------------------------------------------------------
+// --version
+// ---------------------------------------------------------------------------
+
+describe("run(['--version'])", () => {
+  it("--version prints the package version and exits 0", async () => {
+    const out: string[] = [];
+    const code = await run(["--version"], { printFn: (s) => out.push(s) });
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      version: string;
+    };
+    expect(code).toBe(0);
+    expect(out.join("")).toBe(`${pkg.version}\n`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // service subcommand
 // ---------------------------------------------------------------------------
 

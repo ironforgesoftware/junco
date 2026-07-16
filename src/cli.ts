@@ -211,6 +211,7 @@ Options:
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
   --help, -h            Show this help message
+  --version             Print junco's version and exit
 `;
 
 // ---------------------------------------------------------------------------
@@ -227,6 +228,7 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       config: { type: "string" },
       once: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
+      version: { type: "boolean", default: false },
       platform: { type: "string" },
       all: { type: "boolean", default: false },
       only: { type: "string" },
@@ -319,6 +321,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // --help / -h
   if (values.help) {
     process.stdout.write(USAGE);
+    return 0;
+  }
+
+  // --version (bare version only — junco update's post-install verify parses it)
+  if (values.version) {
+    const { getSelfPackage } = await import("./updateCheck.js");
+    (deps.printFn ?? ((s: string) => process.stdout.write(s)))(`${getSelfPackage().version}\n`);
     return 0;
   }
 
