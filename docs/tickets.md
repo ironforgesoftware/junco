@@ -128,7 +128,7 @@ You (or any harness)
 │
 │ junco submit <ticket.md>
 ▼
-<vaultRoot>/Junco/inbox/ ← drop tickets here
+<dataDir>/queue/inbox/ ← drop tickets here
 │
 │ daemon polls every 15s
 ▼
