@@ -82,11 +82,12 @@ describe("checkForUpdate", () => {
         },
         fetchFn: (async (url: string | URL | Request) => {
           fetches.push(String(url));
-          if (o.registry === "offline" || o.registry === undefined) throw new Error("offline");
+          const reg = o.registry;
+          if (reg === "offline" || reg === undefined) throw new Error("offline");
           return {
-            ok: o.registry.status === 200,
-            status: o.registry.status,
-            json: async () => o.registry.body,
+            ok: reg.status === 200,
+            status: reg.status,
+            json: async () => reg.body,
           } as Response;
         }) as typeof fetch,
       },
