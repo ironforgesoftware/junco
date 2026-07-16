@@ -30,6 +30,7 @@ import { draftCount } from "./commentReview.js";
 import { listHistory } from "./assessHistory.js";
 import { defaultExec, defaultAccessOk } from "./execProbe.js";
 import { SAML_MARKER } from "./botAccess.js";
+import { checkForUpdate, getSelfPackage, type UpdateInfo } from "./updateCheck.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -70,6 +71,10 @@ export interface DoctorDeps {
    * not a directory) is treated as "nothing to hint about" rather than
    * thrown. Defaults to `fs.readdirSync`. */
   readdirFn?: (d: string) => string[];
+  /** Best-effort npm update check (spec 2026-07-16). Defaults to the real
+   * `checkForUpdate`; injectable so tests never hit the network or a real
+   * fs cache. */
+  checkUpdateFn?: (cfg: Config) => Promise<UpdateInfo | null>;
 }
 
 type Verdict = "ok" | "warn" | "fail";
@@ -589,6 +594,24 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // 8. daemon (informational)
     const holder = lockHolderFn(join(dirname(configPath), "worker.lock"));
     report("ok", "daemon", holder ? `running (pid ${holder})` : "not running");
+
+    // 9. npm update check (spec 2026-07-16) — best-effort, never a failure.
+    const update = await (deps.checkUpdateFn ?? ((c: Config) => checkForUpdate(c)))(cfg);
+    if (update === null) {
+      report(
+        "ok",
+        "junco version",
+        `v${getSelfPackage().version} (update check skipped — offline or disabled)`,
+      );
+    } else if (update.available) {
+      report(
+        "warn",
+        "junco version",
+        `v${update.current} — v${update.latest} available (run: junco update)`,
+      );
+    } else {
+      report("ok", "junco version", `v${update.current} (latest)`);
+    }
   }
 
   const fails = results.filter((r) => r.v === "fail").length;
