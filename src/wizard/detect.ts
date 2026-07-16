@@ -145,7 +145,7 @@ export async function flightChecks(cfg: Config, deps: DetectDeps = {}): Promise<
   for (const [label, dir] of [
     ["queue dir", dirname(paths.inbox)],
     ["worktree dir", cfg.worktreeRoot],
-    ["state dir", cfg.dataDir],
+    ["data dir", cfg.dataDir],
   ] as const) {
     out.push(
       accessOkFn(dir)

@@ -13,7 +13,9 @@ import {
   COVERED_LEVER_COUNT,
   type WizardAnswers,
 } from "../src/wizard/flow.js";
-import { loadConfig, queuePaths } from "../src/config.js";
+import { loadConfig, queuePaths, configDeprecations } from "../src/config.js";
+
+const DEFAULT_DATA_DIR = "~/.local/state/junco";
 
 function loadRendered(a: WizardAnswers) {
   const dir = mkdtempSync(join(tmpdir(), "wizflow-"));
@@ -45,7 +47,7 @@ describe("chapters", () => {
 describe("defaultAnswers", () => {
   it("keeps today's --yes pins and adds safe walkthrough defaults", () => {
     const a = defaultAnswers();
-    expect(a.vaultRoot).toBe("~/Junco");
+    expect(a.dataDir).toBe(DEFAULT_DATA_DIR);
     expect(a.modelId).toBe("local/my-model");
     expect(a.baseUrl).toBe("http://127.0.0.1:1234/v1");
     expect(a.apiKey).toBe("1234");
@@ -56,18 +58,32 @@ describe("defaultAnswers", () => {
 });
 
 describe("buildConfigObject / renderConfigJson", () => {
-  it("defaults render the same minimal config as today's --yes", () => {
+  it("fresh default config carries NO vaultRoot/juncoSubdir/dataDir key at all — never born deprecated", () => {
     const obj = buildConfigObject(defaultAnswers());
-    expect(Object.keys(obj).sort()).toEqual(["juncoSubdir", "model", "vaultRoot"]);
+    expect(Object.keys(obj).sort()).toEqual(["model"]);
+    expect("vaultRoot" in obj).toBe(false);
+    expect("juncoSubdir" in obj).toBe(false);
+    expect("dataDir" in obj).toBe(false);
     const cfg = loadRendered(defaultAnswers());
     expect(cfg.model.id).toBe("local/my-model");
-    expect(queuePaths(cfg).inbox.endsWith("Junco/inbox")).toBe(true);
+    expect(queuePaths(cfg).inbox.endsWith("/junco/queue/inbox")).toBe(true);
+    expect(configDeprecations(cfg)).toEqual([]);
+  });
+
+  it("a custom data root renders {dataDir} only, never vaultRoot/juncoSubdir, and round-trips clean", () => {
+    const a: WizardAnswers = { ...defaultAnswers(), dataDir: "~/custom" };
+    const obj = buildConfigObject(a);
+    expect(Object.keys(obj).sort()).toEqual(["dataDir", "model"]);
+    expect(obj.dataDir).toBe("~/custom");
+    const cfg = loadRendered(a);
+    expect(cfg.dataDir.endsWith("/custom")).toBe(true);
+    expect(configDeprecations(cfg)).toEqual([]);
   });
 
   it("non-default answers land in the right sections and round-trip", () => {
     const a: WizardAnswers = {
       ...defaultAnswers(),
-      vaultRoot: "/tmp/jv",
+      dataDir: "/tmp/jv",
       repoRoots: ["~/code"],
       github: {
         enabled: true,
@@ -105,8 +121,8 @@ describe("buildConfigObject / renderConfigJson", () => {
   });
 
   it("escapes JSON-hostile strings", () => {
-    const a = { ...defaultAnswers(), vaultRoot: '/tmp/we"ird\\path' };
-    expect(loadRendered(a).queueRoot).toBe('/tmp/we"ird\\path');
+    const a = { ...defaultAnswers(), dataDir: '/tmp/we"ird\\path' };
+    expect(loadRendered(a).dataDir).toBe('/tmp/we"ird\\path');
   });
 });
 
@@ -163,8 +179,7 @@ describe("hosted mode — fresh build (must PRESERVE catalog eligibility)", () =
 
 describe("re-run mode", () => {
   const raw = {
-    vaultRoot: "/v",
-    juncoSubdir: "",
+    dataDir: "/v",
     model: { id: "prov/m", baseUrl: "http://h:1/v1", apiKey: "k" },
     worker: { maxConcurrent: 3 }, // NOT wizard-covered — must survive untouched
     git: { allowedRepoRoots: ["/code"], branchPrefix: "junco/" },
@@ -173,7 +188,7 @@ describe("re-run mode", () => {
 
   it("answersFromConfig prefills covered levers and defaults the rest", () => {
     const a = answersFromConfig(raw);
-    expect(a.vaultRoot).toBe("/v");
+    expect(a.dataDir).toBe("/v");
     expect(a.mode).toBe("inline");
     expect(a.modelId).toBe("prov/m");
     expect(a.repoRoots).toEqual(["/code"]);
@@ -190,10 +205,10 @@ describe("re-run mode", () => {
 
   it("diffAnswers reports only changed paths", () => {
     const a = answersFromConfig(raw);
-    a.vaultRoot = "/v2";
+    a.dataDir = "/v2";
     a.extras.sandbox = true;
     const d = diffAnswers(raw, a);
-    expect(d).toContainEqual({ path: "vaultRoot", from: "/v", to: "/v2" });
+    expect(d).toContainEqual({ path: "dataDir", from: "/v", to: "/v2" });
     expect(d).toContainEqual({ path: "sandbox.enabled", from: false, to: true });
     expect(d.length).toBe(2);
   });
@@ -204,16 +219,16 @@ describe("re-run mode", () => {
 
   it("applyAnswers preserves uncovered keys verbatim and does not mutate input", () => {
     const a = answersFromConfig(raw);
-    a.vaultRoot = "/v2";
+    a.dataDir = "/v2";
     const out = applyAnswers(raw, a);
-    expect(out.vaultRoot).toBe("/v2");
+    expect(out.dataDir).toBe("/v2");
     expect((out.worker as { maxConcurrent: number }).maxConcurrent).toBe(3);
     expect((out.git as { branchPrefix: string }).branchPrefix).toBe("junco/");
-    expect(raw.vaultRoot).toBe("/v"); // input untouched
+    expect(raw.dataDir).toBe("/v"); // input untouched
   });
 
   it("switching models_json → inline clears model.modelsJson in the output", () => {
-    const mjRaw = { vaultRoot: "/v", model: { id: "p/m", modelsJson: "/mj.json" } };
+    const mjRaw = { dataDir: "/v", model: { id: "p/m", modelsJson: "/mj.json" } };
     const a = answersFromConfig(mjRaw);
     a.mode = "inline";
     a.baseUrl = "http://h:1/v1";
@@ -225,7 +240,7 @@ describe("re-run mode", () => {
 
   it("switching inline → models_json clears model.baseUrl and model.apiKey in the output", () => {
     const inlineRaw = {
-      vaultRoot: "/v",
+      dataDir: "/v",
       model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" },
     };
     const a = answersFromConfig(inlineRaw);
@@ -255,22 +270,50 @@ describe("re-run mode", () => {
     // fresh default omits the block entirely
     expect(buildConfigObject(defaultAnswers()).botAccount).toBeUndefined();
     // prefill
-    expect(answersFromConfig({ vaultRoot: "/v", botAccount: { enabled: true } }).botAccount).toBe(
+    expect(answersFromConfig({ dataDir: "/v", botAccount: { enabled: true } }).botAccount).toBe(
       true,
     );
-    expect(answersFromConfig({ vaultRoot: "/v" }).botAccount).toBe(false);
+    expect(answersFromConfig({ dataDir: "/v" }).botAccount).toBe(false);
     // rerun diff: flipping it registers exactly one change at the lever path
     const diffs = diffAnswers(
-      { vaultRoot: "/v" },
-      { ...answersFromConfig({ vaultRoot: "/v" }), botAccount: true },
+      { dataDir: "/v" },
+      { ...answersFromConfig({ dataDir: "/v" }), botAccount: true },
     );
     expect(diffs).toEqual([{ path: "botAccount.enabled", from: undefined, to: true }]);
   });
 });
 
+describe("legacy vaultRoot rerun (dataDir migration boundary — junco data migrate's job, not the wizard's)", () => {
+  const legacyRaw = { vaultRoot: "~/V", model: { id: "prov/m" } };
+
+  it("answersFromConfig prefills dataDir with the DEFAULT, never the legacy vaultRoot", () => {
+    const a = answersFromConfig(legacyRaw);
+    expect(a.dataDir).toBe(defaultAnswers().dataDir);
+    expect(a.dataDir).not.toBe("~/V");
+  });
+
+  it("an untouched rerun diff is a no-op — vaultRoot is never deleted or touched", () => {
+    const a = answersFromConfig(legacyRaw);
+    expect(diffAnswers(legacyRaw, a)).toEqual([]);
+    const out = applyAnswers(legacyRaw, a);
+    expect(out).toEqual(legacyRaw);
+    expect(out.vaultRoot).toBe("~/V");
+    expect("dataDir" in out).toBe(false);
+  });
+
+  it("explicitly setting a new dataDir writes it without touching the legacy vaultRoot", () => {
+    const a = { ...answersFromConfig(legacyRaw), dataDir: "~/custom" };
+    const diffs = diffAnswers(legacyRaw, a);
+    expect(diffs).toEqual([{ path: "dataDir", from: undefined, to: "~/custom" }]);
+    const out = applyAnswers(legacyRaw, a);
+    expect(out.dataDir).toBe("~/custom");
+    expect(out.vaultRoot).toBe("~/V"); // untouched — migration is `junco data migrate`'s job
+  });
+});
+
 describe("hosted mode — re-run detection (the trap: misclassifying as inline destroys catalog eligibility)", () => {
   it("classifies hosted when the raw config has no modelsJson and no baseUrl key", () => {
-    const a = answersFromConfig({ vaultRoot: "/v", model: { id: "anthropic/claude-sonnet-4-5" } });
+    const a = answersFromConfig({ dataDir: "/v", model: { id: "anthropic/claude-sonnet-4-5" } });
     expect(a.mode).toBe("hosted");
     expect(a.modelId).toBe("anthropic/claude-sonnet-4-5");
     expect(a.baseUrl).toBeUndefined(); // NO localhost baseUrl prefill
@@ -289,7 +332,7 @@ describe("hosted mode — re-run detection (the trap: misclassifying as inline d
   });
 
   it("hosted rerun coveredPaths never write model.baseUrl, even when the id changes", () => {
-    const hostedRaw = { vaultRoot: "/v", model: { id: "p/m" } };
+    const hostedRaw = { dataDir: "/v", model: { id: "p/m" } };
     const a = answersFromConfig(hostedRaw);
     a.modelId = "p/m2";
     expect(diffAnswers(hostedRaw, a)).toEqual([{ path: "model.id", from: "p/m", to: "p/m2" }]);
@@ -299,7 +342,7 @@ describe("hosted mode — re-run detection (the trap: misclassifying as inline d
   });
 
   it("hosted rerun surfaces model.apiKey only when it actually changes", () => {
-    const hostedRaw = { vaultRoot: "/v", model: { id: "p/m", apiKey: "$OLD_VAR" } };
+    const hostedRaw = { dataDir: "/v", model: { id: "p/m", apiKey: "$OLD_VAR" } };
     const a = answersFromConfig(hostedRaw);
     expect(diffAnswers(hostedRaw, a)).toEqual([]); // untouched rerun is a true no-op
     a.apiKey = "$NEW_VAR";
@@ -313,7 +356,7 @@ describe("hosted mode — re-run detection (the trap: misclassifying as inline d
 
   it("switching inline → hosted clears model.baseUrl and model.apiKey in the output", () => {
     const inlineRaw = {
-      vaultRoot: "/v",
+      dataDir: "/v",
       model: { id: "p/m", baseUrl: "http://h:1/v1", apiKey: "k" },
     };
     const a = answersFromConfig(inlineRaw);
@@ -327,7 +370,7 @@ describe("hosted mode — re-run detection (the trap: misclassifying as inline d
   });
 
   it("switching hosted → inline writes model.baseUrl and model.apiKey in the output", () => {
-    const hostedRaw = { vaultRoot: "/v", model: { id: "p/m" } };
+    const hostedRaw = { dataDir: "/v", model: { id: "p/m" } };
     const a = answersFromConfig(hostedRaw);
     a.mode = "inline";
     a.baseUrl = "http://h:1/v1";

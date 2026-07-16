@@ -82,7 +82,7 @@ describe("loadConfig (JSON)", () => {
   it("expands ~ in path fields and derives github cross-field defaults", () => {
     const cfg = loadConfig(
       writeJson({
-        vaultRoot: "~/Junco",
+        vaultRoot: "~/LegacyVault",
         observability: { stateDir: "/state" },
         github: { enabled: true, triggerLabel: "bot" },
       }),
