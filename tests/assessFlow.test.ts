@@ -888,21 +888,28 @@ describe("runAssessFlow", () => {
     expect(h.lastFailureReason).toContain("dedup");
   });
 
-  it("a phase error BEFORE nwo resolution records nothing and does not throw (TDZ regression)", async () => {
+  it("a phase error BEFORE `let nwo` executes records nothing and does not throw (TDZ regression)", async () => {
     const { root, j } = sandbox();
     const repo = mkRepo();
     const { path } = claim(j, ticketContent(repo));
     const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
 
-    // origin is unparseable → Phase 2 fails → finalizeAssess runs with no nwo.
-    const r = await runAssessFlow(cfg(root), ticket, path, {
+    // A Phase 2 origin-parse failure runs AFTER `let nwo` (assessFlow.ts:218)
+    // has already executed — declaring it (even unassigned) ends nwo's TDZ,
+    // so it cannot discriminate a closure over bare `nwo` (would just read
+    // `undefined`) from the fix (recordNwo === null). Only a Phase 1 failure
+    // genuinely predates that declaration and would throw ReferenceError on a
+    // bare-`nwo` closure. Reuses the containment construction from "path
+    // containment: a repo outside allowed_repo_roots → failed/..." above.
+    const c = { ...cfg(root), allowedRepoRoots: ["/somewhere-else-entirely"] };
+    const r = await runAssessFlow(c, ticket, path, {
       ghFn: ghDedupEmpty().ghFn,
-      gitFn: fakeGit("not-a-github-remote\n"),
+      gitFn: fakeGit(originHttps),
       runCmdFn: fakeRunCmd(auditJson("high")),
       sessionFactoryFor: () => fakeSession("x"),
       nowFn: () => new Date("2026-07-16T00:00:00.000Z"),
     });
     expect(r.status).toBe("failed"); // did NOT throw ReferenceError
-    expect(listHistory(cfg(root))).toEqual([]);
+    expect(listHistory(c)).toEqual([]);
   });
 });
