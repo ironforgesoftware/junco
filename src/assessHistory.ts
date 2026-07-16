@@ -11,10 +11,14 @@
  * slugifyId key confinement). Keyed by nwo rather than a ticket id, so `write`
  * is an upsert: the newest terminal run for a repo replaces its record.
  *
- * ONE FILE PER REPO IS LOAD-BEARING. The daemon runs max_concurrent > 1 and
- * serializes only SAME-repo tickets, so two repos can finalize an assess
- * concurrently. A single shared map file would lose updates across the
- * read-modify-write; per-repo files have no shared mutable state.
+ * ONE FILE PER REPO IS LOAD-BEARING. The daemon runs max_concurrent > 1, so a
+ * single shared map file would lose updates across DIFFERENT repos finalizing
+ * concurrently; per-repo files confine that risk to same-repo contention, and
+ * the write is atomic tmp+rename (via reviewStore.ts), so a record is never
+ * torn. Residual caveat: the scheduler serializes claims by repo PATH, not
+ * nwo (runOnce.ts), so two distinct local checkouts of the same upstream nwo
+ * can still interleave this file's read-modify-write — last-write-wins, and
+ * the next clean assess of either checkout self-heals it.
  */
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
 import type { Config } from "./types.js";
