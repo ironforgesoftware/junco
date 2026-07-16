@@ -3,9 +3,8 @@ import { runDashboard, INK_RENDER_OPTIONS } from "../src/dashboardCmd.js";
 import type { Config } from "../src/types.js";
 
 const cfg = {
-  stateDir: "/tmp/junco-dash-test",
-  vaultRoot: "/tmp/junco-dash-test-vault",
-  juncoSubdir: "Junco",
+  dataDir: "/tmp/junco-dash-test",
+  queueRoot: "/tmp/junco-dash-test-vault/Junco",
   maxConcurrent: 1,
   healthEnabled: false,
   healthHost: "127.0.0.1",

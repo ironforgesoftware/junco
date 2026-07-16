@@ -11,8 +11,9 @@ function makeConfig(): { cfg: Config; root: string } {
   const root = mkdtempSync(join(tmpdir(), "junco-orphans-"));
   roots.push(root);
   const cfg: Config = {
-    vaultRoot: root,
-    juncoSubdir: "Junco",
+    dataDir: root,
+    queueRoot: join(root, "Junco"),
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
     model: {
       id: "m",
       source: "auto",
@@ -87,7 +88,6 @@ function makeConfig(): { cfg: Config; root: string } {
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    stateDir: join(root, "state"),
     logToFile: false,
     transcriptsEnabled: false,
   };

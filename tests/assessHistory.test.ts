@@ -11,8 +11,8 @@ import {
 } from "../src/assessHistory.js";
 import type { Config } from "../src/types.js";
 
-function cfg(stateDir: string): Config {
-  return { stateDir } as unknown as Config; // only stateDir is read by this module
+function cfg(dataDir: string): Config {
+  return { dataDir } as unknown as Config; // only dataDir is read by this module (via reviewStore)
 }
 function sandbox(): string {
   return mkdtempSync(join(tmpdir(), "junco-hist-"));

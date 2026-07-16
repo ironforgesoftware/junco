@@ -33,11 +33,10 @@ describe("runStatusCommand", () => {
     writeFileSync(join(root, "inbox", "a.md"), "x");
     writeFileSync(join(root, "failed", "b.md"), "x");
     cfg = {
-      vaultRoot: root,
-      juncoSubdir: "",
+      queueRoot: root,
       healthHost: "127.0.0.1",
       healthPort: 8787,
-      stateDir: join(root, "state"),
+      dataDir: join(root, "state"),
     } as unknown as Config;
     out = [];
   });

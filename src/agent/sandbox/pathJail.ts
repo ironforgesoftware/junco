@@ -45,7 +45,9 @@ export function assertWriteAllowed(target: string, cwd: string, policy: SandboxP
 
 export function assertReadAllowed(target: string, cwd: string, policy: SandboxPolicy): string {
   const abs = canonicalize(resolveWithin(target, cwd));
-  if (isUnderAnyDeny(abs, policy.readDenyPaths)) {
+  // Subtree denies plus exact-file denies (isUnder matches equality, and a
+  // file has no descendants, so one predicate covers both lists).
+  if (isUnderAnyDeny(abs, policy.readDenyPaths) || isUnderAnyDeny(abs, policy.readDenyFiles)) {
     throw new SandboxViolation(`sandbox: read denied (protected path): ${abs}`);
   }
   return abs;

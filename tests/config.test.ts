@@ -12,6 +12,7 @@ import {
   assembleConfig,
   ConfigSchema,
   expandHome,
+  configDeprecations,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -30,8 +31,7 @@ function writeRaw(basename: string, body: string): string {
 describe("loadConfig (JSON)", () => {
   it("parses a minimal config and fills defaults", () => {
     const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/vault" }));
-    expect(cfg.vaultRoot).toBe("/tmp/vault");
-    expect(cfg.juncoSubdir).toBe("Junco");
+    expect(cfg.queueRoot).toBe(join("/tmp/vault", "Junco"));
     expect(cfg.model.id).toBe("local/my-model");
     expect(cfg.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
     expect(cfg.model.api).toBe("openai-completions");
@@ -82,19 +82,19 @@ describe("loadConfig (JSON)", () => {
   it("expands ~ in path fields and derives github cross-field defaults", () => {
     const cfg = loadConfig(
       writeJson({
-        vaultRoot: "~/Junco",
+        vaultRoot: "~/LegacyVault",
         observability: { stateDir: "/state" },
         github: { enabled: true, triggerLabel: "bot" },
       }),
     );
-    expect(cfg.vaultRoot).not.toContain("~");
+    expect(cfg.queueRoot).not.toContain("~");
     expect(cfg.github.askLabel).toBe("bot:ask");
-    expect(cfg.github.externalReposRoot).toBe("/state/external");
+    expect(cfg.github.externalReposRoot).toBe("/state/clones/external");
     expect(cfg.github.plannerModelId).toBeNull();
   });
 
-  it("throws a clear error when vaultRoot is missing", () => {
-    expect(() => loadConfig(writeJson({ model: { id: "x" } }))).toThrow(/vaultRoot/);
+  it("vaultRoot is optional — a config with no keys at all parses (unified data root)", () => {
+    expect(() => loadConfig(writeJson({ model: { id: "x" } }))).not.toThrow();
   });
 
   it("throws a friendly error on malformed JSON", () => {
@@ -157,8 +157,8 @@ describe("loadConfig (JSON)", () => {
 
   it("expands a leading ~ in vaultRoot to the home dir", () => {
     const cfg = loadConfig(writeJson({ vaultRoot: "~/vault" }));
-    expect(cfg.vaultRoot).not.toContain("~");
-    expect(cfg.vaultRoot).toBe(join(homedir(), "vault"));
+    expect(cfg.queueRoot).not.toContain("~");
+    expect(cfg.queueRoot).toBe(join(homedir(), "vault", "Junco"));
   });
 
   it("applies supervisor defaults when supervisor is absent", () => {
@@ -284,7 +284,7 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.maxTransientRetries).toBe(2);
     expect(cfg.retryBackoffSeconds).toBe(60);
     expect(cfg.maxConcurrent).toBe(1);
-    expect(cfg.stateDir).toBe(join(homedir(), ".local/state/junco"));
+    expect(cfg.dataDir).toBe(join(homedir(), ".local/state/junco"));
     expect(cfg.logToFile).toBe(true);
     expect(cfg.transcriptsEnabled).toBe(true);
     expect(cfg.allowedRepoRoots).toEqual([]);
@@ -310,7 +310,7 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.maxTransientRetries).toBe(0);
     expect(cfg.retryBackoffSeconds).toBe(5);
     expect(cfg.maxConcurrent).toBe(3);
-    expect(cfg.stateDir).toBe(join(homedir(), "x"));
+    expect(cfg.dataDir).toBe(join(homedir(), "x"));
     expect(cfg.logToFile).toBe(false);
     expect(cfg.transcriptsEnabled).toBe(false);
     expect(cfg.allowedRepoRoots).toEqual([join(homedir(), "code")]);
@@ -377,7 +377,7 @@ describe("[github] config section", () => {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
-      externalReposRoot: join(homedir(), ".local/state/junco/external"),
+      externalReposRoot: join(homedir(), ".local/state/junco/clones/external"),
     });
   });
 
@@ -431,11 +431,11 @@ describe("[github] config section", () => {
 });
 
 describe("github.externalReposRoot", () => {
-  it("defaults to <stateDir>/external", () => {
+  it("defaults to <dataDir>/clones/external", () => {
     const cfg = loadConfig(
       writeJson({ vaultRoot: "/tmp/vault", observability: { stateDir: "/tmp/junco-state" } }),
     );
-    expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/external");
+    expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/clones/external");
   });
 
   it("expands ~ in an explicit value", () => {
@@ -562,8 +562,8 @@ describe("resolveConfigPath / defaultUserConfigPath", () => {
 });
 
 describe("queuePaths", () => {
-  it("derives queue paths under vaultRoot/juncoSubdir", () => {
-    const paths = queuePaths({ vaultRoot: "/v", juncoSubdir: "Junco" } as any);
+  it("derives queue paths under queueRoot", () => {
+    const paths = queuePaths({ queueRoot: "/v/Junco" } as any);
     expect(paths.inbox).toBe("/v/Junco/inbox");
     expect(paths.failed).toBe("/v/Junco/failed");
   });
@@ -677,5 +677,92 @@ describe("worker.endpointProbe", () => {
     expect(() =>
       loadConfig(writeJson({ vaultRoot: "/v", worker: { endpointProbe: "sometimes" } })),
     ).toThrow();
+  });
+});
+
+describe("dataDir resolution (unified data root)", () => {
+  const XDG_DEFAULT = join(homedir(), ".local/state/junco");
+  const parse = (raw: object) => assembleConfig(ConfigSchema.parse(raw), {});
+
+  it("defaults dataDir to ~/.local/state/junco and derives every root", () => {
+    const cfg = parse({});
+    expect(cfg.dataDir).toBe(XDG_DEFAULT);
+    expect(cfg.queueRoot).toBe(join(XDG_DEFAULT, "queue"));
+    expect(cfg.worktreeRoot).toBe(join(XDG_DEFAULT, "worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(XDG_DEFAULT, "clones", "external"));
+    expect(cfg.legacy).toEqual({
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+    });
+  });
+
+  it("explicit dataDir moves every derived root", () => {
+    const cfg = parse({ dataDir: "~/jdata" });
+    const root = join(homedir(), "jdata");
+    expect(cfg.dataDir).toBe(root);
+    expect(cfg.queueRoot).toBe(join(root, "queue"));
+    expect(cfg.worktreeRoot).toBe(join(root, "worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(root, "clones", "external"));
+  });
+
+  it("legacy vaultRoot/juncoSubdir wins the queue root only", () => {
+    const cfg = parse({ dataDir: "~/jdata", vaultRoot: "~/vault", juncoSubdir: "Junco" });
+    expect(cfg.queueRoot).toBe(join(homedir(), "vault", "Junco"));
+    expect(cfg.dataDir).toBe(join(homedir(), "jdata")); // untouched
+    expect(cfg.legacy.vaultRoot).toBe(true);
+  });
+
+  it("legacy observability.stateDir wins over dataDir for the whole root", () => {
+    const cfg = parse({ dataDir: "~/jdata", observability: { stateDir: "~/state" } });
+    expect(cfg.dataDir).toBe(join(homedir(), "state"));
+    expect(cfg.legacy.stateDir).toBe(true);
+  });
+
+  it("legacy git.worktreeRoot and github.externalReposRoot win their subtrees", () => {
+    const cfg = parse({
+      git: { worktreeRoot: "~/wt" },
+      github: { externalReposRoot: "~/ext" },
+    });
+    expect(cfg.worktreeRoot).toBe(join(homedir(), "wt"));
+    expect(cfg.github.externalReposRoot).toBe(join(homedir(), "ext"));
+    expect(cfg.legacy.worktreeRoot).toBe(true);
+    expect(cfg.legacy.externalReposRoot).toBe(true);
+  });
+
+  it("configDeprecations names each set legacy key and is empty when clean", () => {
+    expect(configDeprecations(parse({}))).toEqual([]);
+    const warns = configDeprecations(
+      parse({ vaultRoot: "~/vault", observability: { stateDir: "~/state" } }),
+    );
+    expect(warns).toHaveLength(2);
+    expect(warns[0]).toContain("vaultRoot");
+    expect(warns[1]).toContain("stateDir");
+    for (const w of warns) expect(w).toContain("junco data migrate");
+  });
+
+  it("configDeprecations: git.worktreeRoot gets a remove-the-key hint, NOT the migrate hint (migrate doesn't move worktrees)", () => {
+    const warns = configDeprecations(parse({ git: { worktreeRoot: "~/wt" } }));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("git.worktreeRoot");
+    expect(warns[0]).toContain("remove the key");
+    expect(warns[0]).toContain("<dataDir>/worktrees");
+    // 'junco data migrate' does NOT unify this key — pointing at it loops the
+    // operator (the warning would survive the migrate forever).
+    expect(warns[0]).not.toContain("junco data migrate");
+  });
+
+  it("configDeprecations: github.externalReposRoot gets a remove-the-key hint, NOT the migrate hint", () => {
+    const warns = configDeprecations(parse({ github: { externalReposRoot: "~/ext" } }));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("github.externalReposRoot");
+    expect(warns[0]).toContain("remove the key");
+    expect(warns[0]).toContain("<dataDir>/clones/external");
+    expect(warns[0]).not.toContain("junco data migrate");
+  });
+
+  it("a config with no keys at all is valid (vaultRoot no longer required)", () => {
+    expect(() => ConfigSchema.parse({})).not.toThrow();
   });
 });

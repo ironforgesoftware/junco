@@ -22,8 +22,8 @@ function schemaLeaves(schema: z.ZodTypeAny, prefix = ""): { path: string; def: z
 // while unwrapping (a ZodDefault node's `defaultValue()`), and unwraps
 // ZodEffects before ZodDefault so `z.string().default(x).transform(fn)`
 // (e.g. observability.healthHost) still yields the pre-transform default.
-// A leaf never wrapped in ZodDefault (e.g. vaultRoot, which is required)
-// reports `undefined` — matching a required schema field with no default.
+// A leaf never wrapped in ZodDefault (e.g. vaultRoot, which is optional with
+// no default) reports `undefined` — matching a schema field with no default.
 function schemaLeavesWithDefault(
   schema: z.ZodTypeAny,
   prefix = "",

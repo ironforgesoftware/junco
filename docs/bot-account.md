@@ -161,7 +161,7 @@ unwatched repo the same way, classifying the bot's access before touching anythi
 | Private, no push access                                           | **blocked** | Fails loud before cloning anything. With the bot account enabled, the error names the fix — `junco auth grant <owner/repo>` (or the SSO guidance above, if that's the cause); with it disabled, you get a plain access-denied message, since there's no bot to grant. Nothing is added to the watchlist.                                                                                                                                                |
 
 If an auto-onboarded repo isn't one you meant junco to watch permanently, unwatch it from
-the dashboard (`x` on the repo) or remove its entry from `<stateDir>/github-watchlist.json`
+the dashboard (`x` on the repo) or remove its entry from `<dataDir>/watchlist.json`
 by hand.
 
 ## Doctor

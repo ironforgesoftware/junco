@@ -35,7 +35,7 @@ export type TipKey =
 export const TIPS: Record<TipKey, string> = {
   welcome: "Every answer lands in one editable file — config.json. Nothing here is permanent.",
   workspace:
-    "This is junco's nest — tickets fly into inbox/, get worked in processing/, and land in done/ or failed/.",
+    "This is junco's nest — tickets fly into inbox/, get worked in processing/, and land in done/ or failed/. Parked review items and per-ticket transcripts live right alongside the queue, all under one root.",
   model:
     "junco drives a coding agent through an inference endpoint — any OpenAI-compatible /v1 server, or a hosted provider from the built-in catalog.",
   repoSafety:

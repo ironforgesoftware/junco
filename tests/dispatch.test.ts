@@ -24,7 +24,8 @@ import { inboxPath, submitTicket } from "../src/dispatch.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const CONFIG_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
+const CONFIG_DEFAULTS: Omit<Config, "dataDir" | "queueRoot"> = {
+  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   model: {
     id: "test-model",
     source: "auto",
@@ -80,7 +81,6 @@ const CONFIG_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
   healthHost: "127.0.0.1",
   healthPort: 8787,
   logLevel: "info",
-  stateDir: "/tmp/vault/state",
   logToFile: false,
   transcriptsEnabled: false,
   github: {
@@ -105,7 +105,7 @@ const CONFIG_DEFAULTS: Omit<Config, "vaultRoot" | "juncoSubdir"> = {
 };
 
 function makeConfig(vaultRoot: string): Config {
-  return { ...CONFIG_DEFAULTS, vaultRoot, juncoSubdir: "Junco" };
+  return { ...CONFIG_DEFAULTS, dataDir: vaultRoot, queueRoot: join(vaultRoot, "Junco") };
 }
 
 const TICKET_NO_FRONTMATTER = `# Do the thing

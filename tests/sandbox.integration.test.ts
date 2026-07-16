@@ -42,7 +42,7 @@ async function run(
     cwd: opts.work,
     scratchDir: opts.scratch,
     home: process.env.HOME ?? "/tmp",
-    stateDir: join(opts.scratch, "state"),
+    dataDenyPaths: { dirs: [join(opts.scratch, "state")], files: [] },
     network: opts.network ?? false,
   });
   // Inject a fake GH_TOKEN into the source env to prove the scrub removes it.

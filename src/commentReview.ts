@@ -1,6 +1,6 @@
 /**
  * Durable review queue for `junco analyze` comment drafts — one JSON file per
- * draft under <state_dir>/comment-review/ (atomic tmp+rename, watchlist/outbox
+ * draft under <dataDir>/review/comments/ (atomic tmp+rename, watchlist/outbox
  * pattern). The analysis (analyzeFlow.ts) PARKS a draft here; a human-confirmed
  * post step (`junco analyze post`) posts it. Never throws on read: missing →
  * empty/null, corrupt → skipped (list) / `error` (read). Reviewed drafts
@@ -10,6 +10,7 @@
  * wrapper alongside assessReview.ts.
  */
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
+import { REVIEW_COMMENTS_SUBDIR } from "./dataTree.js";
 import type { Config } from "./types.js";
 
 export interface PendingComment {
@@ -29,7 +30,7 @@ export type CommentReviewDeps = ReviewStoreDeps;
 export const ANALYSIS_FOOTER =
   "_Analysis drafted with [junco](https://github.com/ironforgesoftware/junco) and human-reviewed before posting._";
 
-const store = makeReviewStore<PendingComment>("comment-review");
+const store = makeReviewStore<PendingComment>(REVIEW_COMMENTS_SUBDIR);
 
 /** draft + (footer ? "\n\n" + ANALYSIS_FOOTER : "") — the ONE place post/preview composition lives. */
 export function composeCommentBody(d: PendingComment): string {

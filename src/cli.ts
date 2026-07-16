@@ -35,6 +35,7 @@ import {
   resolveConfigPath,
   isLoopbackHost,
   assembleConfig,
+  configDeprecations,
 } from "./config.js";
 import type { ConfigParsed } from "./config.js";
 import { parseTicket } from "./ticket.js";
@@ -180,6 +181,7 @@ Subcommands:
   rm <name>            Delete a queued ticket from the inbox (best-effort)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
+  data [--json]  Print the data tree (paths, counts, provenance); 'data migrate' unifies legacy roots
   config path|list|get <path>|set <path> <value>|init  Inspect/edit config.json knobs; init scaffolds defaults
   assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
@@ -234,6 +236,8 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       human: { type: "boolean", default: false },
       "auto-plan": { type: "boolean", default: false },
       "no-footer": { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -260,8 +264,8 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
   if (process.stdout.isTTY && process.env.JUNCO_LOG_JSON !== "1") setLogFormat("human");
   if (!cfg.logToFile) return () => {};
   try {
-    const logPath = join(cfg.stateDir, "worker.log");
-    mkdirSync(cfg.stateDir, { recursive: true });
+    const logPath = join(cfg.dataDir, "worker.log");
+    mkdirSync(cfg.dataDir, { recursive: true });
     const sink = opts.rotate ? openRotatingLogSink(logPath) : openAppendLogSink(logPath);
     setLogSink((l) => sink.write(l));
     return () => {
@@ -363,7 +367,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         maxQueuedTimeoutSecondsFn(cfg),
       );
       stopTimeoutSeconds = timeoutSeconds + 10 * 60;
-      logDir = cfg.stateDir;
+      logDir = cfg.dataDir;
     } catch {
       /* fall back to renderer defaults */
     }
@@ -474,6 +478,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         healthPort: cfgAuthed.healthPort,
         advice: "bind healthHost to 127.0.0.1 unless it is firewalled",
       });
+    }
+
+    // Deprecated legacy config keys (Unified Data Root spec §5): one log.warn
+    // per set key, logged once at startup — `junco doctor` mirrors the same
+    // list as a "deprecated config keys" finding.
+    for (const line of configDeprecations(cfgAuthed)) {
+      log.warn(line);
     }
 
     const stopFlag = new StopFlag();
@@ -755,6 +766,35 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     process.stderr.write(`Usage: junco worktree prune <path>\n`);
     return 2;
+  }
+
+  // ------------------------------------------------------------
+  // data: unified-data-root inspection/migration. `data migrate`
+  // (src/dataMigrateCmd.ts) is the explicit, opt-in full unification (queue
+  // move + state tree + config rewrite); the bare `data` view
+  // (src/dataCmd.ts) is a pure read — resolved paths, live counts,
+  // legacy-override provenance, pending migrations — and never mutates.
+  // ------------------------------------------------------------
+  if (subcommand === "data") {
+    const verb = positionals[1];
+    if (verb !== undefined && verb !== "migrate") {
+      // Unknown verb: usage + exit 2 BEFORE any config load — never silently
+      // fall through to the view (`junco data foo` is a typo, not a request).
+      printFn(`Usage: junco data [--json] | junco data migrate [--dry-run] [--force]\n`);
+      return 2;
+    }
+    const cfg = loadConfigFn(configPath);
+    if (verb === "migrate") {
+      const { runDataMigrate } = await import("./dataMigrateCmd.js");
+      return runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: values["dry-run"] as boolean, force: values.force as boolean },
+        { printFn },
+      );
+    }
+    const { runData } = await import("./dataCmd.js");
+    return runData(cfg, { json: values.json as boolean }, { printFn });
   }
 
   // ------------------------------------------------------------

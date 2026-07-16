@@ -15,7 +15,7 @@ const NET_ERR = new GitOpError("gh failed", "connect: network is unreachable", 1
 const PERM_ERR = new GitOpError("gh failed", "HTTP 403: Forbidden", 1);
 
 function cfg(stateDir: string): Config {
-  return { stateDir, github: { triggerLabel: "junco" } } as unknown as Config;
+  return { dataDir: stateDir, github: { triggerLabel: "junco" } } as unknown as Config;
 }
 function pending(external: boolean): PendingAssess {
   return {

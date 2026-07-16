@@ -48,7 +48,7 @@ describe("runRetryCommand", () => {
     for (const d of ["inbox", "processing", "done", "failed"])
       mkdirSync(join(root, d), { recursive: true });
     writeFileSync(join(root, "failed", failedName), failedBody, "utf8");
-    cfg = { vaultRoot: root, juncoSubdir: "", defaultTimeoutMinutes: 30 } as unknown as Config;
+    cfg = { queueRoot: root, defaultTimeoutMinutes: 30 } as unknown as Config;
     out = [];
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));

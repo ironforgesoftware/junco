@@ -13,6 +13,7 @@ import {
   type RegistryOps,
 } from "./modelSetup.js";
 import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
+import { sandboxDenyPaths } from "../dataTree.js";
 import {
   selectBackend,
   classifyAvailability,
@@ -480,7 +481,10 @@ export async function resolveSandbox(
     cwd,
     scratchDir,
     home,
-    stateDir: cfg.stateDir,
+    // Sensitive data-tree subtrees/files only — never the dataDir root: the
+    // default layout puts the worktree (this session's cwd) and the clone
+    // gitdirs under it (see dataTree.sandboxDenyPaths).
+    dataDenyPaths: sandboxDenyPaths(cfg),
     network,
     botGhConfigDir: cfg.botAccount.configDir,
   });

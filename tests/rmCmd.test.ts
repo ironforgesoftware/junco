@@ -15,7 +15,7 @@ describe("runRmCommand", () => {
     for (const d of ["inbox", "processing", "done", "failed"])
       mkdirSync(join(root, d), { recursive: true });
     writeFileSync(join(root, "inbox", queued), "---\nid: fix-thing\n---\nfix\n", "utf8");
-    cfg = { vaultRoot: root, juncoSubdir: "", defaultTimeoutMinutes: 30 } as unknown as Config;
+    cfg = { queueRoot: root, defaultTimeoutMinutes: 30 } as unknown as Config;
     out = [];
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));

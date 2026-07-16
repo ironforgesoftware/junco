@@ -1,4 +1,4 @@
-/** Chapter 1 — vaultRoot. juncoSubdir stays "" (queue directly under it). */
+/** Chapter 1 — dataDir, the unified data root (queue, reviews, transcripts). */
 import React, { useEffect } from "react";
 import { Box, Text } from "ink";
 import { Tip, type ChapterProps } from "../controls.js";
@@ -18,16 +18,16 @@ export function Workspace({
   }, [setTextEditing]);
   return (
     <Box flexDirection="column">
-      <Text>Where should junco keep its tickets?</Text>
+      <Text>Where should junco keep its data (queue, reviews, transcripts)?</Text>
       <Box borderStyle="round" borderColor={theme.border} paddingX={1} width={46} marginTop={1}>
         <TextField
-          value={answers.vaultRoot}
-          onChange={(v) => patch({ vaultRoot: v })}
+          value={answers.dataDir}
+          onChange={(v) => patch({ dataDir: v })}
           onSubmit={() => {
-            if (answers.vaultRoot.trim() !== "") onNext();
+            if (answers.dataDir.trim() !== "") onNext();
           }}
           focus
-          placeholder="~/Junco"
+          placeholder="~/.local/state/junco"
         />
       </Box>
       <Tip>{TIPS.workspace}</Tip>

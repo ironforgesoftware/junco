@@ -1,6 +1,6 @@
 /**
  * Durable per-repo assess history — one JSON file per repo under
- * <state_dir>/assess-history/, keyed by nwo. assessFlow.ts writes one record
+ * <dataDir>/assess-history/, keyed by nwo. assessFlow.ts writes one record
  * per TERMINAL whole-repo run; the rail, `junco status` and `junco doctor`
  * read it to answer "when was this last audited, and did it find anything?".
  * Issue #193.
@@ -21,6 +21,7 @@
  * the next clean assess of either checkout self-heals it.
  */
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
+import { ASSESS_HISTORY_SUBDIR } from "./dataTree.js";
 import type { Config } from "./types.js";
 
 export interface AssessHistory {
@@ -37,7 +38,7 @@ export type AssessHistoryDeps = ReviewStoreDeps;
 // Only `id` is required: every other field is nullable BY DESIGN (a repo whose
 // only run failed has no lastSuccessAt), so a truncated or hand-edited file
 // still reads rather than being skipped wholesale.
-const store = makeReviewStore<AssessHistory>("assess-history", ["id"]);
+const store = makeReviewStore<AssessHistory>(ASSESS_HISTORY_SUBDIR, ["id"]);
 
 export function assessHistoryDir(cfg: Config): string {
   return store.dir(cfg);

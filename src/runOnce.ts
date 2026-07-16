@@ -342,7 +342,7 @@ export async function executeClaimed(
         onProgress: (p) => metrics.setTaskProgress(next.id, p),
         onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
         transcriptPath: cfg.transcriptsEnabled
-          ? transcriptPathFor(cfg.stateDir, next.id)
+          ? transcriptPathFor(cfg.dataDir, next.id)
           : undefined,
       });
       // Record spend immediately, BEFORE any classification/requeue logic

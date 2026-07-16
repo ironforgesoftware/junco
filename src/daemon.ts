@@ -13,11 +13,10 @@
  * cadence (sleepInterruptible) and the loop guard.
  */
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import type { Config } from "./types.js";
 import type { ConfigHolder } from "./configWatcher.js";
-import { queuePaths } from "./config.js";
+import { ensureDataTree } from "./dataTree.js";
+import { migrateStateTree, type MigrateResult } from "./dataMigrate.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
@@ -164,19 +163,25 @@ export function installSignalHandlers(
 
 // Restart-kind levers (configLevers reload:"restart") must never hot-apply — even
 // read via the holder they stay at startup values, so a live edit can't move the
-// queue/state dir or rebind the health socket mid-run. Live-kind fields come from
+// dataDir/queueRoot or rebind the health socket mid-run. Live-kind fields come from
 // the holder; restart-kind fields are pinned to the frozen startup cfg. Keep this
 // list in sync with the reload:"restart" entries in src/configLevers.ts.
 export function overlayFrozenRestartFields(frozen: Config, live: Config): Config {
   return {
     ...live,
-    vaultRoot: frozen.vaultRoot,
-    juncoSubdir: frozen.juncoSubdir,
+    dataDir: frozen.dataDir,
+    queueRoot: frozen.queueRoot,
+    legacy: frozen.legacy,
+    // worktreeRoot derives from dataDir (restart-kind) whenever the legacy
+    // git.worktreeRoot key is unset — pin the derived value so a live dataDir
+    // edit can't move new worktrees while everything else stays frozen. An
+    // EXPLICIT live git.worktreeRoot is a reload:"live" lever and keeps its
+    // hot-apply semantics. (Same rule for github.externalReposRoot below.)
+    worktreeRoot: live.legacy.worktreeRoot ? live.worktreeRoot : frozen.worktreeRoot,
     maxConcurrent: frozen.maxConcurrent,
     healthEnabled: frozen.healthEnabled,
     healthHost: frozen.healthHost,
     healthPort: frozen.healthPort,
-    stateDir: frozen.stateDir,
     logToFile: frozen.logToFile,
     transcriptsEnabled: frozen.transcriptsEnabled,
     // botAccount.enabled + botAccount.configDir are both reload:"restart" — pin
@@ -195,6 +200,11 @@ export function overlayFrozenRestartFields(frozen: Config, live: Config): Config
       // prefix (#162). Both are reload:"restart".
       triggerLabel: frozen.github.triggerLabel,
       askLabel: frozen.github.askLabel,
+      // Derived-from-dataDir unless the legacy key is explicitly set — see
+      // the worktreeRoot pin above for the rationale.
+      externalReposRoot: live.legacy.externalReposRoot
+        ? live.github.externalReposRoot
+        : frozen.github.externalReposRoot,
     },
   };
 }
@@ -216,6 +226,10 @@ export interface MainLoopDeps {
   pruneFn?: (worktreeRoot: string) => void;
   waitForEndpointFn?: (cfg: Config, stopFlag: StopFlagLike) => Promise<void>;
   sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
+  /** In-place state-tree migration (Task 4), run BEFORE mkdirs — an eager
+   * mkdir would otherwise fabricate empty destinations for pairs whose old
+   * name still holds the real data. Defaults to the real migrateStateTree. */
+  migrateFn?: (cfg: Config) => MigrateResult;
   mkdirs?: (cfg: Config) => void;
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
@@ -250,8 +264,8 @@ export interface MainLoopDeps {
     | "reportBudgetExhausted"
   >;
   /** Per-day spend ledger (Phase-3 Task 4), constructed next to the gate:
-   * absent → mainLoop builds its own via `makeSpendLedger(cfg.stateDir)`.
-   * `cfg` here is always the FROZEN startup config (stateDir is
+   * absent → mainLoop builds its own via `makeSpendLedger(cfg.dataDir)`.
+   * `cfg` here is always the FROZEN startup config (dataDir is
    * restart-kind — see overlayFrozenRestartFields), exactly like the gate and
    * the health server bind. Threaded into both the serial default runOnceFn
    * and the scheduler's default executeFn (peer of `gate`). `todayUsd`/
@@ -275,10 +289,7 @@ export function makeProviderGate(cfg: Config): ProviderGate {
 }
 
 function defaultMkdirs(cfg: Config): void {
-  const paths = queuePaths(cfg);
-  for (const dir of [paths.inbox, paths.processing, paths.done, paths.failed]) {
-    mkdirSync(dir, { recursive: true });
-  }
+  ensureDataTree(cfg);
 }
 
 export interface SchedulerDeps {
@@ -492,9 +503,9 @@ export async function mainLoop(
   const gate = deps.gate ?? makeProviderGate(cfg);
   // Per-day spend ledger (Phase-3 Task 4): every session runOnce/executeClaimed
   // runs records its costUsd here. `cfg` is the frozen startup config, not
-  // activeCfg() — stateDir is restart-kind (same freeze as the gate above and
+  // activeCfg() — dataDir is restart-kind (same freeze as the gate above and
   // the health server's host/port bind; see overlayFrozenRestartFields).
-  const spend = deps.spend ?? makeSpendLedger(cfg.stateDir);
+  const spend = deps.spend ?? makeSpendLedger(cfg.dataDir);
   // Single TTL-cached probe shared by the claim gate and the health server so
   // neither multiplies upstream endpoint-probe traffic. Wraps the *call* —
   // activeCfg() is read fresh on every uncached probe — so a hot-reloaded
@@ -545,9 +556,28 @@ export async function mainLoop(
   const waitForEndpointFn =
     deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
+  const migrateFn = deps.migrateFn ?? migrateStateTree;
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
+  // Migrate BEFORE mkdirs: ensureDataTree mkdir-p's the whole new tree, so if
+  // it ran first every old-name pair's destination would already exist (as an
+  // empty dir) by the time migrateStateTree looked — turning every ordinary
+  // rename into the repair path for no reason. See dataMigrate.ts's
+  // recursively-empty-dst repair rule for the cases that path actually means
+  // to catch (a crash between mkdir and rename, or scaffolding a rolled-back
+  // version materialized), not routine startup ordering.
+  const mig = migrateFn(cfg);
+  for (const step of mig.steps) {
+    // One receipt per pair that actually moved — worker.log evidence of what
+    // the automatic migration did (the durable journal is migrated.json).
+    if (step.action === "renamed") {
+      log.info("state-tree migration: renamed", { from: step.from, to: step.to });
+    }
+  }
+  for (const conflict of mig.conflicts) {
+    log.warn("state-tree migration conflict; manual resolution required", { conflict });
+  }
   mkdirs(cfg);
   // Stamp the start time once the queue dirs exist; the health server reports
   // uptime off this. Idempotent — first call wins.
@@ -558,7 +588,7 @@ export async function mainLoop(
 
   log.info("worker online", {
     pid: process.pid,
-    vault: join(cfg.vaultRoot, cfg.juncoSubdir),
+    queue: cfg.queueRoot,
     model: cfg.model.id,
     once: Boolean(opts.once),
   });

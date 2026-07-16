@@ -23,11 +23,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `junco assess` now records a per-repo history (last successful audit, its finding counts, and a
   marker when the most recent attempt failed), surfaced as a column in the dashboard rail and in
   `junco status` / `junco doctor`. Issue-scoped runs (`junco assess owner/repo#N`) deliberately do
-  not refresh a repo's freshness — they audit only the code the issue implicates.
+  not refresh a repo's freshness — they audit only the code the issue implicates. The history lives
+  at `<dataDir>/assess-history/` (one file per repo).
+- **Unified data root:** a new top-level `dataDir` config key (default `~/.local/state/junco`)
+  that every on-disk path — the ticket queue, parked `assess`/`analyze` review items, the GitHub
+  outbox, cloned repos, PR-flow worktrees, transcripts, and watchlist/spend/metrics/log files —
+  now resolves under. The tree is materialized eagerly at daemon startup — every directory except
+  `clones/external/` and `worktrees/` (still created on demand, since a legacy override can point
+  them outside the root) — and the root gets a self-`.gitignore` (`*`, written only when absent)
+  so pointing `dataDir` inside a git checkout — including junco's own — can never dirty a commit.
+- `junco data [--json]` — a pure, read-only view of the resolved tree: live counts per node,
+  legacy-override provenance, pending migrations, and config deprecations.
+- `junco data migrate [--dry-run|--force]` — the opt-in full unification for a config still
+  carrying legacy path keys: moves the queue into `<dataDir>/queue`, normalizes the state tree,
+  rewrites `config.json` to drop the legacy keys, and prints a receipt. Refuses while the daemon
+  looks like it's running (`--force` to override).
+- An in-place state-tree migration (old directory names → new ones, e.g. `assess-review` →
+  `review/assess`) runs automatically at every daemon startup — journaled, idempotent, and never
+  destructive on a name conflict.
+- Daemon startup logs a one-line warning per deprecated legacy config key set, plus a warning for
+  any state-tree migration conflict it had to skip; `junco doctor` and `junco data` additionally
+  report pending (not-yet-run) migrations as informational findings, pointing at
+  `junco data migrate`.
 
 ### Changed
 
 - Dashboard mouse protocol upgraded to SGR any-motion tracking (hover); click targets now resolve via a render-time hit-region registry.
+- Default on-disk locations moved under the unified `dataDir` root (existing configs are
+  unaffected — see Deprecated below):
+
+  | What                      | Old default                           | New default                  |
+  | ------------------------- | ------------------------------------- | ---------------------------- |
+  | Ticket queue              | `<vaultRoot>/<juncoSubdir>/{inbox,…}` | `<dataDir>/queue/{inbox,…}`  |
+  | Assess review parking     | `<stateDir>/assess-review/`           | `<dataDir>/review/assess/`   |
+  | Analyze review parking    | `<stateDir>/comment-review/`          | `<dataDir>/review/comments/` |
+  | GitHub outbox             | `<stateDir>/github-outbox/`           | `<dataDir>/outbox/`          |
+  | Dashboard-cloned repos    | `<stateDir>/repos/`                   | `<dataDir>/clones/watched/`  |
+  | External (fork-PR) clones | `<stateDir>/external/`                | `<dataDir>/clones/external/` |
+  | PR-flow worktrees         | `~/junco/worktrees`                   | `<dataDir>/worktrees/`       |
+  | Watchlist                 | `<stateDir>/github-watchlist.json`    | `<dataDir>/watchlist.json`   |
+
+  `worker.log`, `transcripts/`, and `spend.json` were already under `stateDir` and simply move
+  with it to `dataDir`. `metrics.json` is a reserved, forward-looking path — listed in the tree
+  (and by `junco data`) now, written by a planned metrics-persistence follow-up.
+
+- The setup wizard's Workspace question now scaffolds `dataDir` into a fresh `config.json`, but
+  only when it differs from the default — a fully-default fresh config still carries no path keys
+  at all.
+
+### Deprecated
+
+- Four legacy, single-purpose path keys are now optional per-subtree overrides — each still works
+  exactly as before, but logs a one-line deprecation warning at daemon startup and is flagged by
+  `junco doctor`/`junco data`: `vaultRoot` + `juncoSubdir` (queue root), `observability.stateDir`
+  (the whole data root), `git.worktreeRoot` (worktrees root), and `github.externalReposRoot`
+  (external-clones root). Run `junco data migrate` to drop them and unify onto `dataDir`.
 
 ### Fixed
 
