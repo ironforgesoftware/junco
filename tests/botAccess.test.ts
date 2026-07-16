@@ -125,7 +125,7 @@ const AMBIENT_CFG = {
 const withBotAuthFn = async (c: Config) => ({ ...c, ghAuth: CTX });
 
 const PUT = "api repos/acme/api/collaborators/junco-agent -X PUT -f permission=push";
-const LIST = "api /user/repository_invitations";
+const LIST = "api /user/repository_invitations?per_page=100";
 const ACCEPT = "api /user/repository_invitations/77 -X PATCH";
 const VIEW_KEY = "repo view acme/api --json viewerPermission,isPrivate";
 
@@ -220,6 +220,42 @@ describe("grantBotAccess", () => {
     const off = { ...AMBIENT_CFG, botAccount: { enabled: false, configDir: "/x" } } as Config;
     await expect(grantBotAccess(off, "acme/api", { ghFn: fakeGh2({}).ghFn })).rejects.toThrow(
       /junco auth login/,
+    );
+  });
+
+  it("verify classifies blocked/sso (operator authorized, bot itself SAML-blocked) → SSO guidance", async () => {
+    const { ghFn } = fakeGh2({
+      [PUT]: { code: 0, stdout: JSON.stringify({ id: 77 }) },
+      [LIST]: {
+        code: 0,
+        stdout: JSON.stringify([{ id: 77, repository: { full_name: "acme/api" } }]),
+      },
+      [ACCEPT]: { code: 0, stdout: "" },
+      [VIEW_KEY]: {
+        code: 1,
+        stderr: "HTTP 403: Resource protected by organization SAML enforcement",
+      },
+    });
+    await expect(grantBotAccess(AMBIENT_CFG, "acme/api", { ghFn, withBotAuthFn })).rejects.toThrow(
+      /SAML/,
+    );
+  });
+
+  it("verify classifies fork → generic did-not-take-effect message", async () => {
+    const { ghFn } = fakeGh2({
+      [PUT]: { code: 0, stdout: JSON.stringify({ id: 77 }) },
+      [LIST]: {
+        code: 0,
+        stdout: JSON.stringify([{ id: 77, repository: { full_name: "acme/api" } }]),
+      },
+      [ACCEPT]: { code: 0, stdout: "" },
+      [VIEW_KEY]: {
+        code: 0,
+        stdout: JSON.stringify({ viewerPermission: "READ", isPrivate: false }),
+      },
+    });
+    await expect(grantBotAccess(AMBIENT_CFG, "acme/api", { ghFn, withBotAuthFn })).rejects.toThrow(
+      /grant did not take effect/,
     );
   });
 

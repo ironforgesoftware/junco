@@ -1948,15 +1948,15 @@ describe("bot access after adding an owned repo", () => {
     expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
   });
 
-  it("a grant failure warns with the fix command but leaves the repo watched", async () => {
+  it("a grant failure surfaces the underlying error instead of a fixed prescription", async () => {
     const { client } = makeClient({ "acme/api": [] });
-    client.ensureBotAccess = async () => ({ ok: false, error: "granting needs admin" });
+    client.ensureBotAccess = async () => ({ ok: false, error: "needs admin — ask an org admin" });
     const file = wl5();
     const r = renderApp(client, file);
     await tick();
     await addOwnedRepo(r);
     await until(() => readWatchlist(file).entries.length > 0);
-    await until(() => (r.lastFrame() ?? "").includes("junco auth grant"));
+    await until(() => (r.lastFrame() ?? "").includes("needs admin — ask an org admin"));
     expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
   });
 

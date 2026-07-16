@@ -1242,7 +1242,7 @@ export function App(props: AppProps): React.JSX.Element {
       const grant = await client.ensureBotAccess(nwo);
       if (!aliveRef.current) return;
       if (!grant.ok) {
-        showToast("error", `bot lacks access — run: junco auth grant ${nwo}`);
+        showToast("error", `bot access: ${grant.error.split("\n")[0]}`);
       } else if (!grant.value.skipped) {
         showToast("success", `bot ${grant.value.login} granted write on ${nwo}`);
       }

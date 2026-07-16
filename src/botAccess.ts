@@ -113,9 +113,10 @@ export async function grantBotAccess(
     let accepted = false;
     for (let attempt = 0; attempt < 3 && !accepted; attempt++) {
       if (attempt > 0) await sleep(retryDelayMs);
-      // No --paginate: multi-page output is concatenated JSON arrays (unparseable),
-      // and a fresh invitation list is far below one page anyway.
-      const list = await ghFn(botCfg, ["api", "/user/repository_invitations"], {
+      // No --paginate: multi-page output is concatenated JSON arrays (unparseable).
+      // per_page=100 covers gh's default 30-item page, which a busy bot account
+      // with >30 pending invitations would otherwise blow past.
+      const list = await ghFn(botCfg, ["api", "/user/repository_invitations?per_page=100"], {
         check: false,
         timeoutMs: GH_TIMEOUT,
         retryNetwork: true,
@@ -150,8 +151,14 @@ export async function grantBotAccess(
     }
   }
 
-  // 3. Verify as the bot.
+  // 3. Verify as the bot. The canonical SAML-org case lands here, not at the
+  // invite/accept steps above: the operator's PUT and the bot's PATCH both
+  // succeed (the accept endpoint is user-scoped), and it's this repo-view
+  // call — under the bot's own identity — that first hits the SAML wall.
   const access = await classifyRepoAccess(botCfg, nwo, deps);
+  if (access.mode === "blocked" && access.reason === "sso") {
+    throw new Error(ssoMessage(nwo));
+  }
   if (access.mode !== "direct") {
     throw new Error(
       `grant did not take effect on ${nwo} (bot access: ${access.mode}) — re-run: junco auth grant ${nwo}`,

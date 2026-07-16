@@ -200,7 +200,7 @@ frontmatter contract, `examples/` has templates, and the bundled
 | `junco start` / `junco restart`                               | run the daemon / restart the installed service                                                                    |
 | `junco submit <file>`                                         | queue a ticket (also reads stdin)                                                                                 |
 | `junco dashboard`                                             | the fullscreen TUI                                                                                                |
-| `junco dispatch <owner/repo#N \| url>`                        | fork-PR mode: plan and PR an external repo's issue                                                                |
+| `junco dispatch <owner/repo#N \| url>`                        | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                      |
 | `junco status` / `junco list` / `junco logs -f`               | daemon, queue, and log visibility                                                                                 |
 | `junco prs`                                                   | list junco-authored pull requests across watched repos                                                            |
 | `junco assess <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`assess review`, `assess file`)   |
