@@ -851,6 +851,30 @@ describe("runDoctor bot account checks", () => {
     expect(lines.join("")).toMatch(/junco auth login/);
   });
 
+  it("SAML-blocked bot probe → SSO guidance", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => botConfig(),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          const key = args.join(" ");
+          if (key === "api user" && opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh") {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "HTTP 403: Resource protected by organization SAML enforcement",
+            };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    expect(lines.join("")).toMatch(/✗ bot account.*authorize gh for the org/);
+  });
+
   it("bot mode: skips the bot-account check entirely when gh itself is not installed", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
@@ -902,7 +926,7 @@ describe("runDoctor bot account checks", () => {
     expect(lines.join("")).toMatch(/✓ bot access: acme\/api — write/);
   });
 
-  it("bot mode: warns with invite guidance on TRIAGE permission for a watched repo", async () => {
+  it("bot mode: warns with the grant command on TRIAGE permission for a watched repo", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
@@ -933,11 +957,43 @@ describe("runDoctor bot account checks", () => {
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(
-      /⚠ bot access: acme\/api — triage.*branch pushes will fail.*invite the bot with write/,
+      /⚠ bot access: acme\/api — triage — label edits work, branch pushes will fail — fix: junco auth grant acme\/api/,
     );
   });
 
-  it("bot mode: warns to invite the bot as a collaborator on NONE permission for a watched repo", async () => {
+  it("per-repo warnings name the grant command", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () =>
+          botConfig({
+            github: {
+              ...okConfig.github,
+              enabled: true,
+              repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
+            },
+          }),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          if (args.includes("get-url")) {
+            return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
+          }
+          if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
+            // TRIAGE fixture from the test above, reused to pin the grant hint.
+            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+              ? { code: 0, stdout: JSON.stringify({ viewerPermission: "TRIAGE" }), stderr: "" }
+              : { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/junco auth grant acme\/api/);
+  });
+
+  it("bot mode: warns with the grant command on NONE permission for a watched repo", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
       "/x/config.json",
@@ -968,8 +1024,43 @@ describe("runDoctor bot account checks", () => {
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(
-      /⚠ bot access: acme\/api — NONE — invite the bot as a collaborator/,
+      /⚠ bot access: acme\/api — NONE — fix: junco auth grant acme\/api/,
     );
+  });
+
+  it("bot mode: SAML-blocked per-repo permission probe → SSO guidance", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () =>
+          botConfig({
+            github: {
+              ...okConfig.github,
+              enabled: true,
+              repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
+            },
+          }),
+        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+          if (args.includes("get-url")) {
+            return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
+          }
+          if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
+            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+              ? {
+                  code: 1,
+                  stdout: "",
+                  stderr: "HTTP 403: Resource protected by organization SAML enforcement",
+                }
+              : { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" };
+          }
+          return { code: 0, stdout: "ok", stderr: "" };
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/⚠ bot access: acme\/api.*authorize gh for the org/);
   });
 
   it("non-bot mode: does not check per-repo bot permission at all", async () => {

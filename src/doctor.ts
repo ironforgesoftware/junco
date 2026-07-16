@@ -20,6 +20,7 @@ import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
 import { draftCount } from "./commentReview.js";
 import { defaultExec, defaultAccessOk } from "./execProbe.js";
+import { SAML_MARKER } from "./botAccess.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -199,7 +200,9 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         report(
           "fail",
           "bot account",
-          `enabled but not logged in under ${cfg.botAccount.configDir} (run: junco auth login)`,
+          bot.stderr.includes(SAML_MARKER)
+            ? "bot token blocked by SAML enforcement — authorize gh for the org in the bot's browser session"
+            : `enabled but not logged in under ${cfg.botAccount.configDir} (run: junco auth login)`,
         );
       } else {
         let botLogin: string | null = null;
@@ -470,13 +473,20 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
             report(
               "warn",
               `bot access: ${repo.nwo}`,
-              "triage — label edits work, branch pushes will fail; invite the bot with write",
+              "triage — label edits work, branch pushes will fail — fix: junco auth grant " +
+                repo.nwo,
+            );
+          } else if (perm.code !== 0 && perm.stderr.includes(SAML_MARKER)) {
+            report(
+              "warn",
+              `bot access: ${repo.nwo}`,
+              "bot token blocked by SAML enforcement — authorize gh for the org in the bot's browser session",
             );
           } else {
             report(
               "warn",
               `bot access: ${repo.nwo}`,
-              `${level ?? "unknown"} — invite the bot as a collaborator (write) for this watched repo`,
+              `${level ?? "unknown"} — fix: junco auth grant ${repo.nwo}`,
             );
           }
         }
