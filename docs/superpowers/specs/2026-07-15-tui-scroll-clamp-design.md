@@ -147,9 +147,14 @@ max.
 1. **Scrolling stops at the bottom on all five surfaces.** The fix.
 2. **ReviewView draft stops one screen earlier** than today (`total - bodyRows` rather than
    `total - 1`), for one consistent rule.
+3. **A GitHub↔LOCAL mode round-trip (`m`) now resets the scroll offset** to the top, where the old
+   two-state design preserved the GitHub-side position while LOCAL scrolled independently. This
+   falls out of the single-instance choice — a mode switch changes the key — and is benign (you
+   left the view). It was not one of the 18 manual resets. Preserving it would require a second
+   `useScroll` instance, which forfeits the consolidation, so we accept the reset.
 
-No other user-visible behavior changes: every one of the 18 manual resets is replaced by a key
-that fires on exactly the same transition.
+Every one of the 18 manual resets is replaced by a key that fires on exactly the same transition;
+change 3 is the one additional reset the keyed model introduces.
 
 ## Testing
 

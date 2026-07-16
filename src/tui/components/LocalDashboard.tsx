@@ -589,6 +589,10 @@ export default function LocalDashboard({
   }
 
   const body =
+    // The queue section is cursor-driven (`selectable` + `selectedRow`), so its
+    // window follows the cursor and the shared scroll offset stays 0 here —
+    // only the daemon section moves it. `scroll`/`onScrollMax` are passed for a
+    // uniform interface; in this section the reported max is harmlessly unused.
     section === "queue" ? (
       <QueueView
         snap={cheap?.queue ?? null}
