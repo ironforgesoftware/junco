@@ -4,9 +4,17 @@
  * ✓ pass · ⚠ warning (degraded but workable) · ✗ failure (exit 1).
  */
 
+import { existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, parseConfigFile, queuePaths, isLoopbackHost } from "./config.js";
+import {
+  loadConfig,
+  parseConfigFile,
+  queuePaths,
+  isLoopbackHost,
+  configDeprecations,
+} from "./config.js";
+import { pendingMigrations } from "./dataMigrate.js";
 import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
@@ -53,6 +61,14 @@ export interface DoctorDeps {
    * source echo). Defaults to `process.env`; injectable so tests never read
    * or mutate the real environment. */
   env?: Record<string, string | undefined>;
+  /** Existence probe for `pendingMigrations` (Unified Data Root spec §5, §7)
+   * and the legacy-worktree-root leftover hint. Defaults to `fs.existsSync`. */
+  existsFn?: (p: string) => boolean;
+  /** Directory listing for the legacy-worktree-root leftover hint (spec §7) —
+   * emptiness is the only thing that matters, so a listing failure (ENOENT,
+   * not a directory) is treated as "nothing to hint about" rather than
+   * thrown. Defaults to `fs.readdirSync`. */
+  readdirFn?: (d: string) => string[];
 }
 
 type Verdict = "ok" | "warn" | "fail";
@@ -144,6 +160,8 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   const fetchFn = deps.fetchFn ?? fetch;
   const rawApiKeyFn = deps.rawApiKeyFn ?? defaultRawApiKey;
   const env = deps.env ?? process.env;
+  const existsFn = deps.existsFn ?? existsSync;
+  const readdirFn = deps.readdirFn ?? readdirSync;
 
   const results: Array<{ v: Verdict; label: string }> = [];
   const report = (v: Verdict, label: string, detail = ""): void => {
@@ -167,6 +185,43 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   else report("fail", "node", `${process.versions.node} < required 22.19`);
 
   if (cfg) {
+    // 2a. deprecated config keys (Unified Data Root spec §5) — informational
+    // only: doctor never fails on a legacy key, it just points at the
+    // migration. `junco start` logs this same list once at daemon startup
+    // (cli.ts) — this is doctor's mirror of that warning.
+    const deprecations = configDeprecations(cfg);
+    if (deprecations.length > 0) {
+      report("warn", "deprecated config keys", deprecations.join(" | "));
+    }
+
+    // 2b. pending state-tree migrations (spec §7) — old-name dirs still
+    // present under dataDir; `junco data migrate` renames them in place.
+    const pending = pendingMigrations(cfg, existsFn);
+    if (pending.length > 0) {
+      const list = pending.map((m) => `${m.from} -> ${m.to}`).join(", ");
+      report("warn", "unmigrated data dirs", `${list} — run 'junco data migrate' to unify`);
+    }
+
+    // 2c. legacy worktree-root leftovers (spec §7): worktrees are disposable
+    // and deliberately excluded from the in-place migration above — nothing
+    // renames them automatically, so doctor only hints that the old location
+    // still holds something.
+    if (cfg.legacy.worktreeRoot && existsFn(cfg.worktreeRoot)) {
+      let hasEntries = false;
+      try {
+        hasEntries = readdirFn(cfg.worktreeRoot).length > 0;
+      } catch {
+        hasEntries = false;
+      }
+      if (hasEntries) {
+        report(
+          "ok",
+          "legacy worktree root",
+          `old worktrees remain at ${cfg.worktreeRoot} (git.worktreeRoot) — disposable, safe to delete; new worktrees use <dataDir>/worktrees`,
+        );
+      }
+    }
+
     // 3-4. git / gh
     const gitRes = await execFn(cfg.gitBin, ["--version"]);
     report(

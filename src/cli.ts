@@ -35,6 +35,7 @@ import {
   resolveConfigPath,
   isLoopbackHost,
   assembleConfig,
+  configDeprecations,
 } from "./config.js";
 import type { ConfigParsed } from "./config.js";
 import { parseTicket } from "./ticket.js";
@@ -477,6 +478,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         healthPort: cfgAuthed.healthPort,
         advice: "bind healthHost to 127.0.0.1 unless it is firewalled",
       });
+    }
+
+    // Deprecated legacy config keys (Unified Data Root spec §5): one log.warn
+    // per set key, logged once at startup — `junco doctor` mirrors the same
+    // list as a "deprecated config keys" finding.
+    for (const line of configDeprecations(cfgAuthed)) {
+      log.warn(line);
     }
 
     const stopFlag = new StopFlag();

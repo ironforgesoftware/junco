@@ -36,9 +36,13 @@ const FAKE_CTX = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Minimal stub Config — injected mainLoop / runOnce ignore it. */
+/** Minimal stub Config — injected mainLoop / runOnce ignore it. `legacy` is
+ * populated (all-clean) so the startup configDeprecations() call in the
+ * `start` arm doesn't throw on a bare `{}` stub. */
 function stubConfig(): Config {
-  return {} as Config;
+  return {
+    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+  } as Config;
 }
 
 /** A fake SingletonLock with a spy on release(). */
@@ -152,7 +156,7 @@ describe("run(['start']) — health bind warning", () => {
 
   it("warns loudly when health is enabled on a non-loopback host", async () => {
     const deps = makeDeps({
-      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "0.0.0.0" }) as Config),
+      loadConfigFn: vi.fn(() => ({ ...stubConfig(), healthEnabled: true, healthHost: "0.0.0.0" })),
     });
     const cap = captureStdout();
     try {
@@ -167,7 +171,11 @@ describe("run(['start']) — health bind warning", () => {
 
   it("does not warn for a loopback health_host", async () => {
     const deps = makeDeps({
-      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "127.0.0.1" }) as Config),
+      loadConfigFn: vi.fn(() => ({
+        ...stubConfig(),
+        healthEnabled: true,
+        healthHost: "127.0.0.1",
+      })),
     });
     const cap = captureStdout();
     try {
@@ -182,7 +190,7 @@ describe("run(['start']) — health bind warning", () => {
     // An empty host that bypassed config normalization must NOT evade the
     // warning: the old `&& cfg.healthHost` guard short-circuited on "".
     const deps = makeDeps({
-      loadConfigFn: vi.fn(() => ({ healthEnabled: true, healthHost: "" }) as Config),
+      loadConfigFn: vi.fn(() => ({ ...stubConfig(), healthEnabled: true, healthHost: "" })),
     });
     const cap = captureStdout();
     try {
@@ -191,6 +199,58 @@ describe("run(['start']) — health bind warning", () => {
       cap.restore();
     }
     expect(cap.lines.join("")).toMatch(/health bind is not loopback/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// start — deprecated legacy config keys (Unified Data Root spec §5)
+// ---------------------------------------------------------------------------
+
+describe("run(['start']) — deprecated config keys warning", () => {
+  function captureStdout(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    return { lines, restore: () => spy.mockRestore() };
+  }
+
+  it("logs a warning for each set legacy key", async () => {
+    const deps = makeDeps({
+      loadConfigFn: vi.fn(
+        () =>
+          ({
+            ...stubConfig(),
+            legacy: {
+              vaultRoot: true,
+              stateDir: false,
+              worktreeRoot: false,
+              externalReposRoot: false,
+            },
+          }) as Config,
+      ),
+    });
+    const cap = captureStdout();
+    try {
+      await run(["start"], deps);
+    } finally {
+      cap.restore();
+    }
+    const out = cap.lines.join("");
+    expect(out).toMatch(/vaultRoot\/juncoSubdir are deprecated/);
+    expect(out).toContain("junco data migrate");
+  });
+
+  it("does not warn for a clean (non-legacy) config", async () => {
+    const deps = makeDeps();
+    const cap = captureStdout();
+    try {
+      await run(["start"], deps);
+    } finally {
+      cap.restore();
+    }
+    expect(cap.lines.join("")).not.toMatch(/deprecated/i);
   });
 });
 

@@ -16,6 +16,7 @@ const okConfig = {
   dataDir: "/tmp/junco-doc-state",
   queueRoot: "/tmp/junco-doc-vault",
   worktreeRoot: "/tmp/junco-doc-wt",
+  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   gitBin: "git",
   ghBin: "gh",
   github: {
@@ -332,6 +333,109 @@ describe("runDoctor", () => {
       }),
     );
     expect(lines.join("")).not.toMatch(/health bind/);
+  });
+});
+
+describe("runDoctor — deprecations + pending migrations (Unified Data Root spec §5, §7)", () => {
+  it("legacy-keyed cfg reports a 'deprecated config keys' warning listing vaultRoot", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      legacy: { ...okConfig.legacy, vaultRoot: true },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    expect(lines.join("")).toMatch(/⚠ deprecated config keys.*vaultRoot/);
+  });
+
+  it("a fake existsFn making <dataDir>/assess-review exist reports 'unmigrated data dirs' with the migrate hint", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => okConfig,
+        existsFn: (p: string) => p === join(okConfig.dataDir, "assess-review"),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    expect(lines.join("")).toMatch(/⚠ unmigrated data dirs/);
+    expect(lines.join("")).toContain(join(okConfig.dataDir, "assess-review"));
+    expect(lines.join("")).toContain("junco data migrate");
+  });
+
+  it("clean cfg reports neither deprecations nor unmigrated dirs", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => okConfig, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/deprecated config keys/);
+    expect(lines.join("")).not.toMatch(/unmigrated data dirs/);
+  });
+
+  it("legacy worktreeRoot dir with leftovers → info-level (✓) hint, itself not a warning", async () => {
+    const lines: string[] = [];
+    // legacy.worktreeRoot:true also trips the "deprecated config keys" WARN
+    // above (git.worktreeRoot is one of the four checked keys) — this test
+    // pins that the worktree-leftover hint ITSELF reports ok (✓), not warn,
+    // distinguishing "here's where the old stuff is" from "please fix this".
+    const cfg = {
+      ...okConfig,
+      legacy: { ...okConfig.legacy, worktreeRoot: true },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        existsFn: (p: string) => p === okConfig.worktreeRoot,
+        readdirFn: (d: string) => (d === okConfig.worktreeRoot ? ["some-ticket-wt"] : []),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ legacy worktree root/);
+    expect(lines.join("")).toContain(okConfig.worktreeRoot);
+    // Exactly one warning: the co-occurring deprecated-key finding, not this hint.
+    expect(lines.join("")).toMatch(/1 warning\(s\)/);
+  });
+
+  it("legacy worktreeRoot dir present but EMPTY → no hint at all", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      legacy: { ...okConfig.legacy, worktreeRoot: true },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        existsFn: (p: string) => p === okConfig.worktreeRoot,
+        readdirFn: () => [],
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/legacy worktree root/);
+  });
+
+  it("worktreeRoot is NOT legacy → no hint even if the dir happens to exist and hold entries", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => okConfig,
+        existsFn: (p: string) => p === okConfig.worktreeRoot,
+        readdirFn: (d: string) => (d === okConfig.worktreeRoot ? ["leftover"] : []),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/legacy worktree root/);
   });
 });
 
