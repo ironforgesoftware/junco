@@ -29,7 +29,7 @@ degrades to exactly today's behavior.
   responses never produce errors, delays past a hard 2s cap, or false badges.
 - The mechanism is fork-friendly and stack-agnostic: package name and current
   version are read from junco's own `package.json`, never hardcoded.
-- Opt-out available (`update_check: false`) for operators who do not want any
+- Opt-out available (`updateCheck: false`) for operators who do not want any
   phone-home.
 
 ## 3. Non-goals
@@ -108,7 +108,7 @@ Single file `update-check.json` at the data root. Full dataTree checklist
 
 ### 6.1 Config lever
 
-Optional `update_check?: boolean` (JSON) / `updateCheck?: boolean` (Config),
+Optional `updateCheck?: boolean` (JSON, camelCase per schema convention) / `updateCheck?: boolean` (Config),
 default `true`. Optional-with-default → no test-fixture sweep. The daemon
 never reads it (it never checks), so it is neither a hot-reload lever nor a
 frozen-restart field — `configLevers.ts` and `overlayFrozenRestartFields` are

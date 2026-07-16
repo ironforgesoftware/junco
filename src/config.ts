@@ -122,6 +122,9 @@ export function resolveApiKey(
 
 export const ConfigSchema = z.object({
   dataDir: z.string().optional(), // unified data root; default applied at assembly
+  // npm update-check opt-out (spec 2026-07-16): CLI/TUI-side only, the daemon
+  // never phones home either way.
+  updateCheck: z.boolean().default(true),
   vaultRoot: z.string().optional(), // DEPRECATED: legacy queue-root override
   juncoSubdir: z.string().default("Junco"),
   tools: z.array(z.string()).default(DEFAULT_TOOLS),
@@ -360,6 +363,7 @@ export function assembleConfig(
     dataDir,
     queueRoot,
     legacy,
+    updateCheck: d.updateCheck,
     tools: d.tools,
     model: {
       id: d.model.id,
