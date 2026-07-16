@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import type { PendingAssess } from "../../assessReview.js";
 import { ANALYSIS_FOOTER, type PendingComment } from "../../commentReview.js";
+import { clampScroll, maxScroll } from "../window.js";
 
 export interface ReviewOpen {
   kind: "batch";
@@ -14,7 +15,6 @@ export interface ReviewOpen {
 export interface DraftOpen {
   kind: "draft";
   draftIdx: number;
-  scroll: number;
 }
 export interface ReviewState {
   loading: boolean;
@@ -54,18 +54,22 @@ function firstDraftLine(draft: string): string {
 
 export function ReviewView({
   state,
+  scroll,
   height,
   focused,
   onRowPress,
   onFindingPress,
   onDraftWheel,
+  onScrollMax,
 }: {
   state: ReviewState;
+  scroll: number;
   height: number;
   focused: boolean;
   onRowPress?: (index: number) => void;
   onFindingPress?: (index: number) => void;
   onDraftWheel?: (dir: 1 | -1) => void;
+  onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
   const rows = Math.max(1, height - 2);
   if (state.loading) {
@@ -96,9 +100,10 @@ export function ReviewView({
     const lines = draft.draft.split("\n");
     // Reserve rows: header (1), the footer line when present (1), hint (1).
     const bodyRows = Math.max(1, rows - (draft.footer ? 3 : 2));
-    // Top-anchored: the window starts exactly at `scroll`, so `j`/`k` move
-    // the visible lines by one immediately — no cursor-centering dead-zone.
-    const scroll = state.open.scroll;
+    // Top-anchored: the window starts exactly at `start`, so `j`/`k` move the
+    // visible lines by one immediately — no cursor-centering dead-zone.
+    onScrollMax?.(maxScroll(lines.length, bodyRows));
+    const start = clampScroll(scroll, lines.length, bodyRows);
     return (
       <ClickableBox flexDirection="column" paddingX={1} onWheel={onDraftWheel}>
         <Text wrap="truncate-end">
@@ -107,8 +112,8 @@ export function ReviewView({
             dimColor
           >{` · ${draft.issueTitle} · ${draft.external ? "external" : "owned"}`}</Text>
         </Text>
-        {lines.slice(scroll, scroll + bodyRows).map((line, i) => (
-          <Text key={scroll + i} wrap="truncate-end">
+        {lines.slice(start, start + bodyRows).map((line, i) => (
+          <Text key={start + i} wrap="truncate-end">
             {line.length > 0 ? line : " "}
           </Text>
         ))}

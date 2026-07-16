@@ -67,7 +67,7 @@ function state(over: Partial<ReviewState>): ReviewState {
 
 describe("ReviewView", () => {
   it("batch-list mode lists batches with nwo + count", () => {
-    const { lastFrame } = render(<ReviewView state={state({})} height={20} focused />);
+    const { lastFrame } = render(<ReviewView state={state({})} scroll={0} height={20} focused />);
     expect(lastFrame()).toContain("o/r");
     expect(lastFrame()).toContain("2"); // finding count
   });
@@ -75,7 +75,7 @@ describe("ReviewView", () => {
     const s = state({
       open: { kind: "batch", batchIdx: 0, findingCursor: 0, checked: new Set(["f1"]) },
     });
-    const frame = render(<ReviewView state={s} height={20} focused />).lastFrame() ?? "";
+    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
     expect(frame).toContain("SQL injection");
     expect(frame).toContain("stale dep");
     expect(frame).toMatch(/\[x\].*SQL injection/); // f1 checked
@@ -84,14 +84,19 @@ describe("ReviewView", () => {
   it("empty state renders a hint", () => {
     expect(
       render(
-        <ReviewView state={state({ batches: [], drafts: [], cursor: 0 })} height={20} focused />,
+        <ReviewView
+          state={state({ batches: [], drafts: [], cursor: 0 })}
+          scroll={0}
+          height={20}
+          focused
+        />,
       ).lastFrame(),
     ).toContain("no pending");
   });
 
   it("list mode renders a draft row with a comment badge and nwo#issue", () => {
     const s = state({ batches: [], drafts: [DRAFT], cursor: 0 });
-    const frame = render(<ReviewView state={s} height={20} focused />).lastFrame() ?? "";
+    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
     expect(frame).toContain("o/r#5");
     expect(frame).toContain("comment"); // badge column
     expect(frame).toContain("This is the analysis."); // first non-empty draft line
@@ -99,7 +104,7 @@ describe("ReviewView", () => {
 
   it("draft-row comment badge is right-aligned, after the flexing preview text — matching the batch rows' far-right count column", () => {
     const s = state({ batches: [], drafts: [DRAFT], cursor: 0 });
-    const frame = render(<ReviewView state={s} height={20} focused />).lastFrame() ?? "";
+    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
     const previewIdx = frame.indexOf("This is the analysis.");
     const badgeIdx = frame.indexOf("comment");
     expect(previewIdx).toBeGreaterThan(-1);
@@ -111,9 +116,9 @@ describe("ReviewView", () => {
       batches: [],
       drafts: [DRAFT],
       cursor: 0,
-      open: { kind: "draft", draftIdx: 0, scroll: 0 },
+      open: { kind: "draft", draftIdx: 0 },
     });
-    const frame = render(<ReviewView state={s} height={20} focused />).lastFrame() ?? "";
+    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
     expect(frame).toContain("o/r#5");
     expect(frame).toContain("Broken build"); // issueTitle in header
     expect(frame).toContain("owned"); // external|owned in header
@@ -128,7 +133,8 @@ describe("ReviewView", () => {
     const atZero =
       render(
         <ReviewView
-          state={state({ ...base, open: { kind: "draft", draftIdx: 0, scroll: 0 } })}
+          state={state({ ...base, open: { kind: "draft", draftIdx: 0 } })}
+          scroll={0}
           height={10}
           focused
         />,
@@ -136,7 +142,8 @@ describe("ReviewView", () => {
     const atOne =
       render(
         <ReviewView
-          state={state({ ...base, open: { kind: "draft", draftIdx: 0, scroll: 1 } })}
+          state={state({ ...base, open: { kind: "draft", draftIdx: 0 } })}
+          scroll={1}
           height={10}
           focused
         />,
@@ -150,14 +157,30 @@ describe("ReviewView", () => {
     expect(atOne).toContain("line-6");
   });
 
+  it("a past-the-end scroll clamps to the bottom instead of blanking the pane", () => {
+    // LONG_DRAFT is 10 lines (line-0..line-9), footer:false. height 10 → rows 8 →
+    // bodyRows 6 → max 4, so the bottom window is line-4..line-9.
+    const base = { batches: [], drafts: [LONG_DRAFT], cursor: 0 };
+    const f = render(
+      <ReviewView
+        state={state({ ...base, open: { kind: "draft", draftIdx: 0 } })}
+        scroll={999}
+        height={10}
+        focused
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("line-9"); // the last line is on screen…
+    expect(f).not.toContain("line-0"); // …and the window stopped at the bottom
+  });
+
   it("draft preview omits the footer line when footer:false", () => {
     const s = state({
       batches: [],
       drafts: [{ ...DRAFT, footer: false }],
       cursor: 0,
-      open: { kind: "draft", draftIdx: 0, scroll: 0 },
+      open: { kind: "draft", draftIdx: 0 },
     });
-    const frame = render(<ReviewView state={s} height={20} focused />).lastFrame() ?? "";
+    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
     expect(frame).toContain("This is the analysis.");
     expect(frame).not.toContain("Analysis drafted with");
   });
@@ -165,7 +188,12 @@ describe("ReviewView", () => {
   it("combined empty state hints at drafting a comment", () => {
     const frame =
       render(
-        <ReviewView state={state({ batches: [], drafts: [], cursor: 0 })} height={20} focused />,
+        <ReviewView
+          state={state({ batches: [], drafts: [], cursor: 0 })}
+          scroll={0}
+          height={20}
+          focused
+        />,
       ).lastFrame() ?? "";
     expect(frame).toContain("draft a comment");
   });

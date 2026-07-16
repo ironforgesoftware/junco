@@ -2140,21 +2140,40 @@ describe("queue rail + queue view", () => {
     await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
   });
 
-  it("queue view scrolls with ] and [", async () => {
+  it("queue view scrolls with ] and [, and stops at the bottom", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-tui-q3-"));
     const { client } = makeClient({ "acme/api": [rawIssue] });
-    const r = renderApp(client, join(dir, "wl.json"));
+    // A queue taller than the pane — the clamp makes a short queue unscrollable
+    // (correctly), so overscroll can no longer stand in for real scrolling.
+    const tall: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      waiting: Array.from({ length: 30 }, (_, i) => ({
+        id: `manual-row-${String(i).padStart(2, "0")}`,
+        github: null,
+        kind: "pr" as const,
+        priority: "normal" as const,
+        retryCount: 0,
+        notBefore: null,
+        deferred: false,
+      })),
+    };
+    const r = renderApp(client, join(dir, "wl.json"), 999999, undefined, async () => tall);
     await until(() => (r.lastFrame() ?? "").includes("#46 exec"));
     r.stdin.write("t");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    // QueueView renders a "queue" title row above RUNNING, so two ] presses are
-    // needed to slice the RUNNING header out of the (unclamped) scroll window.
+    // ] scrolls the RUNNING header out of the window…
     r.stdin.write("]");
     r.stdin.write("]");
     await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    // …and [ brings it back.
     r.stdin.write("[");
     r.stdin.write("[");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    // Pressing well past the end parks at the bottom: the last row stays visible
+    // and the pane never blanks.
+    for (let i = 0; i < 60; i++) r.stdin.write("]");
+    await until(() => (r.lastFrame() ?? "").includes("row-29"));
+    expect(r.lastFrame()).toContain("row-29");
   });
 
   it("footer advertises t queue when the issues pane is focused", async () => {

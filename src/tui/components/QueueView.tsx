@@ -4,6 +4,7 @@ import type { QueueSnapshot, QueueWaiting } from "../queueSnapshot.js";
 import { queueLabel, progressLine, fmtAge, fmtClock } from "../queueFmt.js";
 import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { clampScroll, maxScroll } from "../window.js";
 
 function waitingNote(w: QueueWaiting): string {
   const parts: string[] = [];
@@ -32,6 +33,7 @@ export function QueueView({
   selectedRow,
   counts,
   onRowPress,
+  onScrollMax,
 }: {
   snap: QueueSnapshot | null;
   scroll: number;
@@ -47,6 +49,9 @@ export function QueueView({
    * wired when `selectable` — absent/false keeps the GitHub `t` view's rows
    * bare (byte-identical). */
   onRowPress?: (row: number) => void;
+  /** Reports `maxScroll(rows, visible)` to the owner DURING render, so the
+   * owning hook can clamp its offset without duplicating this row arithmetic. */
+  onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
   if (snap === null) {
     return (
@@ -214,9 +219,13 @@ export function QueueView({
   // and 0 for the LOCAL queue), then nudge so a selected row past the fold stays
   // visible — mirrors windowSlice's clamp. The slice caps at `visible` rows, so
   // the frame never exceeds `height` (Ink duplicate-redraw hazard). Non-
-  // selectable → selRowIndex null → start === scroll (byte-identical).
+  // selectable → selRowIndex null → start clamped (byte-identical output).
   const visible = Math.max(1, height - 3);
-  let start = scroll;
+  onScrollMax?.(maxScroll(rows.length, visible));
+  // Clamp the base offset BEFORE the selected-row nudge below, so a stale or
+  // past-the-end `scroll` can never slice an empty window; cursor-following is
+  // unchanged.
+  let start = clampScroll(scroll, rows.length, visible);
   if (selRowIndex !== null) {
     if (selRowIndex < start) start = selRowIndex;
     else if (selRowIndex >= start + visible) start = selRowIndex - visible + 1;

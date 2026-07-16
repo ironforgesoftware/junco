@@ -15,3 +15,18 @@ export function windowSlice(
   else if (c >= start + h) start = c - h + 1;
   return { start, end: start + h };
 }
+
+/** Largest first-row offset that still fills a `height`-row viewport from
+ * `total` rows: the last row lands at the BOTTOM of the viewport, never above
+ * it, so blank rows are unreachable. Content that fits gives 0 — no scrolling. */
+export function maxScroll(total: number, height: number): number {
+  if (height <= 0 || total <= 0) return 0;
+  return Math.max(0, total - height);
+}
+
+/** Clamp a scroll offset into `[0, maxScroll(total, height)]`. Clamps at BOTH
+ * ends: a stale offset left over from a longer list collapses onto the new
+ * bottom instead of slicing past it into an empty window. */
+export function clampScroll(offset: number, total: number, height: number): number {
+  return Math.min(Math.max(offset, 0), maxScroll(total, height));
+}

@@ -74,3 +74,61 @@ describe("cursor + spinner polish", () => {
     expect(SPINNER_FRAMES.some((g: string) => f.includes(g))).toBe(true);
   });
 });
+
+describe("CommandOutput scroll clamp", () => {
+  const OUT = Array.from({ length: 20 }, (_, i) => `line-${String(i).padStart(2, "0")}`).join("\n");
+
+  it("a past-the-end scroll clamps to the bottom instead of blanking the pane", () => {
+    const f = render(
+      <CommandOutput
+        title="junco doctor"
+        running={false}
+        elapsedS={1}
+        output={OUT}
+        scroll={999}
+        exitCode={0}
+        timedOut={false}
+        height={10}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("line-19");
+    expect(f).not.toContain("line-00");
+  });
+
+  it("the footer counter never runs past the total", () => {
+    const f = render(
+      <CommandOutput
+        title="junco doctor"
+        running={false}
+        elapsedS={1}
+        output={OUT}
+        scroll={999}
+        exitCode={0}
+        timedOut={false}
+        height={10}
+      />,
+    ).lastFrame()!;
+    // height 10 → visibleLines 5 → max 15 → the window is rows 16-20 of 20.
+    expect(f).toContain("16-20/20");
+  });
+
+  it("reports its max scroll to the owner", () => {
+    let reported: number | null = null;
+    render(
+      <CommandOutput
+        title="junco doctor"
+        running={false}
+        elapsedS={1}
+        output={OUT}
+        scroll={0}
+        exitCode={0}
+        timedOut={false}
+        height={10}
+        onScrollMax={(m) => {
+          reported = m;
+        }}
+      />,
+    );
+    expect(reported).toBe(15); // 20 lines − 5 visible
+  });
+});

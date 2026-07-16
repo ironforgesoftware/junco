@@ -47,6 +47,7 @@ import { theme, type ToastKind } from "./theme.js";
 import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
 import { useGuardedInput } from "./useGuardedInput.js";
+import { useScroll } from "./useScroll.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -265,7 +266,6 @@ export function App(props: AppProps): React.JSX.Element {
     cursor: 0,
     open: null,
   });
-  const [scroll, setScroll] = useState(0);
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(null);
@@ -305,13 +305,29 @@ export function App(props: AppProps): React.JSX.Element {
     worktrees: 0,
     daemon: 0,
   });
-  const [localScroll, setLocalScroll] = useState(0);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
   const [localRefreshedAt, setLocalRefreshedAt] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
+
+  // One scroll mechanic for every offset-driven surface. Exactly one is mounted
+  // at a time (the render tree is config | local | review | rail+one-of), so one
+  // instance serves them all; the key is the mounted surface's content identity,
+  // and a key change is what resets the offset — this replaces the 18
+  // hand-written offset-reset calls (this hook's github-side setter here, plus
+  // LOCAL mode's own scroll state, folded into this same instance) that used to
+  // stand in for a lifecycle.
+  const scrollKey = useMemo(() => {
+    if (uiMode === "local") return `local:${localSection}`;
+    if (view === "review" && reviewState.open?.kind === "draft")
+      return `draft:${reviewState.open.draftIdx}`;
+    if (view === "cmdOutput" && cmd) return `cmd:${cmd.token}`;
+    if (view === "detail" && detail) return `detail:${detail.nwo}#${detail.issue.number}`;
+    return view;
+  }, [uiMode, localSection, view, reviewState.open, cmd, detail]);
+  const { scroll, scrollBy, onScrollMax } = useScroll(scrollKey);
 
   // Selectable rows for the current section. INVARIANT: this list is the EXACT
   // rendered list each section component highlights, in the same order and
@@ -373,7 +389,6 @@ export function App(props: AppProps): React.JSX.Element {
     const i = LOCAL_SECTIONS.indexOf(localSection);
     const next = Math.max(0, Math.min(i + delta, LOCAL_SECTIONS.length - 1));
     setLocalSection(LOCAL_SECTIONS[next]);
-    setLocalScroll(0); // section switch resets the daemon-panel scroll
   };
 
   const showToast = useCallback((kind: ToastKind, text: string) => {
@@ -868,7 +883,6 @@ export function App(props: AppProps): React.JSX.Element {
     const nwo = currentNwo;
     const snapshot = currentIssue; // frozen at open — the header never swaps mid-read
     const num = snapshot.number;
-    setScroll(0);
     setDetail({ issue: snapshot, nwo, body: null, planComment: null, loading: true });
     setView("detail");
     void client.issueDetail(nwo, num).then((res) => {
@@ -1067,7 +1081,6 @@ export function App(props: AppProps): React.JSX.Element {
     (name: string, extraArgs: string[]) => {
       const title = ["junco", name, ...extraArgs].join(" ");
       const token = ++cmdTokenRef.current;
-      setScroll(0);
       setCmd({
         title,
         running: true,
@@ -1435,8 +1448,8 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (localSection === "daemon") {
-        if (input === "[" || key.upArrow) return void setLocalScroll((s) => Math.max(0, s - 1));
-        if (input === "]" || key.downArrow) return void setLocalScroll((s) => s + 1);
+        if (input === "[" || key.upArrow) return void scrollBy(-1);
+        if (input === "]" || key.downArrow) return void scrollBy(1);
         if (input === "X") {
           const n = localCheap?.daemon.currentTickets.length ?? 0;
           return void askConfirm({
@@ -1515,12 +1528,10 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "k" || key.upArrow) return void moveLocalSection(-1);
     if (input === "g") {
       setLocalSection("queue");
-      setLocalScroll(0);
       return;
     }
     if (input === "G") {
       setLocalSection("daemon");
-      setLocalScroll(0);
       return;
     }
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
@@ -1586,13 +1597,10 @@ export function App(props: AppProps): React.JSX.Element {
     }
 
     if (view === "detail") {
-      if (key.escape) {
-        setScroll(0); // shared offset — don't bleed it into the next view that reads it
-        return void setView("main");
-      }
+      if (key.escape) return void setView("main");
       if (input === "o") return void openDetailIssueInBrowser();
-      if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
-      if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+      if (input === "]" || key.downArrow) return void scrollBy(1);
+      if (input === "[" || key.upArrow) return void scrollBy(-1);
       return;
     }
 
@@ -1610,20 +1618,14 @@ export function App(props: AppProps): React.JSX.Element {
     }
 
     if (view === "queue") {
-      if (key.escape || input === "t") {
-        setScroll(0); // shared offset — don't bleed it into the next view that reads it
-        return void setView("main");
-      }
-      if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
-      if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+      if (key.escape || input === "t") return void setView("main");
+      if (input === "]" || key.downArrow) return void scrollBy(1);
+      if (input === "[" || key.upArrow) return void scrollBy(-1);
       return;
     }
 
     if (view === "prs") {
-      if (key.escape || input === "p") {
-        setScroll(0); // shared offset — don't bleed it into the next view that reads it
-        return void setView("main");
-      }
+      if (key.escape || input === "p") return void setView("main");
       if (input === "j" || key.downArrow) return void movePr(1);
       if (input === "k" || key.upArrow) return void movePr(-1);
       if (input === "g") return void movePrTo(0);
@@ -1656,12 +1658,9 @@ export function App(props: AppProps): React.JSX.Element {
     }
 
     if (view === "cmdOutput") {
-      if (key.escape) {
-        setScroll(0); // the palette → main path must not carry this offset either
-        return void setView("palette");
-      }
-      if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
-      if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+      if (key.escape) return void setView("palette");
+      if (input === "]" || key.downArrow) return void scrollBy(1);
+      if (input === "[" || key.upArrow) return void scrollBy(-1);
       if (input === "r" && cmd && !cmd.running) {
         return void runPaletteCommand(cmd.name, cmd.extraArgs);
       }
@@ -1674,21 +1673,8 @@ export function App(props: AppProps): React.JSX.Element {
       if (rs.open && rs.open.kind === "draft") {
         const draft = rs.drafts[rs.open.draftIdx];
         if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
-        if (input === "k" || key.upArrow) {
-          return void setReviewState((s) =>
-            s.open && s.open.kind === "draft"
-              ? { ...s, open: { ...s.open, scroll: Math.max(0, s.open.scroll - 1) } }
-              : s,
-          );
-        }
-        if (input === "j" || key.downArrow) {
-          return void setReviewState((s) => {
-            if (!s.open || s.open.kind !== "draft") return s;
-            const d = s.drafts[s.open.draftIdx];
-            const max = d ? Math.max(0, d.draft.split("\n").length - 1) : 0;
-            return { ...s, open: { ...s.open, scroll: Math.min(max, s.open.scroll + 1) } };
-          });
-        }
+        if (input === "k" || key.upArrow) return void scrollBy(-1);
+        if (input === "j" || key.downArrow) return void scrollBy(1);
         // Optimistic removal shared by post and discard: drop the draft, close
         // the preview, clamp the cursor to the (shrunk) combined list.
         const dropDraft = (id: string): void => {
@@ -1850,7 +1836,7 @@ export function App(props: AppProps): React.JSX.Element {
           }
           const draftIdx = s.cursor - s.batches.length;
           if (!s.drafts[draftIdx]) return s;
-          return { ...s, open: { kind: "draft", draftIdx, scroll: 0 } };
+          return { ...s, open: { kind: "draft", draftIdx } };
         });
       }
       return;
@@ -1887,7 +1873,6 @@ export function App(props: AppProps): React.JSX.Element {
     }
     if (input === "?") return void setView("help");
     if (input === "t") {
-      setScroll(0);
       setView("queue");
       return;
     }
@@ -1895,7 +1880,6 @@ export function App(props: AppProps): React.JSX.Element {
     // of this cascade — the settings idiom, free per
     // `grep -n 'input === ' src/tui/App.tsx`.
     if (input === "p") {
-      setScroll(0);
       setView("prs");
       // Entering the monitor: immediate full sweep (scope override — viewRef
       // still reads "main" until this render commits).
@@ -2100,7 +2084,7 @@ export function App(props: AppProps): React.JSX.Element {
       }
       const draftIdx = idx - s.batches.length;
       if (!s.drafts[draftIdx]) return s;
-      return { ...s, open: { kind: "draft", draftIdx, scroll: 0 } };
+      return { ...s, open: { kind: "draft", draftIdx } };
     });
   };
   const reviewFindingPress = (idx: number): void => {
@@ -2118,14 +2102,7 @@ export function App(props: AppProps): React.JSX.Element {
       return { ...s, open: { ...s.open, findingCursor: idx, checked } };
     });
   };
-  const reviewDraftWheel = (d: 1 | -1): void => {
-    setReviewState((s) => {
-      if (!s.open || s.open.kind !== "draft") return s;
-      const dft = s.drafts[s.open.draftIdx];
-      const max = dft ? Math.max(0, dft.draft.split("\n").length - 1) : 0;
-      return { ...s, open: { ...s.open, scroll: Math.max(0, Math.min(max, s.open.scroll + d)) } };
-    });
-  };
+  const reviewDraftWheel = (d: 1 | -1): void => scrollBy(d);
 
   // LOCAL-dashboard mouse handlers — mirror the rail/body key recipes above.
   const localSectionPress = (s: LocalSection): void => {
@@ -2135,7 +2112,6 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     setLocalSection(s);
-    setLocalScroll(0);
     setLocalFocus("rail");
   };
   const localRowPress = (idx: number): void => {
@@ -2182,35 +2158,23 @@ export function App(props: AppProps): React.JSX.Element {
       case "detail":
         return {
           o: openDetailIssueInBrowser,
-          esc: () => {
-            setScroll(0);
-            setView("main");
-          },
+          esc: () => setView("main"),
         };
       case "prDetail":
         return { esc: () => setView(prDetail?.from ?? "main"), o: openPrDetailInBrowser };
       case "queue":
         return {
-          "esc/t": () => {
-            setScroll(0);
-            setView("main");
-          },
+          "esc/t": () => setView("main"),
         };
       case "prs":
         return {
           enter: () => openPrDetail(selectedPr, "prs"),
           o: openSelectedPr,
-          "esc/p": () => {
-            setScroll(0);
-            setView("main");
-          },
+          "esc/p": () => setView("main"),
         };
       case "cmdOutput":
         return {
-          esc: () => {
-            setScroll(0);
-            setView("palette");
-          },
+          esc: () => setView("palette"),
           ...(cmd && !cmd.running ? { r: () => runPaletteCommand(cmd.name, cmd.extraArgs) } : {}),
         };
       case "palette":
@@ -2231,12 +2195,8 @@ export function App(props: AppProps): React.JSX.Element {
             onExit();
           },
           "?": () => setView("help"),
-          t: () => {
-            setScroll(0);
-            setView("queue");
-          },
+          t: () => setView("queue"),
           p: () => {
-            setScroll(0);
             setView("prs");
             void refreshAll({ scope: "monitor" });
           },
@@ -2471,22 +2431,25 @@ export function App(props: AppProps): React.JSX.Element {
           section={localSection}
           focus={localFocus}
           cursor={localCursorSafe}
-          scroll={localScroll}
+          scroll={scroll}
           layout={layout}
           now={queueNow}
           refreshedAt={localRefreshedAt}
           onSectionPress={localSectionPress}
           onRowPress={localRowPress}
-          onDaemonWheel={(d) => setLocalScroll((s) => Math.max(0, s + d))}
+          onDaemonWheel={(d) => scrollBy(d)}
+          onScrollMax={onScrollMax}
         />
       ) : view === "review" ? (
         <ReviewView
           state={reviewState}
+          scroll={scroll}
           height={listHeight}
           focused
           onRowPress={reviewRowPress}
           onFindingPress={reviewFindingPress}
           onDraftWheel={reviewDraftWheel}
+          onScrollMax={onScrollMax}
         />
       ) : (
         <>
@@ -2512,17 +2475,18 @@ export function App(props: AppProps): React.JSX.Element {
             }
           />
           {view === "queue" ? (
-            <ClickableBox flexGrow={1} onWheel={(d) => setScroll((s) => Math.max(0, s + d))}>
+            <ClickableBox flexGrow={1} onWheel={(d) => scrollBy(d)}>
               <QueueView
                 snap={queueSnap}
                 scroll={scroll}
                 now={queueNow}
                 height={listHeight}
                 focused
+                onScrollMax={onScrollMax}
               />
             </ClickableBox>
           ) : view === "cmdOutput" && cmd ? (
-            <ClickableBox flexGrow={1} onWheel={(d) => setScroll((s) => Math.max(0, s + d))}>
+            <ClickableBox flexGrow={1} onWheel={(d) => scrollBy(d)}>
               <CommandOutput
                 title={cmd.title}
                 running={cmd.running}
@@ -2532,6 +2496,7 @@ export function App(props: AppProps): React.JSX.Element {
                 exitCode={cmd.exitCode}
                 timedOut={cmd.timedOut}
                 height={listHeight}
+                onScrollMax={onScrollMax}
               />
             </ClickableBox>
           ) : view === "detail" && detail ? (
@@ -2546,7 +2511,8 @@ export function App(props: AppProps): React.JSX.Element {
               focused
               height={listHeight}
               onLinkPress={openDetailIssueInBrowser}
-              onWheel={(d) => setScroll((s) => Math.max(0, s + d))}
+              onWheel={(d) => scrollBy(d)}
+              onScrollMax={onScrollMax}
             />
           ) : view === "prDetail" && prDetail ? (
             <PrPreview

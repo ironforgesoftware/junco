@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { theme, toastColor } from "../src/tui/theme.js";
-import { windowSlice } from "../src/tui/window.js";
+import { windowSlice, maxScroll, clampScroll } from "../src/tui/window.js";
 import { computeLayout, WIDE_COLS, MIN_COLS, MIN_ROWS, CHROME_ROWS } from "../src/tui/layout.js";
 
 describe("theme", () => {
@@ -32,6 +32,36 @@ describe("windowSlice (follow-the-cursor)", () => {
   it("degenerate inputs return empty", () => {
     expect(windowSlice(0, 5, 0, 0)).toEqual({ start: 0, end: 0 });
     expect(windowSlice(5, 0, 0, 0)).toEqual({ start: 0, end: 0 });
+  });
+});
+
+describe("maxScroll / clampScroll (bottom stop)", () => {
+  it("content that fits never scrolls", () => {
+    expect(maxScroll(3, 10)).toBe(0);
+    expect(clampScroll(99, 3, 10)).toBe(0);
+  });
+  it("an exact fit never scrolls", () => {
+    expect(maxScroll(10, 10)).toBe(0);
+  });
+  it("stops with the last row at the viewport bottom", () => {
+    expect(maxScroll(20, 5)).toBe(15);
+    expect(clampScroll(999, 20, 5)).toBe(15);
+  });
+  it("passes an in-range offset through untouched", () => {
+    expect(clampScroll(7, 20, 5)).toBe(7);
+  });
+  it("clamps a negative offset to the top", () => {
+    expect(clampScroll(-3, 20, 5)).toBe(0);
+  });
+  it("collapses a stale offset when the list shrinks under it", () => {
+    expect(clampScroll(50, 12, 12)).toBe(0);
+    expect(clampScroll(50, 14, 12)).toBe(2);
+  });
+  it("degenerate inputs return 0", () => {
+    expect(maxScroll(0, 5)).toBe(0);
+    expect(maxScroll(5, 0)).toBe(0);
+    expect(clampScroll(4, 0, 5)).toBe(0);
+    expect(clampScroll(4, 5, 0)).toBe(0);
   });
 });
 

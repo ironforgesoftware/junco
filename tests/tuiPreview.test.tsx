@@ -67,3 +67,48 @@ describe("Preview", () => {
     expect(rows[3]).toContain("↗");
   });
 });
+
+describe("Preview scroll clamp", () => {
+  const BODY = Array.from({ length: 30 }, (_, i) => `line-${String(i).padStart(2, "0")}`).join(
+    "\n",
+  );
+
+  it("a past-the-end scroll clamps to the bottom instead of blanking the pane", () => {
+    const f = render(
+      <Preview
+        issue={ISSUE}
+        trigger="junco"
+        body={BODY}
+        planComment={null}
+        loading={false}
+        error={null}
+        scroll={999}
+        focused
+        height={14}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("(no plan posted yet)"); // the last built line
+    expect(f).not.toContain("line-00");
+  });
+
+  it("reports its max scroll to the owner", () => {
+    let reported: number | null = null;
+    render(
+      <Preview
+        issue={ISSUE}
+        trigger="junco"
+        body={"only one line"}
+        planComment={null}
+        loading={false}
+        error={null}
+        scroll={0}
+        focused
+        height={14}
+        onScrollMax={(m) => {
+          reported = m;
+        }}
+      />,
+    );
+    expect(reported).toBe(0); // 3 built lines in an 8-row viewport — nothing to scroll
+  });
+});
