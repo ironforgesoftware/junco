@@ -5,6 +5,7 @@ import { deriveState, stateMeta, type DashIssue } from "../state.js";
 import { hyperlink, shortResourceRef } from "../links.js";
 import { Spinner } from "./Spinner.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { clampScroll, maxScroll } from "../window.js";
 
 export interface PreviewProps {
   issue: DashIssue;
@@ -21,6 +22,7 @@ export interface PreviewProps {
   onLinkPress?: () => void;
   /** Mouse: wheel over the pane (down → +1, up → −1). */
   onWheel?: (dir: 1 | -1) => void;
+  onScrollMax?: (max: number) => void;
 }
 
 /** The fullscreen issue-detail view's body — issue heading, body text, and any
@@ -39,6 +41,7 @@ export function Preview({
   width,
   onLinkPress,
   onWheel,
+  onScrollMax,
 }: PreviewProps): React.JSX.Element {
   // Reserved rows: borders ×2, pane title, issue heading, the ↗ link line
   // (LINK_LINE_ROW in geometry.ts), footer line.
@@ -47,7 +50,9 @@ export function Preview({
   if (body !== null) lines.push(...body.split("\n"));
   if (planComment !== null) lines.push("", "── plan ──", ...planComment.split("\n"));
   else if (body !== null && !loading) lines.push("", "(no plan posted yet)");
-  const visible = lines.slice(scroll, scroll + viewHeight);
+  onScrollMax?.(maxScroll(lines.length, viewHeight));
+  const start = clampScroll(scroll, lines.length, viewHeight);
+  const visible = lines.slice(start, start + viewHeight);
   const st = deriveState(issue.labels, trigger);
   return (
     <ClickableBox
@@ -88,7 +93,7 @@ export function Preview({
       <Box flexGrow={1} />
       {lines.length > viewHeight && (
         <Text dimColor>
-          ↑/↓ scroll · {scroll + 1}-{Math.min(scroll + viewHeight, lines.length)}/{lines.length}
+          ↑/↓ scroll · {start + 1}-{Math.min(start + viewHeight, lines.length)}/{lines.length}
         </Text>
       )}
     </ClickableBox>
