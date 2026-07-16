@@ -412,6 +412,43 @@ describe("DaemonSection", () => {
     const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
     expect(f).toContain("spend $2.35 today / $10.00 budget");
   });
+
+  it("a past-the-end scroll clamps to the bottom instead of blanking the pane", () => {
+    // A daemon with many progress rows — taller than a short pane.
+    const busy = {
+      ...DAEMON,
+      progress: Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [
+          `manual-row-${String(i).padStart(2, "0")}`,
+          {
+            turns: i,
+            lastTool: "bash",
+            outputTokens: 100 + i,
+            startedAt: "2026-07-09T11:58:00Z",
+          },
+        ]),
+      ),
+    };
+    const f = render(<DaemonSection daemon={busy} scroll={999} height={8} focused />).lastFrame()!;
+    expect(f).toContain("row-11");
+    expect(f).not.toContain("row-00");
+  });
+
+  it("reports its max scroll to the owner", () => {
+    let reported: number | null = null;
+    render(
+      <DaemonSection
+        daemon={DAEMON}
+        scroll={0}
+        height={40}
+        focused
+        onScrollMax={(m) => {
+          reported = m;
+        }}
+      />,
+    );
+    expect(reported).toBe(0); // a tall pane fits the whole panel
+  });
 });
 
 describe("LocalDashboard", () => {

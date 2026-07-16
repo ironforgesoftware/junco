@@ -4,7 +4,7 @@ import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
 import { QueueView } from "./QueueView.js";
-import { windowSlice } from "../window.js";
+import { windowSlice, clampScroll, maxScroll } from "../window.js";
 import { listRowsHeight } from "../geometry.js";
 import { RAIL_WIDTH, type Layout } from "../layout.js";
 import type {
@@ -399,8 +399,10 @@ export function WorktreesSection({
   );
 }
 
-/** Daemon & health detail — a scrollable non-list panel (`scroll` slices the
- * built rows, mirroring QueueView). Stack-agnostic wording: "inference
+/** Daemon & health detail — a scrollable non-list panel (`scroll` is clamped
+ * into `[0, maxScroll(rows, visible)]` before it slices the built rows,
+ * mirroring QueueView, so a past-the-end offset lands on the bottom row
+ * instead of blanking the pane). Stack-agnostic wording: "inference
  * endpoint", never a specific server. */
 export function DaemonSection({
   daemon,
@@ -408,12 +410,16 @@ export function DaemonSection({
   height,
   focused,
   onWheel,
+  onScrollMax,
 }: {
   daemon: DaemonDetail | null;
   scroll: number;
   height: number;
   focused: boolean;
   onWheel?: (dir: 1 | -1) => void;
+  /** Reports `maxScroll(rows, visible)` to the owner DURING render, so the
+   * owning hook can clamp its offset without duplicating this row arithmetic. */
+  onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
   const border = (
     <ClickableBox
@@ -516,7 +522,10 @@ export function DaemonSection({
       </Text>,
     );
   }
-  return React.cloneElement(border, {}, lines.slice(scroll, scroll + Math.max(1, height - 3)));
+  const visible = Math.max(1, height - 3);
+  onScrollMax?.(maxScroll(lines.length, visible));
+  const start = clampScroll(scroll, lines.length, visible);
+  return React.cloneElement(border, {}, lines.slice(start, start + visible));
 }
 
 /** LOCAL dashboard: the section rail + the selected section body. Windowing
@@ -536,6 +545,7 @@ export default function LocalDashboard({
   onSectionPress,
   onRowPress,
   onDaemonWheel,
+  onScrollMax,
 }: {
   cheap: LocalCheap | null;
   heavy: LocalHeavy | null;
@@ -550,6 +560,10 @@ export default function LocalDashboard({
   onSectionPress?: (s: LocalSection) => void;
   onRowPress?: (index: number) => void;
   onDaemonWheel?: (dir: 1 | -1) => void;
+  /** Forwarded to whichever of LOCAL mode's two offset surfaces is mounted —
+   * `QueueView` (queue section) or `DaemonSection` (daemon section); only one
+   * is ever mounted at a time, so a single callback serves both. */
+  onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
   const bodyFocused = focus === "body";
   const h = layout.bodyRows;
@@ -586,6 +600,7 @@ export default function LocalDashboard({
         selectedRow={cursor}
         counts={cheap?.counts ?? null}
         onRowPress={onRowPress}
+        onScrollMax={onScrollMax}
       />
     ) : section === "outbox" ? (
       <OutboxSection
@@ -624,6 +639,7 @@ export default function LocalDashboard({
         height={h}
         focused={bodyFocused}
         onWheel={onDaemonWheel}
+        onScrollMax={onScrollMax}
       />
     );
 
