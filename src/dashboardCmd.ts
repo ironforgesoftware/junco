@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import type { Config } from "./types.js";
 import type { AppProps } from "./tui/App.js";
 import { CLONES_WATCHED_SUBDIR } from "./dataTree.js";
+import { checkForUpdate } from "./updateCheck.js";
 import type React from "react";
 
 /**
@@ -118,6 +119,9 @@ export async function runDashboard(
     githubEnabled: c.github.enabled,
     // App drives useApp().exit() itself; this stays a no-op hook point.
     onExit: () => {},
+    // Best-effort passive update check — cfg pre-bound, zero-arg (App's seam
+    // is CLI-agnostic; checkForUpdate itself never throws).
+    checkUpdateFn: () => checkForUpdate(c),
   });
 
   let exitCode = 0;

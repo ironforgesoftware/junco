@@ -53,6 +53,7 @@ export function Header({
   uiMode,
   githubEnabled,
   onModeTab,
+  updateLatest,
 }: {
   repoNwo: string | null;
   /** Extended /health snapshot, null before the first poll resolves. */
@@ -84,6 +85,8 @@ export function Header({
   githubEnabled?: boolean;
   /** Click handler for the GITHUB/LOCAL tabs (region-based; Task 5). */
   onModeTab?: (m: UiMode) => void;
+  /** Latest npm version when newer than the running one; null/absent → no chip. */
+  updateLatest?: string | null;
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -150,6 +153,7 @@ export function Header({
       </Box>
       <Box flexGrow={1} />
       <Box flexShrink={0} gap={2}>
+        {wide && updateLatest != null && <Text color={theme.accent}>⬆ v{updateLatest}</Text>}
         {watchlistError !== null && <Text color={theme.warn}>watchlist!</Text>}
         {reviewCount > 0 && <Text color={theme.warn}>●{reviewCount} review</Text>}
         {prAttention > 0 && (

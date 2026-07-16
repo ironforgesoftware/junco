@@ -31,6 +31,7 @@ export function HelpModal({
   trigger,
   uiMode,
   localSection,
+  updateLatest,
 }: {
   view: HintView;
   pane: 1 | 2 | 3;
@@ -43,6 +44,8 @@ export function HelpModal({
   /** Which LOCAL section is focused — its own keys render first, k9s-style,
    * same as `view`/`pane` do for the github help. Defaults to "queue". */
   localSection?: LocalSection;
+  /** Latest npm version when newer than the running one; null/absent → no line. */
+  updateLatest?: string | null;
 }): React.JSX.Element {
   if (uiMode === "local") {
     return (
@@ -90,6 +93,11 @@ export function HelpModal({
             ["mouse", "header tab only in local; body rows are keyboard-first (v1)"],
           ]}
         />
+        {updateLatest != null && (
+          <Box marginTop={1}>
+            <Text color={theme.accent}>⬆ junco v{updateLatest} available — run: junco update</Text>
+          </Box>
+        )}
         <Box marginTop={1}>
           <Text dimColor>press any key to close</Text>
         </Box>
@@ -158,6 +166,11 @@ export function HelpModal({
           ["⇡", "unpushed GitHub ops — flushed automatically; junco outbox flush pushes now"],
         ]}
       />
+      {updateLatest != null && (
+        <Box marginTop={1}>
+          <Text color={theme.accent}>⬆ junco v{updateLatest} available — run: junco update</Text>
+        </Box>
+      )}
       <Box marginTop={1}>
         <Text dimColor>press any key to close</Text>
       </Box>
