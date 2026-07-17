@@ -75,6 +75,12 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       analyze = { issue: a.issue, title: String(a.title ?? "") };
     }
   }
+  const reqRaw = frontmatter.github_request;
+  let githubRequest: Ticket["githubRequest"] = null;
+  if (reqRaw !== null && typeof reqRaw === "object" && !Array.isArray(reqRaw)) {
+    // Strict-true like `network:` — anything else is a documented no.
+    githubRequest = { createIssue: (reqRaw as Record<string, unknown>).create_issue === true };
+  }
   return {
     path,
     id,
@@ -94,6 +100,7 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       ? frontmatter.tools.filter((t): t is string => typeof t === "string" && t.trim() !== "")
       : null,
     github,
+    githubRequest,
     assess,
     analyze,
     network: typeof frontmatter.network === "boolean" ? frontmatter.network : null,

@@ -108,7 +108,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
     github: {
       type: "object",
       description:
-        "Worker-managed: provenance of a ticket bridged from a GitHub issue. Do not set by hand.",
+        "Worker-managed: provenance of a ticket bridged from a GitHub issue. Do not set by hand — to request a linked issue on a local dispatch, see github_request.",
       properties: {
         nwo: { type: "string", description: "Repository name-with-owner, e.g. acme/api." },
         issue: { type: "integer", minimum: 1, description: "Source issue number." },
@@ -117,6 +117,17 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
           type: "boolean",
           description:
             "Worker-managed: true when the ticket targets a repo the operator does not control. The reporter posts no labels/comments to the upstream issue; the PR itself (from the push_remote fork) is the only outward-facing write.",
+        },
+      },
+    },
+    github_request: {
+      type: "object",
+      description:
+        "Dispatcher-settable request: ask the worker to create a GitHub tracking issue for this ticket at claim time and link the resulting pull request to it (the PR body gains `Closes owner/repo#N`, so merging closes the issue). The worker creates the issue on the clone's origin repo under its own gh identity (the bot account when configured) and then stamps the worker-managed `github:` provenance block itself — dispatchers never write `github:` by hand. Best-effort: if the issue cannot be created (offline, no permission, non-GitHub origin) the ticket still runs, unlinked. Ignored on fork-push tickets (`push_remote: fork`), on amend tickets (`amends_pr` — the existing PR body is never edited, so the issue could never auto-close), and on Q&A/assess/analyze tickets.",
+      properties: {
+        create_issue: {
+          type: "boolean",
+          description: "Set true to request tracking-issue creation.",
         },
       },
     },

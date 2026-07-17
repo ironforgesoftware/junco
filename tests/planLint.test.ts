@@ -701,6 +701,57 @@ describe("labels_exist", () => {
 // Full valid ticket integration test
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Rule: github_request_scope
+// ---------------------------------------------------------------------------
+
+describe("github_request_scope", () => {
+  it("warns (never errors) when github_request rides a fork-push ticket", () => {
+    const fm = { ...VALID_FM, push_remote: "fork", github_request: { create_issue: true } };
+    const result = lintTicket(VALID_BODY, fm, { checkLabels: false });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+  });
+
+  it("warns when the ticket already carries a github: block", () => {
+    const fm = {
+      ...VALID_FM,
+      github: { nwo: "acme/api", issue: 3, kind: "pr" },
+      github_request: { create_issue: true },
+    };
+    const result = lintTicket(VALID_BODY, fm, { checkLabels: false });
+    expect(result.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+  });
+
+  it("warns when github_request rides an amend ticket", () => {
+    const fm = { ...VALID_FM, amends_pr: 42, github_request: { create_issue: true } };
+    const result = lintTicket(VALID_BODY, fm, { checkLabels: false });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+  });
+
+  it("warns on a non-mapping github_request, stays silent on a well-scoped one and on absence", () => {
+    const bad = lintTicket(
+      VALID_BODY,
+      { ...VALID_FM, github_request: true },
+      { checkLabels: false },
+    );
+    expect(bad.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+    const good = lintTicket(
+      VALID_BODY,
+      { ...VALID_FM, github_request: { create_issue: true } },
+      { checkLabels: false },
+    );
+    expect(good.violations.some((v) => v.rule === "github_request_scope")).toBe(false);
+    const absent = lintTicket(VALID_BODY, VALID_FM, { checkLabels: false });
+    expect(absent.violations.some((v) => v.rule === "github_request_scope")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Full valid ticket integration test
+// ---------------------------------------------------------------------------
+
 describe("lintTicket — clean ticket", () => {
   it("all-pass ticket returns ok with no violations", () => {
     const result = lintTicket(VALID_BODY, VALID_FM, { checkLabels: false });

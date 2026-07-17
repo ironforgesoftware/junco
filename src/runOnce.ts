@@ -10,6 +10,7 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
+import { fulfillIssueRequest } from "./githubIssueRequest.js";
 // NOTE: assessFlow.ts imports READ_ONLY_TOOLS from this module, so this
 // import creates a module cycle. Runtime-safe: both bindings are only
 // dereferenced inside function bodies (executeClaimed / runAssessFlow),
@@ -70,6 +71,9 @@ export interface RunDeps {
   // Analyze-flow factory (peer of assessFlowFn): tests inject a fake;
   // production defaults to the real runAnalyzeFlow.
   analyzeFlowFn?: typeof runAnalyzeFlow;
+  // Issue-linkage fulfillment (github_request frontmatter): tests inject a
+  // fake; production defaults to the real fulfillIssueRequest.
+  fulfillIssueRequestFn?: typeof fulfillIssueRequest;
   /** Probe before claiming: false → leave the inbox untouched this poll. The
    * daemon wires this to endpointReachable so an endpoint outage queues work
    * instead of burning tickets into failed/. */
@@ -288,6 +292,20 @@ export async function executeClaimed(
           defaultLabels: cfg.defaultLabels,
         });
         if (ctx) {
+          // Dispatcher-requested issue linkage: fulfilled here — after the
+          // repo context exists, before runPrFlow reads task.github — so the
+          // PR body's Closes line and the reporter both see the stamped
+          // provenance. Best-effort: null leaves the ticket unlinked. The
+          // reporter re-call is the queued→working flip the top-of-function
+          // onStart skipped while github was still null.
+          if (next.githubRequest?.createIssue && !next.github) {
+            const fulfillFn = deps.fulfillIssueRequestFn ?? fulfillIssueRequest;
+            const stamped = await fulfillFn(cfg, next, ctx, claimed);
+            if (stamped) {
+              next.github = stamped;
+              await reporter.onStart(next).catch(() => undefined);
+            }
+          }
           const flow = await runPrFlow(cfg, next, claimed, ctx, {
             sessionFactoryFor: deps.sessionFactoryFor,
             criticSessionFactory: deps.criticSessionFactory,

@@ -11,7 +11,7 @@ are no reusable utilities to point at). Prefer to keep a section and write
 
 ---
 
-```markdown
+````markdown
 ---
 id: <slug>-<YYYY-MM-DD>
 created: <YYYY-MM-DDTHH:mm:ss>
@@ -24,6 +24,8 @@ pr_title: "<verb-first H1, ≤70 chars>"
 draft: true
 labels: []
 # amends_pr: 42    # ONLY for amendment tickets — see "Amend mode" section below
+# github_request:     # optional — worker creates a tracking issue and links the PR to it
+#   create_issue: true
 ---
 
 # <Verb-first action title, ≤70 chars>
@@ -57,7 +59,7 @@ NOT to include: anything obvious from the file tree or repeating the Why.>
 
 ### ⚠️ Ask before touching (stop and report; do not unilaterally fix)
 
-- <files outside the In-scope list that *look* related but might be intentional>
+- <files outside the In-scope list that _look_ related but might be intentional>
 - <pre-existing test failures unrelated to this change>
 - <anything that would force a new dependency>
 - <if list is empty, write `_None._` — but bias toward at least one bullet for any non-trivial ticket>
@@ -96,11 +98,11 @@ and "agent uses what already exists".)
 
 ## Files
 
-| File | Action | Lines | Notes |
-|---|---|---|---|
+| File       | Action | Lines | Notes                                              |
+| ---------- | ------ | ----- | -------------------------------------------------- |
 | `src/a.ts` | modify | 42–58 | replace inline validation with `validate()` helper |
-| `src/b.ts` | new | — | one-line module re-exporting from `./a` |
-| `src/c.ts` | delete | — | dead code (last import removed in step 1) |
+| `src/b.ts` | new    | —     | one-line module re-exporting from `./a`            |
+| `src/c.ts` | delete | —     | dead code (last import removed in step 1)          |
 
 All paths are relative to the worktree root (your cwd).
 
@@ -125,9 +127,9 @@ Each step is one atomic change. **Commit after each step.**
 
 ## Behavior (acceptance — testable assertions)
 
-EARS-style trigger/response pairs. These are *behavioral* — what the system
+EARS-style trigger/response pairs. These are _behavioral_ — what the system
 should do once the change lands. The Verification block (next) is the
-*operational* check that exercises these behaviors. For doc-only or
+_operational_ check that exercises these behaviors. For doc-only or
 content-only tickets where there is no observable behavior, write `_None._`.
 
 - WHEN `<trigger>` THE SYSTEM SHALL `<observable response>`.
@@ -142,13 +144,14 @@ content-only tickets where there is no observable behavior, write `_None._`.
 <command 2>
 <command 3>
 ```
+````
 
 Junco runs each fenced bash block in the worktree after your session ends and
 surfaces results in the PR body. Do not run these commands inside your session
 — they're junco's job. Tell the spec what success looks like; junco enforces.
 
 **Do NOT include `cd <repo>` in this block.** Junco invokes the block with
-`cwd=<worktree-path>`, which is *not* the source repo's main checkout — it's
+`cwd=<worktree-path>`, which is _not_ the source repo's main checkout — it's
 a per-ticket worktree under `~/junco/worktrees/<id>/`. A leading `cd` moves
 out of the worktree into the source repo's main, where the agent's new files
 don't exist yet, and the verification fails for the wrong reason. Just write
@@ -171,7 +174,8 @@ the commands relative to the worktree root (e.g. `test -f src/foo.ts`,
 6. **Do not push or open a PR.** The worker handles that.
 7. **Final summary** (2–3 sentences at session end): what you did and any surprises. (Junco runs `## Verification` itself — don't restate it.)
 8. **Graceful stop on spec mismatch.** If you find the spec doesn't match reality (a file already exists with content the spec doesn't anticipate, a precondition has changed, the work is already done, or you cannot complete it as specified), output a single sentence explaining the mismatch and stop. Do NOT loop in thinking trying to reconcile — junco's supervisor will kill the session within minutes and the ticket lands in `failed/` with no useful information. Your one-sentence summary becomes the failure note that lets the user fix the spec and re-dispatch.
-```
+
+````
 
 ---
 
@@ -252,7 +256,7 @@ amends_pr: 42
 7. After `git commit` exits 0, the commit is real. Do not `git log`/`status`/`diff` to verify.
 8. After the initial `todo_write` with `phases:`, use only the incremental fields (`start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`). Never pass `phases:` again — it wipes progress memory.
 9. **Final summary:** what you amended, which verification commands passed.
-```
+````
 
 ### Metadata rules for amend tickets
 

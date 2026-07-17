@@ -20,6 +20,7 @@ const ticket = (github: Ticket["github"]): Ticket => ({
   retryCount: 0,
   tools: null,
   github,
+  githubRequest: null,
   assess: null,
   analyze: null,
   workdir: null,

@@ -78,6 +78,17 @@ Ask the minimum needed — autodetect where possible, ask inline when not.
 - `draft`: always `true` unless the user explicitly requests ready-for-review.
 - `labels`: empty `[]` by default. **Only include labels that exist on the repo** — `gh label list --repo <nwo>` to verify. Nonexistent labels fail `gh pr create` after push, leaving the branch on origin but no PR.
 
+### Linked tracking issue (optional)
+
+When the user asks for an issue alongside the PR ("file an issue for this too", "link the PR to a tracking issue"), add to the frontmatter:
+
+```yaml
+github_request:
+  create_issue: true
+```
+
+The **worker** — not you — creates the issue at claim time under its own GitHub identity (the operator's bot account when configured), on the clone's `origin` repo, and the eventual PR carries `Closes owner/repo#N` so merging closes it. Do NOT create the issue yourself with `gh`, and never write a `github:` block by hand (it is worker-managed). Omit the request when the ticket targets a repo the operator does not control (fork-PR dispatch) — the worker ignores it there. The same goes for amendment tickets (`amends_pr`): amendments never edit the existing PR's body, so the issue would never close — omit the request.
+
 ## Authoring discipline (what makes the plan NOT loop)
 
 Empirical lessons from repeated testing. Bake these into every plan body:

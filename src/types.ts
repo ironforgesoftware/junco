@@ -225,6 +225,11 @@ export interface Ticket {
   tools: string[] | null;
   /** GitHub issue this ticket was bridged from (null = local dispatch). */
   github: TicketGithub | null;
+  /** Dispatcher-authored request block (`github_request:`). Trusted local
+   * dispatchers may ask the worker to create a tracking issue at claim time;
+   * the worker fulfills it and stamps `github:` provenance itself, keeping
+   * that block worker-managed (githubIssueRequest.ts). Null = no request. */
+  githubRequest: { createIssue: boolean } | null;
   /** Assessment flavor options (null = regular PR/Q&A flow). `issue` scopes the
    * audit to a single GitHub issue when set by `junco assess owner/repo#N`.
    * The frontmatter also carries `issue_title` (self-documentation for anyone

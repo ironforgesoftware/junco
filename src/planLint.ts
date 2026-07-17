@@ -16,6 +16,7 @@
  * - notes_block_present:   strict "Notes for the agent" block is present
  * - no_forbidden_phrases:  no TBD / "Similar to Step N" / "think carefully" / etc.
  * - no_cd_in_steps (warn): no absolute `cd /Users/...` in Step bodies
+ * - github_request_scope (warn): github_request rides a ticket the worker will actually fulfill
  * - labels_exist:          frontmatter `labels:` exist on the GitHub repo
  */
 
@@ -512,6 +513,42 @@ function checkLabelsExist(
 }
 
 // ---------------------------------------------------------------------------
+// Check: github_request scoped where fulfillment can actually happen
+// ---------------------------------------------------------------------------
+
+function checkGithubRequestScope(frontmatter: Record<string, unknown>): LintViolation[] {
+  const req = frontmatter.github_request;
+  if (req === undefined || req === null) return [];
+  const warn = (message: string): LintViolation => ({
+    rule: "github_request_scope",
+    severity: "warning",
+    message,
+  });
+  if (typeof req !== "object" || Array.isArray(req)) {
+    return [
+      warn(
+        "github_request must be a mapping (github_request: { create_issue: true }); it will be ignored",
+      ),
+    ];
+  }
+  const v: LintViolation[] = [];
+  if (frontmatter.github !== undefined && frontmatter.github !== null) {
+    v.push(
+      warn("ticket already carries a github: provenance block; github_request will be ignored"),
+    );
+  }
+  if (frontmatter.push_remote === "fork") {
+    v.push(
+      warn("fork-push tickets never write to the upstream repo; github_request will be ignored"),
+    );
+  }
+  if (frontmatter.amends_pr !== undefined && frontmatter.amends_pr !== null) {
+    v.push(warn("amend tickets never edit the existing PR body; github_request will be ignored"));
+  }
+  return v;
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -548,6 +585,7 @@ export function lintTicket(
   violations.push(...checkNotesBlockPresent(body));
   violations.push(...checkNoForbiddenPhrases(body));
   violations.push(...checkNoCdInSteps(body));
+  violations.push(...checkGithubRequestScope(frontmatter));
   if (checkLabels) {
     violations.push(
       ...checkLabelsExist(frontmatter, repoNwo, { labelCache, fetchLabels, ghBin, ghEnv }),
