@@ -239,4 +239,18 @@ describe("parseTicket", () => {
     const t = parseTicket("/q/a.md", `---\nid: x\nanalyze:\n  issue: 3\n---\nbody`);
     expect(t.analyze).toEqual({ issue: 3, title: "" });
   });
+
+  it("parses github_request.create_issue: true", () => {
+    const md = `---\nid: t7\nrepo: /x\ngithub_request:\n  create_issue: true\n---\nb`;
+    expect(parseTicket("/in/t7.md", md).githubRequest).toEqual({ createIssue: true });
+  });
+
+  it("defaults githubRequest to null when absent; non-true create_issue parses false", () => {
+    expect(parseTicket("/in/t8.md", `---\nid: t8\n---\nb`).githubRequest).toBeNull();
+    const md = `---\nid: t9\ngithub_request:\n  create_issue: "yes"\n---\nb`;
+    expect(parseTicket("/in/t9.md", md).githubRequest).toEqual({ createIssue: false });
+    expect(
+      parseTicket("/in/t10.md", `---\nid: t10\ngithub_request: banana\n---\nb`).githubRequest,
+    ).toBeNull();
+  });
 });

@@ -138,6 +138,7 @@ function makeTicket(body: string): Ticket {
     retryCount: 0,
     tools: null,
     github: null,
+    githubRequest: null,
     assess: null,
     analyze: null,
     workdir: null,

@@ -43,6 +43,18 @@ describe("TICKET_FRONTMATTER_JSON_SCHEMA structure", () => {
   it("has a $schema field pointing to draft 2020-12", () => {
     expect(TICKET_FRONTMATTER_JSON_SCHEMA.$schema).toMatch(/2020-12/);
   });
+
+  it("documents github_request as a dispatcher-settable mapping with create_issue", () => {
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<
+      string,
+      { type?: string; description?: string; properties?: Record<string, { type?: string }> }
+    >;
+    expect(props.github_request).toBeDefined();
+    expect(props.github_request.type).toBe("object");
+    expect(props.github_request.properties?.create_issue?.type).toBe("boolean");
+    // The request surface must say who fulfills it — the worker, not the dispatcher.
+    expect(props.github_request.description).toMatch(/worker/i);
+  });
 });
 
 describe("describeTicketSchema()", () => {
