@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runOnce, claimNextTask } from "../src/runOnce.js";
-import type { Config, Ticket } from "../src/types.js";
+import type { Config, Ticket, TicketGithub } from "../src/types.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import type { AssessFlowResult } from "../src/assessFlow.js";
 import type { AnalyzeFlowResult } from "../src/analyzeFlow.js";
@@ -1717,5 +1717,82 @@ describe("analyze routing", () => {
     // onFinal — the call that would post an outward comment — must never
     // reach the injected reporter on the analyze path, `github:` block or not.
     expect(calls).not.toContain("final");
+  });
+});
+
+describe("github_request fulfillment wiring", () => {
+  const STAMP: TicketGithub = { nwo: "acme/api", issue: 7, kind: "pr", external: false };
+
+  function seed(root: string, frontmatterExtra: string): void {
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(
+      join(j, "inbox", "t.md"),
+      `---\nid: t\nrepo: ${join(root, "no-such-repo")}\n${frontmatterExtra}---\n# T\nbody\n`,
+      "utf8",
+    );
+  }
+
+  it("fulfills for a PR-flow ticket: stamp lands on the ticket, reporter restarts with the link", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "github_request:\n  create_issue: true\n");
+    const seen: Ticket[] = [];
+    const starts: Array<string | null> = [];
+    await runOnce(cfg(root), {
+      sessionFactoryFor: () => fakeFactory(),
+      fulfillIssueRequestFn: (_c, ticket) => {
+        seen.push(ticket);
+        return Promise.resolve(STAMP);
+      },
+      reporter: {
+        onStart: (t) => {
+          starts.push(t.github ? `${t.github.nwo}#${t.github.issue}` : null);
+          return Promise.resolve();
+        },
+        onRequeue: () => Promise.resolve(),
+        onFinal: () => Promise.resolve(),
+      },
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].github).toEqual(STAMP); // stamped before the flow consumed it
+    expect(starts).toEqual([null, "acme/api#7"]); // pre-fulfillment no-op, then the linked re-call
+  });
+
+  it("does not fulfill for Q&A tickets or when github: provenance already exists", async () => {
+    const qaRoot = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(qaRoot, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(
+      join(j, "inbox", "q.md"),
+      "---\nid: q\ngithub_request:\n  create_issue: true\n---\nq\n",
+      "utf8",
+    );
+    let calls = 0;
+    await runOnce(cfg(qaRoot), {
+      sessionFactoryFor: () => fakeFactory(),
+      fulfillIssueRequestFn: () => {
+        calls += 1;
+        return Promise.resolve(STAMP);
+      },
+    });
+    expect(calls).toBe(0);
+
+    const linkedRoot = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(
+      linkedRoot,
+      'github: {nwo: "acme/api", issue: 3, kind: pr}\ngithub_request:\n  create_issue: true\n',
+    );
+    await runOnce(cfg(linkedRoot), {
+      sessionFactoryFor: () => fakeFactory(),
+      fulfillIssueRequestFn: () => {
+        calls += 1;
+        return Promise.resolve(STAMP);
+      },
+    });
+    expect(calls).toBe(0);
   });
 });
