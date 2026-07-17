@@ -68,6 +68,13 @@ export async function fulfillIssueRequest(
     log.warn("github_request: fork-push ticket — skipping issue creation", { id: ticket.id });
     return null;
   }
+  if (ctx.amendsPr !== null) {
+    // Amend tickets never rebuild the PR body, so the Closes line — and with
+    // it any hope of the issue auto-closing — can never land. Don't create
+    // an issue nothing will ever close.
+    log.warn("github_request: amend ticket — skipping issue creation", { id: ticket.id });
+    return null;
+  }
 
   let nwo: string | null = null;
   try {

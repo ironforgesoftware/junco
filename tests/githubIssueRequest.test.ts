@@ -112,6 +112,19 @@ describe("fulfillIssueRequest", () => {
     expect(h.ghCalls).toHaveLength(0);
   });
 
+  it("skips amend tickets — the existing PR body is never edited, so the issue could never close", async () => {
+    const h = harness();
+    const meta = await fulfillIssueRequest(
+      CFG,
+      ticketOf(),
+      ctx({ amendsPr: 42 }),
+      "/claim/tk-1.md",
+      h.deps,
+    );
+    expect(meta).toBeNull();
+    expect(h.ghCalls).toHaveLength(0);
+  });
+
   it("returns null (never throws) on a non-GitHub origin, a gh failure, and an unparseable issue URL", async () => {
     const bad = harness({ originUrl: "https://gitlab.com/acme/api.git" });
     expect(

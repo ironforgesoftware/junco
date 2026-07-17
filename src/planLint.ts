@@ -542,6 +542,9 @@ function checkGithubRequestScope(frontmatter: Record<string, unknown>): LintViol
       warn("fork-push tickets never write to the upstream repo; github_request will be ignored"),
     );
   }
+  if (frontmatter.amends_pr !== undefined && frontmatter.amends_pr !== null) {
+    v.push(warn("amend tickets never edit the existing PR body; github_request will be ignored"));
+  }
   return v;
 }
 

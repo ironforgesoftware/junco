@@ -723,6 +723,13 @@ describe("github_request_scope", () => {
     expect(result.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
   });
 
+  it("warns when github_request rides an amend ticket", () => {
+    const fm = { ...VALID_FM, amends_pr: 42, github_request: { create_issue: true } };
+    const result = lintTicket(VALID_BODY, fm, { checkLabels: false });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+  });
+
   it("warns on a non-mapping github_request, stays silent on a well-scoped one and on absence", () => {
     const bad = lintTicket(
       VALID_BODY,
