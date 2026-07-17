@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<dataDir>/update-check.json`; opt out with `"updateCheck": false`).
 - `junco update` — install the latest release and drain-restart the supervised daemon.
 - `junco --version`.
+- Tickets can request a bot-created tracking issue: `github_request: { create_issue: true }` makes the worker create the issue at claim time (own gh identity — bot account when configured) and link the PR (`Closes owner/repo#N`), so merging closes it. Best-effort; fork-push tickets are skipped.
 
 ### Changed
 
