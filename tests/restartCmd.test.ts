@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { discoverService, runRestartCommand, type RestartDeps } from "../src/restartCmd.js";
+import {
+  discoverService,
+  kickstartService,
+  runRestartCommand,
+  type RestartDeps,
+  type ServiceRef,
+} from "../src/restartCmd.js";
 
 const CONFIG = "/Users/u/junco/config.json";
 
@@ -249,5 +255,43 @@ describe("discoverService — reviewer findings", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("kickstartService", () => {
+  it("launchd → launchctl kickstart -k gui/<uid>/<label>", async () => {
+    const calls: string[][] = [];
+    const deps: RestartDeps = {
+      uid: 501,
+      execFn: async (cmd, args) => {
+        calls.push([cmd, ...args]);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const svc: ServiceRef = { platform: "launchd", id: "com.edelweiss.junco-worker" };
+    const r = await kickstartService(svc, deps);
+    expect(r.code).toBe(0);
+    expect(calls).toEqual([["launchctl", "kickstart", "-k", "gui/501/com.edelweiss.junco-worker"]]);
+  });
+
+  it("systemd → systemctl --user --no-block restart <unit>", async () => {
+    const calls: string[][] = [];
+    const deps: RestartDeps = {
+      execFn: async (cmd, args) => {
+        calls.push([cmd, ...args]);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+    const svc: ServiceRef = { platform: "systemd", id: "junco.service" };
+    await kickstartService(svc, deps);
+    expect(calls).toEqual([["systemctl", "--user", "--no-block", "restart", "junco.service"]]);
+  });
+
+  it("propagates a non-zero exit + stderr", async () => {
+    const deps: RestartDeps = {
+      execFn: async () => ({ code: 1, stdout: "", stderr: "kick boom" }),
+    };
+    const r = await kickstartService({ platform: "launchd", id: "x" }, deps);
+    expect(r).toMatchObject({ code: 1, stderr: "kick boom" });
   });
 });
