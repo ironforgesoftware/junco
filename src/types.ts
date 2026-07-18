@@ -62,6 +62,7 @@ export interface AssessConfig {
   maxIssuesPerRun: number; // cap on issues filed per assessment run
   minSeverity: "critical" | "high" | "medium" | "low"; // findings below this are dropped
   npmBin: string; // binary for the dependency scan (`npm audit --json`)
+  fileAs: "me" | "bot"; // identity `junco assess file` posts under ("bot" = the dedicated bot account; fails loud when its login is missing)
 }
 /** [botAccount] — dedicated machine-account identity for daemon GitHub traffic. */
 export interface BotAccountConfig {

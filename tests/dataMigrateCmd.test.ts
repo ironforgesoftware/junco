@@ -100,7 +100,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       plannerModelId: null,
       externalReposRoot: join(dataDir, "clones", "external"),
     },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
     sandbox: {
       enabled: false,
       backend: "auto",

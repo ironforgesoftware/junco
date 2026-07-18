@@ -21,6 +21,7 @@ const NONEXISTENT_STATE_DIR = "/nonexistent-junco-assesscmd-state";
 function cfg(repos: GithubRepoMapping[] = [], stateDir: string = NONEXISTENT_STATE_DIR): Config {
   return {
     dataDir: stateDir,
+    ghBin: "gh",
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -30,8 +31,39 @@ function cfg(repos: GithubRepoMapping[] = [], stateDir: string = NONEXISTENT_STA
       requireApproval: true,
       plannerModelId: null,
     },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
+    botAccount: { enabled: false, configDir: "/sbx/junco-gh" },
   } as unknown as Config;
 }
+
+const BATCH_ONE = {
+  id: "assess-fileas-1",
+  nwo: "o/r",
+  external: true,
+  autoPlan: false,
+  repoPath: "/x",
+  createdAt: "2026-07-09T00:00:00.000Z",
+  findings: [
+    {
+      fingerprint: "f1",
+      kind: "code" as const,
+      severity: "high" as const,
+      ruleId: "R",
+      title: "One",
+      description: "",
+      references: [],
+    },
+  ],
+};
+
+const OK_FILE_RESULT = {
+  created: 1,
+  queuedOffline: 0,
+  deduped: 0,
+  failed: 0,
+  urls: [],
+  warnings: [],
+};
 
 const FIXED = new Date("2026-07-06T12:34:00Z");
 
@@ -787,5 +819,78 @@ describe("runAssessFileCommand", () => {
     );
     expect(code).toBe(1);
     expect(out).toContain("failed 1");
+  });
+});
+
+describe("runAssessFileCommand · assess.fileAs", () => {
+  it('fileAs "me" (default): the filing config carries no ghAuth', async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-fileas-me-"));
+    const c = cfg([], dir);
+    writePending(c, BATCH_ONE);
+    let seen: Config | null = null;
+    const fileFindingsFn = (async (fc: Config) => {
+      seen = fc;
+      return OK_FILE_RESULT;
+    }) as unknown as typeof fileFindings;
+    const code = await runAssessFileCommand(
+      c,
+      BATCH_ONE.id,
+      { all: true, only: undefined },
+      { printFn: () => {}, fileFindingsFn },
+    );
+    expect(code).toBe(0);
+    expect(seen).not.toBeNull();
+    expect((seen as unknown as Config).ghAuth).toBeUndefined();
+  });
+
+  it('fileAs "bot" with the bot disabled: exit 1, actionable message, nothing filed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-fileas-off-"));
+    const c = cfg([], dir);
+    (c.assess as { fileAs: string }).fileAs = "bot";
+    writePending(c, BATCH_ONE);
+    let out = "";
+    let called = false;
+    const fileFindingsFn = (async () => {
+      called = true;
+      return OK_FILE_RESULT;
+    }) as unknown as typeof fileFindings;
+    const code = await runAssessFileCommand(
+      c,
+      BATCH_ONE.id,
+      { all: true, only: undefined },
+      { printFn: (s) => (out += s), fileFindingsFn },
+    );
+    expect(code).toBe(1);
+    expect(called).toBe(false);
+    expect(out).toMatch(/junco auth login|assess\.fileAs/);
+    // the batch survives for retry after the auth problem is fixed
+    expect(readPending(c, BATCH_ONE.id).batch).not.toBeUndefined();
+  });
+
+  it('fileAs "bot" with a working login: the filing config carries the bot identity', async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afc-fileas-bot-"));
+    const c = cfg([], dir);
+    (c.assess as { fileAs: string }).fileAs = "bot";
+    (c.botAccount as { enabled: boolean }).enabled = true;
+    writePending(c, BATCH_ONE);
+    let seen: Config | null = null;
+    const fileFindingsFn = (async (fc: Config) => {
+      seen = fc;
+      return OK_FILE_RESULT;
+    }) as unknown as typeof fileFindings;
+    const authExec = async () => ({
+      code: 0,
+      stdout: JSON.stringify({ login: "junco-agent", id: 987654 }),
+      stderr: "",
+    });
+    const code = await runAssessFileCommand(
+      c,
+      BATCH_ONE.id,
+      { all: true, only: undefined },
+      { printFn: () => {}, fileFindingsFn, authDeps: { execFn: authExec } },
+    );
+    expect(code).toBe(0);
+    expect((seen as unknown as Config).ghAuth?.login).toBe("junco-agent");
+    expect((seen as unknown as Config).ghAuth?.configDir).toBe("/sbx/junco-gh");
   });
 });

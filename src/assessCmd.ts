@@ -14,6 +14,7 @@ import { readWatchlist, watchlistPath } from "./watchlist.js";
 import { buildAssessPrompt } from "./assessPrompt.js";
 import { listPending, readPending } from "./assessReview.js";
 import { fileFindings, type FileFindingsDeps, type FileResult } from "./assessFiling.js";
+import { withFileAsAuth, type GhAuthDeps } from "./ghAuth.js";
 import {
   parseIssueRef,
   resolveIssueTarget,
@@ -240,6 +241,7 @@ export interface AssessFileDeps {
   printFn?: (s: string) => void;
   fileDeps?: FileFindingsDeps;
   fileFindingsFn?: typeof fileFindings;
+  authDeps?: GhAuthDeps;
 }
 
 /**
@@ -306,9 +308,20 @@ export async function runAssessFileCommand(
     }
   }
 
+  // assess.fileAs: attach the bot identity to the WHOLE filing pass (dedup
+  // scan, label ensure, issue creates all flow through gh(cfg, …)) — or fail
+  // loud before anything posts. The batch stays parked either way.
+  let fileCfg = cfg;
+  try {
+    fileCfg = await withFileAsAuth(cfg, deps.authDeps ?? {});
+  } catch (e) {
+    print(`junco assess file: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
+
   let res: FileResult;
   try {
-    res = await fileFn(cfg, batch, selected, deps.fileDeps ?? {});
+    res = await fileFn(fileCfg, batch, selected, deps.fileDeps ?? {});
   } catch (e) {
     // fileFindings rethrows before archiving on the fatal-dedup path, so the
     // batch is preserved — surface the reason cleanly, don't swallow it.

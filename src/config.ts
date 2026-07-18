@@ -293,6 +293,7 @@ export const ConfigSchema = z.object({
       maxIssuesPerRun: z.number().int().min(1).default(20),
       minSeverity: z.enum(["critical", "high", "medium", "low"]).default("low"),
       npmBin: z.string().min(1).default("npm"),
+      fileAs: z.enum(["me", "bot"]).default("me"),
     })
     .default({}),
   botAccount: z
@@ -449,6 +450,7 @@ export function assembleConfig(
       maxIssuesPerRun: d.assess.maxIssuesPerRun,
       minSeverity: d.assess.minSeverity,
       npmBin: d.assess.npmBin,
+      fileAs: d.assess.fileAs,
     },
     sandbox: {
       enabled: d.sandbox.enabled,

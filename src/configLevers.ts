@@ -753,6 +753,16 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Binary for the dependency scan (npm audit --json).",
   },
+  {
+    path: "assess.fileAs",
+    type: "enum",
+    enumValues: ["me", "bot"],
+    default: "me",
+    editable: true,
+    reload: "live",
+    description:
+      "Identity `junco assess file` posts under: me (your gh login) or bot (the dedicated bot account; fails loud when its login is missing).",
+  },
 ];
 
 /** Look up a single lever by its dotted path. */

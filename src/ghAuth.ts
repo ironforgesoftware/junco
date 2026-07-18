@@ -94,6 +94,24 @@ export async function withBotAuth<C extends Pick<Config, "botAccount" | "ghBin">
   return { ...cfg, ghAuth: ctx };
 }
 
+/** assess.fileAs resolution for the interactive filing path: "me" keeps the
+ * ambient identity untouched; "bot" attaches the bot context and fails LOUD
+ * when the bot is disabled or its login is broken — a filing that was asked to
+ * post as the bot must never silently fall back to the personal login. */
+export async function withFileAsAuth<
+  C extends Pick<Config, "botAccount" | "ghBin"> & { assess: { fileAs: "me" | "bot" } },
+>(cfg: C, deps: GhAuthDeps = {}): Promise<C & { ghAuth?: GhAuthContext }> {
+  if (cfg.assess.fileAs !== "bot") return cfg;
+  if (!cfg.botAccount.enabled) {
+    throw new Error(
+      'assess.fileAs is "bot" but botAccount.enabled is false — ' +
+        'run: junco auth login (or set assess.fileAs back to "me")',
+    );
+  }
+  const ctx = await resolveBotAuth(cfg, deps); // throws the actionable auth-login message
+  return { ...cfg, ghAuth: ctx ?? undefined };
+}
+
 /** Wizard/doctor probe: bot login under configDir, or null. Never throws. */
 export async function detectBotLogin(
   ghBin: string,

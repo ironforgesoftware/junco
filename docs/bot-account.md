@@ -65,7 +65,9 @@ The config surface is additive and off by default:
   them — the PR flow, worktree operations, and the GitHub inbox/outbox/reporter. Interactive
   commands stay on your personal login: dashboard GitHub actions (except add-repo provisioning —
   see the next bullet), `junco assess`/`junco analyze` posting, `junco submit`, and
-  `junco doctor`'s ambient probes.
+  `junco doctor`'s ambient probes. One opt-in exception: `assess.fileAs: "bot"` moves
+  `junco assess file` (scan + labels + creates, as one identity) to the bot — see
+  docs/assess.md, "Filing identity".
 - **Fork provisioning exception.** One deliberate carve-out: provisioning a fork or managed
   clone for a repo you don't own always runs as the bot, even though it's human-triggered —
   the fork it creates is the daemon's future push target, so it has to live on the bot's
