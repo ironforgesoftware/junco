@@ -14,7 +14,7 @@ import { Account } from "../src/tui/wizard/chapters/Account.js";
 import { Extras } from "../src/tui/wizard/chapters/Extras.js";
 import { Review } from "../src/tui/wizard/chapters/Review.js";
 import { Finale } from "../src/tui/wizard/chapters/Finale.js";
-import { useSuspend } from "../src/tui/useSuspend.js";
+import { useSuspend, SuspendProvider } from "../src/tui/useSuspend.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 
@@ -1126,6 +1126,61 @@ describe("useSuspend", () => {
     const written = frames.join("\n");
     expect(written).not.toContain("\x1b[?1000"); // MOUSE_ENABLE/MOUSE_DISABLE share this prefix
     expect(written).not.toContain("\x1b[?1049"); // ALT_SCREEN_ENTER/LEAVE share this prefix
+  });
+
+  it("SuspendProvider: frame is blank while the wrapped fn runs, restored after, state kept", async () => {
+    let frameDuring: string | null = null;
+    let getFrame: () => string | undefined = () => undefined;
+    let done = false;
+    function Probe(): React.JSX.Element {
+      const suspend = useSuspend();
+      const [label] = React.useState("probe-42"); // must survive the suspension
+      React.useEffect(() => {
+        void suspend(async () => {
+          frameDuring = getFrame() ?? "<unrendered>";
+          return 0;
+        }).then(() => {
+          done = true;
+        });
+      }, []);
+      return <Text>{label}</Text>;
+    }
+    const { lastFrame } = render(
+      <SuspendProvider>
+        <Probe />
+      </SuspendProvider>,
+    );
+    getFrame = lastFrame;
+    await until(() => done);
+    // The commit that blanks the UI must land BEFORE the child runs…
+    expect(frameDuring).toBe("");
+    // …and the tree must re-render (not remount) afterwards, state intact.
+    await until(() => (lastFrame() ?? "").includes("probe-42"));
+  });
+
+  it("Account under SuspendProvider: login blanks the wizard, then re-detects without resetting", async () => {
+    let frameDuring: string | null = null;
+    let getFrame: () => string | undefined = () => undefined;
+    let loggedIn = false;
+    const io = fakeIo({
+      detectBotLogin: async () => (loggedIn ? "junco-agent" : null),
+      runGhLogin: async () => {
+        frameDuring = getFrame() ?? "<unrendered>";
+        loggedIn = true;
+        return 0;
+      },
+    });
+    const { lastFrame, stdin } = render(
+      <SuspendProvider>
+        <Account {...noopChapter} answers={defaultAnswers()} io={io} onNext={() => {}} />
+      </SuspendProvider>,
+    );
+    getFrame = lastFrame;
+    await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
+    await fireUntil(stdin, DOWN + ENTER, () => (lastFrame() ?? "").includes("Log in now"));
+    await fireUntil(stdin, ENTER, () => (lastFrame() ?? "").includes("acting as junco-agent"), 200);
+    // gh owned the terminal alone: no wizard frame was painted while it ran.
+    expect(frameDuring).toBe("");
   });
 });
 
