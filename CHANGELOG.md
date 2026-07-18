@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-17
+
 ### Added
 
 - Full-TUI mouse control with hover feedback: config editor, command palette, queue, review, help, add-repo, LOCAL dashboard, plus clickable footer hint chips in every view.
@@ -54,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bare `junco` now ensures the supervised daemon is up, then opens the dashboard. On an
+  interactive terminal, if the daemon is down and a launchd/systemd service references your
+  config, it starts that service and waits briefly for it to come up before landing in the
+  dashboard; with no service installed it opens the dashboard and points you at `junco service`.
+  Previously bare `junco` with a config ran the daemon in the foreground (blocking the terminal).
+  Never starts an unsupervised daemon, and non-interactive invocations (pipes/CI) skip the
+  pre-flight entirely. `junco start` (explicit foreground daemon) and `junco dashboard` (observe
+  without starting anything) are unchanged.
 - Dashboard mouse protocol upgraded to SGR any-motion tracking (hover); click targets now resolve via a render-time hit-region registry.
 - Default on-disk locations moved under the unified `dataDir` root (existing configs are
   unaffected — see Deprecated below):
