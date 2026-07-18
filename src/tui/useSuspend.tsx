@@ -12,9 +12,19 @@
  * next commit diffs against the empty frame, so Ink rewrites the whole UI
  * instead of diffing against a frame the cleared alt screen no longer shows.
  *
+ * Raw mode is dropped on the STREAM ITSELF, not via Ink's setRawMode: that
+ * wrapper is reference-counted (ink App's rawModeEnabledCount, real
+ * stdin.setRawMode only at 0/1 crossings), and the still-mounted useInput
+ * consumers under display:none hold the count above zero — a counted
+ * "disable" can never actually restore cooked mode, leaving gh's line-read
+ * waiting for a "\n" that ICRNL never produces (#216). The suspended tree is
+ * static, so Ink performs no 0/1 crossing that could re-raw the tty while the
+ * child owns it; on resume the tty is returned raw — exactly the state Ink's
+ * count believes it is in.
+ *
  * TTY-gated like MouseProvider — under ink-testing-library's fake streams
- * only raw mode toggles and the provider state change are observable. Without
- * a SuspendProvider ancestor the hook degrades to the old behavior (begin()
+ * (no isTTY) neither raw mode nor escapes are touched. Without a
+ * SuspendProvider ancestor the hook degrades to pause/resume only (begin()
  * resolves immediately). */
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Box, useStdin, useStdout } from "ink";
@@ -74,21 +84,22 @@ export function SuspendProvider({ children }: { children: React.ReactNode }): Re
 }
 
 export function useSuspend(): <T>(fn: () => Promise<T>) => Promise<T> {
-  const { stdin, setRawMode } = useStdin();
+  const { stdin } = useStdin();
   const { stdout } = useStdout();
   const { begin, end } = useContext(SuspendContext);
   return async <T,>(fn: () => Promise<T>): Promise<T> => {
     await begin();
-    const isTTY = Boolean(stdout.isTTY);
-    if (isTTY) stdout.write(MOUSE_DISABLE + ALT_SCREEN_LEAVE);
-    setRawMode(false);
+    const outTTY = Boolean(stdout.isTTY);
+    if (outTTY) stdout.write(MOUSE_DISABLE + ALT_SCREEN_LEAVE);
+    // Directly on the stream — NOT Ink's counted setRawMode (see header).
+    if (stdin.isTTY) stdin.setRawMode(false);
     stdin.pause();
     try {
       return await fn();
     } finally {
       stdin.resume();
-      setRawMode(true);
-      if (isTTY) stdout.write(ALT_SCREEN_ENTER + MOUSE_ENABLE);
+      if (stdin.isTTY) stdin.setRawMode(true);
+      if (outTTY) stdout.write(ALT_SCREEN_ENTER + MOUSE_ENABLE);
       end();
     }
   };
