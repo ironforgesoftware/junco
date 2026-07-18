@@ -11,6 +11,7 @@ import { theme } from "../theme.js";
 import { useTerminalSize, type TerminalSize } from "../useTerminalSize.js";
 import { useGuardedInput } from "../useGuardedInput.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { SuspendProvider } from "../useSuspend.js";
 import { Welcome } from "./chapters/Welcome.js";
 import { Workspace } from "./chapters/Workspace.js";
 import { Model } from "./chapters/Model.js";
@@ -112,72 +113,74 @@ export function WizardApp({
     );
 
   return (
-    <Box flexDirection="column" padding={1}>
-      <Text bold color={theme.accent}>
-        junco setup
-      </Text>
-      <Box marginTop={1}>
-        {!narrow && (
-          <Box flexDirection="column" width={16} marginRight={2}>
-            {CHAPTERS.map((c, i) => {
-              const mark = result !== null || i < idx ? "✓" : i === idx ? "▶" : " ";
-              return (
-                <Text
-                  key={c}
-                  color={i === idx && result === null ? theme.accent : undefined}
-                  dimColor={i > idx && result === null}
-                >
-                  {mark} {c}
-                </Text>
-              );
-            })}
-          </Box>
-        )}
-        <Box flexDirection="column" flexGrow={1}>
-          {narrow && (
-            <Text dimColor>
-              {result !== null ? "done" : `${idx + 1}/${CHAPTERS.length} · ${CHAPTERS[idx]}`}
-            </Text>
-          )}
-          {writeError !== null && result === null && (
-            <Box flexDirection="column" marginBottom={1}>
-              <Text color={theme.error}>✗ Write failed: {writeError}</Text>
-              <Text dimColor>fix the problem, then Write again — or Quit without writing</Text>
+    <SuspendProvider>
+      <Box flexDirection="column" padding={1}>
+        <Text bold color={theme.accent}>
+          junco setup
+        </Text>
+        <Box marginTop={1}>
+          {!narrow && (
+            <Box flexDirection="column" width={16} marginRight={2}>
+              {CHAPTERS.map((c, i) => {
+                const mark = result !== null || i < idx ? "✓" : i === idx ? "▶" : " ";
+                return (
+                  <Text
+                    key={c}
+                    color={i === idx && result === null ? theme.accent : undefined}
+                    dimColor={i > idx && result === null}
+                  >
+                    {mark} {c}
+                  </Text>
+                );
+              })}
             </Box>
           )}
-          {body}
+          <Box flexDirection="column" flexGrow={1}>
+            {narrow && (
+              <Text dimColor>
+                {result !== null ? "done" : `${idx + 1}/${CHAPTERS.length} · ${CHAPTERS[idx]}`}
+              </Text>
+            )}
+            {writeError !== null && result === null && (
+              <Box flexDirection="column" marginBottom={1}>
+                <Text color={theme.error}>✗ Write failed: {writeError}</Text>
+                <Text dimColor>fix the problem, then Write again — or Quit without writing</Text>
+              </Box>
+            )}
+            {body}
+          </Box>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor>enter continue · </Text>
+          <ClickableBox
+            hoverBg={theme.hoverBg}
+            onPress={result === null && idx > 0 ? back : undefined}
+          >
+            <Text dimColor>← back</Text>
+          </ClickableBox>
+          <Text dimColor> · </Text>
+          <ClickableBox
+            hoverBg={theme.hoverBg}
+            // NOT `textEditing.current ? undefined : cancel` — that ternary
+            // resolves to a snapshot at WizardApp's last render. textEditing
+            // flips inside a chapter's mount effect (e.g. Workspace.tsx),
+            // which commits without itself triggering a WizardApp re-render,
+            // so a click landing in that window would still fire the
+            // pre-effect snapshot's `cancel`. The wrapped closure instead
+            // dereferences the ref at CALL time — same live-read guarantee
+            // the keyboard branch above already gets for free from useInput.
+            onPress={
+              result !== null
+                ? done
+                : () => {
+                    if (!textEditing.current) cancel();
+                  }
+            }
+          >
+            <Text dimColor>q quit</Text>
+          </ClickableBox>
         </Box>
       </Box>
-      <Box marginTop={1}>
-        <Text dimColor>enter continue · </Text>
-        <ClickableBox
-          hoverBg={theme.hoverBg}
-          onPress={result === null && idx > 0 ? back : undefined}
-        >
-          <Text dimColor>← back</Text>
-        </ClickableBox>
-        <Text dimColor> · </Text>
-        <ClickableBox
-          hoverBg={theme.hoverBg}
-          // NOT `textEditing.current ? undefined : cancel` — that ternary
-          // resolves to a snapshot at WizardApp's last render. textEditing
-          // flips inside a chapter's mount effect (e.g. Workspace.tsx),
-          // which commits without itself triggering a WizardApp re-render,
-          // so a click landing in that window would still fire the
-          // pre-effect snapshot's `cancel`. The wrapped closure instead
-          // dereferences the ref at CALL time — same live-read guarantee
-          // the keyboard branch above already gets for free from useInput.
-          onPress={
-            result !== null
-              ? done
-              : () => {
-                  if (!textEditing.current) cancel();
-                }
-          }
-        >
-          <Text dimColor>q quit</Text>
-        </ClickableBox>
-      </Box>
-    </Box>
+    </SuspendProvider>
   );
 }
