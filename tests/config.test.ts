@@ -452,12 +452,13 @@ describe("github.externalReposRoot", () => {
 });
 
 describe("[assess] config section", () => {
-  it("defaults: maxIssuesPerRun 20, minSeverity low, npmBin npm", () => {
+  it("defaults: maxIssuesPerRun 20, minSeverity low, npmBin npm, fileAs me", () => {
     const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/v" }));
     expect(cfg.assess).toEqual({
       maxIssuesPerRun: 20,
       minSeverity: "low",
       npmBin: "npm",
+      fileAs: "me",
     });
   });
 
@@ -465,14 +466,21 @@ describe("[assess] config section", () => {
     const cfg = loadConfig(
       writeJson({
         vaultRoot: "/tmp/v",
-        assess: { maxIssuesPerRun: 5, minSeverity: "high", npmBin: "pnpm" },
+        assess: { maxIssuesPerRun: 5, minSeverity: "high", npmBin: "pnpm", fileAs: "bot" },
       }),
     );
     expect(cfg.assess).toEqual({
       maxIssuesPerRun: 5,
       minSeverity: "high",
       npmBin: "pnpm",
+      fileAs: "bot",
     });
+  });
+
+  it('rejects fileAs = "daemon" (enum validation)', () => {
+    expect(() =>
+      loadConfig(writeJson({ vaultRoot: "/tmp/v", assess: { fileAs: "daemon" } })),
+    ).toThrow();
   });
 
   it("rejects maxIssuesPerRun = 0 (min(1))", () => {

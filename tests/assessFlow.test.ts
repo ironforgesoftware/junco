@@ -86,7 +86,7 @@ function cfg(root: string): Config {
       plannerModelId: null,
       externalReposRoot: "/tmp/junco-test-external",
     },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm" },
+    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
     sandbox: {
       enabled: false,
       backend: "auto",

@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import type { spawn } from "node:child_process";
-import { resolveBotAuth, withBotAuth, detectBotLogin, runGhLogin } from "../src/ghAuth.js";
+import {
+  resolveBotAuth,
+  withBotAuth,
+  withFileAsAuth,
+  detectBotLogin,
+  runGhLogin,
+} from "../src/ghAuth.js";
 
 const USER_JSON = JSON.stringify({ login: "junco-agent", id: 987654 });
 
@@ -147,5 +153,54 @@ describe("runGhLogin", () => {
     await expect(runGhLogin("gh", "/sbx/junco-gh", { spawnFn, mkdirFn: () => {} })).resolves.toBe(
       3,
     );
+  });
+});
+
+describe("withFileAsAuth", () => {
+  const bot = { enabled: true, configDir: "/sbx/junco-gh" };
+
+  it('fileAs "me": returns cfg unchanged, execs nothing', async () => {
+    const { execFn, calls } = fakeExec({});
+    const cfg = { botAccount: bot, ghBin: "gh", assess: { fileAs: "me" as const } };
+    const out = await withFileAsAuth(cfg, { execFn });
+    expect(out).toBe(cfg);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('fileAs "bot" with botAccount disabled: fails loud, execs nothing, never falls back', async () => {
+    const { execFn, calls } = fakeExec({ "api user": { code: 0, stdout: USER_JSON } });
+    await expect(
+      withFileAsAuth(
+        {
+          botAccount: { enabled: false, configDir: "/sbx/junco-gh" },
+          ghBin: "gh",
+          assess: { fileAs: "bot" as const },
+        },
+        { execFn },
+      ),
+    ).rejects.toThrow(/assess\.fileAs.*botAccount\.enabled|junco auth login/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('fileAs "bot" with a working login: attaches the bot context (isolated GH_CONFIG_DIR)', async () => {
+    const { execFn, calls } = fakeExec({ "api user": { code: 0, stdout: USER_JSON } });
+    const out = await withFileAsAuth(
+      { botAccount: bot, ghBin: "gh", assess: { fileAs: "bot" as const } },
+      { execFn },
+    );
+    expect(out.ghAuth?.login).toBe("junco-agent");
+    expect(out.ghAuth?.configDir).toBe("/sbx/junco-gh");
+    expect(calls[0]?.env?.GH_CONFIG_DIR).toBe("/sbx/junco-gh");
+    expect(calls[0]?.env?.GH_TOKEN).toBe("");
+  });
+
+  it('fileAs "bot" with a broken login: rejects with the actionable auth-login message', async () => {
+    const { execFn } = fakeExec({ "api user": { code: 1, stdout: "" } });
+    await expect(
+      withFileAsAuth(
+        { botAccount: bot, ghBin: "gh", assess: { fileAs: "bot" as const } },
+        { execFn },
+      ),
+    ).rejects.toThrow(/junco auth login/);
   });
 });

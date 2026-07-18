@@ -116,6 +116,8 @@ Before filing, it re-runs the authoritative dedup scan (so a finding someone alr
 
 Prints a one-line summary — `filed N · queued N · already-filed N · failed N` — followed by the created issue URLs and any warnings, and exits `1` if anything failed to file.
 
+**Filing identity** (`assess.fileAs`, default `"me"`): by default issues post under your ambient `gh` login — human confirmation is human attribution. Set `assess.fileAs: "bot"` to file under the dedicated bot account instead: the bot identity is attached to the whole filing pass, so the author-scoped dedup scan, the label ensure, and the issue creates all run as the bot (a scan-as-me/file-as-bot split would blind dedup to the bot's own past findings). Fails loud — with the bot disabled or its login missing/expired, `assess file` exits non-zero pointing at `junco auth login` and posts nothing; there is no silent fallback to your personal login. The bot needs triage-or-better on owned repos for the labels; label gaps degrade the same best-effort way as today. Switching filing identity re-introduces the documented one-time dedup mismatch (author-scoped scans stop seeing findings filed under the previous identity) — same caveat as enabling the bot, self-resolving.
+
 ## Issue-scoped assess
 
 `junco assess owner/repo#N` (or a full issue URL) points the audit at one issue instead of sweeping the whole repo. Target resolution goes through the same `resolveIssueTarget` helper `junco dispatch` and `junco analyze` use: a fail-fast `gh issue view` fetch, then either resolve against an already-watched repo or **auto-provision** an unwatched one — fork, clone into a managed directory, add it to the watchlist.
