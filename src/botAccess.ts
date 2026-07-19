@@ -12,7 +12,7 @@
  */
 
 import type { Config } from "./types.js";
-import { gh } from "./git.js";
+import { gh, GitOpError, isNetworkError } from "./git.js";
 import { withBotAuth } from "./ghAuth.js";
 
 export type RepoAccess =
@@ -46,6 +46,14 @@ export async function classifyRepoAccess(
     retryNetwork: true,
   });
   if (r.code !== 0) {
+    // #192.2: `check: false` resolves non-zero exits instead of throwing, so
+    // retryNetwork never fires — a transient network failure would otherwise
+    // be mis-classified as blocked/no-access and prescribe `junco auth grant`
+    // for a repo the bot may fully own. Throw a (retryable) GitOpError instead,
+    // checked before SAML since a network error carries no SAML marker.
+    if (isNetworkError(r.stderr)) {
+      throw new GitOpError(`gh repo view ${nwo} failed (network)`, r.stderr, r.code);
+    }
     if (r.stderr.includes(SAML_MARKER)) return { mode: "blocked", reason: "sso" };
     return { mode: "blocked", reason: "no-access" };
   }
@@ -63,8 +71,18 @@ export async function classifyRepoAccess(
 
 const firstLine = (s: string): string => (s.split("\n")[0] ?? "").slice(0, 200);
 
-const ssoMessage = (nwo: string): string =>
-  `the bot's token is blocked by SAML enforcement for ${nwo} — authorize gh for the org in the bot's browser session, then retry`;
+/**
+ * #192.1: the SSO guidance is shared by grantBotAccess (bot identity, always)
+ * and resolveIssueTarget (which may run under the AMBIENT identity when
+ * botAccount.enabled is false). Parameterize the subject/possessive on `who` so
+ * an ambient-only user isn't told about "the bot's token" that doesn't exist.
+ * `who: "bot"` reproduces the original string byte-for-byte.
+ */
+export const ssoMessage = (nwo: string, who: "bot" | "you" = "bot"): string => {
+  const subject = who === "bot" ? "the bot's token" : "your gh token";
+  const whose = who === "bot" ? "the bot's" : "your";
+  return `${subject} is blocked by SAML enforcement for ${nwo} — authorize gh for the org in ${whose} browser session, then retry`;
+};
 
 /**
  * Grant the bot write access to `nwo` using both identities junco holds:

@@ -1023,10 +1023,13 @@ describe("runDoctor bot account checks", () => {
             return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
           }
           if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
-            // WRITE only under the bot's GH_CONFIG_DIR — ambient auth would
-            // read code 1 → "unknown" warn, flipping the ✓ assertion below.
-            // Pins that the permission probe runs as the bot, not just arg shape.
-            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+            // WRITE only under the bot's GH_CONFIG_DIR AND with GH_TOKEN/
+            // GITHUB_TOKEN cleared — ambient auth or an un-cleared token would
+            // read code 1 → "unknown" warn, flipping the ✓ assertion below. Pins
+            // both the identity dir and the #186 token-clearing (#192.3).
+            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh" &&
+              opts?.env?.GH_TOKEN === "" &&
+              opts?.env?.GITHUB_TOKEN === ""
               ? { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" }
               : { code: 1, stdout: "", stderr: "wrong identity" };
           }

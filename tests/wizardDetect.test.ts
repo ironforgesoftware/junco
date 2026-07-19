@@ -169,9 +169,12 @@ describe("flightChecks bot-access receipts", () => {
         opts?: { env?: Record<string, string> },
       ): Promise<{ code: number; stdout: string; stderr: string }> => {
         if (args.join(" ") === "repo view acme/api --json viewerPermission") {
-          // WRITE only under the bot's GH_CONFIG_DIR — ambient auth would
-          // flip the "ok" assertion below if the probe ran without it.
-          return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+          // WRITE only under the bot's GH_CONFIG_DIR AND with GH_TOKEN/
+          // GITHUB_TOKEN cleared — an un-cleared ambient token would flip the
+          // "ok" assertion. Pins both dir and #186 token-clearing (#192.3).
+          return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh" &&
+            opts?.env?.GH_TOKEN === "" &&
+            opts?.env?.GITHUB_TOKEN === ""
             ? { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" }
             : { code: 1, stdout: "", stderr: "wrong identity" };
         }

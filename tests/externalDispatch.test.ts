@@ -477,14 +477,33 @@ describe("resolveIssueTarget", () => {
       expect(message).not.toContain("auth grant");
     });
 
-    it("unwatched + blocked/sso → SSO guidance", async () => {
+    it("unwatched + blocked/sso in bot mode → SSO guidance names the bot's token (#192.1)", async () => {
       const cfg = freshCfg();
       await expect(
         resolveIssueTarget(cfg, "up/stream#5", {
           ghFn,
+          withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
           classifyFn: async () => ({ mode: "blocked" as const, reason: "sso" as const }),
         }),
-      ).rejects.toThrow(/SAML/);
+      ).rejects.toThrow(/the bot's token is blocked by SAML/);
+    });
+
+    it("unwatched + blocked/sso in ambient mode → SSO guidance names your gh token, not the bot's (#192.1)", async () => {
+      const cfg = freshCfg();
+      let message = "";
+      try {
+        await resolveIssueTarget(cfg, "up/stream#5", {
+          ghFn,
+          withBotAuthFn: async (c: Config) => c, // ambient: no ghAuth attached
+          classifyFn: async () => ({ mode: "blocked" as const, reason: "sso" as const }),
+        });
+        throw new Error("expected resolveIssueTarget to throw");
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/SAML/);
+      expect(message).toContain("your gh token");
+      expect(message).not.toContain("the bot's token");
     });
 
     it("assess override: opts.fork=false + fork classification → clone-only, external:true", async () => {

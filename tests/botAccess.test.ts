@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { classifyRepoAccess } from "../src/botAccess.js";
+import { classifyRepoAccess, ssoMessage } from "../src/botAccess.js";
 import type { Config, GhAuthContext } from "../src/types.js";
-import type { CmdResult, GitCallOpts } from "../src/git.js";
+import { GitOpError, type CmdResult, type GitCallOpts } from "../src/git.js";
 
 const CTX: GhAuthContext = {
   configDir: "/sbx/junco-gh",
@@ -81,6 +81,16 @@ describe("classifyRepoAccess", () => {
     });
   });
 
+  // #192.2: a transient network failure must NOT be classified as
+  // blocked/no-access (which prescribes `junco auth grant`) — throw a
+  // retryable GitOpError so the real cause surfaces.
+  it("network failure → throws GitOpError, not blocked/no-access", async () => {
+    const { ghFn } = fakeGh({
+      [VIEW]: { code: 1, stderr: "dial tcp: connection refused" },
+    });
+    await expect(classifyRepoAccess(CFG, "acme/api", { ghFn })).rejects.toBeInstanceOf(GitOpError);
+  });
+
   it("null viewerPermission on a public repo → fork", async () => {
     const { ghFn } = fakeGh({
       [VIEW]: { code: 0, stdout: JSON.stringify({ viewerPermission: null, isPrivate: false }) },
@@ -94,6 +104,21 @@ describe("classifyRepoAccess", () => {
       mode: "blocked",
       reason: "no-access",
     });
+  });
+});
+
+describe("ssoMessage (#192.1)", () => {
+  it('defaults the subject to "the bot\'s token"', () => {
+    const m = ssoMessage("acme/api");
+    expect(m).toContain("the bot's token is blocked by SAML enforcement for acme/api");
+    expect(m).toContain("in the bot's browser session");
+  });
+
+  it('who="you" swaps subject and possessive to the ambient identity', () => {
+    const m = ssoMessage("acme/api", "you");
+    expect(m).toContain("your gh token is blocked by SAML enforcement for acme/api");
+    expect(m).toContain("in your browser session");
+    expect(m).not.toContain("the bot's");
   });
 });
 
