@@ -75,32 +75,6 @@ export async function preflightChecks(deps: DetectDeps = {}): Promise<CheckResul
   return out;
 }
 
-/** Account-chapter probe: is a bot login present under the isolated config
- * dir? warn (not fail) when absent — the chapter offers the login step next. */
-export async function botLoginCheck(
-  ghBin: string,
-  configDir: string,
-  deps: DetectDeps = {},
-): Promise<{ check: CheckResult; login: string | null }> {
-  const execFn = deps.execFn ?? defaultExec;
-  const r = await execFn(ghBin, ["api", "user"], { env: { GH_CONFIG_DIR: configDir } });
-  if (r.code !== 0) {
-    return {
-      check: { verdict: "warn", label: "bot account", detail: "not logged in yet" },
-      login: null,
-    };
-  }
-  try {
-    const login = (JSON.parse(r.stdout) as { login: string }).login;
-    return { check: { verdict: "ok", label: "bot account", detail: `acting as ${login}` }, login };
-  } catch {
-    return {
-      check: { verdict: "warn", label: "bot account", detail: "could not parse identity" },
-      login: null,
-    };
-  }
-}
-
 /** Finale receipts against the freshly-written config. Mirrors the doctor
  * checks the wizard can affect; failures never block — config is on disk and
  * `junco doctor` is the standalone re-check. */
