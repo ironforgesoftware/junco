@@ -2163,13 +2163,10 @@ export function App(props: AppProps): React.JSX.Element {
   // verbatim, including the guards.
   const footerActions: Record<string, () => void> = useMemo((): Record<string, () => void> => {
     if (confirm !== null) return {}; // destructive confirm owns input — every chip inert
-    // LOCAL's help modal (like github's) leaves the rail/body hint row showing
-    // underneath it (a pre-existing hints-computation quirk — LOCAL's `hints`
-    // never special-cases view==="help" the way github's hintsFor("help",...)
-    // does), so without this exclusion the STALE rail chips (q, r, m, ←)
-    // would stay clickable while help is open — most alarmingly `q`, which
-    // would quit the app instead of the keyboard's "any key closes help".
-    // Falls through to the `case "help": return {}` below, same as github.
+    // help/config render mode-agnostic hint sets (see the `hints` computation),
+    // so their chips carry no LOCAL actions — fall through to the switch below
+    // (case "help" returns {}), same as github. The view guards stay as
+    // defense-in-depth should the two computations ever drift.
     if (uiMode === "local" && view !== "config" && view !== "help") {
       return {
         q: () => {
@@ -2364,9 +2361,14 @@ export function App(props: AppProps): React.JSX.Element {
         // config editor's own hints apply regardless of which surface opened
         // it, not LOCAL's section-rail hints.
         hintsFor("config", pane, layout.mode, filtering)
-      : uiMode === "local"
-        ? localHintsFor(localSection, localFocus)
-        : hintsFor(view as HintView, pane, layout.mode, filtering);
+      : view === "help"
+        ? // Mode-agnostic for the same reason: the help modal's "any key
+          // closes" applies on both surfaces — LOCAL must not keep rendering
+          // stale rail/body chips under the modal. (#225)
+          hintsFor("help", pane, layout.mode, filtering)
+        : uiMode === "local"
+          ? localHintsFor(localSection, localFocus)
+          : hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
   const paletteProps = {
     commands: PALETTE_COMMANDS,

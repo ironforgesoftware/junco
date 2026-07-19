@@ -178,6 +178,15 @@ describe("local help modal", () => {
     await until(() => !(r.lastFrame() ?? "").includes("local mode"));
     expect(r.lastFrame()).toContain("[LOCAL]"); // still in local mode
   });
+
+  it("help hints replace the LOCAL rail hints while help is open", async () => {
+    const r = renderApp({ initialUiMode: "local" });
+    await until(() => (r.lastFrame() ?? "").includes("↑/↓ section")); // rail hints in the footer
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes("local mode")); // help modal open
+    await until(() => !(r.lastFrame() ?? "").includes("↑/↓ section")); // stale rail chips gone
+    expect(r.lastFrame()).toContain("any key");
+  });
 });
 
 describe("config editor reachable in local mode", () => {
