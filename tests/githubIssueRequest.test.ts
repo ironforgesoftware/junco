@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fulfillIssueRequest } from "../src/githubIssueRequest.js";
 import type { IssueRequestDeps } from "../src/githubIssueRequest.js";
 import { parseTicket } from "../src/ticket.js";
@@ -82,6 +85,33 @@ describe("fulfillIssueRequest", () => {
     // The stamp must round-trip through the real parser.
     const reparsed = parseTicket("/claim/tk-1.md", h.files.get("/claim/tk-1.md")!);
     expect(reparsed.github).toEqual({ nwo: "acme/api", issue: 41, kind: "pr", external: false });
+  });
+
+  // #209: exercise the REAL default writeFileFn (the injected harness bypasses
+  // it) — the stamp lands atomically and no tmp-<pid> file survives.
+  it("stamps atomically via the default write path, leaving no temp file (#209)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-ghreq-"));
+    const claimedPath = join(dir, "tk-1.md");
+    writeFileSync(claimedPath, TICKET_MD, "utf8");
+    // Fake only git/gh; readFileFn/writeFileFn fall through to the real atomic default.
+    const deps = {
+      gitFn: (_c: unknown, _a: string[]) =>
+        Promise.resolve({ code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" }),
+      ghFn: (_c: unknown, _a: string[]) =>
+        Promise.resolve({ code: 0, stdout: "https://github.com/acme/api/issues/41\n", stderr: "" }),
+    } as unknown as IssueRequestDeps;
+
+    const meta = await fulfillIssueRequest(CFG, ticketOf(), ctx(), claimedPath, deps);
+    expect(meta).toEqual({ nwo: "acme/api", issue: 41, kind: "pr", external: false });
+    // Stamp is durable on disk and re-parses.
+    expect(parseTicket(claimedPath, readFileSync(claimedPath, "utf8")).github).toEqual({
+      nwo: "acme/api",
+      issue: 41,
+      kind: "pr",
+      external: false,
+    });
+    // No `.tmp-<pid>` residue left behind.
+    expect(readdirSync(dir).filter((n) => n.includes(".tmp-"))).toEqual([]);
   });
 
   it("skips without a gh call when there is no request or github: is already present", async () => {
