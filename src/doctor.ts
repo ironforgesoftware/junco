@@ -514,6 +514,20 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         // Bot mode only: the bot account needs enough permission on this
         // watched repo to actually push branches, not just read issues.
         if (cfg.botAccount.enabled) {
+          // #189: the bot credential helper is pinned for https github remotes
+          // only. An SSH origin pushes with the operator's ssh key regardless
+          // of bot mode (commits stay bot-authored and the PR is bot-opened,
+          // but the push/audit trail shows the human) — warn so it can be
+          // re-pointed. `origin` reached here with code 0 and a matching nwo.
+          if (!/^https:\/\/github\.com\//.test(origin.stdout.trim())) {
+            report(
+              "warn",
+              `bot remote: ${repo.nwo}`,
+              `origin is not an https github remote (${origin.stdout.trim() || "unknown"}) — ` +
+                `the bot credential helper only applies to https; pushes authenticate with your ` +
+                `ssh key, not the bot. Re-point origin to https for full bot attribution.`,
+            );
+          }
           const perm = await execFn(
             cfg.ghBin,
             ["repo", "view", repo.nwo, "--json", "viewerPermission"],

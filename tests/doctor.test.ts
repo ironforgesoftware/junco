@@ -1192,6 +1192,42 @@ describe("runDoctor bot account checks", () => {
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/bot access/i);
   });
+
+  // #189: an SSH origin under bot mode warns (pushes bypass the bot cred
+  // helper); an https origin does not.
+  it("bot mode: warns on an SSH origin, stays quiet on an https origin", async () => {
+    const run = async (originUrl: string) => {
+      const lines: string[] = [];
+      await runDoctor(
+        "/x/config.json",
+        deps({
+          loadConfigFn: () =>
+            botConfig({
+              github: {
+                ...okConfig.github,
+                enabled: true,
+                repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
+              },
+            }),
+          execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+            if (args.includes("get-url")) return { code: 0, stdout: originUrl + "\n", stderr: "" };
+            if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
+              return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+                ? { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" }
+                : { code: 1, stdout: "", stderr: "wrong identity" };
+            }
+            return { code: 0, stdout: "ok", stderr: "" };
+          },
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      return lines.join("");
+    };
+    expect(await run("git@github.com:acme/api.git")).toMatch(
+      /⚠ bot remote: acme\/api.*not an https/,
+    );
+    expect(await run("https://github.com/acme/api.git")).not.toMatch(/bot remote:/);
+  });
 });
 
 describe("runDoctor outbox checks", () => {

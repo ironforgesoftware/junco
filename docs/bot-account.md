@@ -88,7 +88,11 @@ The config surface is additive and off by default:
   (`-c credential.helper=` to clear any inherited helper, then
   `-c credential.helper=!<gh> auth git-credential`) so pushes and fetches authenticate as the bot
   regardless of your own global gitconfig. This is applied uniformly and is harmless on local-only
-  git operations.
+  git operations. Note this pins credentials for **https** github remotes only — a watched clone
+  whose `origin` is an SSH URL (`git@github.com:…`) authenticates its pushes with your host SSH
+  key, not the bot, so the push/audit trail shows you (commits are still bot-authored and the PR is
+  still bot-opened). `junco doctor` warns when it sees a non-https origin under bot mode; re-point
+  such a remote to https for full bot attribution.
 - **Refuse-to-start posture.** If `botAccount.enabled` is `true` but the bot's login is missing
   or expired, `junco start` and `junco run-once` refuse to run at all — they resolve the auth
   context _before_ taking the daemon lock or touching the log file, and exit with a message
