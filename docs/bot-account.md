@@ -181,12 +181,12 @@ viewerPermission`, run as the bot): `write`/`maintain`/`admin` is fine; `triage`
 
 ## Migration notes
 
-- **Historical dedup mismatch.** GitHub-side dedup for `junco assess` findings and outbox replay
-  keys off `gh api user`/`--author @me`, which now resolves to the bot instead of you. Comments
-  and issues you posted by hand under your own login won't match anymore, so you may see **one
-  one-time duplicate** plan-comment or finding on a pre-existing thread the first time it's
-  touched after enabling the bot. This is documented behavior, not a bug, and it self-resolves —
-  every subsequent dedup check runs consistently as the bot.
+- **Historical dedup mismatch (plan comments).** The bridge's plan-comment dedup keys off
+  `gh api user`/`@me`, which now resolves to the bot instead of you — a plan comment you posted
+  under your own login won't match, so a pre-existing thread may receive **one one-time
+  duplicate** plan comment the first time it's touched after enabling the bot. Documented
+  behavior, self-resolving. (`junco assess` finding dedup is marker-scoped and
+  author-independent — findings are immune to this switch; see docs/assess.md.)
 - **Stale personal-fork remotes.** If you already have external clones from before the bot was
   enabled, their `fork` remote points at _your_ fork — the bot can't push there, and the push
   will fail loud. Fix: remove the stale `fork` remote from the managed clone and let Junco

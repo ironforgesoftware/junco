@@ -874,20 +874,33 @@ describe("flushOutbox — flush lock", () => {
 });
 
 describe("fetchFindingMarkers", () => {
-  it("lists by author, not by label, and scans bodies", async () => {
+  it("scans bodies marker-scoped: any author, all states, no label filter (#221)", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-ffm-"));
     const cfg = cfgAt(root);
     const f = fakes((_tool, args) => {
       if (args[0] === "issue" && args[1] === "list") {
-        return { stdout: JSON.stringify([{ body: `x ${findingMarker("deadbeef")} y` }]) };
+        // Two markers from two different authors — indistinguishable in the
+        // body-only response, which is exactly the point: dedup keys on the
+        // marker, never on who filed it. An identity split (bot daemon /
+        // me filings, a fileAs switch) must not blind either scan.
+        return {
+          stdout: JSON.stringify([
+            { body: `x ${findingMarker("deadbeef")} y` },
+            { body: `z ${findingMarker("cafe0042")} w` },
+          ]),
+        };
       }
       return undefined;
     });
     const markers = await fetchFindingMarkers(cfg, "o/r", f.ghFn);
     expect(markers.has("deadbeef")).toBe(true);
-    expect(f.calls[0].args).toContain("--author");
-    expect(f.calls[0].args).toContain("@me");
+    expect(markers.has("cafe0042")).toBe(true);
+    // Marker-scoped: the listing must NOT be narrowed to the caller's identity.
+    expect(f.calls[0].args).not.toContain("--author");
+    expect(f.calls[0].args).not.toContain("@me");
     expect(f.calls[0].args).not.toContain("--label");
+    expect(f.calls[0].args).toContain("--state");
+    expect(f.calls[0].args).toContain("all");
   });
 });
 
