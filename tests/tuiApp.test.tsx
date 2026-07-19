@@ -1852,7 +1852,7 @@ describe("review view (v)", () => {
     expect(r.lastFrame()).toContain("acme/api");
   });
 
-  it("toggling and pressing f files the selected fingerprints and drops the batch", async () => {
+  it("f files the selection; the batch row STAYS with filed accounting and unfiled stays checked-out", async () => {
     const batches = [
       {
         id: "assess-x-1",
@@ -1898,6 +1898,82 @@ describe("review view (v)", () => {
         failed: 0,
         urls: [],
         warnings: [],
+        batch: {
+          ...batches[0],
+          filed: Object.fromEntries(
+            fps.map((fp) => [fp, { at: "2026-07-09T01:00:00.000Z", how: "created" as const }]),
+          ),
+        },
+      });
+    };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r"));
+    r.stdin.write("\r"); // open batch (all unfiled → all pre-checked)
+    await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
+    r.stdin.write("j"); // cursor to f2
+    r.stdin.write(" "); // uncheck f2
+    await until(() => /\[ \].*stale dep/.test(r.lastFrame() ?? ""));
+    r.stdin.write("f"); // file
+    await until(() => filed.length === 1);
+    expect(filed[0]).toEqual(["assess-x-1", ["f1"]]);
+    await until(() => (r.lastFrame() ?? "").includes("filed 1")); // toast
+    // The checklist stays open: f1 now shows ✓ accounting, f2 keeps its empty box.
+    await until(() => /✓.*SQL injection/.test(r.lastFrame() ?? ""));
+    expect(r.lastFrame()).toMatch(/\[ \].*stale dep/);
+    // Back in the list, the batch row is still there with a filed chip.
+    r.stdin.write(ESC);
+    await until(() => (r.lastFrame() ?? "").includes("filed 1/2"));
+  });
+
+  it("enter pre-checks only UNFILED findings; f refiles nothing already filed", async () => {
+    const batches = [
+      {
+        id: "assess-x-1",
+        nwo: "o/r",
+        external: true,
+        autoPlan: false,
+        repoPath: "/x",
+        createdAt: "2026-07-09T00:00:00.000Z",
+        findings: [
+          {
+            fingerprint: "f1",
+            kind: "code" as const,
+            severity: "high" as const,
+            ruleId: "R",
+            title: "SQL injection",
+            description: "",
+            references: [],
+          },
+          {
+            fingerprint: "f2",
+            kind: "code" as const,
+            severity: "low" as const,
+            ruleId: "R",
+            title: "stale dep",
+            description: "",
+            references: [],
+          },
+        ],
+        filed: { f1: { at: "2026-07-09T00:30:00.000Z", how: "created" as const } },
+      },
+    ];
+    const filed: Array<[string, string[]]> = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listReview: () => Promise<unknown> }).listReview = async () => okv(batches);
+    (client as { fileReview: (id: string, fps: string[]) => Promise<unknown> }).fileReview = async (
+      id,
+      fps,
+    ) => {
+      filed.push([id, fps]);
+      return okv({
+        created: fps.length,
+        queuedOffline: 0,
+        deduped: 0,
+        failed: 0,
+        urls: [],
+        warnings: [],
         batch: batches[0],
       });
     };
@@ -1905,17 +1981,32 @@ describe("review view (v)", () => {
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
     r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
-    r.stdin.write("\r"); // open batch (all checked)
-    await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
-    r.stdin.write("j"); // cursor to f2
-    r.stdin.write(" "); // uncheck f2
-    await until(() => /\[ \].*stale dep/.test(r.lastFrame() ?? ""));
-    r.stdin.write("f"); // file
+    r.stdin.write("\r");
+    // f1 is filed → ✓ (not pre-checked); f2 unfiled → pre-checked [x].
+    await until(() => /✓.*SQL injection/.test(r.lastFrame() ?? ""));
+    expect(r.lastFrame()).toMatch(/\[x\].*stale dep/);
+    r.stdin.write("f");
     await until(() => filed.length === 1);
-    expect(filed[0][0]).toBe("assess-x-1");
-    expect(filed[0][1]).toEqual(["f1"]); // only f1 checked
-    await until(() => (r.lastFrame() ?? "").includes("filed 1")); // toast
-    // Optimistic removal: the batch is gone from the review view.
+    expect(filed[0]).toEqual(["assess-x-1", ["f2"]]);
+  });
+
+  it("x discards the open batch and drops the row", async () => {
+    const discarded: string[] = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
+    (client as { discardReview: (id: string) => Promise<unknown> }).discardReview = async (id) => {
+      discarded.push(id);
+      return okv(null);
+    };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("o/r"));
+    r.stdin.write("\r");
+    await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
+    r.stdin.write("x");
+    await until(() => discarded.length === 1);
+    expect(discarded[0]).toBe("assess-x-1");
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
   });
 

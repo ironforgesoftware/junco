@@ -1805,6 +1805,29 @@ export function App(props: AppProps): React.JSX.Element {
               : s,
           );
         }
+        if (input === "x") {
+          if (!batch) return;
+          const id = batch.id;
+          void client.discardReview(id).then((res) => {
+            if (!aliveRef.current) return;
+            if (res.ok) {
+              showToast("success", "discarded");
+              setReviewState((s) => {
+                const batches = s.batches.filter((b) => b.id !== id);
+                const total = batches.length + s.drafts.length;
+                return {
+                  ...s,
+                  batches,
+                  open: null,
+                  cursor: Math.min(s.cursor, Math.max(0, total - 1)),
+                };
+              });
+            } else {
+              showToast("error", res.error);
+            }
+          });
+          return;
+        }
         if (input === "f" || key.return) {
           if (!batch) return;
           const fps = batch.findings.map((f) => f.fingerprint).filter((fp) => open.checked.has(fp));
@@ -1820,14 +1843,15 @@ export function App(props: AppProps): React.JSX.Element {
                 `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`,
               );
               setReviewState((s) => {
-                const batches = s.batches.filter((b) => b.id !== id); // optimistic removal
-                const total = batches.length + s.drafts.length;
-                return {
-                  ...s,
-                  batches,
-                  open: null,
-                  cursor: Math.min(s.cursor, Math.max(0, total - 1)),
-                };
+                const batches = s.batches.map((b) => (b.id === id ? v.batch : b));
+                const open =
+                  s.open && s.open.kind === "batch"
+                    ? {
+                        ...s.open,
+                        checked: new Set([...s.open.checked].filter((fp) => !v.batch.filed?.[fp])),
+                      }
+                    : s.open;
+                return { ...s, batches, open };
               });
             } else {
               showToast("error", res.error);
@@ -1858,7 +1882,11 @@ export function App(props: AppProps): React.JSX.Element {
                 kind: "batch",
                 batchIdx: s.cursor,
                 findingCursor: 0,
-                checked: new Set(batch.findings.map((f) => f.fingerprint)),
+                checked: new Set(
+                  batch.findings
+                    .filter((f) => !batch.filed?.[f.fingerprint])
+                    .map((f) => f.fingerprint),
+                ),
               },
             };
           }
@@ -2106,7 +2134,9 @@ export function App(props: AppProps): React.JSX.Element {
             kind: "batch",
             batchIdx: idx,
             findingCursor: 0,
-            checked: new Set(batch.findings.map((f) => f.fingerprint)),
+            checked: new Set(
+              batch.findings.filter((f) => !batch.filed?.[f.fingerprint]).map((f) => f.fingerprint),
+            ),
           },
         };
       }
