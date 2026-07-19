@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fulfillIssueRequest } from "../src/githubIssueRequest.js";
 import type { IssueRequestDeps } from "../src/githubIssueRequest.js";
 import { parseTicket } from "../src/ticket.js";
@@ -84,6 +87,33 @@ describe("fulfillIssueRequest", () => {
     expect(reparsed.github).toEqual({ nwo: "acme/api", issue: 41, kind: "pr", external: false });
   });
 
+  // #209: exercise the REAL default writeFileFn (the injected harness bypasses
+  // it) — the stamp lands atomically and no tmp-<pid> file survives.
+  it("stamps atomically via the default write path, leaving no temp file (#209)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-ghreq-"));
+    const claimedPath = join(dir, "tk-1.md");
+    writeFileSync(claimedPath, TICKET_MD, "utf8");
+    // Fake only git/gh; readFileFn/writeFileFn fall through to the real atomic default.
+    const deps = {
+      gitFn: (_c: unknown, _a: string[]) =>
+        Promise.resolve({ code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" }),
+      ghFn: (_c: unknown, _a: string[]) =>
+        Promise.resolve({ code: 0, stdout: "https://github.com/acme/api/issues/41\n", stderr: "" }),
+    } as unknown as IssueRequestDeps;
+
+    const meta = await fulfillIssueRequest(CFG, ticketOf(), ctx(), claimedPath, deps);
+    expect(meta).toEqual({ nwo: "acme/api", issue: 41, kind: "pr", external: false });
+    // Stamp is durable on disk and re-parses.
+    expect(parseTicket(claimedPath, readFileSync(claimedPath, "utf8")).github).toEqual({
+      nwo: "acme/api",
+      issue: 41,
+      kind: "pr",
+      external: false,
+    });
+    // No `.tmp-<pid>` residue left behind.
+    expect(readdirSync(dir).filter((n) => n.includes(".tmp-"))).toEqual([]);
+  });
+
   it("skips without a gh call when there is no request or github: is already present", async () => {
     const h = harness();
     const noReq = ticketOf(TICKET_MD.replace(/github_request:\n  create_issue: true\n/, ""));
@@ -156,5 +186,42 @@ describe("fulfillIssueRequest", () => {
     const meta = await fulfillIssueRequest(CFG, t, ctx(), "/claim/tk-1.md", h.deps);
     expect(meta).toEqual({ nwo: "acme/api", issue: 41, kind: "pr", external: false });
     expect(h.files.get("/claim/tk-1.md")).toBe(broken); // not persisted, not corrupted
+  });
+
+  // #211.1: title precedence is prTitle ?? firstHeading(body) ?? id. Every
+  // other test sets prTitle, so tiers 2 and 3 were never exercised. The title
+  // is a discrete arg (--title <t>; the body goes to --body-file), so read it
+  // back precisely.
+  const titleOf = (args: string[]): string => args[args.indexOf("--title") + 1];
+
+  it("title tier 2: falls back to the first body heading when prTitle is null (#211)", async () => {
+    const h = harness();
+    const t = ticketOf(TICKET_MD.replace("# Fix the flux capacitor", "# Some Heading"));
+    await fulfillIssueRequest(CFG, t, ctx({ prTitle: null }), "/claim/tk-1.md", h.deps);
+    expect(titleOf(h.ghCalls[0])).toBe("Some Heading");
+  });
+
+  it("title tier 3: falls back to the ticket id when prTitle is null and there is no heading (#211)", async () => {
+    const h = harness();
+    const t = ticketOf(
+      TICKET_MD.replace("# Fix the flux capacitor\nBody text.", "Body, no heading."),
+    );
+    await fulfillIssueRequest(CFG, t, ctx({ prTitle: null }), "/claim/tk-1.md", h.deps);
+    expect(titleOf(h.ghCalls[0])).toBe("tk-1");
+  });
+
+  // #211.2: the end-to-end double-create defense — fulfill stamps the file, a
+  // requeue+re-claim re-parses it, and the second fulfillment must skip.
+  it("composed: fulfill → re-parse the stamped file → re-claim skips (no double-create) (#211)", async () => {
+    const h = harness();
+    const meta1 = await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", h.deps);
+    expect(meta1).not.toBeNull();
+    expect(h.ghCalls).toHaveLength(1);
+    // Re-parse the now-stamped file — exactly what requeueTicket → re-claim reads.
+    const ticket2 = parseTicket("/claim/tk-1.md", h.files.get("/claim/tk-1.md")!);
+    expect(ticket2.github).not.toBeNull(); // the stamp round-trips through the parser
+    const meta2 = await fulfillIssueRequest(CFG, ticket2, ctx(), "/claim/tk-1.md", h.deps);
+    expect(meta2).toBeNull(); // already linked → skip
+    expect(h.ghCalls).toHaveLength(1); // no second issue created
   });
 });

@@ -36,15 +36,6 @@ export interface ReviewStore<T extends { id: string }> {
 }
 
 /**
- * Filename for an entry id, confined to a single inert path component
- * (issue #32 class — see slug.ts). Applied at every read/write/remove call
- * site so the id can never escape <dataDir>/<subdir>/.
- */
-function entryFileName(id: string): string {
-  return `${slugifyId(id)}.json`;
-}
-
-/**
  * Field-presence check applied to parsed JSON before it is trusted as T: a
  * hand-tampered or truncated file (e.g. `{}`) parses cleanly but is missing
  * fields downstream code dereferences unconditionally (e.g. `batch.findings
@@ -61,7 +52,15 @@ function hasRequiredFields(v: unknown, requiredFields: readonly string[]): boole
 export function makeReviewStore<T extends { id: string }>(
   subdir: string,
   requiredFields: readonly string[] = ["id"],
+  // #202: how an entry id maps to its on-disk key. Defaults to slugifyId (which
+  // is LOSSY — `o-a/b` and `o/a-b` both slug to `o-a-b`); a store keyed by a
+  // value that can collide under slugifyId (e.g. assessHistory's nwo) passes a
+  // collision-free deriver here. Applied at every read/write/remove call site
+  // so the id still can never escape <dataDir>/<subdir>/ (issue #32 class).
+  keyOf: (id: string) => string = slugifyId,
 ): ReviewStore<T> {
+  const entryFileName = (id: string): string => `${keyOf(id)}.json`;
+
   function dir(cfg: Config): string {
     return join(cfg.dataDir, subdir);
   }

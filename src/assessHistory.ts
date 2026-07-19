@@ -8,8 +8,8 @@
  * Third instantiation of reviewStore.ts. That factory is named for review
  * QUEUES and carries an archive-on-remove this store never calls; the reuse is
  * for its durable keyed-upsert core (atomic tmp+rename, never-throw reads,
- * slugifyId key confinement). Keyed by nwo rather than a ticket id, so `write`
- * is an upsert: the newest terminal run for a repo replaces its record.
+ * slug+hash key confinement — #202). Keyed by nwo rather than a ticket id, so
+ * `write` is an upsert: the newest terminal run for a repo replaces its record.
  *
  * ONE FILE PER REPO IS LOAD-BEARING. The daemon runs max_concurrent > 1, so a
  * single shared map file would lose updates across DIFFERENT repos finalizing
@@ -20,8 +20,10 @@
  * can still interleave this file's read-modify-write — last-write-wins, and
  * the next clean assess of either checkout self-heals it.
  */
+import { createHash } from "node:crypto";
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
 import { ASSESS_HISTORY_SUBDIR } from "./dataTree.js";
+import { slugifyId } from "./slug.js";
 import type { Config } from "./types.js";
 
 export interface AssessHistory {
@@ -35,10 +37,20 @@ export interface AssessHistory {
 
 export type AssessHistoryDeps = ReviewStoreDeps;
 
+/** #202: slugifyId is lossy — `o-a/b` and `o/a-b` both collapse to `o-a-b`, so
+ * two distinct watched repos would otherwise share one history file (harmless
+ * to filed findings, which key by ticket id, but a repo's rail/doctor/status
+ * line would then show ANOTHER repo's audit age). Append an 8-hex sha256 of the
+ * FULL nwo so distinct repos never alias; the slug prefix keeps the directory
+ * eyeball-readable and the fixed suffix is uniquely splittable. */
+function historyKey(nwo: string): string {
+  return `${slugifyId(nwo)}-${createHash("sha256").update(nwo).digest("hex").slice(0, 8)}`;
+}
+
 // Only `id` is required: every other field is nullable BY DESIGN (a repo whose
 // only run failed has no lastSuccessAt), so a truncated or hand-edited file
 // still reads rather than being skipped wholesale.
-const store = makeReviewStore<AssessHistory>(ASSESS_HISTORY_SUBDIR, ["id"]);
+const store = makeReviewStore<AssessHistory>(ASSESS_HISTORY_SUBDIR, ["id"], historyKey);
 
 export function assessHistoryDir(cfg: Config): string {
   return store.dir(cfg);

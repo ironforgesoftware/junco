@@ -30,6 +30,11 @@ export interface DataCmdDeps {
   existsFn?: (p: string) => boolean;
   readFileFn?: (p: string) => string;
   printFn?: (s: string) => void;
+  /** Clock fed to the spend ledger's local-date read (#199.1). Injecting a
+   * fixed instant lets a test build the fixture date and read the ledger off
+   * the SAME moment, closing the midnight-rollover flake window. Default:
+   * Date.now. */
+  nowFn?: () => number;
 }
 
 interface FileInfo {
@@ -212,9 +217,11 @@ function readSpendUsd(
   path: string,
   existsFn: (p: string) => boolean,
   readFileFn: (p: string) => string,
+  nowFn: () => number,
 ): number | null {
   if (!existsFn(path)) return null;
   const ledger = makeSpendLedger(dataDir, {
+    now: nowFn,
     readFileFn: ((p: string) => readFileFn(p)) as unknown as typeof readFileSync,
   });
   return ledger.todayUsd();
@@ -240,6 +247,7 @@ function computeCounts(
   statFn: (p: string) => StatLike,
   existsFn: (p: string) => boolean,
   readFileFn: (p: string) => string,
+  nowFn: () => number,
 ): DataCounts {
   const assessPaths = assessReviewPaths(cfg);
   const commentPaths = commentReviewPaths(cfg);
@@ -276,7 +284,7 @@ function computeCounts(
     updateCheckFile: fileInfo(p.updateCheckFile, existsFn, statFn),
     spendFile: {
       ...fileInfo(p.spendFile, existsFn, statFn),
-      usd: readSpendUsd(cfg.dataDir, p.spendFile, existsFn, readFileFn),
+      usd: readSpendUsd(cfg.dataDir, p.spendFile, existsFn, readFileFn, nowFn),
     },
     metricsFile: fileInfo(p.metricsFile, existsFn, statFn),
     logFile: fileInfo(p.logFile, existsFn, statFn),
@@ -429,11 +437,12 @@ export function runData(cfg: Config, opts: { json: boolean }, deps: DataCmdDeps 
   const existsFn = deps.existsFn ?? existsSync;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+  const nowFn = deps.nowFn ?? (() => Date.now());
 
   const p = dataTreePaths(cfg);
   const pending = pendingMigrations(cfg, existsFn);
   const deprecations = configDeprecations(cfg);
-  const counts = computeCounts(cfg, p, readdirFn, statFn, existsFn, readFileFn);
+  const counts = computeCounts(cfg, p, readdirFn, statFn, existsFn, readFileFn, nowFn);
 
   if (opts.json) {
     print(

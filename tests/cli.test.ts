@@ -241,6 +241,21 @@ describe("run(['start']) — deprecated config keys warning", () => {
     const out = cap.lines.join("");
     expect(out).toMatch(/vaultRoot\/juncoSubdir are deprecated/);
     expect(out).toContain("junco data migrate");
+    // #199.4: pin the LEVEL too — a regression downgrading these to info would
+    // otherwise still match the text above. Logs are JSON under vitest.
+    const entry = cap.lines
+      .flatMap((l) => l.split("\n"))
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("{"))
+      .map((l) => {
+        try {
+          return JSON.parse(l) as { level?: string; msg?: string };
+        } catch {
+          return null;
+        }
+      })
+      .find((e) => e !== null && /vaultRoot\/juncoSubdir are deprecated/.test(e.msg ?? ""));
+    expect(entry?.level).toBe("warn");
   });
 
   it("does not warn for a clean (non-legacy) config", async () => {

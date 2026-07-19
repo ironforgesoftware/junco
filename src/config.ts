@@ -350,15 +350,25 @@ export function assembleConfig(
   // Unified data root (spec 2026-07-16): legacy observability.stateDir wins
   // over dataDir for the whole root; legacy vaultRoot/juncoSubdir wins the
   // queue root only. See LegacyPathFlags for which override each key drives.
-  const dataDir = expandHome(d.observability.stateDir ?? d.dataDir ?? "~/.local/state/junco");
-  const queueRoot = d.vaultRoot
-    ? join(expandHome(d.vaultRoot), d.juncoSubdir)
-    : join(dataDir, "queue");
+  //
+  // #198: normalize the four legacy path keys once — an explicitly-set-but-empty
+  // (or whitespace-only) value is treated as unset, so the legacy FLAG and the
+  // RESOLUTION can never disagree (an empty "vaultRoot": "" previously set the
+  // flag true — deprecation warning, provenance suffix, overlay pinning — while
+  // the resolution fell through to the dataDir default).
+  const norm = (v: string | undefined): string | undefined =>
+    v !== undefined && v.trim() !== "" ? v : undefined;
+  const nStateDir = norm(d.observability.stateDir);
+  const nVault = norm(d.vaultRoot);
+  const nWorktree = norm(d.git.worktreeRoot);
+  const nExternal = norm(d.github.externalReposRoot);
+  const dataDir = expandHome(nStateDir ?? d.dataDir ?? "~/.local/state/junco");
+  const queueRoot = nVault ? join(expandHome(nVault), d.juncoSubdir) : join(dataDir, "queue");
   const legacy = {
-    vaultRoot: d.vaultRoot !== undefined,
-    stateDir: d.observability.stateDir !== undefined,
-    worktreeRoot: d.git.worktreeRoot !== undefined,
-    externalReposRoot: d.github.externalReposRoot !== undefined,
+    vaultRoot: nVault !== undefined,
+    stateDir: nStateDir !== undefined,
+    worktreeRoot: nWorktree !== undefined,
+    externalReposRoot: nExternal !== undefined,
   };
   return {
     dataDir,
@@ -414,7 +424,7 @@ export function assembleConfig(
     ghBin: d.git.ghBin,
     defaultBaseBranch: d.git.defaultBaseBranch,
     branchPrefix: d.git.branchPrefix,
-    worktreeRoot: d.git.worktreeRoot ? expandHome(d.git.worktreeRoot) : join(dataDir, "worktrees"),
+    worktreeRoot: nWorktree ? expandHome(nWorktree) : join(dataDir, "worktrees"),
     removeWorktreeOnSuccess: d.git.removeWorktreeOnSuccess,
     allowedRepoRoots: d.git.allowedRepoRoots.map(expandHome),
     draftByDefault: d.pr.draftByDefault,
@@ -441,9 +451,7 @@ export function assembleConfig(
       pollIntervalSeconds: d.github.pollIntervalSeconds,
       requireApproval: d.github.requireApproval,
       plannerModelId: d.github.plannerModelId ?? null,
-      externalReposRoot: d.github.externalReposRoot
-        ? expandHome(d.github.externalReposRoot)
-        : join(dataDir, "clones", "external"),
+      externalReposRoot: nExternal ? expandHome(nExternal) : join(dataDir, "clones", "external"),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
     },
     assess: {

@@ -44,7 +44,7 @@ describe("resolveBotAuth", () => {
       configDir: "/sbx/junco-gh",
       login: "junco-agent",
       email: "987654+junco-agent@users.noreply.github.com",
-      credentialHelper: "!gh auth git-credential",
+      credentialHelper: '!"gh" auth git-credential',
     });
     expect(calls[0].env).toEqual({
       GH_CONFIG_DIR: "/sbx/junco-gh",
@@ -56,6 +56,35 @@ describe("resolveBotAuth", () => {
   it("throws an actionable error when enabled but not logged in", async () => {
     const { execFn } = fakeExec({}); // api user → exit 1
     await expect(resolveBotAuth(ENABLED, { execFn })).rejects.toThrow(/junco auth login/);
+  });
+
+  // #187.1: `gh api user` returning valid-JSON-but-missing-fields must not
+  // sail through to email "undefined+undefined@…" and a later spawn TypeError.
+  it("rejects shapeless JSON ({} — no login/id) instead of building an undefined email", async () => {
+    const { execFn } = fakeExec({ "api user": { code: 0, stdout: "{}" } });
+    await expect(resolveBotAuth(ENABLED, { execFn })).rejects.toThrow(/could not parse/);
+    await expect(resolveBotAuth(ENABLED, { execFn })).rejects.not.toThrow(/undefined\+undefined/);
+  });
+
+  // #187.2: a missing gh binary (exit 127 in the exec seam) is a distinct
+  // failure from a genuinely absent login — say so precisely.
+  it("distinguishes a missing gh binary (exit 127) from a missing login", async () => {
+    const { execFn } = fakeExec({ "api user": { code: 127, stdout: "" } });
+    await expect(resolveBotAuth(ENABLED, { execFn })).rejects.toThrow(
+      /gh (binary )?not found|not found/i,
+    );
+    await expect(resolveBotAuth(ENABLED, { execFn })).rejects.not.toThrow(/junco auth login/);
+  });
+
+  // #187.4: git shell-splits `!`-helpers, so a ghBin path with spaces must be
+  // quoted in the credential helper.
+  it("quotes a ghBin containing spaces in the credential helper", async () => {
+    const { execFn } = fakeExec({ "api user": { code: 0, stdout: USER_JSON } });
+    const ctx = await resolveBotAuth(
+      { botAccount: { enabled: true, configDir: "/sbx/junco-gh" }, ghBin: "/opt/my tools/gh" },
+      { execFn },
+    );
+    expect(ctx?.credentialHelper).toBe('!"/opt/my tools/gh" auth git-credential');
   });
 });
 

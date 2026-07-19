@@ -13,10 +13,12 @@
  * cadence (sleepInterruptible) and the loop guard.
  */
 
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import type { ConfigHolder } from "./configWatcher.js";
 import { ensureDataTree } from "./dataTree.js";
 import { migrateStateTree, type MigrateResult } from "./dataMigrate.js";
+import { acquirePidfileLock } from "./pidfileLock.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
@@ -28,7 +30,7 @@ import {
 } from "./health.js";
 import { log } from "./logging.js";
 import { metrics } from "./metrics.js";
-import { ProviderGate } from "./providerGate.js";
+import { ProviderGate, type GateStateKind } from "./providerGate.js";
 import { makeSpendLedger, type SpendLedger } from "./spendLedger.js";
 import {
   startHealthServer,
@@ -230,6 +232,11 @@ export interface MainLoopDeps {
    * mkdir would otherwise fabricate empty destinations for pairs whose old
    * name still holds the real data. Defaults to the real migrateStateTree. */
   migrateFn?: (cfg: Config) => MigrateResult;
+  /** #197.2: non-blocking lock around the startup migration so a concurrent
+   * `junco data migrate` (which can't see a mid-startup daemon via /health —
+   * the health server starts after migration) doesn't double-run the pass.
+   * Returns null when another migrate holds the lock. Default: migrate.lock. */
+  migrateLockFn?: (dataDir: string) => { release: () => void } | null;
   mkdirs?: (cfg: Config) => void;
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
@@ -280,10 +287,15 @@ export interface MainLoopDeps {
  * metrics singleton. Shared by mainLoop's own default and cli.ts (which
  * constructs one gate up front so it can wire the SAME instance into both
  * mainLoopFn's deps and the config-watcher's onApplied clear).
+ *
+ * `backoffGetter` (#180): retryBackoffSeconds is a reload:"live" lever, so
+ * callers with a live config holder pass a getter (`() => holder.current
+ * .retryBackoffSeconds`) that the gate re-reads on every report/stamp;
+ * omitting it freezes the startup value (fine for tests / one-shot callers).
  */
-export function makeProviderGate(cfg: Config): ProviderGate {
+export function makeProviderGate(cfg: Config, backoffGetter?: () => number): ProviderGate {
   return new ProviderGate({
-    retryBackoffSeconds: cfg.retryBackoffSeconds,
+    retryBackoffSeconds: backoffGetter ?? cfg.retryBackoffSeconds,
     onTransition: (_from, to) => metrics.recordGateTransition(to),
   });
 }
@@ -500,7 +512,7 @@ export async function mainLoop(
   // pauses claiming without touching retry_count; runOnce/executeClaimed
   // report into it below, the health server surfaces its status, and (via
   // cli.ts) a successful config hot-reload clears a stale latch.
-  const gate = deps.gate ?? makeProviderGate(cfg);
+  const gate = deps.gate ?? makeProviderGate(cfg, () => activeCfg().retryBackoffSeconds);
   // Per-day spend ledger (Phase-3 Task 4): every session runOnce/executeClaimed
   // runs records its costUsd here. `cfg` is the frozen startup config, not
   // activeCfg() — dataDir is restart-kind (same freeze as the gate above and
@@ -512,6 +524,11 @@ export async function mainLoop(
   // endpoint config is picked up on the next probe past the TTL; no cache
   // invalidation is needed.
   const cachedReachable = makeCachedProbe(() => endpointReachable(activeCfg()));
+  // #180.2: the pause warn is debounced to once per gate-state transition
+  // (keyed on the state KIND, not the reason string — the budget reason embeds
+  // a running spend total that changes every poll). Steady-state blocked polls
+  // drop to debug so a latch doesn't spam warn for its whole lifetime.
+  let lastGateWarnState: GateStateKind = "ok";
   const gatedReady = async (): Promise<boolean> => {
     // Daily spend cap (Phase-3 Task 5): checked BEFORE the gate/probe, on
     // EVERY poll, using the LIVE config — dailyBudgetUsd is a live lever, so
@@ -532,8 +549,18 @@ export async function mainLoop(
     }
     const block = gate.claimBlockReason();
     if (block) {
-      log.warn("claiming paused by provider gate", { reason: block });
+      const kind = gate.status().state;
+      if (kind !== lastGateWarnState) {
+        log.warn("claiming paused by provider gate", { reason: block, state: kind });
+      } else {
+        log.debug("claiming still paused by provider gate", { reason: block, state: kind });
+      }
+      lastGateWarnState = kind;
       return false;
+    }
+    if (lastGateWarnState !== "ok") {
+      log.info("claiming resumed by provider gate");
+      lastGateWarnState = "ok";
     }
     return cachedReachable();
   };
@@ -557,6 +584,8 @@ export async function mainLoop(
     deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
   const migrateFn = deps.migrateFn ?? migrateStateTree;
+  const migrateLockFn =
+    deps.migrateLockFn ?? ((d: string) => acquirePidfileLock(join(d, "migrate.lock")));
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
@@ -567,16 +596,33 @@ export async function mainLoop(
   // recursively-empty-dst repair rule for the cases that path actually means
   // to catch (a crash between mkdir and rename, or scaffolding a rolled-back
   // version materialized), not routine startup ordering.
-  const mig = migrateFn(cfg);
-  for (const step of mig.steps) {
-    // One receipt per pair that actually moved — worker.log evidence of what
-    // the automatic migration did (the durable journal is migrated.json).
-    if (step.action === "renamed") {
-      log.info("state-tree migration: renamed", { from: step.from, to: step.to });
+  //
+  // #197.2: hold migrate.lock (non-blocking) for the pass. A concurrent
+  // `junco data migrate` in the startup window is invisible to its /health
+  // probe (the health server starts after this), so without the lock both
+  // would run the state-tree pass. Renames are atomic — the loser only
+  // errors-then-converges — so this is tidiness, not corruption: skip if held.
+  // acquirePidfileLock mkdirs only dirname(lockPath) = cfg.dataDir, not the
+  // nested tree, so the migrate-before-mkdirs invariant above is preserved.
+  const migLock = migrateLockFn(cfg.dataDir);
+  if (migLock === null) {
+    log.warn("state-tree migration skipped — another migrate holds migrate.lock");
+  } else {
+    try {
+      const mig = migrateFn(cfg);
+      for (const step of mig.steps) {
+        // One receipt per pair that actually moved — worker.log evidence of
+        // what the automatic migration did (durable journal is migrated.json).
+        if (step.action === "renamed") {
+          log.info("state-tree migration: renamed", { from: step.from, to: step.to });
+        }
+      }
+      for (const conflict of mig.conflicts) {
+        log.warn("state-tree migration conflict; manual resolution required", { conflict });
+      }
+    } finally {
+      migLock.release();
     }
-  }
-  for (const conflict of mig.conflicts) {
-    log.warn("state-tree migration conflict; manual resolution required", { conflict });
   }
   mkdirs(cfg);
   // Stamp the start time once the queue dirs exist; the health server reports

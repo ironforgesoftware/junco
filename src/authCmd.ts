@@ -107,14 +107,25 @@ export async function runAuthCommand(
   }
 
   setAtPath(raw, "botAccount.enabled", true);
-  validateConfigObject(raw);
+  // #188: validate BEFORE writing and catch here so a config that was ALREADY
+  // schema-invalid in some unrelated field surfaces a one-line message and a
+  // clean exit 1 — parity with configCmd's `set` — instead of letting the raw
+  // ZodError propagate to cli.ts's top-level catch and print a stack trace.
+  try {
+    validateConfigObject(raw);
+  } catch (e) {
+    printErr(
+      `config invalid — not modified: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}\n`,
+    );
+    return 1;
+  }
   // Atomic temp+rename (wizard/configCmd pattern) — never truncate in place.
   const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
   const writeFileFn = deps.writeFileFn ?? ((p: string, c: string) => writeFileSync(p, c, "utf8"));
   const renameFn = deps.renameFn ?? renameSync;
   const unlinkFn = deps.unlinkFn ?? unlinkSync;
-  writeFileFn(tmp, JSON.stringify(raw, null, 2) + "\n");
   try {
+    writeFileFn(tmp, JSON.stringify(raw, null, 2) + "\n");
     renameFn(tmp, resolved);
   } catch (e) {
     try {
@@ -122,7 +133,10 @@ export async function runAuthCommand(
     } catch {
       /* best effort */
     }
-    throw e;
+    printErr(
+      `config write failed — not modified: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}\n`,
+    );
+    return 1;
   }
 
   print(`✓ junco now acts as ${login} for daemon GitHub traffic (botAccount.enabled=true)\n`);

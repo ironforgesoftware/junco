@@ -230,6 +230,10 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // ("/tmp/vault/state" etc.) aren't real tmp roots, so default every test
     // to a no-op migration unless a test overrides it to exercise the wiring.
     migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
+    // Fake migrate lock — the real acquirePidfileLock would mkdir the fixture
+    // dataDir and write a real lock file (#197.2). Tests exercising the lock
+    // override this.
+    migrateLockFn: vi.fn(() => ({ release: vi.fn() })),
     mkdirs: vi.fn(() => {}),
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
@@ -630,6 +634,52 @@ describe("mainLoop", () => {
     expect(deps.waitForEndpointFn).toHaveBeenCalledWith(cfg, stop);
   });
 
+  it("skips the startup migration when migrate.lock is held by a concurrent migrate (#197.2)", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        migrateLockFn: () => null, // another migrate holds the lock
+        migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(deps.migrateFn).not.toHaveBeenCalled();
+      const warned = warnSpy.mock.calls.some((c) =>
+        String(c[0]).includes("state-tree migration skipped"),
+      );
+      expect(warned).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("runs the startup migration under migrate.lock and releases it (#197.2)", async () => {
+    const cfg = makeConfig();
+    const stop = new StopFlag();
+    const release = vi.fn();
+    const migrateLockFn = vi.fn(() => ({ release }));
+    const { deps } = makeDeps({
+      migrateLockFn,
+      migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(migrateLockFn).toHaveBeenCalledWith(cfg.dataDir);
+    expect(deps.migrateFn).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("logs one warn per state-tree migration conflict at startup", async () => {
     const { log } = await import("../src/logging.js");
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
@@ -890,6 +940,52 @@ describe("mainLoop — provider gate wiring", () => {
       expect(warned).toBe(true);
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  it("logs the pause warn once per gate transition, not once per poll (#180)", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
+    let captured: { readyFn?: () => Promise<boolean> } | undefined;
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(
+      async (_c: Config, runDeps: { readyFn?: () => Promise<boolean> }) => {
+        captured = runDeps;
+        return false;
+      },
+    );
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        gate: fakeGate("auth_error: bad key"),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured?.readyFn).toBeDefined();
+      // Three blocked polls against the same latch: the warn fires exactly once
+      // (on the ok→auth_error transition); later polls drop to debug.
+      await captured!.readyFn!();
+      await captured!.readyFn!();
+      await captured!.readyFn!();
+      const warns = warnSpy.mock.calls.filter(
+        (c) => String(c[0]) === "claiming paused by provider gate",
+      );
+      expect(warns).toHaveLength(1);
+      const debugs = debugSpy.mock.calls.filter(
+        (c) => String(c[0]) === "claiming still paused by provider gate",
+      );
+      expect(debugs.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      runOnceBox.current = realRunOnce;
+      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 

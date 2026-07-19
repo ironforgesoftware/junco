@@ -516,6 +516,29 @@ function checkLabelsExist(
 // Check: github_request scoped where fulfillment can actually happen
 // ---------------------------------------------------------------------------
 
+/** #210: mirror ticket.ts's github-block parse — only a fully-valid block sets
+ * ticket.github and thus makes fulfillment skip. An unparseable block leaves
+ * ticket.github null and fulfillment PROCEEDS, so "will be ignored" is false. */
+function githubBlockParsesValid(g: unknown): boolean {
+  if (g === null || typeof g !== "object" || Array.isArray(g)) return false;
+  const o = g as Record<string, unknown>;
+  return (
+    typeof o.nwo === "string" &&
+    typeof o.issue === "number" &&
+    Number.isInteger(o.issue) &&
+    o.issue > 0 &&
+    (o.kind === "pr" || o.kind === "ask" || o.kind === "plan")
+  );
+}
+
+/** #210: mirror repoContext.ts's amends_pr parse — a value that derives to NaN
+ * leaves ctx.amendsPr null, so fulfillment proceeds (not "ignored"). */
+function amendsParsesToPr(v: unknown): boolean {
+  if (v === null || v === undefined) return false;
+  const n = parseInt(String(v).replace(/^#+/, ""), 10);
+  return !Number.isNaN(n);
+}
+
 function checkGithubRequestScope(frontmatter: Record<string, unknown>): LintViolation[] {
   const req = frontmatter.github_request;
   if (req === undefined || req === null) return [];
@@ -532,19 +555,47 @@ function checkGithubRequestScope(frontmatter: Record<string, unknown>): LintViol
     ];
   }
   const v: LintViolation[] = [];
-  if (frontmatter.github !== undefined && frontmatter.github !== null) {
+
+  // #210: the likeliest authoring typo — create_issue as a non-boolean. The
+  // fulfillment gate is strict (create_issue === true), so `yes`/`"true"`/`1`/
+  // `on` all parse to false under YAML 1.2 core schema and are silently ignored.
+  const ci = (req as Record<string, unknown>).create_issue;
+  if (ci !== undefined && typeof ci !== "boolean") {
     v.push(
-      warn("ticket already carries a github: provenance block; github_request will be ignored"),
+      warn(
+        'github_request.create_issue must be the boolean true; a value like `yes`, `"true"`, ' +
+          "or `1` parses to a non-boolean under YAML 1.2 and is silently ignored",
+      ),
     );
   }
-  if (frontmatter.push_remote === "fork") {
+
+  // #210: only warn when the github: block would actually PARSE (→ ticket.github
+  // set → fulfillment skips). An unparseable block does not suppress fulfillment.
+  if (githubBlockParsesValid(frontmatter.github)) {
     v.push(
-      warn("fork-push tickets never write to the upstream repo; github_request will be ignored"),
+      warn(
+        "ticket already carries a valid github: provenance block; github_request will be ignored",
+      ),
     );
   }
-  if (frontmatter.amends_pr !== undefined && frontmatter.amends_pr !== null) {
+
+  // #210: fulfillment skips ANY non-origin pushRemote (repoContext parse), not
+  // just "fork" — an exotic push_remote: upstream was silently unlinted before.
+  const pr = frontmatter.push_remote;
+  if (typeof pr === "string" && pr.trim() !== "" && pr.trim() !== "origin") {
+    v.push(
+      warn(
+        `push_remote: ${pr.trim()} pushes to a non-origin remote, which never writes to the ` +
+          "upstream repo; github_request will be ignored",
+      ),
+    );
+  }
+
+  // #210: only warn on an amends_pr that parses to a real PR number.
+  if (amendsParsesToPr(frontmatter.amends_pr)) {
     v.push(warn("amend tickets never edit the existing PR body; github_request will be ignored"));
   }
+
   return v;
 }
 

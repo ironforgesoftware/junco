@@ -519,12 +519,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const stopFlag = new StopFlag();
     const uninstall = installSignalHandlersFn(stopFlag);
 
-    // Provider gate (Task 10): one instance shared between mainLoop's claim/
-    // health wiring and the hot-reload watcher below, so a successful config
-    // edit (bad key fixed, quota lifted, model id corrected) clears a stale
-    // latch without requiring a restart.
-    const gate = makeProviderGate(cfgAuthed);
-
     // Live-reload (Task 6): the holder starts seeded with the config we just
     // loaded; the watcher re-parses config.json on change and swaps in a new
     // Config, which mainLoop's per-iteration reads pick up without a restart.
@@ -532,7 +526,17 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // unsupported FS) must NOT crash the daemon, matching the health server's
     // graceful-degrade pattern below: log a warning and continue with the
     // holder seeded but never updated (hot-reload disabled until restart).
+    // Built BEFORE the gate so the gate can read retryBackoffSeconds live off
+    // holder.current (a reload:"live" lever — #180).
     const holder = makeConfigHolder(cfgAuthed);
+
+    // Provider gate (Task 10): one instance shared between mainLoop's claim/
+    // health wiring and the hot-reload watcher below, so a successful config
+    // edit (bad key fixed, quota lifted, model id corrected) clears a stale
+    // latch without requiring a restart. The backoff getter re-reads the live
+    // retryBackoffSeconds so gate backoff windows honor a hot-reload too (#180).
+    const gate = makeProviderGate(cfgAuthed, () => holder.current.retryBackoffSeconds);
+
     let watcher: { close(): void } | null = null;
     try {
       watcher = watchConfigFn(configPath, holder, {

@@ -22,7 +22,7 @@
  * outward-facing writes beyond the PR itself (reporter `external` parity).
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { git, gh } from "./git.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { createIssueLive } from "./assessFiling.js";
@@ -58,7 +58,17 @@ export async function fulfillIssueRequest(
   const gitFn = deps.gitFn ?? git;
   const ghFn = deps.ghFn ?? gh;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
-  const writeFileFn = deps.writeFileFn ?? ((p: string, c: string) => writeFileSync(p, c, "utf8"));
+  const writeFileFn =
+    deps.writeFileFn ??
+    ((p: string, c: string) => {
+      // #209: atomic tmp+rename (the queue idiom — moveBackToInbox, reviewStore)
+      // so a crash mid-write can't truncate the claimed ticket into malformed
+      // frontmatter, which requeueTicket's #108 verify would then route to
+      // failed/ instead of retrying.
+      const tmp = `${p}.tmp-${process.pid}`;
+      writeFileSync(tmp, c, "utf8");
+      renameSync(tmp, p);
+    });
 
   if (!ticket.githubRequest?.createIssue) return null;
   // Already linked: a bridge/dispatch ticket, or a requeue after a prior

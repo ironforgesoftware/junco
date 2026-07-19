@@ -29,6 +29,7 @@ import {
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
+import { log } from "./logging.js";
 
 export interface MigrationStep {
   from: string;
@@ -52,6 +53,10 @@ export interface MigrateDeps {
   rmFn?: (d: string) => void;
   readFileFn?: (p: string) => string;
   writeFileFn?: (p: string, s: string) => void;
+  /** Where a journal-write failure that follows a migration error is logged
+   * (rather than being allowed to mask the original — #197.1). Default:
+   * log.warn. */
+  logFn?: (msg: string, fields?: Record<string, unknown>) => void;
 }
 
 interface Journal {
@@ -184,9 +189,14 @@ export function migrateStateTree(cfg: Config, deps: MigrateDeps = {}): MigrateRe
   const rmFn = deps.rmFn ?? ((d: string) => rmSync(d, { recursive: true }));
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
+  const logFn = deps.logFn ?? ((m: string, f?: Record<string, unknown>) => log.warn(m, f));
 
   const steps: MigrationStep[] = [];
   const conflicts: string[] = [];
+  // #197.1: track clean completion so the finally can tell a journal-write
+  // failure that FOLLOWS a migration error (must not mask it) from one on the
+  // happy path (must still propagate — a silently unwritten receipt is a bug).
+  let loopCompleted = false;
 
   // The journal append lives in `finally`: a genuine fs error on a LATER
   // pair must not lose the receipts of pairs that already renamed on disk
@@ -214,10 +224,28 @@ export function migrateStateTree(cfg: Config, deps: MigrateDeps = {}): MigrateRe
       steps.push({ from, to, action: "skipped-conflict" });
       conflicts.push(`${from} -> ${to}: destination already exists and is not empty`);
     }
+    loopCompleted = true;
   } finally {
     const completed = steps.filter((s) => s.action !== "noop");
     if (completed.length > 0) {
-      appendJournal(dataTreePaths(cfg).migratedFile, completed, readFileFn, writeFileFn, renameFn);
+      try {
+        appendJournal(
+          dataTreePaths(cfg).migratedFile,
+          completed,
+          readFileFn,
+          writeFileFn,
+          renameFn,
+        );
+      } catch (journalErr) {
+        // #197.1: JS finally semantics let a throw here REPLACE the in-flight
+        // migration error. On the throwing path, log the journal failure and
+        // let the original error propagate; on the clean path, propagate the
+        // journal error (an unwritten receipt must not be swallowed).
+        if (loopCompleted) throw journalErr;
+        logFn("state-tree migration: journal write failed after a migration error", {
+          error: journalErr instanceof Error ? journalErr.message : String(journalErr),
+        });
+      }
     }
   }
 

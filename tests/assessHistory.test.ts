@@ -89,4 +89,15 @@ describe("assessHistory", () => {
     expect(listHistory(cfg(s))).toEqual([]);
     expect(assessHistoryDir(cfg(s))).toBe(join(s, "assess-history"));
   });
+
+  // #202: two distinct nwos that slugify identically (`o-a/b` and `o/a-b` both
+  // → `o-a-b`) must land in separate files, not clobber each other.
+  it("distinct nwos that slugify identically get separate files (#202)", () => {
+    const s = sandbox();
+    recordRun(cfg(s), "o-a/b", { ok: true, at: "2026-07-16T00:00:00.000Z", found: 1, parked: 1 });
+    recordRun(cfg(s), "o/a-b", { ok: true, at: "2026-07-16T00:00:00.000Z", found: 2, parked: 2 });
+    expect(listHistory(cfg(s))).toHaveLength(2); // pre-#202: 1 (second clobbers first)
+    expect(readHistory(cfg(s), "o-a/b")!.lastFound).toBe(1); // pre-#202: reads 2
+    expect(readHistory(cfg(s), "o/a-b")!.lastFound).toBe(2);
+  });
 });

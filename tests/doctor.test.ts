@@ -94,7 +94,11 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 
 describe("runDoctor", () => {
   it("all green → exit 0", async () => {
-    expect(await runDoctor("/x/config.json", deps())).toBe(0);
+    // #199.3: inject existsFn/readdirFn so the clean verdict doesn't silently
+    // depend on the real fs lacking the /tmp/junco-doc-* fixture paths.
+    expect(
+      await runDoctor("/x/config.json", deps({ existsFn: () => false, readdirFn: () => [] })),
+    ).toBe(0);
   });
 
   it("unreachable endpoint → ✗ and exit 1", async () => {
@@ -374,9 +378,16 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
 
   it("clean cfg reports neither deprecations nor unmigrated dirs", async () => {
     const lines: string[] = [];
+    // #199.3: existsFn/readdirFn injected so "clean" is hermetic, not reliant
+    // on the host filesystem not containing the /tmp/junco-doc-* literals.
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => okConfig, printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => okConfig,
+        existsFn: () => false,
+        readdirFn: () => [],
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/deprecated config keys/);
@@ -1023,10 +1034,13 @@ describe("runDoctor bot account checks", () => {
             return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
           }
           if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
-            // WRITE only under the bot's GH_CONFIG_DIR — ambient auth would
-            // read code 1 → "unknown" warn, flipping the ✓ assertion below.
-            // Pins that the permission probe runs as the bot, not just arg shape.
-            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+            // WRITE only under the bot's GH_CONFIG_DIR AND with GH_TOKEN/
+            // GITHUB_TOKEN cleared — ambient auth or an un-cleared token would
+            // read code 1 → "unknown" warn, flipping the ✓ assertion below. Pins
+            // both the identity dir and the #186 token-clearing (#192.3).
+            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh" &&
+              opts?.env?.GH_TOKEN === "" &&
+              opts?.env?.GITHUB_TOKEN === ""
               ? { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" }
               : { code: 1, stdout: "", stderr: "wrong identity" };
           }
@@ -1192,6 +1206,42 @@ describe("runDoctor bot account checks", () => {
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/bot access/i);
   });
+
+  // #189: an SSH origin under bot mode warns (pushes bypass the bot cred
+  // helper); an https origin does not.
+  it("bot mode: warns on an SSH origin, stays quiet on an https origin", async () => {
+    const run = async (originUrl: string) => {
+      const lines: string[] = [];
+      await runDoctor(
+        "/x/config.json",
+        deps({
+          loadConfigFn: () =>
+            botConfig({
+              github: {
+                ...okConfig.github,
+                enabled: true,
+                repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
+              },
+            }),
+          execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
+            if (args.includes("get-url")) return { code: 0, stdout: originUrl + "\n", stderr: "" };
+            if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
+              return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
+                ? { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" }
+                : { code: 1, stdout: "", stderr: "wrong identity" };
+            }
+            return { code: 0, stdout: "ok", stderr: "" };
+          },
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      return lines.join("");
+    };
+    expect(await run("git@github.com:acme/api.git")).toMatch(
+      /⚠ bot remote: acme\/api.*not an https/,
+    );
+    expect(await run("https://github.com/acme/api.git")).not.toMatch(/bot remote:/);
+  });
 });
 
 describe("runDoctor outbox checks", () => {
@@ -1350,6 +1400,33 @@ describe("runDoctor assess history checks", () => {
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(
       /✓ assess history — o\/other: never assessed \(last attempt failed\)/,
+    );
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
+
+  // #204: the combined branch — a repo that succeeded, then later failed —
+  // shows BOTH the last-success date and the failed flag.
+  it("a repo that succeeded then later failed shows both the date and the failed flag", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-both-"));
+    recordRun({ dataDir } as unknown as Config, "o/r", {
+      ok: true,
+      at: "2026-07-14T00:00:00.000Z",
+      found: 2,
+      parked: 1,
+    });
+    recordRun({ dataDir } as unknown as Config, "o/r", {
+      ok: false,
+      at: "2026-07-16T00:00:00.000Z",
+      reason: "boom",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(
+      /✓ assess history — o\/r: assessed 2026-07-14 \(last attempt failed\)/,
     );
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });

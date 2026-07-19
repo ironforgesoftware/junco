@@ -744,6 +744,39 @@ describe("dataDir resolution (unified data root)", () => {
     expect(cfg.legacy.externalReposRoot).toBe(true);
   });
 
+  it("empty-string legacy path keys are treated as unset — flag and resolution agree (#198)", () => {
+    const cfg = parse({
+      vaultRoot: "",
+      observability: { stateDir: "" },
+      git: { worktreeRoot: "" },
+    });
+    expect(cfg.legacy).toEqual({
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+    });
+    expect(cfg.dataDir).toBe(XDG_DEFAULT);
+    expect(cfg.queueRoot).toBe(join(XDG_DEFAULT, "queue"));
+    expect(cfg.worktreeRoot).toBe(join(XDG_DEFAULT, "worktrees"));
+  });
+
+  it("whitespace-only legacy path keys are unset too, including externalReposRoot (min(1) admits it) (#198)", () => {
+    const cfg = parse({
+      vaultRoot: "  ",
+      git: { worktreeRoot: " " },
+      github: { externalReposRoot: "  " },
+    });
+    expect(cfg.legacy).toEqual({
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+    });
+    expect(cfg.worktreeRoot).toBe(join(XDG_DEFAULT, "worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(XDG_DEFAULT, "clones", "external"));
+  });
+
   it("configDeprecations names each set legacy key and is empty when clean", () => {
     expect(configDeprecations(parse({}))).toEqual([]);
     const warns = configDeprecations(

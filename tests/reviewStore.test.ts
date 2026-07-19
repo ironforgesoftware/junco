@@ -23,6 +23,15 @@ describe("makeReviewStore", () => {
     expect(store.count(c)).toBe(0);
     expect(existsSync(join(store.archiveDir(c, "posted"), "a-1.json"))).toBe(true);
   });
+  // #202: a custom keyOf controls the on-disk filename while the raw id still
+  // round-trips (used by assessHistory to avoid slugifyId nwo collisions).
+  it("a custom keyOf controls the on-disk filename and round-trips the id", () => {
+    const keyed = makeReviewStore<Item>("test-review-keyed", ["id"], (id) => `k-${id.length}`);
+    const c = cfg(mkdtempSync(join(tmpdir(), "rvs-")));
+    keyed.write(c, { id: "abcd", note: "x" });
+    expect(readdirSync(keyed.dir(c))).toEqual(["k-4.json"]); // keyOf, not slugifyId
+    expect(keyed.read(c, "abcd").entry?.note).toBe("x"); // same keyOf on read
+  });
   it("missing → {null,null}; corrupt → skipped in list, error in read; missing dir → empty", () => {
     const c = cfg(mkdtempSync(join(tmpdir(), "rvs-")));
     expect(store.read(c, "nope")).toEqual({ entry: null, error: null });

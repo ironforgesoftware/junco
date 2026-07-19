@@ -11,7 +11,7 @@ import { submitTicket } from "./dispatch.js";
 import { ensureExternalClone, type ExternalRepoDeps } from "./externalRepo.js";
 import { readWatchlist, writeWatchlist, watchlistPath, resolveWatchedRepos } from "./watchlist.js";
 import { withBotAuth } from "./ghAuth.js";
-import { classifyRepoAccess } from "./botAccess.js";
+import { classifyRepoAccess, ssoMessage } from "./botAccess.js";
 import type { Config } from "./types.js";
 
 const GH_TIMEOUT = 60_000;
@@ -150,10 +150,10 @@ export async function resolveIssueTarget(
     const access = await (deps.classifyFn ?? classifyRepoAccess)(botCfg, ref.nwo, deps);
     if (access.mode === "blocked") {
       if (access.reason === "sso") {
-        throw new Error(
-          `the bot's token is blocked by SAML enforcement for ${ref.nwo} — authorize gh for ` +
-            `the org in the bot's browser session, then retry`,
-        );
+        // #192.1: classification runs under the ambient identity when bot mode
+        // is off (withBotAuth returns cfg unchanged → no ghAuth) — name the
+        // right token, mirroring the no-access branch below.
+        throw new Error(ssoMessage(ref.nwo, botCfg.ghAuth !== undefined ? "bot" : "you"));
       }
       throw new Error(
         botCfg.ghAuth !== undefined
