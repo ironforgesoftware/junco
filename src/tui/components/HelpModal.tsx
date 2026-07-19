@@ -90,7 +90,10 @@ export function HelpModal({
               "running / live rows",
               "never selectable — the daemon owns processing/ and live worktrees",
             ],
-            ["mouse", "header tab only in local; body rows are keyboard-first (v1)"],
+            [
+              "mouse",
+              "parity with github: click selects/focuses · click-again enters/opens · wheel scrolls",
+            ],
           ]}
         />
         {updateLatest != null && (
