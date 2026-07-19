@@ -187,4 +187,41 @@ describe("fulfillIssueRequest", () => {
     expect(meta).toEqual({ nwo: "acme/api", issue: 41, kind: "pr", external: false });
     expect(h.files.get("/claim/tk-1.md")).toBe(broken); // not persisted, not corrupted
   });
+
+  // #211.1: title precedence is prTitle ?? firstHeading(body) ?? id. Every
+  // other test sets prTitle, so tiers 2 and 3 were never exercised. The title
+  // is a discrete arg (--title <t>; the body goes to --body-file), so read it
+  // back precisely.
+  const titleOf = (args: string[]): string => args[args.indexOf("--title") + 1];
+
+  it("title tier 2: falls back to the first body heading when prTitle is null (#211)", async () => {
+    const h = harness();
+    const t = ticketOf(TICKET_MD.replace("# Fix the flux capacitor", "# Some Heading"));
+    await fulfillIssueRequest(CFG, t, ctx({ prTitle: null }), "/claim/tk-1.md", h.deps);
+    expect(titleOf(h.ghCalls[0])).toBe("Some Heading");
+  });
+
+  it("title tier 3: falls back to the ticket id when prTitle is null and there is no heading (#211)", async () => {
+    const h = harness();
+    const t = ticketOf(
+      TICKET_MD.replace("# Fix the flux capacitor\nBody text.", "Body, no heading."),
+    );
+    await fulfillIssueRequest(CFG, t, ctx({ prTitle: null }), "/claim/tk-1.md", h.deps);
+    expect(titleOf(h.ghCalls[0])).toBe("tk-1");
+  });
+
+  // #211.2: the end-to-end double-create defense — fulfill stamps the file, a
+  // requeue+re-claim re-parses it, and the second fulfillment must skip.
+  it("composed: fulfill → re-parse the stamped file → re-claim skips (no double-create) (#211)", async () => {
+    const h = harness();
+    const meta1 = await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", h.deps);
+    expect(meta1).not.toBeNull();
+    expect(h.ghCalls).toHaveLength(1);
+    // Re-parse the now-stamped file — exactly what requeueTicket → re-claim reads.
+    const ticket2 = parseTicket("/claim/tk-1.md", h.files.get("/claim/tk-1.md")!);
+    expect(ticket2.github).not.toBeNull(); // the stamp round-trips through the parser
+    const meta2 = await fulfillIssueRequest(CFG, ticket2, ctx(), "/claim/tk-1.md", h.deps);
+    expect(meta2).toBeNull(); // already linked → skip
+    expect(h.ghCalls).toHaveLength(1); // no second issue created
+  });
 });
