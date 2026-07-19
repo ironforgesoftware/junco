@@ -773,6 +773,7 @@ describe("fileReview", () => {
     const r = await client.fileReview("assess-x-1", ["f1"]);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.created).toBe(1);
+    if (r.ok) expect(r.value.batch.id).toBe("assess-x-1");
     expect([...(gotSelected ?? new Set())]).toEqual(["f1"]);
     expect(readPendingFn).toHaveBeenCalledWith(cfg, "assess-x-1");
   });
@@ -864,6 +865,25 @@ describe("fileReview", () => {
     expect(r.ok).toBe(true);
     expect(fileFindingsFn).toHaveBeenCalledTimes(1);
     expect(fileFindingsFn.mock.calls[0]?.[0].ghAuth).toBeUndefined();
+  });
+});
+
+describe("discardReview", () => {
+  it("discards via discardPendingFn and returns ok(null)", async () => {
+    const discardPendingFn = vi.fn((_c: Config, _id: string) => true);
+    const client = makeGhDashboardClient(cfg, { ...fakes(), discardPendingFn });
+    const r = await client.discardReview("assess-x-1");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value).toBeNull();
+    expect(discardPendingFn).toHaveBeenCalledWith(cfg, "assess-x-1");
+  });
+
+  it("a throwing discard surfaces as ok:false", async () => {
+    const discardPendingFn = vi.fn((_c: Config, _id: string): boolean => {
+      throw new Error("rename boom");
+    });
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), discardPendingFn }).discardReview("x");
+    expect(r.ok).toBe(false);
   });
 });
 

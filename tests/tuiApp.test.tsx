@@ -160,6 +160,7 @@ function makeClient(
     listCommentDrafts: async () => okv([]),
     postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
     discardCommentDraft: async () => okv(null),
+    discardReview: async () => okv(null),
     analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
@@ -221,6 +222,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     listCommentDrafts: async () => okv([]),
     postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
     discardCommentDraft: async () => okv(null),
+    discardReview: async () => okv(null),
     analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
@@ -285,6 +287,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
     listCommentDrafts: async () => okv([]),
     postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
     discardCommentDraft: async () => okv(null),
+    discardReview: async () => okv(null),
     analyzeIssue: async () => okv({ id: "x" }),
     health: async () => ({
       up: true,
@@ -771,6 +774,7 @@ describe("App", () => {
       listCommentDrafts: async () => okv([]),
       postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
       discardCommentDraft: async () => okv(null),
+      discardReview: async () => okv(null),
       analyzeIssue: async () => okv({ id: "x" }),
       health: async () => ({
         up: true,
