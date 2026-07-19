@@ -9,29 +9,10 @@
 
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { execFile } from "node:child_process";
+import { defaultExec } from "./execProbe.js";
 import type { Config, GhAuthContext } from "./types.js";
 
 export const DEFAULT_GH_CONFIG_DIR = "~/.config/junco/gh";
-
-/** Same shape as execProbe's defaultExec, plus env (bot probes need it). */
-function defaultExecWithEnv(
-  cmd: string,
-  args: string[],
-  opts?: { env?: Record<string, string> },
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(
-      cmd,
-      args,
-      { timeout: 10_000, env: opts?.env ? { ...process.env, ...opts.env } : undefined },
-      (err, stdout, stderr) => {
-        const code = err ? ((err as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1) : 0;
-        resolve({ code, stdout: String(stdout), stderr: String(stderr) });
-      },
-    );
-  });
-}
 
 export interface GhAuthDeps {
   execFn?: (
@@ -52,13 +33,22 @@ export async function resolveBotAuth(
   deps: GhAuthDeps = {},
 ): Promise<GhAuthContext | null> {
   if (!cfg.botAccount.enabled) return null;
-  const execFn = deps.execFn ?? defaultExecWithEnv;
+  const execFn = deps.execFn ?? defaultExec;
   const r = await execFn(cfg.ghBin, ["api", "user"], {
     // Clear GH_TOKEN/GITHUB_TOKEN (see git.ts ghAuthEnv): gh gives them
     // precedence over GH_CONFIG_DIR creds, so an ambient token would make this
     // very verification resolve to the wrong identity and defeat refuse-to-start.
     env: { GH_CONFIG_DIR: cfg.botAccount.configDir, GH_TOKEN: "", GITHUB_TOKEN: "" },
   });
+  // #187.2: a missing/unreadable gh binary maps to 127 in the exec seam — a
+  // distinct failure from a genuinely absent login (below), so name it
+  // precisely rather than sending the operator to `junco auth login`.
+  if (r.code === 127) {
+    throw new Error(
+      `botAccount.enabled is true but the gh binary was not found (ghBin="${cfg.ghBin}") — ` +
+        `install gh or fix git.ghBin`,
+    );
+  }
   if (r.code !== 0) {
     throw new Error(
       `botAccount.enabled is true but no working gh login exists under ` +
@@ -68,7 +58,13 @@ export async function resolveBotAuth(
   let login: string;
   let id: number;
   try {
-    const u = JSON.parse(r.stdout) as { login: string; id: number };
+    // #187.1: validate the shape inside the try so shapeless-but-valid JSON
+    // ({} → login:undefined, id:undefined) is caught by the same "could not
+    // parse" error instead of producing "undefined+undefined@…" downstream.
+    const u = JSON.parse(r.stdout) as { login?: unknown; id?: unknown };
+    if (typeof u.login !== "string" || typeof u.id !== "number") {
+      throw new Error("unexpected 'gh api user' shape");
+    }
     login = u.login;
     id = u.id;
   } catch {
@@ -80,7 +76,9 @@ export async function resolveBotAuth(
     email: `${id}+${login}@users.noreply.github.com`,
     // The helper subprocess is spawned by git and inherits the child's
     // GH_CONFIG_DIR (ghAuthEnv), so the bare gh binary reference suffices.
-    credentialHelper: `!${cfg.ghBin} auth git-credential`,
+    // #187.4: quote ghBin — git runs `!`-helpers through the shell, which
+    // word-splits, so an unquoted path with spaces would break mid-path.
+    credentialHelper: `!"${cfg.ghBin}" auth git-credential`,
   };
 }
 
@@ -118,7 +116,7 @@ export async function detectBotLogin(
   configDir: string,
   deps: GhAuthDeps = {},
 ): Promise<string | null> {
-  const execFn = deps.execFn ?? defaultExecWithEnv;
+  const execFn = deps.execFn ?? defaultExec;
   try {
     const r = await execFn(ghBin, ["api", "user"], {
       // Clear GH_TOKEN/GITHUB_TOKEN so an ambient token can't spoof the probe.
