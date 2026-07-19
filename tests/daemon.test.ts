@@ -230,6 +230,10 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // ("/tmp/vault/state" etc.) aren't real tmp roots, so default every test
     // to a no-op migration unless a test overrides it to exercise the wiring.
     migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
+    // Fake migrate lock — the real acquirePidfileLock would mkdir the fixture
+    // dataDir and write a real lock file (#197.2). Tests exercising the lock
+    // override this.
+    migrateLockFn: vi.fn(() => ({ release: vi.fn() })),
     mkdirs: vi.fn(() => {}),
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
@@ -628,6 +632,52 @@ describe("mainLoop", () => {
     expect(deps.pruneFn).toHaveBeenCalledWith(cfg.worktreeRoot);
     expect(deps.waitForEndpointFn).toHaveBeenCalledTimes(1);
     expect(deps.waitForEndpointFn).toHaveBeenCalledWith(cfg, stop);
+  });
+
+  it("skips the startup migration when migrate.lock is held by a concurrent migrate (#197.2)", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        migrateLockFn: () => null, // another migrate holds the lock
+        migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(deps.migrateFn).not.toHaveBeenCalled();
+      const warned = warnSpy.mock.calls.some((c) =>
+        String(c[0]).includes("state-tree migration skipped"),
+      );
+      expect(warned).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("runs the startup migration under migrate.lock and releases it (#197.2)", async () => {
+    const cfg = makeConfig();
+    const stop = new StopFlag();
+    const release = vi.fn();
+    const migrateLockFn = vi.fn(() => ({ release }));
+    const { deps } = makeDeps({
+      migrateLockFn,
+      migrateFn: vi.fn(() => ({ steps: [], conflicts: [] })),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(migrateLockFn).toHaveBeenCalledWith(cfg.dataDir);
+    expect(deps.migrateFn).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("logs one warn per state-tree migration conflict at startup", async () => {

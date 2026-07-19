@@ -317,6 +317,48 @@ describe("migrateStateTree", () => {
     expect(renamed[0].from.endsWith("assess-review")).toBe(true);
   });
 
+  it("a journal-write failure after a migration error does not mask the original error (#197.1)", () => {
+    const root = freshRoot();
+    // assess-review renames cleanly (one completed step to journal), then
+    // github-outbox's rename throws — and the finally's journal write throws too.
+    mkdirSync(join(root, "assess-review"), { recursive: true });
+    writeFileSync(join(root, "assess-review", "a.json"), "{}");
+    mkdirSync(join(root, "github-outbox"), { recursive: true });
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const boom = (from: string, to: string): void => {
+      if (from.endsWith("github-outbox")) throw new Error("ORIGINAL migration error");
+      renameSync(from, to);
+    };
+    const writeBoom = (): void => {
+      throw new Error("JOURNAL write error");
+    };
+    const logged: Array<{ msg: string; fields?: Record<string, unknown> }> = [];
+    expect(() =>
+      migrateStateTree(cfg, {
+        renameFn: boom,
+        writeFileFn: writeBoom,
+        logFn: (msg, fields) => logged.push({ msg, fields }),
+      }),
+    ).toThrow("ORIGINAL migration error"); // NOT the journal error
+    expect(logged).toHaveLength(1);
+    expect(logged[0].msg).toMatch(/journal write failed/);
+    expect(String(logged[0].fields?.error)).toMatch(/JOURNAL write error/);
+  });
+
+  it("a journal-write failure on the clean path still propagates (#197.1)", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "github-outbox"), { recursive: true }); // renames cleanly
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const writeBoom = (): void => {
+      throw new Error("JOURNAL write error");
+    };
+    const logged: string[] = [];
+    expect(() =>
+      migrateStateTree(cfg, { writeFileFn: writeBoom, logFn: (m) => logged.push(m) }),
+    ).toThrow("JOURNAL write error"); // no in-flight error to preserve → propagate
+    expect(logged).toHaveLength(0); // not swallowed-and-logged
+  });
+
   it("corrupt journal is treated as fresh rather than thrown", () => {
     const root = freshRoot();
     writeFileSync(join(root, "migrated.json"), "{ not json");

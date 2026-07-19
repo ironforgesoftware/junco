@@ -13,10 +13,12 @@
  * cadence (sleepInterruptible) and the loop guard.
  */
 
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import type { ConfigHolder } from "./configWatcher.js";
 import { ensureDataTree } from "./dataTree.js";
 import { migrateStateTree, type MigrateResult } from "./dataMigrate.js";
+import { acquirePidfileLock } from "./pidfileLock.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
 import { recoverOrphans } from "./orphans.js";
 import { pruneStaleWorktrees } from "./worktree.js";
@@ -230,6 +232,11 @@ export interface MainLoopDeps {
    * mkdir would otherwise fabricate empty destinations for pairs whose old
    * name still holds the real data. Defaults to the real migrateStateTree. */
   migrateFn?: (cfg: Config) => MigrateResult;
+  /** #197.2: non-blocking lock around the startup migration so a concurrent
+   * `junco data migrate` (which can't see a mid-startup daemon via /health —
+   * the health server starts after migration) doesn't double-run the pass.
+   * Returns null when another migrate holds the lock. Default: migrate.lock. */
+  migrateLockFn?: (dataDir: string) => { release: () => void } | null;
   mkdirs?: (cfg: Config) => void;
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
@@ -577,6 +584,8 @@ export async function mainLoop(
     deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
   const migrateFn = deps.migrateFn ?? migrateStateTree;
+  const migrateLockFn =
+    deps.migrateLockFn ?? ((d: string) => acquirePidfileLock(join(d, "migrate.lock")));
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
@@ -587,16 +596,33 @@ export async function mainLoop(
   // recursively-empty-dst repair rule for the cases that path actually means
   // to catch (a crash between mkdir and rename, or scaffolding a rolled-back
   // version materialized), not routine startup ordering.
-  const mig = migrateFn(cfg);
-  for (const step of mig.steps) {
-    // One receipt per pair that actually moved — worker.log evidence of what
-    // the automatic migration did (the durable journal is migrated.json).
-    if (step.action === "renamed") {
-      log.info("state-tree migration: renamed", { from: step.from, to: step.to });
+  //
+  // #197.2: hold migrate.lock (non-blocking) for the pass. A concurrent
+  // `junco data migrate` in the startup window is invisible to its /health
+  // probe (the health server starts after this), so without the lock both
+  // would run the state-tree pass. Renames are atomic — the loser only
+  // errors-then-converges — so this is tidiness, not corruption: skip if held.
+  // acquirePidfileLock mkdirs only dirname(lockPath) = cfg.dataDir, not the
+  // nested tree, so the migrate-before-mkdirs invariant above is preserved.
+  const migLock = migrateLockFn(cfg.dataDir);
+  if (migLock === null) {
+    log.warn("state-tree migration skipped — another migrate holds migrate.lock");
+  } else {
+    try {
+      const mig = migrateFn(cfg);
+      for (const step of mig.steps) {
+        // One receipt per pair that actually moved — worker.log evidence of
+        // what the automatic migration did (durable journal is migrated.json).
+        if (step.action === "renamed") {
+          log.info("state-tree migration: renamed", { from: step.from, to: step.to });
+        }
+      }
+      for (const conflict of mig.conflicts) {
+        log.warn("state-tree migration conflict; manual resolution required", { conflict });
+      }
+    } finally {
+      migLock.release();
     }
-  }
-  for (const conflict of mig.conflicts) {
-    log.warn("state-tree migration conflict; manual resolution required", { conflict });
   }
   mkdirs(cfg);
   // Stamp the start time once the queue dirs exist; the health server reports
