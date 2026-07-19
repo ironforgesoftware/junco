@@ -69,6 +69,49 @@ describe("junco auth login", () => {
     const code = await runAuthCommand(["logout"], "/nonexistent", { printErrFn: () => {} });
     expect(code).toBe(2);
   });
+
+  // #188.1: a pre-existing schema-invalid config must surface a one-line
+  // message and exit 1 cleanly, not propagate a raw ZodError stack.
+  it("prints a one-line error (not a ZodError stack) when the pre-existing config is schema-invalid", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-auth-"));
+    const configPath = writeConfig(dir, { vaultRoot: 123 }); // JSON-valid, schema-invalid
+    const errs: string[] = [];
+    const code = await runAuthCommand(["login"], configPath, {
+      runGhLoginFn: async () => 0,
+      detectBotLoginFn: async () => "junco-agent",
+      printFn: () => {},
+      printErrFn: (s) => errs.push(s),
+    });
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("config invalid — not modified");
+    // On-disk config untouched — no botAccount added, bad value preserved.
+    const raw = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(raw.botAccount).toBeUndefined();
+    expect(raw.vaultRoot).toBe(123);
+  });
+
+  // #188.2: exercise the rename-failure / temp-cleanup branch.
+  it("on a write/rename failure, cleans up the temp file and reports without modifying the config", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-auth-"));
+    const configPath = writeConfig(dir, BASE);
+    const errs: string[] = [];
+    const unlinked: string[] = [];
+    const code = await runAuthCommand(["login"], configPath, {
+      runGhLoginFn: async () => 0,
+      detectBotLoginFn: async () => "junco-agent",
+      printFn: () => {},
+      printErrFn: (s) => errs.push(s),
+      writeFileFn: () => {}, // pretend the temp write succeeded
+      renameFn: () => {
+        throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+      },
+      unlinkFn: (p) => unlinked.push(p),
+    });
+    expect(code).toBe(1);
+    expect(errs.join("")).toMatch(/not modified/);
+    expect(unlinked).toHaveLength(1); // temp file cleaned up
+    expect(unlinked[0]).toContain(".config.json.tmp-");
+  });
 });
 
 describe("junco auth grant", () => {
