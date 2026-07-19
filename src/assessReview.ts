@@ -13,6 +13,14 @@ import { REVIEW_ASSESS_SUBDIR } from "./dataTree.js";
 import type { Config } from "./types.js";
 import type { Finding } from "./findings.js";
 
+/** Per-finding filing accounting, stamped by assessFiling.ts at file time.
+ * `deduped` = the marker scan found it already on GitHub during a pass. */
+export interface FiledRecord {
+  at: string; // ISO, the filing pass's timestamp
+  how: "created" | "queued" | "deduped";
+  url?: string; // gh-printed issue URL (how: "created" only)
+}
+
 export interface PendingAssess {
   id: string; // = the assess ticket id (stable across requeue → re-run overwrites)
   nwo: string;
@@ -22,13 +30,14 @@ export interface PendingAssess {
   createdAt: string; // ISO
   findings: Finding[];
   issue?: number; // scoping issue (junco assess owner/repo#N) — filed findings reference it
+  filed?: Record<string, FiledRecord>; // fingerprint → accounting; absent = nothing filed yet
 }
 
 export type AssessReviewDeps = ReviewStoreDeps;
 
-// `issue` is the one optional PendingAssess field (scoping context, not
-// always present) — every other field is required for a batch to be usable
-// downstream (e.g. runAssessReviewCommand's `batch.findings.length`).
+// `issue` and `filed` are the two optional PendingAssess fields — every other
+// field is required for a batch to be usable downstream (e.g.
+// runAssessReviewCommand's `batch.findings.length`).
 const store = makeReviewStore<PendingAssess>(REVIEW_ASSESS_SUBDIR, [
   "id",
   "nwo",
@@ -64,9 +73,11 @@ export function readPending(
   return { batch: entry, error }; // preserve the existing {batch,error} shape
 }
 
-/** true → archived; false → the batch was already archived/gone (ENOENT-safe:
- * archiving an id twice is a no-op, not a throw). */
-export function removePending(cfg: Config, id: string, deps: AssessReviewDeps = {}): boolean {
+/** Explicit end-of-life for a batch: archive to filed/. true → archived;
+ * false → already archived/gone (ENOENT-safe: discarding twice is a no-op,
+ * not a throw). Filing does NOT archive (assessFiling.ts stamps `filed`
+ * records instead) — this is the only way a batch leaves the review list. */
+export function discardPending(cfg: Config, id: string, deps: AssessReviewDeps = {}): boolean {
   return store.remove(cfg, id, "filed", deps);
 }
 

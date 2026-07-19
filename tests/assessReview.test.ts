@@ -6,7 +6,7 @@ import {
   writePending,
   listPending,
   readPending,
-  removePending,
+  discardPending,
   pendingCount,
   assessReviewPaths,
   type PendingAssess,
@@ -47,7 +47,7 @@ describe("assessReview store", () => {
     expect(listPending(c).map((b) => b.id)).toEqual(["assess-x-1"]);
     expect(readPending(c, "assess-x-1").batch?.nwo).toBe("o/r");
 
-    removePending(c, "assess-x-1");
+    discardPending(c, "assess-x-1");
     expect(pendingCount(c)).toBe(0);
     expect(existsSync(join(assessReviewPaths(c).filed, "assess-x-1.json"))).toBe(true);
   });
@@ -94,7 +94,7 @@ describe("assessReview store", () => {
     expect(error).toBeNull();
     expect(read?.id).toBe(evilId); // stored field stays the raw, human-facing id
 
-    removePending(c, evilId);
+    discardPending(c, evilId);
     const { filed } = assessReviewPaths(c);
     const filedNames = readdirSync(filed);
     expect(filedNames).toHaveLength(1);
@@ -119,16 +119,50 @@ describe("assessReview store", () => {
     expect(error).toMatch(/missing required fields/);
   });
 
-  it("removePending on an already-archived id is ENOENT-safe: returns false, never throws", () => {
+  it("discardPending on an already-archived id is ENOENT-safe: returns false, never throws", () => {
     const dir = mkdtempSync(join(tmpdir(), "arv-"));
     const c = cfg(dir);
     writePending(c, batch("assess-x-1"));
-    expect(removePending(c, "assess-x-1")).toBe(true);
+    expect(discardPending(c, "assess-x-1")).toBe(true);
     expect(pendingCount(c)).toBe(0);
     // archiving the same (now-gone) id again must not throw a raw ENOENT
-    expect(() => removePending(c, "assess-x-1")).not.toThrow();
-    expect(removePending(c, "assess-x-1")).toBe(false);
+    expect(() => discardPending(c, "assess-x-1")).not.toThrow();
+    expect(discardPending(c, "assess-x-1")).toBe(false);
     // an id that was never written is the same no-op case
-    expect(removePending(c, "never-written")).toBe(false);
+    expect(discardPending(c, "never-written")).toBe(false);
+  });
+
+  it("filed accounting round-trips through the store", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-"));
+    const c = cfg(dir);
+    writePending(c, {
+      ...batch("assess-x-1"),
+      filed: {
+        abc123: {
+          at: "2026-07-10T00:00:00.000Z",
+          how: "created",
+          url: "https://github.com/o/r/issues/1",
+        },
+      },
+    });
+    const { batch: read } = readPending(c, "assess-x-1");
+    expect(read?.filed).toEqual({
+      abc123: {
+        at: "2026-07-10T00:00:00.000Z",
+        how: "created",
+        url: "https://github.com/o/r/issues/1",
+      },
+    });
+    expect(listPending(c)[0].filed?.abc123.how).toBe("created");
+  });
+
+  it("a legacy batch without `filed` still loads (field is optional, not required)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-"));
+    const c = cfg(dir);
+    writePending(c, batch("legacy")); // no filed key at all
+    const { batch: read, error } = readPending(c, "legacy");
+    expect(error).toBeNull();
+    expect(read?.filed).toBeUndefined();
+    expect(listPending(c).map((b) => b.id)).toEqual(["legacy"]);
   });
 });

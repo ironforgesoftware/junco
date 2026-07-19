@@ -19,7 +19,7 @@ import {
   type OutboxOp,
 } from "./githubOutbox.js";
 import { buildIssueTitle, buildIssueBody, findingLabels, type Finding } from "./findings.js";
-import { removePending, type PendingAssess } from "./assessReview.js";
+import { discardPending, type PendingAssess } from "./assessReview.js";
 import { log } from "./logging.js";
 
 const GH_TIMEOUT = 60_000;
@@ -209,7 +209,7 @@ export async function fileFindings(
   // the already-filed/deduped subset on the next pass. Offline enqueues count as
   // queuedOffline (success), so a fully-queued batch still archives. (#137)
   if (result.failed === 0) {
-    removePending(cfg, batch.id);
+    discardPending(cfg, batch.id);
   }
   return result;
 }
