@@ -193,6 +193,7 @@ Subcommands:
   assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
   assess review [<id>]                    list pending assess reviews, or show one
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
+  assess discard <id>                     discard a pending batch without filing
   analyze <owner/repo#N|url>          investigate an issue and park a comment draft for review
   analyze review [<id>]                   list pending comment drafts, or preview one
   analyze edit <id>                       edit a pending draft in $EDITOR
@@ -673,6 +674,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         { all: values.all === true, only: values.only as string | undefined },
         { printFn },
       );
+    }
+    if (sub === "discard") {
+      const { runAssessDiscardCommand } = await import("./assessCmd.js");
+      return runAssessDiscardCommand(cfg, positionals[2], { printFn });
     }
     const { runAssessCommand } = await import("./assessCmd.js");
     return runAssessCommand(
