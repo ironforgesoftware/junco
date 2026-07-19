@@ -1,10 +1,12 @@
 /**
  * Least-privilege filing core for `junco assess`. Files a human-confirmed
  * SELECTION from a parked review batch (assessReview.ts) as GitHub issues,
- * through the outbox seam (githubOutbox.ts) so offline runs converge. Labels are
- * owned-only best-effort DATA (external batches file label-free); dedup is
- * author-scoped + marker-based, identical for owned and unowned. This module is
- * the seam SP-2 (comment) / SP-3 (issue-context) build on.
+ * through the outbox seam (githubOutbox.ts) so offline runs converge, then
+ * stamps per-finding `filed` records and keeps the batch parked (explicit
+ * discard is the batch's only end-of-life). Labels are owned-only best-effort
+ * DATA (external batches file label-free); dedup is author-scoped +
+ * marker-based, identical for owned and unowned. This module is the seam
+ * SP-2 (comment) / SP-3 (issue-context) build on.
  */
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -19,13 +21,14 @@ import {
   type OutboxOp,
 } from "./githubOutbox.js";
 import { buildIssueTitle, buildIssueBody, findingLabels, type Finding } from "./findings.js";
-import { discardPending, type PendingAssess } from "./assessReview.js";
+import { writePending, type FiledRecord, type PendingAssess } from "./assessReview.js";
 import { log } from "./logging.js";
 
 const GH_TIMEOUT = 60_000;
 
 export interface FileFindingsDeps {
   ghFn?: typeof gh;
+  nowFn?: () => Date;
 }
 export interface FileResult {
   created: number;
@@ -34,6 +37,9 @@ export interface FileResult {
   failed: number;
   urls: string[];
   warnings: string[];
+  /** The batch as persisted after this pass — filed stamps merged in. The
+   * batch STAYS parked; explicit discard is the only end-of-life. */
+  batch: PendingAssess;
 }
 
 function describeError(e: unknown): string {
@@ -82,10 +88,11 @@ export async function createIssueLive(
   }
 }
 
-/** File the SELECTED findings from a parked batch, then archive the batch.
- * Owned → labelled (best-effort ensure; on failure, file label-free rather than
- * fail the issue). External → label-free by construction. Author-scoped dedup
- * skips anything already filed. Offline → durable outbox op. */
+/** File the SELECTED findings from a parked batch, stamping per-finding filed
+ * records; the batch stays parked. Owned → labelled (best-effort ensure; on
+ * failure, file label-free rather than fail the issue). External →
+ * label-free by construction. Author-scoped dedup skips anything already
+ * filed. Offline → durable outbox op. */
 export async function fileFindings(
   cfg: Config,
   batch: PendingAssess,
@@ -93,7 +100,7 @@ export async function fileFindings(
   deps: FileFindingsDeps = {},
 ): Promise<FileResult> {
   const ghFn = deps.ghFn ?? gh;
-  const result: FileResult = {
+  const result: Omit<FileResult, "batch"> = {
     created: 0,
     queuedOffline: 0,
     deduped: 0,
@@ -103,11 +110,10 @@ export async function fileFindings(
   };
   const toFile = batch.findings.filter((f) => selected.has(f.fingerprint));
   if (toFile.length === 0) {
-    // Nothing selected → nothing to file. Do NOT archive here: archiving only
-    // happens after an actual (non-empty) filing pass, so an empty selection
-    // (e.g. an unknown --only fingerprint that slipped past the CLI guard) can
-    // never silently discard the parked batch.
-    return result;
+    // Nothing selected → nothing to file, and nothing to stamp. Return the
+    // batch exactly as parked (e.g. an unknown --only fingerprint that
+    // slipped past the CLI guard must not stamp or persist anything).
+    return { ...result, batch };
   }
 
   // Authoritative dedup: network failure degrades to empty (converges via the
@@ -158,9 +164,15 @@ export async function fileFindings(
       ? []
       : findingLabels(f, { autoPlan: batch.autoPlan, triggerLabel: cfg.github.triggerLabel });
 
+  const at = (deps.nowFn ?? (() => new Date()))().toISOString();
+  const filedMap: Record<string, FiledRecord> = { ...(batch.filed ?? {}) };
+  let stamped = 0;
+
   for (const f of toFile) {
     if (filed.has(f.fingerprint)) {
       result.deduped++;
+      filedMap[f.fingerprint] = { at, how: "deduped" };
+      stamped++;
       continue;
     }
     const title = buildIssueTitle(f);
@@ -185,9 +197,12 @@ export async function fileFindings(
       if (outcome === "sent") {
         result.created++;
         if (url) result.urls.push(url);
+        filedMap[f.fingerprint] = { at, how: "created", ...(url ? { url: url as string } : {}) };
       } else {
         result.queuedOffline++;
+        filedMap[f.fingerprint] = { at, how: "queued" };
       }
+      stamped++;
     } catch (e) {
       result.failed++;
       result.warnings.push(`could not file "${title}": ${describeError(e)}`);
@@ -201,15 +216,13 @@ export async function fileFindings(
     deduped: result.deduped,
     failed: result.failed,
   });
-  // Archive only when nothing failed. A non-offline filing error (issues
-  // disabled, 403/422 — tryOrEnqueue rethrows it, the loop swallows it into
-  // result.failed) would otherwise sail past this unconditional archive and
-  // drop the findings out of `junco assess review` with no un-archive path. On
-  // any failure the batch stays parked for retry; the author-scoped dedup skips
-  // the already-filed/deduped subset on the next pass. Offline enqueues count as
-  // queuedOffline (success), so a fully-queued batch still archives. (#137)
-  if (result.failed === 0) {
-    discardPending(cfg, batch.id);
-  }
-  return result;
+  // The batch STAYS parked — explicit discard (`junco assess discard` / TUI x)
+  // is the only end-of-life. The rewrite runs whenever anything was stamped,
+  // INCLUDING partial-failure passes: stamps for the successful subset must
+  // survive so a retry shows what already landed. (supersedes the #137
+  // archive gate — with no auto-archive, a failed pass can no longer discard
+  // findings, which was #137's concern.)
+  const updated: PendingAssess = stamped > 0 ? { ...batch, filed: filedMap } : batch;
+  if (stamped > 0) writePending(cfg, updated);
+  return { ...result, batch: updated };
 }

@@ -23,6 +23,15 @@ import { until, fireUntil } from "./helpers/until.js";
 afterEach(cleanup);
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
+const STUB_FILE_BATCH = {
+  id: "stub",
+  nwo: "o/r",
+  external: true,
+  autoPlan: false,
+  repoPath: "/x",
+  createdAt: "2026-07-09T00:00:00.000Z",
+  findings: [],
+};
 const CLONES_DIR = "/x/state/repos";
 const ESC = String.fromCharCode(27);
 
@@ -139,7 +148,15 @@ function makeClient(
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
     fileReview: async () =>
-      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+      okv({
+        created: 0,
+        queuedOffline: 0,
+        deduped: 0,
+        failed: 0,
+        urls: [],
+        warnings: [],
+        batch: STUB_FILE_BATCH,
+      }),
     listCommentDrafts: async () => okv([]),
     postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
     discardCommentDraft: async () => okv(null),
@@ -192,7 +209,15 @@ function makeSeqClient(sequence: DashIssue[][]) {
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
     fileReview: async () =>
-      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+      okv({
+        created: 0,
+        queuedOffline: 0,
+        deduped: 0,
+        failed: 0,
+        urls: [],
+        warnings: [],
+        batch: STUB_FILE_BATCH,
+      }),
     listCommentDrafts: async () => okv([]),
     postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
     discardCommentDraft: async () => okv(null),
@@ -248,7 +273,15 @@ function makePrSeqClient(sequence: DashPr[][]) {
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
     fileReview: async () =>
-      okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+      okv({
+        created: 0,
+        queuedOffline: 0,
+        deduped: 0,
+        failed: 0,
+        urls: [],
+        warnings: [],
+        batch: STUB_FILE_BATCH,
+      }),
     listCommentDrafts: async () => okv([]),
     postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
     discardCommentDraft: async () => okv(null),
@@ -726,7 +759,15 @@ describe("App", () => {
         okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
       listReview: async () => okv([]),
       fileReview: async () =>
-        okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+        okv({
+          created: 0,
+          queuedOffline: 0,
+          deduped: 0,
+          failed: 0,
+          urls: [],
+          warnings: [],
+          batch: STUB_FILE_BATCH,
+        }),
       listCommentDrafts: async () => okv([]),
       postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
       discardCommentDraft: async () => okv(null),
@@ -1853,6 +1894,7 @@ describe("review view (v)", () => {
         failed: 0,
         urls: [],
         warnings: [],
+        batch: batches[0],
       });
     };
     const r = renderApp(client, wl8());

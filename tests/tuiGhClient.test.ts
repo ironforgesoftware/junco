@@ -765,6 +765,7 @@ describe("fileReview", () => {
           failed: 0,
           urls: [],
           warnings: [],
+          batch,
         });
       },
     );
@@ -806,6 +807,7 @@ describe("fileReview", () => {
           failed: 0,
           urls: [],
           warnings: [],
+          batch,
         }),
     );
     const withFileAsAuthFn = vi.fn(attachFakeCtx);
@@ -852,6 +854,7 @@ describe("fileReview", () => {
           failed: 0,
           urls: [],
           warnings: [],
+          batch,
         }),
     );
     // No withFileAsAuthFn injected: the REAL withFileAsAuth runs — safe,
