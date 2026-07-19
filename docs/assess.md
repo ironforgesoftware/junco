@@ -50,7 +50,7 @@ pending review batch, keyed by the ticket id
 │    labels; external repo → label-free by construction            │
 │ 3. file each selected, un-filed finding as a GitHub issue        │
 │    (via the offline-durable outbox)                              │
-│ 4. archive the batch                                             │
+│ 4. stamp per-finding filed records; batch stays parked           │
 └───────────────────────────────────────────────────────────────┘
 │
 ▼
@@ -61,7 +61,9 @@ GitHub issues (labeled on owned repos, label-free on repos you don't own)
 + trigger label → the plan → approve → PR loop (docs/github-mode.md)
 ```
 
-Nothing is filed until Phase B runs. A batch that's never reviewed just sits in the pending store — it doesn't expire, and a re-run of `junco assess` on the same ticket id overwrites it rather than piling up duplicates.
+Nothing is filed until Phase B runs. A batch that's never reviewed just sits in the pending store — it doesn't expire, and a re-run of `junco assess` on the same ticket id overwrites it rather than piling up duplicates (carrying forward any `filed` stamps for findings that are still present, so an offline-dedup re-park doesn't lose track of what already went out).
+
+Filing does not remove a batch from the pending list either: it stamps per-finding filed accounting (created/queued/deduped, a timestamp, and the issue URL when created) and the batch stays parked, so you can file the rest of it later or just check what already went out. `junco assess discard <id>` — or `x` on an open batch in the dashboard review view — is the only way a batch leaves the pending list.
 
 ## CLI usage
 
@@ -99,9 +101,9 @@ junco assess review              # list every pending batch
 junco assess review <id>         # show one batch's findings
 ```
 
-With no id, prints one line per pending batch: id, nwo, `(owned)`/`(external)`, finding count, and the audit's timestamp — or `no pending assess reviews` if the store is empty.
+With no id, prints one line per pending batch: id, nwo, `(owned)`/`(external)`, finding count, the audit's timestamp, and — once anything in the batch has been filed — a `filed n/m` count; or `no pending assess reviews` if the store is empty.
 
-With an id, prints the batch's `nwo`/scope followed by each finding's fingerprint, severity, and title, then two ready-to-run hints: `junco assess file <id> --all` and a `--only <fp,fp>` example built from the first two fingerprints.
+With an id, prints the batch's `nwo`/scope followed by each finding's fingerprint, severity, and title (a filed finding's line ends with a `[filed <how> <at>]` note), then three ready-to-run hints: `junco assess file <id> --all`, a `--only <fp,fp>` example built from the first two fingerprints, and `junco assess discard <id>`.
 
 ### `junco assess file <id> --all | --only <fingerprint,…>` — confirm and file
 
@@ -110,13 +112,21 @@ junco assess file <id> --all
 junco assess file <id> --only <fingerprint>,<fingerprint>,…
 ```
 
-Files the selected findings as GitHub issues (through `assessFiling.ts`) and archives the batch. **There is no bare default** — you must pass `--all` or `--only <fingerprints>` — because these are writes landing on someone else's issue tracker as much as your own. Findings you don't select simply stay unreviewed for the next audit; they aren't suppressed (see dedup semantics below).
+Files the selected findings as GitHub issues (through `assessFiling.ts`) and stamps per-finding filed accounting (created/queued/deduped, a timestamp, and the issue URL when created) — the batch stays in the pending review list; `junco assess discard <id>` is the explicit end-of-life, not filing. **There is no bare default** — you must pass `--all` or `--only <fingerprints>` — because these are writes landing on someone else's issue tracker as much as your own. Findings you don't select simply stay unreviewed for the next audit; they aren't suppressed (see dedup semantics below).
 
 Before filing, it re-runs the authoritative dedup scan (so a finding someone already filed by hand in the meantime is skipped, not duplicated) and, on an owned repo, best-effort ensures the `junco:finding` + `severity/<level>` labels exist — if that fails (e.g. a transient permission glitch), the issue still files, just label-free, rather than the whole run failing.
 
 Prints a one-line summary — `filed N · queued N · already-filed N · failed N` — followed by the created issue URLs and any warnings, and exits `1` if anything failed to file.
 
 **Filing identity** (`assess.fileAs`, default `"me"`): by default issues post under your ambient `gh` login — human confirmation is human attribution. Set `assess.fileAs: "bot"` to file under the dedicated bot account instead: the bot identity is attached to the whole filing pass, so the author-scoped dedup scan, the label ensure, and the issue creates all run as the bot (a scan-as-me/file-as-bot split would blind dedup to the bot's own past findings). Fails loud — with the bot disabled or its login missing/expired, `assess file` exits non-zero pointing at `junco auth login` and posts nothing; there is no silent fallback to your personal login. The bot needs triage-or-better on owned repos for the labels; label gaps degrade the same best-effort way as today. Switching filing identity does not disturb dedup: the marker scan is author-independent, so findings filed under either identity stay deduplicated.
+
+### `junco assess discard <id>` — the end-of-life for a batch
+
+```bash
+junco assess discard <id>
+```
+
+The explicit end-of-life for a parked batch: archives it out of the pending review list (to `review/assess/filed/`) without filing anything further. Filing no longer archives a batch, so this — or `x` on an open batch in the dashboard review view — is the only way one leaves `junco assess review`, whether it's fully filed, partially filed, or untouched. Discarding an id that's already gone is a no-op success, not an error.
 
 ## Issue-scoped assess
 
