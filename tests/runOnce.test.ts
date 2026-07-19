@@ -972,6 +972,61 @@ describe("provider gate wiring (Phase 2 Task 5)", () => {
     expect(content).toContain("status: timeout");
   });
 
+  it("Q&A timeout with a stale OUTAGE-class errorMessage does not report to the gate (#180, parity with prFlow's hardError guard)", async () => {
+    // Sibling of the 429 case above, but for the outage branch (runOnce.ts:396),
+    // which was NOT behind the !timedOut && !abortedByGuard guard: a timeout
+    // landing mid-retry-backoff leaves the first attempt's outage-class
+    // errorMessage captured; reporting it would push the SHARED gate into
+    // outage_backoff and pause claiming for other tickets. timedOut must win.
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\ntimeout_minutes: 0.001\n---\nq\n", "utf8");
+    const gate = fakeGate();
+    const timedOutOutageFactory = () => async () => {
+      let resolvePrompt: (() => void) | undefined;
+      return {
+        subscribe(l: (e: any) => void) {
+          queueMicrotask(() => {
+            l({
+              type: "turn_end",
+              message: {
+                role: "assistant",
+                stopReason: "error",
+                errorMessage: "fetch failed",
+                usage: { input: 0, output: 0 },
+              },
+            });
+          });
+          return () => {};
+        },
+        async prompt() {
+          return new Promise<void>((resolve) => {
+            resolvePrompt = resolve;
+          });
+        },
+        dispose() {},
+        abort: async () => {
+          resolvePrompt?.();
+        },
+      };
+    };
+
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: timedOutOutageFactory,
+      gate,
+    });
+    expect(handled).toBe(true);
+    expect(gate.failureCalls).toEqual([]); // the :396 outage report is suppressed by the timeout guard
+    expect(gate.successCalls).toBe(0);
+    const failed = readdirSync(join(j, "failed"));
+    expect(failed).toHaveLength(1); // existing timeout semantics: routes to failed/ as "timeout"
+    const content = readFileSync(join(j, "failed", failed[0]), "utf8");
+    expect(content).toContain("status: timeout");
+  });
+
   it("without a gate in deps, a 401 error falls back to the existing budgeted requeue path (byte-identical pre-gate behavior)", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");

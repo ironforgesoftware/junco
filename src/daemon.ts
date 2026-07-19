@@ -28,7 +28,7 @@ import {
 } from "./health.js";
 import { log } from "./logging.js";
 import { metrics } from "./metrics.js";
-import { ProviderGate } from "./providerGate.js";
+import { ProviderGate, type GateStateKind } from "./providerGate.js";
 import { makeSpendLedger, type SpendLedger } from "./spendLedger.js";
 import {
   startHealthServer,
@@ -280,10 +280,15 @@ export interface MainLoopDeps {
  * metrics singleton. Shared by mainLoop's own default and cli.ts (which
  * constructs one gate up front so it can wire the SAME instance into both
  * mainLoopFn's deps and the config-watcher's onApplied clear).
+ *
+ * `backoffGetter` (#180): retryBackoffSeconds is a reload:"live" lever, so
+ * callers with a live config holder pass a getter (`() => holder.current
+ * .retryBackoffSeconds`) that the gate re-reads on every report/stamp;
+ * omitting it freezes the startup value (fine for tests / one-shot callers).
  */
-export function makeProviderGate(cfg: Config): ProviderGate {
+export function makeProviderGate(cfg: Config, backoffGetter?: () => number): ProviderGate {
   return new ProviderGate({
-    retryBackoffSeconds: cfg.retryBackoffSeconds,
+    retryBackoffSeconds: backoffGetter ?? cfg.retryBackoffSeconds,
     onTransition: (_from, to) => metrics.recordGateTransition(to),
   });
 }
@@ -500,7 +505,7 @@ export async function mainLoop(
   // pauses claiming without touching retry_count; runOnce/executeClaimed
   // report into it below, the health server surfaces its status, and (via
   // cli.ts) a successful config hot-reload clears a stale latch.
-  const gate = deps.gate ?? makeProviderGate(cfg);
+  const gate = deps.gate ?? makeProviderGate(cfg, () => activeCfg().retryBackoffSeconds);
   // Per-day spend ledger (Phase-3 Task 4): every session runOnce/executeClaimed
   // runs records its costUsd here. `cfg` is the frozen startup config, not
   // activeCfg() — dataDir is restart-kind (same freeze as the gate above and
@@ -512,6 +517,11 @@ export async function mainLoop(
   // endpoint config is picked up on the next probe past the TTL; no cache
   // invalidation is needed.
   const cachedReachable = makeCachedProbe(() => endpointReachable(activeCfg()));
+  // #180.2: the pause warn is debounced to once per gate-state transition
+  // (keyed on the state KIND, not the reason string — the budget reason embeds
+  // a running spend total that changes every poll). Steady-state blocked polls
+  // drop to debug so a latch doesn't spam warn for its whole lifetime.
+  let lastGateWarnState: GateStateKind = "ok";
   const gatedReady = async (): Promise<boolean> => {
     // Daily spend cap (Phase-3 Task 5): checked BEFORE the gate/probe, on
     // EVERY poll, using the LIVE config — dailyBudgetUsd is a live lever, so
@@ -532,8 +542,18 @@ export async function mainLoop(
     }
     const block = gate.claimBlockReason();
     if (block) {
-      log.warn("claiming paused by provider gate", { reason: block });
+      const kind = gate.status().state;
+      if (kind !== lastGateWarnState) {
+        log.warn("claiming paused by provider gate", { reason: block, state: kind });
+      } else {
+        log.debug("claiming still paused by provider gate", { reason: block, state: kind });
+      }
+      lastGateWarnState = kind;
       return false;
+    }
+    if (lastGateWarnState !== "ok") {
+      log.info("claiming resumed by provider gate");
+      lastGateWarnState = "ok";
     }
     return cachedReachable();
   };

@@ -893,6 +893,52 @@ describe("mainLoop — provider gate wiring", () => {
     }
   });
 
+  it("logs the pause warn once per gate transition, not once per poll (#180)", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
+    let captured: { readyFn?: () => Promise<boolean> } | undefined;
+    const realRunOnce = runOnceBox.current;
+    runOnceBox.current = vi.fn(
+      async (_c: Config, runDeps: { readyFn?: () => Promise<boolean> }) => {
+        captured = runDeps;
+        return false;
+      },
+    );
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        runOnceFn: undefined,
+        gate: fakeGate("auth_error: bad key"),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(captured?.readyFn).toBeDefined();
+      // Three blocked polls against the same latch: the warn fires exactly once
+      // (on the ok→auth_error transition); later polls drop to debug.
+      await captured!.readyFn!();
+      await captured!.readyFn!();
+      await captured!.readyFn!();
+      const warns = warnSpy.mock.calls.filter(
+        (c) => String(c[0]) === "claiming paused by provider gate",
+      );
+      expect(warns).toHaveLength(1);
+      const debugs = debugSpy.mock.calls.filter(
+        (c) => String(c[0]) === "claiming still paused by provider gate",
+      );
+      expect(debugs.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      runOnceBox.current = realRunOnce;
+      warnSpy.mockRestore();
+      debugSpy.mockRestore();
+    }
+  });
+
   it("wires the health server's readinessProbe to the cached probe and gateStatus to the gate", async () => {
     const cfg = makeConfig({ healthEnabled: true });
     const stop = new StopFlag();

@@ -419,4 +419,46 @@ describe("ProviderGate", () => {
       expect(gate.notBeforeIso()).toBe(new Date(60_000).toISOString());
     });
   });
+
+  // #180.1: retryBackoffSeconds is a reload:"live" lever, so the gate must
+  // re-read it on every report/stamp rather than freezing it at construction.
+  describe("live retryBackoffSeconds getter (#180)", () => {
+    it("re-reads the getter on each outage report — the base is not frozen at construction", () => {
+      let base = 60;
+      const clock = 0;
+      const g = new ProviderGate({ retryBackoffSeconds: () => base, now: () => clock });
+      g.reportFailure("outage", "503");
+      expect(g.status().until).toBe(new Date(60_000).toISOString());
+      base = 120;
+      g.reportFailure("outage", "503");
+      expect(g.status().until).toBe(new Date(120_000).toISOString());
+    });
+
+    it("re-reads the getter for a latched notBeforeIso stamp", () => {
+      let base = 60;
+      const clock = 5_000;
+      const g = new ProviderGate({ retryBackoffSeconds: () => base, now: () => clock });
+      g.reportFailure("auth", "401");
+      expect(g.notBeforeIso()).toBe(new Date(5_000 + 60_000).toISOString());
+      base = 120;
+      expect(g.notBeforeIso()).toBe(new Date(5_000 + 120_000).toISOString());
+    });
+
+    it("re-reads the getter for rate-limit doubling", () => {
+      let base = 60;
+      const clock = 0;
+      const g = new ProviderGate({ retryBackoffSeconds: () => base, now: () => clock });
+      g.reportFailure("rate_limit", "429"); // streak 1 → base * 1 = 60s
+      expect(g.status().until).toBe(new Date(60_000).toISOString());
+      base = 100;
+      g.reportFailure("rate_limit", "429"); // streak 2 → base * 2 = 200s
+      expect(g.status().until).toBe(new Date(200_000).toISOString());
+    });
+
+    it("still accepts a plain number (back-compat)", () => {
+      const g = new ProviderGate({ retryBackoffSeconds: 30, now: () => 0 });
+      g.reportFailure("outage", "503");
+      expect(g.status().until).toBe(new Date(30_000).toISOString());
+    });
+  });
 });

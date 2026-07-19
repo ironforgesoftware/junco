@@ -393,7 +393,12 @@ export async function executeClaimed(
         log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
         return;
       }
-      if (deps.gate && cls === "outage") deps.gate.reportFailure(cls, result.errorMessage ?? cls);
+      // #180.3: same timeout/guard exclusion as the GATE_CLASSES routing above
+      // and prFlow's hardError gate — a timed-out run carries a STALE first-
+      // attempt errorMessage, so reporting it would push the shared gate into
+      // outage_backoff and pause claiming for other tickets.
+      if (deps.gate && !result.timedOut && !result.abortedByGuard && cls === "outage")
+        deps.gate.reportFailure(cls, result.errorMessage ?? cls);
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
       // backoff instead of finalizing to failed/ (budget permitting).
       if (isTransientFailure(result, 0)) {

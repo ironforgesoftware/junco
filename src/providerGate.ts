@@ -17,7 +17,11 @@ export interface GateStatus {
 }
 
 export interface ProviderGateOpts {
-  retryBackoffSeconds: number; // base for rate-limit doubling and outage block
+  // Base (seconds) for rate-limit doubling and outage block. A getter is
+  // re-read on every report/stamp so a hot-reloaded retryBackoffSeconds (a
+  // reload:"live" lever) takes effect without a restart; a plain number is
+  // frozen at construction (back-compat, used by tests). See #180.
+  retryBackoffSeconds: number | (() => number);
   now?: () => number; // injectable clock (tests)
   onTransition?: (from: GateStateKind, to: GateStateKind) => void; // daemon wires metrics
 }
@@ -73,7 +77,9 @@ const OK_STATE: InternalState = { kind: "ok", reason: null, since: null, until: 
  *    consulted — so a stray overwrite cannot survive past the next poll.
  */
 export class ProviderGate {
-  private readonly retryBackoffSeconds: number;
+  // Re-read on every use (never cached) so a live retryBackoffSeconds edit is
+  // honored without a restart — see ProviderGateOpts.retryBackoffSeconds (#180).
+  private readonly backoffBaseSeconds: () => number;
   private readonly now: () => number;
   private readonly onTransitionCb: ((from: GateStateKind, to: GateStateKind) => void) | undefined;
 
@@ -83,7 +89,8 @@ export class ProviderGate {
   private streak = 0;
 
   constructor(opts: ProviderGateOpts) {
-    this.retryBackoffSeconds = opts.retryBackoffSeconds;
+    const base = opts.retryBackoffSeconds;
+    this.backoffBaseSeconds = typeof base === "function" ? base : () => base;
     this.now = opts.now ?? (() => Date.now());
     this.onTransitionCb = opts.onTransition;
   }
@@ -109,7 +116,7 @@ export class ProviderGate {
       case "rate_limit": {
         if (LATCHED_KINDS.has(this.state.kind)) return; // latch wins
         this.streak += 1;
-        const delaySeconds = Math.min(this.retryBackoffSeconds * 2 ** (this.streak - 1), 900);
+        const delaySeconds = Math.min(this.backoffBaseSeconds() * 2 ** (this.streak - 1), 900);
         this.transitionTo("rate_limited", reason, this.now() + delaySeconds * 1000);
         return;
       }
@@ -117,7 +124,7 @@ export class ProviderGate {
         if (LATCHED_KINDS.has(this.state.kind)) return; // latch wins
         // Single interval, never doubles — recomputed fresh from "now" on
         // every report, so repeated outage reports don't accumulate delay.
-        this.transitionTo("outage_backoff", reason, this.now() + this.retryBackoffSeconds * 1000);
+        this.transitionTo("outage_backoff", reason, this.now() + this.backoffBaseSeconds() * 1000);
         return;
       }
       case "unknown":
@@ -195,7 +202,7 @@ export class ProviderGate {
     const s = this.currentState();
     if (s.until !== null) return new Date(s.until).toISOString();
     if (LATCHED_KINDS.has(s.kind)) {
-      return new Date(this.now() + this.retryBackoffSeconds * 1000).toISOString();
+      return new Date(this.now() + this.backoffBaseSeconds() * 1000).toISOString();
     }
     return new Date(this.now()).toISOString();
   }
