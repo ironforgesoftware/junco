@@ -377,9 +377,18 @@ const FINDING_LABEL_DEFAULT = { color: "ededed", description: "" };
 // empty. Older label-based issues were authored by @me too, so replay stays correct.
 //
 // KNOWN LIMITATION: `--limit 500` truncates on repos with >500 finding issues
-// (issue #41 follow-up). Second limitation: on a shared OWNED repo where multiple
-// operator accounts file findings, `--author @me` misses a teammate's issue and
-// can re-file; the marker keeps that from corrupting state.
+// (issue #41 follow-up).
+//
+// Marker-scoped, NOT author-scoped (#221): the scan reads every recent issue's
+// body regardless of author. Author scoping (`--author @me`) made the two dedup
+// scans identity-relative — a bot daemon pre-filtering while filings were
+// operator-authored saw zero markers and re-parked entire filed histories, and
+// an assess.fileAs switch could mass-duplicate on file. The fingerprint marker
+// is machine-written and unambiguous; whoever filed it, the finding is filed.
+// Trust note: anyone who can open an issue on the repo can therefore write a
+// marker and suppress that fingerprint — same trust class as the documented
+// close-to-suppress behavior, and out of scope for a tool that already treats
+// repo collaborators as operators.
 export async function fetchFindingMarkers(
   cfg: Config,
   nwo: string,
@@ -387,20 +396,7 @@ export async function fetchFindingMarkers(
 ): Promise<Set<string>> {
   const listed = await ghFn(
     cfg,
-    [
-      "issue",
-      "list",
-      "--repo",
-      nwo,
-      "--author",
-      "@me",
-      "--state",
-      "all",
-      "--limit",
-      "500",
-      "--json",
-      "body",
-    ],
+    ["issue", "list", "--repo", nwo, "--state", "all", "--limit", "500", "--json", "body"],
     { timeoutMs: GH_TIMEOUT },
   );
   const bodies = (JSON.parse(listed.stdout) as { body: string | null }[]).map((b) =>
