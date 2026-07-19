@@ -280,9 +280,11 @@ describe("Rail assess indicator", () => {
       {
         nwo: "ironforgesoftware/junco",
         fromConfig: true,
-        counts: { "plan-ready": 2 as number },
+        counts: { "plan-ready": 2 },
+        // #204: the TRUE worst-case indicator is `99d+! 99+⚠` (10 chars) — needs
+        // lastSuccessAt > 99 days back (the old 21d fixture only reached 9).
         assess: hist({
-          lastSuccessAt: "2026-06-25T12:00:00.000Z",
+          lastSuccessAt: "2026-01-01T00:00:00.000Z",
           lastFound: 250,
           lastParked: 250,
           lastFailureAt: "2026-07-16T11:00:00.000Z",
@@ -303,5 +305,8 @@ describe("Rail assess indicator", () => {
       />,
     ).lastFrame()!;
     for (const line of f.split("\n")) expect(line.length).toBeLessThanOrEqual(26);
+    // The pinned indicator (never truncated) renders at its worst case, incl.
+    // the literal failed-state `!`.
+    expect(f).toContain("99d+!");
   });
 });

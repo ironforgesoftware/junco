@@ -154,6 +154,22 @@ describe("fmtAgeShort", () => {
   it("clamps a future timestamp to 0s rather than going negative", () => {
     expect(fmtAgeShort("2027-01-01T00:00:00.000Z", NOW2)).toBe("0s");
   });
+  // #204: pin the exact bucket edges (s = 60 / 3600 / 86400) so a `<`→`<=` slip
+  // would be caught; times expressed as offsets from NOW2 to be precise.
+  it("bucket edges are exact (59s→1m, 59m→1h, 23h→1d)", () => {
+    const at = (ms: number) => new Date(NOW2.getTime() - ms).toISOString();
+    expect(fmtAgeShort(at(59_000), NOW2)).toBe("59s");
+    expect(fmtAgeShort(at(60_000), NOW2)).toBe("1m");
+    expect(fmtAgeShort(at(3_599_000), NOW2)).toBe("59m");
+    expect(fmtAgeShort(at(3_600_000), NOW2)).toBe("1h");
+    expect(fmtAgeShort(at(86_399_000), NOW2)).toBe("23h");
+    expect(fmtAgeShort(at(86_400_000), NOW2)).toBe("1d");
+  });
+  it("day cap edge: 99d shows, 100d caps to 99d+", () => {
+    const at = (ms: number) => new Date(NOW2.getTime() - ms).toISOString();
+    expect(fmtAgeShort(at(99 * 86_400_000), NOW2)).toBe("99d");
+    expect(fmtAgeShort(at(100 * 86_400_000), NOW2)).toBe("99d+");
+  });
 });
 
 describe("fmtAssessIndicator", () => {
@@ -185,6 +201,23 @@ describe("fmtAssessIndicator", () => {
   it("caps the count at 99+ to bound the column", () => {
     const h = hist({ lastSuccessAt: "2026-07-16T10:00:00.000Z", lastFound: 250, lastParked: 250 });
     expect(fmtAssessIndicator(h, NOW2)).toBe("2h 99+⚠");
+  });
+  // #204: exact count-cap edge (99 shows, 100 caps) + the failed-with-0-findings
+  // combo (failed marker on the age AND the 0✓ clean-count branch).
+  it("count-cap edge: 99 shows, 100 caps to 99+", () => {
+    const base = { lastSuccessAt: "2026-07-16T10:00:00.000Z", lastParked: 0 };
+    expect(fmtAssessIndicator(hist({ ...base, lastFound: 99 }), NOW2)).toBe("2h 99⚠");
+    expect(fmtAssessIndicator(hist({ ...base, lastFound: 100 }), NOW2)).toBe("2h 99+⚠");
+  });
+  it("failed last attempt with zero findings marks the age and keeps 0✓", () => {
+    const h = hist({
+      lastSuccessAt: "2026-07-16T10:00:00.000Z",
+      lastFound: 0,
+      lastParked: 0,
+      lastFailureAt: "2026-07-16T11:00:00.000Z",
+      lastFailureReason: "boom",
+    });
+    expect(fmtAssessIndicator(h, NOW2)).toBe("2h! 0✓");
   });
 });
 

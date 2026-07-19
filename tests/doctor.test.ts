@@ -1403,6 +1403,33 @@ describe("runDoctor assess history checks", () => {
     );
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
+
+  // #204: the combined branch — a repo that succeeded, then later failed —
+  // shows BOTH the last-success date and the failed flag.
+  it("a repo that succeeded then later failed shows both the date and the failed flag", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-both-"));
+    recordRun({ dataDir } as unknown as Config, "o/r", {
+      ok: true,
+      at: "2026-07-14T00:00:00.000Z",
+      found: 2,
+      parked: 1,
+    });
+    recordRun({ dataDir } as unknown as Config, "o/r", {
+      ok: false,
+      at: "2026-07-16T00:00:00.000Z",
+      reason: "boom",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(
+      /✓ assess history — o\/r: assessed 2026-07-14 \(last attempt failed\)/,
+    );
+    expect(lines.join("")).toMatch(/0 warning\(s\)/);
+  });
 });
 
 describe("runDoctor version check", () => {
