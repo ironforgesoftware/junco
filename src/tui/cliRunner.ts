@@ -19,6 +19,9 @@ export interface PaletteCommand {
   defaultArgs: string[];
   /** Non-null = not runnable from the palette; the string is the reason. */
   excluded: string | null;
+  /** Subprocess time budget; null = DEFAULT_TIMEOUT_MS. Long-runners only:
+   * assess may fork+clone an unwatched repo, run-once executes a full ticket. */
+  timeoutMs: number | null;
 }
 
 const cmd = (
@@ -27,7 +30,8 @@ const cmd = (
   description: string,
   defaultArgs: string[] = [],
   excluded: string | null = null,
-): PaletteCommand => ({ name, argsHint, description, defaultArgs, excluded });
+  timeoutMs: number | null = null,
+): PaletteCommand => ({ name, argsHint, description, defaultArgs, excluded, timeoutMs });
 
 /** Mirrors cli.ts USAGE — a consistency test pins runnable names to it. The
  * one exception is "setup": App intercepts it in-process (the Root host swaps
@@ -44,10 +48,13 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
     "assess",
     "<path|owner/repo> [--auto-plan]",
     "Audit a repo for vulnerabilities and file GitHub issues",
+    [],
+    null,
+    600_000, // issue-ref targets may fork + full-clone an unwatched repo
   ),
   cmd("doctor", null, "Preflight: config, git, gh auth, endpoint, model, dirs"),
   cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200", "--human"]),
-  cmd("run-once", null, "Process one task and exit (no lock)"),
+  cmd("run-once", null, "Process one task and exit (no lock)", [], null, 3_600_000),
   cmd("restart", null, "Restart the supervised daemon"),
   cmd("worktree", "prune <path>", "Prune a stale/backup worktree (lock-guarded)"),
   cmd("service", "[--platform launchd|systemd]", "Render a service file"),
@@ -58,6 +65,13 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("dashboard", null, "This dashboard", [], "already running"),
   cmd("start", null, "Start the daemon", [], "foreground daemon would block — use restart"),
 ];
+
+export const DEFAULT_TIMEOUT_MS = 120_000;
+
+/** Palette subprocess budget: the roster override or the 120 s default. */
+export function timeoutFor(name: string): number {
+  return PALETTE_COMMANDS.find((c) => c.name === name)?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+}
 
 export interface CliRunResult {
   code: number | null;
@@ -84,7 +98,7 @@ export function runCliCommand(
 ): Promise<CliRunResult> {
   const spawnFn = deps.spawnFn ?? spawn;
   const cliPath = deps.cliPath ?? DEFAULT_CLI_PATH;
-  const timeoutMs = deps.timeoutMs ?? 120_000;
+  const timeoutMs = deps.timeoutMs ?? timeoutFor(name);
 
   return new Promise((resolvePromise) => {
     const chunks: string[] = [];

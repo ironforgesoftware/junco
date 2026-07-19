@@ -7,7 +7,7 @@ import { cleanup } from "ink-testing-library";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import { until } from "./helpers/until.js";
-import { renderApp, CHEAP, ESC, stubClient } from "./helpers/localFixtures.js";
+import { renderApp, CHEAP, ESC, stubClient, WIDE_COLS_TEST } from "./helpers/localFixtures.js";
 
 afterEach(cleanup);
 
@@ -177,6 +177,30 @@ describe("local help modal", () => {
     r.stdin.write("j"); // any key — must close help, not move the section rail
     await until(() => !(r.lastFrame() ?? "").includes("local mode"));
     expect(r.lastFrame()).toContain("[LOCAL]"); // still in local mode
+  });
+
+  it("help hints replace the LOCAL rail hints while help is open", async () => {
+    const r = renderApp({ initialUiMode: "local" });
+    await until(() => (r.lastFrame() ?? "").includes("↑/↓ section")); // rail hints in the footer
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes("local mode")); // help modal open
+    await until(() => !(r.lastFrame() ?? "").includes("↑/↓ section")); // stale rail chips gone
+    expect(r.lastFrame()).toContain("any key");
+  });
+
+  it("help copy reflects wired LOCAL mouse support (no stale keyboard-first note)", async () => {
+    // Tall render: the cross-mode divergences section (where the mouse row
+    // lives) sits below the default 30-row fold and would be height-clipped.
+    const r = renderApp({
+      initialUiMode: "local",
+      sizeOverride: { columns: WIDE_COLS_TEST, rows: 60 },
+    });
+    await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes("local mode"));
+    const f = r.lastFrame() ?? "";
+    expect(f).not.toContain("keyboard-first");
+    expect(f).toContain("click-again");
   });
 });
 

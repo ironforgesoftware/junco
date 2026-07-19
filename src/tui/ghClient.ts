@@ -16,7 +16,7 @@ import type { DashPr } from "./prState.js";
 import { fetchJuncoPrs } from "../githubPrs.js";
 import { ensureExternalClone } from "../externalRepo.js";
 import { dispatchIssue } from "../externalDispatch.js";
-import { withBotAuth } from "../ghAuth.js";
+import { withBotAuth, withFileAsAuth } from "../ghAuth.js";
 import { classifyRepoAccess, grantBotAccess } from "../botAccess.js";
 import { listPending, readPending, type PendingAssess } from "../assessReview.js";
 import { fileFindings, type FileResult } from "../assessFiling.js";
@@ -182,6 +182,11 @@ export interface GhClientDeps {
    * spec) — same rule and monomorphic-over-Config typing as
    * ExternalDispatchDeps.withBotAuthFn (see externalDispatch.ts). */
   withBotAuthFn?: (cfg: Config) => Promise<Config>;
+  /** assess.fileAs resolution for the review-confirm filing path — same
+   * contract as the CLI's `junco assess file` (assessCmd.ts): attach the bot
+   * identity when fileAs is "bot", fail loud (→ error Result → toast) when
+   * the bot login is broken. Injectable for tests, like withBotAuthFn. */
+  withFileAsAuthFn?: (cfg: Config) => Promise<Config>;
   /** Task 5 (ensureBotAccess): swap the real repo-access classifier / bot
    * grant for a spy without touching the module-level exports. */
   classifyFn?: typeof classifyRepoAccess;
@@ -545,7 +550,13 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         const { batch, error } = (deps.readPendingFn ?? readPending)(cfg, id);
         if (error) throw new Error(error);
         if (!batch) throw new Error(`no pending review '${id}'`);
-        return (deps.fileFindingsFn ?? fileFindings)(cfg, batch, new Set(fingerprints), { ghFn });
+        // assess.fileAs: the filing pass runs under the resolved identity, or
+        // fails loud BEFORE anything posts (mirrors `junco assess file`,
+        // assessCmd.ts) — the batch stays parked on a broken bot login. (#224)
+        const fileCfg = await (deps.withFileAsAuthFn ?? ((c: Config) => withFileAsAuth(c)))(cfg);
+        return (deps.fileFindingsFn ?? fileFindings)(fileCfg, batch, new Set(fingerprints), {
+          ghFn,
+        });
       });
     },
 

@@ -31,6 +31,9 @@ const cfg = {
     externalReposRoot: "/tmp/junco-test-external",
   },
   botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
+  // fileReview traverses the REAL withFileAsAuth by default — "me" is its
+  // side-effect-free short-circuit, so the fixture must carry the field.
+  assess: { fileAs: "me" },
 } as unknown as Config;
 
 /** Same literal as Task 2's CTX / cli.test.ts's FAKE_CTX. */
@@ -789,6 +792,75 @@ describe("fileReview", () => {
     const r = await client.fileReview("assess-x-1", ["f1"]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("not valid JSON");
+  });
+
+  it('fileAs "bot": the filing cfg carries the bot identity (batch read stays ambient)', async () => {
+    const botFileCfg = { ...enabledCfg, assess: { fileAs: "bot" } } as unknown as Config;
+    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
+    const fileFindingsFn = vi.fn(
+      (_c: Config): Promise<FileResult> =>
+        Promise.resolve({
+          created: 1,
+          queuedOffline: 0,
+          deduped: 0,
+          failed: 0,
+          urls: [],
+          warnings: [],
+        }),
+    );
+    const withFileAsAuthFn = vi.fn(attachFakeCtx);
+    const client = makeGhDashboardClient(botFileCfg, {
+      ...fakes(),
+      readPendingFn,
+      fileFindingsFn,
+      withFileAsAuthFn,
+    });
+    const r = await client.fileReview("assess-x-1", ["f1"]);
+    expect(r.ok).toBe(true);
+    expect(fileFindingsFn.mock.calls[0]?.[0].ghAuth).toEqual(FAKE_CTX);
+    expect(readPendingFn).toHaveBeenCalledWith(botFileCfg, "assess-x-1");
+  });
+
+  it('fileAs "bot" with a broken bot login: error Result, nothing filed', async () => {
+    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
+    const fileFindingsFn = vi.fn();
+    const withFileAsAuthFn = vi.fn(() =>
+      Promise.reject(
+        new Error("botAccount.enabled is true but no working gh login — run: junco auth login"),
+      ),
+    );
+    const client = makeGhDashboardClient(cfg, {
+      ...fakes(),
+      readPendingFn,
+      fileFindingsFn,
+      withFileAsAuthFn,
+    });
+    const r = await client.fileReview("assess-x-1", ["f1"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("junco auth login");
+    expect(fileFindingsFn).not.toHaveBeenCalled();
+  });
+
+  it('fileAs "me" (default dep): the filing cfg stays ambient — no ghAuth attached', async () => {
+    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
+    const fileFindingsFn = vi.fn(
+      (_c: Config): Promise<FileResult> =>
+        Promise.resolve({
+          created: 0,
+          queuedOffline: 0,
+          deduped: 1,
+          failed: 0,
+          urls: [],
+          warnings: [],
+        }),
+    );
+    // No withFileAsAuthFn injected: the REAL withFileAsAuth runs — safe,
+    // because fileAs "me" short-circuits before any gh probe.
+    const client = makeGhDashboardClient(cfg, { ...fakes(), readPendingFn, fileFindingsFn });
+    const r = await client.fileReview("assess-x-1", ["f1"]);
+    expect(r.ok).toBe(true);
+    expect(fileFindingsFn).toHaveBeenCalledTimes(1);
+    expect(fileFindingsFn.mock.calls[0]?.[0].ghAuth).toBeUndefined();
   });
 });
 
