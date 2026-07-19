@@ -31,6 +31,9 @@ import {
   rmSync,
   statSync,
   readdirSync,
+  openSync,
+  fsyncSync,
+  closeSync,
 } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import type { Config, Paths } from "./types.js";
@@ -66,6 +69,9 @@ export interface DataMigrateDeps {
   migrateFn?: (cfg: Config) => MigrateResult;
   /** Recursive directory copy for the EXDEV fallback. Default: fs.cpSync. */
   copyDirFn?: (from: string, to: string) => void;
+  /** fsync a single path (open+fsync+close) in the EXDEV fallback, so copies
+   * are durable before the source is deleted (#196). Default: real fsync. */
+  syncPathFn?: (p: string) => void;
   /** Daemon-pidfile liveness probe (the /health-independent "is the daemon
    * up" signal). Default: the real readPidfileHolder. */
   pidfileHolderFn?: (lockPath: string) => number | null;
@@ -134,6 +140,22 @@ function verifyCopy(from: string, to: string): void {
       throw new Error(`EXDEV copy verification failed — size mismatch for ${rel}`);
     }
   }
+}
+
+/** #196: fsync every copied file and the destination directories after an
+ * EXDEV copy+verify, BEFORE the source is deleted. Without this, a power loss
+ * in the window between the size verify and the page-cache flush can leave
+ * truncated copies after the source is already gone — the one command whose
+ * job is moving ticket files. The design spec (§11) calls for
+ * copy+fsync+verify+delete; the size verify still runs first (above). */
+function fsyncCopied(to: string, syncPathFn: (p: string) => void): void {
+  const dirs = new Set<string>([to]);
+  for (const rel of listFilesRecursive(to)) {
+    const full = join(to, rel);
+    syncPathFn(full);
+    dirs.add(dirname(full));
+  }
+  for (const d of dirs) syncPathFn(d);
 }
 
 /** Read → mutate → validate → atomic tmp+rename write of the RAW config.json
@@ -245,6 +267,18 @@ export async function runDataMigrate(
   const migrateFn = deps.migrateFn ?? ((c: Config) => migrateStateTree(c));
   const copyDirFn =
     deps.copyDirFn ?? ((from: string, to: string) => cpSync(from, to, { recursive: true }));
+  const syncPathFn =
+    deps.syncPathFn ??
+    ((p: string) => {
+      // Directories are fsync'd too (metadata durability); openSync("r")
+      // works on both files and dirs on POSIX, the only place EXDEV applies.
+      const fd = openSync(p, "r");
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    });
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
 
   // 1a. Daemon-up refusal — both signals skipped entirely by --force.
@@ -340,6 +374,7 @@ export async function runDataMigrate(
           if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
             copyDirFn(s.from, s.to);
             verifyCopy(s.from, s.to);
+            fsyncCopied(s.to, syncPathFn); // #196: durable before deleting source
             rmSync(s.from, { recursive: true, force: true });
             queueReceipt.push(`queue/${s.key}: copied (cross-device) ${s.from} -> ${s.to}`);
           } else {

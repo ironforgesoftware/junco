@@ -571,6 +571,57 @@ describe("runDataMigrate — EXDEV fallback", () => {
     expect(readFileSync(join(dataDir, "queue", "inbox", "t1.md"), "utf8")).toBe("ticket body");
     expect(out.join("")).toMatch(/copied \(cross-device\)/);
   });
+
+  // #196: the fsync pass must run AFTER the copy (dest exists) and BEFORE the
+  // source is deleted (source still exists) — copy+fsync+verify+delete order.
+  it("fsyncs copied files between the verify and the source delete", async () => {
+    const root = trackRoot(freshRoot());
+    const vaultRoot = join(root, "vault");
+    const srcFile = join(vaultRoot, "Junco", "inbox", "t1.md");
+    mkdirSync(join(vaultRoot, "Junco", "inbox"), { recursive: true });
+    writeFileSync(srcFile, "ticket body", "utf8");
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(vaultRoot, "Junco"),
+      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    });
+    const renameFn = (from: string, to: string): void => {
+      if (to.includes(join("data", "queue"))) {
+        const err = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+        err.code = "EXDEV";
+        throw err;
+      }
+      renameSync(from, to);
+    };
+
+    const destFile = join(dataDir, "queue", "inbox", "t1.md");
+    const syncedFilePaths: string[] = [];
+    let sawDestBeforeSourceGone = false;
+    const syncPathFn = (p: string): void => {
+      if (p === destFile) {
+        syncedFilePaths.push(p);
+        // Ordering invariant: dest already copied AND source not yet deleted.
+        sawDestBeforeSourceGone = existsSync(destFile) && existsSync(srcFile);
+      }
+    };
+
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: () => {}, renameFn, syncPathFn },
+    );
+
+    expect(code).toBe(0);
+    expect(syncedFilePaths).toContain(destFile); // the copied file was fsync'd
+    expect(sawDestBeforeSourceGone).toBe(true); // sync ran after copy, before delete
+    expect(existsSync(srcFile)).toBe(false); // source removed only afterwards
+    expect(readFileSync(destFile, "utf8")).toBe("ticket body");
+  });
 });
 
 describe("runDataMigrate — unreadable config.json", () => {
