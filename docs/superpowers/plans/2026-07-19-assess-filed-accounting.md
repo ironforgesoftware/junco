@@ -772,7 +772,7 @@ git add -A && git commit -m "feat(tui): discardReview client seam; fileReview re
 
 **Interfaces:**
 
-- Consumes: `PendingAssess.filed` (Task 1), `relTime(iso: string, now: Date): string` (`src/tui/components/IssueList.tsx`).
+- Consumes: `PendingAssess.filed` (Task 1), `fmtAge(iso: string, now: Date): string` (`src/tui/queueFmt.ts`).
 - Produces: `ReviewView` requires a new `now: Date` prop. Task 7's App tests rely on the ✓/`[x]` glyph rendering described here.
 
 - [ ] **Step 1: Write the failing tests**
@@ -837,12 +837,12 @@ Expected: FAIL — TS: `now` is not a known prop (and the new assertions would f
 
 - [ ] **Step 3: Implement in `src/tui/components/ReviewView.tsx`**
 
-Imports: `import { relTime } from "./IssueList.js";`. Props: add `now: Date;` to the component's props type and destructure `now`. Batch list row — replace the two right-hand cells:
+Imports: `import { fmtAge } from "../queueFmt.js";`. Props: add `now: Date;` to the component's props type and destructure `now`. Batch list row — replace the two right-hand cells:
 
 ```tsx
           const filedCount = b.filed ? Object.keys(b.filed).length : 0;
           …
-              <Text dimColor>{relTime(b.createdAt, now)}</Text>
+              <Text dimColor>{fmtAge(b.createdAt, now)}</Text>
               <Text dimColor>{b.external ? "external" : "owned"}</Text>
               {filedCount > 0 ? (
                 <Text color={theme.accent}>{`filed ${filedCount}/${b.findings.length}`}</Text>
@@ -870,7 +870,7 @@ Checklist row — inside the findings map, look up the record and render:
                 </Text>
               </Box>
               {rec && (
-                <Text dimColor>{`${rec.how === "deduped" ? "dup" : rec.how} ${relTime(rec.at, now)}`}</Text>
+                <Text dimColor>{`${rec.how === "deduped" ? "dup" : rec.how} ${fmtAge(rec.at, now)}`}</Text>
               )}
 ```
 
