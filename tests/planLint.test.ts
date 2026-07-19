@@ -746,6 +746,82 @@ describe("github_request_scope", () => {
     const absent = lintTicket(VALID_BODY, VALID_FM, { checkLabels: false });
     expect(absent.violations.some((v) => v.rule === "github_request_scope")).toBe(false);
   });
+
+  // #210: an UNPARSEABLE github: block does NOT suppress fulfillment, so the
+  // lint must not claim "already carries a github: block; will be ignored".
+  it("does not warn about a github: block that would not parse (fulfillment proceeds) (#210)", () => {
+    for (const bad of ["banana", { issue: 0 }, { nwo: "acme/api", issue: 3 /* no kind */ }]) {
+      const fm = { ...VALID_FM, github: bad, github_request: { create_issue: true } };
+      const result = lintTicket(VALID_BODY, fm, { checkLabels: false });
+      expect(result.warnings.some((w) => w.rule === "github_request_scope")).toBe(false);
+    }
+    // A parseable block still warns.
+    const valid = lintTicket(
+      VALID_BODY,
+      {
+        ...VALID_FM,
+        github: { nwo: "acme/api", issue: 3, kind: "pr" },
+        github_request: { create_issue: true },
+      },
+      { checkLabels: false },
+    );
+    expect(valid.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+  });
+
+  // #210: fulfillment skips ANY non-origin push_remote, not just "fork".
+  it("warns on push_remote: upstream (any non-origin remote), not only fork (#210)", () => {
+    const up = lintTicket(
+      VALID_BODY,
+      { ...VALID_FM, push_remote: "upstream", github_request: { create_issue: true } },
+      { checkLabels: false },
+    );
+    expect(up.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+  });
+
+  // #210: a malformed amends_pr derives to null → fulfillment proceeds → no warn.
+  it("does not warn on a malformed amends_pr; warns on a real one (#210)", () => {
+    const bad = lintTicket(
+      VALID_BODY,
+      { ...VALID_FM, amends_pr: "banana", github_request: { create_issue: true } },
+      { checkLabels: false },
+    );
+    expect(bad.warnings.some((w) => w.rule === "github_request_scope")).toBe(false);
+    const good = lintTicket(
+      VALID_BODY,
+      { ...VALID_FM, amends_pr: 42, github_request: { create_issue: true } },
+      { checkLabels: false },
+    );
+    expect(good.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
+  });
+
+  // #210: a non-boolean create_issue (the likeliest typo) now gets an advisory.
+  it('warns when create_issue is a non-boolean (yes / 1 / "true"); silent on real booleans (#210)', () => {
+    for (const ci of ["yes", 1, "true", "on"]) {
+      const result = lintTicket(
+        VALID_BODY,
+        { ...VALID_FM, github_request: { create_issue: ci } },
+        { checkLabels: false },
+      );
+      expect(
+        result.warnings.some(
+          (w) =>
+            w.rule === "github_request_scope" && /create_issue must be the boolean/.test(w.message),
+        ),
+      ).toBe(true);
+      expect(result.ok).toBe(true); // advisory only, never blocks
+    }
+    // Real booleans get no advisory (true = opt-in, false = deliberate opt-out).
+    for (const ci of [true, false]) {
+      const result = lintTicket(
+        VALID_BODY,
+        { ...VALID_FM, github_request: { create_issue: ci } },
+        { checkLabels: false },
+      );
+      expect(result.warnings.some((w) => /create_issue must be the boolean/.test(w.message))).toBe(
+        false,
+      );
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
