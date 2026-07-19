@@ -94,7 +94,11 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 
 describe("runDoctor", () => {
   it("all green → exit 0", async () => {
-    expect(await runDoctor("/x/config.json", deps())).toBe(0);
+    // #199.3: inject existsFn/readdirFn so the clean verdict doesn't silently
+    // depend on the real fs lacking the /tmp/junco-doc-* fixture paths.
+    expect(
+      await runDoctor("/x/config.json", deps({ existsFn: () => false, readdirFn: () => [] })),
+    ).toBe(0);
   });
 
   it("unreachable endpoint → ✗ and exit 1", async () => {
@@ -374,9 +378,16 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
 
   it("clean cfg reports neither deprecations nor unmigrated dirs", async () => {
     const lines: string[] = [];
+    // #199.3: existsFn/readdirFn injected so "clean" is hermetic, not reliant
+    // on the host filesystem not containing the /tmp/junco-doc-* literals.
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => okConfig, printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => okConfig,
+        existsFn: () => false,
+        readdirFn: () => [],
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/deprecated config keys/);

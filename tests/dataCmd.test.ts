@@ -117,10 +117,13 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-/** LOCAL "YYYY-MM-DD" — same construction as src/spendLedger.ts's
- * localDateString (getFullYear/getMonth/getDate, NOT toISOString/UTC). */
-function localToday(): string {
-  const d = new Date();
+/** LOCAL "YYYY-MM-DD" for a given instant — same construction as
+ * src/spendLedger.ts's localDateString (getFullYear/getMonth/getDate, NOT
+ * toISOString/UTC). #199.1: fresh-spend tests derive the fixture date and read
+ * the ledger off the SAME injected instant, so a local-midnight rollover
+ * between the two can't flake the assertion. */
+function localDateFrom(ms: number): string {
+  const d = new Date(ms);
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
@@ -320,10 +323,11 @@ describe("runData — text mode", () => {
   it("prints today's USD from a spend.json dated today", () => {
     const root = freshRoot();
     buildFixtureTree(root);
-    writeFileSync(join(root, "spend.json"), JSON.stringify({ date: localToday(), usd: 3.5 }));
+    const NOW = new Date(2026, 5, 15, 12, 0, 0, 0).getTime(); // fixed noon, no rollover
+    writeFileSync(join(root, "spend.json"), JSON.stringify({ date: localDateFrom(NOW), usd: 3.5 }));
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, { json: false }, { printFn: (s) => captured.push(s), nowFn: () => NOW });
     const out = captured.join("");
     expect(out).toContain("$3.50 today");
   });
@@ -396,9 +400,10 @@ describe("runData — --json mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
 
-    writeFileSync(join(root, "spend.json"), JSON.stringify({ date: localToday(), usd: 3.5 }));
+    const NOW = new Date(2026, 5, 15, 12, 0, 0, 0).getTime(); // fixed noon, no rollover
+    writeFileSync(join(root, "spend.json"), JSON.stringify({ date: localDateFrom(NOW), usd: 3.5 }));
     const fresh: string[] = [];
-    runData(cfg, { json: true }, { printFn: (s) => fresh.push(s) });
+    runData(cfg, { json: true }, { printFn: (s) => fresh.push(s), nowFn: () => NOW });
     const freshParsed = JSON.parse(fresh.join("")) as { counts: { spendFile: { usd: number } } };
     expect(freshParsed.counts.spendFile.usd).toBe(3.5);
 
@@ -407,6 +412,25 @@ describe("runData — --json mode", () => {
     runData(cfg, { json: true }, { printFn: (s) => stale.push(s) });
     const staleParsed = JSON.parse(stale.join("")) as { counts: { spendFile: { usd: number } } };
     expect(staleParsed.counts.spendFile.usd).toBe(0);
+  });
+
+  it("counts populated clones/watched and clones/external owner-repo trees (#199.2)", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    // Two-level owner/repo layout — countOwnerRepoDirs sums repo subdirs per owner.
+    mkdirSync(join(root, "clones", "watched", "acme", "api"), { recursive: true });
+    mkdirSync(join(root, "clones", "watched", "acme", "web"), { recursive: true });
+    mkdirSync(join(root, "clones", "external", "oss", "lib"), { recursive: true });
+    // A stray file at the owner level must NOT be miscounted as a repo.
+    writeFileSync(join(root, "clones", "watched", "README"), "x");
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    runData(cfg, { json: true }, { printFn: (s) => captured.push(s) });
+    const parsed = JSON.parse(captured.join("")) as {
+      counts: { clonesWatched: { repos: number }; clonesExternal: { repos: number } };
+    };
+    expect(parsed.counts.clonesWatched.repos).toBe(2);
+    expect(parsed.counts.clonesExternal.repos).toBe(1);
   });
 
   it("reflects legacy overrides and deprecations in the JSON shape", () => {
