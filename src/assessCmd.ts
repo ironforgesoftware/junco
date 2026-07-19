@@ -331,8 +331,9 @@ export async function runAssessFileCommand(
   try {
     res = await fileFn(fileCfg, batch, selected, deps.fileDeps ?? {});
   } catch (e) {
-    // fileFindings rethrows before archiving on the fatal-dedup path, so the
-    // batch is preserved — surface the reason cleanly, don't swallow it.
+    // fileFindings rethrows on the fatal-dedup path before stamping or
+    // rewriting anything, so the batch is preserved untouched — surface the
+    // reason cleanly, don't swallow it.
     print(`junco assess file: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
