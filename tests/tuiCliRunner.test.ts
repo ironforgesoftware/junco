@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
-import { PALETTE_COMMANDS, runCliCommand, type CliRunnerDeps } from "../src/tui/cliRunner.js";
+import {
+  DEFAULT_TIMEOUT_MS,
+  PALETTE_COMMANDS,
+  runCliCommand,
+  timeoutFor,
+  type CliRunnerDeps,
+} from "../src/tui/cliRunner.js";
 
 /** Minimal fake ChildProcess: emit stdout/stderr data + close/error on cue. */
 function fakeChild() {
@@ -68,6 +74,23 @@ describe("PALETTE_COMMANDS roster", () => {
     const logs = PALETTE_COMMANDS.find((c) => c.name === "logs")!;
     expect(logs.defaultArgs).toEqual(["-n", "200", "--human"]);
     expect(logs.defaultArgs).not.toContain("-f");
+  });
+});
+
+describe("per-command timeouts", () => {
+  it("assess and run-once carry long budgets; everything else keeps the default", () => {
+    expect(timeoutFor("assess")).toBe(600_000);
+    expect(timeoutFor("run-once")).toBe(3_600_000);
+    expect(timeoutFor("status")).toBe(DEFAULT_TIMEOUT_MS);
+    expect(timeoutFor("not-a-command")).toBe(DEFAULT_TIMEOUT_MS);
+  });
+
+  it("an injected deps.timeoutMs still wins over the roster value", async () => {
+    const child = fakeChild();
+    const { d } = deps(child, 30); // run-once's roster budget is 60 min — injection must win
+    const r = await runCliCommand("/cfg/config.json", "run-once", [], d);
+    expect(r.timedOut).toBe(true);
+    expect(child.killed).toBe(true);
   });
 });
 
