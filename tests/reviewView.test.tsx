@@ -33,6 +33,19 @@ const BATCH = {
   ],
 };
 
+const NOW = new Date("2026-07-09T02:00:00.000Z");
+
+const FILED_BATCH = {
+  ...BATCH,
+  filed: {
+    f1: {
+      at: "2026-07-09T00:00:00.000Z",
+      how: "created" as const,
+      url: "https://github.com/o/r/issues/1",
+    },
+  },
+};
+
 const DRAFT: PendingComment = {
   id: "analyze-o-r-5",
   nwo: "o/r",
@@ -67,7 +80,9 @@ function state(over: Partial<ReviewState>): ReviewState {
 
 describe("ReviewView", () => {
   it("batch-list mode lists batches with nwo + count", () => {
-    const { lastFrame } = render(<ReviewView state={state({})} scroll={0} height={20} focused />);
+    const { lastFrame } = render(
+      <ReviewView state={state({})} scroll={0} height={20} focused now={NOW} />,
+    );
     expect(lastFrame()).toContain("o/r");
     expect(lastFrame()).toContain("2"); // finding count
   });
@@ -75,7 +90,8 @@ describe("ReviewView", () => {
     const s = state({
       open: { kind: "batch", batchIdx: 0, findingCursor: 0, checked: new Set(["f1"]) },
     });
-    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
     expect(frame).toContain("SQL injection");
     expect(frame).toContain("stale dep");
     expect(frame).toMatch(/\[x\].*SQL injection/); // f1 checked
@@ -89,6 +105,7 @@ describe("ReviewView", () => {
           scroll={0}
           height={20}
           focused
+          now={NOW}
         />,
       ).lastFrame(),
     ).toContain("no pending");
@@ -96,7 +113,8 @@ describe("ReviewView", () => {
 
   it("list mode renders a draft row with a comment badge and nwo#issue", () => {
     const s = state({ batches: [], drafts: [DRAFT], cursor: 0 });
-    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
     expect(frame).toContain("o/r#5");
     expect(frame).toContain("comment"); // badge column
     expect(frame).toContain("This is the analysis."); // first non-empty draft line
@@ -104,7 +122,8 @@ describe("ReviewView", () => {
 
   it("draft-row comment badge is right-aligned, after the flexing preview text — matching the batch rows' far-right count column", () => {
     const s = state({ batches: [], drafts: [DRAFT], cursor: 0 });
-    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
     const previewIdx = frame.indexOf("This is the analysis.");
     const badgeIdx = frame.indexOf("comment");
     expect(previewIdx).toBeGreaterThan(-1);
@@ -118,7 +137,8 @@ describe("ReviewView", () => {
       cursor: 0,
       open: { kind: "draft", draftIdx: 0 },
     });
-    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
     expect(frame).toContain("o/r#5");
     expect(frame).toContain("Broken build"); // issueTitle in header
     expect(frame).toContain("owned"); // external|owned in header
@@ -137,6 +157,7 @@ describe("ReviewView", () => {
           scroll={0}
           height={10}
           focused
+          now={NOW}
         />,
       ).lastFrame() ?? "";
     const atOne =
@@ -146,6 +167,7 @@ describe("ReviewView", () => {
           scroll={1}
           height={10}
           focused
+          now={NOW}
         />,
       ).lastFrame() ?? "";
     // height=10 → rows=8, no footer → bodyRows=6: scroll=0 shows line-0..line-5.
@@ -167,6 +189,7 @@ describe("ReviewView", () => {
         scroll={999}
         height={10}
         focused
+        now={NOW}
       />,
     ).lastFrame()!;
     expect(f).toContain("line-9"); // the last line is on screen…
@@ -180,7 +203,8 @@ describe("ReviewView", () => {
       cursor: 0,
       open: { kind: "draft", draftIdx: 0 },
     });
-    const frame = render(<ReviewView state={s} scroll={0} height={20} focused />).lastFrame() ?? "";
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
     expect(frame).toContain("This is the analysis.");
     expect(frame).not.toContain("Analysis drafted with");
   });
@@ -193,8 +217,54 @@ describe("ReviewView", () => {
           scroll={0}
           height={20}
           focused
+          now={NOW}
         />,
       ).lastFrame() ?? "";
     expect(frame).toContain("draft a comment");
+  });
+
+  it("list row shows the batch age and a filed n/m chip when accounting exists", () => {
+    const s = state({ batches: [FILED_BATCH as never] });
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
+    expect(frame).toContain("2h ago"); // createdAt age
+    expect(frame).toContain("filed 1/2"); // replaces the bare count column
+  });
+
+  it("checklist: a filed, unchecked row renders ✓ + how + age instead of an empty checkbox", () => {
+    const s = state({
+      batches: [FILED_BATCH as never],
+      open: { kind: "batch", batchIdx: 0, findingCursor: 0, checked: new Set<string>() },
+    });
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
+    expect(frame).toMatch(/✓.*SQL injection.*created 2h ago/);
+    expect(frame).toMatch(/\[ \].*stale dep/); // unfiled row keeps its checkbox
+    expect(frame).toContain("1 filed"); // header accounting
+  });
+
+  it("checklist: a filed row that is re-checked shows [x] and keeps its accounting note", () => {
+    const s = state({
+      batches: [FILED_BATCH as never],
+      open: { kind: "batch", batchIdx: 0, findingCursor: 0, checked: new Set(["f1"]) },
+    });
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
+    expect(frame).toMatch(/\[x\].*SQL injection.*created 2h ago/);
+  });
+
+  it("checklist: how 'deduped' renders as 'dup'", () => {
+    const s = state({
+      batches: [
+        {
+          ...BATCH,
+          filed: { f1: { at: "2026-07-09T01:00:00.000Z", how: "deduped" as const } },
+        } as never,
+      ],
+      open: { kind: "batch", batchIdx: 0, findingCursor: 0, checked: new Set<string>() },
+    });
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
+    expect(frame).toMatch(/dup 1h ago/);
   });
 });

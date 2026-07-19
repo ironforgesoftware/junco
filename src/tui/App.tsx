@@ -2478,6 +2478,7 @@ export function App(props: AppProps): React.JSX.Element {
           scroll={scroll}
           height={listHeight}
           focused
+          now={queueNow}
           onRowPress={reviewRowPress}
           onFindingPress={reviewFindingPress}
           onDraftWheel={reviewDraftWheel}
