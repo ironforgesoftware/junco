@@ -796,19 +796,18 @@ describe("fileReview", () => {
 
   it('fileAs "bot": the filing cfg carries the bot identity (batch read stays ambient)', async () => {
     const botFileCfg = { ...enabledCfg, assess: { fileAs: "bot" } } as unknown as Config;
-    let filedWith: Config | null = null;
     const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
-    const fileFindingsFn = vi.fn((c: Config): Promise<FileResult> => {
-      filedWith = c;
-      return Promise.resolve({
-        created: 1,
-        queuedOffline: 0,
-        deduped: 0,
-        failed: 0,
-        urls: [],
-        warnings: [],
-      });
-    });
+    const fileFindingsFn = vi.fn(
+      (_c: Config): Promise<FileResult> =>
+        Promise.resolve({
+          created: 1,
+          queuedOffline: 0,
+          deduped: 0,
+          failed: 0,
+          urls: [],
+          warnings: [],
+        }),
+    );
     const withFileAsAuthFn = vi.fn(attachFakeCtx);
     const client = makeGhDashboardClient(botFileCfg, {
       ...fakes(),
@@ -818,7 +817,7 @@ describe("fileReview", () => {
     });
     const r = await client.fileReview("assess-x-1", ["f1"]);
     expect(r.ok).toBe(true);
-    expect(filedWith?.ghAuth).toEqual(FAKE_CTX);
+    expect(fileFindingsFn.mock.calls[0]?.[0].ghAuth).toEqual(FAKE_CTX);
     expect(readPendingFn).toHaveBeenCalledWith(botFileCfg, "assess-x-1");
   });
 
@@ -843,26 +842,25 @@ describe("fileReview", () => {
   });
 
   it('fileAs "me" (default dep): the filing cfg stays ambient — no ghAuth attached', async () => {
-    let filedWith: (Config & { ghAuth?: unknown }) | null = null;
     const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
-    const fileFindingsFn = vi.fn((c: Config): Promise<FileResult> => {
-      filedWith = c;
-      return Promise.resolve({
-        created: 0,
-        queuedOffline: 0,
-        deduped: 1,
-        failed: 0,
-        urls: [],
-        warnings: [],
-      });
-    });
+    const fileFindingsFn = vi.fn(
+      (_c: Config): Promise<FileResult> =>
+        Promise.resolve({
+          created: 0,
+          queuedOffline: 0,
+          deduped: 1,
+          failed: 0,
+          urls: [],
+          warnings: [],
+        }),
+    );
     // No withFileAsAuthFn injected: the REAL withFileAsAuth runs — safe,
     // because fileAs "me" short-circuits before any gh probe.
     const client = makeGhDashboardClient(cfg, { ...fakes(), readPendingFn, fileFindingsFn });
     const r = await client.fileReview("assess-x-1", ["f1"]);
     expect(r.ok).toBe(true);
-    expect(filedWith).not.toBeNull();
-    expect(filedWith?.ghAuth).toBeUndefined();
+    expect(fileFindingsFn).toHaveBeenCalledTimes(1);
+    expect(fileFindingsFn.mock.calls[0]?.[0].ghAuth).toBeUndefined();
   });
 });
 
