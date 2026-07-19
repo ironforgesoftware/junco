@@ -67,7 +67,7 @@ export interface AppProps {
   healthPollMs?: number; // default 5_000
   /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
   queueFn: () => Promise<QueueSnapshot>;
-  queuePollMs?: number; // default 2_000
+  queuePollMs?: number; // default 1_000 — queue card / turn counters (local reads only)
   /** Per-repo assess history source (dashboardCmd wires makeAssessHistoryFn). */
   assessHistoryFn: () => Promise<AssessHistory[]>;
   assessHistoryPollMs?: number; // default 15_000 — assess runs take minutes
@@ -215,7 +215,7 @@ export function App(props: AppProps): React.JSX.Element {
   } = props;
   const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
-  const queuePollMs = props.queuePollMs ?? 2_000;
+  const queuePollMs = props.queuePollMs ?? 1_000;
   const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
