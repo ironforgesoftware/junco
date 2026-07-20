@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { Header, Toast, Footer, hintsFor, localHintsFor } from "../src/tui/components/Chrome.js";
+import {
+  Header,
+  Toast,
+  Footer,
+  hintsFor,
+  hintsForUnified,
+  localHintsFor,
+} from "../src/tui/components/Chrome.js";
 import type { HealthInfo } from "../src/tui/ghClient.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
@@ -530,5 +537,45 @@ describe("hintsFor github main still discovers the mode key", () => {
   it("main pane 2 wide includes m local", () => {
     const pairs = hintsFor("main", 2, "wide", false);
     expect(pairs.find(([k]) => k === "m")?.[1]).toBe("local");
+  });
+});
+
+describe("hintsForUnified", () => {
+  it("delegates non-main views to the existing sets", () => {
+    expect(hintsForUnified("detail", "issues", 2, "wide", false)).toEqual(
+      hintsFor("detail", 2, "wide", false),
+    );
+  });
+
+  it("main + pane 1 has no mode toggle and keeps rail verbs", () => {
+    const keys = hintsForUnified("main", "issues", 1, "wide", false).map(([k]) => k);
+    expect(keys).not.toContain("m");
+    for (const k of ["↑/↓", "enter", "w", "x", "o", "r", "s", ":", "?", "q"]) {
+      expect(keys).toContain(k);
+    }
+  });
+
+  it("main + pane 2 varies by body kind", () => {
+    const q = hintsForUnified("main", "queue", 2, "wide", false).map(([k]) => k);
+    expect(q).toEqual(expect.arrayContaining(["↑/↓", "R", "x", "←"]));
+    const d = hintsForUnified("main", "daemon", 2, "wide", false).map(([k]) => k);
+    expect(d).toEqual(expect.arrayContaining(["[/]", "X", "f"]));
+    const issue = hintsForUnified("main", "issues", 2, "wide", false).map(([k]) => k);
+    expect(issue).toEqual(expect.arrayContaining(["d", "a", "/", "p"]));
+    expect(issue).not.toContain("m");
+    const r = hintsForUnified("main", "repoDetail", 2, "wide", false).map(([k]) => k);
+    expect(r).toEqual(expect.arrayContaining(["[ ]", "←"]));
+  });
+
+  it("pane 3 delegates to the existing PR-pane set", () => {
+    expect(hintsForUnified("main", "issues", 3, "wide", false)).toEqual(
+      hintsFor("main", 3, "wide", false),
+    );
+  });
+
+  it("filtering short-circuits like hintsFor", () => {
+    expect(hintsForUnified("main", "issues", 2, "wide", true)).toEqual(
+      hintsFor("main", 2, "wide", true),
+    );
   });
 });

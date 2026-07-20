@@ -426,3 +426,86 @@ export function localHintsFor(section: LocalSection, focus: "rail" | "body"): [s
       return [["←", "back"]];
   }
 }
+
+/** What pane 2 currently shows in the unified view — mirrors railModel's
+ * BodyKind with sections flattened for hint lookup. */
+export type BodyHintKind =
+  | "issues"
+  | "repoDetail"
+  | "queue"
+  | "outbox"
+  | "worktrees"
+  | "daemon"
+  | "logs";
+
+/** Single-surface hint sets for the unified view. Non-main views delegate to
+ * hintsFor verbatim; main is pane- and body-kind-aware. Replaces the
+ * hintsFor/localHintsFor pair once App swaps over (unified-view spec §3). */
+export function hintsForUnified(
+  view: HintView,
+  bodyKind: BodyHintKind,
+  pane: 1 | 2 | 3,
+  mode: LayoutMode,
+  filtering: boolean,
+): [string, string][] {
+  if (filtering || view !== "main") return hintsFor(view, pane, mode, filtering);
+  if (pane === 1) {
+    return [
+      ["↑/↓", "move"],
+      ["enter", "detail"],
+      ["→", "open"],
+      ["w", "add repo"],
+      ["x", "unwatch"],
+      ["o", "browser"],
+      ["r", "refresh"],
+      ["s", "assess"],
+      [":", "commands"],
+      ["?", "help"],
+      ["q", "quit"],
+    ];
+  }
+  if (pane === 3) return hintsFor("main", 3, mode, false);
+  switch (bodyKind) {
+    case "issues":
+      // Pane-2 issue verbs minus the dead mode toggle and the t queue-view
+      // key (t now jumps the RAIL cursor, so it reads as a rail hint).
+      return hintsFor("main", 2, mode, false).filter(([k]) => k !== "m" && k !== "t");
+    case "repoDetail":
+      return [
+        ["[ ]", "scroll"],
+        ["o", "browser"],
+        ["←", "back"],
+      ];
+    case "queue":
+      return [
+        ["↑/↓", "move"],
+        ["R", "requeue"],
+        ["x", "delete"],
+        ["←", "back"],
+      ];
+    case "outbox":
+      return [
+        ["↑/↓", "move"],
+        ["f", "flush"],
+        ["←", "back"],
+      ];
+    case "worktrees":
+      return [
+        ["↑/↓", "move"],
+        ["x", "prune"],
+        ["←", "back"],
+      ];
+    case "daemon":
+      return [
+        ["[/]", "scroll"],
+        ["X", "restart"],
+        ["f", "flush"],
+        ["←", "back"],
+      ];
+    case "logs":
+      return [
+        ["enter", "open log"],
+        ["←", "back"],
+      ];
+  }
+}
