@@ -154,6 +154,12 @@ describe("LOCAL full-screen log overlay", () => {
     // First [ pauses (chip flips to paused) and steps the window up by one.
     r.stdin.write("[");
     await until(() => frame(r).includes("paused"));
+    // Tail-anchor invariant: pausing lands at the BOTTOM (toEnd) then steps up
+    // one row — the oldest line must still be off screen. This fails loudly
+    // under a hypothetical jump-to-top-on-pause regression (which the scroll-up
+    // loop below would otherwise mask, since fireUntil stops the moment the
+    // condition first holds).
+    expect(frame(r)).not.toContain("line-000");
     // Keep stepping up until the earliest line comes into view — proof the
     // paused window scrolls back through scrollback.
     await fireUntil(r.stdin, "[", () => frame(r).includes("line-000"), 80);

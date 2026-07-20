@@ -389,7 +389,14 @@ export function App(props: AppProps): React.JSX.Element {
   // No render-time fs call: an empty/absent file both show the placeholder until
   // the first line arrives (a running daemon fills within one poll).
   const logHasFile = logEntries.length > 0;
-  const onLogExpand = (): void => setLogOverlay(true);
+  // Both open paths (click on the compact pane, and the logs rail Enter) route
+  // here so opening ALWAYS starts tailing live (tail -f / less +F convention) —
+  // a follow state left paused from a prior session would otherwise reopen at
+  // the top. Filters intentionally persist across reopen; only follow resets.
+  const onLogExpand = (): void => {
+    setLogFollow(true);
+    setLogOverlay(true);
+  };
 
   // Selectable rows for the current section. INVARIANT: this list is the EXACT
   // rendered list each section component highlights, in the same order and
@@ -1705,9 +1712,9 @@ export function App(props: AppProps): React.JSX.Element {
     }
     if (localSection === "logs" && (input === "l" || key.rightArrow || key.return)) {
       // The compact `logs` section has nothing to navigate row-by-row — entering
-      // it opens the full-screen overlay (keyboard parity with clicking the pane,
-      // whose onLogExpand does the same).
-      return void setLogOverlay(true);
+      // it opens the full-screen overlay (keyboard parity with clicking the pane;
+      // both go through onLogExpand so opening always starts tailing live).
+      return void onLogExpand();
     }
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
   };
