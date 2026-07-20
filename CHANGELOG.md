@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `junco assess discard <id>` — explicitly archive a pending review batch; filing no longer auto-archives.
+- Durable per-task history: every finalized ticket (PR flow, ask, assess, analyze, or a crash-containment path) appends a record — kind, terminal status, duration, tokens, cost, and (for GitHub-bridged tickets) `nwo`/issue/PR url — to `<dataDir>/history/` (UTC-month JSONL shards). Requeues never append.
+- Queue monitoring in the dashboard's queue view (`t`, and the LOCAL queue section): a `▸ paused — <reason>` banner when the daemon's provider gate is backed off, a `↻ poll Ns ago` heartbeat on the RUNNING header, `⚠ no activity Nm` stall warnings on a wedged running task, deferred/oldest-wait context on the WAITING header plus a `queued Nm` age per row, real result status + duration on RECENT rows, and an always-on STATS section (24h ok/failed counts and success rate, avg duration, ETA, a 7-day sparkline, spend and token totals, guard/requeue counts, outbox depth, and a pending-restart notice) built from the new history ledger with a done/failed-dir-mtime fallback when the ledger is still empty.
+- The rail's queue card and `junco status` pick up the same signals: a paused line and `oldest Nm` on the waiting line in the rail, and a `stats:` line (24h ok/failed · avg duration · oldest wait) plus a `gate:` line (when not healthy) in `junco status`.
 
 ### Changed
 

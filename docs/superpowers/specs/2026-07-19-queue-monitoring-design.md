@@ -196,3 +196,29 @@ Everything is additive: new optional fields on snapshot/flow-result types, a new
 directory, new render lines. No ticket-schema change, no config lever, no `/health`
 payload change. Older done/failed files without parseable result blocks render exactly
 as today.
+
+## Implementation deviations
+
+- **(a) `PrFlowResult` was the only flow-result type that needed widening.** The
+  assess/analyze flow results already carried `result: RunResult` (with `usage`/
+  `durationMs` on it), so `runOnce.ts` could read those directly — no new fields there.
+  Only `PrFlowResult` gained the additive optional `usage?: Usage` / `durationMs?:
+number` fields, threaded from the underlying `RunResult` in `flowResult()`.
+- **(b) The shard memo keys on `mtimeMs` alone**, not `(mtimeMs, size)` as this doc
+  originally sketched — an append always bumps mtime, so a single key is enough, and it
+  keeps `TaskHistoryDeps`'s `statFn` seam the same shape as the codebase's other
+  stat-based memoization.
+- **(c) `kind` is passed explicitly by the executed branch, not derived from ticket
+  shape at the finalize point.** A `kindOf`-style guess from ticket frontmatter can
+  diverge from what actually ran — e.g. a `repo: ""` ticket has `hasRepo` true but falls
+  through to the Q&A path, and a ticket carrying both `repo:` and `github.kind: "plan"`
+  actually runs the PR flow. Every finalize call site in `runOnce.ts` names its own kind
+  directly; only the top-level crash-containment catch — where the branch that ran is no
+  longer knowable once execution has thrown — falls back to a documented best-effort
+  `kindEstimate(next)`.
+- **(d) `perDay7d` day keys use DST-safe calendar-field arithmetic, not fixed 24h
+  steps.** `buildQueueStats` builds each of the 7 day keys with
+  `new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)` — the `spendLedger.ts`
+  `nextMidnightMs()` precedent — rather than `now.getTime() - i * DAY_MS`: a fixed 24h
+  step across a DST transition lands on a 23h/25h local day and skips (spring-forward) or
+  double-counts (fall-back) a calendar-day key.

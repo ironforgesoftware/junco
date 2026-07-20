@@ -53,6 +53,8 @@ That's also the default, so most setups never need to set it at all. The shape u
     watched/<owner>/<repo>/                             dashboard-cloned watched repos
     external/<owner>/<repo>/                             managed clones of unowned repos (fork/assess flow)
   worktrees/                                            ephemeral PR-flow build worktrees
+  assess-history/                                       per-repo `junco assess` history, one JSON file per repo
+  history/                                              per-task finalize ledger, tasks-YYYY-MM.jsonl shards
   transcripts/<ticket-id>.jsonl                         per-run event stream
   watchlist.json    spend.json    metrics.json    worker.log    migrated.json
 ```
@@ -108,6 +110,10 @@ clones
   external  1 repos   /Users/you/.local/state/junco/clones/external
 
 worktrees  1 dirs   /Users/you/.local/state/junco/worktrees
+
+assess-history 3 repos   /Users/you/.local/state/junco/assess-history
+
+history 2 shards   /Users/you/.local/state/junco/history
 
 transcripts 158 files · 3.20 MB   /Users/you/.local/state/junco/transcripts
 
