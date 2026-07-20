@@ -52,6 +52,7 @@ interface DataCounts {
   clonesExternal: { repos: number };
   worktrees: { dirs: number };
   assessHistory: { repos: number };
+  history: { files: number };
   transcripts: { files: number; bytes: number };
   watchlistFile: FileInfo;
   updateCheckFile: FileInfo;
@@ -81,6 +82,10 @@ function countMd(dir: string, readdirFn: (d: string) => string[]): number {
 
 function countJson(dir: string, readdirFn: (d: string) => string[]): number {
   return countByExt(dir, ".json", readdirFn);
+}
+
+function countJsonl(dir: string, readdirFn: (d: string) => string[]): number {
+  return countByExt(dir, ".jsonl", readdirFn);
 }
 
 function countSubdirs(
@@ -279,6 +284,7 @@ function computeCounts(
     clonesExternal: { repos: countOwnerRepoDirs(p.clonesExternal, readdirFn, statFn) },
     worktrees: { dirs: countSubdirs(p.worktrees, readdirFn, statFn) },
     assessHistory: { repos: countJson(p.assessHistory, readdirFn) },
+    history: { files: countJsonl(p.history, readdirFn) },
     transcripts: flatFilesAndBytes(p.transcripts, readdirFn, statFn),
     watchlistFile: fileInfo(p.watchlistFile, existsFn, statFn),
     updateCheckFile: fileInfo(p.updateCheckFile, existsFn, statFn),
@@ -382,6 +388,12 @@ function renderText(
     `\nassess-history ${
       existsFn(p.assessHistory) ? `${counts.assessHistory.repos} repos` : "(absent)"
     }   ${p.assessHistory}\n`,
+  );
+
+  print(
+    `\nhistory ${
+      existsFn(p.history) ? `${counts.history.files} shards` : "(absent)"
+    }   ${p.history}\n`,
   );
 
   print(
