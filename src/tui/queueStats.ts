@@ -132,7 +132,16 @@ export function buildQueueStats(
   let perDay7d: QueueStats["perDay7d"] = [];
   if (recs7d.length > 0) {
     const keys: string[] = [];
-    for (let i = 6; i >= 0; i--) keys.push(dayKey(new Date(now.getTime() - i * DAY_MS)));
+    // Calendar-field arithmetic (spendLedger.ts nextMidnightMs() precedent),
+    // NOT raw `now.getTime() - i * DAY_MS`: a fixed 24h step across a DST
+    // transition lands on a 23h/25h local day, so the naive walk skips
+    // (spring-forward) or double-counts (fall-back) a calendar-day key. The
+    // Date constructor normalizes out-of-range day-of-month values, so
+    // subtracting from `getDate()` correctly rolls across month/year
+    // boundaries too.
+    for (let i = 6; i >= 0; i--) {
+      keys.push(dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)));
+    }
     const byDay = new Map(keys.map((k) => [k, { done: 0, failed: 0 }]));
     for (const r of recs7d) {
       const b = byDay.get(dayKey(new Date(r.at)));
