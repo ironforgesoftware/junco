@@ -295,9 +295,14 @@ describe("runStatusCommand", () => {
     const queueIdx = lines.findIndex((l) => l.startsWith("queue:"));
     const outboxIdx = lines.findIndex((l) => l.startsWith("outbox:"));
     expect(queueIdx).toBeGreaterThanOrEqual(0);
-    // Not necessarily adjacent — a `stats:` line (#T9) can land between them
-    // when the fixture's inbox/done/failed files carry recent mtimes.
-    expect(outboxIdx).toBeGreaterThan(queueIdx);
+    // This fixture's `stats:` line (#T9) is deterministic, not incidental: a
+    // fresh temp root + no history dir means readTaskHistory always returns
+    // [] here, so the dir-mtime fallback fires; failed/b.md (beforeEach) was
+    // just written, so it always lands inside the 24h window. The stats line
+    // therefore ALWAYS prints between queue: and outbox: in this test —
+    // assert the full three-line sequence, not just relative order.
+    expect(outboxIdx).toBe(queueIdx + 2);
+    expect(lines[queueIdx + 1]).toMatch(/^stats:/);
     expect(lines[outboxIdx]).toMatch(/outbox: {4}2 queued · 1 dead/);
   });
 
