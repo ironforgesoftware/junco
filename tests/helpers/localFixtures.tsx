@@ -1,8 +1,11 @@
-// Shared fixtures + renderApp for the App-level LOCAL-mode suites
-// (tuiLocalApp / tuiLocalActions / tuiMouse). The LOCAL surface renders the
-// mode tabs bracketed only at the wide breakpoint (WIDE_COLS=110), so these
-// suites mount at 120 cols — that is what makes `[GITHUB]`/`[LOCAL]` (and the
-// spelled-out inactive labels) appear in the frame.
+// Shared fixtures + renderApp for the App-level unified-view suites
+// (tuiLocalApp / tuiLocalActions / tuiMouse). Mounted at 120 cols (wide
+// breakpoint, WIDE_COLS=110) so the three-pane layout renders.
+//
+// Rail geometry under these fixtures: HEAVY's one candidate (acme/api at
+// /c/api) collapses into the watched acme/api row by path, so the rows are
+// [acme/api, beta/two] + the five system rows (queue/outbox/worktrees/
+// daemon/logs) = 7.
 import React from "react";
 import { render } from "ink-testing-library";
 import { App, type AppProps } from "../../src/tui/App.js";
@@ -15,8 +18,28 @@ import type { QueueSnapshot } from "../../src/tui/queueSnapshot.js";
 export const okv = <T,>(v: T): Result<T> => ({ ok: true, value: v });
 export const ESC = String.fromCharCode(27);
 export const ENTER = "\r";
-/** Wide layout so the bracketed tabs (`[GITHUB]`/`[LOCAL]`) render. */
+/** Wide layout (three-pane breakpoint). */
 export const WIDE_COLS_TEST = 120;
+/** Key sequence that parks the rail cursor on a system row from the top of
+ * the rail (two config repos precede the system block in these fixtures).
+ * Feed through `tap` — a multi-char stdin.write lands as ONE input string. */
+export const TO_QUEUE_ROW = "jj"; // acme/api → beta/two → queue
+export const TO_OUTBOX_ROW = "jjj";
+export const TO_WORKTREES_ROW = "jjjj";
+export const TO_DAEMON_ROW = "jjjjj";
+export const TO_LOGS_ROW = "jjjjjj";
+
+/** Write each key as its own stdin chunk with a tick between — ink delivers a
+ * multi-char chunk as a single `input` string, which matches no key branch. */
+export async function tap(
+  r: { stdin: { write: (s: string) => void } },
+  keys: string,
+): Promise<void> {
+  for (const k of keys) {
+    r.stdin.write(k);
+    await new Promise((res) => setTimeout(res, 5));
+  }
+}
 
 export const EMPTY_QUEUE: QueueSnapshot = {
   daemonUp: true,
@@ -256,7 +279,6 @@ export function makeAppProps(over: Partial<AppProps> = {}): AppProps {
     localHeavyFn: async () => HEAVY,
     localCheapPollMs: 999999,
     localHeavyPollMs: 999999,
-    initialUiMode: "github",
     githubEnabled: true,
     runCliFn: runCli,
     sizeOverride: { columns: WIDE_COLS_TEST, rows: 30 },

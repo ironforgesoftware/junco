@@ -63,7 +63,7 @@ describe("CommandPalette mouse (App integration)", () => {
       output: "ok",
       timedOut: false,
     }));
-    const r = renderApp({ initialUiMode: "github", runCliFn });
+    const r = renderApp({ runCliFn });
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     r.stdin.write(":");
     await until(() => (r.lastFrame() ?? "").includes("run a junco command"));

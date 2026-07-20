@@ -449,16 +449,18 @@ export function hintsForUnified(
   filtering: boolean,
 ): [string, string][] {
   if (filtering || view !== "main") return hintsFor(view, pane, mode, filtering);
+  // Pane 1 (rail): one row's worth of chips — enter (repo detail) and → (body
+  // focus) live in the help modal instead; the row must not clip `q quit` at
+  // the 120-col test width (Footer clips, never wraps).
   if (pane === 1) {
     return [
       ["↑/↓", "move"],
-      ["enter", "detail"],
-      ["→", "open"],
       ["w", "add repo"],
       ["x", "unwatch"],
       ["o", "browser"],
       ["r", "refresh"],
       ["s", "assess"],
+      ["t", "queue"],
       [":", "commands"],
       ["?", "help"],
       ["q", "quit"],

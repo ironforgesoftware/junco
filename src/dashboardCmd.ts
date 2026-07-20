@@ -112,12 +112,10 @@ export async function runDashboard(
     queueFn: makeQueueSnapshotFn(c),
     // Per-repo assess history for the rail's audit-age indicator (#193).
     assessHistoryFn: () => Promise.resolve(listHistory(c)),
-    // LOCAL surface snapshot factories (cheap @3s, heavy @15s).
+    // Local snapshot factories (cheap @3s, heavy @15s) — always on in the
+    // unified view (system badges + local rail rows + section bodies).
     localCheapFn: makeLocalCheapFn(c),
     localHeavyFn: makeLocalHeavyFn(c),
-    // GitHub disabled -> land on LOCAL; the daemon still won't sweep GitHub,
-    // but there's a live local surface to show instead of refusing to launch.
-    initialUiMode: c.github.enabled ? "github" : "local",
     githubEnabled: c.github.enabled,
     // App drives useApp().exit() itself; this stays a no-op hook point.
     onExit: () => {},

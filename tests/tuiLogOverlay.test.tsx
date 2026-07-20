@@ -35,12 +35,13 @@ function fakeFs(initial = "") {
 
 const frame = (r: { lastFrame: () => string | undefined }): string => r.lastFrame() ?? "";
 
-/** Mount in LOCAL mode, jump to the `logs` section, and wait for a seeded line
- * to tail into the compact pane (proves the section mounted + polled). */
+/** Mount the unified view, jump the rail to the `logs` system row, and wait
+ * for a seeded line to tail into the compact pane (proves the section-variant
+ * LogView mounted + polled). */
 async function openToLogs(deps: LogReaderDeps, waitFor: string) {
-  const r = renderApp({ initialUiMode: "local", logReaderDeps: deps, logsPollMs: 15 });
-  await until(() => frame(r).includes("[LOCAL]"));
-  // G jumps to the last rail section (`logs`); resend is idempotent.
+  const r = renderApp({ logReaderDeps: deps, logsPollMs: 15 });
+  await until(() => frame(r).includes("system"));
+  // G jumps to the last rail row (`logs`); resend is idempotent.
   await fireUntil(r.stdin, "G", () => frame(r).includes(waitFor));
   return r;
 }
@@ -183,9 +184,8 @@ describe("LOCAL full-screen log overlay", () => {
     const r = await openToLogs(deps, "daemon, booted");
     await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
     // Enter search-entry mode, then build the term "daemon" char-group by
-    // char-group. The `m` MUST land as a discrete keystroke: under the open
-    // overlay canToggleMode() is false, so `m` extends the term instead of
-    // flipping to GITHUB (which would unmount the overlay and time out below).
+    // char-group. The `m` MUST land as a discrete keystroke: the overlay owns
+    // input, so `m` extends the term (it must never leak to any lower layer).
     r.stdin.write("/");
     await until(() => frame(r).includes("/▏"));
     r.stdin.write("dae"); // plain chars, appended wholesale
@@ -198,9 +198,10 @@ describe("LOCAL full-screen log overlay", () => {
     // Under the overlay it is just another search char.
     r.stdin.write(",");
     await until(() => frame(r).includes("/daemon,▏"));
-    // Still LOCAL, still the overlay open — neither `m` nor `,` leaked.
-    expect(frame(r)).toContain("[LOCAL]"); // `m` did not flip to GITHUB
+    // Still the overlay — neither `m` (a dead key now, but historically the
+    // mode toggle) nor `,` (config-open) leaked past the search field.
     expect(frame(r)).toContain("following"); // ConfigView did not replace the overlay
+    expect(frame(r)).not.toContain("Root directory Junco keeps"); // no ConfigView
   });
 
   it("the footer under the overlay shows esc/close, not the stale LOCAL rail chips", async () => {

@@ -550,7 +550,7 @@ describe("hintsForUnified", () => {
   it("main + pane 1 has no mode toggle and keeps rail verbs", () => {
     const keys = hintsForUnified("main", "issues", 1, "wide", false).map(([k]) => k);
     expect(keys).not.toContain("m");
-    for (const k of ["↑/↓", "enter", "w", "x", "o", "r", "s", ":", "?", "q"]) {
+    for (const k of ["↑/↓", "w", "x", "o", "r", "s", "t", ":", "?", "q"]) {
       expect(keys).toContain(k);
     }
   });
