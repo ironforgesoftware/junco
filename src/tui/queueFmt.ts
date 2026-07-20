@@ -78,6 +78,36 @@ export function fmtClock(iso: string): string {
   return new Date(iso).toTimeString().slice(0, 5);
 }
 
+/** `45s` / `12m` / `2h13m` — result-duration and avg/ETA column format. */
+export function fmtDurShort(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+}
+
+const SPARK_BARS = "▁▂▃▄▅▆▇█";
+
+/** One glyph per value, scaled to the series max (0 pins to ▁). */
+export function fmtSpark(values: number[]): string {
+  const max = Math.max(...values, 1);
+  return values
+    .map((v) => (v <= 0 ? SPARK_BARS[0] : SPARK_BARS[Math.max(1, Math.round((v / max) * 7))]))
+    .join("");
+}
+
+/** Earliest queuedAt among ELIGIBLE (non-deferred) waiting rows, else null. */
+export function oldestQueuedAt(
+  waiting: { queuedAt: string | null; deferred: boolean }[],
+): string | null {
+  let oldest: string | null = null;
+  for (const w of waiting) {
+    if (w.deferred || w.queuedAt === null) continue;
+    if (oldest === null || Date.parse(w.queuedAt) < Date.parse(oldest)) oldest = w.queuedAt;
+  }
+  return oldest;
+}
+
 /** `turn 14 · bash · 12.3k tok · 4m32s` — null segments omitted. */
 export function progressLine(
   r: {

@@ -11,8 +11,12 @@ import {
   fmtCompact,
   fmtAgeShort,
   fmtAssessIndicator,
+  fmtDurShort,
+  fmtSpark,
+  oldestQueuedAt,
 } from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import type { QueueStats } from "../src/tui/queueStats.js";
 import type { AssessHistory } from "../src/assessHistory.js";
 
 const NOW = new Date("2026-07-07T10:05:00Z");
@@ -131,6 +135,40 @@ describe("queueFmt", () => {
     expect(fmtCompact(999_949)).toBe("999.9k"); // still rounds below 1000k
     expect(fmtCompact(999_950)).toBe("1M"); // would render "1000.0k" — rolled
     expect(fmtCompact(999_999)).toBe("1M"); // never "1000k"
+  });
+
+  it("fmtDurShort: s / m / h+m buckets, floors, clamps negatives", () => {
+    expect(fmtDurShort(0)).toBe("0s");
+    expect(fmtDurShort(45)).toBe("45s");
+    expect(fmtDurShort(59)).toBe("59s");
+    expect(fmtDurShort(60)).toBe("1m");
+    expect(fmtDurShort(720)).toBe("12m"); // avg/ETA column form
+    expect(fmtDurShort(3599)).toBe("59m");
+    expect(fmtDurShort(3600)).toBe("1h0m");
+    expect(fmtDurShort(7980)).toBe("2h13m");
+    expect(fmtDurShort(-5)).toBe("0s"); // negative clamps rather than going odd
+  });
+
+  it("fmtSpark: one glyph per value scaled to the series max (0 pins to ▁)", () => {
+    expect(fmtSpark([0, 0])).toBe("▁▁"); // all-zero → all floor, no divide-by-zero
+    expect(fmtSpark([1, 8])).toBe("▂█"); // scaled to max 8: full bar + a low bar
+    expect(fmtSpark([5])).toBe("█"); // a lone value is its own max → full bar
+    expect(fmtSpark([0, 4, 8]).length).toBe(3); // one glyph per value
+    for (const g of fmtSpark([3, 1, 9, 0, 7])) expect("▁▂▃▄▅▆▇█").toContain(g);
+  });
+
+  it("oldestQueuedAt: earliest eligible queuedAt, skipping deferred + nulls", () => {
+    expect(
+      oldestQueuedAt([
+        { queuedAt: "2026-07-07T09:50:00Z", deferred: false },
+        { queuedAt: "2026-07-07T09:23:00Z", deferred: false }, // earliest eligible
+        { queuedAt: "2026-07-07T08:00:00Z", deferred: true }, // older but deferred → skip
+        { queuedAt: null, deferred: false }, // null → skip
+      ]),
+    ).toBe("2026-07-07T09:23:00Z");
+    expect(oldestQueuedAt([])).toBeNull();
+    expect(oldestQueuedAt([{ queuedAt: null, deferred: false }])).toBeNull();
+    expect(oldestQueuedAt([{ queuedAt: "2026-07-07T09:00:00Z", deferred: true }])).toBeNull();
   });
 });
 
@@ -255,6 +293,89 @@ describe("QueueView", () => {
     ],
   };
 
+  // Full derived stats (ledger populated): every segment present.
+  const STATS_FULL: QueueStats = {
+    gate: null,
+    lastPollAt: "2026-07-07T10:04:58Z", // 2s before NOW
+    window24h: {
+      done: 14,
+      failed: 2,
+      successRate: 0.88,
+      avgDurationSeconds: 720, // 12m
+      tokensIn: 1_200_000,
+      tokensOut: 340_000,
+      costUsd: 4.2,
+    },
+    perDay7d: [
+      { done: 10, failed: 1 },
+      { done: 12, failed: 2 },
+      { done: 8, failed: 0 },
+      { done: 15, failed: 3 },
+      { done: 11, failed: 1 },
+      { done: 14, failed: 2 },
+      { done: 14, failed: 0 },
+    ], // Σ done 84, Σ failed 9
+    etaSeconds: 2160, // 36m
+    spend: { todayUsd: 4.2, dailyBudgetUsd: 10 },
+    guards: { nudges: 1, kills: 0, requeues: 3 },
+    outbox: { depth: 2, dead: 0 },
+    pendingRestartFields: ["max_concurrent"],
+  };
+
+  // Fresh-upgrade fallback (empty ledger): avg/ETA/7d/tokens/spend/guards null.
+  const STATS_FALLBACK: QueueStats = {
+    gate: null,
+    lastPollAt: null,
+    window24h: {
+      done: 3,
+      failed: 1,
+      successRate: 0.75,
+      avgDurationSeconds: null,
+      tokensIn: null,
+      tokensOut: null,
+      costUsd: null,
+    },
+    perDay7d: [],
+    etaSeconds: null,
+    spend: null,
+    guards: null,
+    outbox: { depth: 0, dead: 0 },
+    pendingRestartFields: [],
+  };
+
+  const mkStats = (over: Partial<QueueStats>): QueueStats => ({ ...STATS_FALLBACK, ...over });
+
+  const frameOf = (snap: QueueSnapshot): string =>
+    render(<QueueView snap={snap} scroll={0} now={NOW} height={40} focused={false} />).lastFrame()!;
+
+  const runRow = (
+    over: Partial<QueueSnapshot["running"][number]>,
+  ): QueueSnapshot["running"][number] => ({
+    id: "run-1",
+    github: null,
+    turns: 3,
+    lastTool: "bash",
+    outputTokens: 100,
+    startedAt: "2026-07-07T10:00:00Z",
+    updatedAt: null,
+    stale: false,
+    ...over,
+  });
+
+  const wRow = (
+    over: Partial<QueueSnapshot["waiting"][number]>,
+  ): QueueSnapshot["waiting"][number] => ({
+    id: "w",
+    github: null,
+    kind: "pr",
+    priority: "normal",
+    retryCount: 0,
+    notBefore: null,
+    deferred: false,
+    queuedAt: null,
+    ...over,
+  });
+
   it("renders all three sections with detail", () => {
     const frame = render(
       <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} />,
@@ -263,7 +384,8 @@ describe("QueueView", () => {
     expect(frame).toContain("#46 exec");
     expect(frame).toContain("gh-acme-api-46"); // dim id next to the label
     expect(frame).toContain("turn 14 · bash · 12.3k tok · 4m32s");
-    expect(frame).toContain("WAITING (4)");
+    // BUSY's 4th waiting row is deferred, so the header surfaces the count.
+    expect(frame).toContain("WAITING (4 · 1 deferred)");
     expect(frame).toContain("1. #51 plan");
     expect(frame).toContain("2. manual-tide-fix");
     expect(frame).toContain("retry 1");
@@ -450,5 +572,197 @@ describe("QueueView", () => {
       />,
     );
     expect(reported).toBe(0); // an idle queue fits — nothing to scroll
+  });
+
+  // ── Task 8: monitoring surface ──────────────────────────────────────────
+
+  it("gate ≠ ok renders a paused banner under the title (retry when until set)", () => {
+    const f = frameOf({
+      ...IDLE,
+      stats: mkStats({
+        gate: { state: "rate_limited", reason: "429 from provider", until: "2026-07-07T11:00:00Z" },
+      }),
+    });
+    expect(f).toContain("▸ paused — rate limited"); // underscores → spaces
+    expect(f).toMatch(/▸ paused — rate limited \(retry \d{2}:\d{2}\)/);
+  });
+
+  it("paused banner: no until falls back to ` — reason`", () => {
+    const f = frameOf({
+      ...IDLE,
+      stats: mkStats({ gate: { state: "auth_error", reason: "invalid key", until: null } }),
+    });
+    expect(f).toContain("▸ paused — auth error — invalid key");
+  });
+
+  it("gate ok/null renders no paused banner", () => {
+    expect(
+      frameOf({ ...IDLE, stats: mkStats({ gate: { state: "ok", reason: null, until: null } }) }),
+    ).not.toContain("paused");
+    expect(frameOf({ ...IDLE, stats: mkStats({ gate: null }) })).not.toContain("paused");
+  });
+
+  it("daemon up + lastPollAt → RUNNING header shows the poll heartbeat", () => {
+    const f = frameOf({
+      ...IDLE,
+      daemonUp: true,
+      stats: mkStats({ lastPollAt: "2026-07-07T10:04:58Z" }),
+    });
+    expect(f).toContain("· ↻ poll 2s ago");
+  });
+
+  it("daemon down → RUNNING header carries no heartbeat", () => {
+    const f = frameOf({
+      ...IDLE,
+      daemonUp: false,
+      stats: mkStats({ lastPollAt: "2026-07-07T10:04:58Z" }),
+    });
+    expect(f).not.toContain("↻ poll");
+    expect(f).toContain("RUNNING (0/1)");
+  });
+
+  it("running row idle past STALL_MS → a `no activity` line", () => {
+    const f = frameOf({ ...IDLE, running: [runRow({ updatedAt: "2026-07-07T09:59:00Z" })] });
+    expect(f).toContain("⚠ no activity 6m");
+  });
+
+  it("fresh running row → no stall line", () => {
+    const f = frameOf({ ...IDLE, running: [runRow({ updatedAt: "2026-07-07T10:04:00Z" })] });
+    expect(f).not.toContain("no activity");
+  });
+
+  it("stale (daemon-down) running row → no stall line even with an old updatedAt", () => {
+    const f = frameOf({
+      ...IDLE,
+      running: [runRow({ updatedAt: "2026-07-07T09:59:00Z", stale: true })],
+    });
+    expect(f).not.toContain("no activity");
+  });
+
+  it("WAITING header surfaces deferred count + oldest-eligible age", () => {
+    const f = frameOf({
+      ...IDLE,
+      waiting: [
+        wRow({ id: "w1", queuedAt: "2026-07-07T09:23:00Z" }), // 42m — earliest eligible
+        wRow({ id: "w2", queuedAt: "2026-07-07T09:50:00Z" }),
+        wRow({
+          id: "w3",
+          queuedAt: "2026-07-07T08:00:00Z", // older, but deferred → excluded from oldest
+          deferred: true,
+          notBefore: "2026-07-07T11:00:00Z",
+        }),
+      ],
+    });
+    expect(f).toContain("WAITING (3 · 1 deferred · oldest 42m)");
+  });
+
+  it("WAITING header stays plain with no deferred + no queuedAt", () => {
+    const f = frameOf({
+      ...IDLE,
+      waiting: [wRow({ id: "a" }), wRow({ id: "b" }), wRow({ id: "c" })],
+    });
+    expect(f).toContain("WAITING (3)");
+    expect(f).not.toContain("deferred");
+    expect(f).not.toContain("oldest");
+  });
+
+  it("waiting row with queuedAt → trailing dim `queued` age (· after a note)", () => {
+    const f = frameOf({
+      ...IDLE,
+      waiting: [wRow({ id: "w-hi", priority: "high", queuedAt: "2026-07-07T09:23:00Z" })],
+    });
+    expect(f).toContain("· queued 42m");
+  });
+
+  it("recent row with result meta → status + duration + `·` age", () => {
+    const f = frameOf({
+      ...IDLE,
+      recent: [
+        {
+          id: "gh-acme-api-45",
+          github: { nwo: "acme/api", issue: 45, kind: "pr", external: false },
+          status: "done",
+          finishedAt: "2026-07-07T08:05:00Z", // 2h ago
+          resultStatus: "completed",
+          durationSeconds: 660, // 11m
+          prUrl: null,
+        },
+      ],
+    });
+    expect(f).toContain("✓ #45 exec completed 11m · 2h ago");
+  });
+
+  it("recent row without result meta → today's exact rendering (no status, no `·`)", () => {
+    const f = frameOf({
+      ...IDLE,
+      recent: [
+        {
+          id: "gh-acme-api-45",
+          github: { nwo: "acme/api", issue: 45, kind: "pr", external: false },
+          status: "done",
+          finishedAt: "2026-07-07T09:53:00Z", // 12m ago
+          resultStatus: null,
+          durationSeconds: null,
+          prUrl: null,
+        },
+      ],
+    });
+    const line = f.split("\n").find((l) => l.includes("#45"))!;
+    expect(line).toContain("✓ #45 exec 12m ago");
+    expect(line).not.toContain("·");
+  });
+
+  it("STATS section renders all four content lines + restart notice", () => {
+    const f = frameOf({ ...IDLE, stats: STATS_FULL });
+    expect(f).toContain("STATS");
+    expect(f).toContain("24h 14✓ 2✗ (88%) · avg 12m · ETA ~36m");
+    const sevenD = f.split("\n").find((l) => l.includes("7d 84✓ 9✗"));
+    expect(sevenD).toBeDefined();
+    // The spark run trailing the counts — one glyph per day, all from the ramp.
+    const spark = sevenD!.match(/7d 84✓ 9✗ ([▁▂▃▄▅▆▇█]+)/);
+    expect(spark).not.toBeNull();
+    expect(spark![1].length).toBe(7);
+    expect(f).toContain("spend $4.20/$10.00 · tok 1.2M in 340k out");
+    expect(f).toContain("guards 1 nudges · 3 requeues · outbox 2 queued");
+    expect(f).toContain("⚠ restart to apply: max_concurrent");
+  });
+
+  it("STATS section omits null-derived segments (fallback stats)", () => {
+    const f = frameOf({ ...IDLE, stats: STATS_FALLBACK });
+    expect(f).toContain("STATS");
+    expect(f).toContain("24h 3✓ 1✗ (75%)"); // counts + rate survive
+    expect(f).not.toContain("avg "); // avgDurationSeconds null
+    expect(f).not.toContain("ETA"); // etaSeconds null
+    expect(f).not.toContain("7d "); // perDay7d empty → line absent
+    expect(f).not.toContain("tok"); // spend+tok line omitted entirely
+    expect(f).not.toContain("spend");
+    expect(f).not.toContain("guards"); // guards null + outbox empty → line absent
+  });
+
+  it("stats: null → no STATS section at all", () => {
+    expect(frameOf(FULL)).not.toContain("STATS"); // FULL.stats is null
+  });
+
+  it("selectable index is stable when STATS renders — cursor stays on the same RECENT ticket", () => {
+    const props = {
+      scroll: 0,
+      now: NOW,
+      height: 40,
+      focused: false,
+      selectable: true,
+      selectedRow: 4, // waiting.length (4) + 0 → first RECENT row (#44)
+      onRowPress: (): void => {},
+    };
+    const noStats = render(<QueueView snap={FULL} {...props} />).lastFrame()!;
+    const withStats = render(
+      <QueueView snap={{ ...FULL, stats: STATS_FULL }} {...props} />,
+    ).lastFrame()!;
+    // Without stats: cursor sits on #44, no STATS section.
+    expect(noStats.split("\n").find((l) => l.includes("#44 exec"))!).toContain("▌");
+    expect(noStats).not.toContain("STATS");
+    // With full stats: STATS renders, yet the appended (non-pressable) rows
+    // never shift the selectable index — the cursor is still on #44.
+    expect(withStats).toContain("STATS");
+    expect(withStats.split("\n").find((l) => l.includes("#44 exec"))!).toContain("▌");
   });
 });
