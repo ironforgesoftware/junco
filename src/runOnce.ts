@@ -1,6 +1,6 @@
 import { readFileSync, statSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import type { Config, RunResult, Ticket } from "./types.js";
+import type { Config, RunResult, Ticket, Usage } from "./types.js";
 import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
@@ -10,6 +10,7 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
+import { appendTaskRecord, type TaskRecord } from "./taskHistory.js";
 import { fulfillIssueRequest } from "./githubIssueRequest.js";
 // NOTE: assessFlow.ts imports READ_ONLY_TOOLS from this module, so this
 // import creates a module cycle. Runtime-safe: both bindings are only
@@ -71,6 +72,9 @@ export interface RunDeps {
   // Analyze-flow factory (peer of assessFlowFn): tests inject a fake;
   // production defaults to the real runAnalyzeFlow.
   analyzeFlowFn?: typeof runAnalyzeFlow;
+  // PR-flow factory (peer of assessFlowFn/analyzeFlowFn): tests inject a
+  // fake; production defaults to the real runPrFlow.
+  prFlowFn?: typeof runPrFlow;
   // Issue-linkage fulfillment (github_request frontmatter): tests inject a
   // fake; production defaults to the real fulfillIssueRequest.
   fulfillIssueRequestFn?: typeof fulfillIssueRequest;
@@ -94,6 +98,10 @@ export interface RunDeps {
    * critic, and corrective sessions each record their own). Optional: absent
    * (CLI one-shot, tests) is a no-op everywhere `recordUsd` would be called. */
   spend?: Pick<SpendLedger, "recordUsd">;
+  /** Task-history ledger seam (tests capture records; default real append). */
+  appendTaskRecordFn?: typeof appendTaskRecord;
+  /** Clock seam for the history record's `at` timestamp (tests pin a value). */
+  nowFn?: () => Date;
 }
 
 /** One claimed unit of work, ready to execute. */
@@ -212,6 +220,16 @@ function resolveQaCwd(t: Ticket, cfg: Config, fallback: string): string {
   return wd;
 }
 
+/** Execution kind for the history record — branch order mirrors this
+ * function's own dispatch (analyze → assess → pr → Q&A) and queueSnapshot's
+ * kind derivation. */
+function kindOf(next: Ticket): TaskRecord["kind"] {
+  if (next.analyze) return "analyze";
+  if (next.assess) return "assess";
+  if (next.github?.kind === "plan") return "plan";
+  return next.hasRepo ? "pr" : "ask";
+}
+
 /** Execute one claimed ticket to its terminal state (or a requeue). */
 export async function executeClaimed(
   cfg: Config,
@@ -228,6 +246,29 @@ export async function executeClaimed(
     metrics.taskStarted(next.id);
     const startedAt = Date.now();
     const reporter = deps.reporter ?? NOOP_REPORTER;
+    // Task-history record for this finalize point. Requeues never call this
+    // (mirrors metrics.recordTask, which also never fires on a requeue path).
+    const recordHistory = (
+      status: string,
+      usage: Usage | undefined,
+      durationMs: number | undefined,
+      prUrl?: string | null,
+    ): void => {
+      (deps.appendTaskRecordFn ?? appendTaskRecord)(cfg, {
+        v: 1,
+        at: (deps.nowFn?.() ?? new Date()).toISOString(),
+        id: next.id,
+        kind: kindOf(next),
+        status,
+        durationSeconds: Math.round((durationMs ?? 0) / 1000),
+        tokensIn: usage?.input ?? 0,
+        tokensOut: usage?.output ?? 0,
+        costUsd: usage?.costUsd ?? 0,
+        ...(next.github ? { nwo: next.github.nwo, issue: next.github.issue } : {}),
+        ...(prUrl != null && prUrl !== "" ? { prUrl } : {}),
+        retryCount: next.retryCount,
+      });
+    };
     try {
       log.info("claimed", { src: next.path, dst: claimed });
       await reporter.onStart(next).catch(() => undefined);
@@ -257,6 +298,7 @@ export async function executeClaimed(
             () => undefined,
           );
         log.info("finalized (analyze)", { dst: flow.dst, status: flow.status });
+        if (!flow.requeued) recordHistory(flow.status, flow.result.usage, flow.result.durationMs);
         return;
       }
 
@@ -279,6 +321,7 @@ export async function executeClaimed(
             .onFinal(next, outcomeFromQa(flow.status, flow.result))
             .catch(() => undefined);
         log.info("finalized (assess)", { dst: flow.dst, status: flow.status });
+        if (!flow.requeued) recordHistory(flow.status, flow.result.usage, flow.result.durationMs);
         return;
       }
 
@@ -306,7 +349,7 @@ export async function executeClaimed(
               await reporter.onStart(next).catch(() => undefined);
             }
           }
-          const flow = await runPrFlow(cfg, next, claimed, ctx, {
+          const flow = await (deps.prFlowFn ?? runPrFlow)(cfg, next, claimed, ctx, {
             sessionFactoryFor: deps.sessionFactoryFor,
             criticSessionFactory: deps.criticSessionFactory,
             abortSignal: deps.abortSignal,
@@ -318,6 +361,7 @@ export async function executeClaimed(
           if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
           log.info("finalized (pr-flow)", { dst: flow.dst, status: flow.status });
+          if (!flow.requeued) recordHistory(flow.status, flow.usage, flow.durationMs, flow.prUrl);
           return;
         }
         // ctx === null means no usable `repo:` — fall through to the Q&A path.
@@ -419,6 +463,7 @@ export async function executeClaimed(
       const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
       await reporter.onFinal(next, outcomeFromQa(fin.status, result)).catch(() => undefined);
       log.info("finalized", { dst: fin.dst, status: fin.status });
+      recordHistory(fin.status, result.usage, result.durationMs);
     } catch (e) {
       // Top-level containment: real throw paths exist (a rejecting session
       // factory — runAgent awaits it outside its try/catch; runPrFlow
@@ -500,6 +545,7 @@ export async function executeClaimed(
         const fin = finalize(claimed, crashResult, { done: paths.done, failed: paths.failed });
         await reporter.onFinal(next, outcomeFromQa(fin.status, crashResult)).catch(() => undefined);
         log.info("finalized (crash containment)", { dst: fin.dst, status: fin.status });
+        recordHistory(fin.status, crashResult.usage, crashResult.durationMs);
       } catch (finErr) {
         // Both dispositions failed (e.g. the claimed file vanished). Never
         // rethrow — leave whatever remains in processing/ for the startup
