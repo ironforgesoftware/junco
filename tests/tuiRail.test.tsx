@@ -59,6 +59,7 @@ const QUEUE: QueueSnapshot = {
       startedAt: null,
       updatedAt: null,
       stale: false,
+      repoPath: null,
     },
   ],
   waiting: [
@@ -71,6 +72,7 @@ const QUEUE: QueueSnapshot = {
       notBefore: null,
       deferred: false,
       queuedAt: null,
+      repoPath: null,
     },
     {
       id: "w2",
@@ -81,6 +83,7 @@ const QUEUE: QueueSnapshot = {
       notBefore: null,
       deferred: false,
       queuedAt: null,
+      repoPath: null,
     },
   ],
   recent: [],
@@ -162,6 +165,7 @@ describe("Rail", () => {
           startedAt: null,
           updatedAt: null,
           stale: false,
+          repoPath: null,
         },
         {
           id: "gh-a-b-47",
@@ -172,6 +176,7 @@ describe("Rail", () => {
           startedAt: null,
           updatedAt: null,
           stale: false,
+          repoPath: null,
         },
       ],
     };
@@ -416,6 +421,7 @@ describe("Rail queue card — stats parity (#T9)", () => {
           notBefore: null,
           deferred: false,
           queuedAt: "2026-07-16T11:18:00.000Z", // 42m before NOW
+          repoPath: null,
         },
         {
           id: "w2",
@@ -426,6 +432,7 @@ describe("Rail queue card — stats parity (#T9)", () => {
           notBefore: null,
           deferred: false,
           queuedAt: "2026-07-16T11:50:00.000Z",
+          repoPath: null,
         },
         {
           id: "w3",
@@ -436,6 +443,7 @@ describe("Rail queue card — stats parity (#T9)", () => {
           notBefore: null,
           deferred: false,
           queuedAt: null,
+          repoPath: null,
         },
       ],
     };

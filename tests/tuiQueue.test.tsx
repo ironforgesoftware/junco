@@ -44,6 +44,7 @@ const BUSY: QueueSnapshot = {
       startedAt: "2026-07-07T10:00:28Z",
       updatedAt: null,
       stale: false,
+      repoPath: null,
     },
   ],
   waiting: [
@@ -56,6 +57,7 @@ const BUSY: QueueSnapshot = {
       notBefore: null,
       deferred: false,
       queuedAt: null,
+      repoPath: null,
     },
     {
       id: "manual-tide-fix",
@@ -66,6 +68,7 @@ const BUSY: QueueSnapshot = {
       notBefore: null,
       deferred: false,
       queuedAt: null,
+      repoPath: null,
     },
     {
       id: "gh-acme-api-52-plan",
@@ -76,6 +79,7 @@ const BUSY: QueueSnapshot = {
       notBefore: "2026-07-07T11:00:00Z",
       deferred: true,
       queuedAt: null,
+      repoPath: null,
     },
     {
       id: "gh-acme-api-53-plan",
@@ -86,6 +90,7 @@ const BUSY: QueueSnapshot = {
       notBefore: null,
       deferred: false,
       queuedAt: null,
+      repoPath: null,
     },
   ],
 };
@@ -280,6 +285,7 @@ describe("QueueView", () => {
         resultStatus: null,
         durationSeconds: null,
         prUrl: null,
+        repoPath: null,
       },
       {
         id: "gh-acme-api-40",
@@ -289,6 +295,7 @@ describe("QueueView", () => {
         resultStatus: null,
         durationSeconds: null,
         prUrl: null,
+        repoPath: null,
       },
     ],
   };
@@ -359,6 +366,7 @@ describe("QueueView", () => {
     startedAt: "2026-07-07T10:00:00Z",
     updatedAt: null,
     stale: false,
+    repoPath: null,
     ...over,
   });
 
@@ -373,6 +381,7 @@ describe("QueueView", () => {
     notBefore: null,
     deferred: false,
     queuedAt: null,
+    repoPath: null,
     ...over,
   });
 
@@ -512,6 +521,7 @@ describe("QueueView", () => {
         notBefore: null,
         deferred: false,
         queuedAt: null,
+        repoPath: null,
       })),
     };
     const frame = render(
@@ -545,6 +555,7 @@ describe("QueueView", () => {
         notBefore: null,
         deferred: false,
         queuedAt: null,
+        repoPath: null,
       })),
     };
     const f = render(
@@ -686,6 +697,7 @@ describe("QueueView", () => {
           resultStatus: "completed",
           durationSeconds: 660, // 11m
           prUrl: null,
+          repoPath: null,
         },
       ],
     });
@@ -704,6 +716,7 @@ describe("QueueView", () => {
           resultStatus: null,
           durationSeconds: null,
           prUrl: null,
+          repoPath: null,
         },
       ],
     });

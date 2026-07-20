@@ -63,6 +63,7 @@ const QUEUE_SNAP: QueueSnapshot = {
       startedAt: "2026-07-07T10:00:00Z",
       updatedAt: null,
       stale: false,
+      repoPath: null,
     },
   ],
   waiting: [
@@ -75,6 +76,7 @@ const QUEUE_SNAP: QueueSnapshot = {
       notBefore: null,
       deferred: false,
       queuedAt: null,
+      repoPath: null,
     },
   ],
   recent: [],
@@ -2300,6 +2302,7 @@ describe("queue rail + queue view", () => {
         notBefore: null,
         deferred: false,
         queuedAt: null,
+        repoPath: null,
       })),
     };
     const r = renderApp(client, join(dir, "wl.json"), 999999, undefined, async () => tall);

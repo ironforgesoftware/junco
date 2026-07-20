@@ -30,6 +30,9 @@ export interface QueueRunning {
   updatedAt: string | null;
   /** true when sourced from processing/ because /health was unreachable. */
   stale: boolean;
+  /** Ticket's `repo:` target path (frontmatter, raw); null on Q&A tickets and
+   * unparsable rows. Lets the dashboard scope queue activity to a repo. */
+  repoPath: string | null;
 }
 
 export interface QueueWaiting {
@@ -44,6 +47,8 @@ export interface QueueWaiting {
   /** ISO of the inbox file's mtime (when it landed in the queue); null when the
    * stat failed (vanished between discover and stat). */
   queuedAt: string | null;
+  /** Ticket's `repo:` target path (frontmatter, raw); null on Q&A tickets. */
+  repoPath: string | null;
 }
 
 export interface QueueRecent {
@@ -56,6 +61,8 @@ export interface QueueRecent {
   resultStatus: string | null;
   durationSeconds: number | null;
   prUrl: string | null;
+  /** Ticket's `repo:` target path (frontmatter, raw); null when unparsable. */
+  repoPath: string | null;
 }
 
 export interface QueueSnapshot {
@@ -143,6 +150,13 @@ export function makeQueueSnapshotFn(
 
   const displayId = (t: Ticket): string => stripStamp(t.id);
 
+  /** Raw frontmatter `repo:` — parseTicket keeps only hasRepo, so the path is
+   * read back off the retained frontmatter record. */
+  const ticketRepoPath = (t: Ticket | null | undefined): string | null => {
+    const r = t?.frontmatter["repo"];
+    return typeof r === "string" && r !== "" ? r : null;
+  };
+
   return async (): Promise<QueueSnapshot> => {
     const base: QueueSnapshot = {
       daemonUp: false,
@@ -194,6 +208,7 @@ export function makeQueueSnapshotFn(
             notBefore: deferred ? t.notBefore : null,
             deferred,
             queuedAt,
+            repoPath: ticketRepoPath(t),
           };
         });
 
@@ -219,6 +234,7 @@ export function makeQueueSnapshotFn(
             startedAt: p?.startedAt ?? null,
             updatedAt: p?.updatedAt ?? null,
             stale: false,
+            repoPath: ticketRepoPath(procById.get(id)),
           };
         });
       // healthOverride present → use its already-fetched body (makeLocalCheapFn
@@ -247,6 +263,7 @@ export function makeQueueSnapshotFn(
             startedAt: null,
             updatedAt: null,
             stale: true,
+            repoPath: ticketRepoPath(e.ticket),
           }),
         );
       }
@@ -296,6 +313,7 @@ export function makeQueueSnapshotFn(
             resultStatus: meta.status,
             durationSeconds: meta.durationSeconds,
             prUrl: meta.prUrl,
+            repoPath: ticketRepoPath(t),
           };
         });
 

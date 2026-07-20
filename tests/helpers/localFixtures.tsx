@@ -42,6 +42,7 @@ export const CHEAP: LocalCheap = {
         startedAt: "2026-07-07T10:00:00Z",
         updatedAt: null,
         stale: false,
+        repoPath: null,
       },
     ],
     waiting: [
@@ -54,6 +55,7 @@ export const CHEAP: LocalCheap = {
         notBefore: null,
         deferred: false,
         queuedAt: null,
+        repoPath: null,
       },
     ],
     recent: [
@@ -65,6 +67,7 @@ export const CHEAP: LocalCheap = {
         resultStatus: null,
         durationSeconds: null,
         prUrl: null,
+        repoPath: null,
       },
     ],
   },

@@ -222,6 +222,7 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
             resultStatus: null,
             durationSeconds: null,
             prUrl: null,
+            repoPath: null,
           },
           {
             id: "gh-acme-api-8",
@@ -231,6 +232,7 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
             resultStatus: null,
             durationSeconds: null,
             prUrl: null,
+            repoPath: null,
           },
         ],
       },
