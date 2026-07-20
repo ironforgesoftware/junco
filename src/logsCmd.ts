@@ -5,10 +5,11 @@
  * (size shrink → reset to the file start).
  */
 
-import { existsSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { formatHumanLine } from "./logging.js";
+import { readTail, makeLogTailer } from "./logReader.js";
 
 export interface LogsOpts {
   follow?: boolean;
@@ -47,39 +48,15 @@ export async function runLogsCommand(
     return 1;
   }
 
-  const tail = readFileSync(path, "utf8").split("\n").filter(Boolean);
-  for (const l of tail.slice(-(opts.lines ?? 100))) print(render(l, json));
+  const tail = readTail(path, opts.lines ?? 100);
+  for (const e of tail) print(render(e.raw, json));
   if (!opts.follow) return 0;
 
-  let pos = statSync(path).size;
-  let carry = "";
+  const tailer = makeLogTailer(path);
   const pollMs = deps.pollMs ?? 500;
   return await new Promise<number>((resolveDone) => {
     const timer = setInterval(() => {
-      let size: number;
-      try {
-        size = statSync(path).size;
-      } catch {
-        return; // rotated away mid-poll; next tick re-stats
-      }
-      if (size < pos) {
-        pos = 0; // rotation: start over from the new file's head
-        carry = "";
-      }
-      if (size > pos) {
-        const fd = openSync(path, "r");
-        try {
-          const buf = Buffer.alloc(size - pos);
-          readSync(fd, buf, 0, buf.length, pos);
-          pos = size;
-          const chunk = carry + buf.toString("utf8");
-          const parts = chunk.split("\n");
-          carry = parts.pop() ?? "";
-          for (const l of parts.filter(Boolean)) print(render(l, json));
-        } finally {
-          closeSync(fd);
-        }
-      }
+      for (const e of tailer.poll()) print(render(e.raw, json));
     }, pollMs);
     const stop = (): void => {
       clearInterval(timer);
