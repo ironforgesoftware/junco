@@ -351,13 +351,19 @@ export function QueueView({
     }
 
     // Guards + outbox: zero segments drop; the whole line drops when every one
-    // is empty (fresh daemon, drained outbox).
-    const seg4: string[] = [];
+    // is empty (fresh daemon, drained outbox). The `guards ` label only prefixes
+    // the line when a guard segment actually rendered — an outbox-only line
+    // (guards null/all-zero) reads bare, e.g. `outbox 2 queued`.
+    const guardSegs: string[] = [];
     if (st.guards !== null) {
-      if (st.guards.nudges > 0) seg4.push(`${st.guards.nudges} nudges`);
-      if (st.guards.kills > 0) seg4.push(`${st.guards.kills} kills`);
-      if (st.guards.requeues > 0) seg4.push(`${st.guards.requeues} requeues`);
+      const n = st.guards.nudges;
+      const k = st.guards.kills;
+      const r = st.guards.requeues;
+      if (n > 0) guardSegs.push(`${n} nudge${n === 1 ? "" : "s"}`);
+      if (k > 0) guardSegs.push(`${k} kill${k === 1 ? "" : "s"}`);
+      if (r > 0) guardSegs.push(`${r} requeue${r === 1 ? "" : "s"}`);
     }
+    const seg4: string[] = guardSegs.length > 0 ? [`guards ${guardSegs.join(" · ")}`] : [];
     if (st.outbox.depth + st.outbox.dead > 0) {
       seg4.push(
         `outbox ${st.outbox.depth} queued${st.outbox.dead > 0 ? ` ${st.outbox.dead} dead` : ""}`,
@@ -366,7 +372,7 @@ export function QueueView({
     if (seg4.length > 0) {
       rows.push(
         <Text key="stats-g" wrap="truncate-end">
-          {`  guards ${seg4.join(" · ")}`}
+          {`  ${seg4.join(" · ")}`}
         </Text>,
       );
     }

@@ -723,7 +723,7 @@ describe("QueueView", () => {
     expect(spark).not.toBeNull();
     expect(spark![1].length).toBe(7);
     expect(f).toContain("spend $4.20/$10.00 · tok 1.2M in 340k out");
-    expect(f).toContain("guards 1 nudges · 3 requeues · outbox 2 queued");
+    expect(f).toContain("guards 1 nudge · 3 requeues · outbox 2 queued");
     expect(f).toContain("⚠ restart to apply: max_concurrent");
   });
 
@@ -737,6 +737,40 @@ describe("QueueView", () => {
     expect(f).not.toContain("tok"); // spend+tok line omitted entirely
     expect(f).not.toContain("spend");
     expect(f).not.toContain("guards"); // guards null + outbox empty → line absent
+  });
+
+  it("guards+outbox line: outbox-only (guards null) renders with no `guards ` label prefix", () => {
+    const f = frameOf({
+      ...IDLE,
+      stats: mkStats({ guards: null, outbox: { depth: 2, dead: 0 } }),
+    });
+    const line = f.split("\n").find((l) => l.includes("outbox"))!;
+    expect(line).toContain("outbox 2 queued");
+    expect(line).not.toContain("guards");
+  });
+
+  it("guards+outbox line: all-zero guards (present but 0/0/0) also drops the `guards ` label", () => {
+    const f = frameOf({
+      ...IDLE,
+      stats: mkStats({
+        guards: { nudges: 0, kills: 0, requeues: 0 },
+        outbox: { depth: 2, dead: 0 },
+      }),
+    });
+    const line = f.split("\n").find((l) => l.includes("outbox"))!;
+    expect(line).toContain("outbox 2 queued");
+    expect(line).not.toContain("guards");
+  });
+
+  it("guards+outbox line: singular at 1, plural otherwise, for nudges/kills/requeues", () => {
+    const f = frameOf({
+      ...IDLE,
+      stats: mkStats({
+        guards: { nudges: 1, kills: 1, requeues: 2 },
+        outbox: { depth: 0, dead: 0 },
+      }),
+    });
+    expect(f).toContain("guards 1 nudge · 1 kill · 2 requeues");
   });
 
   it("stats: null → no STATS section at all", () => {

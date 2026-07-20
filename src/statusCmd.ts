@@ -168,6 +168,9 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
       failedN = mdMtimes(paths.failed, statFn).filter((t) => t >= since24Ms).length;
       avgSeconds = null;
     }
+    // Deliberately includes deferred tickets — this is a stat-only mtime scan
+    // of every .md in inbox/, no frontmatter parse — unlike the TUI's
+    // eligible-only oldestQueuedAt (queueFmt.ts), which skips deferred rows.
     const inboxMtimes = mdMtimes(paths.inbox, statFn);
     const oldestWaitSeconds =
       inboxMtimes.length > 0 ? (now.getTime() - Math.min(...inboxMtimes)) / 1000 : null;

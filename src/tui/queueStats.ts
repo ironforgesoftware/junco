@@ -127,7 +127,6 @@ export function buildQueueStats(
       costUsd: null,
     };
   }
-  if (window24h.done + window24h.failed === 0) window24h.successRate = null;
 
   let perDay7d: QueueStats["perDay7d"] = [];
   if (recs7d.length > 0) {
