@@ -10,12 +10,25 @@ afterEach(cleanup);
 /** A scroll surface in miniature: `total` rows in a `height`-row viewport,
  * reporting its own max during render exactly as the real components do. `]`
  * and `[` are the App's own scroll recipe. */
-function Probe({ k, total, height }: { k: string; total: number; height: number }) {
-  const { scroll, scrollBy, onScrollMax } = useScroll(k);
-  onScrollMax(Math.max(0, total - height));
+function Probe({
+  k,
+  total,
+  height,
+  report = true,
+}: {
+  k: string;
+  total: number;
+  height: number;
+  /** When false the surface never reports its max — proves `toEnd()` reads the
+   * (unreported) `maxRef`, which is 0 until a render reports it. */
+  report?: boolean;
+}) {
+  const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(k);
+  if (report) onScrollMax(Math.max(0, total - height));
   useInput((input) => {
     if (input === "]") scrollBy(1);
     if (input === "[") scrollBy(-1);
+    if (input === "e") toEnd();
   });
   return <Text>scroll={scroll}</Text>;
 }
@@ -61,6 +74,37 @@ describe("useScroll", () => {
     r.rerender(<Probe k="a" total={8} height={4} />);
     await new Promise((res) => setTimeout(res, 40));
     expect(r.lastFrame()).toContain("scroll=1");
+  });
+
+  it("toEnd() jumps to the last-reported max", async () => {
+    const r = render(<Probe k="a" total={8} height={4} />); // max = 8 - 4 = 4
+    await until(() => (r.lastFrame() ?? "").includes("scroll=0"));
+    r.stdin.write("e");
+    await until(() => (r.lastFrame() ?? "").includes("scroll=4"));
+    expect(r.lastFrame()).toContain("scroll=4");
+  });
+
+  it("toEnd() renormalizes to a shorter surface's max after a key change", async () => {
+    const r = render(<Probe k="a" total={8} height={4} />); // max 4
+    r.stdin.write("e");
+    await until(() => (r.lastFrame() ?? "").includes("scroll=4"));
+    // New content (key change) resets the offset AND maxRef; the shorter
+    // surface reports max=2, so toEnd must land at 2, never the stale 4.
+    r.rerender(<Probe k="b" total={6} height={4} />); // max 2
+    await until(() => (r.lastFrame() ?? "").includes("scroll=0"));
+    r.stdin.write("e");
+    await until(() => (r.lastFrame() ?? "").includes("scroll=2"));
+    expect(r.lastFrame()).toContain("scroll=2");
+  });
+
+  it("toEnd() is a no-op at 0 until the surface reports a max", async () => {
+    // The surface never reports (report=false), so maxRef stays 0: toEnd lands
+    // at 0 rather than jumping anywhere.
+    const r = render(<Probe k="a" total={8} height={4} report={false} />);
+    await until(() => (r.lastFrame() ?? "").includes("scroll=0"));
+    r.stdin.write("e");
+    await new Promise((res) => setTimeout(res, 40));
+    expect(r.lastFrame()).toContain("scroll=0");
   });
 
   it("a surface that shrinks under the offset self-heals on the next press", async () => {

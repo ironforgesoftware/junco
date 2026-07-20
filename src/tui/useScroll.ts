@@ -10,6 +10,10 @@ export interface ScrollHandle {
   /** Called by the mounted surface DURING its render with its own
    * `maxScroll(total, height)`. Writes a ref, never state, so it cannot loop. */
   onScrollMax: (max: number) => void;
+  /** Jump to the bottom — the last reported max. Used by the log overlay to
+   * land at the tail BEFORE pausing follow, so the paused window doesn't snap
+   * to the top; 0 after a key change until the new surface re-reports its max. */
+  toEnd: () => void;
 }
 
 /** The TUI's one scroll mechanic, for every offset-driven surface.
@@ -47,5 +51,7 @@ export function useScroll(key: string): ScrollHandle {
     maxRef.current = max;
   }, []);
 
-  return { scroll: current, scrollBy, onScrollMax };
+  const toEnd = useCallback(() => setScroll(maxRef.current), []);
+
+  return { scroll: current, scrollBy, onScrollMax, toEnd };
 }

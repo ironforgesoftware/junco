@@ -26,6 +26,8 @@ import type { UiMode } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
 import { Header, hintsFor, localHintsFor, type HintView } from "./components/Chrome.js";
 import LocalDashboard from "./components/LocalDashboard.js";
+import { LogView } from "./components/LogView.js";
+import { cycleLevel, distinctTickets, type LogFilters } from "./logFilter.js";
 import type { LocalCheap, LocalHeavy, LocalSection, LocalRepo } from "./localSnapshot.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
 import type { AssessHistory } from "../assessHistory.js";
@@ -337,6 +339,17 @@ export function App(props: AppProps): React.JSX.Element {
   // the compact section's expand handler); Task 7 renders the overlay + its
   // keys. Keeping the poll active while it's open lives in `logActive` below.
   const [logOverlay, setLogOverlay] = useState(false);
+  // Overlay filter/follow state, live only while the overlay is open. `follow`
+  // pins the tail (● following); a scrollback key pauses it (⏸ paused). The
+  // filters cycle via keys and render as display-only chips. `searchMode` routes
+  // printable keys into the search term instead of the overlay's key recipes.
+  const [logFollow, setLogFollow] = useState(true);
+  const [logFilters, setLogFilters] = useState<LogFilters>({
+    minLevel: "info",
+    ticket: null,
+    search: "",
+  });
+  const [logSearchMode, setLogSearchMode] = useState(false);
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const [updateLatest, setUpdateLatest] = useState<string | null>(null);
@@ -351,14 +364,17 @@ export function App(props: AppProps): React.JSX.Element {
   // LOCAL mode's own scroll state, folded into this same instance) that used to
   // stand in for a lifecycle.
   const scrollKey = useMemo(() => {
+    // The overlay is its own scroll surface (mounted over the section), so it
+    // gets its own key — a change resets the offset when it opens/closes.
+    if (uiMode === "local" && logOverlay) return "logOverlay";
     if (uiMode === "local") return `local:${localSection}`;
     if (view === "review" && reviewState.open?.kind === "draft")
       return `draft:${reviewState.open.draftIdx}`;
     if (view === "cmdOutput" && cmd) return `cmd:${cmd.token}`;
     if (view === "detail" && detail) return `detail:${detail.nwo}#${detail.issue.number}`;
     return view;
-  }, [uiMode, localSection, view, reviewState.open, cmd, detail]);
-  const { scroll, scrollBy, onScrollMax } = useScroll(scrollKey);
+  }, [uiMode, logOverlay, localSection, view, reviewState.open, cmd, detail]);
+  const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(scrollKey);
 
   // LOCAL logs tail — the hook reads disk ONLY while the logs surface is on
   // screen (the section is selected, or the overlay is open). `props.logReaderDeps`
@@ -1514,6 +1530,85 @@ export function App(props: AppProps): React.JSX.Element {
       }
       return;
     }
+    // The full-screen log overlay owns ALL input while open — placed above the
+    // rail/body split so its filter/follow/scroll keys never leak to the
+    // section underneath (and `t` can never reach the github `t` queue view,
+    // which LOCAL mode's layer-4 dispatch already fences off).
+    if (logOverlay) {
+      if (logSearchMode) {
+        // Live search entry: printable chars extend the term; Enter commits it
+        // (keeps the term, exits entry); Esc discards the term AND exits.
+        if (key.escape) {
+          setLogFilters((f) => ({ ...f, search: "" }));
+          setLogSearchMode(false);
+          return;
+        }
+        if (key.return) {
+          setLogSearchMode(false);
+          return;
+        }
+        if (key.backspace || key.delete) {
+          setLogFilters((f) => ({ ...f, search: f.search.slice(0, -1) }));
+          return;
+        }
+        if (input && !key.ctrl && !key.meta) {
+          setLogFilters((f) => ({ ...f, search: f.search + input }));
+          return;
+        }
+        return;
+      }
+      if (key.escape || input === "q") {
+        setLogOverlay(false);
+        setLogSearchMode(false);
+        return;
+      }
+      if (input === "f") {
+        // Pause must land at the tail first (toEnd) so the paused window shows
+        // the newest lines, not a jump to the top.
+        if (logFollow) {
+          setLogFollow(false);
+          toEnd();
+        } else {
+          setLogFollow(true);
+        }
+        return;
+      }
+      if (input === "l") {
+        setLogFilters((f) => ({ ...f, minLevel: cycleLevel(f.minLevel) }));
+        return;
+      }
+      if (input === "t") {
+        // Cycle null (all) → each ticket present in the buffer → back to null.
+        const opts: (string | null)[] = [null, ...distinctTickets(logEntries)];
+        const idx = opts.indexOf(logFilters.ticket);
+        const next = opts[(idx + 1) % opts.length];
+        setLogFilters((f) => ({ ...f, ticket: next }));
+        return;
+      }
+      if (input === "/") {
+        setLogSearchMode(true);
+        return;
+      }
+      if (input === "G" || key.end) {
+        setLogFollow(true);
+        return;
+      }
+      if (input === "[" || key.upArrow) {
+        // Scrolling up pauses follow, landing at the tail first so the step-up
+        // is relative to the bottom rather than a stale offset.
+        if (logFollow) {
+          setLogFollow(false);
+          toEnd();
+        }
+        scrollBy(-1);
+        return;
+      }
+      if (input === "]" || key.downArrow) {
+        scrollBy(1);
+        return;
+      }
+      return;
+    }
     if (localFocus === "body") {
       if (key.escape || input === "h" || key.leftArrow) {
         setLocalFocus("rail");
@@ -1607,6 +1702,12 @@ export function App(props: AppProps): React.JSX.Element {
       // array so it never drifts as sections are added.
       setLocalSection(LOCAL_SECTIONS[LOCAL_SECTIONS.length - 1]);
       return;
+    }
+    if (localSection === "logs" && (input === "l" || key.rightArrow || key.return)) {
+      // The compact `logs` section has nothing to navigate row-by-row — entering
+      // it opens the full-screen overlay (keyboard parity with clicking the pane,
+      // whose onLogExpand does the same).
+      return void setLogOverlay(true);
     }
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
   };
@@ -2532,6 +2633,29 @@ export function App(props: AppProps): React.JSX.Element {
         // surface, so this must be checked ahead of the uiMode branch below
         // or a LOCAL-mode config view would render LocalDashboard instead.
         <ConfigView configPath={configPath} onExit={() => setView("main")} />
+      ) : uiMode === "local" && logOverlay ? (
+        // The full-screen log overlay replaces the section dashboard while open;
+        // it owns input via handleLocalInput's `logOverlay` branch above.
+        <LogView
+          variant="full"
+          entries={logEntries}
+          filters={logFilters}
+          follow={logFollow}
+          scroll={scroll}
+          height={listHeight}
+          focused
+          hasFile={logHasFile}
+          onScrollMax={onScrollMax}
+          onWheel={(d) => {
+            // Wheel-up pauses follow (landing at the tail first), mirroring the
+            // `[` key recipe; wheel-down just scrolls.
+            if (logFollow && d < 0) {
+              setLogFollow(false);
+              toEnd();
+            }
+            scrollBy(d);
+          }}
+        />
       ) : uiMode === "local" ? (
         <LocalDashboard
           cheap={localCheap}
