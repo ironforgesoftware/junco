@@ -3,8 +3,10 @@
  * daemon is up; falls back to lockfile liveness + queue-dir counts when not.
  */
 
-import { readdirSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { Config } from "./types.js";
+import { TERMINAL_DONE_STATUSES } from "./types.js";
 import { queuePaths } from "./config.js";
 import { readLockHolder } from "./lock.js";
 import { outboxDepth, deadCount } from "./githubOutbox.js";
@@ -12,6 +14,7 @@ import { pendingCount } from "./assessReview.js";
 import { draftCount } from "./commentReview.js";
 import { listHistory } from "./assessHistory.js";
 import { checkForUpdate, type UpdateInfo } from "./updateCheck.js";
+import { readTaskHistory } from "./taskHistory.js";
 
 export interface StatusDeps {
   fetchFn?: typeof fetch;
@@ -21,6 +24,11 @@ export interface StatusDeps {
   lockPath?: string;
   timeoutMs?: number;
   checkUpdateFn?: (cfg: Config) => Promise<UpdateInfo | null>;
+  /** Task-history ledger reader for the `stats:` line (Task 3's readTaskHistory). */
+  readTaskHistoryFn?: typeof readTaskHistory;
+  nowFn?: () => Date;
+  /** Stat seam for the `stats:` line's dir-mtime fallback + oldest-wait calc. */
+  statFn?: (p: string) => { mtimeMs: number };
 }
 
 export function fmtUptime(totalSeconds: number): string {
@@ -43,6 +51,25 @@ function countMd(dir: string): number {
   }
 }
 
+/** mtimes (ms) of the .md files in a dir; unreadable dir/file → skipped.
+ * Mirrors src/tui/queueStats.ts's mdMtimes — duplicated rather than imported:
+ * statusCmd is CLI-side and must not import from src/tui/. */
+function mdMtimes(dir: string, statFn: (p: string) => { mtimeMs: number }): number[] {
+  try {
+    return readdirSync(dir)
+      .filter((n) => n.endsWith(".md"))
+      .flatMap((n) => {
+        try {
+          return [statFn(join(dir, n)).mtimeMs];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
 export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Promise<number> {
   const fetchFn = deps.fetchFn ?? fetch;
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
@@ -60,6 +87,7 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const body = (await resp.json()) as {
       ready: boolean;
+      gate?: { state: string; reason: string | null } | null;
       metrics: Record<string, unknown> & {
         currentTickets?: string[];
         currentTicket?: string | null;
@@ -75,6 +103,13 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
       `processed: ${m.tasksProcessed} (${m.tasksSucceeded} ok / ${m.tasksFailed} failed) · tokens in=${m.totalTokensIn} out=${m.totalTokensOut}`,
       `last task: ${m.lastTaskStatus ?? "—"}${m.lastTaskAt ? ` @ ${m.lastTaskAt}` : ""}`,
     ];
+    // Gate line — the daemon's provider-gate state (rate limits, cost cap, …);
+    // silent when healthy, same "only when non-ok" rule QueueView uses (#T9).
+    if (body.gate != null && body.gate.state !== "ok") {
+      detailLines.push(
+        `gate:      ${body.gate.state}${body.gate.reason ? ` — ${body.gate.reason}` : ""}`,
+      );
+    }
     // GitHub bridge line — only when it has actually done (or failed) something.
     if (Number(m.bridgeSweeps ?? 0) > 0 || Number(m.bridgeErrors ?? 0) > 0) {
       detailLines.push(
@@ -107,6 +142,44 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   print(
     `queue:     inbox ${countMd(paths.inbox)} · processing ${countMd(paths.processing)} · done ${countMd(paths.done)} · failed ${countMd(paths.failed)}\n`,
   );
+
+  // Stats line: 24h done/failed + avg duration from the task-history ledger
+  // (Task 3); fresh-install fallback to done/failed dir mtimes when the ledger
+  // has no records yet in the window (mirrors queueStats.ts's mdMtimes
+  // fallback, duplicated locally per the CLI→tui import boundary above).
+  // Oldest wait is always computed straight off inbox mtimes, independent of
+  // the ledger. The whole line is silent unless something is non-empty.
+  {
+    const nowFn = deps.nowFn ?? ((): Date => new Date());
+    const statFn = deps.statFn ?? statSync;
+    const readTaskHistoryFn = deps.readTaskHistoryFn ?? readTaskHistory;
+    const now = nowFn();
+    const since24Ms = now.getTime() - 86_400_000;
+    const recs = readTaskHistoryFn(cfg, { since: new Date(since24Ms) });
+    let doneN: number;
+    let failedN: number;
+    let avgSeconds: number | null;
+    if (recs.length > 0) {
+      doneN = recs.filter((r) => TERMINAL_DONE_STATUSES.has(r.status)).length;
+      failedN = recs.length - doneN;
+      avgSeconds = Math.round(recs.reduce((a, r) => a + r.durationSeconds, 0) / recs.length);
+    } else {
+      doneN = mdMtimes(paths.done, statFn).filter((t) => t >= since24Ms).length;
+      failedN = mdMtimes(paths.failed, statFn).filter((t) => t >= since24Ms).length;
+      avgSeconds = null;
+    }
+    const inboxMtimes = mdMtimes(paths.inbox, statFn);
+    const oldestWaitSeconds =
+      inboxMtimes.length > 0 ? (now.getTime() - Math.min(...inboxMtimes)) / 1000 : null;
+
+    if (doneN + failedN > 0 || oldestWaitSeconds !== null) {
+      let line = `stats:     24h ${doneN} ok / ${failedN} failed`;
+      if (avgSeconds !== null) line += ` · avg ${fmtUptime(avgSeconds)}`;
+      if (oldestWaitSeconds !== null) line += ` · oldest wait ${fmtUptime(oldestWaitSeconds)}`;
+      print(line + "\n");
+    }
+  }
+
   const obxQueued = outboxDepth(cfg);
   const obxDead = deadCount(cfg);
   if (obxQueued + obxDead > 0) {

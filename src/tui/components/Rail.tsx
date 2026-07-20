@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { stateMeta, type IssueLifecycle } from "../state.js";
 import type { QueueSnapshot } from "../queueSnapshot.js";
-import { queueLabel, fmtAssessIndicator } from "../queueFmt.js";
+import { queueLabel, fmtAssessIndicator, oldestQueuedAt, fmtAgeShort } from "../queueFmt.js";
 import { ClickableBox } from "../ClickableBox.js";
 import type { AssessHistory } from "../../assessHistory.js";
 
@@ -56,6 +56,7 @@ export function Rail({
   onWheel,
 }: RailProps): React.JSX.Element {
   const running = queue?.running ?? [];
+  const oldestWaiting = queue !== null ? oldestQueuedAt(queue.waiting) : null;
   return (
     <ClickableBox
       flexDirection="column"
@@ -124,6 +125,11 @@ export function Rail({
       )}
       {queue !== null && queue.error === null && (
         <>
+          {queue.stats?.gate != null && queue.stats.gate.state !== "ok" && (
+            <Text color={theme.warn} wrap="truncate">
+              ▸ paused — {queue.stats.gate.state.replace(/_/g, " ")}
+            </Text>
+          )}
           {running.length === 0 && queue.waiting.length === 0 && queue.daemonUp && (
             <Text dimColor>idle</Text>
           )}
@@ -135,7 +141,12 @@ export function Rail({
             </Text>
           ))}
           {running.length > 1 && <Text dimColor>+{running.length - 1} more running</Text>}
-          {queue.waiting.length > 0 && <Text dimColor>{queue.waiting.length} waiting</Text>}
+          {queue.waiting.length > 0 && (
+            <Text dimColor>
+              {queue.waiting.length} waiting
+              {oldestWaiting !== null ? ` · oldest ${fmtAgeShort(oldestWaiting, now)}` : ""}
+            </Text>
+          )}
           {!queue.daemonUp && <Text color={theme.warn}>daemon ○ down</Text>}
         </>
       )}
