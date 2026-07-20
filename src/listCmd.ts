@@ -4,17 +4,14 @@ import { readdirSync, statSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
+import { parseResultMeta } from "./resultMeta.js";
 
 const BOXES = ["inbox", "processing", "done", "failed"] as const;
 type Box = (typeof BOXES)[number];
 
-const RESULT_STATUS_RE = /<!-- junco-result\nstatus: ([^\n]+)/g;
-
 /** The status recorded by the LAST junco-result block, or null. */
 export function ticketStatusOf(content: string): string | null {
-  let last: string | null = null;
-  for (const m of content.matchAll(RESULT_STATUS_RE)) last = m[1].trim();
-  return last;
+  return parseResultMeta(content).status;
 }
 
 function age(mtimeMs: number, now: number): string {

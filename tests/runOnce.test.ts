@@ -18,6 +18,8 @@ import type { Config, Ticket, TicketGithub } from "../src/types.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import type { AssessFlowResult } from "../src/assessFlow.js";
 import type { AnalyzeFlowResult } from "../src/analyzeFlow.js";
+import type { PrFlowResult } from "../src/prFlow.js";
+import type { TaskRecord } from "../src/taskHistory.js";
 import { listPending } from "../src/assessReview.js";
 import { draftCount } from "../src/commentReview.js";
 import { makeGithubReporter } from "../src/githubReport.js";
@@ -1849,5 +1851,409 @@ describe("github_request fulfillment wiring", () => {
       },
     });
     expect(calls).toBe(0);
+  });
+});
+
+describe("task-history ledger (Task 4)", () => {
+  // Captures appendTaskRecordFn calls — the injectable seam over
+  // taskHistory.ts's appendTaskRecord (which itself is exercised in
+  // taskHistory.test.ts; here we only need to prove runOnce calls it with
+  // the right record, at the right finalize points, and never on a requeue).
+  function fakeAppendTaskRecord(): {
+    calls: TaskRecord[];
+    fn: (cfg: Config, rec: TaskRecord) => void;
+  } {
+    const calls: TaskRecord[] = [];
+    return { calls, fn: (_cfg: Config, rec: TaskRecord) => void calls.push(rec) };
+  }
+
+  function fakeFlowRunResult(
+    overrides: Partial<AssessFlowResult["result"]> = {},
+  ): AssessFlowResult["result"] {
+    return {
+      finalText: "",
+      toolCalls: [],
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+      stopReason: "stop",
+      errorMessage: null,
+      timedOut: false,
+      durationMs: 5,
+      abortedByGuard: false,
+      ...overrides,
+    };
+  }
+
+  function seed(root: string, id: string, frontmatterExtra = ""): void {
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    writeFileSync(
+      join(j, "inbox", `${id}.md`),
+      `---\nid: ${id}\n${frontmatterExtra}---\n# T\nbody\n`,
+      "utf8",
+    );
+  }
+
+  it("PR path: a completed pr-flow run appends one pr-kind record with usage/duration/prUrl/retryCount", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    seed(root, "pr-1", "repo: /tmp/fake-repo-for-history\nretry_count: 3\n");
+
+    const fakePrFlowFn = async (): Promise<PrFlowResult> => ({
+      dst: join(j, "done", "pr-1.md"),
+      status: "completed",
+      requeued: false,
+      prUrl: "https://x/pull/1",
+      commitCount: 1,
+      finalText: "done",
+      phaseError: null,
+      prQueued: false,
+      usage: { input: 10, output: 5, cacheRead: 0, total: 15, costUsd: 0.01 },
+      durationMs: 4000,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      prFlowFn: fakePrFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    const r = rec.calls[0];
+    expect(r).toMatchObject({
+      kind: "pr",
+      status: "completed",
+      durationSeconds: 4,
+      tokensIn: 10,
+      tokensOut: 5,
+      costUsd: 0.01,
+      prUrl: "https://x/pull/1",
+      retryCount: 3,
+    });
+    expect(r.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("PR path: a requeued pr-flow run appends zero records", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    seed(root, "pr-2", "repo: /tmp/fake-repo-for-history\n");
+
+    const fakePrFlowFn = async (): Promise<PrFlowResult> => ({
+      dst: join(j, "inbox", "pr-2.md"),
+      status: "requeued",
+      requeued: true,
+      prUrl: null,
+      commitCount: 0,
+      finalText: "",
+      phaseError: null,
+      prQueued: false,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      prFlowFn: fakePrFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("Assess path: a completed assess-flow run appends one assess-kind record", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    seed(root, "assess-1", "assess: {}\nrepo: /tmp/fake-repo-for-history\n");
+
+    const fakeAssessFlowFn = async (): Promise<AssessFlowResult> => ({
+      dst: join(j, "done", "assess-1.md"),
+      status: "completed",
+      requeued: false,
+      result: fakeFlowRunResult({
+        usage: { input: 7, output: 3, cacheRead: 0, total: 10, costUsd: 0.02 },
+        durationMs: 2000,
+      }),
+      found: 1,
+      deduped: 0,
+      dropped: 0,
+      parked: 1,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      assessFlowFn: fakeAssessFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0]).toMatchObject({
+      kind: "assess",
+      status: "completed",
+      durationSeconds: 2,
+      tokensIn: 7,
+      tokensOut: 3,
+      costUsd: 0.02,
+    });
+  });
+
+  it("Assess path: a requeued assess-flow run appends zero records", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "assess-2", "assess: {}\nrepo: /tmp/fake-repo-for-history\n");
+
+    const fakeAssessFlowFn = async (): Promise<AssessFlowResult> => ({
+      dst: join(root, "Junco", "inbox", "assess-2.md"),
+      status: "requeued",
+      requeued: true,
+      result: fakeFlowRunResult(),
+      found: 0,
+      deduped: 0,
+      dropped: 0,
+      parked: 0,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      assessFlowFn: fakeAssessFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("Analyze path: a completed analyze-flow run appends one analyze-kind record", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    seed(root, "analyze-1", "analyze:\n  issue: 7\n  title: T\nrepo: /tmp/fake-repo-for-history\n");
+
+    const fakeAnalyzeFlowFn = async (): Promise<AnalyzeFlowResult> => ({
+      dst: join(j, "done", "analyze-1.md"),
+      status: "completed",
+      requeued: false,
+      result: fakeFlowRunResult({
+        usage: { input: 4, output: 6, cacheRead: 0, total: 10, costUsd: 0.03 },
+        durationMs: 3000,
+      }),
+      parked: true,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      analyzeFlowFn: fakeAnalyzeFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0]).toMatchObject({
+      kind: "analyze",
+      status: "completed",
+      durationSeconds: 3,
+      tokensIn: 4,
+      tokensOut: 6,
+      costUsd: 0.03,
+    });
+  });
+
+  it("Analyze path: a requeued analyze-flow run appends zero records", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "analyze-2", "analyze:\n  issue: 8\n  title: T\nrepo: /tmp/fake-repo-for-history\n");
+
+    const fakeAnalyzeFlowFn = async (): Promise<AnalyzeFlowResult> => ({
+      dst: join(root, "Junco", "inbox", "analyze-2.md"),
+      status: "requeued",
+      requeued: true,
+      result: fakeFlowRunResult(),
+      parked: false,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      analyzeFlowFn: fakeAnalyzeFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("Ask path: a plain Q&A ticket appends one ask-kind record with no github fields", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "ask-1");
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: costedFactory(0.03),
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    const r = rec.calls[0];
+    expect(r.kind).toBe("ask");
+    expect(r.status).toBe("completed");
+    expect(r.tokensIn).toBe(3);
+    expect(r.tokensOut).toBe(4);
+    expect(r.costUsd).toBeCloseTo(0.03);
+    expect(r.nwo).toBeUndefined();
+    expect(r.issue).toBeUndefined();
+  });
+
+  it("Ask path: a bridged plan ticket appends a plan-kind record carrying nwo/issue", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "plan-1", "github:\n  nwo: acme/api\n  issue: 42\n  kind: plan\n");
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: () => fakeFactory(),
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].kind).toBe("plan");
+    expect(rec.calls[0].nwo).toBe("acme/api");
+    expect(rec.calls[0].issue).toBe(42);
+  });
+
+  it('hasRepo-but-empty repo (repo: "") falls through to Q&A and appends an ask-kind record', async () => {
+    // repo: "" makes hasRepo true (frontmatter.repo is defined, non-null) but
+    // deriveRepoContext's `if (!rawRepo) return null` rejects the empty
+    // string, so executeClaimed logs "hasRepo ticket produced no repo
+    // context; treating as Q&A" and actually runs the Q&A branch. The record
+    // must reflect that executed branch (ask), not the field-shape guess (pr).
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "empty-repo-1", 'repo: ""\n');
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: () => fakeFactory(),
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].kind).toBe("ask");
+    expect(rec.calls[0].status).toBe("completed");
+  });
+
+  it("repo: + github.kind=plan runs the real PR flow and appends a pr-kind record", async () => {
+    // A ticket carrying BOTH `repo:` and `github: { kind: plan, ... }` still
+    // dispatches through the hasRepo branch (executeClaimed checks hasRepo,
+    // not github.kind) and runs the real PR flow — the record must say "pr",
+    // not "plan", even though the field-shape guess would say "plan" first.
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    seed(
+      root,
+      "pr-plan-1",
+      "repo: /tmp/fake-repo-for-history\ngithub:\n  nwo: acme/api\n  issue: 5\n  kind: plan\n  external: false\n",
+    );
+
+    const fakePrFlowFn = async (): Promise<PrFlowResult> => ({
+      dst: join(j, "done", "pr-plan-1.md"),
+      status: "completed",
+      requeued: false,
+      prUrl: "https://x/pull/2",
+      commitCount: 1,
+      finalText: "done",
+      phaseError: null,
+      prQueued: false,
+      usage: { input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 },
+      durationMs: 100,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      prFlowFn: fakePrFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].kind).toBe("pr");
+  });
+
+  it("Q&A transient-failure requeue appends zero records", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "transient-1");
+    const erroringFactory = () => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        throw new Error("fetch failed: ECONNREFUSED");
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: erroringFactory,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("crash containment: a rejecting factory with budget remaining requeues and appends zero records", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "crash-1");
+    const rejectingFactory = () => async (): Promise<never> => {
+      throw new Error("model unresolved at session create");
+    };
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: rejectingFactory,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(0);
+  });
+
+  it("crash containment: exhausted retry budget finalizes to failed/ and appends one record with zero tokens", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "crash-2", "retry_count: 2\n");
+    const rejectingFactory = () => async (): Promise<never> => {
+      throw new Error("model unresolved at session create");
+    };
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: rejectingFactory,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    const r = rec.calls[0];
+    expect(r.status).toBe("failed");
+    expect(r.tokensIn).toBe(0);
+    expect(r.tokensOut).toBe(0);
+    expect(r.costUsd).toBe(0);
+    expect(r.kind).toBe("ask");
+  });
+
+  it("uses nowFn (when provided) for the record's `at` timestamp", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "ask-2");
+    const pinned = new Date("2020-01-02T03:04:05.000Z");
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: () => fakeFactory(),
+      appendTaskRecordFn: rec.fn,
+      nowFn: () => pinned,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].at).toBe(pinned.toISOString());
   });
 });

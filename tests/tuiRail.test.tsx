@@ -3,6 +3,7 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { Rail } from "../src/tui/components/Rail.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import type { QueueStats } from "../src/tui/queueStats.js";
 import { windowSlice } from "../src/tui/window.js";
 import { railListHeight } from "../src/tui/geometry.js";
 import { fmtAssessIndicator } from "../src/tui/queueFmt.js";
@@ -21,6 +22,29 @@ function hist(p: Partial<AssessHistory>): AssessHistory {
   };
 }
 
+function stats(p: Partial<QueueStats> = {}): QueueStats {
+  return {
+    gate: null,
+    lastPollAt: null,
+    window24h: {
+      done: 0,
+      failed: 0,
+      successRate: null,
+      avgDurationSeconds: null,
+      tokensIn: null,
+      tokensOut: null,
+      costUsd: null,
+    },
+    perDay7d: [],
+    etaSeconds: null,
+    spend: null,
+    guards: null,
+    outbox: { depth: 0, dead: 0 },
+    pendingRestartFields: [],
+    ...p,
+  };
+}
+
 const QUEUE: QueueSnapshot = {
   daemonUp: true,
   outboxDepth: 0,
@@ -33,6 +57,7 @@ const QUEUE: QueueSnapshot = {
       lastTool: "bash",
       outputTokens: 900,
       startedAt: null,
+      updatedAt: null,
       stale: false,
     },
   ],
@@ -45,6 +70,7 @@ const QUEUE: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
     {
       id: "w2",
@@ -54,10 +80,12 @@ const QUEUE: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
   ],
   recent: [],
   error: null,
+  stats: null,
 };
 
 const repos = [
@@ -132,6 +160,7 @@ describe("Rail", () => {
           lastTool: "bash",
           outputTokens: 900,
           startedAt: null,
+          updatedAt: null,
           stale: false,
         },
         {
@@ -141,6 +170,7 @@ describe("Rail", () => {
           lastTool: "edit",
           outputTokens: 100,
           startedAt: null,
+          updatedAt: null,
           stale: false,
         },
       ],
@@ -308,5 +338,137 @@ describe("Rail assess indicator", () => {
     // The pinned indicator (never truncated) renders at its worst case, incl.
     // the literal failed-state `!`.
     expect(f).toContain("99d+!");
+  });
+});
+
+describe("Rail queue card — stats parity (#T9)", () => {
+  it("gate ≠ ok renders a warn paused line directly under the queue header", () => {
+    const paused: QueueSnapshot = {
+      ...QUEUE,
+      stats: stats({ gate: { state: "rate_limited", reason: "429", until: null } }),
+    };
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={paused}
+        width={30}
+        height={20}
+        now={NOW}
+        window={{ start: 0, end: repos.length }}
+      />,
+    ).lastFrame()!;
+    const lines = f.split("\n");
+    // Strip the round-border pipes before comparing — the box renders
+    // `│ queue                      │`, not a bare "queue" line.
+    const queueIdx = lines.findIndex((l) => l.replace(/[│]/g, "").trim() === "queue");
+    expect(queueIdx).toBeGreaterThanOrEqual(0);
+    expect(lines[queueIdx + 1]).toContain("▸ paused — rate limited");
+  });
+
+  it("gate ok → no paused line", () => {
+    const ok: QueueSnapshot = {
+      ...QUEUE,
+      stats: stats({ gate: { state: "ok", reason: null, until: null } }),
+    };
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={ok}
+        width={30}
+        height={20}
+        now={NOW}
+        window={{ start: 0, end: repos.length }}
+      />,
+    ).lastFrame()!;
+    expect(f).not.toContain("▸ paused");
+  });
+
+  it("gate null (stats null, e.g. loading) → no paused line", () => {
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={QUEUE}
+        width={30}
+        height={20}
+        now={NOW}
+        window={{ start: 0, end: repos.length }}
+      />,
+    ).lastFrame()!;
+    expect(f).not.toContain("▸ paused");
+  });
+
+  it("waiting line gains oldest age when queuedAt data is present", () => {
+    const withAges: QueueSnapshot = {
+      ...QUEUE,
+      waiting: [
+        {
+          id: "w1",
+          github: null,
+          kind: "ask",
+          priority: "normal",
+          retryCount: 0,
+          notBefore: null,
+          deferred: false,
+          queuedAt: "2026-07-16T11:18:00.000Z", // 42m before NOW
+        },
+        {
+          id: "w2",
+          github: null,
+          kind: "pr",
+          priority: "normal",
+          retryCount: 0,
+          notBefore: null,
+          deferred: false,
+          queuedAt: "2026-07-16T11:50:00.000Z",
+        },
+        {
+          id: "w3",
+          github: null,
+          kind: "pr",
+          priority: "normal",
+          retryCount: 0,
+          notBefore: null,
+          deferred: false,
+          queuedAt: null,
+        },
+      ],
+    };
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={withAges}
+        width={30}
+        height={20}
+        now={NOW}
+        window={{ start: 0, end: repos.length }}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("3 waiting · oldest 42m");
+  });
+
+  it("waiting line has no oldest segment when no queuedAt data (regression)", () => {
+    // QUEUE's fixture waiting rows all carry queuedAt: null.
+    const f = render(
+      <Rail
+        repos={repos}
+        selected={0}
+        focused={true}
+        queue={QUEUE}
+        width={30}
+        height={20}
+        now={NOW}
+        window={{ start: 0, end: repos.length }}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("2 waiting");
+    expect(f).not.toContain("oldest");
   });
 });

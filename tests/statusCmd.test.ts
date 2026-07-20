@@ -8,6 +8,23 @@ import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import { recordRun } from "../src/assessHistory.js";
 import type { Config } from "../src/types.js";
+import type { TaskRecord } from "../src/taskHistory.js";
+
+function makeRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
+  return {
+    v: 1,
+    at: "2026-07-16T10:00:00.000Z",
+    id: "t1",
+    kind: "pr",
+    status: "completed",
+    durationSeconds: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    costUsd: 0,
+    retryCount: 0,
+    ...overrides,
+  };
+}
 
 describe("fmtUptime", () => {
   it("renders s / m / h forms", () => {
@@ -263,7 +280,7 @@ describe("runStatusCommand", () => {
     expect(out.join("")).not.toMatch(/outbox:/);
   });
 
-  it("shows the outbox line (queued + dead) after the queue line, placed after it", async () => {
+  it("shows the outbox line (queued + dead) after the queue line", async () => {
     const { dir, dead } = outboxPaths(cfg);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "1-a-labels.json"), "{}", "utf8");
@@ -278,7 +295,14 @@ describe("runStatusCommand", () => {
     const queueIdx = lines.findIndex((l) => l.startsWith("queue:"));
     const outboxIdx = lines.findIndex((l) => l.startsWith("outbox:"));
     expect(queueIdx).toBeGreaterThanOrEqual(0);
-    expect(outboxIdx).toBe(queueIdx + 1);
+    // This fixture's `stats:` line (#T9) is deterministic, not incidental: a
+    // fresh temp root + no history dir means readTaskHistory always returns
+    // [] here, so the dir-mtime fallback fires; failed/b.md (beforeEach) was
+    // just written, so it always lands inside the 24h window. The stats line
+    // therefore ALWAYS prints between queue: and outbox: in this test —
+    // assert the full three-line sequence, not just relative order.
+    expect(outboxIdx).toBe(queueIdx + 2);
+    expect(lines[queueIdx + 1]).toMatch(/^stats:/);
     expect(lines[outboxIdx]).toMatch(/outbox: {4}2 queued · 1 dead/);
   });
 
@@ -428,6 +452,182 @@ describe("runStatusCommand", () => {
         checkUpdateFn: fn,
       });
       expect(out.join("")).not.toContain("update:");
+    }
+  });
+
+  it("prints a gate line when /health reports a non-ok gate", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        gate: { state: "rate_limited", reason: "429 from provider" },
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 1,
+          currentTickets: [],
+          tasksProcessed: 0,
+          tasksSucceeded: 0,
+          tasksFailed: 0,
+          totalTokensIn: 0,
+          totalTokensOut: 0,
+          lastTaskStatus: null,
+          lastTaskAt: null,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    const code = await runStatusCommand(cfg, {
+      fetchFn,
+      printFn: print,
+      lockHolderFn: () => 42,
+      readTaskHistoryFn: () => [],
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/gate: {6}rate_limited — 429 from provider/);
+  });
+
+  it("omits the gate line when gate state is ok", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        gate: { state: "ok", reason: null },
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 1,
+          currentTickets: [],
+          tasksProcessed: 0,
+          tasksSucceeded: 0,
+          tasksFailed: 0,
+          totalTokensIn: 0,
+          totalTokensOut: 0,
+          lastTaskStatus: null,
+          lastTaskAt: null,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, {
+      fetchFn,
+      printFn: print,
+      lockHolderFn: () => 42,
+      readTaskHistoryFn: () => [],
+    });
+    expect(out.join("")).not.toMatch(/gate:/);
+  });
+
+  it("omits the gate line when /health has no gate field", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 1,
+          currentTickets: [],
+          tasksProcessed: 0,
+          tasksSucceeded: 0,
+          tasksFailed: 0,
+          totalTokensIn: 0,
+          totalTokensOut: 0,
+          lastTaskStatus: null,
+          lastTaskAt: null,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, {
+      fetchFn,
+      printFn: print,
+      lockHolderFn: () => 42,
+      readTaskHistoryFn: () => [],
+    });
+    expect(out.join("")).not.toMatch(/gate:/);
+  });
+
+  it("prints a stats line: ledger counts/avg plus the always-independent oldest wait", async () => {
+    const nowFn = (): Date => new Date("2026-07-16T12:00:00.000Z");
+    // Path-agnostic: only the inbox file (a.md, from beforeEach) gets stat'd
+    // here — the ledger is faked directly, so no dir-fallback stat happens.
+    const statFn = (): { mtimeMs: number } => ({
+      mtimeMs: Date.parse("2026-07-16T11:18:00.000Z"), // 42m before nowFn()
+    });
+    const records: TaskRecord[] = [
+      makeRecord({ id: "a", status: "completed", durationSeconds: 60 }),
+      makeRecord({ id: "b", status: "completed", durationSeconds: 120 }),
+      makeRecord({ id: "c", status: "completed_no_changes", durationSeconds: 180 }),
+      makeRecord({ id: "d", status: "guard_killed", durationSeconds: 120 }), // not terminal-done → failed
+    ];
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const code = await runStatusCommand(cfg, {
+      fetchFn,
+      printFn: print,
+      lockHolderFn: () => null,
+      nowFn,
+      statFn,
+      readTaskHistoryFn: () => records,
+    });
+    expect(code).toBe(0);
+    // avg = (60+120+180+120)/4 = 120s = 2m
+    expect(out.join("")).toMatch(/stats: {5}24h 3 ok \/ 1 failed · avg 2m · oldest wait 42m/);
+  });
+
+  it("falls back to done/failed dir mtimes (within 24h) when the ledger has no records", async () => {
+    writeFileSync(join(root, "done", "c.md"), "x");
+    const nowFn = (): Date => new Date("2026-07-16T12:00:00.000Z");
+    // Path-agnostic fixed mtime: 45m before now, well inside the 24h window —
+    // used for the done/failed fallback counts AND the inbox oldest-wait stat.
+    const statFn = (): { mtimeMs: number } => ({
+      mtimeMs: Date.parse("2026-07-16T11:15:00.000Z"),
+    });
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const code = await runStatusCommand(cfg, {
+      fetchFn,
+      printFn: print,
+      lockHolderFn: () => null,
+      nowFn,
+      statFn,
+      readTaskHistoryFn: () => [],
+    });
+    expect(code).toBe(0);
+    const text = out.join("");
+    // done/c.md (1) + failed/b.md from beforeEach (1) = 1 ok / 1 failed; empty
+    // ledger → no avg segment; inbox/a.md (from beforeEach) → oldest wait 45m.
+    expect(text).toMatch(/stats: {5}24h 1 ok \/ 1 failed · oldest wait 45m/);
+    expect(text).not.toMatch(/avg/);
+  });
+
+  it("omits the stats line when there is no 24h ledger activity and no queue-dir files", async () => {
+    const emptyRoot = mkdtempSync(join(tmpdir(), "junco-status-empty-"));
+    for (const d of ["inbox", "processing", "done", "failed"]) {
+      mkdirSync(join(emptyRoot, d), { recursive: true });
+    }
+    const emptyCfg = {
+      ...cfg,
+      queueRoot: emptyRoot,
+      dataDir: join(emptyRoot, "state"),
+    } as unknown as Config;
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    try {
+      const code = await runStatusCommand(emptyCfg, {
+        fetchFn,
+        printFn: print,
+        lockHolderFn: () => null,
+        readTaskHistoryFn: () => [],
+      });
+      expect(code).toBe(0);
+      expect(out.join("")).not.toMatch(/stats:/);
+    } finally {
+      rmSync(emptyRoot, { recursive: true, force: true });
     }
   });
 });

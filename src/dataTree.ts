@@ -17,6 +17,7 @@ export const MIRROR_SUBDIR = "mirror";
 export const CLONES_WATCHED_SUBDIR = "clones/watched";
 export const CLONES_EXTERNAL_SUBDIR = "clones/external";
 export const ASSESS_HISTORY_SUBDIR = "assess-history";
+export const HISTORY_SUBDIR = "history";
 export const WATCHLIST_FILENAME = "watchlist.json";
 export const UPDATE_CHECK_FILENAME = "update-check.json";
 
@@ -31,6 +32,7 @@ export interface DataTreePaths {
   clonesExternal: string; // NOTE: cfg.github.externalReposRoot (legacy-overridable)
   worktrees: string; // NOTE: cfg.worktreeRoot (legacy-overridable)
   assessHistory: string; // per-repo `junco assess` history (one file per repo)
+  history: string; // per-task finalize records (tasks-YYYY-MM.jsonl shards)
   transcripts: string;
   watchlistFile: string;
   updateCheckFile: string; // npm update-check cache (spec 2026-07-16)
@@ -53,6 +55,7 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     clonesExternal: cfg.github.externalReposRoot,
     worktrees: cfg.worktreeRoot,
     assessHistory: join(r, ASSESS_HISTORY_SUBDIR),
+    history: join(r, HISTORY_SUBDIR),
     transcripts: join(r, "transcripts"),
     watchlistFile: join(r, WATCHLIST_FILENAME),
     updateCheckFile: join(r, UPDATE_CHECK_FILENAME),
@@ -82,6 +85,7 @@ export function sandboxDenyPaths(cfg: Config): { dirs: string[]; files: string[]
       cfg.queueRoot,
       dirname(p.reviewAssess), // <dataDir>/review (assess + comments)
       p.assessHistory, // daemon-owned audit history; agent has no reason to read it
+      p.history, // daemon-owned task-history ledger
       p.outbox,
       p.mirror,
       p.transcripts,
@@ -134,6 +138,7 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
     p.mirror,
     p.clonesWatched,
     p.assessHistory,
+    p.history,
     p.transcripts,
   ];
   for (const d of dirs) mkdirFn(d);

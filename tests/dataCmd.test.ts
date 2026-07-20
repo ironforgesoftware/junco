@@ -307,6 +307,30 @@ describe("runData — text mode", () => {
     expect(out).toContain("vaultRoot/juncoSubdir are deprecated");
   });
 
+  it("marks the absent history directory with '(absent)'", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    expect(existsSync(join(root, "history"))).toBe(false);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const out = captured.join("");
+    expect(out).toContain("\nhistory (absent)");
+  });
+
+  it("prints the history shard-file count when populated", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    mkdirSync(join(root, "history"), { recursive: true });
+    writeFileSync(join(root, "history", "tasks-2026-07.jsonl"), '{"kind":"task"}\n');
+    writeFileSync(join(root, "history", "tasks-2026-06.jsonl"), '{"kind":"task"}\n');
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const out = captured.join("");
+    expect(out).toContain("history 2 shards");
+  });
+
   it("prints file-count + total bytes for transcripts/", () => {
     const root = freshRoot();
     buildFixtureTree(root);

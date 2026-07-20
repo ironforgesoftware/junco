@@ -117,6 +117,11 @@ export interface PrFlowResult {
   /** Mirrors PrOutcome.prQueued — the reporter uses this to skip the
    * finalize comment + label flip when the composite outbox op owns them. */
   prQueued: boolean;
+  /** Token usage of the underlying run — threaded so runOnce can write the
+   * task-history record without re-plumbing RunResult (additive; absent on
+   * requeuedResult, which never produces a record). */
+  usage?: Usage;
+  durationMs?: number;
 }
 
 function flowResult(
@@ -135,6 +140,8 @@ function flowResult(
     allText: result.allText,
     phaseError: phaseError ?? result.errorMessage,
     prQueued: prOutcome.prQueued,
+    usage: result.usage,
+    durationMs: result.durationMs,
   };
 }
 

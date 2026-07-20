@@ -1,6 +1,6 @@
 import { readFileSync, statSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import type { Config, RunResult, Ticket } from "./types.js";
+import type { Config, RunResult, Ticket, Usage } from "./types.js";
 import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
@@ -10,6 +10,7 @@ import { GuardManager } from "./agent/guardManager.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
+import { appendTaskRecord, type TaskRecord } from "./taskHistory.js";
 import { fulfillIssueRequest } from "./githubIssueRequest.js";
 // NOTE: assessFlow.ts imports READ_ONLY_TOOLS from this module, so this
 // import creates a module cycle. Runtime-safe: both bindings are only
@@ -71,6 +72,9 @@ export interface RunDeps {
   // Analyze-flow factory (peer of assessFlowFn): tests inject a fake;
   // production defaults to the real runAnalyzeFlow.
   analyzeFlowFn?: typeof runAnalyzeFlow;
+  // PR-flow factory (peer of assessFlowFn/analyzeFlowFn): tests inject a
+  // fake; production defaults to the real runPrFlow.
+  prFlowFn?: typeof runPrFlow;
   // Issue-linkage fulfillment (github_request frontmatter): tests inject a
   // fake; production defaults to the real fulfillIssueRequest.
   fulfillIssueRequestFn?: typeof fulfillIssueRequest;
@@ -94,6 +98,10 @@ export interface RunDeps {
    * critic, and corrective sessions each record their own). Optional: absent
    * (CLI one-shot, tests) is a no-op everywhere `recordUsd` would be called. */
   spend?: Pick<SpendLedger, "recordUsd">;
+  /** Task-history ledger seam (tests capture records; default real append). */
+  appendTaskRecordFn?: typeof appendTaskRecord;
+  /** Clock seam for the history record's `at` timestamp (tests pin a value). */
+  nowFn?: () => Date;
 }
 
 /** One claimed unit of work, ready to execute. */
@@ -212,6 +220,25 @@ function resolveQaCwd(t: Ticket, cfg: Config, fallback: string): string {
   return wd;
 }
 
+/** Crash-path best-effort ESTIMATE of the history record's `kind`, used ONLY
+ * by the top-level crash-containment catch below — the branch that actually
+ * ran is unknowable once execution has thrown, so this falls back to
+ * guessing from ticket frontmatter shape. Every other finalize point knows
+ * its own executed branch and passes `kind` to `recordHistory` explicitly
+ * instead of calling this (a field-shape guess can diverge from reality: a
+ * `repo: ""` ticket has hasRepo true but actually falls through to Q&A, and a
+ * ticket carrying both `repo:` and `github: { kind: "plan" }` actually runs
+ * the PR flow, not the plan path). Order mirrors real dispatch as closely as
+ * a static guess can: analyze → assess → hasRepo (PR flow, regardless of
+ * github.kind) → github.kind === "plan" → ask. */
+function kindEstimate(next: Ticket): TaskRecord["kind"] {
+  if (next.analyze) return "analyze";
+  if (next.assess) return "assess";
+  if (next.hasRepo) return "pr";
+  if (next.github?.kind === "plan") return "plan";
+  return "ask";
+}
+
 /** Execute one claimed ticket to its terminal state (or a requeue). */
 export async function executeClaimed(
   cfg: Config,
@@ -228,6 +255,33 @@ export async function executeClaimed(
     metrics.taskStarted(next.id);
     const startedAt = Date.now();
     const reporter = deps.reporter ?? NOOP_REPORTER;
+    // Task-history record for this finalize point. Requeues never call this
+    // (mirrors metrics.recordTask, which also never fires on a requeue path).
+    // `kind` is passed in explicitly by each call site — it names the branch
+    // that actually executed, not a re-derived guess from ticket shape (see
+    // kindEstimate's doc comment for why those can diverge).
+    const recordHistory = (
+      kind: TaskRecord["kind"],
+      status: string,
+      usage: Usage | undefined,
+      durationMs: number | undefined,
+      prUrl?: string | null,
+    ): void => {
+      (deps.appendTaskRecordFn ?? appendTaskRecord)(cfg, {
+        v: 1,
+        at: (deps.nowFn?.() ?? new Date()).toISOString(),
+        id: next.id,
+        kind,
+        status,
+        durationSeconds: Math.round((durationMs ?? 0) / 1000),
+        tokensIn: usage?.input ?? 0,
+        tokensOut: usage?.output ?? 0,
+        costUsd: usage?.costUsd ?? 0,
+        ...(next.github ? { nwo: next.github.nwo, issue: next.github.issue } : {}),
+        ...(prUrl != null && prUrl !== "" ? { prUrl } : {}),
+        retryCount: next.retryCount,
+      });
+    };
     try {
       log.info("claimed", { src: next.path, dst: claimed });
       await reporter.onStart(next).catch(() => undefined);
@@ -257,6 +311,8 @@ export async function executeClaimed(
             () => undefined,
           );
         log.info("finalized (analyze)", { dst: flow.dst, status: flow.status });
+        if (!flow.requeued)
+          recordHistory("analyze", flow.status, flow.result.usage, flow.result.durationMs);
         return;
       }
 
@@ -279,6 +335,8 @@ export async function executeClaimed(
             .onFinal(next, outcomeFromQa(flow.status, flow.result))
             .catch(() => undefined);
         log.info("finalized (assess)", { dst: flow.dst, status: flow.status });
+        if (!flow.requeued)
+          recordHistory("assess", flow.status, flow.result.usage, flow.result.durationMs);
         return;
       }
 
@@ -306,7 +364,7 @@ export async function executeClaimed(
               await reporter.onStart(next).catch(() => undefined);
             }
           }
-          const flow = await runPrFlow(cfg, next, claimed, ctx, {
+          const flow = await (deps.prFlowFn ?? runPrFlow)(cfg, next, claimed, ctx, {
             sessionFactoryFor: deps.sessionFactoryFor,
             criticSessionFactory: deps.criticSessionFactory,
             abortSignal: deps.abortSignal,
@@ -318,6 +376,8 @@ export async function executeClaimed(
           if (flow.requeued) await reporter.onRequeue(next).catch(() => undefined);
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
           log.info("finalized (pr-flow)", { dst: flow.dst, status: flow.status });
+          if (!flow.requeued)
+            recordHistory("pr", flow.status, flow.usage, flow.durationMs, flow.prUrl);
           return;
         }
         // ctx === null means no usable `repo:` — fall through to the Q&A path.
@@ -419,6 +479,17 @@ export async function executeClaimed(
       const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
       await reporter.onFinal(next, outcomeFromQa(fin.status, result)).catch(() => undefined);
       log.info("finalized", { dst: fin.dst, status: fin.status });
+      // This IS the Q&A branch (reached only after the hasRepo/assess/analyze
+      // branches above all declined), so "plan" vs "ask" is a real fact, not
+      // a guess: a bridged plan ticket runs the same Q&A path but under the
+      // planner model (see qaModel above) and is worth distinguishing in the
+      // ledger.
+      recordHistory(
+        next.github?.kind === "plan" ? "plan" : "ask",
+        fin.status,
+        result.usage,
+        result.durationMs,
+      );
     } catch (e) {
       // Top-level containment: real throw paths exist (a rejecting session
       // factory — runAgent awaits it outside its try/catch; runPrFlow
@@ -500,6 +571,7 @@ export async function executeClaimed(
         const fin = finalize(claimed, crashResult, { done: paths.done, failed: paths.failed });
         await reporter.onFinal(next, outcomeFromQa(fin.status, crashResult)).catch(() => undefined);
         log.info("finalized (crash containment)", { dst: fin.dst, status: fin.status });
+        recordHistory(kindEstimate(next), fin.status, crashResult.usage, crashResult.durationMs);
       } catch (finErr) {
         // Both dispositions failed (e.g. the claimed file vanished). Never
         // rethrow — leave whatever remains in processing/ for the startup

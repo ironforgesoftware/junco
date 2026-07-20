@@ -61,6 +61,7 @@ const QUEUE_SNAP: QueueSnapshot = {
       lastTool: "bash",
       outputTokens: 500,
       startedAt: "2026-07-07T10:00:00Z",
+      updatedAt: null,
       stale: false,
     },
   ],
@@ -73,11 +74,13 @@ const QUEUE_SNAP: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
   ],
   recent: [],
   error: null,
   outboxDepth: 4,
+  stats: null,
 };
 
 // LOCAL snapshot for the github-default App tests — the LOCAL surface is never
@@ -2292,6 +2295,7 @@ describe("queue rail + queue view", () => {
         retryCount: 0,
         notBefore: null,
         deferred: false,
+        queuedAt: null,
       })),
     };
     const r = renderApp(client, join(dir, "wl.json"), 999999, undefined, async () => tall);
