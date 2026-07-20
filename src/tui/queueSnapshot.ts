@@ -13,7 +13,7 @@ import { PRIORITY_RANK } from "../types.js";
 import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
 import { parseTicket } from "../ticket.js";
 import { outboxDepth as computeOutboxDepth } from "../githubOutbox.js";
-import type { HealthBody } from "./localSnapshot.js";
+import type { HealthBody } from "./healthBody.js";
 
 export interface QueueRunning {
   id: string;
