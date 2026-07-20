@@ -106,7 +106,6 @@ describe("makeTaskHistoryReader", () => {
   });
 
   it("memoizes per shard on mtimeMs and re-reads when it changes", () => {
-    const p = join("/data", "history", "tasks-2026-07.jsonl");
     let content = shard([rec({ id: "a" })]);
     let mtime = 1;
     let reads = 0;
