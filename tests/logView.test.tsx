@@ -154,6 +154,27 @@ describe("LogView — full variant", () => {
     expect(frame).toContain("the daemon writes it once started");
   });
 
+  it("hasFile=false wins over a non-empty filtered buffer → the placeholder, never real rows", () => {
+    // Defensive/stale wiring state: entries present AND passing the filter, but
+    // hasFile is false. The daemon-not-started placeholder must still win.
+    const buf = [e({ level: "info", msg: "stale-line" })];
+    const frame = render(
+      <LogView
+        variant="full"
+        entries={buf}
+        height={12}
+        focused
+        hasFile={false}
+        filters={F()}
+        follow
+        scroll={0}
+      />,
+    ).lastFrame()!;
+    expect(frame).toContain("the daemon writes it once started");
+    expect(frame).not.toContain("stale-line");
+    expect(frame).not.toContain("no lines match");
+  });
+
   it("case 7: a filter that matches nothing renders `no lines match` (not the no-file placeholder)", () => {
     const buf = [e({ level: "info", msg: "only-info" })];
     const frame = render(

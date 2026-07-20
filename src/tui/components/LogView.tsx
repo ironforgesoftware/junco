@@ -150,8 +150,12 @@ function fullView(props: LogViewProps): React.JSX.Element {
   if (filters.ticket !== null) chips.push(`#${filters.ticket}`);
   if (filters.search.trim() !== "") chips.push(`"${filters.search.trim()}"`);
 
+  // `hasFile === false` shows the daemon-not-started placeholder unconditionally
+  // (BOTH variants, per the brief) — never real rows, even if a stale buffer
+  // still passes the filter. Only with a file present does an empty filter
+  // result become `no lines match`.
   const body =
-    rows.length === 0 ? (
+    !hasFile || rows.length === 0 ? (
       <Text dimColor wrap="truncate-end">
         {hasFile ? "no lines match" : NO_FILE}
       </Text>
