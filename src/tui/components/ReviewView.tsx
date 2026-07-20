@@ -5,6 +5,7 @@ import { ClickableBox } from "../ClickableBox.js";
 import type { PendingAssess } from "../../assessReview.js";
 import { ANALYSIS_FOOTER, type PendingComment } from "../../commentReview.js";
 import { clampScroll, maxScroll } from "../window.js";
+import { fmtAge } from "../queueFmt.js";
 
 export interface ReviewOpen {
   kind: "batch";
@@ -57,6 +58,7 @@ export function ReviewView({
   scroll,
   height,
   focused,
+  now,
   onRowPress,
   onFindingPress,
   onDraftWheel,
@@ -66,6 +68,7 @@ export function ReviewView({
   scroll: number;
   height: number;
   focused: boolean;
+  now: Date;
   onRowPress?: (index: number) => void;
   onFindingPress?: (index: number) => void;
   onDraftWheel?: (dir: 1 | -1) => void;
@@ -139,18 +142,20 @@ export function ReviewView({
     }
     const { checked, findingCursor } = state.open;
     const w = windowRange(batch.findings.length, findingCursor, rows - 1);
+    const filedCount = batch.filed ? Object.keys(batch.filed).length : 0;
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text>
           <Text color={theme.accent}>{batch.nwo}</Text>
           <Text
             dimColor
-          >{`  ${batch.external ? "external" : "owned"} · ${checked.size}/${batch.findings.length} selected`}</Text>
+          >{`  ${batch.external ? "external" : "owned"} · ${checked.size}/${batch.findings.length} selected${filedCount > 0 ? ` · ${filedCount} filed` : ""}`}</Text>
         </Text>
         {batch.findings.slice(w.start, w.end).map((f, i) => {
           const idx = w.start + i;
           const sel = idx === findingCursor && focused;
           const on = checked.has(f.fingerprint);
+          const rec = batch.filed?.[f.fingerprint];
           return (
             <ClickableBox
               key={f.fingerprint}
@@ -161,13 +166,18 @@ export function ReviewView({
               onPress={onFindingPress ? () => onFindingPress(idx) : undefined}
             >
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
-              <Text>{on ? "[x]" : "[ ]"}</Text>
+              <Text>{on ? "[x]" : rec ? " ✓ " : "[ ]"}</Text>
               <Text color={SEV_COLOR[f.severity]}>{f.severity.padEnd(8)}</Text>
               <Box flexGrow={1} minWidth={0}>
                 <Text wrap="truncate" dimColor={!sel}>
                   {f.title}
                 </Text>
               </Box>
+              {rec && (
+                <Text
+                  dimColor
+                >{`${rec.how === "deduped" ? "dup" : rec.how} ${fmtAge(rec.at, now)}`}</Text>
+              )}
             </ClickableBox>
           );
         })}
@@ -196,6 +206,7 @@ export function ReviewView({
         const sel = idx === state.cursor && focused;
         if (idx < batchCount) {
           const b = state.batches[idx];
+          const filedCount = b.filed ? Object.keys(b.filed).length : 0;
           return (
             <ClickableBox
               key={b.id}
@@ -211,8 +222,13 @@ export function ReviewView({
                   {b.nwo}
                 </Text>
               </Box>
+              <Text dimColor>{fmtAge(b.createdAt, now)}</Text>
               <Text dimColor>{b.external ? "external" : "owned"}</Text>
-              <Text color={theme.accent}>{`${b.findings.length}`}</Text>
+              {filedCount > 0 ? (
+                <Text color={theme.accent}>{`filed ${filedCount}/${b.findings.length}`}</Text>
+              ) : (
+                <Text color={theme.accent}>{`${b.findings.length}`}</Text>
+              )}
             </ClickableBox>
           );
         }

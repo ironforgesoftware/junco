@@ -18,7 +18,7 @@ import { ensureExternalClone } from "../externalRepo.js";
 import { dispatchIssue } from "../externalDispatch.js";
 import { withBotAuth, withFileAsAuth } from "../ghAuth.js";
 import { classifyRepoAccess, grantBotAccess } from "../botAccess.js";
-import { listPending, readPending, type PendingAssess } from "../assessReview.js";
+import { listPending, readPending, discardPending, type PendingAssess } from "../assessReview.js";
 import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
 import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
@@ -152,8 +152,13 @@ export interface DashboardClient {
   /** Parked `junco assess` batches awaiting human confirmation. */
   listReview(): Promise<Result<PendingAssess[]>>;
   /** File the selected findings (by fingerprint) from a parked batch; throws
-   * (surfacing as an error `Result`) if the batch is missing or corrupt. */
+   * (surfacing as an error `Result`) if the batch is missing or corrupt. The
+   * returned `FileResult.batch` is the batch as persisted after the pass
+   * (still parked, filed stamps merged). */
   fileReview(id: string, fingerprints: string[]): Promise<Result<FileResult>>;
+  /** Discard a parked batch without filing — the explicit end-of-life
+   * (archives to review/assess/filed/). Already-gone ids are a no-op. */
+  discardReview(id: string): Promise<Result<null>>;
   /** Parked `junco analyze` comment drafts awaiting human confirmation. */
   listCommentDrafts(): Promise<Result<PendingComment[]>>;
   /** Post (or, offline, durably enqueue) a parked draft with its footer
@@ -195,6 +200,7 @@ export interface GhClientDeps {
   listPendingFn?: typeof listPending;
   readPendingFn?: typeof readPending;
   fileFindingsFn?: typeof fileFindings;
+  discardPendingFn?: typeof discardPending;
   listDraftsFn?: typeof listDrafts;
   postDraftFn?: typeof postDraftCore;
   discardDraftFn?: typeof removeDraft;
@@ -557,6 +563,13 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         return (deps.fileFindingsFn ?? fileFindings)(fileCfg, batch, new Set(fingerprints), {
           ghFn,
         });
+      });
+    },
+
+    discardReview(id) {
+      return attempt(async () => {
+        (deps.discardPendingFn ?? discardPending)(cfg, id);
+        return null;
       });
     },
 

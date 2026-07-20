@@ -164,6 +164,16 @@ export const ISSUES: DashIssue[] = [
   },
 ];
 
+const STUB_FILE_BATCH = {
+  id: "stub",
+  nwo: "o/r",
+  external: true,
+  autoPlan: false,
+  repoPath: "/x",
+  createdAt: "2026-07-09T00:00:00.000Z",
+  findings: [],
+};
+
 export const stubClient: DashboardClient = {
   listIssues: async () => okv({ issues: ISSUES, staleAt: null }),
   listPrs: async () => okv({ prs: [], staleAt: null }),
@@ -180,10 +190,19 @@ export const stubClient: DashboardClient = {
   dispatchTicket: async (nwo, num) => okv({ id: `gh-${nwo}-${num}`, destPath: "/x" }),
   listReview: async () => okv([]),
   fileReview: async () =>
-    okv({ created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }),
+    okv({
+      created: 0,
+      queuedOffline: 0,
+      deduped: 0,
+      failed: 0,
+      urls: [],
+      warnings: [],
+      batch: STUB_FILE_BATCH,
+    }),
   listCommentDrafts: async () => okv([]),
   postCommentDraft: async () => okv({ outcome: "sent" as const, url: null }),
   discardCommentDraft: async () => okv(null),
+  discardReview: async () => okv(null),
   analyzeIssue: async () => okv({ id: "analyze-x-y-1" }),
   health: async () => ({
     up: true,

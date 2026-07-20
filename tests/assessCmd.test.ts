@@ -7,6 +7,7 @@ import {
   runAssessCommand,
   runAssessReviewCommand,
   runAssessFileCommand,
+  runAssessDiscardCommand,
 } from "../src/assessCmd.js";
 import { parseTicket } from "../src/ticket.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
@@ -466,6 +467,58 @@ describe("runAssessReviewCommand", () => {
     expect(code).toBe(2);
     expect(out).toContain("assess-ghost");
   });
+
+  it("list and detail show filed accounting", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "arv-filed-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-1",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "Bug",
+          description: "",
+          references: [],
+        },
+        {
+          fingerprint: "f2",
+          kind: "code",
+          severity: "low",
+          ruleId: "R",
+          title: "Nit",
+          description: "",
+          references: [],
+        },
+      ],
+      filed: {
+        f1: {
+          at: "2026-07-10T00:00:00.000Z",
+          how: "created",
+          url: "https://github.com/o/r/issues/1",
+        },
+      },
+    });
+    let out = "";
+    const print = (s: string) => {
+      out += s;
+    };
+    await runAssessReviewCommand(c, undefined, { printFn: print });
+    expect(out).toContain("filed 1/2");
+
+    out = "";
+    await runAssessReviewCommand(c, "assess-x-1", { printFn: print });
+    expect(out).toContain("[filed created 2026-07-10T00:00:00.000Z]");
+    expect(out).toMatch(/f2.*Nit\n/); // unfiled row carries no filed note
+    expect(out).toContain("discard: junco assess discard assess-x-1");
+  });
 });
 
 describe("runAssessFileCommand", () => {
@@ -892,5 +945,55 @@ describe("runAssessFileCommand · assess.fileAs", () => {
     expect(code).toBe(0);
     expect((seen as unknown as Config).ghAuth?.login).toBe("junco-agent");
     expect((seen as unknown as Config).ghAuth?.configDir).toBe("/sbx/junco-gh");
+  });
+});
+
+describe("runAssessDiscardCommand", () => {
+  it("discards a pending batch (exit 0) — it leaves the pending list", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "adc-"));
+    const c = cfg([], dir);
+    writePending(c, {
+      id: "assess-x-1",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "Bug",
+          description: "",
+          references: [],
+        },
+      ],
+    });
+    let out = "";
+    const code = await runAssessDiscardCommand(c, "assess-x-1", { printFn: (s) => (out += s) });
+    expect(code).toBe(0);
+    expect(out).toContain("discarded 'assess-x-1'");
+    expect(readPending(c, "assess-x-1").batch).toBeNull();
+  });
+
+  it("already-gone id: exit 0 with a note (ENOENT-safe)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "adc-"));
+    const c = cfg([], dir);
+    let out = "";
+    const code = await runAssessDiscardCommand(c, "assess-ghost", { printFn: (s) => (out += s) });
+    expect(code).toBe(0);
+    expect(out).toContain("assess-ghost");
+    expect(out).toMatch(/already discarded/);
+  });
+
+  it("missing id: usage, exit 2", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "adc-"));
+    const c = cfg([], dir);
+    let out = "";
+    const code = await runAssessDiscardCommand(c, undefined, { printFn: (s) => (out += s) });
+    expect(code).toBe(2);
+    expect(out).toContain("Usage: junco assess discard <id>");
   });
 });

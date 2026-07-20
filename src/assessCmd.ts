@@ -12,7 +12,7 @@ import { expandHome } from "./config.js";
 import { submitTicket } from "./dispatch.js";
 import { readWatchlist, watchlistPath } from "./watchlist.js";
 import { buildAssessPrompt } from "./assessPrompt.js";
-import { listPending, readPending } from "./assessReview.js";
+import { listPending, readPending, discardPending } from "./assessReview.js";
 import { fileFindings, type FileFindingsDeps, type FileResult } from "./assessFiling.js";
 import { withFileAsAuth, type GhAuthDeps } from "./ghAuth.js";
 import {
@@ -208,7 +208,11 @@ export async function runAssessReviewCommand(
     }
     for (const b of pending) {
       const scope = b.external ? "external" : "owned";
-      print(`${b.id}  ${b.nwo} (${scope})  ${b.findings.length} findings  ${b.createdAt}\n`);
+      const filedCount = Object.keys(b.filed ?? {}).length;
+      const filedCol = filedCount > 0 ? `  filed ${filedCount}/${b.findings.length}` : "";
+      print(
+        `${b.id}  ${b.nwo} (${scope})  ${b.findings.length} findings  ${b.createdAt}${filedCol}\n`,
+      );
     }
     print(`\nreview one: junco assess review <id> · file: junco assess file <id> --all\n`);
     return 0;
@@ -225,7 +229,9 @@ export async function runAssessReviewCommand(
   }
   print(`${batch.id}  ${batch.nwo} (${batch.external ? "external" : "owned"})\n`);
   for (const f of batch.findings) {
-    print(`  ${f.fingerprint}  [${f.severity}]  ${f.title}\n`);
+    const rec = batch.filed?.[f.fingerprint];
+    const note = rec ? `  [filed ${rec.how} ${rec.at}]` : "";
+    print(`  ${f.fingerprint}  [${f.severity}]  ${f.title}${note}\n`);
   }
   print(`\nfile all: junco assess file ${batch.id} --all\n`);
   print(
@@ -234,6 +240,7 @@ export async function runAssessReviewCommand(
       .slice(0, 2)
       .join(",")}\n`,
   );
+  print(`discard: junco assess discard ${batch.id}\n`);
   return 0;
 }
 
@@ -247,9 +254,10 @@ export interface AssessFileDeps {
 /**
  * `junco assess file <id> --all | --only <fp,...>` — the human confirm step:
  * files a SELECTION of the findings parked by `junco assess` (assessReview.ts)
- * as GitHub issues via assessFiling.ts, then archives the batch. Requires an
- * explicit selection (no bare default) — these writes land on someone else's
- * tracker.
+ * as GitHub issues via assessFiling.ts; the batch stays parked with per-finding
+ * `filed` stamps — `junco assess discard` is the explicit end-of-life. Requires
+ * an explicit selection (no bare default) — these writes land on someone
+ * else's tracker.
  */
 export async function runAssessFileCommand(
   cfg: Config,
@@ -323,8 +331,9 @@ export async function runAssessFileCommand(
   try {
     res = await fileFn(fileCfg, batch, selected, deps.fileDeps ?? {});
   } catch (e) {
-    // fileFindings rethrows before archiving on the fatal-dedup path, so the
-    // batch is preserved — surface the reason cleanly, don't swallow it.
+    // fileFindings rethrows on the fatal-dedup path before stamping or
+    // rewriting anything, so the batch is preserved untouched — surface the
+    // reason cleanly, don't swallow it.
     print(`junco assess file: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
@@ -334,4 +343,32 @@ export async function runAssessFileCommand(
   for (const u of res.urls) print(`  ${u}\n`);
   for (const w of res.warnings) print(`  ! ${w}\n`);
   return res.failed > 0 ? 1 : 0;
+}
+
+export interface AssessDiscardDeps {
+  printFn?: (s: string) => void;
+}
+
+/**
+ * `junco assess discard <id>` — the explicit end-of-life for a parked batch:
+ * archive to review/assess/filed/ without filing anything further. Filing no
+ * longer archives, so this is the only way a batch leaves `assess review`.
+ * Discarding an already-gone id is a no-op success (ENOENT-safe).
+ */
+export async function runAssessDiscardCommand(
+  cfg: Config,
+  id: string | undefined,
+  deps: AssessDiscardDeps = {},
+): Promise<number> {
+  const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+  if (!id) {
+    print("Usage: junco assess discard <id>\n");
+    return 2;
+  }
+  if (discardPending(cfg, id)) {
+    print(`discarded '${id}'\n`);
+  } else {
+    print(`junco assess discard: no pending batch '${id}' (already discarded?)\n`);
+  }
+  return 0;
 }

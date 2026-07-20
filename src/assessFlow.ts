@@ -36,7 +36,7 @@ import {
   SEVERITY_RANK,
   type Finding,
 } from "./findings.js";
-import { writePending, type PendingAssess } from "./assessReview.js";
+import { writePending, readPending, type PendingAssess, type FiledRecord } from "./assessReview.js";
 import { recordRun } from "./assessHistory.js";
 import { syncExternalClone } from "./externalRepo.js";
 import { log } from "./logging.js";
@@ -381,6 +381,20 @@ export async function runAssessFlow(
     return true;
   });
 
+  // Carry filed accounting across the overwrite. An ONLINE re-run's marker
+  // dedup (above) already excluded filed findings, so this matters on the
+  // OFFLINE path where dedup degraded to an empty set and previously-filed
+  // findings re-park — their stamps must survive. Corrupt/missing prior
+  // batch → no merge (readPending never throws).
+  const priorFiled = readPending(cfg, ticket.id).batch?.filed;
+  const carried: Record<string, FiledRecord> = {};
+  if (priorFiled) {
+    for (const f of afterDedup) {
+      const rec = priorFiled[f.fingerprint];
+      if (rec) carried[f.fingerprint] = rec;
+    }
+  }
+
   // --- Phase 7: Park all surviving findings for human review. There is NO cap
   // here — the per-finding confirm at file time (`junco assess file <id>`) is
   // the volume gate, not this audit. The batch is keyed by ticket id, so a
@@ -396,6 +410,7 @@ export async function runAssessFlow(
     createdAt: nowFn().toISOString(),
     findings: afterDedup,
     ...(ticket.assess?.issue !== undefined ? { issue: ticket.assess.issue } : {}),
+    ...(Object.keys(carried).length > 0 ? { filed: carried } : {}),
   };
   if (afterDedup.length > 0) writePending(cfg, parked);
   counts.parked = afterDedup.length;

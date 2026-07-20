@@ -13,6 +13,8 @@ import { GitOpError, type gh } from "../src/git.js";
 const NET_ERR = new GitOpError("gh failed", "connect: network is unreachable", 1);
 /** Non-network (permission) GitOpError → isOffline() false. */
 const PERM_ERR = new GitOpError("gh failed", "HTTP 403: Forbidden", 1);
+const NOW = () => new Date("2026-07-19T12:00:00.000Z");
+const AT = "2026-07-19T12:00:00.000Z";
 
 function cfg(stateDir: string): Config {
   return { dataDir: stateDir, github: { triggerLabel: "junco" } } as unknown as Config;
@@ -60,12 +62,15 @@ function ghFake(calls: string[][]): typeof gh {
 }
 
 describe("fileFindings", () => {
-  it("files only the selected findings and archives the batch", async () => {
+  it("files the selected findings, stamps them filed, and keeps the batch parked", async () => {
     const dir = mkdtempSync(join(tmpdir(), "afl-"));
     const c = cfg(dir);
     writePending(c, pending(false));
     const calls: string[][] = [];
-    const res = await fileFindings(c, pending(false), new Set(["f1"]), { ghFn: ghFake(calls) });
+    const res = await fileFindings(c, pending(false), new Set(["f1"]), {
+      ghFn: ghFake(calls),
+      nowFn: NOW,
+    });
 
     expect(res.created).toBe(1);
     expect(res.urls).toEqual(["https://github.com/o/r/issues/9"]);
@@ -73,8 +78,12 @@ describe("fileFindings", () => {
     expect(creates).toHaveLength(1);
     // owned → labelled
     expect(creates[0]).toContain("--label");
-    // archived
-    expect(readPending(c, "assess-x-1").batch).toBeNull();
+    const { batch } = readPending(c, "assess-x-1");
+    expect(batch).not.toBeNull();
+    expect(batch?.filed).toEqual({
+      f1: { at: AT, how: "created", url: "https://github.com/o/r/issues/9" },
+    });
+    expect(res.batch).toEqual(batch);
   });
 
   it("external batch files WITHOUT labels and never calls label create", async () => {
@@ -152,10 +161,11 @@ describe("fileFindings", () => {
       return { stdout: "", stderr: "", code: 0 };
     }) as unknown as typeof gh;
 
-    const res = await fileFindings(c, pending(true), new Set(["f1"]), { ghFn });
+    const res = await fileFindings(c, pending(true), new Set(["f1"]), { ghFn, nowFn: NOW });
     expect(res.queuedOffline).toBe(1);
     expect(res.created).toBe(0);
     expect(listOps(c).some((o) => o.op.kind === "issue-create")).toBe(true);
+    expect(readPending(c, "assess-x-1").batch?.filed?.f1).toEqual({ at: AT, how: "queued" });
   });
 
   it("skips a finding already filed (marker present in author-scoped list)", async () => {
@@ -169,9 +179,16 @@ describe("fileFindings", () => {
         return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     }) as unknown as typeof gh;
-    const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn });
+    const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn, nowFn: NOW });
     expect(res.deduped).toBe(1);
     expect(res.created).toBe(1);
+    const { batch } = readPending(c, "assess-x-1");
+    expect(batch?.filed?.f1).toEqual({ at: AT, how: "deduped" });
+    expect(batch?.filed?.f2).toEqual({
+      at: AT,
+      how: "created",
+      url: "https://github.com/o/r/issues/9",
+    });
   });
 
   it("does NOT archive the batch when every selected finding fails with a non-offline error", async () => {
@@ -192,15 +209,41 @@ describe("fileFindings", () => {
     expect(res.failed).toBe(2);
     expect(res.created).toBe(0);
     expect(readPending(c, "assess-x-1").batch).not.toBeNull();
+    expect(readPending(c, "assess-x-1").batch?.filed).toBeUndefined();
   });
 
-  it("still archives when a filing partially succeeds and the rest queue offline", async () => {
+  it("stamps persist for the successful subset even when another finding fails", async () => {
     const dir = mkdtempSync(join(tmpdir(), "afl-"));
     const c = cfg(dir);
     writePending(c, pending(true));
-    // f1 files live, f2 goes offline (queuedOffline, not failed). No non-offline
-    // failure → result.failed === 0 → the batch archives as before (queued =
-    // success). Guards #137's guard against over-preserving.
+    let n = 0;
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[0] === "issue" && args[1] === "create") {
+        n++;
+        if (n === 2) throw PERM_ERR; // f2 fails non-offline
+        return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+
+    const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn, nowFn: NOW });
+    expect(res.created).toBe(1);
+    expect(res.failed).toBe(1);
+    // The rewrite happened despite the failure: f1's stamp is durable, f2 is retryable.
+    const { batch } = readPending(c, "assess-x-1");
+    expect(batch?.filed).toEqual({
+      f1: { at: AT, how: "created", url: "https://github.com/o/r/issues/9" },
+    });
+  });
+
+  it("a partially-queued pass stamps created + queued and keeps the batch parked", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    writePending(c, pending(true));
+    // f1 files live, f2 goes offline (queuedOffline, not failed) — a
+    // partially-queued pass. Both outcomes get stamped and the batch stays
+    // parked (no auto-archive) for a subsequent retry/discard.
     let n = 0;
     const ghFn = (async (_c: unknown, args: string[]) => {
       if (args[0] === "issue" && args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
@@ -212,11 +255,17 @@ describe("fileFindings", () => {
       return { stdout: "", stderr: "", code: 0 };
     }) as unknown as typeof gh;
 
-    const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn });
+    const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn, nowFn: NOW });
     expect(res.created).toBe(1);
     expect(res.queuedOffline).toBe(1);
     expect(res.failed).toBe(0);
-    expect(readPending(c, "assess-x-1").batch).toBeNull();
+    const { batch } = readPending(c, "assess-x-1");
+    expect(batch?.filed?.f1).toEqual({
+      at: AT,
+      how: "created",
+      url: "https://github.com/o/r/issues/9",
+    });
+    expect(batch?.filed?.f2).toEqual({ at: AT, how: "queued" });
   });
 
   // SP-3 Task 5: filed findings reference the scoping issue.
@@ -259,6 +308,7 @@ describe("fileFindings", () => {
       failed: 0,
       urls: [],
       warnings: [],
+      batch: pending(false),
     });
     // no gh calls at all — not even the dedup list fetch
     expect(calls).toHaveLength(0);
@@ -278,6 +328,7 @@ describe("fileFindings", () => {
     expect(res.created).toBe(0);
     expect(res.failed).toBe(0);
     expect(calls).toHaveLength(0);
+    expect(res.batch.id).toBe("assess-x-1");
     expect(readPending(c, "assess-x-1").batch).not.toBeNull();
   });
 

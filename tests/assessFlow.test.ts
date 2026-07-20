@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAssessFlow } from "../src/assessFlow.js";
-import { listPending, assessReviewPaths } from "../src/assessReview.js";
+import { listPending, writePending, assessReviewPaths } from "../src/assessReview.js";
 import { listHistory, readHistory, recordRun } from "../src/assessHistory.js";
 import { parseTicket } from "../src/ticket.js";
 import { fingerprintFinding, findingMarker } from "../src/findings.js";
@@ -602,6 +602,57 @@ describe("runAssessFlow", () => {
     expect(listPending(cfg(root))).toHaveLength(1);
     const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
     expect(body.toLowerCase()).toContain("warning");
+  });
+
+  it("offline re-park carries filed stamps forward for still-present findings", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    const { path } = claim(j, ticketContent(repo));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+    const fp = fingerprintFinding({
+      kind: "code",
+      ruleId: "NET-1",
+      location: { path: "src/index.ts" },
+      title: "NET-1",
+    });
+    // A prior filing pass stamped this finding. The re-run happens OFFLINE
+    // (dedup list throws → empty marker set), so the finding re-parks — the
+    // overwrite must not lose its stamp.
+    writePending(cfg(root), {
+      id: ticket.id,
+      nwo: "o/r",
+      external: false,
+      autoPlan: false,
+      repoPath: repo,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      findings: [],
+      filed: {
+        [fp]: {
+          at: "2026-07-02T00:00:00.000Z",
+          how: "created",
+          url: "https://github.com/o/r/issues/1",
+        },
+      },
+    });
+    const gh = fakeGh((args) => {
+      if (args[0] === "issue" && args[1] === "list") throw NET_ERR;
+      return undefined;
+    });
+    const r = await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: () => fakeSession(findingsFence([codeFinding("NET-1", "src/index.ts")])),
+    });
+    expect(r.parked).toBe(1);
+    const [b] = listPending(cfg(root));
+    expect(b.filed).toEqual({
+      [fp]: {
+        at: "2026-07-02T00:00:00.000Z",
+        how: "created",
+        url: "https://github.com/o/r/issues/1",
+      },
+    });
   });
 
   it("no origin remote: unparseable remote → failed/, phase error, zero gh calls, nothing parked", async () => {
