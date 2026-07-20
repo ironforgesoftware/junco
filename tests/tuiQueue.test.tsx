@@ -25,6 +25,7 @@ const IDLE: QueueSnapshot = {
   recent: [],
   error: null,
   outboxDepth: 0,
+  stats: null,
 };
 
 const BUSY: QueueSnapshot = {
@@ -37,6 +38,7 @@ const BUSY: QueueSnapshot = {
       lastTool: "bash",
       outputTokens: 12345,
       startedAt: "2026-07-07T10:00:28Z",
+      updatedAt: null,
       stale: false,
     },
   ],
@@ -49,6 +51,7 @@ const BUSY: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
     {
       id: "manual-tide-fix",
@@ -58,6 +61,7 @@ const BUSY: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
     {
       id: "gh-acme-api-52-plan",
@@ -67,6 +71,7 @@ const BUSY: QueueSnapshot = {
       retryCount: 1,
       notBefore: "2026-07-07T11:00:00Z",
       deferred: true,
+      queuedAt: null,
     },
     {
       id: "gh-acme-api-53-plan",
@@ -76,6 +81,7 @@ const BUSY: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
   ],
 };
@@ -233,12 +239,18 @@ describe("QueueView", () => {
         github: { nwo: "acme/api", issue: 44, kind: "pr", external: false },
         status: "done",
         finishedAt: "2026-07-07T09:53:00Z",
+        resultStatus: null,
+        durationSeconds: null,
+        prUrl: null,
       },
       {
         id: "gh-acme-api-40",
         github: { nwo: "acme/api", issue: 40, kind: "pr", external: false },
         status: "failed",
         finishedAt: "2026-07-07T09:05:00Z",
+        resultStatus: null,
+        durationSeconds: null,
+        prUrl: null,
       },
     ],
   };
@@ -377,6 +389,7 @@ describe("QueueView", () => {
         retryCount: 0,
         notBefore: null,
         deferred: false,
+        queuedAt: null,
       })),
     };
     const frame = render(
@@ -409,6 +422,7 @@ describe("QueueView", () => {
         retryCount: 0,
         notBefore: null,
         deferred: false,
+        queuedAt: null,
       })),
     };
     const f = render(

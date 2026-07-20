@@ -26,6 +26,7 @@ export const EMPTY_QUEUE: QueueSnapshot = {
   recent: [],
   error: null,
   outboxDepth: 0,
+  stats: null,
 };
 
 export const CHEAP: LocalCheap = {
@@ -39,6 +40,7 @@ export const CHEAP: LocalCheap = {
         lastTool: "bash",
         outputTokens: 10,
         startedAt: "2026-07-07T10:00:00Z",
+        updatedAt: null,
         stale: false,
       },
     ],
@@ -51,6 +53,7 @@ export const CHEAP: LocalCheap = {
         retryCount: 0,
         notBefore: null,
         deferred: false,
+        queuedAt: null,
       },
     ],
     recent: [
@@ -59,6 +62,9 @@ export const CHEAP: LocalCheap = {
         github: { nwo: "acme/api", issue: 9, kind: "pr", external: false },
         status: "failed",
         finishedAt: "2026-07-07T10:05:00Z",
+        resultStatus: null,
+        durationSeconds: null,
+        prUrl: null,
       },
     ],
   },

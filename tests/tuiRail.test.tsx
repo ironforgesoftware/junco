@@ -33,6 +33,7 @@ const QUEUE: QueueSnapshot = {
       lastTool: "bash",
       outputTokens: 900,
       startedAt: null,
+      updatedAt: null,
       stale: false,
     },
   ],
@@ -45,6 +46,7 @@ const QUEUE: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
     {
       id: "w2",
@@ -54,10 +56,12 @@ const QUEUE: QueueSnapshot = {
       retryCount: 0,
       notBefore: null,
       deferred: false,
+      queuedAt: null,
     },
   ],
   recent: [],
   error: null,
+  stats: null,
 };
 
 const repos = [
@@ -132,6 +136,7 @@ describe("Rail", () => {
           lastTool: "bash",
           outputTokens: 900,
           startedAt: null,
+          updatedAt: null,
           stale: false,
         },
         {
@@ -141,6 +146,7 @@ describe("Rail", () => {
           lastTool: "edit",
           outputTokens: 100,
           startedAt: null,
+          updatedAt: null,
           stale: false,
         },
       ],

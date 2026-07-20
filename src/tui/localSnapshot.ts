@@ -505,6 +505,7 @@ function emptyQueue(cfg: Config): QueueSnapshot {
     recent: [],
     error: null,
     outboxDepth: 0,
+    stats: null,
   };
 }
 

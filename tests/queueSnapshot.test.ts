@@ -4,12 +4,17 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeQueueSnapshotFn, stripStamp } from "../src/tui/queueSnapshot.js";
 import { enqueueOp } from "../src/githubOutbox.js";
+import type { HealthBody } from "../src/tui/healthBody.js";
 import type { Config } from "../src/types.js";
 
-/** Minimal config over a sandboxed queue root (same cast style as dashboardCmd.test.ts). */
+/** Minimal config over a sandboxed queue root (same cast style as dashboardCmd.test.ts).
+ * `dataDir` is always populated so the stats layer (history ledger + outbox dirs,
+ * Task 6/7) resolves a real path — an unset dataDir would make queueStats' path
+ * joins throw and sink the whole snapshot. */
 function makeQueueCfg(root: string, overrides: Partial<Config> = {}): Config {
   return {
     queueRoot: join(root, "q"),
+    dataDir: join(root, "state"),
     defaultTimeoutMinutes: 30,
     maxConcurrent: 1,
     healthEnabled: true,
@@ -166,6 +171,7 @@ describe("running", () => {
         lastTool: "bash",
         outputTokens: 12345,
         startedAt: "2026-07-07T10:00:00.000Z",
+        updatedAt: "2026-07-07T10:04:00.000Z",
         stale: false,
       },
     ]);
@@ -184,6 +190,7 @@ describe("running", () => {
         lastTool: null,
         outputTokens: null,
         startedAt: null,
+        updatedAt: null,
         stale: false,
       },
     ]);
@@ -206,6 +213,7 @@ describe("running", () => {
         lastTool: null,
         outputTokens: null,
         startedAt: null,
+        updatedAt: null,
         stale: true,
       },
     ]);
@@ -293,11 +301,156 @@ describe("never-throws contract", () => {
     expect(snap.error).toBe("clock boom");
     expect(snap.waiting).toEqual([]);
     expect(snap.running).toEqual([]);
+    expect(snap.stats).toBeNull(); // error-path base object never carries stats
   });
 
   it("missing queue dirs (fresh install) → empty snapshot, no error", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-qsnap-empty-"));
     const snap = await makeQueueSnapshotFn(makeQueueCfg(root), { fetchFn: downFetch })();
     expect(snap).toMatchObject({ waiting: [], running: [], recent: [], error: null });
+  });
+});
+
+describe("waiting queuedAt", () => {
+  it("carries the inbox file mtime (ISO); a stat failure → null", async () => {
+    const d = setupDirs();
+    writeTicket(d.inbox, "a-high.md", "id: a-high\npriority: high");
+    writeTicket(d.inbox, "b-normal.md", "id: b-normal");
+    const statFn = (p: string): { mtimeMs: number } => {
+      if (p.endsWith("a-high.md")) return { mtimeMs: 1_700_000_000_000 };
+      if (p.endsWith("b-normal.md")) throw new Error("ENOENT");
+      return { mtimeMs: 0 }; // history/queue-dir stats — swallowed downstream
+    };
+    const snap = await makeQueueSnapshotFn(makeQueueCfg(d.root), {
+      fetchFn: downFetch,
+      statFn,
+    })();
+    const a = snap.waiting.find((w) => w.id === "a-high")!;
+    const b = snap.waiting.find((w) => w.id === "b-normal")!;
+    expect(a.queuedAt).toBe(new Date(1_700_000_000_000).toISOString());
+    expect(b.queuedAt).toBeNull();
+  });
+});
+
+describe("recent enrichment", () => {
+  it("populates result fields from the junco-result block; legacy files → null", async () => {
+    const d = setupDirs();
+    writeFileSync(
+      join(d.done, "2026-07-07T1002Z__gh-acme-api-7.md"),
+      "---\nid: gh-acme-api-7\ngithub:\n  nwo: acme/api\n  issue: 7\n  kind: pr\n---\n\nbody\n\n" +
+        "---\n<!-- junco-result\nstatus: timeout_partial\nduration_seconds: 61\n" +
+        "pr_url: https://github.com/acme/api/pull/7\npushed: true\n-->\n\n## Result\n\nok\n",
+    );
+    writeTicket(d.done, "2026-07-07T1001Z__legacy-1.md", "id: legacy-1"); // no result block
+    const statFn = (p: string): { mtimeMs: number } => {
+      if (p.includes("gh-acme-api-7")) return { mtimeMs: 2000 };
+      if (p.includes("legacy-1")) return { mtimeMs: 1000 };
+      return { mtimeMs: 0 };
+    };
+    const snap = await makeQueueSnapshotFn(makeQueueCfg(d.root), {
+      fetchFn: downFetch,
+      statFn,
+    })();
+    const enriched = snap.recent.find((r) => r.id === "gh-acme-api-7")!;
+    expect(enriched.resultStatus).toBe("timeout_partial");
+    expect(enriched.durationSeconds).toBe(61);
+    expect(enriched.prUrl).toBe("https://github.com/acme/api/pull/7");
+    const legacy = snap.recent.find((r) => r.id === "legacy-1")!;
+    expect(legacy.resultStatus).toBeNull();
+    expect(legacy.durationSeconds).toBeNull();
+    expect(legacy.prUrl).toBeNull();
+    // The legacy row is otherwise identical to today's shape.
+    expect(legacy).toMatchObject({ id: "legacy-1", status: "done", github: null });
+  });
+});
+
+describe("stats", () => {
+  const NOW = new Date("2026-07-15T12:00:00.000Z");
+
+  function writeShard(dataDir: string, records: unknown[]): void {
+    const dir = join(dataDir, "history");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "tasks-2026-07.jsonl"),
+      records.map((r) => JSON.stringify(r)).join("\n") + "\n",
+    );
+  }
+
+  const doneRec = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    v: 1,
+    at: "2026-07-15T10:00:00.000Z",
+    id: "x",
+    kind: "pr",
+    status: "completed",
+    durationSeconds: 100,
+    tokensIn: 10,
+    tokensOut: 20,
+    costUsd: 0.5,
+    retryCount: 0,
+    ...over,
+  });
+
+  it("populates stats from the health body, ledger shard, and outbox dirs", async () => {
+    const d = setupDirs();
+    const dataDir = join(d.root, "state");
+    const cfg = makeQueueCfg(d.root, { dataDir } as Partial<Config>);
+    writeShard(dataDir, [doneRec()]);
+    const obx = join(dataDir, "outbox");
+    mkdirSync(join(obx, "dead"), { recursive: true });
+    writeFileSync(join(obx, "1-0-a-labels.json"), "{}");
+    writeFileSync(join(obx, "2-0-b-labels.json"), "{}");
+    writeFileSync(join(obx, "dead", "3-0-c-labels.json"), "{}");
+
+    const healthOverride = {
+      body: {
+        status: "ok",
+        ready: true,
+        metrics: {
+          lastPollAt: "2026-07-15T11:59:00.000Z",
+          currentTickets: [],
+          currentProgress: {},
+        },
+        gate: { state: "cooldown", reason: "rate limited", until: null },
+      } as unknown as HealthBody,
+    };
+    const snap = await makeQueueSnapshotFn(cfg, { nowFn: () => NOW, healthOverride })();
+    expect(snap.stats).not.toBeNull();
+    expect(snap.stats!.gate?.state).toBe("cooldown");
+    expect(snap.stats!.lastPollAt).toBe("2026-07-15T11:59:00.000Z");
+    expect(snap.stats!.window24h.done).toBe(1);
+    expect(snap.stats!.outbox).toEqual({ depth: 2, dead: 1 });
+  });
+
+  it("self-fetch path parses the FULL health body into stats.gate", async () => {
+    const d = setupDirs();
+    const cfg = makeQueueCfg(d.root, { dataDir: join(d.root, "state") } as Partial<Config>);
+    const body = {
+      status: "ok",
+      ready: true,
+      metrics: { currentTickets: [], currentProgress: {}, lastPollAt: "2026-07-15T00:00:00Z" },
+      gate: { state: "open", reason: null, until: null },
+    };
+    const fetchFn = (async () => ({
+      ok: true,
+      json: async () => body,
+    })) as unknown as typeof fetch;
+    const snap = await makeQueueSnapshotFn(cfg, { fetchFn, nowFn: () => NOW })();
+    expect(snap.daemonUp).toBe(true);
+    expect(snap.stats!.gate?.state).toBe("open");
+  });
+
+  it("ETA uses the eligible (non-deferred) waiting count, not the total", async () => {
+    const d = setupDirs();
+    const dataDir = join(d.root, "state");
+    const cfg = makeQueueCfg(d.root, { dataDir } as Partial<Config>); // maxConcurrent 1
+    const future = new Date(NOW.getTime() + 3600_000).toISOString();
+    writeTicket(d.inbox, "a.md", `id: a\nnot_before: "${future}"`); // deferred
+    writeTicket(d.inbox, "b.md", "id: b"); // eligible
+    writeTicket(d.inbox, "c.md", "id: c"); // eligible
+    writeShard(dataDir, [doneRec()]); // avgDurationSeconds → 100
+    const snap = await makeQueueSnapshotFn(cfg, { fetchFn: downFetch, nowFn: () => NOW })();
+    expect(snap.stats!.window24h.avgDurationSeconds).toBe(100);
+    // 2 eligible × 100s / 1 concurrent = 200 (NOT 3 total × 100 = 300).
+    expect(snap.stats!.etaSeconds).toBe(200);
   });
 });

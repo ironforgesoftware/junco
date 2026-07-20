@@ -10,10 +10,13 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Config, TicketGithub, Ticket } from "../types.js";
 import { PRIORITY_RANK } from "../types.js";
-import { queuePaths, HEALTH_TIMEOUT_MS } from "../config.js";
+import { queuePaths } from "../config.js";
 import { parseTicket } from "../ticket.js";
-import { outboxDepth as computeOutboxDepth } from "../githubOutbox.js";
-import type { HealthBody } from "./healthBody.js";
+import { parseResultMeta } from "../resultMeta.js";
+import { makeTaskHistoryReader } from "../taskHistory.js";
+import { outboxDepth as computeOutboxDepth, deadCount } from "../githubOutbox.js";
+import { fetchHealthBody, type HealthBody } from "./healthBody.js";
+import { buildQueueStats, type QueueStats } from "./queueStats.js";
 
 export interface QueueRunning {
   id: string;
@@ -22,6 +25,9 @@ export interface QueueRunning {
   lastTool: string | null;
   outputTokens: number | null;
   startedAt: string | null;
+  /** ISO of the last progress update (currentProgress[id].updatedAt); null when
+   * /health has no progress entry yet or the row is a processing/ fallback. */
+  updatedAt: string | null;
   /** true when sourced from processing/ because /health was unreachable. */
   stale: boolean;
 }
@@ -35,6 +41,9 @@ export interface QueueWaiting {
   /** ISO stamp when deferred (future not_before), else null. */
   notBefore: string | null;
   deferred: boolean;
+  /** ISO of the inbox file's mtime (when it landed in the queue); null when the
+   * stat failed (vanished between discover and stat). */
+  queuedAt: string | null;
 }
 
 export interface QueueRecent {
@@ -42,6 +51,11 @@ export interface QueueRecent {
   github: TicketGithub | null;
   status: "done" | "failed";
   finishedAt: string; // file mtime, ISO
+  /** Terminal status from the junco-result block (parseResultMeta); null on a
+   * legacy/blockless file. */
+  resultStatus: string | null;
+  durationSeconds: number | null;
+  prUrl: string | null;
 }
 
 export interface QueueSnapshot {
@@ -53,6 +67,9 @@ export interface QueueSnapshot {
   error: string | null;
   /** Count of ops parked in the GitHub outbox (offline store-and-forward). */
   outboxDepth: number;
+  /** Derived queue statistics (ledger windows, ETA, gate/spend/guards). null
+   * only on the error-path base object. */
+  stats: QueueStats | null;
 }
 
 export interface QueueSnapshotDeps {
@@ -81,6 +98,7 @@ interface HealthProgress {
   lastTool?: string | null;
   outputTokens?: number;
   startedAt?: string;
+  updatedAt?: string;
 }
 
 export function makeQueueSnapshotFn(
@@ -93,6 +111,14 @@ export function makeQueueSnapshotFn(
   const fetchFn = deps.fetchFn ?? fetch;
   const nowFn = deps.nowFn ?? ((): Date => new Date());
   const paths = queuePaths(cfg);
+
+  // Constructed ONCE per factory so its per-shard memo survives across ticks
+  // (a caller that holds this factory amortizes ledger parsing over its polling).
+  const historyReader = makeTaskHistoryReader(cfg, {
+    readFileFn: deps.readFileFn,
+    statFn: deps.statFn,
+    nowFn: deps.nowFn,
+  });
 
   const listMd = (dir: string): string[] => {
     try {
@@ -130,20 +156,31 @@ export function makeQueueSnapshotFn(
       // failure earlier in the try (e.g. nowFn) must still yield a renderable
       // snapshot rather than an undefined field.
       outboxDepth: 0,
+      // null only here — the try-body always computes real stats; the catch
+      // path returns this base unchanged.
+      stats: null,
     };
     try {
       const now = nowFn().getTime();
 
       // -- waiting: mirror claimNextTask ordering exactly ------------------
+      // Keep the path alongside the parsed ticket so `queuedAt` can stat the
+      // inbox file (mtime = when it landed in the queue).
       const waiting = listMd(paths.inbox)
         .flatMap((p) => {
           const t = parseAt(p);
-          return t ? [t] : [];
+          return t ? [{ path: p, ticket: t }] : [];
         })
-        .sort((a, b) => PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority])
-        .map((t): QueueWaiting => {
+        .sort((a, b) => PRIORITY_RANK[b.ticket.priority] - PRIORITY_RANK[a.ticket.priority])
+        .map(({ path, ticket: t }): QueueWaiting => {
           const ts = t.notBefore ? Date.parse(t.notBefore) : NaN;
           const deferred = Number.isFinite(ts) && ts > now; // unparseable = eligible (runOnce parity)
+          let queuedAt: string | null = null;
+          try {
+            queuedAt = new Date(statFn(path).mtimeMs).toISOString();
+          } catch {
+            queuedAt = null; // vanished between discover and stat
+          }
           return {
             id: displayId(t),
             github: t.github,
@@ -156,6 +193,7 @@ export function makeQueueSnapshotFn(
             retryCount: t.retryCount,
             notBefore: deferred ? t.notBefore : null,
             deferred,
+            queuedAt,
           };
         });
 
@@ -179,46 +217,24 @@ export function makeQueueSnapshotFn(
             lastTool: p?.lastTool ?? null,
             outputTokens: p?.outputTokens ?? null,
             startedAt: p?.startedAt ?? null,
+            updatedAt: p?.updatedAt ?? null,
             stale: false,
           };
         });
-      if (deps.healthOverride !== undefined) {
-        // Already fetched by makeLocalCheapFn — never issue a second request.
-        const body = deps.healthOverride.body;
-        if (body !== null) {
-          daemonUp = true;
-          running = mkRunning(
-            body.metrics?.currentTickets ?? [],
-            body.metrics?.currentProgress ?? {},
-          );
-        }
-      } else if (cfg.healthEnabled) {
-        try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
-          try {
-            const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`, {
-              signal: ctrl.signal,
-            });
-            if (resp.ok) {
-              const j = (await resp.json()) as {
-                metrics?: {
-                  currentTickets?: string[];
-                  currentProgress?: Record<string, HealthProgress>;
-                };
-              };
-              daemonUp = true;
-              running = mkRunning(
-                j.metrics?.currentTickets ?? [],
-                j.metrics?.currentProgress ?? {},
-              );
-            }
-          } finally {
-            clearTimeout(timer);
-          }
-        } catch {
-          // unreachable/timeout — fall through to the processing/ fallback
-        }
+      // healthOverride present → use its already-fetched body (makeLocalCheapFn
+      // shares ONE /health per tick); absent → self-fetch the FULL body via
+      // fetchHealthBody (which owns the timeout/abort and the healthEnabled gate).
+      // A null body means the daemon is down → the processing/ fallback below.
+      const body =
+        deps.healthOverride !== undefined
+          ? deps.healthOverride.body
+          : await fetchHealthBody(cfg, { fetchFn });
+      if (body !== null) {
+        daemonUp = true;
+        running = mkRunning(
+          body.metrics?.currentTickets ?? [],
+          body.metrics?.currentProgress ?? {},
+        );
       }
       if (!daemonUp) {
         running = proc.map(
@@ -229,6 +245,7 @@ export function makeQueueSnapshotFn(
             lastTool: null,
             outputTokens: null,
             startedAt: null,
+            updatedAt: null,
             stale: true,
           }),
         );
@@ -249,20 +266,56 @@ export function makeQueueSnapshotFn(
         .sort((a, b) => b.mtimeMs - a.mtimeMs)
         .slice(0, RECENT_CAP)
         .map((e): QueueRecent => {
-          const t = parseAt(e.p);
+          // Read the file ONCE — the content feeds both parseTicket (id/github)
+          // and parseResultMeta (result block). Same never-throw posture: a
+          // vanished/unreadable file falls back to the stamped basename with
+          // null result fields.
+          let content: string | null = null;
+          try {
+            content = readFileFn(e.p);
+          } catch {
+            content = null;
+          }
+          let t: Ticket | null = null;
+          if (content !== null) {
+            try {
+              t = parseTicket(e.p, content, cfg.defaultTimeoutMinutes);
+            } catch {
+              t = null;
+            }
+          }
+          const meta =
+            content !== null
+              ? parseResultMeta(content)
+              : { status: null, durationSeconds: null, prUrl: null };
           return {
             id: t ? displayId(t) : stripStamp(basename(e.p).replace(/\.md$/, "")),
             github: t?.github ?? null,
             status: e.status,
             finishedAt: new Date(e.mtimeMs).toISOString(),
+            resultStatus: meta.status,
+            durationSeconds: meta.durationSeconds,
+            prUrl: meta.prUrl,
           };
         });
 
       // Reuse the same readdirFn the rest of this snapshot was built with
       // (test fakes then cover both the queue dirs and the outbox dir).
       const outboxDepth = computeOutboxDepth(cfg, { readdirFn });
+      const outboxDead = deadCount(cfg, { readdirFn });
 
-      return { ...base, daemonUp, running, waiting, recent, outboxDepth };
+      const stats = buildQueueStats(
+        cfg,
+        {
+          healthBody: body,
+          history: historyReader,
+          eligibleWaiting: waiting.filter((w) => !w.deferred).length,
+          outbox: { depth: outboxDepth, dead: outboxDead },
+        },
+        { nowFn: deps.nowFn, readdirFn, statFn },
+      );
+
+      return { ...base, daemonUp, running, waiting, recent, outboxDepth, stats };
     } catch (e) {
       return { ...base, error: e instanceof Error ? e.message : String(e) };
     }
