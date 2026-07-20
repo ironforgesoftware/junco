@@ -480,7 +480,7 @@ export function makeLocalHeavyFn(
   };
 }
 
-export type LocalSection = "queue" | "outbox" | "repos" | "worktrees" | "daemon";
+export type LocalSection = "queue" | "outbox" | "repos" | "worktrees" | "daemon" | "logs";
 
 export interface LocalCheap {
   queue: QueueSnapshot;

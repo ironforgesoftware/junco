@@ -49,6 +49,8 @@ import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
+import { useLogTail } from "./useLogTail.js";
+import type { LogReaderDeps } from "../logReader.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -61,6 +63,10 @@ export interface AppProps {
   configPath: string;
   /** Managed clones root (<dataDir>/clones/watched) — auto-clone destination. */
   clonesDir: string;
+  /** The daemon's log file (<dataDir>/worker.log) — the LOCAL `logs` section
+   * and its overlay tail it via useLogTail. Resolved by dashboardCmd where cfg
+   * is in scope; read only while the logs surface is on screen. */
+  logPath: string;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */
   refreshPollMs?: number;
@@ -91,6 +97,13 @@ export interface AppProps {
   onExit: () => void;
   /** Best-effort npm update check (spec 2026-07-16); absent in tests → no chip. */
   checkUpdateFn?: () => Promise<UpdateInfo | null>;
+  /** LOCAL logs poll cadence override (tests); production omits it → the hook's
+   * 500ms default. */
+  logsPollMs?: number;
+  /** useLogTail fs seam (tests inject an in-memory file); production omits it —
+   * MUST stay `undefined` so the hook's effect dep array keeps a stable
+   * identity and never teardown/re-seeds per render. */
+  logReaderDeps?: LogReaderDeps;
 }
 
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
@@ -219,7 +232,14 @@ export function App(props: AppProps): React.JSX.Element {
   const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
-  const LOCAL_SECTIONS: LocalSection[] = ["queue", "outbox", "repos", "worktrees", "daemon"];
+  const LOCAL_SECTIONS: LocalSection[] = [
+    "queue",
+    "outbox",
+    "repos",
+    "worktrees",
+    "daemon",
+    "logs",
+  ];
   const runCliFn =
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
@@ -307,11 +327,16 @@ export function App(props: AppProps): React.JSX.Element {
     repos: 0,
     worktrees: 0,
     daemon: 0,
+    logs: 0,
   });
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
   const [localRefreshedAt, setLocalRefreshedAt] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // The full-screen log overlay's open flag. Task 6 wires the setter (opened by
+  // the compact section's expand handler); Task 7 renders the overlay + its
+  // keys. Keeping the poll active while it's open lives in `logActive` below.
+  const [logOverlay, setLogOverlay] = useState(false);
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const [updateLatest, setUpdateLatest] = useState<string | null>(null);
@@ -334,6 +359,21 @@ export function App(props: AppProps): React.JSX.Element {
     return view;
   }, [uiMode, localSection, view, reviewState.open, cmd, detail]);
   const { scroll, scrollBy, onScrollMax } = useScroll(scrollKey);
+
+  // LOCAL logs tail — the hook reads disk ONLY while the logs surface is on
+  // screen (the section is selected, or the overlay is open). `props.logReaderDeps`
+  // is passed by IDENTITY (undefined in production, a stable fake in tests) so
+  // the hook's effect never teardown/re-seeds per render; the resolved `pollMs`
+  // primitive and that identity are what its dep array reads, not this literal.
+  const logActive = uiMode === "local" && (localSection === "logs" || logOverlay);
+  const logEntries = useLogTail(props.logPath, logActive, {
+    pollMs: props.logsPollMs,
+    readerDeps: props.logReaderDeps,
+  });
+  // No render-time fs call: an empty/absent file both show the placeholder until
+  // the first line arrives (a running daemon fills within one poll).
+  const logHasFile = logEntries.length > 0;
+  const onLogExpand = (): void => setLogOverlay(true);
 
   // Selectable rows for the current section. INVARIANT: this list is the EXACT
   // rendered list each section component highlights, in the same order and
@@ -379,6 +419,10 @@ export function App(props: AppProps): React.JSX.Element {
           klass: w.kind,
         }));
       case "daemon":
+        return [];
+      case "logs":
+        // Viewport, no selectable rows (like daemon) — the compact tail is
+        // click-to-expand, not row-navigable.
         return [];
     }
   };
@@ -1559,7 +1603,9 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (input === "G") {
-      setLocalSection("daemon");
+      // Jump to the LAST section (now `logs`, appended after `daemon`) — via the
+      // array so it never drifts as sections are added.
+      setLocalSection(LOCAL_SECTIONS[LOCAL_SECTIONS.length - 1]);
       return;
     }
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
@@ -2501,6 +2547,9 @@ export function App(props: AppProps): React.JSX.Element {
           onRowPress={localRowPress}
           onDaemonWheel={(d) => scrollBy(d)}
           onScrollMax={onScrollMax}
+          logEntries={logEntries}
+          logHasFile={logHasFile}
+          onLogExpand={onLogExpand}
         />
       ) : view === "review" ? (
         <ReviewView

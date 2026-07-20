@@ -66,13 +66,13 @@ describe("local sections", () => {
 
   it("j/k move the section rail; → enters the body; ← returns to the rail", async () => {
     const r = renderApp({ initialUiMode: "local" });
-    await until(() => (r.lastFrame() ?? "").includes("1/5")); // queue selected
+    await until(() => (r.lastFrame() ?? "").includes("1/6")); // queue selected
     r.stdin.write("j"); // → outbox
-    await until(() => (r.lastFrame() ?? "").includes("2/5"));
+    await until(() => (r.lastFrame() ?? "").includes("2/6"));
     r.stdin.write("j"); // → repos
-    await until(() => (r.lastFrame() ?? "").includes("3/5"));
+    await until(() => (r.lastFrame() ?? "").includes("3/6"));
     r.stdin.write("j"); // → worktrees
-    await until(() => (r.lastFrame() ?? "").includes("4/5"));
+    await until(() => (r.lastFrame() ?? "").includes("4/6"));
     await until(() => (r.lastFrame() ?? "").includes("fix-typos")); // worktrees body (heavy loaded)
     r.stdin.write("l"); // → body
     await until(() => (r.lastFrame() ?? "").includes("prune")); // body footer (worktrees)
@@ -84,7 +84,9 @@ describe("local sections", () => {
   it("daemon section shows pid, uptime, endpoint, guard, tokens", async () => {
     const r = renderApp({ initialUiMode: "local" });
     await until(() => (r.lastFrame() ?? "").includes("daemon"));
-    r.stdin.write("G"); // last section
+    r.stdin.write("G"); // → logs (last section)
+    await until(() => (r.lastFrame() ?? "").includes("6/6"));
+    r.stdin.write("k"); // → daemon section
     await until(() => {
       const f = r.lastFrame() ?? "";
       return f.includes("4242") && f.includes("guard");
@@ -99,11 +101,14 @@ describe("local sections", () => {
     };
     const r = renderApp({ initialUiMode: "local", localCheapFn: async () => down });
     await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
-    // "not running" only lives in the daemon SECTION body — navigate to it.
+    // "not running" only lives in the daemon SECTION body — navigate to it
+    // (G → logs, the last section; k steps up to daemon).
     r.stdin.write("G");
+    await until(() => (r.lastFrame() ?? "").includes("6/6"));
+    r.stdin.write("k");
     await until(() => (r.lastFrame() ?? "").toLowerCase().includes("not running"));
     r.stdin.write("g"); // → queue
-    await until(() => (r.lastFrame() ?? "").includes("1/5"));
+    await until(() => (r.lastFrame() ?? "").includes("1/6"));
     r.stdin.write("j"); // → outbox (its snapshot error renders "unavailable")
     await until(() => (r.lastFrame() ?? "").includes("unavailable"));
   });
