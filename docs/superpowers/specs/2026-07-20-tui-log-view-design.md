@@ -49,7 +49,6 @@ export function readTail(path: string, n: number, deps?: LogReaderDeps): LogEntr
 export interface LogTailer {
   poll(): LogEntry[]; // entries appended since the last poll; [] when unchanged
   rotated: boolean; // set true on the poll that detected a rotation, for a marker row
-  reset(): void; // drop offset + carry (re-tail from head)
 }
 export function makeLogTailer(path: string, deps?: LogReaderDeps): LogTailer;
 ```
