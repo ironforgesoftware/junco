@@ -109,3 +109,15 @@ poll (500 ms, visibility-gated) → `tailer.poll()` → append to ring buffer (d
 ## Compatibility
 
 Additive: a new module, a new TUI section + overlay, a new visibility-gated poll. No change to the log file format, the daemon, `ticketSchema`, config, or `/health`. `logsCmd`'s observable behavior is unchanged. No new Config field (the 500 ms poll is an internal default, injectable in tests via the existing `*PollMs` prop convention — not a config lever).
+
+## Implementation deviations
+
+Small departures from the design above, discovered during implementation:
+
+(a) The rail badge for `logs` is `""` (no badge), not the `●` dot Component 5 originally specified. The live/follow indicator lives in the `LogView` header instead (`● following` / `⏸ paused`) — a rail dot would be redundant with the `▌` cursor, since the logs poll is active exactly when the section is selected. Passively surfacing a warn/error count from other sections without the section being on screen remains a non-goal (it would require the background disk reads this design explicitly avoids).
+
+(b) The compact section shows the latest **unfiltered** tail — filters (level/ticket/search) apply only in the full-screen overlay, never to the compact rail view.
+
+(c) `logPath` is threaded as an explicit `App` prop (`AppProps.logPath`), resolved once in `dashboardCmd.ts` (`join(cfg.dataDir, "worker.log")`) rather than derived inside `App` — `App` has no `cfg` in scope. This mirrors the existing `clonesDir` prop, which resolves `<dataDir>/clones/watched` the same way.
+
+(d) The compact section's row count is `k = max(1, height - 3)`, not the plan's `height - 2`. The bordered box already consumes 2 rows (top/bottom border) plus 1 for the pinned `logs  ●  <count>` header; `height - 2` would let the tail overflow the box by one row. `k = height - 3` matches the arithmetic `QueueView` already uses for the same bordered-box-plus-header shape.
