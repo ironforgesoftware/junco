@@ -121,3 +121,7 @@ Small departures from the design above, discovered during implementation:
 (c) `logPath` is threaded as an explicit `App` prop (`AppProps.logPath`), resolved once in `dashboardCmd.ts` (`join(cfg.dataDir, "worker.log")`) rather than derived inside `App` — `App` has no `cfg` in scope. This mirrors the existing `clonesDir` prop, which resolves `<dataDir>/clones/watched` the same way.
 
 (d) The compact section's row count is `k = max(1, height - 3)`, not the plan's `height - 2`. The bordered box already consumes 2 rows (top/bottom border) plus 1 for the pinned `logs  ●  <count>` header; `height - 2` would let the tail overflow the box by one row. `k = height - 3` matches the arithmetic `QueueView` already uses for the same bordered-box-plus-header shape.
+
+(e) The overlay's filter chips (level/ticket/search) are **display-only** — the spec mentioned "click chips to cycle", but filters cycle via keys (`l`/`t`/`/`) only. Mouse/keyboard parity is not owed for non-actionable display chips (the same rule the footer applies to movement hints: an inert chip has no click handler).
+
+(f) The `LogView` header `●` indicates **follow state** (`● following` / `⏸ paused`), not daemon liveness; the spec's "daemon-down note in the header" was not implemented — the file still renders when the daemon is down (the placeholder only distinguishes "no log file yet"). Threading daemon-up state into the overlay header is left to a follow-up issue.

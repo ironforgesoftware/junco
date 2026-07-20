@@ -5,14 +5,8 @@
  * tail on activation, polls for deltas, resets on deactivation.
  */
 
-import { useEffect, useRef, useState } from "react";
-import {
-  makeLogTailer,
-  readTail,
-  type LogEntry,
-  type LogReaderDeps,
-  type LogTailer,
-} from "../logReader.js";
+import { useEffect, useState } from "react";
+import { makeLogTailer, readTail, type LogEntry, type LogReaderDeps } from "../logReader.js";
 
 export const LOG_BUFFER_CAP = 2000;
 
@@ -42,17 +36,17 @@ export function useLogTail(path: string, active: boolean, opts: UseLogTailOpts =
   const seedN = opts.seedN ?? 200;
   const cap = opts.cap ?? LOG_BUFFER_CAP;
   const [entries, setEntries] = useState<LogEntry[]>([]);
-  const tailerRef = useRef<LogTailer | null>(null);
 
   useEffect(() => {
     if (!active) {
       setEntries([]);
-      tailerRef.current = null;
       return;
     }
-    setEntries(readTail(path, seedN, opts.readerDeps));
+    // Defensive `.slice(-cap)`: the seed is bounded by `seedN`, but a future
+    // caller could pass `seedN > cap` — clamp so the buffer never opens larger
+    // than the running cap that `appendBounded` enforces on every later poll.
+    setEntries(readTail(path, seedN, opts.readerDeps).slice(-cap));
     const tailer = makeLogTailer(path, opts.readerDeps);
-    tailerRef.current = tailer;
     const id = setInterval(() => {
       const fresh = tailer.poll();
       const add = tailer.rotated ? [ROTATED_MARKER, ...fresh] : fresh;
@@ -60,7 +54,6 @@ export function useLogTail(path: string, active: boolean, opts: UseLogTailOpts =
     }, pollMs);
     return () => {
       clearInterval(id);
-      tailerRef.current = null;
     };
     // opts.readerDeps identity is stable per test; path/active/pollMs drive it.
   }, [path, active, pollMs, seedN, cap, opts.readerDeps]);

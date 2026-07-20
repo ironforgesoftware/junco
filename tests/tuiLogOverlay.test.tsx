@@ -16,7 +16,6 @@ const ENTER = "\r";
 const logLine = (o: Record<string, unknown>): string => JSON.stringify(o) + "\n";
 const lineOf = (frame: string, needle: string): number =>
   frame.split("\n").findIndex((l) => l.includes(needle));
-
 // In-memory file backing the reader deps (no spies needed here).
 function fakeFs(initial = "") {
   const content = Buffer.from(initial, "utf8");
@@ -35,12 +34,6 @@ function fakeFs(initial = "") {
 }
 
 const frame = (r: { lastFrame: () => string | undefined }): string => r.lastFrame() ?? "";
-
-// Yield a couple of macrotasks so React commits and ink re-binds its input
-// handler after a mode-entry keystroke (`/`) that has no observable of its own.
-// Used ONLY to sequence a following keystroke — every assertion still polls via
-// `until`, never a fixed tick.
-const settle = (): Promise<void> => new Promise((res) => setTimeout(res, 40));
 
 /** Mount in LOCAL mode, jump to the `logs` section, and wait for a seeded line
  * to tail into the compact pane (proves the section mounted + polled). */
@@ -102,26 +95,28 @@ describe("LOCAL full-screen log overlay", () => {
     await until(() => !frame(r).includes("#alpha") && !frame(r).includes("#beta"));
   });
 
-  it("/ + typed term + Enter sets the search chip; esc in search clears it", async () => {
+  it("/ shows the search prompt; typed term + Enter sets the chip; esc in search clears it", async () => {
     const deps = fakeFs(
       logLine({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "daemon booted" }),
     );
     const r = await openToLogs(deps, "daemon booted");
     await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
-    // `/` toggles search-entry mode — a state change with NO observable of its
-    // own, so yield a tick (sequencing only; the real assertions stay on until)
-    // before the next keystroke reads the freshly-committed handler.
+    // `/` enters search-entry mode — now observable via the live prompt chip
+    // (`/<term>▏`), present even before a char is typed. Polling that prompt
+    // replaces the old fixed settle: `until` yields ticks for React to commit
+    // and ink to re-bind before the following keystroke lands.
     r.stdin.write("/");
-    await settle();
-    r.stdin.write("boot"); // printable chars extend the term — chip tracks live
-    await until(() => frame(r).includes('"boot"')); // the quoted search chip
+    await until(() => frame(r).includes("/▏")); // empty-term prompt
+    r.stdin.write("boot"); // printable chars extend the term — prompt tracks live
+    await until(() => frame(r).includes("/boot▏"));
     r.stdin.write(ENTER); // commit: keep the term, leave search-entry mode
-    await until(() => frame(r).includes('"boot"')); // still shown after commit
-    // Re-enter search then esc → discards the term and exits search-entry mode.
+    await until(() => frame(r).includes('"boot"')); // the committed quoted chip
+    expect(frame(r)).not.toContain("/boot▏"); // the live prompt is gone once committed
+    // Re-enter search (prompt shows the retained term) then esc → discards it.
     r.stdin.write("/");
-    await settle();
+    await until(() => frame(r).includes("/boot▏"));
     r.stdin.write(ESC);
-    await until(() => !frame(r).includes('"boot"'));
+    await until(() => !frame(r).includes('"boot"') && !frame(r).includes("/boot▏"));
   });
 
   it("f toggles follow (following → paused → following)", async () => {
@@ -179,5 +174,75 @@ describe("LOCAL full-screen log overlay", () => {
     // Still the overlay (not the github `t` queue view, which renders RUNNING).
     expect(frame(r)).toContain("following");
     expect(frame(r)).not.toContain("RUNNING");
+  });
+
+  it("the overlay owns input: `m` and `,` typed in search are chars, not mode/config toggles", async () => {
+    const deps = fakeFs(
+      logLine({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "daemon, booted" }),
+    );
+    const r = await openToLogs(deps, "daemon, booted");
+    await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
+    // Enter search-entry mode, then build the term "daemon" char-group by
+    // char-group. The `m` MUST land as a discrete keystroke: under the open
+    // overlay canToggleMode() is false, so `m` extends the term instead of
+    // flipping to GITHUB (which would unmount the overlay and time out below).
+    r.stdin.write("/");
+    await until(() => frame(r).includes("/▏"));
+    r.stdin.write("dae"); // plain chars, appended wholesale
+    await until(() => frame(r).includes("/dae▏"));
+    r.stdin.write("m"); // the critical discrete `m` — a search char, NOT a toggle
+    await until(() => frame(r).includes("/daem▏"));
+    r.stdin.write("on");
+    await until(() => frame(r).includes("/daemon▏"));
+    // `,` is the worst case: layer-3b used to open ConfigView even mid-search.
+    // Under the overlay it is just another search char.
+    r.stdin.write(",");
+    await until(() => frame(r).includes("/daemon,▏"));
+    // Still LOCAL, still the overlay open — neither `m` nor `,` leaked.
+    expect(frame(r)).toContain("[LOCAL]"); // `m` did not flip to GITHUB
+    expect(frame(r)).toContain("following"); // ConfigView did not replace the overlay
+  });
+
+  it("the footer under the overlay shows esc/close, not the stale LOCAL rail chips", async () => {
+    const deps = fakeFs(
+      logLine({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "seed-foot" }),
+    );
+    const r = await openToLogs(deps, "seed-foot");
+    await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
+    const f = frame(r);
+    expect(f).toContain("esc"); // the overlay's only actionable chip (close)
+    expect(f).toContain("close");
+    // The LOCAL rail chips (whose keys the overlay swallows) must be gone — the
+    // `q` chip must not quit while the `q` key closes, `→ open` label is wrong.
+    expect(f).not.toContain("q quit");
+    expect(f).not.toContain("→ open");
+  });
+
+  it("a second click on the already-selected logs rail row opens the overlay", async () => {
+    const deps = fakeFs(
+      logLine({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "seed-rail" }),
+    );
+    // openToLogs leaves `logs` selected (rail focus) with the overlay closed —
+    // so a click on that rail row is the click-again case (parity with Enter).
+    const r = await openToLogs(deps, "seed-rail");
+    // Locate the `logs` rail row: the "logs" text inside the left rail column
+    // (x < RAIL_WIDTH), NOT the compact pane header to its right.
+    const railLogs = (): { x: number; y: number } | null => {
+      const lines = frame(r).split("\n");
+      for (let y = 0; y < lines.length; y++) {
+        const x = (lines[y] ?? "").indexOf("logs");
+        if (x >= 0 && x < 26) return { x, y };
+      }
+      return null;
+    };
+    const pos = railLogs();
+    expect(pos).not.toBeNull();
+    const { x, y } = pos!;
+    // ESC-prefixed SGR press (the reliable form the LOCAL rail suites use — a
+    // bare `[<…M` lands only intermittently on the nested section regions).
+    const press = `[<0;${x + 1};${y + 1}M`;
+    // Idempotent (a click that unmounts its own target — the rail — once the
+    // overlay opens), so fireUntil's re-send is safe.
+    await fireUntil(r.stdin, press, () => frame(r).includes("following"));
   });
 });

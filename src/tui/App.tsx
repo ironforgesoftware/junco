@@ -112,6 +112,21 @@ export interface AppProps {
 // terminals only).
 type Pane = 1 | 2 | 3;
 
+// Footer hints while the full-screen log overlay owns input. `esc` is the only
+// actionable chip (footerActions closes the overlay); the movement/filter hints
+// are display-only (inert chips), mirroring how movement hints render elsewhere.
+// This replaces the stale LOCAL rail chips (`q quit`, `→ open`, …) that would
+// otherwise act while their keys are swallowed by the overlay. (#225 class.)
+const LOG_OVERLAY_HINTS: [string, string][] = [
+  ["f", "follow"],
+  ["l", "level"],
+  ["t", "ticket"],
+  ["/", "search"],
+  ["[ ]", "scroll"],
+  ["G", "bottom"],
+  ["esc", "close"],
+];
+
 /** What a loader actually delivered — the unified cycle aggregates these to
  * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
 type Delivery = { delivered: boolean; staleAt: string | null };
@@ -1466,7 +1481,15 @@ export function App(props: AppProps): React.JSX.Element {
   // The mode toggle is inert while a text field (filter / add-repo / palette)
   // or the confirm modal owns input — so `m` can never eat a typed character.
   const canToggleMode = (): boolean =>
-    !filtering && view !== "addRepo" && view !== "config" && view !== "palette" && confirm === null;
+    !filtering &&
+    view !== "addRepo" &&
+    view !== "config" &&
+    view !== "palette" &&
+    confirm === null &&
+    // The log overlay owns ALL input while open — `m`/Shift+Tab must not flip
+    // modes (leaving the overlay latent, reopened with a reset scroll) or hijack
+    // a typed search char containing `m` (e.g. "daemon").
+    !(uiMode === "local" && logOverlay);
   // Region-based tab clicks (Header). Guarded like the `m` key: inert while
   // the confirm modal owns input; github-disabled taps toast instead of switch.
   const handleModeTab = (m: UiMode): void => {
@@ -1478,6 +1501,11 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     dismissToast();
+    // The mouse mode-tab path is the one key-fencing (canToggleMode) can't
+    // reach: close any open overlay here so none survives a mouse mode switch
+    // (a latent overlay would reopen — with a reset scroll — on returning).
+    setLogOverlay(false);
+    setLogSearchMode(false);
     setUiMode(m);
   };
   // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
@@ -1756,7 +1784,15 @@ export function App(props: AppProps): React.JSX.Element {
     // view (never stealing the key from help/detail/queue/prs/palette/etc.,
     // which in LOCAL mode is moot since local never routes view away from
     // "main"/"help").
-    if (input === "," && view === "main" && !filtering && confirm === null) {
+    if (
+      input === "," &&
+      view === "main" &&
+      !filtering &&
+      confirm === null &&
+      // Not while the log overlay owns input — `,` there is a search char, not a
+      // config-open (worst inside search mode, typing a term containing a comma).
+      !(uiMode === "local" && logOverlay)
+    ) {
       dismissToast();
       setView("config");
       return;
@@ -2320,6 +2356,10 @@ export function App(props: AppProps): React.JSX.Element {
   const localSectionPress = (s: LocalSection): void => {
     if (confirm !== null) return;
     if (localSection === s) {
+      // Click-again = the l/→/Enter key. For `logs` that key opens the overlay
+      // (onLogExpand) — so click-again must too, or the mouse dead-ends in a
+      // body focus whose only key (Enter) is then swallowed by the overlay path.
+      if (s === "logs") return void onLogExpand();
       setLocalFocus("body"); // click-again = enter (the l/→/enter key)
       return;
     }
@@ -2347,6 +2387,18 @@ export function App(props: AppProps): React.JSX.Element {
   // verbatim, including the guards.
   const footerActions: Record<string, () => void> = useMemo((): Record<string, () => void> => {
     if (confirm !== null) return {}; // destructive confirm owns input — every chip inert
+    // The log overlay owns input while open: only its `esc` chip acts (closes
+    // the overlay); the movement/filter hints (LOG_OVERLAY_HINTS) render inert.
+    // Placed ahead of the LOCAL branch so the stale rail chips (whose keys the
+    // overlay swallows) never carry live handlers under the modal. (#225 class.)
+    if (uiMode === "local" && logOverlay) {
+      return {
+        esc: () => {
+          setLogOverlay(false);
+          setLogSearchMode(false);
+        },
+      };
+    }
     // help/config render mode-agnostic hint sets (see the `hints` computation),
     // so their chips carry no LOCAL actions — fall through to the switch below
     // (case "help" returns {}), same as github. The view guards stay as
@@ -2509,6 +2561,7 @@ export function App(props: AppProps): React.JSX.Element {
   }, [
     confirm,
     uiMode,
+    logOverlay,
     view,
     cmd,
     prDetail,
@@ -2550,9 +2603,13 @@ export function App(props: AppProps): React.JSX.Element {
           // closes" applies on both surfaces — LOCAL must not keep rendering
           // stale rail/body chips under the modal. (#225)
           hintsFor("help", pane, layout.mode, filtering)
-        : uiMode === "local"
-          ? localHintsFor(localSection, localFocus)
-          : hintsFor(view as HintView, pane, layout.mode, filtering);
+        : uiMode === "local" && logOverlay
+          ? // The overlay owns input — its own hint set (esc = close, the rest
+            // display-only), never the section-rail chips underneath. (#225 class.)
+            LOG_OVERLAY_HINTS
+          : uiMode === "local"
+            ? localHintsFor(localSection, localFocus)
+            : hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
   const paletteProps = {
     commands: PALETTE_COMMANDS,
@@ -2648,6 +2705,7 @@ export function App(props: AppProps): React.JSX.Element {
           entries={logEntries}
           filters={logFilters}
           follow={logFollow}
+          searchMode={logSearchMode}
           scroll={scroll}
           height={listHeight}
           focused

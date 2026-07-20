@@ -214,4 +214,54 @@ describe("LogView — full variant", () => {
     );
     expect(reported).toBe(32);
   });
+
+  it("searchMode renders a live search prompt in the header, even before a char is typed", () => {
+    const emptyFrame = render(
+      <LogView
+        variant="full"
+        entries={[]}
+        height={12}
+        focused
+        hasFile
+        filters={F()}
+        follow
+        scroll={0}
+        searchMode
+      />,
+    ).lastFrame()!;
+    expect(emptyFrame).toContain("/▏"); // empty-term prompt (search-entry cue)
+
+    const typedFrame = render(
+      <LogView
+        variant="full"
+        entries={[e({ msg: "x" })]}
+        height={12}
+        focused
+        hasFile
+        filters={F({ search: "boot" })}
+        follow
+        scroll={0}
+        searchMode
+      />,
+    ).lastFrame()!;
+    expect(typedFrame).toContain("/boot▏"); // the prompt tracks the term live
+    expect(typedFrame).not.toContain('"boot"'); // NOT the committed quoted chip while editing
+  });
+
+  it("a committed search (searchMode off) renders the quoted chip, not the live prompt", () => {
+    const frame = render(
+      <LogView
+        variant="full"
+        entries={[e({ msg: "x" })]}
+        height={12}
+        focused
+        hasFile
+        filters={F({ search: "boot" })}
+        follow
+        scroll={0}
+      />,
+    ).lastFrame()!;
+    expect(frame).toContain('"boot"');
+    expect(frame).not.toContain("/boot▏");
+  });
 });

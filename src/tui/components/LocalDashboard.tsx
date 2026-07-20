@@ -66,7 +66,7 @@ export function sectionBadge(
   }
 }
 
-/** LOCAL section rail — a fixed 5-row list (never windowed), rendered like the
+/** LOCAL section rail — a fixed 6-row list (never windowed), rendered like the
  * GitHub Rail: `▌` accent cursor + selectionBg on the selected section, border
  * accent when the rail holds focus. Live badges come from the cheap/heavy
  * snapshots; an optional `↻ <age>` stamp is pinned at the bottom so the tall
@@ -678,6 +678,8 @@ export default function LocalDashboard({
         onScrollMax={onScrollMax}
       />
     ) : (
+      // The section variant reports no scrollable max (its whole surface is
+      // click-to-expand), so no `onWheel` — a wheel there would clamp to a no-op.
       <LogView
         variant="section"
         entries={logEntries ?? []}
@@ -685,7 +687,6 @@ export default function LocalDashboard({
         focused={bodyFocused}
         hasFile={logHasFile ?? true}
         onExpand={onLogExpand}
-        onWheel={onDaemonWheel}
       />
     );
 

@@ -98,7 +98,6 @@ function readViaSeam(
 export interface LogTailer {
   poll(): LogEntry[];
   rotated: boolean;
-  reset(): void;
 }
 
 export function makeLogTailer(path: string, deps: LogReaderDeps = {}): LogTailer {
@@ -111,10 +110,6 @@ export function makeLogTailer(path: string, deps: LogReaderDeps = {}): LogTailer
   let carry = "";
   const tailer: LogTailer = {
     rotated: false,
-    reset(): void {
-      pos = 0;
-      carry = "";
-    },
     poll(): LogEntry[] {
       this.rotated = false;
       let size: number;

@@ -24,6 +24,7 @@ interface LogViewProps {
   // full-variant only:
   filters?: LogFilters;
   follow?: boolean;
+  searchMode?: boolean; // true → render the live search-entry prompt in the header
   scroll?: number; // top offset when paused
   onScrollMax?: (max: number) => void;
   onExpand?: () => void; // section: click to open the overlay
@@ -145,10 +146,14 @@ function fullView(props: LogViewProps): React.JSX.Element {
 
   // Filter chips (display-only — the overlay cycles them via keys): the level
   // threshold only shows once it's above the floor, then ticket, then search.
+  // While search-entry mode is active the term renders as a live prompt
+  // (`/<term>▏`) — a visible cue that keystrokes are extending the term, shown
+  // even before the first char is typed — instead of the committed quoted chip.
   const chips: string[] = [];
   if (filters.minLevel !== "debug") chips.push(`level ≥ ${filters.minLevel}`);
   if (filters.ticket !== null) chips.push(`#${filters.ticket}`);
-  if (filters.search.trim() !== "") chips.push(`"${filters.search.trim()}"`);
+  if (props.searchMode === true) chips.push(`/${filters.search}▏`);
+  else if (filters.search.trim() !== "") chips.push(`"${filters.search.trim()}"`);
 
   // `hasFile === false` shows the daemon-not-started placeholder unconditionally
   // (BOTH variants, per the brief) — never real rows, even if a stale buffer
