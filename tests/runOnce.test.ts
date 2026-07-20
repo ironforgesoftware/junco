@@ -2118,6 +2118,64 @@ describe("task-history ledger (Task 4)", () => {
     expect(rec.calls[0].issue).toBe(42);
   });
 
+  it('hasRepo-but-empty repo (repo: "") falls through to Q&A and appends an ask-kind record', async () => {
+    // repo: "" makes hasRepo true (frontmatter.repo is defined, non-null) but
+    // deriveRepoContext's `if (!rawRepo) return null` rejects the empty
+    // string, so executeClaimed logs "hasRepo ticket produced no repo
+    // context; treating as Q&A" and actually runs the Q&A branch. The record
+    // must reflect that executed branch (ask), not the field-shape guess (pr).
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    seed(root, "empty-repo-1", 'repo: ""\n');
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      sessionFactoryFor: () => fakeFactory(),
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].kind).toBe("ask");
+    expect(rec.calls[0].status).toBe("completed");
+  });
+
+  it("repo: + github.kind=plan runs the real PR flow and appends a pr-kind record", async () => {
+    // A ticket carrying BOTH `repo:` and `github: { kind: plan, ... }` still
+    // dispatches through the hasRepo branch (executeClaimed checks hasRepo,
+    // not github.kind) and runs the real PR flow — the record must say "pr",
+    // not "plan", even though the field-shape guess would say "plan" first.
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    seed(
+      root,
+      "pr-plan-1",
+      "repo: /tmp/fake-repo-for-history\ngithub:\n  nwo: acme/api\n  issue: 5\n  kind: plan\n  external: false\n",
+    );
+
+    const fakePrFlowFn = async (): Promise<PrFlowResult> => ({
+      dst: join(j, "done", "pr-plan-1.md"),
+      status: "completed",
+      requeued: false,
+      prUrl: "https://x/pull/2",
+      commitCount: 1,
+      finalText: "done",
+      phaseError: null,
+      prQueued: false,
+      usage: { input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 },
+      durationMs: 100,
+    });
+
+    const rec = fakeAppendTaskRecord();
+    const handled = await runOnce(cfg(root), {
+      prFlowFn: fakePrFlowFn,
+      appendTaskRecordFn: rec.fn,
+    });
+
+    expect(handled).toBe(true);
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].kind).toBe("pr");
+  });
+
   it("Q&A transient-failure requeue appends zero records", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     seed(root, "transient-1");
