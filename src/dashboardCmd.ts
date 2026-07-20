@@ -107,6 +107,8 @@ export async function runDashboard(
     configPath,
     // Managed clones for the add-repo "empty path = clone for me" flow.
     clonesDir: join(c.dataDir, CLONES_WATCHED_SUBDIR),
+    // The daemon's log file — the LOCAL logs section tails it (useLogTail).
+    logPath: join(c.dataDir, "worker.log"),
     queueFn: makeQueueSnapshotFn(c),
     // Per-repo assess history for the rail's audit-age indicator (#193).
     assessHistoryFn: () => Promise.resolve(listHistory(c)),

@@ -73,7 +73,7 @@ Press `t` for the full **queue view** (the same rendering backs the LOCAL mode Q
 
 ## Local mode
 
-LOCAL is the machine-local runtime — the same daemon and on-disk state the GitHub-mode queue card and header pulse already summarize, given its own fullscreen home. In place of the three GitHub panes it has a **section rail** on the left (Queue, Outbox, Repos, Worktrees, Daemon) and a **section body** on the right showing the selected section's rows or detail panel.
+LOCAL is the machine-local runtime — the same daemon and on-disk state the GitHub-mode queue card and header pulse already summarize, given its own fullscreen home. In place of the three GitHub panes it has a **section rail** on the left (Queue, Outbox, Repos, Worktrees, Daemon, Logs) and a **section body** on the right showing the selected section's rows or detail panel.
 
 There are two focus levels: the rail moves between **sections** (`↑`/`↓` or `j`/`k`), while the body drives the **in-section cursor** once you've entered it (`→` / `l` / `enter`; `←` / `h` / `esc` returns to the rail). Live badges on the rail (`▸N` running, `⇡N` outbox depth, `⚑N` stale worktrees, `●`/`○` daemon up/down) summarize each section without opening it.
 
@@ -82,6 +82,7 @@ There are two focus levels: the rail moves between **sections** (`↑`/`↓` or 
 - **Repos** — every watched repo's on-disk state: path, origin/fork links, branch@sha, dirty flag, and how it was added (config / watchlist / external / clone).
 - **Worktrees** — every ticket worktree junco knows about: mapped repo, slug, live/stale/backup class, HEAD, and age. `x` prunes a stale or backup worktree; a live worktree is shown but never prunable — the daemon owns it.
 - **Daemon** — a scrollable detail panel: pid, uptime, inference endpoint reachability, health host:port, live per-ticket turn progress, token counts, guard nudge/kill counts, and the task-status tally. `[`/`]` scroll it; `X` restarts the daemon.
+- **Logs** — a live, always-following tail of the daemon's `worker.log` (last lines, unfiltered) in the compact rail view; reads the file directly, so it works whether the daemon is up or down. `enter` or a click expands it into a full-screen overlay with scrollback and three filters: `f` toggles follow (scrolling away pauses it), `l` cycles the level threshold (debug → info → warn → error), `t` cycles focus to one ticket at a time (every ticket seen so far, then back to all), and `/` opens a substring search. `G`/End jumps to the bottom and resumes follow; `[`/`]` (or the arrows) scroll while paused; `esc`/`q` closes back to the rail.
 
 | Key                 | Action                                                                                                                   |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------ |

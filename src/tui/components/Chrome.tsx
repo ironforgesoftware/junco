@@ -420,5 +420,9 @@ export function localHintsFor(section: LocalSection, focus: "rail" | "body"): [s
         ["f", "flush"],
         ["←", "back"],
       ];
+    case "logs":
+      // Compact tail: → / Enter (or a click on the pane, or a click-again on the
+      // rail row) opens the full-screen overlay; `←` returns to the rail.
+      return [["←", "back"]];
   }
 }

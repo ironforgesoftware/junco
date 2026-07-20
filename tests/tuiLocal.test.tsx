@@ -113,7 +113,7 @@ const HEAVY: LocalHeavy = {
 };
 
 describe("SectionRail", () => {
-  it("lists all 5 sections with live badges and a position line", () => {
+  it("lists all 6 sections with live badges and a position line", () => {
     const f = render(
       <SectionRail
         section="outbox"
@@ -126,14 +126,20 @@ describe("SectionRail", () => {
       />,
     ).lastFrame()!;
     expect(f).toContain("sections");
-    for (const s of ["queue", "outbox", "repos", "worktrees", "daemon"]) {
+    for (const s of ["queue", "outbox", "repos", "worktrees", "daemon", "logs"]) {
       expect(f).toContain(s);
     }
     expect(f).toContain("▸1"); // 1 running
     expect(f).toContain("⇡2"); // outbox depth 2
     expect(f).toContain("⚑1"); // 1 stale worktree
     expect(f).toContain("●"); // daemon up
-    expect(f).toContain("2/5"); // outbox is the 2nd section
+    expect(f).toContain("2/6"); // outbox is the 2nd of 6 sections
+    // logs carries no rail badge (the follow dot lives in the LogView header) —
+    // its row shows none of the badge glyphs the other sections use.
+    const logsLine = f.split("\n").find((l) => l.includes("logs"))!;
+    for (const badge of ["●", "○", "▸", "⇡", "⚑"]) {
+      expect(logsLine).not.toContain(badge);
+    }
     // cursor glyph is present on the selected row.
     const outboxLine = f.split("\n").find((l) => l.includes("outbox"))!;
     expect(outboxLine).toContain("▌");

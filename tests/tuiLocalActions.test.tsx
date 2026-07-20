@@ -4,7 +4,7 @@
 // State-dependent keystrokes are separated by `await until(<marker>)`, never
 // fired as a synchronous burst: ink runs useInput against the last committed
 // render, so a second key issued before React commits would see a stale
-// closure. Markers: the rail position line ("N/5") for the section, the body
+// closure. Markers: the rail position line ("N/6") for the section, the body
 // footer ("back") for rail→body focus, and the ▌ selection glyph for the row.
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
@@ -34,7 +34,7 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
         return { code: 0, output: "requeued gh-acme-api-9", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5")); // queue section
+    await until(() => frame(r).includes("1/6")); // queue section
     r.stdin.write("l"); // enter body
     await until(() => frame(r).includes("back")); // body focus (footer)
     // The two selectable queue rows are WAITING then failed RECENT (the RUNNING
@@ -56,7 +56,7 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
         return { code: 0, output: "removed", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5"));
+    await until(() => frame(r).includes("1/6"));
     r.stdin.write("l");
     await until(() => selOn(r, "sub-fix-typos")); // cursor on the WAITING row
     r.stdin.write("x"); // opens confirm (destructive)
@@ -76,7 +76,7 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
         return { code: 0, output: "", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5"));
+    await until(() => frame(r).includes("1/6"));
     r.stdin.write("l");
     await until(() => selOn(r, "sub-fix-typos"));
     r.stdin.write("x");
@@ -95,7 +95,7 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
         return { code: 0, output: "", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5"));
+    await until(() => frame(r).includes("1/6"));
     r.stdin.write("l");
     await until(() => frame(r).includes("back"));
     r.stdin.write("g"); // top selectable row — the WAITING row, NOT the running row
@@ -114,9 +114,9 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
         return { code: 0, output: "flushed 2", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5"));
+    await until(() => frame(r).includes("1/6"));
     r.stdin.write("j"); // → outbox section
-    await until(() => frame(r).includes("2/5"));
+    await until(() => frame(r).includes("2/6"));
     r.stdin.write("l"); // enter body
     await until(() => frame(r).includes("back"));
     r.stdin.write("f");
@@ -133,13 +133,13 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
         return { code: 0, output: "pruned", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5"));
+    await until(() => frame(r).includes("1/6"));
     r.stdin.write("j");
-    await until(() => frame(r).includes("2/5"));
+    await until(() => frame(r).includes("2/6"));
     r.stdin.write("j");
-    await until(() => frame(r).includes("3/5"));
+    await until(() => frame(r).includes("3/6"));
     r.stdin.write("j"); // → worktrees section
-    await until(() => frame(r).includes("4/5") && frame(r).includes("fix-typos"));
+    await until(() => frame(r).includes("4/6") && frame(r).includes("fix-typos"));
     r.stdin.write("l"); // enter body
     await until(() => selOn(r, "fix-typos")); // cursor on the stale worktree
     r.stdin.write("x");
@@ -151,9 +151,11 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
 
   it("daemon restart confirm body carries the in-flight ticket count", async () => {
     const r = renderApp({ initialUiMode: "local" });
-    await until(() => frame(r).includes("1/5"));
-    r.stdin.write("G"); // → daemon section (last)
-    await until(() => frame(r).includes("5/5"));
+    await until(() => frame(r).includes("1/6"));
+    r.stdin.write("G"); // → logs (last section); k steps up to daemon
+    await until(() => frame(r).includes("6/6"));
+    r.stdin.write("k"); // → daemon section
+    await until(() => frame(r).includes("5/6"));
     r.stdin.write("l"); // enter the daemon body (X is a body action)
     await until(() => frame(r).includes("back"));
     r.stdin.write("X");
@@ -171,11 +173,11 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
       },
     };
     const r = renderApp({ initialUiMode: "local", client });
-    await until(() => frame(r).includes("1/5"));
+    await until(() => frame(r).includes("1/6"));
     r.stdin.write("j");
-    await until(() => frame(r).includes("2/5"));
+    await until(() => frame(r).includes("2/6"));
     r.stdin.write("j"); // → repos section
-    await until(() => frame(r).includes("3/5") && frame(r).includes("acme/api"));
+    await until(() => frame(r).includes("3/6") && frame(r).includes("acme/api"));
     r.stdin.write("l"); // enter body
     await until(() => selOn(r, "acme/api")); // cursor on the LocalRepo
     r.stdin.write("o");
@@ -242,7 +244,7 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
         return { code: 0, output: "requeued gh-acme-api-8", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5")); // queue section
+    await until(() => frame(r).includes("1/6")); // queue section
     r.stdin.write("l"); // enter body
     await until(() => frame(r).includes("back"));
     // Cursor starts on the DONE row (#7, visual index 0) — highlight lands there.
@@ -311,13 +313,13 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
         return { code: 0, output: "pruned", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/5"));
+    await until(() => frame(r).includes("1/6"));
     r.stdin.write("j");
-    await until(() => frame(r).includes("2/5"));
+    await until(() => frame(r).includes("2/6"));
     r.stdin.write("j");
-    await until(() => frame(r).includes("3/5"));
+    await until(() => frame(r).includes("3/6"));
     r.stdin.write("j"); // → worktrees section
-    await until(() => frame(r).includes("4/5") && frame(r).includes("live-one"));
+    await until(() => frame(r).includes("4/6") && frame(r).includes("live-one"));
     r.stdin.write("l"); // enter body
     // Cursor starts on the LIVE worktree — highlight lands there.
     await until(() => selOn(r, "live-one"));

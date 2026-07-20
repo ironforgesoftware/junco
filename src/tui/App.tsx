@@ -26,6 +26,8 @@ import type { UiMode } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
 import { Header, hintsFor, localHintsFor, type HintView } from "./components/Chrome.js";
 import LocalDashboard from "./components/LocalDashboard.js";
+import { LogView } from "./components/LogView.js";
+import { cycleLevel, distinctTickets, type LogFilters } from "./logFilter.js";
 import type { LocalCheap, LocalHeavy, LocalSection, LocalRepo } from "./localSnapshot.js";
 import { Rail, type RailRepo } from "./components/Rail.js";
 import type { AssessHistory } from "../assessHistory.js";
@@ -49,6 +51,8 @@ import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
+import { useLogTail } from "./useLogTail.js";
+import type { LogReaderDeps } from "../logReader.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -61,6 +65,10 @@ export interface AppProps {
   configPath: string;
   /** Managed clones root (<dataDir>/clones/watched) — auto-clone destination. */
   clonesDir: string;
+  /** The daemon's log file (<dataDir>/worker.log) — the LOCAL `logs` section
+   * and its overlay tail it via useLogTail. Resolved by dashboardCmd where cfg
+   * is in scope; read only while the logs surface is on screen. */
+  logPath: string;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */
   refreshPollMs?: number;
@@ -91,11 +99,33 @@ export interface AppProps {
   onExit: () => void;
   /** Best-effort npm update check (spec 2026-07-16); absent in tests → no chip. */
   checkUpdateFn?: () => Promise<UpdateInfo | null>;
+  /** LOCAL logs poll cadence override (tests); production omits it → the hook's
+   * 500ms default. */
+  logsPollMs?: number;
+  /** useLogTail fs seam (tests inject an in-memory file); production omits it —
+   * MUST stay `undefined` so the hook's effect dep array keeps a stable
+   * identity and never teardown/re-seeds per render. */
+  logReaderDeps?: LogReaderDeps;
 }
 
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
 // terminals only).
 type Pane = 1 | 2 | 3;
+
+// Footer hints while the full-screen log overlay owns input. `esc` is the only
+// actionable chip (footerActions closes the overlay); the movement/filter hints
+// are display-only (inert chips), mirroring how movement hints render elsewhere.
+// This replaces the stale LOCAL rail chips (`q quit`, `→ open`, …) that would
+// otherwise act while their keys are swallowed by the overlay. (#225 class.)
+const LOG_OVERLAY_HINTS: [string, string][] = [
+  ["f", "follow"],
+  ["l", "level"],
+  ["t", "ticket"],
+  ["/", "search"],
+  ["[ ]", "scroll"],
+  ["G", "bottom"],
+  ["esc", "close"],
+];
 
 /** What a loader actually delivered — the unified cycle aggregates these to
  * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
@@ -219,7 +249,14 @@ export function App(props: AppProps): React.JSX.Element {
   const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
-  const LOCAL_SECTIONS: LocalSection[] = ["queue", "outbox", "repos", "worktrees", "daemon"];
+  const LOCAL_SECTIONS: LocalSection[] = [
+    "queue",
+    "outbox",
+    "repos",
+    "worktrees",
+    "daemon",
+    "logs",
+  ];
   const runCliFn =
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
@@ -307,11 +344,27 @@ export function App(props: AppProps): React.JSX.Element {
     repos: 0,
     worktrees: 0,
     daemon: 0,
+    logs: 0,
   });
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
   const [localRefreshedAt, setLocalRefreshedAt] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // The full-screen log overlay's open flag. Task 6 wires the setter (opened by
+  // the compact section's expand handler); Task 7 renders the overlay + its
+  // keys. Keeping the poll active while it's open lives in `logActive` below.
+  const [logOverlay, setLogOverlay] = useState(false);
+  // Overlay filter/follow state, live only while the overlay is open. `follow`
+  // pins the tail (● following); a scrollback key pauses it (⏸ paused). The
+  // filters cycle via keys and render as display-only chips. `searchMode` routes
+  // printable keys into the search term instead of the overlay's key recipes.
+  const [logFollow, setLogFollow] = useState(true);
+  const [logFilters, setLogFilters] = useState<LogFilters>({
+    minLevel: "info",
+    ticket: null,
+    search: "",
+  });
+  const [logSearchMode, setLogSearchMode] = useState(false);
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const [updateLatest, setUpdateLatest] = useState<string | null>(null);
@@ -326,14 +379,39 @@ export function App(props: AppProps): React.JSX.Element {
   // LOCAL mode's own scroll state, folded into this same instance) that used to
   // stand in for a lifecycle.
   const scrollKey = useMemo(() => {
+    // The overlay is its own scroll surface (mounted over the section), so it
+    // gets its own key — a change resets the offset when it opens/closes.
+    if (uiMode === "local" && logOverlay) return "logOverlay";
     if (uiMode === "local") return `local:${localSection}`;
     if (view === "review" && reviewState.open?.kind === "draft")
       return `draft:${reviewState.open.draftIdx}`;
     if (view === "cmdOutput" && cmd) return `cmd:${cmd.token}`;
     if (view === "detail" && detail) return `detail:${detail.nwo}#${detail.issue.number}`;
     return view;
-  }, [uiMode, localSection, view, reviewState.open, cmd, detail]);
-  const { scroll, scrollBy, onScrollMax } = useScroll(scrollKey);
+  }, [uiMode, logOverlay, localSection, view, reviewState.open, cmd, detail]);
+  const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(scrollKey);
+
+  // LOCAL logs tail — the hook reads disk ONLY while the logs surface is on
+  // screen (the section is selected, or the overlay is open). `props.logReaderDeps`
+  // is passed by IDENTITY (undefined in production, a stable fake in tests) so
+  // the hook's effect never teardown/re-seeds per render; the resolved `pollMs`
+  // primitive and that identity are what its dep array reads, not this literal.
+  const logActive = uiMode === "local" && (localSection === "logs" || logOverlay);
+  const logEntries = useLogTail(props.logPath, logActive, {
+    pollMs: props.logsPollMs,
+    readerDeps: props.logReaderDeps,
+  });
+  // No render-time fs call: an empty/absent file both show the placeholder until
+  // the first line arrives (a running daemon fills within one poll).
+  const logHasFile = logEntries.length > 0;
+  // Both open paths (click on the compact pane, and the logs rail Enter) route
+  // here so opening ALWAYS starts tailing live (tail -f / less +F convention) —
+  // a follow state left paused from a prior session would otherwise reopen at
+  // the top. Filters intentionally persist across reopen; only follow resets.
+  const onLogExpand = (): void => {
+    setLogFollow(true);
+    setLogOverlay(true);
+  };
 
   // Selectable rows for the current section. INVARIANT: this list is the EXACT
   // rendered list each section component highlights, in the same order and
@@ -379,6 +457,10 @@ export function App(props: AppProps): React.JSX.Element {
           klass: w.kind,
         }));
       case "daemon":
+        return [];
+      case "logs":
+        // Viewport, no selectable rows (like daemon) — the compact tail is
+        // click-to-expand, not row-navigable.
         return [];
     }
   };
@@ -1399,7 +1481,15 @@ export function App(props: AppProps): React.JSX.Element {
   // The mode toggle is inert while a text field (filter / add-repo / palette)
   // or the confirm modal owns input — so `m` can never eat a typed character.
   const canToggleMode = (): boolean =>
-    !filtering && view !== "addRepo" && view !== "config" && view !== "palette" && confirm === null;
+    !filtering &&
+    view !== "addRepo" &&
+    view !== "config" &&
+    view !== "palette" &&
+    confirm === null &&
+    // The log overlay owns ALL input while open — `m`/Shift+Tab must not flip
+    // modes (leaving the overlay latent, reopened with a reset scroll) or hijack
+    // a typed search char containing `m` (e.g. "daemon").
+    !(uiMode === "local" && logOverlay);
   // Region-based tab clicks (Header). Guarded like the `m` key: inert while
   // the confirm modal owns input; github-disabled taps toast instead of switch.
   const handleModeTab = (m: UiMode): void => {
@@ -1411,6 +1501,11 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     dismissToast();
+    // The mouse mode-tab path is the one key-fencing (canToggleMode) can't
+    // reach: close any open overlay here so none survives a mouse mode switch
+    // (a latent overlay would reopen — with a reset scroll — on returning).
+    setLogOverlay(false);
+    setLogSearchMode(false);
     setUiMode(m);
   };
   // Shift+Tab requires key.shift so a bare Tab still reaches github pane-cycle.
@@ -1466,6 +1561,85 @@ export function App(props: AppProps): React.JSX.Element {
         const fn = confirm.onConfirm;
         setConfirm(null);
         fn();
+        return;
+      }
+      return;
+    }
+    // The full-screen log overlay owns ALL input while open — placed above the
+    // rail/body split so its filter/follow/scroll keys never leak to the
+    // section underneath (and `t` can never reach the github `t` queue view,
+    // which LOCAL mode's layer-4 dispatch already fences off).
+    if (logOverlay) {
+      if (logSearchMode) {
+        // Live search entry: printable chars extend the term; Enter commits it
+        // (keeps the term, exits entry); Esc discards the term AND exits.
+        if (key.escape) {
+          setLogFilters((f) => ({ ...f, search: "" }));
+          setLogSearchMode(false);
+          return;
+        }
+        if (key.return) {
+          setLogSearchMode(false);
+          return;
+        }
+        if (key.backspace || key.delete) {
+          setLogFilters((f) => ({ ...f, search: f.search.slice(0, -1) }));
+          return;
+        }
+        if (input && !key.ctrl && !key.meta) {
+          setLogFilters((f) => ({ ...f, search: f.search + input }));
+          return;
+        }
+        return;
+      }
+      if (key.escape || input === "q") {
+        setLogOverlay(false);
+        setLogSearchMode(false);
+        return;
+      }
+      if (input === "f") {
+        // Pause must land at the tail first (toEnd) so the paused window shows
+        // the newest lines, not a jump to the top.
+        if (logFollow) {
+          setLogFollow(false);
+          toEnd();
+        } else {
+          setLogFollow(true);
+        }
+        return;
+      }
+      if (input === "l") {
+        setLogFilters((f) => ({ ...f, minLevel: cycleLevel(f.minLevel) }));
+        return;
+      }
+      if (input === "t") {
+        // Cycle null (all) → each ticket present in the buffer → back to null.
+        const opts: (string | null)[] = [null, ...distinctTickets(logEntries)];
+        const idx = opts.indexOf(logFilters.ticket);
+        const next = opts[(idx + 1) % opts.length];
+        setLogFilters((f) => ({ ...f, ticket: next }));
+        return;
+      }
+      if (input === "/") {
+        setLogSearchMode(true);
+        return;
+      }
+      if (input === "G" || key.end) {
+        setLogFollow(true);
+        return;
+      }
+      if (input === "[" || key.upArrow) {
+        // Scrolling up pauses follow, landing at the tail first so the step-up
+        // is relative to the bottom rather than a stale offset.
+        if (logFollow) {
+          setLogFollow(false);
+          toEnd();
+        }
+        scrollBy(-1);
+        return;
+      }
+      if (input === "]" || key.downArrow) {
+        scrollBy(1);
         return;
       }
       return;
@@ -1559,8 +1733,16 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (input === "G") {
-      setLocalSection("daemon");
+      // Jump to the LAST section (now `logs`, appended after `daemon`) — via the
+      // array so it never drifts as sections are added.
+      setLocalSection(LOCAL_SECTIONS[LOCAL_SECTIONS.length - 1]);
       return;
+    }
+    if (localSection === "logs" && (input === "l" || key.rightArrow || key.return)) {
+      // The compact `logs` section has nothing to navigate row-by-row — entering
+      // it opens the full-screen overlay (keyboard parity with clicking the pane;
+      // both go through onLogExpand so opening always starts tailing live).
+      return void onLogExpand();
     }
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
   };
@@ -1602,7 +1784,15 @@ export function App(props: AppProps): React.JSX.Element {
     // view (never stealing the key from help/detail/queue/prs/palette/etc.,
     // which in LOCAL mode is moot since local never routes view away from
     // "main"/"help").
-    if (input === "," && view === "main" && !filtering && confirm === null) {
+    if (
+      input === "," &&
+      view === "main" &&
+      !filtering &&
+      confirm === null &&
+      // Not while the log overlay owns input — `,` there is a search char, not a
+      // config-open (worst inside search mode, typing a term containing a comma).
+      !(uiMode === "local" && logOverlay)
+    ) {
       dismissToast();
       setView("config");
       return;
@@ -2166,6 +2356,10 @@ export function App(props: AppProps): React.JSX.Element {
   const localSectionPress = (s: LocalSection): void => {
     if (confirm !== null) return;
     if (localSection === s) {
+      // Click-again = the l/→/Enter key. For `logs` that key opens the overlay
+      // (onLogExpand) — so click-again must too, or the mouse dead-ends in a
+      // body focus whose only key (Enter) is then swallowed by the overlay path.
+      if (s === "logs") return void onLogExpand();
       setLocalFocus("body"); // click-again = enter (the l/→/enter key)
       return;
     }
@@ -2193,6 +2387,18 @@ export function App(props: AppProps): React.JSX.Element {
   // verbatim, including the guards.
   const footerActions: Record<string, () => void> = useMemo((): Record<string, () => void> => {
     if (confirm !== null) return {}; // destructive confirm owns input — every chip inert
+    // The log overlay owns input while open: only its `esc` chip acts (closes
+    // the overlay); the movement/filter hints (LOG_OVERLAY_HINTS) render inert.
+    // Placed ahead of the LOCAL branch so the stale rail chips (whose keys the
+    // overlay swallows) never carry live handlers under the modal. (#225 class.)
+    if (uiMode === "local" && logOverlay) {
+      return {
+        esc: () => {
+          setLogOverlay(false);
+          setLogSearchMode(false);
+        },
+      };
+    }
     // help/config render mode-agnostic hint sets (see the `hints` computation),
     // so their chips carry no LOCAL actions — fall through to the switch below
     // (case "help" returns {}), same as github. The view guards stay as
@@ -2355,6 +2561,7 @@ export function App(props: AppProps): React.JSX.Element {
   }, [
     confirm,
     uiMode,
+    logOverlay,
     view,
     cmd,
     prDetail,
@@ -2396,9 +2603,13 @@ export function App(props: AppProps): React.JSX.Element {
           // closes" applies on both surfaces — LOCAL must not keep rendering
           // stale rail/body chips under the modal. (#225)
           hintsFor("help", pane, layout.mode, filtering)
-        : uiMode === "local"
-          ? localHintsFor(localSection, localFocus)
-          : hintsFor(view as HintView, pane, layout.mode, filtering);
+        : uiMode === "local" && logOverlay
+          ? // The overlay owns input — its own hint set (esc = close, the rest
+            // display-only), never the section-rail chips underneath. (#225 class.)
+            LOG_OVERLAY_HINTS
+          : uiMode === "local"
+            ? localHintsFor(localSection, localFocus)
+            : hintsFor(view as HintView, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
   const paletteProps = {
     commands: PALETTE_COMMANDS,
@@ -2486,6 +2697,30 @@ export function App(props: AppProps): React.JSX.Element {
         // surface, so this must be checked ahead of the uiMode branch below
         // or a LOCAL-mode config view would render LocalDashboard instead.
         <ConfigView configPath={configPath} onExit={() => setView("main")} />
+      ) : uiMode === "local" && logOverlay ? (
+        // The full-screen log overlay replaces the section dashboard while open;
+        // it owns input via handleLocalInput's `logOverlay` branch above.
+        <LogView
+          variant="full"
+          entries={logEntries}
+          filters={logFilters}
+          follow={logFollow}
+          searchMode={logSearchMode}
+          scroll={scroll}
+          height={listHeight}
+          focused
+          hasFile={logHasFile}
+          onScrollMax={onScrollMax}
+          onWheel={(d) => {
+            // Wheel-up pauses follow (landing at the tail first), mirroring the
+            // `[` key recipe; wheel-down just scrolls.
+            if (logFollow && d < 0) {
+              setLogFollow(false);
+              toEnd();
+            }
+            scrollBy(d);
+          }}
+        />
       ) : uiMode === "local" ? (
         <LocalDashboard
           cheap={localCheap}
@@ -2501,6 +2736,9 @@ export function App(props: AppProps): React.JSX.Element {
           onRowPress={localRowPress}
           onDaemonWheel={(d) => scrollBy(d)}
           onScrollMax={onScrollMax}
+          logEntries={logEntries}
+          logHasFile={logHasFile}
+          onLogExpand={onLogExpand}
         />
       ) : view === "review" ? (
         <ReviewView

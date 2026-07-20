@@ -69,4 +69,28 @@ describe("runLogsCommand", () => {
     expect(text).toMatch(/start/);
     expect(text).toMatch(/later/);
   });
+
+  it("--follow resumes from the new head when the log file rotates (shrinks) mid-follow", async () => {
+    const p = join(dir, "worker.log");
+    // `lines: 1` means the initial tail prints only "pre-rotate-two"; "pre-rotate-one"
+    // is never printed by the initial tail, and the follow loop starts at EOF — so it
+    // should never appear in output unless rotation-resume logic is broken.
+    writeFileSync(p, line("pre-rotate-one") + line("pre-rotate-two"), "utf8");
+    const stop = new AbortController();
+    const done = runLogsCommand(
+      cfg,
+      { follow: true, lines: 1 },
+      { printFn: (s) => out.push(s), pollMs: 20, signal: stop.signal },
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    // Rotate: replace with a shorter file (simulates log rotation truncating/recreating).
+    writeFileSync(p, line("post-rotate"), "utf8");
+    await new Promise((r) => setTimeout(r, 80));
+    stop.abort();
+    expect(await done).toBe(0);
+    const text = out.join("");
+    expect(text).toMatch(/pre-rotate-two/); // from the initial tail, pre-rotation
+    expect(text).not.toMatch(/pre-rotate-one/); // never shown — not in tail, not in follow
+    expect(text).toMatch(/post-rotate/); // follow noticed the shrink and read from the new head
+  });
 });

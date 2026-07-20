@@ -4,9 +4,11 @@ import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
 import { QueueView } from "./QueueView.js";
+import { LogView } from "./LogView.js";
 import { windowSlice, clampScroll, maxScroll } from "../window.js";
 import { listRowsHeight } from "../geometry.js";
 import { RAIL_WIDTH, type Layout } from "../layout.js";
+import type { LogEntry } from "../../logReader.js";
 import type {
   LocalCheap,
   LocalHeavy,
@@ -22,11 +24,23 @@ import type {
 export type { LocalSection } from "../localSnapshot.js";
 export type { UiMode } from "../geometry.js";
 
-const SECTIONS: readonly LocalSection[] = ["queue", "outbox", "repos", "worktrees", "daemon"];
+const SECTIONS: readonly LocalSection[] = [
+  "queue",
+  "outbox",
+  "repos",
+  "worktrees",
+  "daemon",
+  "logs",
+];
 
 /** Compact live badge for a section, derived from the cheap/heavy snapshots.
- * Empty string → no badge (hidden at zero). */
-function sectionBadge(s: LocalSection, cheap: LocalCheap | null, heavy: LocalHeavy | null): string {
+ * Empty string → no badge (hidden at zero). Exported for the section suite's
+ * direct `logs → ""` assertion. */
+export function sectionBadge(
+  s: LocalSection,
+  cheap: LocalCheap | null,
+  heavy: LocalHeavy | null,
+): string {
   if (cheap === null) return "";
   switch (s) {
     case "queue": {
@@ -43,10 +57,16 @@ function sectionBadge(s: LocalSection, cheap: LocalCheap | null, heavy: LocalHea
       return cheap.daemon.up ? "●" : "○";
     case "repos":
       return "";
+    // The live/follow indicator lives in the LogView header (● following /
+    // ⏸ paused), not a rail badge — a rail dot would be redundant with the ▌
+    // cursor, since the logs poll is active exactly when the section is
+    // selected. Deliberate deviation from the plan's rail-dot (Component 5).
+    case "logs":
+      return "";
   }
 }
 
-/** LOCAL section rail — a fixed 5-row list (never windowed), rendered like the
+/** LOCAL section rail — a fixed 6-row list (never windowed), rendered like the
  * GitHub Rail: `▌` accent cursor + selectionBg on the selected section, border
  * accent when the rail holds focus. Live badges come from the cheap/heavy
  * snapshots; an optional `↻ <age>` stamp is pinned at the bottom so the tall
@@ -546,6 +566,9 @@ export default function LocalDashboard({
   onRowPress,
   onDaemonWheel,
   onScrollMax,
+  logEntries,
+  logHasFile,
+  onLogExpand,
 }: {
   cheap: LocalCheap | null;
   heavy: LocalHeavy | null;
@@ -564,6 +587,14 @@ export default function LocalDashboard({
    * `QueueView` (queue section) or `DaemonSection` (daemon section); only one
    * is ever mounted at a time, so a single callback serves both. */
   onScrollMax?: (max: number) => void;
+  /** Live log tail for the `logs` section (App's useLogTail buffer); empty/
+   * undefined until the surface is on screen. */
+  logEntries?: LogEntry[];
+  /** false → the daemon-not-started placeholder (App derives it from whether
+   * any line has arrived; no render-time fs call). */
+  logHasFile?: boolean;
+  /** Click-to-expand → App opens the full-screen overlay (Task 7). */
+  onLogExpand?: () => void;
 }): React.JSX.Element {
   const bodyFocused = focus === "body";
   const h = layout.bodyRows;
@@ -574,6 +605,7 @@ export default function LocalDashboard({
     repos: 0,
     worktrees: 0,
     daemon: 0,
+    logs: 0,
   });
   const total =
     section === "outbox"
@@ -636,7 +668,7 @@ export default function LocalDashboard({
         focused={bodyFocused}
         onRowPress={onRowPress}
       />
-    ) : (
+    ) : section === "daemon" ? (
       <DaemonSection
         daemon={cheap?.daemon ?? null}
         scroll={scroll}
@@ -644,6 +676,17 @@ export default function LocalDashboard({
         focused={bodyFocused}
         onWheel={onDaemonWheel}
         onScrollMax={onScrollMax}
+      />
+    ) : (
+      // The section variant reports no scrollable max (its whole surface is
+      // click-to-expand), so no `onWheel` — a wheel there would clamp to a no-op.
+      <LogView
+        variant="section"
+        entries={logEntries ?? []}
+        height={h}
+        focused={bodyFocused}
+        hasFile={logHasFile ?? true}
+        onExpand={onLogExpand}
       />
     );
 

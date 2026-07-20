@@ -243,6 +243,7 @@ export function makeAppProps(over: Partial<AppProps> = {}): AppProps {
     watchlistFile: "/tmp/wl.json",
     configPath: "/x/config.json",
     clonesDir: "/x/state/repos",
+    logPath: "/x/state/worker.log",
     refreshPollMs: 999999,
     healthPollMs: 999999,
     queuePollMs: 999999,
