@@ -1,0 +1,63 @@
+import React from "react";
+import { describe, it, expect } from "vitest";
+import { render } from "ink-testing-library";
+import { Box, Text } from "ink";
+import { Badge, badgeText } from "../src/tui/components/primitives/Badge.js";
+import { Rule, ruleText } from "../src/tui/components/primitives/Rule.js";
+import { StatRow, statRowText } from "../src/tui/components/primitives/StatRow.js";
+
+describe("badgeText", () => {
+  it("wraps the label in one pad space each side", () => {
+    expect(badgeText("done")).toBe(" done ");
+  });
+  it("pads the label to padTo so pill columns align", () => {
+    expect(badgeText("done", 10)).toBe(" done       ");
+    expect(badgeText("plan-ready", 10)).toBe(" plan-ready ");
+  });
+  it("renders the padded label (frame strips ANSI)", () => {
+    const { lastFrame } = render(
+      <Box>
+        <Badge label="failed" color="red" padTo={8} />
+        <Text>|</Text>
+      </Box>,
+    );
+    expect(lastFrame()).toContain(" failed   |");
+  });
+});
+
+describe("ruleText", () => {
+  it("pads a titled rule to the width", () => {
+    expect(ruleText("system", 16)).toBe("── system ──────");
+    expect(ruleText("system", 16)).toHaveLength(16);
+  });
+  it("bare line when title is null", () => {
+    expect(ruleText(null, 5)).toBe("─────");
+  });
+  it("never goes negative on a too-long title", () => {
+    expect(ruleText("longtitle", 4)).toBe("── longtitle ");
+  });
+  it("Rule renders the same text", () => {
+    const { lastFrame } = render(<Rule title="system" width={16} />);
+    expect(lastFrame()).toBe("── system ──────");
+  });
+});
+
+describe("statRowText", () => {
+  it("statRowText concatenates padded label, value, hint", () => {
+    expect(statRowText("state", "up 2h", 10)).toBe("state     up 2h");
+    expect(statRowText("state", "up 2h", 8, "pid 42")).toBe("state   up 2h pid 42");
+  });
+});
+
+describe("StatRow", () => {
+  it("pads the label to labelWidth before the value", () => {
+    const { lastFrame } = render(<StatRow label="state" value="up 2h" labelWidth={10} />);
+    expect(lastFrame()).toBe("state     up 2h");
+  });
+  it("appends the hint after a space", () => {
+    const { lastFrame } = render(
+      <StatRow label="state" value="up 2h" labelWidth={8} hint="pid 42" />,
+    );
+    expect(lastFrame()).toBe("state   up 2h pid 42");
+  });
+});
