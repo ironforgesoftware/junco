@@ -27,10 +27,12 @@
 ### Task 1: Outbox store — op model, enqueue, list, depth
 
 **Files:**
+
 - Create: `src/githubOutbox.ts`
 - Test: `tests/githubOutbox.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Config` (`stateDir`), node fs.
 - Produces (all later tasks rely on these exact names):
 
@@ -57,9 +59,9 @@ export type OutboxOp =
     };
 
 export interface StoredOp {
-  id: string;            // filename stem
+  id: string; // filename stem
   path: string;
-  createdAt: string;     // ISO
+  createdAt: string; // ISO
   origin: "dashboard" | "reporter" | "prflow";
   issueKey: string | null; // "<nwo>#<n>"
   attempts: number;
@@ -78,9 +80,14 @@ export interface OutboxDeps {
 }
 
 export function outboxPaths(cfg: Config): { dir: string; dead: string };
-export function enqueueOp(cfg: Config, origin: StoredOp["origin"], op: OutboxOp, deps?: OutboxDeps): string; // returns id
-export function listOps(cfg: Config, deps?: OutboxDeps): StoredOp[];   // FIFO, skips unparseable with a warn
-export function outboxDepth(cfg: Config, deps?: OutboxDeps): number;   // cheap readdir count
+export function enqueueOp(
+  cfg: Config,
+  origin: StoredOp["origin"],
+  op: OutboxOp,
+  deps?: OutboxDeps,
+): string; // returns id
+export function listOps(cfg: Config, deps?: OutboxDeps): StoredOp[]; // FIFO, skips unparseable with a warn
+export function outboxDepth(cfg: Config, deps?: OutboxDeps): number; // cheap readdir count
 ```
 
 - [ ] **Step 1: Write the failing tests** — create `tests/githubOutbox.test.ts`:
@@ -96,7 +103,13 @@ import type { Config } from "../src/types.js";
 function cfgAt(root: string): Config {
   return { stateDir: root } as unknown as Config;
 }
-const LABELS = { kind: "labels", nwo: "a/b", issue: 7, add: ["junco:approved"], remove: [] } as const;
+const LABELS = {
+  kind: "labels",
+  nwo: "a/b",
+  issue: 7,
+  add: ["junco:approved"],
+  remove: [],
+} as const;
 
 describe("outbox store", () => {
   it("enqueue writes one atomic JSON file; list round-trips the envelope", () => {
@@ -163,14 +176,7 @@ describe("outbox store", () => {
  * ops dead-letter into github-outbox/dead/ — same philosophy as failed/.
  */
 
-import {
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  mkdirSync,
-  rmSync,
-} from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { Config } from "./types.js";
 import { log } from "./logging.js";
@@ -260,6 +266,7 @@ export function outboxDepth(cfg: Config, deps: OutboxDeps = {}): number {
 - [ ] **Step 4: Verify green** — `npx vitest run tests/githubOutbox.test.ts > /tmp/o1 2>&1; echo "exit: $?"; tail -5 /tmp/o1` → PASS; `npm run build` → exit 0.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/githubOutbox.ts tests/githubOutbox.test.ts
 git add src/githubOutbox.ts tests/githubOutbox.test.ts
@@ -271,10 +278,12 @@ git commit -m "feat(outbox): durable op store — FIFO json files under state di
 ### Task 2: `tryOrEnqueue` + `flushOutbox` executor
 
 **Files:**
+
 - Modify: `src/githubOutbox.ts` (append)
 - Test: `tests/githubOutbox.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: `gh`, `git`, `GitOpError`, `isNetworkError` from `src/git.ts` (all exported); Task 1 store.
 - Produces:
 
@@ -283,7 +292,12 @@ export interface FlushDeps extends OutboxDeps {
   ghFn?: typeof gh;
   gitFn?: typeof git;
 }
-export interface FlushResult { sent: number; dead: number; remaining: number; offline: boolean }
+export interface FlushResult {
+  sent: number;
+  dead: number;
+  remaining: number;
+  offline: boolean;
+}
 
 export function isOffline(e: unknown): boolean; // GitOpError + isNetworkError(e.stderr)
 export async function tryOrEnqueue(
@@ -298,6 +312,7 @@ export const MAX_OP_ATTEMPTS = 3;
 ```
 
 Executor semantics per kind (binding):
+
 - `labels` → `gh issue edit <n> --repo <nwo> [--add-label x…] [--remove-label y…]` (skip the call entirely when both lists are empty).
 - `comment` → first `gh api repos/<nwo>/issues/<n>/comments --paginate --jq '.[].body'` and if any line contains `${OUTBOX_MARKER_PREFIX}${id} -->` treat as already posted (sent, delete op). Otherwise post via `--body-file` (temp file, cleaned up) with `\n\n${OUTBOX_MARKER_PREFIX}${id} -->\n` appended.
 - `push` → `git -C <repoPath> push --set-upstream origin <branch>` (180 s timeout — mirrors `pushBranch` in src/pr.ts:111).
@@ -312,7 +327,13 @@ Executor semantics per kind (binding):
 - [ ] **Step 1: Write the failing tests** — append to `tests/githubOutbox.test.ts`:
 
 ```ts
-import { flushOutbox, tryOrEnqueue, isOffline, MAX_OP_ATTEMPTS, OUTBOX_MARKER_PREFIX } from "../src/githubOutbox.js";
+import {
+  flushOutbox,
+  tryOrEnqueue,
+  isOffline,
+  MAX_OP_ATTEMPTS,
+  OUTBOX_MARKER_PREFIX,
+} from "../src/githubOutbox.js";
 import { GitOpError } from "../src/git.js";
 
 const NET_ERR = new GitOpError("gh failed", "connect: network is unreachable", 1);
@@ -363,12 +384,26 @@ describe("flushOutbox", () => {
   it("labels op → one gh issue edit; file deleted on success", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f1-"));
     const cfg = cfgAt(root);
-    enqueueOp(cfg, "dashboard", { kind: "labels", nwo: "a/b", issue: 7, add: ["x"], remove: ["y"] });
+    enqueueOp(cfg, "dashboard", {
+      kind: "labels",
+      nwo: "a/b",
+      issue: 7,
+      add: ["x"],
+      remove: ["y"],
+    });
     const f = fakes(() => undefined);
     const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(r).toMatchObject({ sent: 1, dead: 0, remaining: 0, offline: false });
     expect(f.calls[0].args).toEqual([
-      "issue", "edit", "7", "--repo", "a/b", "--add-label", "x", "--remove-label", "y",
+      "issue",
+      "edit",
+      "7",
+      "--repo",
+      "a/b",
+      "--add-label",
+      "x",
+      "--remove-label",
+      "y",
     ]);
     expect(outboxDepth(cfg)).toBe(0);
   });
@@ -427,11 +462,20 @@ describe("flushOutbox", () => {
       github: { triggerLabel: "junco" },
     } as unknown as Config;
     enqueueOp(cfg, "prflow", {
-      kind: "pr", repoPath: "/repo", branch: "junco/fix-7", nwo: "a/b", issue: 7,
-      base: "main", title: "Fix things", bodyText: "the body", draft: false,
-      labels: [], reviewers: [],
+      kind: "pr",
+      repoPath: "/repo",
+      branch: "junco/fix-7",
+      nwo: "a/b",
+      issue: 7,
+      base: "main",
+      title: "Fix things",
+      bodyText: "the body",
+      draft: false,
+      labels: [],
+      reviewers: [],
       finalize: { ticketId: "gh-a-b-7", status: "completed", finalText: "did the thing" },
-      pushed: false, prUrl: null,
+      pushed: false,
+      prUrl: null,
     });
     // First flush: push succeeds, `pr create` dies offline → checkpoint pushed:true
     const f1 = fakes((tool, args) => {
@@ -448,10 +492,17 @@ describe("flushOutbox", () => {
     let pushes = 0;
     const posted: string[] = [];
     const f2 = fakes((tool, args) => {
-      if (tool === "git" && args.includes("push")) { pushes++; return undefined; }
-      if (args[0] === "pr" && args[1] === "create") return { stdout: "https://github.com/a/b/pull/9\n" };
+      if (tool === "git" && args.includes("push")) {
+        pushes++;
+        return undefined;
+      }
+      if (args[0] === "pr" && args[1] === "create")
+        return { stdout: "https://github.com/a/b/pull/9\n" };
       if (args[0] === "api") return { stdout: "" }; // no marker upstream
-      if (args[0] === "issue" && args[1] === "comment") { posted.push(args.join(" ")); return undefined; }
+      if (args[0] === "issue" && args[1] === "comment") {
+        posted.push(args.join(" "));
+        return undefined;
+      }
       return undefined;
     });
     const r2 = await flushOutbox(cfg, { ghFn: f2.ghFn, gitFn: f2.gitFn });
@@ -467,14 +518,26 @@ describe("flushOutbox", () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f6-"));
     const cfg = { stateDir: root, github: { triggerLabel: "junco" } } as unknown as Config;
     enqueueOp(cfg, "prflow", {
-      kind: "pr", repoPath: "/repo", branch: "junco/x", nwo: "a/b", issue: null,
-      base: "main", title: "t", bodyText: "b", draft: false, labels: [], reviewers: [],
-      finalize: null, pushed: true, prUrl: null,
+      kind: "pr",
+      repoPath: "/repo",
+      branch: "junco/x",
+      nwo: "a/b",
+      issue: null,
+      base: "main",
+      title: "t",
+      bodyText: "b",
+      draft: false,
+      labels: [],
+      reviewers: [],
+      finalize: null,
+      pushed: true,
+      prUrl: null,
     });
     const f = fakes((tool, args) => {
       if (args[0] === "pr" && args[1] === "create")
         throw new GitOpError("gh failed", "a pull request for branch already exists", 1);
-      if (args[0] === "pr" && args[1] === "view") return { stdout: "https://github.com/a/b/pull/3\n" };
+      if (args[0] === "pr" && args[1] === "view")
+        return { stdout: "https://github.com/a/b/pull/3\n" };
       return undefined;
     });
     const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
@@ -615,8 +678,18 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           writeFileSync(bodyFile, op.bodyText, "utf8");
           try {
             const argv = [
-              "pr", "create", "--repo", op.nwo, "--base", op.base, "--head", op.branch,
-              "--title", op.title, "--body-file", bodyFile,
+              "pr",
+              "create",
+              "--repo",
+              op.nwo,
+              "--base",
+              op.base,
+              "--head",
+              op.branch,
+              "--title",
+              op.title,
+              "--body-file",
+              bodyFile,
             ];
             if (op.draft) argv.push("--draft");
             for (const l of op.labels) argv.push("--label", l);
@@ -652,7 +725,17 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           const doneLabel = TERMINAL_DONE_STATUSES.has(op.finalize.status) ? ll.done : ll.failed;
           await ghFn(
             cfg,
-            ["issue", "edit", String(op.issue), "--repo", op.nwo, "--add-label", doneLabel, "--remove-label", ll.working],
+            [
+              "issue",
+              "edit",
+              String(op.issue),
+              "--repo",
+              op.nwo,
+              "--add-label",
+              doneLabel,
+              "--remove-label",
+              ll.working,
+            ],
             { timeoutMs: GH_TIMEOUT },
           );
         }
@@ -699,6 +782,7 @@ Note: `dirnameOf` is a slip in the sketch — use `dirname(bodyFile)` from `node
 - [ ] **Step 4: Verify green** — `npx vitest run tests/githubOutbox.test.ts > /tmp/o2 2>&1; echo "exit: $?"; tail -5 /tmp/o2` → PASS; `npm run build` exit 0.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/githubOutbox.ts tests/githubOutbox.test.ts
 git add src/githubOutbox.ts tests/githubOutbox.test.ts
@@ -710,10 +794,12 @@ git commit -m "feat(outbox): tryOrEnqueue seam + flush executor with checkpoints
 ### Task 3: Reporter integration (+ `prQueued` contract)
 
 **Files:**
+
 - Modify: `src/reporter.ts` (`TicketOutcome` + `outcomeFromPrFlow`), `src/prFlow.ts` (add `prQueued: boolean` to `PrFlowResult`/`prOutcome` init only — behavior lands in Task 4), `src/githubReport.ts`
 - Test: `tests/githubReport.test.ts` (append), `tests/reporter.test.ts` (touch if it builds outcome literals)
 
 **Interfaces:**
+
 - Consumes: `tryOrEnqueue`, `isOffline` (Task 2).
 - Produces: `TicketOutcome.prQueued?: boolean`; `outcomeFromPrFlow` copies `flow.prQueued ?? false`; `githubReport` enqueues on network errors and skips comment+flip when `outcome.prQueued`.
 
@@ -729,21 +815,35 @@ describe("reporter offline (outbox)", () => {
   it("onStart label swap queues a labels op when offline", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-rep-obx-"));
     const cfg = repCfg(root); // the file's cfg helper, with stateDir=root and triggerLabel "junco"
-    const reporter = makeGithubReporter(cfg, { ghFn: async () => { throw NET; } });
+    const reporter = makeGithubReporter(cfg, {
+      ghFn: async () => {
+        throw NET;
+      },
+    });
     await reporter.onStart(prTicket); // the file's pr-ticket fixture (github.kind "pr")
     const ops = listOps(cfg);
     expect(ops).toHaveLength(1);
     expect(ops[0].op).toMatchObject({
-      kind: "labels", add: ["junco:working"], remove: ["junco:queued"],
+      kind: "labels",
+      add: ["junco:working"],
+      remove: ["junco:queued"],
     });
   });
 
   it("onFinal comment + labels queue as two ops offline (comment first)", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-rep-obx2-"));
     const cfg = repCfg(root);
-    const reporter = makeGithubReporter(cfg, { ghFn: async () => { throw NET; } });
+    const reporter = makeGithubReporter(cfg, {
+      ghFn: async () => {
+        throw NET;
+      },
+    });
     await reporter.onFinal(prTicket, {
-      kind: "pr", status: "completed", prUrl: "https://x/pr/1", finalText: "done!", failureReason: null,
+      kind: "pr",
+      status: "completed",
+      prUrl: "https://x/pr/1",
+      finalText: "done!",
+      failureReason: null,
     });
     const kinds = listOps(cfg).map((o) => o.op.kind);
     expect(kinds).toEqual(["comment", "labels"]);
@@ -753,7 +853,9 @@ describe("reporter offline (outbox)", () => {
     const root = mkdtempSync(join(tmpdir(), "junco-rep-obx3-"));
     const cfg = repCfg(root);
     const reporter = makeGithubReporter(cfg, {
-      ghFn: async () => { throw new GitOpError("gh failed", "HTTP 403", 1); },
+      ghFn: async () => {
+        throw new GitOpError("gh failed", "HTTP 403", 1);
+      },
     });
     await expect(reporter.onStart(prTicket)).resolves.toBeUndefined();
     expect(listOps(cfg)).toHaveLength(0);
@@ -764,10 +866,18 @@ describe("reporter offline (outbox)", () => {
     const cfg = repCfg(root);
     const calls: string[][] = [];
     const reporter = makeGithubReporter(cfg, {
-      ghFn: (async (_c: unknown, args: string[]) => { calls.push(args); return { code: 0, stdout: "", stderr: "" }; }) as never,
+      ghFn: (async (_c: unknown, args: string[]) => {
+        calls.push(args);
+        return { code: 0, stdout: "", stderr: "" };
+      }) as never,
     });
     await reporter.onFinal(prTicket, {
-      kind: "pr", status: "completed", prUrl: null, finalText: "x", failureReason: null, prQueued: true,
+      kind: "pr",
+      status: "completed",
+      prUrl: null,
+      finalText: "x",
+      failureReason: null,
+      prQueued: true,
     });
     expect(calls).toHaveLength(0);
     expect(listOps(cfg)).toHaveLength(0);
@@ -786,36 +896,37 @@ describe("reporter offline (outbox)", () => {
 `src/prFlow.ts` — `PrFlowResult`'s `prOutcome` type (the `PrOutcome` interface near line 52) gains `prQueued: boolean;`, initialized `false` in the initializer near line 69, and `PrFlowResult` exposes it however `flowResult` currently derives fields (thread `prOutcome.prQueued` through — inspect `flowResult`/`finalizePr` and mirror how `prUrl` travels). No behavioral change yet.
 
 `src/githubReport.ts`:
+
 1. Imports: `import { tryOrEnqueue, isOffline } from "./githubOutbox.js";`
 2. `swap` and `postComment` stay; `guard` becomes outbox-aware by taking the op to queue:
 
 ```ts
-  const guardOrQueue = async (
-    label: string,
-    id: string,
-    op: OutboxOp,
-    fn: () => Promise<void>,
-  ): Promise<void> => {
-    try {
-      await tryOrEnqueue(cfg, "reporter", op, fn);
-    } catch (e) {
-      // Non-network: best-effort by contract — warn and swallow, as before.
-      log.warn(`github reporter: ${label} failed (issue state on GitHub may be stale)`, {
-        id,
-        error: errMsg(e),
-      });
-    }
-  };
+const guardOrQueue = async (
+  label: string,
+  id: string,
+  op: OutboxOp,
+  fn: () => Promise<void>,
+): Promise<void> => {
+  try {
+    await tryOrEnqueue(cfg, "reporter", op, fn);
+  } catch (e) {
+    // Non-network: best-effort by contract — warn and swallow, as before.
+    log.warn(`github reporter: ${label} failed (issue state on GitHub may be stale)`, {
+      id,
+      error: errMsg(e),
+    });
+  }
+};
 ```
-   (import `OutboxOp` type; keep the old `guard` deleted — every call site migrates.)
-3. Call sites build the equivalent op: swaps →
-   `{ kind: "labels", nwo: g.nwo, issue: g.issue, add: [addLabel], remove: [removeLabel] }`;
-   comments → `{ kind: "comment", nwo: g.nwo, issue: g.issue, body }` (body built BEFORE the call so the op captures it).
-4. `onFinal` pr/ask path starts with: `if (outcome.prQueued) return; // composite outbox op owns comment + flip`.
+
+(import `OutboxOp` type; keep the old `guard` deleted — every call site migrates.) 3. Call sites build the equivalent op: swaps →
+`{ kind: "labels", nwo: g.nwo, issue: g.issue, add: [addLabel], remove: [removeLabel] }`;
+comments → `{ kind: "comment", nwo: g.nwo, issue: g.issue, body }` (body built BEFORE the call so the op captures it). 4. `onFinal` pr/ask path starts with: `if (outcome.prQueued) return; // composite outbox op owns comment + flip`.
 
 - [ ] **Step 4: Verify green** — `npx vitest run tests/githubReport.test.ts tests/reporter.test.ts tests/prFlow.test.ts > /tmp/o3 2>&1; echo "exit: $?"; tail -5 /tmp/o3` → PASS (prFlow suite proves the type additions are inert). Fix any outcome-literal fixtures that now miss nothing (field is optional — expect no changes needed).
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/reporter.ts src/prFlow.ts src/githubReport.ts tests/githubReport.test.ts
 git add src/reporter.ts src/prFlow.ts src/githubReport.ts tests/githubReport.test.ts
@@ -827,10 +938,12 @@ git commit -m "feat(outbox): reporter queues comments/labels offline; prQueued o
 ### Task 4: prFlow offline endgame
 
 **Files:**
+
 - Modify: `src/prFlow.ts` (phases 11–12, ~lines 590–655), `src/finalize.ts` (result-section note when prQueued — locate where `prUrl`/phase notes render), `src/repo.ts` or wherever the base fetch runs (offline fetch tolerance — grep `fetch` there)
 - Test: `tests/prFlow.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: `enqueueOp`, `isOffline` (Task 2); `derivePrTitle`, `buildPrBody` (already in prFlow scope); `RepoContext` fields (`baseBranch`, `branchName`, `draft`, `labels`, `reviewers`); Task 3's `prOutcome.prQueued`.
 - Produces: offline fresh-PR push/create failures → composite `pr` op + done ticket with `prQueued: true`; offline amend push → `push` op; offline base fetch → proceed with local base + PR-body warning line `> ⚠️ Built offline from a possibly stale base — rebase check recommended.`
 
@@ -909,28 +1022,28 @@ Phase 11 catch (line ~607) gains an offline branch BEFORE the existing GitOpErro
 with a local helper defined in the flow's scope (it has `ctx`, `nwo`, `task`, `result`, `prOutcome`):
 
 ```ts
-  const queueOfflinePr = (pushed: boolean): string => {
-    const title = derivePrTitle(ctx, task);
-    const bodyText = buildPrBody(task, ctx, prOutcome, result);
-    return enqueueOp(cfg, "prflow", {
-      kind: "pr",
-      repoPath: ctx.repo,
-      branch: ctx.branchName,
-      nwo,
-      issue: task.github?.issue ?? null,
-      base: ctx.baseBranch,
-      title,
-      bodyText,
-      draft: ctx.draft,
-      labels: ctx.labels,
-      reviewers: ctx.reviewers,
-      finalize: task.github
-        ? { ticketId: task.id, status: result.status, finalText: result.finalText }
-        : null,
-      pushed,
-      prUrl: null,
-    });
-  };
+const queueOfflinePr = (pushed: boolean): string => {
+  const title = derivePrTitle(ctx, task);
+  const bodyText = buildPrBody(task, ctx, prOutcome, result);
+  return enqueueOp(cfg, "prflow", {
+    kind: "pr",
+    repoPath: ctx.repo,
+    branch: ctx.branchName,
+    nwo,
+    issue: task.github?.issue ?? null,
+    base: ctx.baseBranch,
+    title,
+    bodyText,
+    draft: ctx.draft,
+    labels: ctx.labels,
+    reviewers: ctx.reviewers,
+    finalize: task.github
+      ? { ticketId: task.id, status: result.status, finalText: result.finalText }
+      : null,
+    pushed,
+    prUrl: null,
+  });
+};
 ```
 
 Phase 12 catch (line ~641) gains the parallel branch: `if (isOffline(e)) { const opId = queueOfflinePr(true); prOutcome.prQueued = true; prOutcome.worktreePreserved = true; ... same return }` — worktree cleanup must be SKIPPED in this branch (do not call `cleanupWorktree`).
@@ -944,6 +1057,7 @@ Note: `result.status` at the offline-push point — confirm which variable carri
 - [ ] **Step 4: Verify green** — `npx vitest run tests/prFlow.test.ts tests/finalize.test.ts tests/runOnce.test.ts > /tmp/o4 2>&1; echo "exit: $?"; tail -5 /tmp/o4` → PASS.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/prFlow.ts src/finalize.ts src/repo.ts tests/prFlow.test.ts
 git add -A src tests/prFlow.test.ts tests/finalize.test.ts
@@ -955,10 +1069,12 @@ git commit -m "feat(outbox): offline PR endgame — composite op, done ticket, s
 ### Task 5: Sweep flush-first + metrics
 
 **Files:**
+
 - Modify: `src/githubInbox.ts` (`pollGithubInbox` line ~526: flush before the repo loop; `BridgeDeps` gains `flushFn?`), `src/metrics.ts` (outbox counters), `src/daemon.ts` (only if the sweep call site needs the metrics hook — inspect where `recordBridgeSweep` is called)
 - Test: `tests/githubInbox.test.ts` (append), `tests/metrics.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: `flushOutbox`, `outboxDepth` (Task 2).
 - Produces: `MetricsSnapshot` gains `outboxDepth: number; outboxEnqueued: number; outboxFlushed: number; outboxDead: number; lastFlushAt: string | null` (additive); `RunMetrics.recordOutboxFlush(r: FlushResult, depth: number)` and `recordOutboxEnqueue()`; sweep calls flush FIRST and records.
 
@@ -1005,10 +1121,12 @@ it("sweep continues quietly when flush reports offline", async () => {
 ### Task 6: Dashboard client — queued actions + issue-list cache
 
 **Files:**
+
 - Modify: `src/tui/ghClient.ts`
 - Test: `tests/tuiGhClient.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: `tryOrEnqueue`, `outboxDepth` (Task 2).
 - Produces:
   - `applyAction` return becomes `Promise<Result<{ queued: boolean }>>` — `{ok: true, value: {queued: false}}` live, `{queued: true}` when offline-queued; non-network errors unchanged (`ok: false`).
@@ -1020,10 +1138,18 @@ it("sweep continues quietly when flush reports offline", async () => {
 ```ts
 const NET = new GitOpError("gh failed", "connect: network is unreachable", 1);
 
-it("applyAction offline queues a labels op and reports queued:true", async () => { /* ghFn throws NET; assert listOps has the dispatch op with the trigger label; result {ok:true,value:{queued:true}} */ });
-it("applyAction permanent failure still returns ok:false and queues nothing", async () => { /* 403 */ });
-it("listIssues success writes the cache and returns staleAt null", async () => { /* assert cache file content */ });
-it("listIssues offline serves the cache with staleAt set", async () => { /* first call ok, then ghFn throws NET; same issues, staleAt === fetchedAt */ });
+it("applyAction offline queues a labels op and reports queued:true", async () => {
+  /* ghFn throws NET; assert listOps has the dispatch op with the trigger label; result {ok:true,value:{queued:true}} */
+});
+it("applyAction permanent failure still returns ok:false and queues nothing", async () => {
+  /* 403 */
+});
+it("listIssues success writes the cache and returns staleAt null", async () => {
+  /* assert cache file content */
+});
+it("listIssues offline serves the cache with staleAt set", async () => {
+  /* first call ok, then ghFn throws NET; same issues, staleAt === fetchedAt */
+});
 it("listIssues offline with no cache is an error (today's behavior)", async () => {});
 ```
 
@@ -1040,10 +1166,12 @@ Write these fully against the file's helpers — each body is 5–10 lines using
 ### Task 7: Dashboard UI — unpushed chip + stale badge + queued toast
 
 **Files:**
+
 - Modify: `src/tui/queueSnapshot.ts` (`outboxDepth` field), `src/tui/components/Chrome.tsx` (Header chip), `src/tui/components/IssueList.tsx` (staleAt badge), `src/tui/components/HelpModal.tsx` (system row), `src/tui/App.tsx` (thread staleAt + queued toast wording)
 - Test: `tests/queueSnapshot.test.ts`, `tests/tuiChrome.test.tsx`, `tests/tuiIssueList.test.tsx`, `tests/tuiApp.test.tsx` (+ EVERY full QueueSnapshot literal: `tuiQueue`, `tuiRail`, `tuiApp` QUEUE_SNAP — the fixture-sweep rule)
 
 **Interfaces:**
+
 - Consumes: Task 2 `outboxDepth`, Task 6 client signatures.
 - Produces: `QueueSnapshot.outboxDepth: number` (readdir count inside the snapshot builder, deps-injected); `Header` props gain `outboxDepth: number` → chip `⇡N unpushed` in `theme.warn`, hidden at 0; `IssueList` props gain `staleAt: string | null` → title badge `offline · HH:MM` (fmtClock) in warn when set; App: action results with `queued: true` toast `"offline — action queued (⇡N)"` (info kind, N = snapshot depth) and do NOT roll back optimistic labels; `staleAt` from listIssues threads into IssueList.
 
@@ -1063,11 +1191,13 @@ Write these fully against the file's helpers — each body is 5–10 lines using
 ### Task 8: `junco outbox` CLI + palette + status/doctor
 
 **Files:**
+
 - Create: `src/outboxCmd.ts`
 - Modify: `src/cli.ts` (subcommand + USAGE), `src/tui/cliRunner.ts` (roster), `src/statusCmd.ts` (outbox line), `src/doctor.ts` (outbox check)
 - Test: `tests/outboxCmd.test.ts` (new), `tests/cli.test.ts`, `tests/tuiCliRunner.test.ts`, `tests/statusCmd.test.ts` (or wherever status is covered), `tests/doctor.test.ts`
 
 **Interfaces:**
+
 - Consumes: `listOps`, `flushOutbox`, `outboxDepth`, `outboxPaths`.
 - Produces: `runOutboxCommand(cfg, args: string[], deps?): Promise<number>` — no args: list (`<age> <kind> <issueKey ?? branch> attempts=N lastError?`, plus dead count footer; empty → `outbox empty`); `["flush"]`: run flush, print `sent N · dead N · remaining N` + `offline — will retry when GitHub is reachable` when offline; exit 0 unless flush left dead ops (exit 1 so scripts notice).
 - cli.ts: `outbox` case (lazy import like other cmds), USAGE line `outbox [flush]      List or push the offline GitHub backlog`.
@@ -1084,6 +1214,7 @@ Write these fully against the file's helpers — each body is 5–10 lines using
 ### Task 9: Docs + full gate
 
 **Files:**
+
 - Modify: `README.md` (new "Offline / flaky network" subsection under GitHub-integrated mode + dashboard section mention of the chip), `ARCHITECTURE.md` (module row for `githubOutbox.ts`; reporter/prFlow rows gain the offline note)
 
 **Interfaces:** none — document shipped behavior; read `githubOutbox.ts` + the reporter/prFlow diffs before writing; stack-agnostic wording.

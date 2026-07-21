@@ -1,8 +1,9 @@
-<!-- Q&A ticket: no repo field, so the agent answers in-place; submit with `junco submit examples/qa-ticket.md`. -->
----
+## <!-- Q&A ticket: no repo field, so the agent answers in-place; submit with `junco submit examples/qa-ticket.md`. -->
+
 id: what-is-a-monoid-2026-05-31
 priority: normal
 timeout_minutes: 10
+
 ---
 
 # What is a monoid, and when should I use one?

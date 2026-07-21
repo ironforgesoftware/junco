@@ -22,13 +22,13 @@
 
 ## File Structure
 
-| File | Responsibility | Action |
-|---|---|---|
-| `src/tui/ghClient.ts` | `listReview()` + `fileReview()` on `DashboardClient` (close over `cfg`, call the store) | Modify |
+| File                                | Responsibility                                                                            | Action     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------- | ---------- |
+| `src/tui/ghClient.ts`               | `listReview()` + `fileReview()` on `DashboardClient` (close over `cfg`, call the store)   | Modify     |
 | `src/tui/components/ReviewView.tsx` | Presentational: batch list + per-finding checklist; owns `ReviewState`/`ReviewOpen` types | **Create** |
-| `src/tui/App.tsx` | Rewire assess key; wire `"review"` view, state, open key, render arm, key routing, toasts | Modify |
-| `src/tui/components/Chrome.tsx` | `HintView` union + `hintsFor` `case "review"` | Modify |
-| `src/tui/components/HelpModal.tsx` | Register the review open key in "panes & views" | Modify |
+| `src/tui/App.tsx`                   | Rewire assess key; wire `"review"` view, state, open key, render arm, key routing, toasts | Modify     |
+| `src/tui/components/Chrome.tsx`     | `HintView` union + `hintsFor` `case "review"`                                             | Modify     |
+| `src/tui/components/HelpModal.tsx`  | Register the review open key in "panes & views"                                           | Modify     |
 
 Tests: colocated `tests/*.test.ts(x)`.
 
@@ -45,10 +45,12 @@ Tests: colocated `tests/*.test.ts(x)`.
 ### Task 1: `ghClient` — `listReview` + `fileReview`
 
 **Files:**
+
 - Modify: `src/tui/ghClient.ts`
 - Test: the ghClient test file (find it: `ls tests | grep -i ghclient`; likely `tests/ghClient.test.ts`)
 
 **Interfaces:**
+
 - Consumes: `listPending`, `readPending`, `type PendingAssess` (`../assessReview.js`); `fileFindings`, `type FileResult` (`../assessFiling.js`).
 - Produces on `DashboardClient`:
   - `listReview(): Promise<Result<PendingAssess[]>>`
@@ -61,7 +63,17 @@ Add to the ghClient test file (match its existing `makeGhDashboardClient(cfg, de
 
 ```ts
 it("listReview returns the pending batches", async () => {
-  const batches = [{ id: "assess-x-1", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x", createdAt: "2026-07-09T00:00:00.000Z", findings: [] }];
+  const batches = [
+    {
+      id: "assess-x-1",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [],
+    },
+  ];
   const client = makeGhDashboardClient(cfgFixture(), { listPendingFn: () => batches as never });
   const r = await client.listReview();
   expect(r.ok).toBe(true);
@@ -69,11 +81,39 @@ it("listReview returns the pending batches", async () => {
 });
 
 it("fileReview reads the batch and files the selected fingerprints", async () => {
-  const batch = { id: "assess-x-1", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x", createdAt: "2026-07-09T00:00:00.000Z", findings: [{ fingerprint: "f1", kind: "code", severity: "high", ruleId: "R", title: "T", description: "", references: [] }] };
+  const batch = {
+    id: "assess-x-1",
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    findings: [
+      {
+        fingerprint: "f1",
+        kind: "code",
+        severity: "high",
+        ruleId: "R",
+        title: "T",
+        description: "",
+        references: [],
+      },
+    ],
+  };
   let gotSelected: Set<string> | null = null;
   const client = makeGhDashboardClient(cfgFixture(), {
     readPendingFn: () => ({ batch: batch as never, error: null }),
-    fileFindingsFn: (_c, _b, selected) => { gotSelected = selected; return Promise.resolve({ created: 1, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] }); },
+    fileFindingsFn: (_c, _b, selected) => {
+      gotSelected = selected;
+      return Promise.resolve({
+        created: 1,
+        queuedOffline: 0,
+        deduped: 0,
+        failed: 0,
+        urls: [],
+        warnings: [],
+      });
+    },
   });
   const r = await client.fileReview("assess-x-1", ["f1"]);
   expect(r.ok).toBe(true);
@@ -81,7 +121,9 @@ it("fileReview reads the batch and files the selected fingerprints", async () =>
 });
 
 it("fileReview surfaces a missing/corrupt batch as an error Result", async () => {
-  const client = makeGhDashboardClient(cfgFixture(), { readPendingFn: () => ({ batch: null, error: null }) });
+  const client = makeGhDashboardClient(cfgFixture(), {
+    readPendingFn: () => ({ batch: null, error: null }),
+  });
   const r = await client.fileReview("nope", ["f1"]);
   expect(r.ok).toBe(false);
 });
@@ -102,18 +144,24 @@ In `src/tui/ghClient.ts`: add the imports, extend `GhClientDeps` and the `Dashbo
 import { listPending, readPending, type PendingAssess } from "../assessReview.js";
 import { fileFindings, type FileResult } from "../assessFiling.js";
 ```
+
 Add to `GhClientDeps`:
+
 ```ts
   listPendingFn?: typeof listPending;
   readPendingFn?: typeof readPending;
   fileFindingsFn?: typeof fileFindings;
 ```
+
 Add to the `DashboardClient` interface:
+
 ```ts
   listReview(): Promise<Result<PendingAssess[]>>;
   fileReview(id: string, fingerprints: string[]): Promise<Result<FileResult>>;
 ```
+
 Add inside `makeGhDashboardClient` (next to `dispatchTicket`), resolving deps at the top of the factory like the others:
+
 ```ts
     listReview() {
       return attempt(async () => (deps.listPendingFn ?? listPending)(cfg));
@@ -127,6 +175,7 @@ Add inside `makeGhDashboardClient` (next to `dispatchTicket`), resolving deps at
       });
     },
 ```
+
 (`ghFn` is already in scope in this factory — the same one `dispatchTicket` passes.)
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -146,10 +195,12 @@ git commit -m "feat(tui): DashboardClient listReview + fileReview"
 ### Task 2: Rewire the assess key for external repos
 
 **Files:**
+
 - Modify: `src/tui/App.tsx` (`runAssess`, ~762-798)
 - Test: `tests/tuiApp.test.tsx`
 
 **Interfaces:**
+
 - Produces: `s`/`S` now submit an assess audit for external repos too (the CLI resolves them since #95). The stale external-refusal toast is removed.
 
 - [ ] **Step 1: Write the failing test**
@@ -159,7 +210,10 @@ Add to `tests/tuiApp.test.tsx` (match `renderApp` + `until`). Seed an EXTERNAL r
 ```ts
 it("assess key submits an audit for an external repo (no refusal)", async () => {
   const cli: Array<[string, string[]]> = [];
-  const runCli = async (name: string, args: string[]) => { cli.push([name, args]); return { output: "queued", code: 0, timedOut: false }; };
+  const runCli = async (name: string, args: string[]) => {
+    cli.push([name, args]);
+    return { output: "queued", code: 0, timedOut: false };
+  };
   // watchlist fixture with an external entry for nwo "up/stream" (mirror the file's existing external-repo test setup)
   const { client } = makeClient({ "up/stream": [] });
   const r = renderApp(client, wlExternal("up/stream"), 999999, runCli);
@@ -183,14 +237,14 @@ Expected: FAIL — the current gate shows the refusal toast and never calls `run
 In `src/tui/App.tsx` `runAssess`, DELETE the external gate (the whole block, ~772-775):
 
 ```ts
-    // External (fork-PR) repos: assess files finding ISSUES on the target
-    // repo — an upstream write the etiquette invariant forbids. assessCmd
-    // already fails closed (external entries are not "watched"), but gate
-    // here so the toast explains instead of suggesting a config change.
-    if (currentRepo?.external === true) {
-      showToast("error", "assess is not available for external repos — it files issues upstream");
-      return;
-    }
+// External (fork-PR) repos: assess files finding ISSUES on the target
+// repo — an upstream write the etiquette invariant forbids. assessCmd
+// already fails closed (external entries are not "watched"), but gate
+// here so the toast explains instead of suggesting a config change.
+if (currentRepo?.external === true) {
+  showToast("error", "assess is not available for external repos — it files issues upstream");
+  return;
+}
 ```
 
 The comment is stale: since #95, `junco assess <external-nwo>` resolves and parks findings (filing is a separate human-confirmed step), so the refusal is wrong. Also update the success toast to point at the review view — change the success branch to append a hint:
@@ -220,10 +274,12 @@ git commit -m "feat(tui): assess key works on external repos (parks for review)"
 ### Task 3: `ReviewView` component
 
 **Files:**
+
 - Create: `src/tui/components/ReviewView.tsx`
 - Test: `tests/reviewView.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `type PendingAssess` (`../../assessReview.js`), `theme` (`../theme.js`), Ink `Box`/`Text`.
 - Produces (exported):
   - `interface ReviewOpen { batchIdx: number; findingCursor: number; checked: Set<string> }`
@@ -240,11 +296,31 @@ import React from "react";
 import { ReviewView, type ReviewState } from "../src/tui/components/ReviewView.js";
 
 const BATCH = {
-  id: "assess-x-1", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x",
+  id: "assess-x-1",
+  nwo: "o/r",
+  external: true,
+  autoPlan: false,
+  repoPath: "/x",
   createdAt: "2026-07-09T00:00:00.000Z",
   findings: [
-    { fingerprint: "f1", kind: "code", severity: "high", ruleId: "R", title: "SQL injection", description: "", references: [] },
-    { fingerprint: "f2", kind: "code", severity: "low", ruleId: "R", title: "stale dep", description: "", references: [] },
+    {
+      fingerprint: "f1",
+      kind: "code",
+      severity: "high",
+      ruleId: "R",
+      title: "SQL injection",
+      description: "",
+      references: [],
+    },
+    {
+      fingerprint: "f2",
+      kind: "code",
+      severity: "low",
+      ruleId: "R",
+      title: "stale dep",
+      description: "",
+      references: [],
+    },
   ],
 };
 function state(over: Partial<ReviewState>): ReviewState {
@@ -263,10 +339,14 @@ describe("ReviewView", () => {
     expect(frame).toContain("SQL injection");
     expect(frame).toContain("stale dep");
     expect(frame).toMatch(/\[x\].*SQL injection/); // f1 checked
-    expect(frame).toMatch(/\[ \].*stale dep/);     // f2 unchecked
+    expect(frame).toMatch(/\[ \].*stale dep/); // f2 unchecked
   });
   it("empty state renders a hint", () => {
-    expect(render(<ReviewView state={state({ batches: [], cursor: 0 })} height={20} focused />).lastFrame()).toContain("no pending");
+    expect(
+      render(
+        <ReviewView state={state({ batches: [], cursor: 0 })} height={20} focused />,
+      ).lastFrame(),
+    ).toContain("no pending");
   });
 });
 ```
@@ -300,7 +380,10 @@ export interface ReviewState {
 }
 
 const SEV_COLOR: Record<string, string | undefined> = {
-  critical: theme.danger, high: theme.danger, medium: theme.warn, low: undefined,
+  critical: theme.danger,
+  high: theme.danger,
+  medium: theme.warn,
+  low: undefined,
 };
 
 /** Visible slice of `len` rows around `cursor` within `rows` lines. */
@@ -321,31 +404,57 @@ export function ReviewView({
   focused: boolean;
 }): React.JSX.Element {
   const rows = Math.max(1, height - 2);
-  if (state.loading) return <Box paddingX={1}><Text dimColor>loading pending reviews…</Text></Box>;
-  if (state.error) return <Box paddingX={1}><Text color={theme.danger}>{state.error}</Text></Box>;
+  if (state.loading)
+    return (
+      <Box paddingX={1}>
+        <Text dimColor>loading pending reviews…</Text>
+      </Box>
+    );
+  if (state.error)
+    return (
+      <Box paddingX={1}>
+        <Text color={theme.danger}>{state.error}</Text>
+      </Box>
+    );
 
   // Checklist mode.
   if (state.open) {
     const batch = state.batches[state.open.batchIdx];
-    if (!batch) return <Box paddingX={1}><Text dimColor>batch gone</Text></Box>;
+    if (!batch)
+      return (
+        <Box paddingX={1}>
+          <Text dimColor>batch gone</Text>
+        </Box>
+      );
     const { checked, findingCursor } = state.open;
     const w = windowRange(batch.findings.length, findingCursor, rows - 1);
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text>
           <Text color={theme.accent}>{batch.nwo}</Text>
-          <Text dimColor>{`  ${batch.external ? "external" : "owned"} · ${checked.size}/${batch.findings.length} selected`}</Text>
+          <Text
+            dimColor
+          >{`  ${batch.external ? "external" : "owned"} · ${checked.size}/${batch.findings.length} selected`}</Text>
         </Text>
         {batch.findings.slice(w.start, w.end).map((f, i) => {
           const idx = w.start + i;
           const sel = idx === findingCursor && focused;
           const on = checked.has(f.fingerprint);
           return (
-            <Box key={f.fingerprint} width="100%" backgroundColor={sel ? theme.selectionBg : undefined} gap={1}>
+            <Box
+              key={f.fingerprint}
+              width="100%"
+              backgroundColor={sel ? theme.selectionBg : undefined}
+              gap={1}
+            >
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
               <Text>{on ? "[x]" : "[ ]"}</Text>
               <Text color={SEV_COLOR[f.severity]}>{f.severity.padEnd(8)}</Text>
-              <Box flexGrow={1} minWidth={0}><Text wrap="truncate" dimColor={!sel}>{f.title}</Text></Box>
+              <Box flexGrow={1} minWidth={0}>
+                <Text wrap="truncate" dimColor={!sel}>
+                  {f.title}
+                </Text>
+              </Box>
             </Box>
           );
         })}
@@ -355,7 +464,11 @@ export function ReviewView({
 
   // Batch-list mode.
   if (state.batches.length === 0) {
-    return <Box paddingX={1}><Text dimColor>no pending assess reviews — run assess (s) on a repo first</Text></Box>;
+    return (
+      <Box paddingX={1}>
+        <Text dimColor>no pending assess reviews — run assess (s) on a repo first</Text>
+      </Box>
+    );
   }
   const w = windowRange(state.batches.length, state.cursor, rows);
   return (
@@ -364,9 +477,18 @@ export function ReviewView({
         const idx = w.start + i;
         const sel = idx === state.cursor && focused;
         return (
-          <Box key={b.id} width="100%" backgroundColor={sel ? theme.selectionBg : undefined} gap={1}>
+          <Box
+            key={b.id}
+            width="100%"
+            backgroundColor={sel ? theme.selectionBg : undefined}
+            gap={1}
+          >
             <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
-            <Box flexGrow={1} minWidth={0}><Text wrap="truncate" dimColor={!sel}>{b.nwo}</Text></Box>
+            <Box flexGrow={1} minWidth={0}>
+              <Text wrap="truncate" dimColor={!sel}>
+                {b.nwo}
+              </Text>
+            </Box>
             <Text dimColor>{b.external ? "external" : "owned"}</Text>
             <Text color={theme.accent}>{`${b.findings.length}`}</Text>
           </Box>
@@ -396,10 +518,12 @@ git commit -m "feat(tui): ReviewView component (batch list + per-finding checkli
 ### Task 4: Wire the review view into App (navigation)
 
 **Files:**
+
 - Modify: `src/tui/App.tsx`, `src/tui/components/Chrome.tsx`, `src/tui/components/HelpModal.tsx`
 - Test: `tests/tuiApp.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `ReviewView`, `type ReviewState` (Task 3); `client.listReview()` (Task 1).
 - Produces: a `"review"` view opened with `v`; batch-list navigation (↑/↓ cursor, enter → open a batch's checklist, esc → back). Filing arrives in Task 5.
 
@@ -407,9 +531,32 @@ git commit -m "feat(tui): ReviewView component (batch list + per-finding checkli
 
 ```ts
 it("v opens the review view and enter drills into a batch's findings", async () => {
-  const batches = [{ id: "assess-x-1", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x", createdAt: "2026-07-09T00:00:00.000Z", findings: [{ fingerprint: "f1", kind: "code", severity: "high", ruleId: "R", title: "SQL injection", description: "", references: [] }] }];
+  const batches = [
+    {
+      id: "assess-x-1",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "SQL injection",
+          description: "",
+          references: [],
+        },
+      ],
+    },
+  ];
   const { client } = makeClient({ "acme/api": [] });
-  (client as { listReview: () => Promise<unknown> }).listReview = async () => ({ ok: true, value: batches });
+  (client as { listReview: () => Promise<unknown> }).listReview = async () => ({
+    ok: true,
+    value: batches,
+  });
   const r = renderApp(client, wl());
   await until(() => (r.lastFrame() ?? "").includes("acme/api"));
   r.stdin.write("v");
@@ -417,7 +564,9 @@ it("v opens the review view and enter drills into a batch's findings", async () 
   r.stdin.write("\r"); // enter → checklist
   await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
   r.stdin.write(String.fromCharCode(27)); // esc → back to batch list
-  await until(() => (r.lastFrame() ?? "").includes("o/r") && !(r.lastFrame() ?? "").includes("SQL injection"));
+  await until(
+    () => (r.lastFrame() ?? "").includes("o/r") && !(r.lastFrame() ?? "").includes("SQL injection"),
+  );
 });
 ```
 
@@ -432,11 +581,19 @@ Expected: FAIL — `v` does nothing; no review view.
 
 1. **Unions.** Add `"review"` to `View` (`App.tsx:77-86`) and to `HintView` (`Chrome.tsx:10-19`).
 2. **State.** Add near the other view state (`App.tsx:220`):
+
 ```ts
-const [reviewState, setReviewState] = useState<ReviewState>({ loading: false, error: null, batches: [], cursor: 0, open: null });
+const [reviewState, setReviewState] = useState<ReviewState>({
+  loading: false,
+  error: null,
+  batches: [],
+  cursor: 0,
+  open: null,
+});
 ```
-   Import: `import { ReviewView, type ReviewState } from "./components/ReviewView.js";`
-3. **Open key + fetch.** Next to the `s`/`S` block (`App.tsx:1247-1251`), add:
+
+Import: `import { ReviewView, type ReviewState } from "./components/ReviewView.js";` 3. **Open key + fetch.** Next to the `s`/`S` block (`App.tsx:1247-1251`), add:
+
 ```ts
 if (input === "v") {
   setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
@@ -449,44 +606,76 @@ if (input === "v") {
   return;
 }
 ```
+
 4. **Render arm.** In the ternary chain (`App.tsx:1502-1560`), add before the terminal `else`:
+
 ```tsx
 ) : view === "review" ? (
   <ReviewView state={reviewState} height={listHeight} focused />
 ```
+
 5. **Key routing.** Add a `view === "review"` branch in the useInput cascade, BEFORE the `// ── main view ──` block (~`App.tsx:1158`), mirroring the `"queue"`/`"detail"` shape:
+
 ```ts
 if (view === "review") {
   const rs = reviewState;
   if (rs.open) {
     const batch = rs.batches[rs.open.batchIdx];
     if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
-    if ((input === "k" || key.upArrow))
-      return void setReviewState((s) => (s.open ? { ...s, open: { ...s.open, findingCursor: Math.max(0, s.open.findingCursor - 1) } } : s));
-    if ((input === "j" || key.downArrow))
-      return void setReviewState((s) => (s.open && batch ? { ...s, open: { ...s.open, findingCursor: Math.min(batch.findings.length - 1, s.open.findingCursor + 1) } } : s));
+    if (input === "k" || key.upArrow)
+      return void setReviewState((s) =>
+        s.open
+          ? { ...s, open: { ...s.open, findingCursor: Math.max(0, s.open.findingCursor - 1) } }
+          : s,
+      );
+    if (input === "j" || key.downArrow)
+      return void setReviewState((s) =>
+        s.open && batch
+          ? {
+              ...s,
+              open: {
+                ...s.open,
+                findingCursor: Math.min(batch.findings.length - 1, s.open.findingCursor + 1),
+              },
+            }
+          : s,
+      );
     // toggle / file → Task 5
     return;
   }
   if (key.escape || input === "v") return void setView("main");
-  if (input === "k" || key.upArrow) return void setReviewState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
-  if (input === "j" || key.downArrow) return void setReviewState((s) => ({ ...s, cursor: Math.min(Math.max(0, s.batches.length - 1), s.cursor + 1) }));
+  if (input === "k" || key.upArrow)
+    return void setReviewState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
+  if (input === "j" || key.downArrow)
+    return void setReviewState((s) => ({
+      ...s,
+      cursor: Math.min(Math.max(0, s.batches.length - 1), s.cursor + 1),
+    }));
   if (key.return) {
     return void setReviewState((s) => {
       const batch = s.batches[s.cursor];
       if (!batch) return s;
-      return { ...s, open: { batchIdx: s.cursor, findingCursor: 0, checked: new Set(batch.findings.map((f) => f.fingerprint)) } };
+      return {
+        ...s,
+        open: {
+          batchIdx: s.cursor,
+          findingCursor: 0,
+          checked: new Set(batch.findings.map((f) => f.fingerprint)),
+        },
+      };
     });
   }
   return;
 }
 ```
-   (Default selection = all findings checked, per design notes.)
-6. **Chrome hints.** In `hintsFor` (`Chrome.tsx:177+`) add:
+
+(Default selection = all findings checked, per design notes.) 6. **Chrome hints.** In `hintsFor` (`Chrome.tsx:177+`) add:
+
 ```ts
 case "review":
   return [["↑/↓", "move"], ["enter", "open/file"], ["space", "toggle"], ["a/n", "all/none"], ["esc", "back"]];
 ```
+
 7. **HelpModal.** In the "panes & views" section (`HelpModal.tsx:63-76`, near the `s`/`S` rows), add a row: `["v", "assess review queue"]`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -506,10 +695,12 @@ git commit -m "feat(tui): review view — open, list batches, drill into finding
 ### Task 5: Confirm-to-file interaction
 
 **Files:**
+
 - Modify: `src/tui/App.tsx`
 - Test: `tests/tuiApp.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `client.fileReview(id, fingerprints)` (Task 1).
 - Produces: in checklist mode — `space` toggles the finding at the cursor, `a` checks all, `n` none, `f`/`enter` files the checked set (empty → toast, no call); on success, toast the counts and optimistically remove the batch.
 
@@ -517,24 +708,69 @@ git commit -m "feat(tui): review view — open, list batches, drill into finding
 
 ```ts
 it("toggling and pressing f files the selected fingerprints and drops the batch", async () => {
-  const batches = [{ id: "assess-x-1", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x", createdAt: "2026-07-09T00:00:00.000Z", findings: [
-    { fingerprint: "f1", kind: "code", severity: "high", ruleId: "R", title: "SQL injection", description: "", references: [] },
-    { fingerprint: "f2", kind: "code", severity: "low", ruleId: "R", title: "stale dep", description: "", references: [] },
-  ] }];
+  const batches = [
+    {
+      id: "assess-x-1",
+      nwo: "o/r",
+      external: true,
+      autoPlan: false,
+      repoPath: "/x",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      findings: [
+        {
+          fingerprint: "f1",
+          kind: "code",
+          severity: "high",
+          ruleId: "R",
+          title: "SQL injection",
+          description: "",
+          references: [],
+        },
+        {
+          fingerprint: "f2",
+          kind: "code",
+          severity: "low",
+          ruleId: "R",
+          title: "stale dep",
+          description: "",
+          references: [],
+        },
+      ],
+    },
+  ];
   const filed: Array<[string, string[]]> = [];
   const { client } = makeClient({ "acme/api": [] });
-  (client as { listReview: () => Promise<unknown> }).listReview = async () => ({ ok: true, value: batches });
-  (client as { fileReview: (id: string, fps: string[]) => Promise<unknown> }).fileReview = async (id, fps) => { filed.push([id, fps]); return { ok: true, value: { created: fps.length, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [] } }; };
+  (client as { listReview: () => Promise<unknown> }).listReview = async () => ({
+    ok: true,
+    value: batches,
+  });
+  (client as { fileReview: (id: string, fps: string[]) => Promise<unknown> }).fileReview = async (
+    id,
+    fps,
+  ) => {
+    filed.push([id, fps]);
+    return {
+      ok: true,
+      value: {
+        created: fps.length,
+        queuedOffline: 0,
+        deduped: 0,
+        failed: 0,
+        urls: [],
+        warnings: [],
+      },
+    };
+  };
   const r = renderApp(client, wl());
   await until(() => (r.lastFrame() ?? "").includes("acme/api"));
   r.stdin.write("v");
   await until(() => (r.lastFrame() ?? "").includes("o/r"));
   r.stdin.write("\r"); // open batch (all checked)
   await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
-  r.stdin.write("j");     // cursor to f2
-  r.stdin.write(" ");     // uncheck f2
+  r.stdin.write("j"); // cursor to f2
+  r.stdin.write(" "); // uncheck f2
   await until(() => /\[ \].*stale dep/.test(r.lastFrame() ?? ""));
-  r.stdin.write("f");     // file
+  r.stdin.write("f"); // file
   await until(() => filed.length === 1);
   expect(filed[0][0]).toBe("assess-x-1");
   expect(filed[0][1]).toEqual(["f1"]); // only f1 checked
@@ -552,38 +788,56 @@ Expected: FAIL — `space`/`f` do nothing yet.
 In the `view === "review"` → `if (rs.open)` branch (added in Task 4), replace the `// toggle / file → Task 5` line with:
 
 ```ts
-    if (input === " ") {
-      return void setReviewState((s) => {
-        if (!s.open || !batch) return s;
-        const checked = new Set(s.open.checked);
-        const fp = batch.findings[s.open.findingCursor]?.fingerprint;
-        if (fp) { checked.has(fp) ? checked.delete(fp) : checked.add(fp); }
-        return { ...s, open: { ...s.open, checked } };
-      });
+if (input === " ") {
+  return void setReviewState((s) => {
+    if (!s.open || !batch) return s;
+    const checked = new Set(s.open.checked);
+    const fp = batch.findings[s.open.findingCursor]?.fingerprint;
+    if (fp) {
+      checked.has(fp) ? checked.delete(fp) : checked.add(fp);
     }
-    if (input === "a") return void setReviewState((s) => (s.open && batch ? { ...s, open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) } } : s));
-    if (input === "n") return void setReviewState((s) => (s.open ? { ...s, open: { ...s.open, checked: new Set() } } : s));
-    if (input === "f" || key.return) {
-      if (!batch) return;
-      const fps = batch.findings.map((f) => f.fingerprint).filter((fp) => rs.open!.checked.has(fp));
-      if (fps.length === 0) return void showToast("info", "nothing selected");
-      const id = batch.id;
-      showToast("info", `filing ${fps.length} on ${batch.nwo}…`);
-      void client.fileReview(id, fps).then((res) => {
-        if (!aliveRef.current) return;
-        if (res.ok) {
-          const v = res.value;
-          showToast("success", `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`);
-          setReviewState((s) => {
-            const batches = s.batches.filter((b) => b.id !== id); // optimistic removal
-            return { ...s, batches, open: null, cursor: Math.min(s.cursor, Math.max(0, batches.length - 1)) };
-          });
-        } else {
-          showToast("error", res.error);
-        }
+    return { ...s, open: { ...s.open, checked } };
+  });
+}
+if (input === "a")
+  return void setReviewState((s) =>
+    s.open && batch
+      ? { ...s, open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) } }
+      : s,
+  );
+if (input === "n")
+  return void setReviewState((s) =>
+    s.open ? { ...s, open: { ...s.open, checked: new Set() } } : s,
+  );
+if (input === "f" || key.return) {
+  if (!batch) return;
+  const fps = batch.findings.map((f) => f.fingerprint).filter((fp) => rs.open!.checked.has(fp));
+  if (fps.length === 0) return void showToast("info", "nothing selected");
+  const id = batch.id;
+  showToast("info", `filing ${fps.length} on ${batch.nwo}…`);
+  void client.fileReview(id, fps).then((res) => {
+    if (!aliveRef.current) return;
+    if (res.ok) {
+      const v = res.value;
+      showToast(
+        "success",
+        `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`,
+      );
+      setReviewState((s) => {
+        const batches = s.batches.filter((b) => b.id !== id); // optimistic removal
+        return {
+          ...s,
+          batches,
+          open: null,
+          cursor: Math.min(s.cursor, Math.max(0, batches.length - 1)),
+        };
       });
-      return;
+    } else {
+      showToast("error", res.error);
     }
+  });
+  return;
+}
 ```
 
 Update the Chrome `case "review"` hints to reflect `f` files (already added generically in Task 4; refine the label to `["f/enter", "file"]` if clearer).

@@ -54,7 +54,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     // (its label is the github-derived "#9 exec", not the raw ticket id).
     r.stdin.write("j");
     await until(() => selOn(r, "#9"));
-    r.stdin.write("R");
+    r.stdin.write("t"); // re[t]ry mnemonic
     await until(() => calls.length === 1);
     expect(calls[0]).toEqual(["retry", ["gh-acme-api-9"]]);
   });
@@ -72,7 +72,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
     await until(() => selOn(r, "sub-fix-typos")); // cursor on the WAITING row
-    r.stdin.write("x"); // opens confirm (destructive)
+    r.stdin.write("D"); // guarded Delete mnemonic — opens confirm (destructive)
     await until(() => frame(r).toLowerCase().includes("delete"));
     expect(calls).toHaveLength(0); // nothing spawned before confirm
     r.stdin.write("y");
@@ -93,7 +93,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
     await until(() => selOn(r, "sub-fix-typos"));
-    r.stdin.write("x");
+    r.stdin.write("D");
     await until(() => frame(r).toLowerCase().includes("delete"));
     r.stdin.write("n");
     await new Promise((res) => setTimeout(res, 20));
@@ -115,7 +115,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("back"));
     r.stdin.write("g"); // top selectable row — the WAITING row, NOT the running row
     await until(() => selOn(r, "sub-fix-typos"));
-    r.stdin.write("R"); // R only fires on a failed RECENT row → no-op here
+    r.stdin.write("t"); // re[t]ry mnemonic // R only fires on a failed RECENT row → no-op here
     await new Promise((res) => setTimeout(res, 20));
     expect(calls).toHaveLength(0);
   });
@@ -151,7 +151,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("fix-typos")); // worktrees body up
     r.stdin.write("l"); // enter body
     await until(() => selOn(r, "fix-typos")); // cursor on the stale worktree
-    r.stdin.write("x");
+    r.stdin.write("P"); // guarded Prune mnemonic
     await until(() => frame(r).includes("prune worktree")); // confirm modal open
     r.stdin.write("y");
     await until(() => calls.some(([n]) => n === "worktree"));
@@ -165,7 +165,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("4242")); // daemon body up
     r.stdin.write("l"); // enter the daemon body (X is a body action)
     await until(() => frame(r).includes("back"));
-    r.stdin.write("X");
+    r.stdin.write("R"); // guarded Restart mnemonic
     await until(() => frame(r).includes("in-flight ticket"));
     expect(frame(r)).toMatch(/1 in-flight ticket/); // currentTickets.length === 1
   });
@@ -183,7 +183,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("system"));
     r.stdin.write("j"); // → beta/two (rail cursor moves off acme/api)
     await until(() => selOn(r, "beta/two"));
-    r.stdin.write("o");
+    r.stdin.write("b"); // [b]rowser mnemonic
     await until(() => opens.length === 1);
     expect(opens[0]).toBe("beta/two"); // the rail row under the cursor
   });
@@ -201,8 +201,8 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("system"));
     await tap(r, TO_QUEUE_ROW); // park on the queue system row
     await until(() => frame(r).includes("sub-fix-typos"));
-    r.stdin.write("1"); // focus the rail pane (o is pane-scoped)
-    r.stdin.write("o");
+    r.stdin.write("1"); // focus the rail pane
+    r.stdin.write("b"); // [b]rowser mnemonic
     await until(() => frame(r).toLowerCase().includes("no github url"));
     expect(opens).toHaveLength(0);
   });
@@ -265,9 +265,9 @@ describe("section cursor highlight is aligned with the x/R action target", () =>
     // Cursor starts on the DONE row (#7, visual index 0) — highlight lands there.
     await until(() => selOn(r, "#7"));
     expect(selOn(r, "#8")).toBe(false); // the failed row is NOT highlighted yet
-    // R while the DONE row is highlighted is a guarded no-op: a toast, and NO
-    // spawn — crucially it must NOT retry the (non-highlighted) failed row.
-    r.stdin.write("R");
+    // retry while the DONE row is highlighted is a guarded no-op: a toast, and
+    // NO spawn — it must NOT retry the (non-highlighted) failed row.
+    r.stdin.write("t"); // re[t]ry mnemonic
     await until(() => frame(r).toLowerCase().includes("can't be requeued"));
     expect(calls).toHaveLength(0);
     // Move down onto the FAILED row: highlight follows, and now it IS reachable.
@@ -275,7 +275,7 @@ describe("section cursor highlight is aligned with the x/R action target", () =>
     await until(() => selOn(r, "#8"));
     expect(selOn(r, "#7")).toBe(false);
     // R now retries exactly the highlighted row (#8), never the done row.
-    r.stdin.write("R");
+    r.stdin.write("t"); // re[t]ry mnemonic
     await until(() => calls.length === 1);
     expect(calls[0]).toEqual(["retry", ["gh-acme-api-8"]]);
   });
@@ -333,17 +333,17 @@ describe("section cursor highlight is aligned with the x/R action target", () =>
     r.stdin.write("l"); // enter body
     // Cursor starts on the LIVE worktree — highlight lands there.
     await until(() => selOn(r, "live-one"));
-    // x while the live row is highlighted must NOT open a prune confirm for any
+    // Prune while the live row is highlighted must NOT open a confirm for any
     // other row — it's a guarded safe toast.
-    r.stdin.write("x");
+    r.stdin.write("P");
     await until(() => frame(r).toLowerCase().includes("not prunable"));
     expect(frame(r)).not.toContain("prune worktree"); // no confirm modal opened
     expect(calls).toHaveLength(0);
     // Move down onto a STALE worktree: highlight follows.
     r.stdin.write("j");
     await until(() => selOn(r, "stale-a"));
-    // x now confirms a prune of exactly the highlighted worktree (stale-a).
-    r.stdin.write("x");
+    // Prune now confirms exactly the highlighted worktree (stale-a).
+    r.stdin.write("P");
     await until(() => frame(r).includes("prune worktree"));
     r.stdin.write("y");
     await until(() => calls.some(([n]) => n === "worktree"));

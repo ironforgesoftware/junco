@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import { Header } from "../src/tui/components/Chrome.js";
 import { HelpModal } from "../src/tui/components/HelpModal.js";
+import { buildContextBindings } from "../src/tui/viewActions.js";
 import { until } from "./helpers/until.js";
 
 const headerProps = {
@@ -38,12 +39,10 @@ describe("HelpModal update line", () => {
   // Reuse the prop shape from tests/tuiModal.test.tsx's HelpModal render if it
   // differs — the essential contract is the updateLatest line below.
   const modalProps = {
-    view: "main" as const,
     pane: 1 as const,
     mode: "wide" as const,
     trigger: "junco",
-    uiMode: "local" as const,
-    localSection: "queue" as const,
+    bindings: buildContextBindings({ kind: "main", body: "queue" }, 1, "wide"),
   };
 
   it("names junco update when an update is available", async () => {

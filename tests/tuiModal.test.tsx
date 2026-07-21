@@ -4,6 +4,7 @@ import { render } from "ink-testing-library";
 import { Text } from "ink";
 import { Modal, Center } from "../src/tui/components/Modal.js";
 import { HelpModal } from "../src/tui/components/HelpModal.js";
+import { buildContextBindings } from "../src/tui/viewActions.js";
 
 describe("Modal / Center", () => {
   it("frames children with an accent double border and title", () => {
@@ -22,31 +23,81 @@ describe("Modal / Center", () => {
 
 describe("HelpModal", () => {
   it("current context first, then categories, action keys present", () => {
-    const f = render(<HelpModal view="main" pane={2} mode="wide" trigger="junco" />).lastFrame()!;
+    const f = render(
+      <HelpModal
+        pane={2}
+        mode="wide"
+        trigger="junco"
+        bindings={buildContextBindings({ kind: "main", body: "issues" }, 2, "wide")}
+      />,
+    ).lastFrame()!;
     const ctx = f.indexOf("this view");
     const nav = f.indexOf("navigate");
     expect(ctx).toBeGreaterThan(-1);
     expect(nav).toBeGreaterThan(ctx); // context section renders first
-    expect(f).toContain("act on issue");
-    expect(f).toContain("dispatch (adds `junco`)");
-    expect(f).toContain("mouse"); // new mouse section
+    expect(f).toContain("mnemonics"); // the shortcut-system explainer line
+    expect(f).toContain("`junco`"); // trigger label named in the flow line
+    expect(f).toContain("mouse"); // mouse section
     expect(f).toContain("↗ line"); // link-line row documented
     expect(f).toContain("1/2/3");
-    expect(f).toContain("/"); // filter key documented
     expect(f).toContain("press any key to close");
     expect(f).toContain("unpushed"); // outbox chip documented in the system section
-    expect(f).toContain("PR tracking"); // p key documented in panes & views
   });
 
   it("renders ONE unified reference: system-row verbs present, no mode toggle", () => {
-    const f = render(<HelpModal view="main" pane={2} mode="wide" trigger="junco" />).lastFrame()!;
+    const f = render(
+      <HelpModal
+        pane={2}
+        mode="wide"
+        trigger="junco"
+        bindings={buildContextBindings({ kind: "main", body: "issues" }, 2, "wide")}
+      />,
+    ).lastFrame()!;
     expect(f).toContain("system rows"); // the section-verbs block
-    expect(f).toContain("requeue"); // queue R
-    expect(f).toContain("prune"); // worktrees x
-    expect(f).toContain("restart"); // daemon X
+    expect(f).toContain("requeue"); // queue retry row
+    expect(f).toContain("Prune"); // worktrees (shift-guarded)
+    expect(f).toContain("Restart"); // daemon (shift-guarded)
     expect(f).toContain("full-screen live log"); // logs enter
-    expect(f).not.toContain("Shift+Tab"); // the mode toggle is gone
+    expect(f).not.toContain("Shift+Tab"); // the mode toggle stays gone
     expect(f).not.toContain("local mode");
-    expect(f).toContain("jump to the queue row"); // t retargeted from "queue view"
+  });
+});
+
+describe("HelpModal — derived mnemonics (#shortcut overhaul)", () => {
+  it("lists the ACTIVE context's derived keys, hidden shift variants included", () => {
+    const f = render(
+      <HelpModal
+        pane={2}
+        mode="wide"
+        trigger="junco"
+        bindings={buildContextBindings({ kind: "main", body: "issues" }, 2, "wide")}
+      />,
+    ).lastFrame()!;
+    // Derived keys render as key → label rows: analyze is n, approve is o.
+    // (Rows sit inside the modal's ║ border — strip it before matching.)
+    const rows = f.split("\n").map((l) => l.replace(/║/g, "").trim());
+    expect(rows.some((l) => l.startsWith("n") && l.includes("analyze"))).toBe(true);
+    expect(rows.some((l) => l.startsWith("o") && l.includes("approve"))).toBe(true);
+    // Hidden shift variants surface in help (never in the footer).
+    expect(f).toContain("dispatch as ask");
+    expect(rows.some((l) => l.startsWith("D") && l.includes("dispatch as ask"))).toBe(true);
+    expect(rows.some((l) => l.startsWith("A") && l.includes("assess auto-plan"))).toBe(true);
+    // No stale hand-assigned letters.
+    expect(f).not.toContain("c analyze");
+    expect(f).not.toContain("o browser");
+  });
+
+  it("a section context lists its guarded verbs uppercase", () => {
+    const f = render(
+      <HelpModal
+        pane={2}
+        mode="wide"
+        trigger="junco"
+        bindings={buildContextBindings({ kind: "main", body: "queue" }, 2, "wide")}
+      />,
+    ).lastFrame()!;
+    const rows = f.split("\n").map((l) => l.replace(/║/g, "").trim());
+    expect(rows.some((l) => l.startsWith("t") && l.includes("retry"))).toBe(true);
+    expect(rows.some((l) => l.startsWith("D") && l.includes("delete"))).toBe(true);
   });
 });

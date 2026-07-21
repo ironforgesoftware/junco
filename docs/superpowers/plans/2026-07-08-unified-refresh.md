@@ -20,10 +20,12 @@
 ### Task 1: Loader `Delivery` outcomes, `loadPrsFor`, per-repo PR staleness
 
 **Files:**
+
 - Modify: `src/tui/App.tsx` (`loadIssues` ~421, `loadPrs` ~442, `prStaleAt` state ~206)
 - Test: `tests/tuiApp.test.tsx`
 
 **Interfaces:**
+
 - Produces: `type Delivery = { delivered: boolean; staleAt: string | null }` (module-level in App.tsx); `loadIssues(nwo): Promise<Delivery>`; `loadPrs(isAlive?): Promise<Delivery>` (all-repos sweep, full-replace semantics as today); `loadPrsFor(nwo, isAlive?): Promise<Delivery>` (replaces one repo's slice of the `prs` aggregate); `prStaleByRepo: Record<string, string | null>` state with derived `prStaleAt` (oldest non-null among watched).
 
 - [ ] **Step 1: Write the failing test** (in `tests/tuiApp.test.tsx`, a client with two watched repos where a scoped refresh of repo A must not drop repo B's PRs — drive it via the `r` key after Task 2; for now assert current behavior still passes by running the file). This task is internal plumbing: its test cycle is "suite stays green" plus the Task 2 tests that consume the new signatures. Proceed to implementation.
@@ -41,20 +43,20 @@ type Delivery = { delivered: boolean; staleAt: string | null };
 `loadIssues` returns it and loses the `setIssuesFetchedAt` site (state deleted in Task 2):
 
 ```ts
-  const loadIssues = useCallback(
-    (nwo: string): Promise<Delivery> => {
-      return client.listIssues(nwo).then((res) => {
-        if (res.ok) {
-          setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
-          setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
-          return { delivered: true, staleAt: res.value.staleAt };
-        }
-        showToast("error", res.error);
-        return { delivered: false, staleAt: null };
-      });
-    },
-    [client, trigger, showToast],
-  );
+const loadIssues = useCallback(
+  (nwo: string): Promise<Delivery> => {
+    return client.listIssues(nwo).then((res) => {
+      if (res.ok) {
+        setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
+        setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
+        return { delivered: true, staleAt: res.value.staleAt };
+      }
+      showToast("error", res.error);
+      return { delivered: false, staleAt: null };
+    });
+  },
+  [client, trigger, showToast],
+);
 ```
 
 - [ ] **Step 3: Per-repo PR staleness + scoped fetch**
@@ -62,65 +64,65 @@ type Delivery = { delivered: boolean; staleAt: string | null };
 Replace `const [prStaleAt, setPrStaleAt] = useState<string | null>(null);` with:
 
 ```ts
-  // Per-repo staleness so a SCOPED refresh clears only its own repo's marker;
-  // the list-level marker derives as the oldest non-null among watched repos.
-  const [prStaleByRepo, setPrStaleByRepo] = useState<Record<string, string | null>>({});
-  const prStaleAt = useMemo(() => {
-    const watched = new Set(repoMappings.map((r) => r.nwo));
-    let oldest: string | null = null;
-    for (const [nwo, s] of Object.entries(prStaleByRepo)) {
-      if (!watched.has(nwo) || s === null) continue;
-      if (oldest === null || Date.parse(s) < Date.parse(oldest)) oldest = s;
-    }
-    return oldest;
-  }, [prStaleByRepo, repoMappings]);
+// Per-repo staleness so a SCOPED refresh clears only its own repo's marker;
+// the list-level marker derives as the oldest non-null among watched repos.
+const [prStaleByRepo, setPrStaleByRepo] = useState<Record<string, string | null>>({});
+const prStaleAt = useMemo(() => {
+  const watched = new Set(repoMappings.map((r) => r.nwo));
+  let oldest: string | null = null;
+  for (const [nwo, s] of Object.entries(prStaleByRepo)) {
+    if (!watched.has(nwo) || s === null) continue;
+    if (oldest === null || Date.parse(s) < Date.parse(oldest)) oldest = s;
+  }
+  return oldest;
+}, [prStaleByRepo, repoMappings]);
 ```
 
 Rework `loadPrs` (keep full-replace-of-successes semantics and the "one repo down never blocks the rest" comment; drop the `setPrsFetchedAt` site):
 
 ```ts
-  const loadPrs = useCallback(
-    (isAlive: () => boolean = () => true): Promise<Delivery> => {
-      const targets = repoMappings.map((r) => r.nwo);
-      return Promise.all(targets.map((nwo) => client.listPrs(nwo))).then((results) => {
-        if (!isAlive()) return { delivered: false, staleAt: null };
-        const all: DashPr[] = [];
-        const staleMap: Record<string, string | null> = {};
-        let oldest: string | null = null;
-        let delivered = false;
-        results.forEach((res, i) => {
-          if (!res.ok) return; // one repo down: skip it, never block the rest
-          delivered = true;
-          all.push(...res.value.prs);
-          staleMap[targets[i]] = res.value.staleAt;
-          const s = res.value.staleAt;
-          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
-        });
-        setPrs(sortPrs(all));
-        setPrStaleByRepo(staleMap);
-        return { delivered, staleAt: oldest };
+const loadPrs = useCallback(
+  (isAlive: () => boolean = () => true): Promise<Delivery> => {
+    const targets = repoMappings.map((r) => r.nwo);
+    return Promise.all(targets.map((nwo) => client.listPrs(nwo))).then((results) => {
+      if (!isAlive()) return { delivered: false, staleAt: null };
+      const all: DashPr[] = [];
+      const staleMap: Record<string, string | null> = {};
+      let oldest: string | null = null;
+      let delivered = false;
+      results.forEach((res, i) => {
+        if (!res.ok) return; // one repo down: skip it, never block the rest
+        delivered = true;
+        all.push(...res.value.prs);
+        staleMap[targets[i]] = res.value.staleAt;
+        const s = res.value.staleAt;
+        if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
       });
-    },
-    [client, repoMappings],
-  );
+      setPrs(sortPrs(all));
+      setPrStaleByRepo(staleMap);
+      return { delivered, staleAt: oldest };
+    });
+  },
+  [client, repoMappings],
+);
 ```
 
 Add the scoped sibling directly below:
 
 ```ts
-  // Scoped sibling of loadPrs: refresh ONE repo's slice of the cross-repo
-  // aggregate — main-view cycles poll only the selected repo.
-  const loadPrsFor = useCallback(
-    (nwo: string, isAlive: () => boolean = () => true): Promise<Delivery> => {
-      return client.listPrs(nwo).then((res) => {
-        if (!isAlive() || !res.ok) return { delivered: false, staleAt: null };
-        setPrs((prev) => sortPrs([...prev.filter((p) => p.nwo !== nwo), ...res.value.prs]));
-        setPrStaleByRepo((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
-        return { delivered: true, staleAt: res.value.staleAt };
-      });
-    },
-    [client],
-  );
+// Scoped sibling of loadPrs: refresh ONE repo's slice of the cross-repo
+// aggregate — main-view cycles poll only the selected repo.
+const loadPrsFor = useCallback(
+  (nwo: string, isAlive: () => boolean = () => true): Promise<Delivery> => {
+    return client.listPrs(nwo).then((res) => {
+      if (!isAlive() || !res.ok) return { delivered: false, staleAt: null };
+      setPrs((prev) => sortPrs([...prev.filter((p) => p.nwo !== nwo), ...res.value.prs]));
+      setPrStaleByRepo((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
+      return { delivered: true, staleAt: res.value.staleAt };
+    });
+  },
+  [client],
+);
 ```
 
 - [ ] **Step 4: Suite still green**
@@ -132,10 +134,12 @@ Run: `npx vitest run tests/tuiApp.test.tsx tests/tuiPrList.test.tsx > /tmp/t1.ou
 ### Task 2: `refreshAll`, unified interval, immediate cycles, stamp state
 
 **Files:**
+
 - Modify: `src/tui/App.tsx` (props ~56-58 & ~173-176, state ~196-198, effects ~470 & ~529-586, `p` handler ~1127, `r` handlers ~1054 & ~1173, pane props ~1446/1461/1485)
 - Test: `tests/tuiApp.test.tsx` (`renderApp` helper + new cycle tests)
 
 **Interfaces:**
+
 - Consumes: `Delivery`, `loadIssues`, `loadPrs`, `loadPrsFor` (Task 1).
 - Produces: App prop `refreshPollMs?: number` (default 30_000; `issuePollMs`/`prPollMs` deleted); state `refreshedAt: string | null` (Task 3's Header consumes it); `refreshAll(opts?: { isAlive?: () => boolean; scope?: "main" | "monitor" }): Promise<void>`.
 
@@ -207,7 +211,9 @@ describe("unified refresh", () => {
     const client: DashboardClient = {
       ...base,
       listIssues: async () =>
-        fail ? { ok: false as const, error: "net down" } : okv({ issues: [rawIssue], staleAt: null }),
+        fail
+          ? { ok: false as const, error: "net down" }
+          : okv({ issues: [rawIssue], staleAt: null }),
       listPrs: async () =>
         fail ? { ok: false as const, error: "net down" } : okv({ prs: [], staleAt: null }),
     };
@@ -230,77 +236,77 @@ describe("unified refresh", () => {
 3. Add `viewRef` beside `nwoRef` and the cycle:
 
 ```ts
-  const viewRef = useRef(view);
-  viewRef.current = view;
-  // The ONE refresh cycle. Scope follows the view unless overridden (the `p`
-  // handler must sweep before the "prs" view state has committed): main →
-  // selected repo's issues + PRs; monitor → every watched repo's PRs.
-  const refreshAll = useCallback(
-    (opts: { isAlive?: () => boolean; scope?: "main" | "monitor" } = {}): Promise<void> => {
-      const isAlive = opts.isAlive ?? (() => true);
-      const inMonitor =
-        opts.scope !== undefined
-          ? opts.scope === "monitor"
-          : viewRef.current === "prs" || viewRef.current === "prDetail";
-      const nwo = nwoRef.current;
-      const jobs: Promise<Delivery>[] = inMonitor
-        ? [loadPrs(isAlive)]
-        : nwo
-          ? [loadIssues(nwo), loadPrsFor(nwo, isAlive)]
-          : [];
-      if (jobs.length === 0) return Promise.resolve();
-      return Promise.all(jobs).then((outcomes) => {
-        if (!isAlive()) return;
-        const delivered = outcomes.filter((o) => o.delivered);
-        if (delivered.length === 0) return; // nothing arrived: never advance
-        let oldest: string | null = null;
-        for (const o of delivered) {
-          const s = o.staleAt;
-          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
-        }
-        setRefreshedAt(oldest ?? new Date().toISOString());
-      });
-    },
-    [loadIssues, loadPrs, loadPrsFor],
-  );
+const viewRef = useRef(view);
+viewRef.current = view;
+// The ONE refresh cycle. Scope follows the view unless overridden (the `p`
+// handler must sweep before the "prs" view state has committed): main →
+// selected repo's issues + PRs; monitor → every watched repo's PRs.
+const refreshAll = useCallback(
+  (opts: { isAlive?: () => boolean; scope?: "main" | "monitor" } = {}): Promise<void> => {
+    const isAlive = opts.isAlive ?? (() => true);
+    const inMonitor =
+      opts.scope !== undefined
+        ? opts.scope === "monitor"
+        : viewRef.current === "prs" || viewRef.current === "prDetail";
+    const nwo = nwoRef.current;
+    const jobs: Promise<Delivery>[] = inMonitor
+      ? [loadPrs(isAlive)]
+      : nwo
+        ? [loadIssues(nwo), loadPrsFor(nwo, isAlive)]
+        : [];
+    if (jobs.length === 0) return Promise.resolve();
+    return Promise.all(jobs).then((outcomes) => {
+      if (!isAlive()) return;
+      const delivered = outcomes.filter((o) => o.delivered);
+      if (delivered.length === 0) return; // nothing arrived: never advance
+      let oldest: string | null = null;
+      for (const o of delivered) {
+        const s = o.staleAt;
+        if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
+      }
+      setRefreshedAt(oldest ?? new Date().toISOString());
+    });
+  },
+  [loadIssues, loadPrs, loadPrsFor],
+);
 ```
 
 4. Effects: delete the issue-poll interval effect (~529-538) and the cross-repo PR poll effect (~576-586). Replace the selection effect (~470, `useEffect([currentNwo]) → loadIssues`) body with `void refreshAll();`. Add:
 
 ```ts
-  // The unified poll — one interval, view-scoped. Immediate cycles fire from
-  // the selection effect, the `p` handler, and `r`.
-  useEffect(() => {
-    let alive = true;
-    const id = setInterval(() => void refreshAll({ isAlive: () => alive }), refreshPollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [refreshAll, refreshPollMs]);
+// The unified poll — one interval, view-scoped. Immediate cycles fire from
+// the selection effect, the `p` handler, and `r`.
+useEffect(() => {
+  let alive = true;
+  const id = setInterval(() => void refreshAll({ isAlive: () => alive }), refreshPollMs);
+  return () => {
+    alive = false;
+    clearInterval(id);
+  };
+}, [refreshAll, refreshPollMs]);
 
-  // Full sweep on mount and whenever the watchlist changes: populates the ⚑
-  // attention chip and the monitor aggregate (a newly-watched repo's PRs
-  // appear without waiting for a monitor visit). Scoped cycles take over
-  // between watchlist changes.
-  useEffect(() => {
-    let alive = true;
-    void refreshAll({ isAlive: () => alive, scope: "monitor" });
-    return () => {
-      alive = false;
-    };
-  }, [refreshAll]);
+// Full sweep on mount and whenever the watchlist changes: populates the ⚑
+// attention chip and the monitor aggregate (a newly-watched repo's PRs
+// appear without waiting for a monitor visit). Scoped cycles take over
+// between watchlist changes.
+useEffect(() => {
+  let alive = true;
+  void refreshAll({ isAlive: () => alive, scope: "monitor" });
+  return () => {
+    alive = false;
+  };
+}, [refreshAll]);
 ```
 
 5. `p` handler (~1127): after `setView("prs");` add `void refreshAll({ scope: "monitor" });` (the override — `viewRef` still reads "main" until the next render commits).
 6. `r` handlers: PRs view (~1054) `if (input === "r") return void refreshAll();` (viewRef already reads "prs" there); main view (~1173) keep the spinner:
 
 ```ts
-    if (input === "r") {
-      setRefreshing(true);
-      void refreshAll().finally(() => setRefreshing(false));
-      return;
-    }
+if (input === "r") {
+  setRefreshing(true);
+  void refreshAll().finally(() => setRefreshing(false));
+  return;
+}
 ```
 
 7. Pane props: remove `fetchedAt={...}` at ~1446/1461/1485 (Task 4 removes the prop from the components; until then TS still accepts it — remove now, panes render without stamps once Task 4 lands; mid-flight the panes still typecheck because the prop is optional? It is NOT optional — so Tasks 2 and 4's App/pane edits must land in the same commit batch. Run typecheck only after Task 4's component edits.)
@@ -317,10 +323,12 @@ describe("unified refresh", () => {
 ### Task 3: Header `↻` chip
 
 **Files:**
+
 - Modify: `src/tui/components/Chrome.tsx` (Header props + right chip group ~96-129)
 - Test: `tests/tuiChrome.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `relTimeShort` (exported from `./IssueList.js` — Chrome already imports `relTime` from there).
 - Produces: `refreshedAt: string | null` prop on `Header`.
 
@@ -345,16 +353,18 @@ it("keeps the ↻ stamp in narrow mode", () => {
 - [ ] **Step 3: Implement** — add to Header props:
 
 ```tsx
-  /** Last completed unified refresh cycle (oldest cache age when any source
-   * was served offline) — the top bar's single ↻ stamp. Null until the first
-   * cycle completes. */
-  refreshedAt: string | null;
+/** Last completed unified refresh cycle (oldest cache age when any source
+ * was served offline) — the top bar's single ↻ stamp. Null until the first
+ * cycle completes. */
+refreshedAt: string | null;
 ```
 
 and in the right chip group, after the daemon chip (present in ALL modes — it is the point of the feature):
 
 ```tsx
-        {refreshedAt !== null && <Text dimColor>↻ {relTimeShort(refreshedAt, now)}</Text>}
+{
+  refreshedAt !== null && <Text dimColor>↻ {relTimeShort(refreshedAt, now)}</Text>;
+}
 ```
 
 with `relTimeShort` added to the existing `./IssueList.js` import.
@@ -366,6 +376,7 @@ with `relTimeShort` added to the existing `./IssueList.js` import.
 ### Task 4: Remove the per-pane stamps
 
 **Files:**
+
 - Modify: `src/tui/components/IssueList.tsx` (prop ~37-40, stamp render ~83-84), `src/tui/components/PrList.tsx` (prop ~33-35, stamp render ~68-69)
 - Test: `tests/tuiIssueList.test.tsx`, `tests/tuiPrList.test.tsx`
 
@@ -389,6 +400,7 @@ git log --format='%B' -1   # verify: no attribution trailer
 ### Task 5: Docs, full gate, PR
 
 **Files:**
+
 - Modify: `docs/dashboard.md`, `docs/github-mode.md` (per-pane stamp text → top-bar chip + scoped polling)
 
 - [ ] **Step 1: Update the docs.** `grep -rn "↻" docs/*.md` — rewrite each hit: the stamp now lives in the header and reads "time since the last refresh of what you're looking at"; main view polls the selected repo's issues + PRs every 30s; the `p` PR monitor polls every watched repo's junco-authored PRs; `r` refreshes the current view's scope; offline cache age still wins. Delete claims of separate 30s/60s cadences.

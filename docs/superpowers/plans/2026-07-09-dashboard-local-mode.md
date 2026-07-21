@@ -9,6 +9,7 @@
 **Tech Stack:** TypeScript (Node >=22.19, ESM/NodeNext, strict), Ink 7.1.0 + React 19, vitest, ink-testing-library. Zero new dependencies.
 
 ## Global Constraints
+
 - Never import the Pi SDK at module top level in `src/` (type-only imports are fine); the runtime `await import(...)` stays inside `makePiSessionFactory`.
 - Every side effect goes behind an injectable `deps` seam (`readdirFn`, `readFileFn`, `statFn`, `fetchFn`, `nowFn`, `gitFn`, `runCliFn`); tests never touch network or git.
 - NO new `Config` field — everything derives from existing `Config` — so no `makeConfig`/`cfg()` fixture edits across `tests/{runOnce,prFlow,orphans,repo,worktree,daemon}.test.ts`.
@@ -20,18 +21,20 @@
 - Conventional commits with scope (`feat(tui):`, `feat(cli):`, `refactor(worktree):`, etc.).
 
 ---
-<!-- ===== Stage A — Data layer & enumerators (unwired) ===== -->
 
+<!-- ===== Stage A — Data layer & enumerators (unwired) ===== -->
 
 ---
 
 ### Task 1: Extract `listOpsFrom` + add `listDeadOps` in `githubOutbox.ts`
 
 **Files:**
+
 - Modify `src/githubOutbox.ts` (lines 135-158 — refactor `listOps`; add `listOpsFrom` + `listDeadOps` immediately after)
 - Modify `tests/githubOutbox.test.ts` (add imports for `listOpsFrom`/`listDeadOps`; append one `describe` block)
 
 **Interfaces:**
+
 - Consumes: `outboxPaths(cfg: Config): { dir: string; dead: string }` (existing, `githubOutbox.ts:93`); `OutboxDeps` (existing, `githubOutbox.ts:81`); `StoredOp` (existing, `githubOutbox.ts:70`).
 - Produces:
   - `export function listOpsFrom(dir: string, deps?: OutboxDeps): StoredOp[]` — extracted core: reads a specific dir, `.json`-filtered, `.sort()`ed, skips-unparseable (`log.warn`), `[]` on missing dir.
@@ -64,7 +67,10 @@ describe("listOpsFrom / listDeadOps", () => {
       op: { ...LABELS },
     };
     writeFileSync(join(dead, "100-0001-aaaa-labels.json"), JSON.stringify(opA));
-    writeFileSync(join(dead, "200-0002-bbbb-labels.json"), JSON.stringify({ ...opA, lastError: "later" }));
+    writeFileSync(
+      join(dead, "200-0002-bbbb-labels.json"),
+      JSON.stringify({ ...opA, lastError: "later" }),
+    );
     writeFileSync(join(dead, "garbage.json"), "{ not json");
     writeFileSync(join(dead, "ignore.txt"), "nope");
     const ops = listDeadOps(cfg);
@@ -138,10 +144,12 @@ git add -A && git commit -m "refactor(outbox): extract listOpsFrom; add listDead
 ### Task 2: `enumerateRepos` + candidate collection in `src/tui/localSnapshot.ts`
 
 **Files:**
+
 - Create `src/tui/localSnapshot.ts`
 - Create `tests/localSnapshotRepos.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Config` (`src/types.js`); `readWatchlist(file: string): { entries: WatchlistEntry[]; error: string | null }` + `watchlistPath(cfg): string` (`src/watchlist.js`); `nwoFromRemoteUrl(url: string): string | null` (`src/githubInbox.js`); `git(cfg, args, opts): Promise<CmdResult>` (`src/git.js`); `repoDiscriminator(repoPath: string): string` (`src/worktree.js`).
 - Produces:
   - `export interface LocalSnapshotDeps { readdirFn?: (dir: string) => string[]; readFileFn?: (p: string) => string; statFn?: (p: string) => { mtimeMs: number }; fetchFn?: typeof fetch; nowFn?: () => Date; gitFn?: (args: string[], cwd: string) => Promise<{ code: number; stdout: string }> }`
@@ -240,7 +248,11 @@ describe("enumerateRepos", () => {
   it("per-repo git: nwo from origin, forkUrl from fork remote, branch@sha, dirty; every git call carries --no-optional-locks", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-lsr2-"));
     const cfg = makeCfg(root, {
-      github: { enabled: true, repos: [{ nwo: "owner/repo", path: join(root, "cfgrepo") }], externalReposRoot: join(root, "external") },
+      github: {
+        enabled: true,
+        repos: [{ nwo: "owner/repo", path: join(root, "cfgrepo") }],
+        externalReposRoot: join(root, "external"),
+      },
     } as Partial<Config>);
     const calls: string[][] = [];
     const gitFn = fakeGit(
@@ -289,7 +301,10 @@ describe("enumerateRepos", () => {
     const cfg = makeCfg(root);
     const gitFn = fakeGit([{ match: /rev-parse HEAD/, code: 0, stdout: "sha\n" }], []);
     const repos = await enumerateRepos(cfg, {
-      readdirFn: fakeReaddir({ [cfg.github.externalReposRoot]: THROW, [join(cfg.stateDir, "repos")]: THROW }),
+      readdirFn: fakeReaddir({
+        [cfg.github.externalReposRoot]: THROW,
+        [join(cfg.stateDir, "repos")]: THROW,
+      }),
       gitFn,
     });
     expect(repos.map((r) => r.source)).toEqual(["config"]);
@@ -484,7 +499,10 @@ async function buildRepo(c: RepoCandidate, gitFn: GitFn): Promise<LocalRepo> {
   }
 }
 
-export async function enumerateRepos(cfg: Config, deps: LocalSnapshotDeps = {}): Promise<LocalRepo[]> {
+export async function enumerateRepos(
+  cfg: Config,
+  deps: LocalSnapshotDeps = {},
+): Promise<LocalRepo[]> {
   const gitFn = deps.gitFn ?? defaultGitFn(cfg);
   const candidates = collectRepoCandidates(cfg, deps);
   return mapPool(candidates, REPO_POOL, (c) => buildRepo(c, gitFn));
@@ -506,10 +524,12 @@ git add -A && git commit -m "feat(tui): enumerateRepos + candidate union for loc
 ### Task 3: `enumerateWorktrees` in `src/tui/localSnapshot.ts`
 
 **Files:**
+
 - Modify `src/tui/localSnapshot.ts` (add `LocalWorktree` + `enumerateWorktrees`)
 - Create `tests/localSnapshotWorktrees.test.ts`
 
 **Interfaces:**
+
 - Consumes: `collectRepoCandidates` (this module, prior task); `repoDiscriminator(repoPath: string): string` (`src/worktree.js`); `LocalSnapshotDeps` (this module).
 - Produces:
   - `export interface LocalWorktree { path: string; repoPath: string | null; repoNwo: string | null; slug: string; kind: "live"|"stale"|"backup"; headSha: string | null; ageSeconds: number | null; error: string | null }`
@@ -538,7 +558,11 @@ function makeCfg(root: string, repoPath: string): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     maxConcurrent: 1,
-    github: { enabled: true, repos: [{ nwo: "owner/repo", path: repoPath }], externalReposRoot: join(root, "external") },
+    github: {
+      enabled: true,
+      repos: [{ nwo: "owner/repo", path: repoPath }],
+      externalReposRoot: join(root, "external"),
+    },
   } as unknown as Config;
 }
 
@@ -567,7 +591,11 @@ describe("enumerateWorktrees", () => {
 
     const readdirFn = fakeReaddir({
       [wtRoot]: [disc, alien],
-      [join(wtRoot, disc)]: ["gh-owner-repo-1", "gh-owner-repo-2", "gh-owner-repo-3.old-1600000000"],
+      [join(wtRoot, disc)]: [
+        "gh-owner-repo-1",
+        "gh-owner-repo-2",
+        "gh-owner-repo-3.old-1600000000",
+      ],
       [join(wtRoot, alien)]: ["gh-x-y-9"],
       [liveWt]: [".git", "src"], // has .git → live
       [staleWt]: ["src"], //          no .git → stale
@@ -583,9 +611,19 @@ describe("enumerateWorktrees", () => {
     const wts = await enumerateWorktrees(cfg, { readdirFn, gitFn, nowFn: () => now });
     const byPath = Object.fromEntries(wts.map((w) => [w.path, w]));
 
-    expect(byPath[liveWt]).toMatchObject({ kind: "live", slug: "gh-owner-repo-1", repoPath, repoNwo: "owner/repo", headSha: "deadbee" });
+    expect(byPath[liveWt]).toMatchObject({
+      kind: "live",
+      slug: "gh-owner-repo-1",
+      repoPath,
+      repoNwo: "owner/repo",
+      headSha: "deadbee",
+    });
     expect(byPath[staleWt]).toMatchObject({ kind: "stale", repoNwo: "owner/repo" });
-    expect(byPath[backupWt]).toMatchObject({ kind: "backup", slug: "gh-owner-repo-3", headSha: null });
+    expect(byPath[backupWt]).toMatchObject({
+      kind: "backup",
+      slug: "gh-owner-repo-3",
+      headSha: null,
+    });
     expect(byPath[backupWt].ageSeconds).toBe(Math.floor(now.getTime() / 1000) - 1600000000);
     expect(byPath[alienWt]).toMatchObject({ repoPath: null, repoNwo: null, kind: "live" });
     // every HEAD read is lock-free (no plain rev-parse).
@@ -754,10 +792,12 @@ git add -A && git commit -m "feat(tui): enumerateWorktrees with discriminator re
 ### Task 4: `fetchHealthBody` + `buildDaemonDetail` in `src/tui/localSnapshot.ts`
 
 **Files:**
+
 - Modify `src/tui/localSnapshot.ts` (add `HealthBody`, `DaemonDetail`, `fetchHealthBody`, `buildDaemonDetail`, private `emptyDaemon`)
 - Create `tests/localSnapshotDaemon.test.ts`
 
 **Interfaces:**
+
 - Consumes: `MetricsSnapshot` (type, `src/metrics.js`); `endpointReachable(cfg, deps?): Promise<boolean>` (`src/health.js`); `LocalSnapshotDeps` (this module). `/health` body shape is `{ status, ready, metrics: MetricsSnapshot }` (`healthServer.ts:113`).
 - Produces:
   - `export interface HealthBody { status: string; ready: boolean; metrics: MetricsSnapshot }`
@@ -816,7 +856,13 @@ function metrics(over: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
     guardNudges: 2,
     guardKills: 1,
     currentProgress: {
-      "t-1": { turns: 3, lastTool: "bash", outputTokens: 500, startedAt: "2026-07-09T00:00:01Z", updatedAt: "2026-07-09T00:05:00Z" },
+      "t-1": {
+        turns: 3,
+        lastTool: "bash",
+        outputTokens: 500,
+        startedAt: "2026-07-09T00:00:01Z",
+        updatedAt: "2026-07-09T00:05:00Z",
+      },
     },
     ...over,
   };
@@ -840,7 +886,11 @@ describe("fetchHealthBody", () => {
     const urls: string[] = [];
     expect(await fetchHealthBody(makeCfg(), { fetchFn: recordingFetch(urls, body) })).toEqual(body);
     expect(urls).toEqual(["http://127.0.0.1:8787/health"]);
-    expect(await fetchHealthBody(makeCfg({ healthEnabled: false } as Partial<Config>), { fetchFn: recordingFetch([], body) })).toBeNull();
+    expect(
+      await fetchHealthBody(makeCfg({ healthEnabled: false } as Partial<Config>), {
+        fetchFn: recordingFetch([], body),
+      }),
+    ).toBeNull();
     expect(await fetchHealthBody(makeCfg(), { fetchFn: recordingFetch([], null) })).toBeNull();
   });
 });
@@ -864,7 +914,12 @@ describe("buildDaemonDetail", () => {
       currentTickets: ["t-1", "t-2"],
       error: null,
     });
-    expect(d.progress["t-1"]).toEqual({ turns: 3, lastTool: "bash", outputTokens: 500, startedAt: "2026-07-09T00:00:01Z" });
+    expect(d.progress["t-1"]).toEqual({
+      turns: 3,
+      lastTool: "bash",
+      outputTokens: 500,
+      startedAt: "2026-07-09T00:00:01Z",
+    });
   });
 
   it("healthBody null (daemon down) → up:false but endpointReachable is probed independently", async () => {
@@ -884,12 +939,14 @@ describe("buildDaemonDetail", () => {
 - [ ] 3. Write minimal implementation. Add the `MetricsSnapshot`/`endpointReachable` imports to the top of `src/tui/localSnapshot.ts`, then append:
 
 Add to the existing import block:
+
 ```ts
 import type { MetricsSnapshot } from "../metrics.js";
 import { endpointReachable } from "../health.js";
 ```
 
 Append:
+
 ```ts
 const HEALTH_TIMEOUT_MS = 1500;
 
@@ -912,7 +969,10 @@ export interface DaemonDetail {
   tokensOut: number | null;
   tasksByStatus: Record<string, number>;
   currentTickets: string[];
-  progress: Record<string, { turns: number; lastTool: string | null; outputTokens: number; startedAt: string }>;
+  progress: Record<
+    string,
+    { turns: number; lastTool: string | null; outputTokens: number; startedAt: string }
+  >;
   error: string | null;
 }
 
@@ -1015,11 +1075,13 @@ git add -A && git commit -m "feat(tui): fetchHealthBody + buildDaemonDetail (sin
 ### Task 5: `makeLocalCheapFn` + `healthOverride` seam on `makeQueueSnapshotFn`
 
 **Files:**
+
 - Modify `src/tui/queueSnapshot.ts` (`QueueSnapshotDeps` lines 57-63 — add `healthOverride`; the running section lines 165-216 — branch on it)
 - Modify `src/tui/localSnapshot.ts` (add `LocalSection`, `LocalCheap`, `makeLocalCheapFn`, private `emptyQueue`/`countMd`)
 - Create `tests/localSnapshotCheap.test.ts`
 
 **Interfaces:**
+
 - Consumes: `makeQueueSnapshotFn(cfg, deps): () => Promise<QueueSnapshot>` + `QueueSnapshot` + `QueueSnapshotDeps` (`./queueSnapshot.js`); `queuePaths(cfg): Paths` (`../config.js`); `listOpsFrom`, `outboxPaths`, `StoredOp` (`../githubOutbox.js`); `fetchHealthBody`, `buildDaemonDetail`, `HealthBody`, `DaemonDetail` (this module).
 - Produces:
   - `src/tui/queueSnapshot.ts` additive dep: `healthOverride?: { body: HealthBody | null }` on `QueueSnapshotDeps` — when present, the queue layer issues NO `/health` request; a `HealthBody` → `daemonUp` + running from its metrics; `null` → daemon down → processing/ fallback.
@@ -1060,7 +1122,17 @@ function makeCfg(root: string): Config {
 const HEALTH: HealthBody = {
   status: "ok",
   ready: true,
-  metrics: { pid: 99, uptimeSeconds: 10, currentTickets: ["run-1"], currentProgress: {}, tasksByStatus: {}, totalTokensIn: 0, totalTokensOut: 0, guardNudges: 0, guardKills: 0 } as unknown as HealthBody["metrics"],
+  metrics: {
+    pid: 99,
+    uptimeSeconds: 10,
+    currentTickets: ["run-1"],
+    currentProgress: {},
+    tasksByStatus: {},
+    totalTokensIn: 0,
+    totalTokensOut: 0,
+    guardNudges: 0,
+    guardKills: 0,
+  } as unknown as HealthBody["metrics"],
 };
 
 function recordingFetch(urls: string[]): typeof fetch {
@@ -1104,8 +1176,24 @@ describe("makeLocalCheapFn", () => {
     const obx = join(cfg.stateDir, "github-outbox");
     const dead = join(obx, "dead");
     mkdirSync(dead, { recursive: true });
-    writeFileSync(join(obx, "1-0-a-labels.json"), JSON.stringify({ origin: "prflow", attempts: 0, lastError: null, op: { kind: "labels", nwo: "a/b", issue: 1, add: [], remove: [] } }));
-    writeFileSync(join(dead, "2-0-b-labels.json"), JSON.stringify({ origin: "prflow", attempts: 3, lastError: "boom", op: { kind: "labels", nwo: "a/b", issue: 2, add: [], remove: [] } }));
+    writeFileSync(
+      join(obx, "1-0-a-labels.json"),
+      JSON.stringify({
+        origin: "prflow",
+        attempts: 0,
+        lastError: null,
+        op: { kind: "labels", nwo: "a/b", issue: 1, add: [], remove: [] },
+      }),
+    );
+    writeFileSync(
+      join(dead, "2-0-b-labels.json"),
+      JSON.stringify({
+        origin: "prflow",
+        attempts: 3,
+        lastError: "boom",
+        op: { kind: "labels", nwo: "a/b", issue: 2, add: [], remove: [] },
+      }),
+    );
     const cheap = await makeLocalCheapFn(cfg, { fetchFn: recordingFetch([]) })();
     expect(cheap.outbox.depth).toBe(1);
     expect(cheap.outbox.dead).toBe(1);
@@ -1135,6 +1223,7 @@ import type { HealthBody } from "./localSnapshot.js";
 ```
 
 Extend `QueueSnapshotDeps` (after `nowFn?`):
+
 ```ts
   /** Pre-fetched /health, threaded in by makeLocalCheapFn so the queue layer
    * issues no second request (one consistent daemonUp per cheap tick). Absent
@@ -1146,53 +1235,50 @@ Extend `QueueSnapshotDeps` (after `nowFn?`):
 Replace the running-derivation block (`queueSnapshot.ts:165-203`, the `let daemonUp` … through the `catch` that falls through to the processing fallback) so the override short-circuits the fetch:
 
 ```ts
-      let daemonUp = false;
-      let running: QueueRunning[] = [];
-      const mkRunning = (
-        tickets: string[],
-        prog: Record<string, HealthProgress>,
-      ): QueueRunning[] =>
-        tickets.map((id): QueueRunning => {
-          const p = prog[id];
-          return {
-            id,
-            github: procById.get(id)?.github ?? null,
-            turns: p?.turns ?? null,
-            lastTool: p?.lastTool ?? null,
-            outputTokens: p?.outputTokens ?? null,
-            startedAt: p?.startedAt ?? null,
-            stale: false,
-          };
-        });
-      if (deps.healthOverride !== undefined) {
-        // Already fetched by makeLocalCheapFn — never issue a second request.
-        const body = deps.healthOverride.body;
-        if (body !== null) {
-          daemonUp = true;
-          running = mkRunning(body.metrics?.currentTickets ?? [], body.metrics?.currentProgress ?? {});
-        }
-      } else if (cfg.healthEnabled) {
-        try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
-          try {
-            const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`, {
-              signal: ctrl.signal,
-            });
-            if (resp.ok) {
-              const j = (await resp.json()) as {
-                metrics?: { currentTickets?: string[]; currentProgress?: Record<string, HealthProgress> };
-              };
-              daemonUp = true;
-              running = mkRunning(j.metrics?.currentTickets ?? [], j.metrics?.currentProgress ?? {});
-            }
-          } finally {
-            clearTimeout(timer);
-          }
-        } catch {
-          // unreachable/timeout — fall through to the processing/ fallback
-        }
+let daemonUp = false;
+let running: QueueRunning[] = [];
+const mkRunning = (tickets: string[], prog: Record<string, HealthProgress>): QueueRunning[] =>
+  tickets.map((id): QueueRunning => {
+    const p = prog[id];
+    return {
+      id,
+      github: procById.get(id)?.github ?? null,
+      turns: p?.turns ?? null,
+      lastTool: p?.lastTool ?? null,
+      outputTokens: p?.outputTokens ?? null,
+      startedAt: p?.startedAt ?? null,
+      stale: false,
+    };
+  });
+if (deps.healthOverride !== undefined) {
+  // Already fetched by makeLocalCheapFn — never issue a second request.
+  const body = deps.healthOverride.body;
+  if (body !== null) {
+    daemonUp = true;
+    running = mkRunning(body.metrics?.currentTickets ?? [], body.metrics?.currentProgress ?? {});
+  }
+} else if (cfg.healthEnabled) {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
+    try {
+      const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`, {
+        signal: ctrl.signal,
+      });
+      if (resp.ok) {
+        const j = (await resp.json()) as {
+          metrics?: { currentTickets?: string[]; currentProgress?: Record<string, HealthProgress> };
+        };
+        daemonUp = true;
+        running = mkRunning(j.metrics?.currentTickets ?? [], j.metrics?.currentProgress ?? {});
       }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // unreachable/timeout — fall through to the processing/ fallback
+  }
+}
 ```
 
 (The existing `if (!daemonUp) { running = proc.map(...) }` fallback block that follows is untouched.)
@@ -1206,13 +1292,20 @@ import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
 ```
 
 Append:
+
 ```ts
 export type LocalSection = "queue" | "outbox" | "repos" | "worktrees" | "daemon";
 
 export interface LocalCheap {
   queue: QueueSnapshot;
   counts: { done: number; failed: number } | null;
-  outbox: { depth: number; dead: number; ops: StoredOp[]; deadOps: StoredOp[]; error: string | null };
+  outbox: {
+    depth: number;
+    dead: number;
+    ops: StoredOp[];
+    deadOps: StoredOp[];
+    error: string | null;
+  };
   daemon: DaemonDetail;
   error: string | null;
 }
@@ -1281,7 +1374,13 @@ export function makeLocalCheapFn(
         const deadOps = listOpsFrom(outboxPaths(cfg).dead, outDeps);
         outbox = { depth: ops.length, dead: deadOps.length, ops, deadOps, error: null };
       } catch (e) {
-        outbox = { depth: 0, dead: 0, ops: [], deadOps: [], error: e instanceof Error ? e.message : String(e) };
+        outbox = {
+          depth: 0,
+          dead: 0,
+          ops: [],
+          deadOps: [],
+          error: e instanceof Error ? e.message : String(e),
+        };
       }
 
       const daemon = await buildDaemonDetail(cfg, healthBody, deps);
@@ -1309,10 +1408,12 @@ git add -A && git commit -m "feat(tui): makeLocalCheapFn with single-fetch healt
 ### Task 6: `makeLocalHeavyFn` (bounded pool + AbortSignal late-drop)
 
 **Files:**
+
 - Modify `src/tui/localSnapshot.ts` (add `LocalHeavy`, `makeLocalHeavyFn`)
 - Create `tests/localSnapshotHeavy.test.ts`
 
 **Interfaces:**
+
 - Consumes: `enumerateRepos`, `enumerateWorktrees`, `LocalSnapshotDeps` (this module).
 - Produces:
   - `export interface LocalHeavy { repos: LocalRepo[]; worktrees: LocalWorktree[]; error: string | null }`
@@ -1340,14 +1441,21 @@ function makeCfg(root: string): Config {
     healthHost: "127.0.0.1",
     healthPort: 8787,
     maxConcurrent: 1,
-    github: { enabled: true, repos: [{ nwo: "owner/repo", path: join(root, "cfgrepo") }], externalReposRoot: join(root, "external") },
+    github: {
+      enabled: true,
+      repos: [{ nwo: "owner/repo", path: join(root, "cfgrepo") }],
+      externalReposRoot: join(root, "external"),
+    },
   } as unknown as Config;
 }
 
 describe("makeLocalHeavyFn", () => {
   it("composes repos + worktrees", async () => {
     const cfg = makeCfg(mkdtempSync(join(tmpdir(), "junco-heavy-")));
-    const gitFn = async (): Promise<{ code: number; stdout: string }> => ({ code: 0, stdout: "sha\n" });
+    const gitFn = async (): Promise<{ code: number; stdout: string }> => ({
+      code: 0,
+      stdout: "sha\n",
+    });
     const heavy = await makeLocalHeavyFn(cfg, { readdirFn: () => [], gitFn })();
     expect(heavy.repos.map((r) => r.nwo)).toEqual(["owner/repo"]);
     expect(heavy.worktrees).toEqual([]);
@@ -1441,16 +1549,17 @@ git add -A && git commit -m "feat(tui): makeLocalHeavyFn bounded pool with abort
 
 STAGE NOTES: (1) **origin/fork mapping conflict** — the spec's Data-model bullet says an external clone's "origin is the fork → forkUrl = originUrl," but the authoritative code (`externalRepo.ts`) sets origin=upstream and a separate `fork` remote=the operator's fork. I implemented per the code: `nwo`/`originUrl` from `origin`, `forkUrl` from the `fork` remote (null on owned repos). Stage B/UI (`ReposSection`) must render against THIS mapping, and any later stage that trusts the spec bullet needs reconciling. (2) **`HealthBody` lives in `localSnapshot.ts`**; `queueSnapshot.ts` imports it **type-only** to avoid a runtime cycle (localSnapshot value-imports queueSnapshot). Keep that import `import type` — a value import would form a real ESM cycle. (3) **`healthOverride` is an additive optional `QueueSnapshotDeps` field**; the self-fetch path is byte-identical when it's absent, so the atomic-switch Stage-5 App wiring can adopt it without touching the GitHub `t`-view queue poll. (4) **Worktree HEAD** is read through the injected `gitFn` with `--no-optional-locks` rather than calling `currentHeadSha` (worktree.ts:71) directly, because `currentHeadSha` bypasses both the deps seam and the lock-free flag; the behavior is equivalent but the symbol is not consumed. (5) **Repo/clone walk is two-level (`<owner>/<name>`)**, matching `externalClonePath` and the dashboard clone target (`App.tsx:951`), not the spec's imprecise "one-level walk"; the walk root is `<stateDir>/repos` per `dashboardCmd.ts:75`. (6) **`LocalSnapshotDeps` has no `existsFn`** (fixed by contract); live/stale classification uses `readdirFn(wtPath).includes(".git")`. (7) **`enumerateRepos`/`enumerateWorktrees` bound their own git fan-out via an internal `mapPool`**; `makeLocalHeavyFn` owns only the AbortSignal late-drop (true child-process kill on abort is a Stage-B App-effect concern — the enumerators' `gitFn` seam does not thread a signal down to `git()`), which the assembler should flag for the App-wiring stage.
 
-
 <!-- ===== Stage B — Daemon worktrees.lock (behavior-preserving) ===== -->
 
 ### Task 7: Serialize daemon-side worktree mutations behind `.worktrees.lock`
 
 **Files:**
+
 - Modify `src/worktree.ts` (add import; add `worktreesLockPath` export after the header block ~line 28; wrap `prepareWorktree` body lines 143–265; wrap `cleanupWorktree` body lines 280–301; wrap `pruneStaleWorktrees` body lines 319–362 — after its `existsSync` guard)
 - Modify `tests/worktree.test.ts` (add imports; add a `worktrees.lock` describe block after the `pruneStaleWorktrees` block ~line 592)
 
 **Interfaces:**
+
 - Consumes (existing, read from source — do not change signatures):
   - `acquirePidfileLock(lockPath: string, deps?: PidfileLockDeps): PidfileLock | null` (`src/pidfileLock.ts`) — `PidfileLock.release(): void` is idempotent and only unlinks when the file's pid still matches this process.
   - `prepareWorktree(cfg: Config, ctx: RepoContext, taskId: string, opts?): Promise<string>`, `cleanupWorktree(cfg: Config, ctx: RepoContext, wtPath: string): Promise<void>`, `pruneStaleWorktrees(worktreeRoot: string, maxAgeSeconds?: number): void` (`src/worktree.ts`) — signatures UNCHANGED (no deps seam added; the lock deliberately uses the real fs, mirroring the flush-lock idiom at `githubOutbox.ts:391-393`).
@@ -1727,15 +1836,14 @@ with:
 
 STAGE NOTES: The lock filename lives ONLY in `worktreesLockPath` — the sibling `src/worktreePruneCmd.ts` task MUST import and call `worktreesLockPath(cfg)` (not hardcode `.worktrees.lock`) so the daemon and the prune CLI contend on the exact same path; flag this to whoever writes `worktreePruneCmd`. The daemon-side design is proceed-on-null (behavior-preserving), so the CLI is the side that treats a `null` acquire as "daemon busy → refuse/skip"; the mutual exclusion the spec wants (§ lines 486-491) is realized because the daemon HOLDS the lock across its `git worktree add/remove`, making the CLI's acquire return `null`. `worktreesLockPath` takes `Pick<Config, "worktreeRoot">` (full `Config` satisfies it) — if another stage's contract typed it as `(cfg: Config)`, these are compatible, but the assembler should keep the `Pick` form since `pruneStaleWorktrees` only has a bare `worktreeRoot` string to pass. No `LocalSnapshotDeps.gitFn`/`enumerateWorktrees` coupling here; the heavy-snapshot worktree enumeration is a separate read-only stage and does not acquire this lock.
 
-
 <!-- ===== Stage C — New CLI subcommands (unwired from TUI) ===== -->
-
 
 ---
 
 ### Task 8: `junco rm` — best-effort inbox delete (`src/rmCmd.ts`)
 
 **Files:**
+
 - Create `src/rmCmd.ts`
 - Create `tests/rmCmd.test.ts`
 - Modify `src/cli.ts` (import block ~46; USAGE ~92; dispatch — add a block after the `retry` block ~368-371)
@@ -1745,11 +1853,13 @@ STAGE NOTES: The lock filename lives ONLY in `worktreesLockPath` — the sibling
 **Interfaces:**
 
 Consumes (existing, do not change):
+
 - `queuePaths(cfg: Config): { inbox; processing; done; failed }` from `./config.js`
 - `runRetryCommand` fuzzy-match idiom from `./retryCmd.js` (model only, not imported)
 - `PaletteCommand` roster shape + the `cmd(...)` helper in `src/tui/cliRunner.ts`
 
 Produces (matches SHARED CONTRACT verbatim):
+
 - `src/rmCmd.ts`: `export interface RmDeps { printFn?: (s: string) => void; readdirFn?: (d: string) => string[]; unlinkFn?: (p: string) => void }`
 - `src/rmCmd.ts`: `export async function runRmCommand(cfg: Config, args: string[], deps?: RmDeps): Promise<number>` — deletes `inbox/<name>.md` only; fuzzy-match like `retryCmd`; ENOENT-tolerant (exit 0, truthful "may reappear"); refuses `processing/` and out-of-inbox names.
 
@@ -1860,7 +1970,11 @@ export interface RmDeps {
 const notPresent = (name: string): string =>
   `junco rm: '${name}' not present in inbox — it may be claimed or mid-requeue and could reappear\n`;
 
-export async function runRmCommand(cfg: Config, args: string[], deps: RmDeps = {}): Promise<number> {
+export async function runRmCommand(
+  cfg: Config,
+  args: string[],
+  deps: RmDeps = {},
+): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const readdirFn = deps.readdirFn ?? ((d: string) => readdirSync(d));
   const unlinkFn = deps.unlinkFn ?? ((p: string) => unlinkSync(p));
@@ -1937,14 +2051,14 @@ Add a USAGE line directly after the `retry` line (in the `Subcommands:` block, ~
 Add the dispatch block immediately after the `retry` subcommand block (after cli.ts:371):
 
 ```ts
-  // ------------------------------------------------------------
-  // rm: best-effort delete of a queued ticket from inbox/ (src/rmCmd.ts).
-  // Never touches processing/ — the daemon owns it.
-  // ------------------------------------------------------------
-  if (subcommand === "rm") {
-    const cfg = loadConfigFn(configPath);
-    return runRmCommand(cfg, positionals.slice(1), { printFn });
-  }
+// ------------------------------------------------------------
+// rm: best-effort delete of a queued ticket from inbox/ (src/rmCmd.ts).
+// Never touches processing/ — the daemon owns it.
+// ------------------------------------------------------------
+if (subcommand === "rm") {
+  const cfg = loadConfigFn(configPath);
+  return runRmCommand(cfg, positionals.slice(1), { printFn });
+}
 ```
 
 - [ ] 6. Register in `src/tui/cliRunner.ts` `PALETTE_COMMANDS` — add after the `retry` row (~36):
@@ -1985,6 +2099,7 @@ git commit -m "feat(cli): add junco rm — best-effort inbox ticket delete"
 ### Task 9: `junco worktree prune` — lock-guarded, liveness-gated worktree removal (`src/worktreePruneCmd.ts`)
 
 **Files:**
+
 - Create `src/worktreePruneCmd.ts`
 - Create `tests/worktreePruneCmd.test.ts`
 - Modify `src/cli.ts` (USAGE ~92; dispatch — add a `worktree` block; lazy import inside the block like `outbox`/`prs`/`assess`)
@@ -1994,9 +2109,11 @@ git commit -m "feat(cli): add junco rm — best-effort inbox ticket delete"
 **Interfaces:**
 
 Consumes from **Stage B** (must be landed first — atomic-switch staging step 2 precedes step 3):
+
 - `src/worktree.ts`: `worktreesLockPath(cfg): string` = `join(cfg.worktreeRoot, ".worktrees.lock")` — the SAME pidfile lock the daemon acquires around `prepareWorktree`/`cleanupWorktree`/`pruneStaleWorktrees`. Prune's mutual-exclusion guarantee depends on Stage B having wired that daemon-side acquisition; without it, prune still serializes against other prune invocations but not against the daemon.
 
 Consumes (existing, do not change):
+
 - `src/worktree.ts`: `worktreeSlug(taskId: string): string` (the worktree DIR slug, `/`-excluded).
 - `src/pidfileLock.ts`: `acquirePidfileLock(lockPath: string, deps?): PidfileLock | null` and `interface PidfileLock { path; release(): void }` — same stale-tolerant primitive as `flush.lock`; a same-process second acquire returns `null` (live pid + matching start-time ⇒ not stale).
 - `src/config.ts`: `queuePaths(cfg).processing`.
@@ -2005,6 +2122,7 @@ Consumes (existing, do not change):
 - `MetricsSnapshot.currentTickets: string[]` shape of the `/health` body (`healthServer.ts:113` → `{ status, ready, metrics }`).
 
 Produces (matches SHARED CONTRACT verbatim):
+
 - `src/worktreePruneCmd.ts`: `export interface PruneDeps { printFn?; gitFn?: (args: string[], cwd: string) => Promise<{ code: number; stdout: string }>; fetchFn?: typeof fetch; readdirFn?: (d: string) => string[]; readFileFn?: (p: string) => string; acquireLockFn?: () => PidfileLock | null; rmdirFn?: (p: string) => void; rmRecursiveFn?: (p: string) => void }`
 - `src/worktreePruneCmd.ts`: `export async function runWorktreePruneCommand(cfg: Config, args: string[], deps?: PruneDeps): Promise<number>` — path-containment; acquire `worktrees.lock`; in-lock liveness gate (slug in `processing/` OR `/health` `currentTickets`, daemon-down → processing/ scan alone); `git worktree remove --force` + rmdir parent.
 
@@ -2054,7 +2172,10 @@ function fakeGit(calls: string[][]): NonNullable<PruneDeps["gitFn"]> {
 
 function healthFetch(currentTickets: string[]): typeof fetch {
   return (async () =>
-    ({ ok: true, json: async () => ({ metrics: { currentTickets } }) }) as unknown as Response) as typeof fetch;
+    ({
+      ok: true,
+      json: async () => ({ metrics: { currentTickets } }),
+    }) as unknown as Response) as typeof fetch;
 }
 
 describe("runWorktreePruneCommand", () => {
@@ -2371,19 +2492,19 @@ async function fetchCurrentTickets(cfg: Config, fetchFn: typeof fetch): Promise<
 Add the dispatch block after the `restart` subcommand block (before `schema`, ~467). Lazy-import (matches `outbox`/`prs`/`assess` — keeps its graph off other subcommands):
 
 ```ts
-  // ------------------------------------------------------------
-  // worktree prune <path>: lock-guarded, liveness-gated removal of a per-ticket
-  // worktree (src/worktreePruneCmd.ts) — the shared CLI/TUI safety chokepoint.
-  // ------------------------------------------------------------
-  if (subcommand === "worktree") {
-    const cfg = loadConfigFn(configPath);
-    if (positionals[1] === "prune") {
-      const { runWorktreePruneCommand } = await import("./worktreePruneCmd.js");
-      return runWorktreePruneCommand(cfg, positionals.slice(2), { printFn });
-    }
-    process.stderr.write(`Usage: junco worktree prune <path>\n`);
-    return 2;
+// ------------------------------------------------------------
+// worktree prune <path>: lock-guarded, liveness-gated removal of a per-ticket
+// worktree (src/worktreePruneCmd.ts) — the shared CLI/TUI safety chokepoint.
+// ------------------------------------------------------------
+if (subcommand === "worktree") {
+  const cfg = loadConfigFn(configPath);
+  if (positionals[1] === "prune") {
+    const { runWorktreePruneCommand } = await import("./worktreePruneCmd.js");
+    return runWorktreePruneCommand(cfg, positionals.slice(2), { printFn });
   }
+  process.stderr.write(`Usage: junco worktree prune <path>\n`);
+  return 2;
+}
 ```
 
 - [ ] 6. Register in `src/tui/cliRunner.ts` `PALETTE_COMMANDS` — add after the `restart` row (~47). The palette `name` is `worktree` (the USAGE regex `^\s{2}worktree(\s|$)` matches the `worktree prune <path>` line); `runCliCommand` spawns `worktree` + extraArgs, so the dashboard passes `["prune", <path>]`:
@@ -2422,19 +2543,19 @@ git commit -m "feat(cli): add junco worktree prune — lock-guarded, liveness-ga
 
 STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster assertion — the two commits touch the same literal (14→15→16 runnable, adding `"rm"` then `"worktree"`); the assembler must keep them sequential (rm before worktree) or reconcile the count/array if reordered. (2) This stage hard-consumes Stage B's `worktreesLockPath(cfg)` from `src/worktree.ts` — the atomic-switch staging in the spec orders Stage B (step 2) before this (step 3), so the assembler must not float this stage ahead of the `worktrees.lock` daemon-side wiring, or step 9's typecheck fails on an unresolved import. (3) The prune command's default async `gitFn` uses `git worktree remove --force` with `--path-format=absolute --git-common-dir` to resolve the owning repo; that git flag requires git ≥2.31 — if the project's supported git floor is older, swap to reading the worktree's `.git` gitdir pointer, but the injected-`gitFn` seam means only the default path (never the tests) is affected. (4) `PALETTE_COMMANDS` name `worktree` (not `worktree prune`) is deliberate so the USAGE consistency regex `^\s{2}worktree(\s|$)` matches and `runCliCommand` argv composition stays `[name, ...extraArgs]`; the Stage E TUI wiring must pass `["prune", <path>]` as extraArgs — flag this to whoever writes the LocalDashboard action table so it does not pass a single `"prune <path>"` string. (5) Neither task touches `Config`, the Pi SDK import boundary, or the Q&A read-only default; all new user-visible strings are stack-agnostic.
 
-
 <!-- ===== Stage D — LOCAL UI components (unwired) ===== -->
-
 
 ---
 
 ### Task 10: headerTabBands geometry (pure, testable now)
 
 **Files:**
+
 - Modify `src/tui/geometry.ts` (append after `listRowsHeight`, currently ends at line 30; add an import at the top — the file currently has none)
 - Modify `tests/tuiGeometry.test.ts` (append a new `describe`)
 
 **Interfaces:**
+
 - Consumes (existing): `WIDE_COLS` from `src/tui/layout.ts` (`= 110`).
 - Produces:
   - `export type UiMode = "github" | "local";`
@@ -2444,6 +2565,7 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 **Steps:**
 
 1. [ ] Write the failing test — append to `tests/tuiGeometry.test.ts`:
+
    ```ts
    import { headerTabBands, TAB_BRAND_COLS } from "../src/tui/geometry.js";
 
@@ -2477,15 +2599,19 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 2. [ ] Run it, expect FAIL with `does not provide an export named 'headerTabBands'`:
+
    ```
    npx vitest run tests/tuiGeometry.test.ts > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 3. [ ] Write minimal implementation — add the import at the very top of `src/tui/geometry.ts`:
+
    ```ts
    import { WIDE_COLS } from "./layout.js";
    ```
+
    and append after `listRowsHeight`:
+
    ```ts
    export type UiMode = "github" | "local";
 
@@ -2525,11 +2651,13 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 4. [ ] Run, expect PASS:
+
    ```
    npx vitest run tests/tuiGeometry.test.ts > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 5. [ ] Lint the touched files:
+
    ```
    npx prettier --write src/tui/geometry.ts tests/tuiGeometry.test.ts
    npx eslint --no-warn-ignored src/tui/geometry.ts tests/tuiGeometry.test.ts
@@ -2546,10 +2674,12 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 ### Task 11: QueueView additive selectable props (byte-identical default path)
 
 **Files:**
+
 - Modify `src/tui/components/QueueView.tsx` (full rewrite of the exported function + a new exported type; behavior unchanged when the new props are absent)
 - Modify `tests/tuiQueue.test.tsx` (append to the existing `describe("QueueView", …)`)
 
 **Interfaces:**
+
 - Consumes (existing): `QueueSnapshot`, `QueueWaiting` from `src/tui/queueSnapshot.ts`; `queueLabel`, `progressLine`, `fmtAge`, `fmtClock` from `src/tui/queueFmt.ts`; `theme` from `src/tui/theme.ts`.
 - Produces:
   - `export interface QueueRowRef { kind: "running" | "waiting" | "recent"; id: string; status?: "done" | "failed" }`
@@ -2558,6 +2688,7 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 **Steps:**
 
 1. [ ] Write the failing test — append inside `describe("QueueView", …)` in `tests/tuiQueue.test.tsx`, and add the import at the top:
+
    ```ts
    import type { QueueRowRef } from "../src/tui/components/QueueView.js";
 
@@ -2569,6 +2700,7 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
      throw new Error("condition not met within bound");
    }
    ```
+
    ```ts
    it("default-absent props render byte-identical (no cursor glyph)", () => {
      const base = render(
@@ -2642,11 +2774,13 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 2. [ ] Run it, expect FAIL (`does not provide an export named 'QueueRowRef'`, and the selectable assertions fail on the current signature):
+
    ```
    npx vitest run tests/tuiQueue.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 3. [ ] Write minimal implementation — replace the whole of `src/tui/components/QueueView.tsx` with:
+
    ```tsx
    import React from "react";
    import { Box, Text } from "ink";
@@ -2838,11 +2972,13 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 4. [ ] Run, expect PASS (both the new tests and the pre-existing `QueueView` frame assertions — the byte-identical guard proves the default path is unchanged):
+
    ```
    npx vitest run tests/tuiQueue.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 5. [ ] Lint the touched files:
+
    ```
    npx prettier --write src/tui/components/QueueView.tsx tests/tuiQueue.test.tsx
    npx eslint --no-warn-ignored src/tui/components/QueueView.tsx tests/tuiQueue.test.tsx
@@ -2859,10 +2995,12 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 ### Task 12: SectionRail component
 
 **Files:**
+
 - Create `src/tui/components/LocalDashboard.tsx` (initial version: imports, `LocalSection`/`UiMode` types, `SECTIONS`, `sectionBadge`, `SectionRail`)
 - Create `tests/tuiLocal.test.tsx` (shared fixtures + a `SectionRail` describe)
 
 **Interfaces:**
+
 - Consumes (Stage A, type-only): `LocalCheap`, `LocalHeavy` from `src/tui/localSnapshot.ts`; `UiMode` from `src/tui/geometry.ts`. Existing: `theme` from `src/tui/theme.ts`; `fmtAge` from `src/tui/queueFmt.ts`.
 - Produces:
   - `export type LocalSection = "queue" | "outbox" | "repos" | "worktrees" | "daemon";`
@@ -2872,6 +3010,7 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 **Steps:**
 
 1. [ ] Write the failing test — create `tests/tuiLocal.test.tsx` with the shared fixtures and the `SectionRail` describe:
+
    ```tsx
    import { describe, it, expect } from "vitest";
    import React from "react";
@@ -3027,11 +3166,13 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 2. [ ] Run it, expect FAIL with `Failed to resolve import "../src/tui/components/LocalDashboard.js"`:
+
    ```
    npx vitest run tests/tuiLocal.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 3. [ ] Write minimal implementation — create `src/tui/components/LocalDashboard.tsx`:
+
    ```tsx
    import React from "react";
    import { Box, Text } from "ink";
@@ -3046,7 +3187,11 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 
    /** Compact live badge for a section, derived from the cheap/heavy snapshots.
     * Empty string → no badge (hidden at zero). */
-   function sectionBadge(s: LocalSection, cheap: LocalCheap | null, heavy: LocalHeavy | null): string {
+   function sectionBadge(
+     s: LocalSection,
+     cheap: LocalCheap | null,
+     heavy: LocalHeavy | null,
+   ): string {
      if (cheap === null) return "";
      switch (s) {
        case "queue": {
@@ -3131,11 +3276,13 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 4. [ ] Run, expect PASS:
+
    ```
    npx vitest run tests/tuiLocal.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 5. [ ] Lint the touched files:
+
    ```
    npx prettier --write src/tui/components/LocalDashboard.tsx tests/tuiLocal.test.tsx
    npx eslint --no-warn-ignored src/tui/components/LocalDashboard.tsx tests/tuiLocal.test.tsx
@@ -3152,10 +3299,12 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 ### Task 13: Outbox / Repos / Worktrees / Daemon body sections
 
 **Files:**
+
 - Modify `src/tui/components/LocalDashboard.tsx` (append the four section components + two small format helpers, after `SectionRail`)
 - Modify `tests/tuiLocal.test.tsx` (append four describes; reuse the fixtures from the SectionRail task)
 
 **Interfaces:**
+
 - Consumes (Stage A, type-only): `LocalCheap`, `LocalRepo`, `LocalWorktree`, `DaemonDetail` from `src/tui/localSnapshot.ts`. Existing: `theme`, `queueLabel`.
 - Produces (all pure, each renders its own bordered pane with border accent when `focused`):
   - `export function OutboxSection(props: { outbox: LocalCheap["outbox"] | null; cursor: number; window: { start: number; end: number }; height: number; focused: boolean; now: Date }): React.JSX.Element`
@@ -3166,6 +3315,7 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 **Steps:**
 
 1. [ ] Write the failing test — append to `tests/tuiLocal.test.tsx` (add the imports to the existing import line for `LocalDashboard.js`):
+
    ```tsx
    import {
      SectionRail,
@@ -3286,7 +3436,9 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 
    describe("DaemonSection", () => {
      it("renders pid, uptime, endpoint, guards, tokens, per-ticket progress", () => {
-       const f = render(<DaemonSection daemon={DAEMON} scroll={0} height={20} focused />).lastFrame()!;
+       const f = render(
+         <DaemonSection daemon={DAEMON} scroll={0} height={20} focused />,
+       ).lastFrame()!;
        expect(f).toContain("pid 4242");
        expect(f).toContain("up 2h13m"); // 8000s
        expect(f).toContain("inference endpoint");
@@ -3306,16 +3458,26 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 2. [ ] Run it, expect FAIL with `does not provide an export named 'OutboxSection'`:
+
    ```
    npx vitest run tests/tuiLocal.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 3. [ ] Write minimal implementation — extend the imports at the top of `src/tui/components/LocalDashboard.tsx`:
+
    ```tsx
    import { fmtAge, queueLabel } from "../queueFmt.js";
-   import type { LocalCheap, LocalHeavy, LocalRepo, LocalWorktree, DaemonDetail } from "../localSnapshot.js";
+   import type {
+     LocalCheap,
+     LocalHeavy,
+     LocalRepo,
+     LocalWorktree,
+     DaemonDetail,
+   } from "../localSnapshot.js";
    ```
+
    (replace the existing `fmtAge` import and the existing type import line accordingly), then append after `SectionRail`:
+
    ```tsx
    /** Duration from whole seconds: `13m`, `2h13m`, `-` for null. */
    function fmtDur(s: number | null): string {
@@ -3391,7 +3553,8 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
      outbox.ops.slice(window.start, window.end).forEach((s, i) => {
        const idx = window.start + i;
        const sel = idx === cursor;
-       const target = "nwo" in s.op && "issue" in s.op ? `${s.op.nwo}#${s.op.issue}` : s.issueKey ?? "?";
+       const target =
+         "nwo" in s.op && "issue" in s.op ? `${s.op.nwo}#${s.op.issue}` : (s.issueKey ?? "?");
        rows.push(
          <Box key={s.id} width="100%" backgroundColor={sel ? theme.selectionBg : undefined}>
            <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
@@ -3536,7 +3699,9 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
            </Text>
          )}
          {worktrees === null && error === null && <Text dimColor>loading…</Text>}
-         {worktrees !== null && worktrees.length === 0 && error === null && <Text dimColor>none</Text>}
+         {worktrees !== null && worktrees.length === 0 && error === null && (
+           <Text dimColor>none</Text>
+         )}
          {(worktrees ?? []).slice(window.start, window.end).map((w, i) => {
            const idx = window.start + i;
            const sel = idx === cursor;
@@ -3546,7 +3711,8 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
                <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
                <Text wrap="truncate-end" dimColor={dim}>
                  {w.repoNwo ?? "⟨unmapped⟩"} {w.slug} <Text dimColor>{w.kind}</Text>
-                 {w.headSha !== null ? ` ${w.headSha.slice(0, 7)}` : ""} <Text dimColor>{fmtDur(w.ageSeconds)}</Text>
+                 {w.headSha !== null ? ` ${w.headSha.slice(0, 7)}` : ""}{" "}
+                 <Text dimColor>{fmtDur(w.ageSeconds)}</Text>
                  {w.error !== null ? <Text color={theme.warn}> {w.error}</Text> : null}
                </Text>
              </Box>
@@ -3655,11 +3821,13 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 4. [ ] Run, expect PASS:
+
    ```
    npx vitest run tests/tuiLocal.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 5. [ ] Lint the touched files:
+
    ```
    npx prettier --write src/tui/components/LocalDashboard.tsx tests/tuiLocal.test.tsx
    npx eslint --no-warn-ignored src/tui/components/LocalDashboard.tsx tests/tuiLocal.test.tsx
@@ -3676,10 +3844,12 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 ### Task 14: LocalDashboard composition (section rail + body switch + focus border)
 
 **Files:**
+
 - Modify `src/tui/components/LocalDashboard.tsx` (add the default-export `LocalDashboard`, its internal windowing, and the imports it needs)
 - Modify `tests/tuiLocal.test.tsx` (append a `LocalDashboard` describe; reuse the fixtures)
 
 **Interfaces:**
+
 - Consumes (existing): `QueueView` from `./QueueView.js`; `windowSlice` from `../window.js`; `listRowsHeight` from `../geometry.js`; `RAIL_WIDTH` + `Layout` from `../layout.js`; and the section components + types produced above.
 - Produces:
   - `export default function LocalDashboard(props: { cheap: LocalCheap | null; heavy: LocalHeavy | null; section: LocalSection; focus: "rail" | "body"; cursor: number; scroll: number; layout: Layout; now: Date }): React.JSX.Element` — renders `SectionRail` beside the selected section body; the rail holds the border accent when `focus==="rail"`, the body when `focus==="body"`. List sections window via `windowSlice(total, listRowsHeight(bodyRows), cursor, prevStart)` with an internal per-section `prevStart` ref (minimal-movement, App-pattern); Queue passes `selectable`/`selectedRow={cursor}` into `QueueView`; Daemon is the scroll panel.
@@ -3687,6 +3857,7 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 **Steps:**
 
 1. [ ] Write the failing test — append to `tests/tuiLocal.test.tsx` (add the default import + `computeLayout`):
+
    ```tsx
    import LocalDashboard from "../src/tui/components/LocalDashboard.js";
    import { computeLayout } from "../src/tui/layout.js";
@@ -3796,18 +3967,22 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 2. [ ] Run it, expect FAIL with `does not provide an export named 'default'`:
+
    ```
    npx vitest run tests/tuiLocal.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 3. [ ] Write minimal implementation — add the imports at the top of `src/tui/components/LocalDashboard.tsx`:
+
    ```tsx
    import { QueueView } from "./QueueView.js";
    import { windowSlice } from "../window.js";
    import { listRowsHeight } from "../geometry.js";
    import { RAIL_WIDTH, type Layout } from "../layout.js";
    ```
+
    and append at the end of the file:
+
    ```tsx
    /** LOCAL dashboard: the section rail + the selected section body. Windowing
     * memory (minimal-movement prevStart) lives here in a per-section ref so the
@@ -3844,11 +4019,11 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
      });
      const total =
        section === "outbox"
-         ? cheap?.outbox.ops.length ?? 0
+         ? (cheap?.outbox.ops.length ?? 0)
          : section === "repos"
-           ? heavy?.repos.length ?? 0
+           ? (heavy?.repos.length ?? 0)
            : section === "worktrees"
-             ? heavy?.worktrees.length ?? 0
+             ? (heavy?.worktrees.length ?? 0)
              : 0;
      const win = windowSlice(total, listH, cursor, prevStart.current[section]);
      if (section === "outbox" || section === "repos" || section === "worktrees") {
@@ -3894,7 +4069,12 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
            focused={bodyFocused}
          />
        ) : (
-         <DaemonSection daemon={cheap?.daemon ?? null} scroll={scroll} height={h} focused={bodyFocused} />
+         <DaemonSection
+           daemon={cheap?.daemon ?? null}
+           scroll={scroll}
+           height={h}
+           focused={bodyFocused}
+         />
        );
 
      return (
@@ -3915,19 +4095,23 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
    ```
 
 4. [ ] Run, expect PASS (all `tuiLocal` describes):
+
    ```
    npx vitest run tests/tuiLocal.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
 
 5. [ ] Lint + typecheck the touched files:
+
    ```
    npx prettier --write src/tui/components/LocalDashboard.tsx tests/tuiLocal.test.tsx
    npx eslint --no-warn-ignored src/tui/components/LocalDashboard.tsx tests/tuiLocal.test.tsx
    npx tsc --noEmit -p tsconfig.eslint.json > /tmp/tc 2>&1; echo "exit: $?"
    ```
+
    (Confirm no NEW errors in `LocalDashboard.tsx`/`tuiLocal.test.tsx` beyond the ~57 known pre-existing ones.)
 
 6. [ ] Run the full unwired-surface regression to prove nothing App-facing broke (these modules are still unimported by `App.tsx`, so the suite stays green):
+
    ```
    npx vitest run tests/tuiQueue.test.tsx tests/tuiGeometry.test.ts tests/tuiLocal.test.tsx > /tmp/out 2>&1; echo "exit: $?"
    ```
@@ -3942,34 +4126,43 @@ STAGE NOTES: (1) Both tasks edit `tests/tuiCliRunner.test.ts`'s single roster as
 
 STAGE NOTES: Cross-stage reconciliations the assembler must enforce. (1) `UiMode` has one canonical home — `src/tui/geometry.ts` (its `headerTabBands` return type needs it); `LocalDashboard.tsx` re-exports it (`export type { UiMode } from "../geometry.js"`) to satisfy the contract's "types live in LocalDashboard.tsx" listing. Stage E's `App.tsx`/`hitTest.ts` must import `UiMode` from geometry (or transitively from LocalDashboard), not redeclare it — a second `type UiMode` declaration will collide. (2) `headerTabBands` hardcodes `TAB_BRAND_COLS = 11` and fixed slot widths (`[GITHUB]`=8/`[LOCAL]`=7 wide; `[G]`/`[L]`=3 compact) with a 1-col gutter; **Stage E's `Header` must render the brand mark in exactly 11 columns and the tab labels at those slot widths** or the click bands drift from the drawn tabs — Stage E's full-`<App>` header-row frame test is the cross-check, and if the real emoji/brand width forces a different constant, it must move in `geometry.ts` (tests reference `TAB_BRAND_COLS`, so they follow). (3) `LocalDashboard`'s frozen props (per contract) omit a `refreshedAt` for the SectionRail `↻` line — I made `SectionRail.refreshedAt` optional and `LocalDashboard` does **not** pass it, so the pinned refresh stamp is inert until Stage E either renders `SectionRail` directly with `localRefreshedAt` or the assembler extends `LocalDashboard`'s props; flag if the spec's `↻` line is required in v1. (4) All Stage D fixtures assume Stage A's exact interface shapes (`LocalCheap.outbox = {depth,dead,ops,deadOps,error}`, `DaemonDetail` field names, `LocalRepo.source` union, `LocalWorktree.kind`) and `StoredOp` from `src/githubOutbox.ts`; if Stage A renames any field the `tuiLocal.test.tsx` literals and the section renderers must move together. (5) `OutboxSection`/`DaemonSection` use `React.cloneElement` on a bordered `Box` shell to inject sliced children — behaviorally fine, but if a reviewer prefers explicit `<Box>` duplication that is a pure-refactor, no interface impact. (6) `QueueRowRef.kind` includes `"running"` for union completeness but `onRows` never emits running rows (non-selectable) — Stage E's LOCAL cursor logic must treat the `onRows` list as the full actionable index space (waiting then recent) and never synthesize a running selection.
 
-
 <!-- ===== Stage E — The atomic switch + docs ===== -->
-
 
 ---
 
 ### Task 15: Chrome.tsx — Header mode tabs + local hints
 
 **Files:**
+
 - Modify `src/tui/components/Chrome.tsx` (Header signature :35-72; the right-chip `Box` :86-136; `hintsFor` pane-1/pane-2 sets :237-273; add `localHintsFor` after `hintsFor`)
 - Modify `tests/tuiChrome.test.tsx` (add the mode-tab + `localHintsFor` describe blocks)
 
 **Interfaces:**
+
 - Consumes: `headerTabBands(columns: number): { hit(x: number): UiMode | null; githubStart: number; localStart: number }` and `type UiMode = "github" | "local"` from `./geometry.js` (Stage A); `WIDE_COLS` (via the existing `mode: LayoutMode` — `wide` ⇔ `columns ≥ WIDE_COLS`); `theme` from `../theme.js`.
 - Produces: `Header` gains **optional** `uiMode?: UiMode` and `githubEnabled?: boolean`. When `uiMode === undefined` the header renders byte-identically to today (this is what keeps every existing full-`<App>` frame test green until Task 3 flips the switch). `localHintsFor(section: LocalSection, focus: "rail" | "body"): [string, string][]`. `hintsFor("main", …)` pane-2 set gains `["m", "local"]`.
 
 Steps:
 
 - [ ] **Write the failing test.** Append to `tests/tuiChrome.test.tsx`:
+
   ```tsx
   import { headerTabBands } from "../src/tui/geometry.js";
   import { localHintsFor } from "../src/tui/components/Chrome.js";
 
   describe("Header mode tabs", () => {
     const base = {
-      repoNwo: "acme/api", health: UP_BARE, reviewCount: 0, now: NOW,
-      queueRunning: 0, queueWaiting: 0, watchlistError: null, outboxDepth: 0,
-      prAttention: 0, prFailing: false, refreshedAt: null,
+      repoNwo: "acme/api",
+      health: UP_BARE,
+      reviewCount: 0,
+      now: NOW,
+      queueRunning: 0,
+      queueWaiting: 0,
+      watchlistError: null,
+      outboxDepth: 0,
+      prAttention: 0,
+      prFailing: false,
+      refreshedAt: null,
     } as const;
 
     it("absent uiMode renders no tab (byte-for-byte legacy header)", () => {
@@ -3993,7 +4186,9 @@ Steps:
     });
 
     it("compact form below the wide breakpoint: single-letter tabs", () => {
-      const f = render(<Header {...base} mode="medium" uiMode="github" githubEnabled />).lastFrame()!;
+      const f = render(
+        <Header {...base} mode="medium" uiMode="github" githubEnabled />,
+      ).lastFrame()!;
       expect(f).toContain("[G]");
       expect(f).toContain("l");
       expect(f).not.toContain("[GITHUB]");
@@ -4002,9 +4197,16 @@ Steps:
     it("columns=60 with a full medium chip set stays one row (no wrap)", () => {
       const f = render(
         <Header
-          {...base} mode="medium" uiMode="local" githubEnabled
+          {...base}
+          mode="medium"
+          uiMode="local"
+          githubEnabled
           sizeHint={60 as never}
-          reviewCount={2} queueRunning={1} queueWaiting={1} outboxDepth={4} prAttention={3}
+          reviewCount={2}
+          queueRunning={1}
+          queueWaiting={1}
+          outboxDepth={4}
+          prAttention={3}
         />,
       ).lastFrame()!;
       const lines = f.split("\n").filter((l) => l.trim().length > 0);
@@ -4048,16 +4250,20 @@ Steps:
     });
   });
   ```
+
   (Drop the `sizeHint` line if the ink harness cannot narrow below its 100-col default — the one-row guarantee is already structural via `wrap="truncate"`/`flexShrink`; keep the assertion, it proves no self-wrap.)
 
 - [ ] **Run it, expect FAIL.** `npx vitest run tests/tuiChrome.test.tsx > /tmp/e1 2>&1; echo "exit: $?"` — fails with `localHintsFor` not exported and `[GITHUB]`/`[LOCAL]`/`m local` absent.
 
 - [ ] **Write minimal implementation.** In `src/tui/components/Chrome.tsx`, add imports and widen `Header`:
+
   ```tsx
   import { headerTabBands, type UiMode } from "../geometry.js";
   import type { LocalSection } from "../localSnapshot.js";
   ```
+
   Add the two optional fields to the destructure and the type literal:
+
   ```tsx
     prFailing,
     refreshedAt,
@@ -4072,25 +4278,31 @@ Steps:
     githubEnabled?: boolean;
   }): React.JSX.Element {
   ```
+
   Insert the tab segment as the first `flexShrink={0}` child AFTER the brand box (right before the repo-name `Box flexShrink={1}`). Its label widths mirror `headerTabBands` (which owns the click coordinates), so component and hit-test never drift:
+
   ```tsx
-        {uiMode !== undefined && (
-          <Box flexShrink={0}>
-            <Text
-              color={uiMode === "github" ? theme.accent : undefined}
-              bold={uiMode === "github"}
-              dimColor={githubEnabled === false}
-            >
-              {uiMode === "github" ? (wide ? "[GITHUB]" : "[G]") : wide ? "github" : "g"}
-            </Text>
-            <Text> </Text>
-            <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
-              {uiMode === "local" ? (wide ? "[LOCAL]" : "[L]") : wide ? "local" : "l"}
-            </Text>
-          </Box>
-        )}
+  {
+    uiMode !== undefined && (
+      <Box flexShrink={0}>
+        <Text
+          color={uiMode === "github" ? theme.accent : undefined}
+          bold={uiMode === "github"}
+          dimColor={githubEnabled === false}
+        >
+          {uiMode === "github" ? (wide ? "[GITHUB]" : "[G]") : wide ? "github" : "g"}
+        </Text>
+        <Text> </Text>
+        <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
+          {uiMode === "local" ? (wide ? "[LOCAL]" : "[L]") : wide ? "local" : "l"}
+        </Text>
+      </Box>
+    );
+  }
   ```
+
   In `hintsFor`, add `["m", "local"]` to the pane-2 main set (right before `["?", "help"]`) and to the pane-1 set (after `[":", "commands"]`), keeping the footer one-line invariant (`wrap="truncate-end"` already guards it). Then add `localHintsFor` at the bottom of the file:
+
   ```ts
   /** Local-mode key hints — GitHub `hintsFor` is untouched; this is a sibling
    * for the LOCAL surface. `m`/Shift+Tab is the global mode swap (also in the
@@ -4108,15 +4320,38 @@ Steps:
     }
     switch (section) {
       case "queue":
-        return [["↑/↓", "move"], ["R", "requeue"], ["x", "delete"], ["←", "back"]];
+        return [
+          ["↑/↓", "move"],
+          ["R", "requeue"],
+          ["x", "delete"],
+          ["←", "back"],
+        ];
       case "outbox":
-        return [["↑/↓", "move"], ["f", "flush"], ["←", "back"]];
+        return [
+          ["↑/↓", "move"],
+          ["f", "flush"],
+          ["←", "back"],
+        ];
       case "repos":
-        return [["↑/↓", "move"], ["o", "browser"], ["x", "unwatch"], ["←", "back"]];
+        return [
+          ["↑/↓", "move"],
+          ["o", "browser"],
+          ["x", "unwatch"],
+          ["←", "back"],
+        ];
       case "worktrees":
-        return [["↑/↓", "move"], ["x", "prune"], ["←", "back"]];
+        return [
+          ["↑/↓", "move"],
+          ["x", "prune"],
+          ["←", "back"],
+        ];
       case "daemon":
-        return [["[/]", "scroll"], ["X", "restart"], ["f", "flush"], ["←", "back"]];
+        return [
+          ["[/]", "scroll"],
+          ["X", "restart"],
+          ["f", "flush"],
+          ["←", "back"],
+        ];
     }
   }
   ```
@@ -4132,16 +4367,19 @@ Steps:
 ### Task 16: hitTest.ts — modeTab target + optional uiMode
 
 **Files:**
+
 - Modify `src/tui/hitTest.ts` (`HitTarget` union :13-20; `HitContext` :22-41; the `y === 0`/`r < 0` early guard :46-47)
 - Modify `tests/tuiHitTest.test.ts` (`medium()`/`wide()` helpers :6-25; add a `describe` for the header band)
 
 **Interfaces:**
+
 - Consumes: `headerTabBands`, `type UiMode` from `./geometry.js` (Stage A).
 - Produces: `HitContext` gains **optional** `uiMode?: UiMode` (absent ⇒ treated as `"github"` AND no header band is emitted, so every existing `y===0 → none` case stays green). `HitTarget` gains `{ type: "modeTab"; mode: UiMode }` additively. When `uiMode` is supplied and `y === 0`, `hitTest` returns the band under `x` (or `none`).
 
 Steps:
 
 - [ ] **Write the failing test.** In `tests/tuiHitTest.test.ts` add `uiMode: "github"` to the `medium()` literal (keeps it explicit; `wide()` inherits it), then append:
+
   ```ts
   import { headerTabBands } from "../src/tui/geometry.js";
 
@@ -4166,17 +4404,28 @@ Steps:
 - [ ] **Run it, expect FAIL.** `npx vitest run tests/tuiHitTest.test.ts > /tmp/e2 2>&1; echo "exit: $?"` — fails: `modeTab` never returned.
 
 - [ ] **Write minimal implementation.** In `src/tui/hitTest.ts`:
+
   ```ts
-  import { LINK_LINE_ROW, PANE_CONTENT_ROW, listRowsHeight, railListHeight, headerTabBands } from "./geometry.js";
+  import {
+    LINK_LINE_ROW,
+    PANE_CONTENT_ROW,
+    listRowsHeight,
+    railListHeight,
+    headerTabBands,
+  } from "./geometry.js";
   import type { UiMode } from "./geometry.js";
   ```
+
   Add to `HitTarget`: `| { type: "modeTab"; mode: UiMode }`. Add to `HitContext`:
+
   ```ts
     /** Two-mode App only: enables header-band resolution at y===0. Absent ⇒
      * legacy single-surface, header row is dead. */
     uiMode?: UiMode;
   ```
+
   Resolve the header band FIRST, before the `r < 0` bail:
+
   ```ts
   export function hitTest(ctx: HitContext, x: number, y: number): HitTarget {
     const { layout, columns, view } = ctx;
@@ -4201,6 +4450,7 @@ Steps:
 This is THE integration commit. It flips `Header` into two-mode rendering (so **every** full-`<App>` frame now carries the tab), restructures `useInput` into the five layers, adds the LOCAL surface + its two poll effects + confirm modal + spawned actions, resolves the header band first in `onMouseEvent`, wires the new `AppProps`, and **migrates every header-row frame test in the same commit**. Tasks 1–2 already landed green because their default-absent paths preserved frames; this task supplies the props that light them up.
 
 **Files:**
+
 - Modify `src/tui/App.tsx` (imports :9-43; `AppProps` :45-68; `View`/state block :77-247; `unwatch` :853, `openRepoBrowser` :721; `dismissToast` :1050; `useInput` :1059-1324; `onMouseEvent` :1326-1431; `hints`/`modal` :1434-1466; `Workspace`/`Header`/render :1468-1589)
 - Modify `tests/tuiApp.test.tsx` (`renderApp` helper :253-283 — add the four new props), and every other full-`<App>` frame assertion enumerated below
 - Create `tests/tuiLocal.test.tsx`
@@ -4208,6 +4458,7 @@ This is THE integration commit. It flips `Header` into two-mode rendering (so **
 - Create `tests/tuiMouse.test.tsx`
 
 **Interfaces:**
+
 - Consumes (Stages A–D):
   - `LocalDashboard` (default export) from `./components/LocalDashboard.js`, props `{ cheap: LocalCheap|null; heavy: LocalHeavy|null; section: LocalSection; focus: "rail"|"body"; cursor: number; scroll: number; layout: Layout; now: Date }`.
   - `type LocalSection = "queue"|"outbox"|"repos"|"worktrees"|"daemon"`, `LocalCheap`, `LocalHeavy`, `LocalRepo`, `LocalWorktree` from `./localSnapshot.js`.
@@ -4230,13 +4481,16 @@ This is THE integration commit. It flips `Header` into two-mode rendering (so **
 Steps:
 
 - [ ] **Enumerate the frame-test blast radius up front** (the tab renders in both modes → every full-`<App>` header capture shifts):
+
   ```
   grep -n "lastFrame" tests/tuiApp.test.tsx tests/tuiInteractive.test.tsx tests/tuiQueue.test.tsx tests/tuiModal.test.tsx tests/tuiIssueList.test.tsx tests/tuiPrList.test.tsx
   grep -rln "render(\s*<App" tests/
   ```
+
   Every `render(<App …>)` site needs the four new props; every header-row `toContain` that could collide with the new `[GITHUB] local`/`github [LOCAL]` band needs re-checking. `tuiChrome`/`tuiHitTest` were already migrated in Tasks 1–2; direct `Header` renders that do NOT pass `uiMode` stay legacy.
 
 - [ ] **Write the failing component tests.** Create `tests/tuiLocal.test.tsx`:
+
   ```tsx
   import { describe, it, expect, afterEach } from "vitest";
   import React from "react";
@@ -4254,29 +4508,94 @@ Steps:
   const ESC = String.fromCharCode(27);
 
   const EMPTY_QUEUE: QueueSnapshot = {
-    daemonUp: true, maxConcurrent: 1, running: [], waiting: [], recent: [],
-    error: null, outboxDepth: 0,
+    daemonUp: true,
+    maxConcurrent: 1,
+    running: [],
+    waiting: [],
+    recent: [],
+    error: null,
+    outboxDepth: 0,
   };
   const CHEAP: LocalCheap = {
     queue: {
       ...EMPTY_QUEUE,
-      running: [{ id: "gh-acme-api-1", github: { nwo: "acme/api", issue: 1, kind: "pr", external: false }, turns: 2, lastTool: "bash", outputTokens: 10, startedAt: "2026-07-07T10:00:00Z", stale: false }],
-      waiting: [{ id: "sub-fix-typos", github: null, kind: "plan", priority: "normal", retryCount: 0, notBefore: null, deferred: false }],
-      recent: [{ id: "gh-acme-api-9", github: { nwo: "acme/api", issue: 9, kind: "pr", external: false }, status: "failed" }],
+      running: [
+        {
+          id: "gh-acme-api-1",
+          github: { nwo: "acme/api", issue: 1, kind: "pr", external: false },
+          turns: 2,
+          lastTool: "bash",
+          outputTokens: 10,
+          startedAt: "2026-07-07T10:00:00Z",
+          stale: false,
+        },
+      ],
+      waiting: [
+        {
+          id: "sub-fix-typos",
+          github: null,
+          kind: "plan",
+          priority: "normal",
+          retryCount: 0,
+          notBefore: null,
+          deferred: false,
+        },
+      ],
+      recent: [
+        {
+          id: "gh-acme-api-9",
+          github: { nwo: "acme/api", issue: 9, kind: "pr", external: false },
+          status: "failed",
+        },
+      ],
     },
     counts: { done: 12, failed: 3 },
     outbox: { depth: 2, dead: 1, ops: [], deadOps: [], error: null },
     daemon: {
-      up: true, pid: 4242, uptimeSeconds: 7980, endpointReachable: true,
-      healthHost: "127.0.0.1", healthPort: 8787, guardNudges: 1, guardKills: 0,
-      tokensIn: 1000, tokensOut: 2000, tasksByStatus: { done: 12, failed: 3 },
-      currentTickets: ["gh-acme-api-1"], progress: {}, error: null,
+      up: true,
+      pid: 4242,
+      uptimeSeconds: 7980,
+      endpointReachable: true,
+      healthHost: "127.0.0.1",
+      healthPort: 8787,
+      guardNudges: 1,
+      guardKills: 0,
+      tokensIn: 1000,
+      tokensOut: 2000,
+      tasksByStatus: { done: 12, failed: 3 },
+      currentTickets: ["gh-acme-api-1"],
+      progress: {},
+      error: null,
     },
     error: null,
   };
   const HEAVY: LocalHeavy = {
-    repos: [{ nwo: "acme/api", path: "/c/api", source: "config", originUrl: "https://github.com/acme/api", forkUrl: null, githubUrl: "https://github.com/acme/api", branch: "main", headSha: "abc1234", dirty: false, error: null }],
-    worktrees: [{ path: "/w/acme-api/fix-typos", repoPath: "/c/api", repoNwo: "acme/api", slug: "fix-typos", kind: "stale", headSha: "def5678", ageSeconds: 3600, error: null }],
+    repos: [
+      {
+        nwo: "acme/api",
+        path: "/c/api",
+        source: "config",
+        originUrl: "https://github.com/acme/api",
+        forkUrl: null,
+        githubUrl: "https://github.com/acme/api",
+        branch: "main",
+        headSha: "abc1234",
+        dirty: false,
+        error: null,
+      },
+    ],
+    worktrees: [
+      {
+        path: "/w/acme-api/fix-typos",
+        repoPath: "/c/api",
+        repoNwo: "acme/api",
+        slug: "fix-typos",
+        kind: "stale",
+        headSha: "def5678",
+        ageSeconds: 3600,
+        error: null,
+      },
+    ],
     error: null,
   };
 
@@ -4293,11 +4612,24 @@ Steps:
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `/r/${nwo}`, forkNwo: nwo }),
     dispatchTicket: async (nwo, num) => okv({ id: `gh-${nwo}-${num}`, destPath: "/x" }),
-    health: async () => ({ up: true, uptimeSeconds: 60, lastBridgeSweepAt: null, ticketsBridged: 0, tasksProcessed: null, tasksSucceeded: null, tasksFailed: null, lastTaskStatus: null, lastTaskAt: null, totalTokensOut: null, bridgeErrors: null }),
+    health: async () => ({
+      up: true,
+      uptimeSeconds: 60,
+      lastBridgeSweepAt: null,
+      ticketsBridged: 0,
+      tasksProcessed: null,
+      tasksSucceeded: null,
+      tasksFailed: null,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+      totalTokensOut: null,
+      bridgeErrors: null,
+    }),
   };
 
   function renderApp(over: Partial<AppProps> = {}) {
-    const runCli: AppProps["runCliFn"] = over.runCliFn ?? (async () => ({ code: 0, output: "ok", timedOut: false }));
+    const runCli: AppProps["runCliFn"] =
+      over.runCliFn ?? (async () => ({ code: 0, output: "ok", timedOut: false }));
     return render(
       <App
         client={stubClient}
@@ -4364,14 +4696,21 @@ Steps:
       const r = renderApp({ initialUiMode: "local" });
       await until(() => {
         const f = r.lastFrame() ?? "";
-        return f.includes("queue") && f.includes("outbox") && f.includes("worktrees") && f.includes("daemon");
+        return (
+          f.includes("queue") &&
+          f.includes("outbox") &&
+          f.includes("worktrees") &&
+          f.includes("daemon")
+        );
       });
     });
 
     it("j/k move the section rail; → enters the body; ← returns to the rail", async () => {
       const r = renderApp({ initialUiMode: "local" });
       await until(() => (r.lastFrame() ?? "").includes("worktrees"));
-      r.stdin.write("j"); r.stdin.write("j"); r.stdin.write("j"); // queue→outbox→repos→worktrees
+      r.stdin.write("j");
+      r.stdin.write("j");
+      r.stdin.write("j"); // queue→outbox→repos→worktrees
       await until(() => (r.lastFrame() ?? "").includes("fix-typos")); // worktrees body content
       r.stdin.write("l");
       await until(() => (r.lastFrame() ?? "").includes("stale"));
@@ -4419,7 +4758,9 @@ Steps:
     });
   });
   ```
+
   Create `tests/tuiLocalActions.test.tsx`:
+
   ```tsx
   import { describe, it, expect, afterEach } from "vitest";
   import React from "react";
@@ -4437,7 +4778,10 @@ Steps:
       const calls: [string, string[]][] = [];
       const r = renderApp({
         initialUiMode: "local",
-        runCliFn: async (n, a) => { calls.push([n, a]); return { code: 0, output: "requeued gh-acme-api-9", timedOut: false }; },
+        runCliFn: async (n, a) => {
+          calls.push([n, a]);
+          return { code: 0, output: "requeued gh-acme-api-9", timedOut: false };
+        },
       });
       await until(() => (r.lastFrame() ?? "").includes("queue"));
       r.stdin.write("l"); // enter body
@@ -4452,7 +4796,10 @@ Steps:
       const calls: [string, string[]][] = [];
       const r = renderApp({
         initialUiMode: "local",
-        runCliFn: async (n, a) => { calls.push([n, a]); return { code: 0, output: "removed", timedOut: false }; },
+        runCliFn: async (n, a) => {
+          calls.push([n, a]);
+          return { code: 0, output: "removed", timedOut: false };
+        },
       });
       await until(() => (r.lastFrame() ?? "").includes("queue"));
       r.stdin.write("l");
@@ -4467,7 +4814,13 @@ Steps:
 
     it("confirm-cancel (n) spawns nothing", async () => {
       const calls: [string, string[]][] = [];
-      const r = renderApp({ initialUiMode: "local", runCliFn: async (n, a) => { calls.push([n, a]); return { code: 0, output: "", timedOut: false }; } });
+      const r = renderApp({
+        initialUiMode: "local",
+        runCliFn: async (n, a) => {
+          calls.push([n, a]);
+          return { code: 0, output: "", timedOut: false };
+        },
+      });
       await until(() => (r.lastFrame() ?? "").includes("queue"));
       r.stdin.write("l");
       await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos"));
@@ -4480,11 +4833,18 @@ Steps:
 
     it("RUNNING/processing rows are never selectable — no action spawns", async () => {
       const calls: unknown[] = [];
-      const r = renderApp({ initialUiMode: "local", runCliFn: async () => { calls.push(1); return { code: 0, output: "", timedOut: false }; } });
+      const r = renderApp({
+        initialUiMode: "local",
+        runCliFn: async () => {
+          calls.push(1);
+          return { code: 0, output: "", timedOut: false };
+        },
+      });
       await until(() => (r.lastFrame() ?? "").includes("queue"));
       r.stdin.write("l");
       r.stdin.write("g"); // top selectable row — must NOT be the running row
-      r.stdin.write("R"); r.stdin.write("x");
+      r.stdin.write("R");
+      r.stdin.write("x");
       await new Promise((res) => setTimeout(res, 20));
       // R only fires on a failed row; x only on inbox — the running row exposes neither target
       expect(calls.filter((_, i) => i === 0)).not.toEqual(["retry"]);
@@ -4492,7 +4852,13 @@ Steps:
 
     it("outbox f flushes; daemon f/X flush/restart", async () => {
       const calls: [string, string[]][] = [];
-      const r = renderApp({ initialUiMode: "local", runCliFn: async (n, a) => { calls.push([n, a]); return { code: 0, output: "flushed 2", timedOut: false }; } });
+      const r = renderApp({
+        initialUiMode: "local",
+        runCliFn: async (n, a) => {
+          calls.push([n, a]);
+          return { code: 0, output: "flushed 2", timedOut: false };
+        },
+      });
       await until(() => (r.lastFrame() ?? "").includes("outbox"));
       r.stdin.write("j"); // outbox section
       r.stdin.write("l");
@@ -4503,9 +4869,17 @@ Steps:
 
     it("worktree x on a stale row confirms → y → junco worktree prune <path>", async () => {
       const calls: [string, string[]][] = [];
-      const r = renderApp({ initialUiMode: "local", runCliFn: async (n, a) => { calls.push([n, a]); return { code: 0, output: "pruned", timedOut: false }; } });
+      const r = renderApp({
+        initialUiMode: "local",
+        runCliFn: async (n, a) => {
+          calls.push([n, a]);
+          return { code: 0, output: "pruned", timedOut: false };
+        },
+      });
       await until(() => (r.lastFrame() ?? "").includes("worktrees"));
-      r.stdin.write("j"); r.stdin.write("j"); r.stdin.write("j"); // → worktrees
+      r.stdin.write("j");
+      r.stdin.write("j");
+      r.stdin.write("j"); // → worktrees
       r.stdin.write("l");
       await until(() => (r.lastFrame() ?? "").includes("fix-typos"));
       r.stdin.write("x");
@@ -4526,10 +4900,17 @@ Steps:
 
     it("Repos x/o act on the local cursor target, not github currentRepo", async () => {
       const opens: string[] = [];
-      const client = { ...stubClient, openRepoInBrowser: async (nwo: string) => { opens.push(nwo); return okv(undefined); } };
+      const client = {
+        ...stubClient,
+        openRepoInBrowser: async (nwo: string) => {
+          opens.push(nwo);
+          return okv(undefined);
+        },
+      };
       const r = renderApp({ initialUiMode: "local", client });
       await until(() => (r.lastFrame() ?? "").includes("repos"));
-      r.stdin.write("j"); r.stdin.write("j"); // → repos
+      r.stdin.write("j");
+      r.stdin.write("j"); // → repos
       r.stdin.write("l");
       await until(() => (r.lastFrame() ?? "").includes("acme/api"));
       r.stdin.write("o");
@@ -4549,7 +4930,9 @@ Steps:
     });
   });
   ```
+
   Create `tests/tuiMouse.test.tsx`:
+
   ```tsx
   import { describe, it, expect, afterEach } from "vitest";
   import React from "react";
@@ -4567,10 +4950,16 @@ Steps:
   describe("mouse in LOCAL", () => {
     it("a body click/wheel is a no-op (no github state mutation, no spawn)", async () => {
       const calls: unknown[] = [];
-      const r = renderApp({ initialUiMode: "local", runCliFn: async () => { calls.push(1); return { code: 0, output: "", timedOut: false }; } });
+      const r = renderApp({
+        initialUiMode: "local",
+        runCliFn: async () => {
+          calls.push(1);
+          return { code: 0, output: "", timedOut: false };
+        },
+      });
       await until(() => (r.lastFrame() ?? "").includes("queue"));
       const before = r.lastFrame();
-      r.stdin.write(press(40, 5));   // deep in the body
+      r.stdin.write(press(40, 5)); // deep in the body
       r.stdin.write("\u001B[<64;40;5M"); // wheel-down code
       await new Promise((res) => setTimeout(res, 20));
       expect(calls).toHaveLength(0);
@@ -4589,6 +4978,7 @@ Steps:
 - [ ] **Run the new suites, expect FAIL.** `npx vitest run tests/tuiLocal.test.tsx tests/tuiLocalActions.test.tsx tests/tuiMouse.test.tsx > /tmp/e3 2>&1; echo "exit: $?"` — fails: `App` rejects the new props / renders no LOCAL surface.
 
 - [ ] **Rewire `AppProps` and imports.** In `src/tui/App.tsx` add:
+
   ```ts
   import { Header, hintsFor, localHintsFor, type HintView } from "./components/Chrome.js";
   import LocalDashboard from "./components/LocalDashboard.js";
@@ -4596,12 +4986,20 @@ Steps:
   import type { UiMode } from "./geometry.js";
   import { headerTabBands } from "./geometry.js";
   ```
+
   Extend `AppProps` with the six Produces fields above (`localCheapPollMs?`, `localHeavyPollMs?` optional). Add the `ConfirmState` interface next to `CmdState`:
+
   ```ts
-  interface ConfirmState { title: string; body: string; danger: boolean; onConfirm: () => void; }
+  interface ConfirmState {
+    title: string;
+    body: string;
+    danger: boolean;
+    onConfirm: () => void;
+  }
   ```
 
 - [ ] **Add the local state cluster + poll cadence + refs.** After the existing `queuePollMs` derivation and state block:
+
   ```ts
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
@@ -4611,7 +5009,11 @@ Steps:
   const [localSection, setLocalSection] = useState<LocalSection>("queue");
   const [localFocus, setLocalFocus] = useState<"rail" | "body">("rail");
   const [localCursor, setLocalCursor] = useState<Record<LocalSection, number>>({
-    queue: 0, outbox: 0, repos: 0, worktrees: 0, daemon: 0,
+    queue: 0,
+    outbox: 0,
+    repos: 0,
+    worktrees: 0,
+    daemon: 0,
   });
   const [localScroll, setLocalScroll] = useState(0);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
@@ -4622,6 +5024,7 @@ Steps:
   ```
 
 - [ ] **Add the selectable-row derivation + movers.** These give `x`/`R`/`o`/`f` an explicit local target (never the github `currentRepo`) and skip non-selectable RUNNING/live rows:
+
   ```ts
   type LocalRow =
     | { kind: "waiting"; id: string }
@@ -4651,7 +5054,12 @@ Steps:
       case "worktrees":
         return (localHeavy?.worktrees ?? [])
           .filter((w) => w.kind === "stale" || w.kind === "backup")
-          .map((w) => ({ kind: "worktree" as const, path: w.path, slug: w.slug, klass: w.kind as "stale" | "backup" }));
+          .map((w) => ({
+            kind: "worktree" as const,
+            path: w.path,
+            slug: w.slug,
+            klass: w.kind as "stale" | "backup",
+          }));
       case "daemon":
         return [];
     }
@@ -4676,6 +5084,7 @@ Steps:
 - [ ] **Parameterize `unwatch` / `openRepoBrowser`.** Change `unwatch` to `unwatch(nwo: string)` — replace every `currentRepo`/`currentNwo` reference inside it with a lookup of `nwo` in `repoMappings` (config-vs-watchlist decision by the matched mapping), toasting `"not in watchlist"` when the nwo is absent from the watchlist. Update the github pane-1 caller to `unwatch(currentRepo.nwo)`. Change `openRepoBrowser` to `openRepoBrowser(nwo: string)` and the github caller to `openRepoBrowser(currentRepo.nwo)`. (Both now take an explicit target so LOCAL passes its own cursor's nwo.)
 
 - [ ] **Add `askConfirm` + `runLocalAction`.** After `runAssess`:
+
   ```ts
   const askConfirm = useCallback((state: ConfirmState) => setConfirm(state), []);
 
@@ -4699,7 +5108,10 @@ Steps:
         else showToast("error", line ?? `${name} failed`);
         // Immediate re-poll (cheap fn is cheap; section-gated counts refresh too).
         void props.localCheapFn({ section: localSection }).then((c) => {
-          if (aliveRef.current) { setLocalCheap(c); setLocalRefreshedAt(new Date().toISOString()); }
+          if (aliveRef.current) {
+            setLocalCheap(c);
+            setLocalRefreshedAt(new Date().toISOString());
+          }
         });
       });
     },
@@ -4708,6 +5120,7 @@ Steps:
   ```
 
 - [ ] **Add `canToggleMode` + `handleLocalInput`.** Before `useInput`:
+
   ```ts
   const canToggleMode = (): boolean =>
     !filtering && view !== "addRepo" && view !== "palette" && confirm === null;
@@ -4716,15 +5129,29 @@ Steps:
   const isModeToggle = (input: string, key: { tab?: boolean; shift?: boolean }): boolean =>
     input === "m" || (key.tab === true && key.shift === true);
 
-  const handleLocalInput = (input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]): void => {
+  const handleLocalInput = (
+    input: string,
+    key: Parameters<Parameters<typeof useInput>[0]>[1],
+  ): void => {
     // confirm modal owns input while open
     if (confirm) {
-      if (key.escape || input === "n") { setConfirm(null); return; }
-      if (key.return || input === "y") { const fn = confirm.onConfirm; setConfirm(null); fn(); return; }
+      if (key.escape || input === "n") {
+        setConfirm(null);
+        return;
+      }
+      if (key.return || input === "y") {
+        const fn = confirm.onConfirm;
+        setConfirm(null);
+        fn();
+        return;
+      }
       return;
     }
     if (localFocus === "body") {
-      if (key.escape || input === "h" || key.leftArrow) { setLocalFocus("rail"); return; }
+      if (key.escape || input === "h" || key.leftArrow) {
+        setLocalFocus("rail");
+        return;
+      }
       if (localSection === "daemon") {
         if (input === "[" || key.upArrow) return void setLocalScroll((s) => Math.max(0, s - 1));
         if (input === "]" || key.downArrow) return void setLocalScroll((s) => s + 1);
@@ -4743,45 +5170,82 @@ Steps:
       if (input === "j" || key.downArrow) return void moveLocalCursor(1);
       if (input === "k" || key.upArrow) return void moveLocalCursor(-1);
       if (input === "g") return void setLocalCursor((m) => ({ ...m, [localSection]: 0 }));
-      if (input === "G") return void setLocalCursor((m) => ({ ...m, [localSection]: Math.max(0, localRows.length - 1) }));
+      if (input === "G")
+        return void setLocalCursor((m) => ({
+          ...m,
+          [localSection]: Math.max(0, localRows.length - 1),
+        }));
       const t = localTarget;
       if (localSection === "queue") {
-        if (input === "R" && t?.kind === "recent") return void runLocalAction("retry", [t.id], { label: "requeue" });
+        if (input === "R" && t?.kind === "recent")
+          return void runLocalAction("retry", [t.id], { label: "requeue" });
         if (input === "x" && t?.kind === "waiting")
-          return void askConfirm({ title: "delete queued ticket", danger: true, body: `Delete inbox/${t.id}.md? (best-effort; the daemon may have claimed it)`, onConfirm: () => runLocalAction("rm", [t.id]) });
+          return void askConfirm({
+            title: "delete queued ticket",
+            danger: true,
+            body: `Delete inbox/${t.id}.md? (best-effort; the daemon may have claimed it)`,
+            onConfirm: () => runLocalAction("rm", [t.id]),
+          });
       }
-      if (localSection === "outbox" && input === "f") return void runLocalAction("outbox", ["flush"], { label: "flush" });
+      if (localSection === "outbox" && input === "f")
+        return void runLocalAction("outbox", ["flush"], { label: "flush" });
       if (localSection === "repos" && t?.kind === "repo") {
         if (input === "o") return void openRepoBrowser(t.repo.nwo ?? "");
-        if (input === "x") return void (t.repo.nwo ? unwatch(t.repo.nwo) : showToast("info", "not in watchlist"));
+        if (input === "x")
+          return void (t.repo.nwo ? unwatch(t.repo.nwo) : showToast("info", "not in watchlist"));
       }
       if (localSection === "worktrees" && input === "x" && t?.kind === "worktree")
-        return void askConfirm({ title: "prune worktree", danger: true, body: `Prune ${t.slug} (${t.klass})? git worktree remove --force under the daemon lock.`, onConfirm: () => runLocalAction("worktree", ["prune", t.path], { label: "prune" }) });
+        return void askConfirm({
+          title: "prune worktree",
+          danger: true,
+          body: `Prune ${t.slug} (${t.klass})? git worktree remove --force under the daemon lock.`,
+          onConfirm: () => runLocalAction("worktree", ["prune", t.path], { label: "prune" }),
+        });
       return;
     }
     // rail focus
-    if (input === "q") { exit(); onExit(); return; }
+    if (input === "q") {
+      exit();
+      onExit();
+      return;
+    }
     if (input === "?") return void setView("help");
-    if (input === "r") { void forceLocalRefresh(); return; }
+    if (input === "r") {
+      void forceLocalRefresh();
+      return;
+    }
     if (input === "j" || key.downArrow) return void moveLocalSection(1);
     if (input === "k" || key.upArrow) return void moveLocalSection(-1);
-    if (input === "g") { setLocalSection("queue"); setLocalScroll(0); return; }
-    if (input === "G") { setLocalSection("daemon"); setLocalScroll(0); return; }
+    if (input === "g") {
+      setLocalSection("queue");
+      setLocalScroll(0);
+      return;
+    }
+    if (input === "G") {
+      setLocalSection("daemon");
+      setLocalScroll(0);
+      return;
+    }
     if (input === "l" || key.rightArrow || key.return) return void setLocalFocus("body");
   };
   ```
 
 - [ ] **Restructure `useInput` into the five layers.** Replace the head of the `useInput` callback (the `isMouseInput` guard through the `view === "addRepo"` bail) with the wrapper; the entire existing github cascade (from `dismissToast()` at :1068 through the end at :1323) moves UNCHANGED inside `if (uiMode === "github")`:
+
   ```ts
   useInput((input, key) => {
-    if (isMouseInput(input)) return;                 // 1 (keep first)
-    if (view === "addRepo") return;                  // 2 text: form owns input
-    if (view === "palette") {                        // 2 text: palette owns input
+    if (isMouseInput(input)) return; // 1 (keep first)
+    if (view === "addRepo") return; // 2 text: form owns input
+    if (view === "palette") {
+      // 2 text: palette owns input
       // (existing palette branch stays where it is inside the github cascade;
       //  keep it reachable by NOT early-returning here — see note)
     }
-    if (canToggleMode() && isModeToggle(input, key)) {   // 3 toggle
-      if (!props.githubEnabled && uiMode === "github") { /* impossible: start local */ }
+    if (canToggleMode() && isModeToggle(input, key)) {
+      // 3 toggle
+      if (!props.githubEnabled && uiMode === "github") {
+        /* impossible: start local */
+      }
       const target: UiMode = uiMode === "github" ? "local" : "github";
       if (target === "github" && !props.githubEnabled) {
         dismissToast();
@@ -4792,16 +5256,25 @@ Steps:
       dismissToast();
       return;
     }
-    if (uiMode === "local") { dismissToast(); handleLocalInput(input, key); return; }  // 4 local
+    if (uiMode === "local") {
+      dismissToast();
+      handleLocalInput(input, key);
+      return;
+    } // 4 local
     // 5 ── existing github cascade, verbatim from the old :1068 `dismissToast()` ──
     dismissToast();
-    if (view === "help") { setView("main"); return; }
+    if (view === "help") {
+      setView("main");
+      return;
+    }
     // …unchanged…
   });
   ```
+
   Note: the palette/addRepo text handlers stay hoisted ABOVE the mode split (layer 2) so `m` never eats a typed character. Because the github file already routes `view === "palette"` internally, keep that branch in the github cascade but ensure `canToggleMode()` returns false while `view === "palette"` (it does) so layer 3 is skipped — no separate hoist needed beyond the `canToggleMode` gate; the `view === "addRepo"` bail at layer 2 stays. (The confirm modal is LOCAL-only, gated inside `handleLocalInput`.)
 
 - [ ] **Add `forceLocalRefresh` + the two gated poll effects.** After the queue-poll effect:
+
   ```ts
   const forceLocalRefresh = useCallback(async (): Promise<void> => {
     const c = await props.localCheapFn({ section: localSection });
@@ -4826,7 +5299,10 @@ Steps:
     };
     void run();
     const id = setInterval(() => void run(), localCheapPollMs);
-    return () => { alive = false; clearInterval(id); };
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, [uiMode, localSection, props.localCheapFn, localCheapPollMs]);
 
   // Heavy poll @15s — LOCAL + repos/worktrees only; AbortController on cleanup.
@@ -4842,11 +5318,16 @@ Steps:
     };
     void run();
     const id = setInterval(() => void run(), localHeavyPollMs);
-    return () => { alive = false; ctrl.abort(); clearInterval(id); };
+    return () => {
+      alive = false;
+      ctrl.abort();
+      clearInterval(id);
+    };
   }, [uiMode, localSection, props.localHeavyFn, localHeavyPollMs]);
   ```
 
 - [ ] **Resolve the header band FIRST in `onMouseEvent`, then early-return in LOCAL.** At the very top of `onMouseEvent`, before the existing modal-view guard:
+
   ```ts
   const onMouseEvent = (ev: TuiMouseEvent): void => {
     if (ev.y === 0 && ev.kind === "press") {
@@ -4862,17 +5343,23 @@ Steps:
         return;
       }
     }
-    if (confirm) return;                    // confirm modal owns the screen
-    if (uiMode === "local") return;         // local body is keyboard-first in v1
+    if (confirm) return; // confirm modal owns the screen
+    if (uiMode === "local") return; // local body is keyboard-first in v1
     // …existing github onMouseEvent body, unchanged…
   };
   ```
 
 - [ ] **Branch the render + wire Header/hints/confirm modal.** Compute hints by mode:
+
   ```ts
-  const hints = uiMode === "local" ? localHintsFor(localSection, localFocus) : hintsFor(view as HintView, pane, layout.mode, filtering);
+  const hints =
+    uiMode === "local"
+      ? localHintsFor(localSection, localFocus)
+      : hintsFor(view as HintView, pane, layout.mode, filtering);
   ```
+
   Add the confirm modal to the `modal` composition (it outranks the github modals when open):
+
   ```ts
   const modal = confirm ? (
     <Modal title={confirm.title} minWidth={54}>
@@ -4885,7 +5372,9 @@ Steps:
     <HelpModal view={uiMode === "local" ? "main" : (view as HintView)} pane={pane} mode={layout.mode} trigger={trigger} uiMode={uiMode} localSection={localSection} />
   ) : /* …existing palette / addRepo ternary… */ null;
   ```
+
   Pass the new Header props and branch the Workspace children:
+
   ```tsx
   header={
     <Header
@@ -4896,6 +5385,7 @@ Steps:
     />
   }
   ```
+
   ```tsx
   >
     {uiMode === "local" ? (
@@ -4917,9 +5407,11 @@ Steps:
     )}
   </Workspace>
   ```
+
   (Import `Text`/`Box` are already in scope; `theme` — add `import { theme } from "./theme.js"` if not present, matching Chrome's usage. Note `import type { ToastKind }` already imports from theme; extend to a value import.)
 
 - [ ] **Migrate the full-`<App>` frame tests (same commit).** Update `tests/tuiApp.test.tsx` `renderApp` to supply the four required props (and the two optional poll knobs) so it compiles and stays github-default:
+
   ```tsx
   localCheapFn={async () => ({ queue: QUEUE_SNAP, counts: null, outbox: { depth: QUEUE_SNAP.outboxDepth, dead: 0, ops: [], deadOps: [], error: null }, daemon: { up: true, pid: null, uptimeSeconds: null, endpointReachable: true, healthHost: "127.0.0.1", healthPort: 8787, guardNudges: null, guardKills: null, tokensIn: null, tokensOut: null, tasksByStatus: {}, currentTickets: [], progress: {}, error: null }, error: null })}
   localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
@@ -4928,6 +5420,7 @@ Steps:
   initialUiMode="github"
   githubEnabled
   ```
+
   Then run the enumerated suites and repair any header-row `toContain` that the `[GITHUB] local` band pushed out of a 100-col frame (the band is ~14 cols; the repo name is the flexible truncation absorber, so most `toContain("daemon ●")`/`toContain("↻ 0s")` survive — fix only genuine collisions by asserting on the still-present substring). Do the same for every other `render(<App`)` site surfaced by the up-front grep (`tuiInteractive`, `tuiQueue`, `tuiModal`, `tuiIssueList`, `tuiPrList` if present).
 
 - [ ] **Run the migrated + new suites, expect PASS.** `npx vitest run tests/tuiApp.test.tsx tests/tuiInteractive.test.tsx tests/tuiQueue.test.tsx tests/tuiModal.test.tsx tests/tuiLocal.test.tsx tests/tuiLocalActions.test.tsx tests/tuiMouse.test.tsx > /tmp/e3 2>&1; echo "exit: $?"` — green.
@@ -4941,16 +5434,19 @@ Steps:
 ### Task 18: dashboardCmd.ts — inject local fns + relax the github guard
 
 **Files:**
+
 - Modify `src/dashboardCmd.ts` (`github.enabled` guard :35-41; lazy `Promise.all` :43-57; `createElement(App, …)` props :66-79)
 - Modify `tests/dashboardCmd.test.ts` (the `github.enabled=false` case flips from refuse→launch-local)
 
 **Interfaces:**
+
 - Consumes: `makeLocalCheapFn`, `makeLocalHeavyFn` from `./tui/localSnapshot.js` (Stage A) — `makeLocalCheapFn(cfg): (opts?) => Promise<LocalCheap>`, `makeLocalHeavyFn(cfg): (signal?) => Promise<LocalHeavy>`.
 - Produces: `<App>` receives `localCheapFn`, `localHeavyFn`, `initialUiMode: cfg.github.enabled ? "github" : "local"`, `githubEnabled: cfg.github.enabled`. The non-TTY guard is untouched; the `github.enabled` refusal is removed (LOCAL launches when GitHub is off).
 
 Steps:
 
 - [ ] **Write the failing test.** In `tests/dashboardCmd.test.ts` replace the `github.enabled=false exits 1` case with:
+
   ```ts
   it("github.enabled=false launches into LOCAL mode (renders) rather than refusing", async () => {
     const disabled = { ...cfg, github: { ...cfg.github, enabled: false } } as unknown as Config;
@@ -4958,7 +5454,10 @@ Steps:
     const errs: string[] = [];
     const code = await runDashboard(disabled, "/x/config.toml", {
       isTTY: true,
-      renderFn: () => { rendered = true; return { waitUntilExit: async () => {} }; },
+      renderFn: () => {
+        rendered = true;
+        return { waitUntilExit: async () => {} };
+      },
       printErr: (s) => errs.push(s),
     });
     expect(code).toBe(0);
@@ -4971,13 +5470,18 @@ Steps:
     let rendered = false;
     const code = await runDashboard(disabled, "/x/config.toml", {
       isTTY: false,
-      renderFn: () => { rendered = true; return { waitUntilExit: async () => {} }; },
+      renderFn: () => {
+        rendered = true;
+        return { waitUntilExit: async () => {} };
+      },
     });
     expect(code).toBe(1);
     expect(rendered).toBe(false);
   });
   ```
+
   And in the `lazy loading discipline` block add:
+
   ```ts
   it("localSnapshot factories are pulled through the same lazy Promise.all", async () => {
     const { readFileSync } = await import("node:fs");
@@ -4991,6 +5495,7 @@ Steps:
 - [ ] **Run it, expect FAIL.** `npx vitest run tests/dashboardCmd.test.ts > /tmp/e4 2>&1; echo "exit: $?"` — fails: disabled case still exits 1; `localSnapshot` import absent.
 
 - [ ] **Write minimal implementation.** In `src/dashboardCmd.ts`, delete the entire `if (!cfg.github.enabled) { … return 1; }` block (:35-41). Add `makeQueueSnapshotFn`'s sibling to the lazy import (fold `localSnapshot` into the array), then inject the props:
+
   ```ts
   const [
     { App },
@@ -5010,6 +5515,7 @@ Steps:
     import("ink"),
   ]);
   ```
+
   ```ts
       queueFn: makeQueueSnapshotFn(cfg),
       localCheapFn: makeLocalCheapFn(cfg),
@@ -5018,6 +5524,7 @@ Steps:
       githubEnabled: cfg.github.enabled,
       onExit: () => {},
   ```
+
   (The `makeGhDashboardClient(cfg)` line stays — with GitHub disabled the client is still constructed but the LOCAL surface never calls it; the github tab is dim + `m` toasts the off state, wired in Task 3.)
 
 - [ ] **Run, expect PASS.** `npx vitest run tests/dashboardCmd.test.ts > /tmp/e4 2>&1; echo "exit: $?"` — green.
@@ -5029,28 +5536,38 @@ Steps:
 ### Task 19: HelpModal + docs/dashboard.md — document the two modes
 
 **Files:**
+
 - Modify `src/tui/components/HelpModal.tsx` (signature :25-35; add a local-mode `Section` when `uiMode === "local"`)
 - Modify `tests/tuiModal.test.tsx` (add a local-mode help assertion)
 - Modify `docs/dashboard.md` (intro; scope "mouse works throughout"; add a LOCAL section + key table)
 
 **Interfaces:**
+
 - Consumes: `type UiMode` from `../geometry.js`; `type LocalSection`, `localHintsFor` from `./Chrome.js` (Task 1); existing `Section`, `Modal`, `hintsFor`.
 - Produces: `HelpModal` gains **optional** `uiMode?: UiMode` and `localSection?: LocalSection`. Absent/`"github"` ⇒ the existing help renders unchanged (keeps `tuiModal` green). `"local"` ⇒ a local-mode key/action/safety reference.
 
 Steps:
 
 - [ ] **Write the failing test.** In `tests/tuiModal.test.tsx` add:
+
   ```tsx
   it("local-mode help lists the mode swap, section keys, and the action/safety table", () => {
     const f = render(
-      <HelpModal view="main" pane={2} mode="wide" trigger="junco" uiMode="local" localSection="worktrees" />,
+      <HelpModal
+        view="main"
+        pane={2}
+        mode="wide"
+        trigger="junco"
+        uiMode="local"
+        localSection="worktrees"
+      />,
     ).lastFrame()!;
     expect(f).toContain("local mode");
-    expect(f).toContain("m");        // mode swap
+    expect(f).toContain("m"); // mode swap
     expect(f).toContain("Shift+Tab");
-    expect(f).toContain("prune");    // worktrees action
-    expect(f).toContain("restart");  // daemon action
-    expect(f).toContain("[ / ]");    // daemon panel scroll
+    expect(f).toContain("prune"); // worktrees action
+    expect(f).toContain("restart"); // daemon action
+    expect(f).toContain("[ / ]"); // daemon panel scroll
   });
 
   it("github help is unchanged when uiMode is absent", () => {
@@ -5063,17 +5580,28 @@ Steps:
 - [ ] **Run it, expect FAIL.** `npx vitest run tests/tuiModal.test.tsx > /tmp/e5 2>&1; echo "exit: $?"` — fails: `HelpModal` rejects `uiMode`/`localSection`; "local mode" absent.
 
 - [ ] **Write minimal implementation.** In `src/tui/components/HelpModal.tsx` add optional props and a LOCAL branch (stack-agnostic — "inference endpoint", never a server name):
+
   ```tsx
   import type { UiMode } from "../geometry.js";
   import { hintsFor, localHintsFor, type HintView } from "./Chrome.js";
   import type { LocalSection } from "../localSnapshot.js";
   ```
+
   ```tsx
   export function HelpModal({
-    view, pane, mode, trigger, uiMode, localSection,
+    view,
+    pane,
+    mode,
+    trigger,
+    uiMode,
+    localSection,
   }: {
-    view: HintView; pane: 1 | 2 | 3; mode: LayoutMode; trigger: string;
-    uiMode?: UiMode; localSection?: LocalSection;
+    view: HintView;
+    pane: 1 | 2 | 3;
+    mode: LayoutMode;
+    trigger: string;
+    uiMode?: UiMode;
+    localSection?: LocalSection;
   }): React.JSX.Element {
     if (uiMode === "local") {
       return (
@@ -5098,7 +5626,10 @@ Steps:
             title="actions & safety"
             rows={[
               ["R", "requeue a failed ticket (junco retry)"],
-              ["x", "remove under cursor — delete queued ticket / prune worktree / unwatch repo (confirmed when destructive)"],
+              [
+                "x",
+                "remove under cursor — delete queued ticket / prune worktree / unwatch repo (confirmed when destructive)",
+              ],
               ["f", "flush the GitHub outbox backlog"],
               ["o", "open a repo's origin/fork in the browser"],
               ["X", "restart the daemon (confirmed; interrupts in-flight tickets, work salvaged)"],
@@ -5107,12 +5638,20 @@ Steps:
           <Section
             title="cross-mode divergences"
             rows={[
-              ["x / R / X", "local-only: remove / requeue / restart (github x = unwatch, R = re-plan)"],
-              ["running / live rows", "never selectable — the daemon owns processing/ and live worktrees"],
+              [
+                "x / R / X",
+                "local-only: remove / requeue / restart (github x = unwatch, R = re-plan)",
+              ],
+              [
+                "running / live rows",
+                "never selectable — the daemon owns processing/ and live worktrees",
+              ],
               ["mouse", "header tab only in local; body rows are keyboard-first (v1)"],
             ]}
           />
-          <Box marginTop={1}><Text dimColor>press any key to close</Text></Box>
+          <Box marginTop={1}>
+            <Text dimColor>press any key to close</Text>
+          </Box>
         </Modal>
       );
     }
@@ -5123,6 +5662,7 @@ Steps:
 - [ ] **Run, expect PASS.** `npx vitest run tests/tuiModal.test.tsx > /tmp/e5 2>&1; echo "exit: $?"` — green.
 
 - [ ] **Update `docs/dashboard.md`.** Reframe the opening: change the first paragraph to describe **two modes** — GITHUB (the existing repo/issue/PR client) and LOCAL (the machine-local runtime) — swapped with `m` / Shift+Tab or the header tab pair (`[GITHUB] local` ↔ `github [LOCAL]`), and note the dashboard launches into LOCAL when `[github] enabled = false`. Scope the existing **Mouse** paragraph: prefix it with "In GitHub mode, mouse works throughout:" and append a sentence — "In LOCAL mode only the header tab is clickable; local rows are keyboard-first in v1." Add a new `## Local mode` section after the palette section with: the section list (Queue / Outbox / Repos / Worktrees / Daemon), the two focus levels (rail moves the section, body drives the in-section cursor), and a key/action table:
+
   ```
   | Key | Action |
   | --- | --- |
@@ -5138,6 +5678,7 @@ Steps:
   | `X` | restart the daemon (confirmed; in-flight tickets soft-abort, committed work salvaged) |
   | `r` | full local refresh |
   ```
+
   State the safety rails in prose: running/processing rows and live worktrees are never selectable (the daemon owns them); worktree prune runs under a shared daemon lock with an in-lock liveness gate; every mutating action spawns the real `junco` CLI (no reimplementation). Use "inference endpoint" for the daemon's endpoint reachability, never a server product name.
 
 - [ ] **Verify docs are stack-agnostic.** `grep -niE "omp|omlx|pi |launchd|vault|ollama|openai|anthropic|claude" docs/dashboard.md; echo "exit: $?"` — expect no personal-stack matches in the new text.
@@ -5154,22 +5695,21 @@ Steps:
 
 All 19 tasks were authored directly from the spec sections; this table maps each spec section to the covering tasks.
 
-| Spec section | Tasks |
-|---|---|
-| Data model (`localSnapshot.ts`, enumerators, single-`/health`, cadence) | 1–6 |
-| Action model & daemon safety — `worktrees.lock` (daemon side) | 7 |
-| Action model & daemon safety — new CLI (`junco rm`, `junco worktree prune`, liveness gate) | 8–9 |
-| Local mode UI (`headerTabBands`, `QueueView` props, `SectionRail`, section bodies, `LocalDashboard`) | 10–14 |
-| Mode architecture — Header tabs + hints | 15 |
-| Mode architecture — clickable header band (`hitTest`) | 16 |
-| Mode architecture + Wiring — the atomic `App.tsx` rewire (uiMode state, input layers, poll effects, action runner, confirm, render branch, mouse band) | 17 |
-| Data model wiring + degraded state — `dashboardCmd` inject + `github.enabled` relax | 18 |
-| Docs + help — `HelpModal` local section, `docs/dashboard.md` two-mode reframe | 19 |
-| Testing (per-task TDD: pure-module + component + CLI tests) | every task |
-| Out of scope (v1 YAGNI) | n/a — exclusions |
+| Spec section                                                                                                                                           | Tasks            |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
+| Data model (`localSnapshot.ts`, enumerators, single-`/health`, cadence)                                                                                | 1–6              |
+| Action model & daemon safety — `worktrees.lock` (daemon side)                                                                                          | 7                |
+| Action model & daemon safety — new CLI (`junco rm`, `junco worktree prune`, liveness gate)                                                             | 8–9              |
+| Local mode UI (`headerTabBands`, `QueueView` props, `SectionRail`, section bodies, `LocalDashboard`)                                                   | 10–14            |
+| Mode architecture — Header tabs + hints                                                                                                                | 15               |
+| Mode architecture — clickable header band (`hitTest`)                                                                                                  | 16               |
+| Mode architecture + Wiring — the atomic `App.tsx` rewire (uiMode state, input layers, poll effects, action runner, confirm, render branch, mouse band) | 17               |
+| Data model wiring + degraded state — `dashboardCmd` inject + `github.enabled` relax                                                                    | 18               |
+| Docs + help — `HelpModal` local section, `docs/dashboard.md` two-mode reframe                                                                          | 19               |
+| Testing (per-task TDD: pure-module + component + CLI tests)                                                                                            | every task       |
+| Out of scope (v1 YAGNI)                                                                                                                                | n/a — exclusions |
 
 No gaps: every substantive spec section maps to at least one task, and the A→B→C→D→E ordering preserves "green at every commit" (Tasks 1–14 land unwired; Tasks 15–17 are the atomic switch that migrates header-row frame tests together).
-
 
 ---
 
@@ -5177,5 +5717,4 @@ No gaps: every substantive spec section maps to at least one task, and the A→B
 
 The stage authors flagged these interface-alignment points; heed them while implementing so Consumes/Produces stay consistent:
 
-**Stage E — The atomic switch + docs:** Cross-stage interface risks the assembler must reconcile. (1) **`UiMode` / `LocalSection` canonical location.** This stage imports `UiMode` from `./geometry.js` and `LocalSection` from `./localSnapshot.js`; the CONTRACT also lists both as exported from `LocalDashboard.tsx`. Stage A/D must export each from exactly ONE module and have the component re-import — if Stage D defines `UiMode` in `LocalDashboard.tsx` instead of `geometry.ts`, every import here (`Chrome`, `hitTest`, `App`, `HelpModal`) must be redirected, and `geometry.ts`'s `headerTabBands` return type must import it (a `geometry → LocalDashboard` cycle would be illegal, so `geometry.ts` is the correct home — flag if Stage D disagrees). (2) **`headerTabBands` coordinate authority.** Task 1 renders the tab in flex flow immediately after the brand and Task 3 clicks via `headerTabBands(columns)`; Stage A must author `headerTabBands` so `githubStart`/`localStart` match the *rendered* columns of `🐦 junco ` + `paddingX={1}` + the bracketed labels at both wide and compact widths — the `tuiLocal` "tab labels align" test is the tripwire, but if Stage A's offsets drift the click tests fail. (3) **`QueueView` selectable props** (Stage D) are consumed indirectly through `LocalDashboard`'s Queue section, not by this stage directly — but `LocalDashboard` must pass `selectable`/`selectedRow`/`onRows` so the `▌` cursor lands only on WAITING/failed rows; the `tuiLocalActions` "RUNNING rows never selectable" test asserts App-level behavior and assumes `localRowsFor("queue")` (defined here) already excludes them, so the two must agree on which rows are actionable. (4) **`LocalCheap.queue.recent` shape** — this stage's `localRowsFor` reads `recent[].status: "done"|"failed"` and `waiting[].id`; confirm Stage A's `QueueSnapshot`/`LocalCheap` expose those exact fields (the existing `QueueSnapshot.recent` field shape must carry `status`). (5) **CLI subcommand names** `rm` and `worktree prune` (Stage C) are spawned by literal name/args here (`["rm", id]`, `["worktree", "prune", path]`); if Stage C registers `worktree-prune` as a single token instead of the `worktree prune` subcommand pair, Task 3's `runLocalAction("worktree", ["prune", path])` and the `tuiLocalActions` assertion must change together.
-
+**Stage E — The atomic switch + docs:** Cross-stage interface risks the assembler must reconcile. (1) **`UiMode` / `LocalSection` canonical location.** This stage imports `UiMode` from `./geometry.js` and `LocalSection` from `./localSnapshot.js`; the CONTRACT also lists both as exported from `LocalDashboard.tsx`. Stage A/D must export each from exactly ONE module and have the component re-import — if Stage D defines `UiMode` in `LocalDashboard.tsx` instead of `geometry.ts`, every import here (`Chrome`, `hitTest`, `App`, `HelpModal`) must be redirected, and `geometry.ts`'s `headerTabBands` return type must import it (a `geometry → LocalDashboard` cycle would be illegal, so `geometry.ts` is the correct home — flag if Stage D disagrees). (2) **`headerTabBands` coordinate authority.** Task 1 renders the tab in flex flow immediately after the brand and Task 3 clicks via `headerTabBands(columns)`; Stage A must author `headerTabBands` so `githubStart`/`localStart` match the _rendered_ columns of `🐦 junco ` + `paddingX={1}` + the bracketed labels at both wide and compact widths — the `tuiLocal` "tab labels align" test is the tripwire, but if Stage A's offsets drift the click tests fail. (3) **`QueueView` selectable props** (Stage D) are consumed indirectly through `LocalDashboard`'s Queue section, not by this stage directly — but `LocalDashboard` must pass `selectable`/`selectedRow`/`onRows` so the `▌` cursor lands only on WAITING/failed rows; the `tuiLocalActions` "RUNNING rows never selectable" test asserts App-level behavior and assumes `localRowsFor("queue")` (defined here) already excludes them, so the two must agree on which rows are actionable. (4) **`LocalCheap.queue.recent` shape** — this stage's `localRowsFor` reads `recent[].status: "done"|"failed"` and `waiting[].id`; confirm Stage A's `QueueSnapshot`/`LocalCheap` expose those exact fields (the existing `QueueSnapshot.recent` field shape must carry `status`). (5) **CLI subcommand names** `rm` and `worktree prune` (Stage C) are spawned by literal name/args here (`["rm", id]`, `["worktree", "prune", path]`); if Stage C registers `worktree-prune` as a single token instead of the `worktree prune` subcommand pair, Task 3's `runLocalAction("worktree", ["prune", path])` and the `tuiLocalActions` assertion must change together.

@@ -1,0 +1,128 @@
+import { describe, expect, it } from "vitest";
+import { buildContextBindings, type BindingContext } from "../src/tui/viewActions.js";
+
+const km = (c: BindingContext): Record<string, string> =>
+  Object.fromEntries(buildContextBindings(c, 2, "wide").keymap);
+const GLOBALS = {
+  a: "addRepo",
+  u: "unwatch",
+  b: "browser",
+  r: "refresh",
+  s: "assess",
+  e: "queue",
+  v: "review",
+  p: "prs",
+  c: "commands",
+  q: "quit",
+  "?": "help",
+};
+
+describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", () => {
+  it("main:issues", () => {
+    expect(km({ kind: "main", body: "issues" })).toEqual({
+      ...GLOBALS,
+      d: "dispatch",
+      o: "approve",
+      n: "analyze",
+      D: "dispatchAsk",
+      A: "assessAutoPlan",
+      R: "replan",
+    });
+  });
+  it("main:queue", () => {
+    expect(km({ kind: "main", body: "queue" })).toEqual({ ...GLOBALS, t: "retry", D: "delete" });
+  });
+  it("main:outbox", () => {
+    expect(km({ kind: "main", body: "outbox" })).toEqual({ ...GLOBALS, f: "flush" });
+  });
+  it("main:worktrees", () => {
+    expect(km({ kind: "main", body: "worktrees" })).toEqual({ ...GLOBALS, P: "prune" });
+  });
+  it("main:daemon", () => {
+    expect(km({ kind: "main", body: "daemon" })).toEqual({ ...GLOBALS, R: "restart", f: "flush" });
+  });
+  it("main:repoDetail and main:logs are globals-only", () => {
+    expect(km({ kind: "main", body: "repoDetail" })).toEqual(GLOBALS);
+    expect(km({ kind: "main", body: "logs" })).toEqual(GLOBALS);
+  });
+  it("overlay views (each with the hidden reserved q close)", () => {
+    for (const view of ["detail", "prDetail", "repoDetail", "prs"] as const) {
+      expect(km({ kind: "view", view })).toEqual({ b: "browser", q: "close" });
+    }
+    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({ r: "reRun", q: "close" });
+    expect(km({ kind: "view", view: "review" })).toEqual({
+      a: "all",
+      n: "none",
+      f: "file",
+      D: "discard",
+      q: "close",
+    });
+  });
+  it("logOverlay", () => {
+    expect(km({ kind: "logOverlay" })).toEqual({
+      f: "follow",
+      l: "level",
+      t: "ticket",
+      q: "close",
+    });
+  });
+});
+
+describe("invariants", () => {
+  const MAIN_BODIES = [
+    "issues",
+    "repoDetail",
+    "queue",
+    "outbox",
+    "worktrees",
+    "daemon",
+    "logs",
+  ] as const;
+
+  it("globals share keys across every main context", () => {
+    for (const body of MAIN_BODIES) {
+      const m = km({ kind: "main", body });
+      for (const [k, id] of Object.entries(GLOBALS)) expect(m[k]).toBe(id);
+    }
+  });
+
+  it("no context ever hits the exhaustion fallback (reserved-out-of-label keys excepted)", () => {
+    const contexts: BindingContext[] = [
+      ...MAIN_BODIES.map((body) => ({ kind: "main", body }) as BindingContext),
+      { kind: "view", view: "review" },
+      { kind: "view", view: "cmdOutput" },
+      { kind: "view", view: "detail" },
+      { kind: "view", view: "prs" },
+      { kind: "view", view: "prDetail" },
+      { kind: "view", view: "repoDetail" },
+      { kind: "logOverlay" },
+    ];
+    for (const c of contexts) {
+      for (const d of buildContextBindings(c, 2, "wide").all) {
+        if (d.key === "?" || d.id === "close") continue; // reserved keys not in-label
+        expect(d.charIndex, `${JSON.stringify(c)} ${d.id}`).not.toBeNull();
+      }
+    }
+  });
+
+  it("chips: hidden options never render; pane 1 chips are the rail set", () => {
+    const b = buildContextBindings({ kind: "main", body: "issues" }, 1, "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    expect(ids).not.toContain("dispatchAsk");
+    expect(ids).toContain("addRepo");
+    expect(ids).not.toContain("dispatch"); // pane-2 verb, not a rail chip
+  });
+
+  it("chips: pane 2 issues carries the issue verbs, not the rail-only verbs", () => {
+    const b = buildContextBindings({ kind: "main", body: "issues" }, 2, "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    expect(ids).toEqual(expect.arrayContaining(["dispatch", "approve", "analyze", "assess"]));
+    expect(ids).not.toContain("addRepo");
+  });
+
+  it("structuralOnly contexts derive nothing", () => {
+    const b = buildContextBindings({ kind: "structuralOnly", view: "palette" }, 2, "wide");
+    expect(b.all).toEqual([]);
+    expect(b.chips.every((c) => c.kind === "structural")).toBe(true);
+  });
+});

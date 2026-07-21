@@ -35,6 +35,7 @@ Envelope: `{ id, createdAt, origin: "dashboard" | "reporter" | "prflow",
 issueKey: "<nwo>#<n>" | null, attempts, lastError: string | null }`.
 
 Op kinds:
+
 - `labels` — `{ nwo, issue, add: string[], remove: string[] }`
 - `comment` — `{ nwo, issue, body }`; the body gains an invisible trailing
   marker `<!-- junco:outbox:<id> -->`; before posting, the flusher scans the
@@ -43,7 +44,7 @@ Op kinds:
 - `push` — `{ repoPath, branch }` (amend flow: PR exists, URL known; the
   finalize comment travels separately as a `comment` op).
 - `pr` (composite) — `{ repoPath, branch, nwo, issue, base, title, bodyText,
-  finalize: { ticketId, status, finalText } }`. Flush: push → `gh pr create`
+finalize: { ticketId, status, finalText } }`. Flush: push → `gh pr create`
   → capture URL → build the finalize comment (same shape as
   `buildFinalComment`, now with the URL) → post it → flip labels
   (done/failed ↔ working). Progress checkpoints (`pushed: boolean`,
@@ -72,6 +73,7 @@ tryOrEnqueue(cfg, op: OutboxOp, live: () => Promise<void>): Promise<"sent" | "qu
 
 `flushOutbox(cfg, deps): Promise<FlushResult>` — `{ sent, dead, remaining,
 offline: boolean }`:
+
 - Ops in FIFO order; each executes by kind.
 - **Network error → stop the whole flush** (still offline; queue intact,
   attempts NOT incremented for untried ops).
@@ -82,6 +84,7 @@ offline: boolean }`:
   network-pattern stderr.
 
 Triggers:
+
 1. **Daemon** — top of every bridge sweep (before issue listing): reconnect
    auto-drains within one poll interval.
 2. **CLI** — `junco outbox` lists queued ops (kind, issue, age, attempts);

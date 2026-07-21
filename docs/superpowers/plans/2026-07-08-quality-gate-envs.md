@@ -22,10 +22,12 @@
 ### Task 1: Create `env-gate.yml`, rewrite `quality-gate.yml`, validate, commit
 
 **Files:**
+
 - Create: `.github/workflows/env-gate.yml`
 - Rewrite: `.github/workflows/quality-gate.yml`
 
 **Interfaces:**
+
 - Produces: reusable workflow `env-gate.yml` with `workflow_call` inputs `os: string (required)`, `node: string (required)`, `smoke: boolean (default false)`; caller job id `env_gate`; aggregate job display name `quality-gate` (consumed by the existing ruleset).
 
 - [ ] **Step 1: Create `.github/workflows/env-gate.yml`** with exactly:
@@ -161,11 +163,13 @@ jobs:
 - [ ] **Step 3: Validate**
 
 Run:
+
 ```bash
 node -e "const {readFileSync}=require('fs'); const y=require('/Users/alxedelweiss/junco/.claude/worktrees/ci_cd/node_modules/yaml'); y.parse(readFileSync('.github/workflows/quality-gate.yml','utf8')); y.parse(readFileSync('.github/workflows/env-gate.yml','utf8')); console.log('yaml ok')"
 actionlint
 zizmor .github/workflows/ 2>&1 | tail -1
 ```
+
 Expected: `yaml ok`; actionlint silent (exit 0 — it validates `workflow_call` input wiring and the local `uses:` reference); zizmor summary `0 medium, 0 high` (the 1 low is the accepted publish.yml `adhoc-packages`).
 
 - [ ] **Step 4: Commit**
@@ -202,6 +206,7 @@ Expected 7 green check runs: `quality gate (<os>, node <v>) / checks` ×4, `qual
 ```bash
 gh pr merge <PR#> --merge --delete-branch
 ```
+
 (The ruleset enforces the green gate; `--delete-branch` may warn locally because `main` is checked out in the primary worktree — the remote merge still completes; verify with `gh pr view <PR#> --json state`.)
 
 - [ ] **Step 4: Confirm main's run**

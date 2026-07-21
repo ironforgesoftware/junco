@@ -38,7 +38,11 @@ clack reads live stdin/stdout, so it can't be driven by the current injectable
 `runInitWizard` unit-testable without a TTY:
 
 ```ts
-export interface SelectOption { value: string; label: string; hint?: string }
+export interface SelectOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
 export interface Prompter {
   intro(title: string): void;
   outro(msg: string): void;
@@ -95,6 +99,7 @@ request `health.ts:54` already makes: `GET <apiBaseUrl(baseUrl)>/models`, header
 `{ data: [{ id }] }` → ids. Any error / non-200 / empty / timeout → `[]` (never throws).
 
 **`inferProvider(baseUrl) → string`** — parse hostname:
+
 - `api.openai.com`→`openai`, `openrouter.ai`→`openrouter`, `api.anthropic.com`→`anthropic`,
   `generativelanguage.googleapis.com`→`google`, `api.groq.com`→`groq`,
   `api.mistral.ai`→`mistral`, `api.deepseek.com`→`deepseek`.
@@ -103,9 +108,9 @@ request `health.ts:54` already makes: `GET <apiBaseUrl(baseUrl)>/models`, header
   un-parseable → `custom`.
 
 **Inline-mode flow:** vault → mode → endpoint base URL → api key → `spinner("Fetching models
-from <host>…", fetchModels, r => \`${r.length} found\`)` → if ids found, `select` them (each
+from <host>…", fetchModels, r => \`${r.length} found\`)`→ if ids found,`select`them (each
 id as a choice) plus a trailing **"✏️  Enter manually…"** option; if the list is empty (fetch
-failed/offline) → `note(...)` + a `text` prompt for the id (today's behavior).
+failed/offline) →`note(...)`+ a`text` prompt for the id (today's behavior).
 
 **models_json mode:** `parseModelsJson(path)` reads the file and lists
 `<provider>/<modelId>` for every `providers[*].models[*].id` → `select` + manual fallback.
@@ -113,7 +118,7 @@ These ids are already provider-scoped, so no inference.
 
 **Storing the id:** if the chosen/typed id already contains `/`, store as-is (respects
 manual full ids and OpenRouter-style `vendor/model`). Otherwise store
-`\`${inferProvider(baseUrl)}/${id}\``. `splitModelId` splits on the first `/` only, so a
+`\`${inferProvider(baseUrl)}/${id}\``. `splitModelId`splits on the first`/` only, so a
 model id that itself contains slashes is preserved under the inferred provider.
 
 ### E. De-personalization (shipped-surface hygiene)

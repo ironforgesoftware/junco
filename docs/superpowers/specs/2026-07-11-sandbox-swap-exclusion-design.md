@@ -19,7 +19,7 @@ opt-in (`sandbox.enabled` defaults false).
 ## Key insight (scopes the fix)
 
 **Only the `bash` tool can create/swap symlinks.** The fs-tools (`write`,
-`edit`, `mkdir`) have no symlink-creation capability. So the *only* concurrent
+`edit`, `mkdir`) have no symlink-creation capability. So the _only_ concurrent
 swapper is a bash-spawned process, and the intermediate-component TOCTOU is
 specifically a **bash-concurrent-with-an-fs-op** race. Eliminating overlap
 between bash execution and any fs-op's check→syscall window closes **all three
@@ -35,7 +35,9 @@ retained as the documented long-term upgrade path.
 ## Design
 
 ### 1. Per-session readers-writer lock — `src/agent/sandbox/opLock.ts`
+
 An async RW lock:
+
 - **fs-ops** (read/write/edit/mkdir/ls/find/grep) acquire it **shared** — they
   still run concurrently with each other (none can plant a symlink, so fs↔fs is
   safe).
@@ -43,7 +45,7 @@ An async RW lock:
   ones for its whole subprocess lifetime.
 - **Writer-priority**: a pending exclusive (bash) request blocks new shared
   acquisitions, so a stream of fs-ops cannot starve bash.
-- **Invariant**: an fs-op holds shared across its *entire*
+- **Invariant**: an fs-op holds shared across its _entire_
   `assert*Allowed`→`open`→read/write span; bash holds exclusive across
   spawn→exit→reap. Therefore no bash execution ever overlaps an fs-op window ⇒
   no component can be swapped mid-op. `O_NOFOLLOW` on the write leaf stays as
@@ -51,15 +53,17 @@ An async RW lock:
 - No hold-and-wait (fs-ops never wait on bash-produced state), so no deadlock.
 
 ### 2. Process-group reaping — `src/agent/sandbox/bashOps.ts`
+
 Spawn bash with `detached: true` (own process group); on `close`/timeout/abort,
 `process.kill(-pid, "SIGKILL")` the **group** so a backgrounded swapper
-(`ln -s … &`) cannot survive *between* bash calls. On Linux, ensure the bwrap
+(`ln -s … &`) cannot survive _between_ bash calls. On Linux, ensure the bwrap
 wrapper carries `--die-with-parent` (in `backend.ts`'s `spawnArgv`) so the
 namespace tears down and reaps even `setsid`-escaping descendants when the
 bwrap process is killed. Reaping is good hygiene independent of #159 (no
 lingering agent processes after a ticket).
 
 ### 3. Wiring — `src/agent/sandbox/index.ts` (`buildSandbox`)
+
 Create one `OpLock` per sandbox build; inject it into every
 `makeJailed*Operations` wrapper (acquire-shared around the op body) and
 `makeSandboxedBashOperations` (acquire-exclusive around exec + reap). The lock

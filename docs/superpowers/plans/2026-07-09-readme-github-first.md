@@ -23,9 +23,11 @@
 ### Task 1: Rewrite README.md
 
 **Files:**
+
 - Modify: `README.md` (full rewrite; final content assembled below)
 
 **Interfaces:**
+
 - Consumes: `/Users/alxedelweiss/junco-site/site/index.html` (read-only) for the mock + transcript extraction.
 - Produces: the README Task 2 gates and ships.
 
@@ -52,6 +54,7 @@ assert any('◍1' in l for l in lines)
 print('mock OK,', len(lines), 'lines, boxed width', boxed.pop())
 EOF
 ```
+
 Expected: `mock OK, 10 lines, boxed width 84`.
 
 - [ ] **Step 2: Extract the log transcript from the site**
@@ -71,6 +74,7 @@ assert 'gh-acme-reef-api-52-plan' in text and 'critic: pass' in text
 print('transcript OK, 12 lines')
 EOF
 ```
+
 Expected: `transcript OK, 12 lines`. If the span regex fights the HTML, fall back to: extract the whole `<pre ... id="demo">…</pre>` block, replace `</span>` with `\n`, strip remaining tags, unescape, drop empty lines and the `▌` — then re-run the assertions.
 
 - [ ] **Step 3: Write the new README.md**
@@ -283,6 +287,7 @@ assert open('/tmp/readme-transcript.txt').read().strip() in readme, 'transcript 
 print('splices OK')
 "
 ```
+
 Expected: `links OK`, three `exit: 1`, `splices OK`.
 
 - [ ] **Step 5: Commit**
@@ -298,6 +303,7 @@ git add README.md && git commit -m "docs: restructure README GitHub-first — th
 **Files:** none modified (gate + push only).
 
 **Interfaces:**
+
 - Consumes: Task 1's commit on `docs/readme-github-first`.
 
 - [ ] **Step 1: Full gate in the worktree** (deps already installed)
@@ -306,6 +312,7 @@ git add README.md && git commit -m "docs: restructure README GitHub-first — th
 cd /Users/alxedelweiss/junco/worktrees-manual/readme-github-first
 npm run lint && npm run format:check && npm run typecheck && npm run build && npm test > /tmp/readme-gate-test.log 2>&1; echo "exit: $?"; grep -E 'Tests|Test Files' /tmp/readme-gate-test.log
 ```
+
 Expected: `exit: 0`, `Tests  1654 passed` (or higher if main moved). If the count no longer rounds to ~1,650 (i.e. it is < 1,600 or ≥ 1,700), update the README's two `~1,650` mentions to the new round number, re-run Task 1 Step 4's greps, and amend the commit.
 
 - [ ] **Step 2: Push and open the PR (do NOT merge)**
@@ -325,6 +332,7 @@ npm's package page picks this up with the next release.
 
 Spec: docs/superpowers/specs/2026-07-09-readme-github-first-design.md"
 ```
+
 Verify the PR body rendered without any AI-attribution line; the plan + spec commits ride along on the branch by design.
 
 - [ ] **Step 3: Report the PR URL**

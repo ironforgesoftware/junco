@@ -21,86 +21,88 @@
 ### Task 1: fileReview resolves the filing identity (#224)
 
 **Files:**
+
 - Modify: `src/tui/ghClient.ts` (import at :19, `GhClientDeps` block at :171-197, `fileReview` at :543-550)
 - Test: `tests/tuiGhClient.test.ts` (base `cfg` fixture at :15-34, `describe("fileReview")` at :731)
 
 **Interfaces:**
+
 - Consumes: `withFileAsAuth(cfg)` from `src/ghAuth.ts:101` — returns cfg unchanged when `assess.fileAs === "me"` (no side effects); attaches `ghAuth` when `"bot"`; throws actionable Error when `"bot"` but bot disabled/broken.
 - Produces: `GhClientDeps.withFileAsAuthFn?: (cfg: Config) => Promise<Config>`.
 
 - [ ] **Step 1: Write the failing tests.** In `tests/tuiGhClient.test.ts`, add `assess: { fileAs: "me" },` to the base `cfg` literal (after `branchPrefix`) — the real `withFileAsAuth` reads `cfg.assess.fileAs`, and the fixture is `as unknown as Config`-cast so a partial `assess` is fine. Then append inside `describe("fileReview")`:
 
 ```ts
-  it('fileAs "bot": the filing cfg carries the bot identity (batch read stays ambient)', async () => {
-    const botFileCfg = { ...enabledCfg, assess: { fileAs: "bot" } } as unknown as Config;
-    let filedWith: Config | null = null;
-    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
-    const fileFindingsFn = vi.fn((c: Config): Promise<FileResult> => {
-      filedWith = c;
-      return Promise.resolve({
-        created: 1,
-        queuedOffline: 0,
-        deduped: 0,
-        failed: 0,
-        urls: [],
-        warnings: [],
-      });
+it('fileAs "bot": the filing cfg carries the bot identity (batch read stays ambient)', async () => {
+  const botFileCfg = { ...enabledCfg, assess: { fileAs: "bot" } } as unknown as Config;
+  let filedWith: Config | null = null;
+  const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
+  const fileFindingsFn = vi.fn((c: Config): Promise<FileResult> => {
+    filedWith = c;
+    return Promise.resolve({
+      created: 1,
+      queuedOffline: 0,
+      deduped: 0,
+      failed: 0,
+      urls: [],
+      warnings: [],
     });
-    const withFileAsAuthFn = vi.fn(attachFakeCtx);
-    const client = makeGhDashboardClient(botFileCfg, {
-      ...fakes(),
-      readPendingFn,
-      fileFindingsFn,
-      withFileAsAuthFn,
-    });
-    const r = await client.fileReview("assess-x-1", ["f1"]);
-    expect(r.ok).toBe(true);
-    expect(filedWith?.ghAuth).toEqual(FAKE_CTX);
-    expect(readPendingFn).toHaveBeenCalledWith(botFileCfg, "assess-x-1");
   });
+  const withFileAsAuthFn = vi.fn(attachFakeCtx);
+  const client = makeGhDashboardClient(botFileCfg, {
+    ...fakes(),
+    readPendingFn,
+    fileFindingsFn,
+    withFileAsAuthFn,
+  });
+  const r = await client.fileReview("assess-x-1", ["f1"]);
+  expect(r.ok).toBe(true);
+  expect(filedWith?.ghAuth).toEqual(FAKE_CTX);
+  expect(readPendingFn).toHaveBeenCalledWith(botFileCfg, "assess-x-1");
+});
 
-  it('fileAs "bot" with a broken bot login: error Result, nothing filed', async () => {
-    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
-    const fileFindingsFn = vi.fn();
-    const withFileAsAuthFn = vi.fn(() =>
-      Promise.reject(
-        new Error("botAccount.enabled is true but no working gh login — run: junco auth login"),
-      ),
-    );
-    const client = makeGhDashboardClient(cfg, {
-      ...fakes(),
-      readPendingFn,
-      fileFindingsFn,
-      withFileAsAuthFn,
-    });
-    const r = await client.fileReview("assess-x-1", ["f1"]);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("junco auth login");
-    expect(fileFindingsFn).not.toHaveBeenCalled();
+it('fileAs "bot" with a broken bot login: error Result, nothing filed', async () => {
+  const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
+  const fileFindingsFn = vi.fn();
+  const withFileAsAuthFn = vi.fn(() =>
+    Promise.reject(
+      new Error("botAccount.enabled is true but no working gh login — run: junco auth login"),
+    ),
+  );
+  const client = makeGhDashboardClient(cfg, {
+    ...fakes(),
+    readPendingFn,
+    fileFindingsFn,
+    withFileAsAuthFn,
   });
+  const r = await client.fileReview("assess-x-1", ["f1"]);
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error).toContain("junco auth login");
+  expect(fileFindingsFn).not.toHaveBeenCalled();
+});
 
-  it('fileAs "me" (default dep): the filing cfg stays ambient — no ghAuth attached', async () => {
-    let filedWith: (Config & { ghAuth?: unknown }) | null = null;
-    const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
-    const fileFindingsFn = vi.fn((c: Config): Promise<FileResult> => {
-      filedWith = c;
-      return Promise.resolve({
-        created: 0,
-        queuedOffline: 0,
-        deduped: 1,
-        failed: 0,
-        urls: [],
-        warnings: [],
-      });
+it('fileAs "me" (default dep): the filing cfg stays ambient — no ghAuth attached', async () => {
+  let filedWith: (Config & { ghAuth?: unknown }) | null = null;
+  const readPendingFn = vi.fn((_c: Config, _id: string) => ({ batch, error: null }));
+  const fileFindingsFn = vi.fn((c: Config): Promise<FileResult> => {
+    filedWith = c;
+    return Promise.resolve({
+      created: 0,
+      queuedOffline: 0,
+      deduped: 1,
+      failed: 0,
+      urls: [],
+      warnings: [],
     });
-    // No withFileAsAuthFn injected: the REAL withFileAsAuth runs — safe,
-    // because fileAs "me" short-circuits before any gh probe.
-    const client = makeGhDashboardClient(cfg, { ...fakes(), readPendingFn, fileFindingsFn });
-    const r = await client.fileReview("assess-x-1", ["f1"]);
-    expect(r.ok).toBe(true);
-    expect(filedWith).not.toBeNull();
-    expect(filedWith?.ghAuth).toBeUndefined();
   });
+  // No withFileAsAuthFn injected: the REAL withFileAsAuth runs — safe,
+  // because fileAs "me" short-circuits before any gh probe.
+  const client = makeGhDashboardClient(cfg, { ...fakes(), readPendingFn, fileFindingsFn });
+  const r = await client.fileReview("assess-x-1", ["f1"]);
+  expect(r.ok).toBe(true);
+  expect(filedWith).not.toBeNull();
+  expect(filedWith?.ghAuth).toBeUndefined();
+});
 ```
 
 - [ ] **Step 2: Run to verify the new tests fail.** `npx vitest run tests/tuiGhClient.test.ts > /tmp/t1.out 2>&1; echo "exit: $?"` — expect exit 1: test 1 fails on `filedWith?.ghAuth` (undefined ≠ FAKE_CTX); test 2 fails on `r.ok` (true, the fake never rejects because the dep is unknown → TS error first, which is the same signal: `withFileAsAuthFn` does not exist on `GhClientDeps`).
@@ -143,6 +145,7 @@ Replace the `fileReview` body:
 ### Task 2: help hints are mode-agnostic (#225)
 
 **Files:**
+
 - Modify: `src/tui/App.tsx` (`hints` computation at :2361-2369; stale comment block at :2165-2173)
 - Test: `tests/tuiLocalApp.test.tsx` (`describe("local help modal")` at :171)
 
@@ -151,14 +154,14 @@ Replace the `fileReview` body:
 - [ ] **Step 1: Write the failing test** (append to `describe("local help modal")`):
 
 ```tsx
-  it("help hints replace the LOCAL rail hints while help is open", async () => {
-    const r = renderApp({ initialUiMode: "local" });
-    await until(() => (r.lastFrame() ?? "").includes("↑/↓ section")); // rail hints in the footer
-    r.stdin.write("?");
-    await until(() => (r.lastFrame() ?? "").includes("local mode")); // help modal open
-    await until(() => !(r.lastFrame() ?? "").includes("↑/↓ section")); // stale rail chips gone
-    expect(r.lastFrame()).toContain("any key");
-  });
+it("help hints replace the LOCAL rail hints while help is open", async () => {
+  const r = renderApp({ initialUiMode: "local" });
+  await until(() => (r.lastFrame() ?? "").includes("↑/↓ section")); // rail hints in the footer
+  r.stdin.write("?");
+  await until(() => (r.lastFrame() ?? "").includes("local mode")); // help modal open
+  await until(() => !(r.lastFrame() ?? "").includes("↑/↓ section")); // stale rail chips gone
+  expect(r.lastFrame()).toContain("any key");
+});
 ```
 
 (Pre-check during implementation: `grep -n '↑/↓ section' src/tui/components/HelpModal.tsx` must be empty so the negative assertion can settle — it is; that footer chip text only comes from `localHintsFor`.)
@@ -168,29 +171,29 @@ Replace the `fileReview` body:
 - [ ] **Step 3: Implement.** In `src/tui/App.tsx` replace the `hints` computation with:
 
 ```tsx
-  const hints =
-    view === "config"
-      ? // Mode-agnostic, like the view === "config" render branch above: the
-        // config editor's own hints apply regardless of which surface opened
-        // it, not LOCAL's section-rail hints.
-        hintsFor("config", pane, layout.mode, filtering)
-      : view === "help"
-        ? // Mode-agnostic for the same reason: the help modal's "any key
-          // closes" applies on both surfaces — LOCAL must not keep rendering
-          // stale rail/body chips under the modal. (#225)
-          hintsFor("help", pane, layout.mode, filtering)
-        : uiMode === "local"
-          ? localHintsFor(localSection, localFocus)
-          : hintsFor(view as HintView, pane, layout.mode, filtering);
+const hints =
+  view === "config"
+    ? // Mode-agnostic, like the view === "config" render branch above: the
+      // config editor's own hints apply regardless of which surface opened
+      // it, not LOCAL's section-rail hints.
+      hintsFor("config", pane, layout.mode, filtering)
+    : view === "help"
+      ? // Mode-agnostic for the same reason: the help modal's "any key
+        // closes" applies on both surfaces — LOCAL must not keep rendering
+        // stale rail/body chips under the modal. (#225)
+        hintsFor("help", pane, layout.mode, filtering)
+      : uiMode === "local"
+        ? localHintsFor(localSection, localFocus)
+        : hintsFor(view as HintView, pane, layout.mode, filtering);
 ```
 
 Then shrink the now-stale `footerActions` comment (the 8 lines starting "LOCAL's help modal (like github's) leaves the rail/body hint row showing") to:
 
 ```ts
-    // help/config render mode-agnostic hint sets (see the `hints` computation),
-    // so their chips carry no LOCAL actions — fall through to the switch below
-    // (case "help" returns {}), same as github. The view guards stay as
-    // defense-in-depth should the two computations ever drift.
+// help/config render mode-agnostic hint sets (see the `hints` computation),
+// so their chips carry no LOCAL actions — fall through to the switch below
+// (case "help" returns {}), same as github. The view guards stay as
+// defense-in-depth should the two computations ever drift.
 ```
 
 - [ ] **Step 4: Run the file + full suite** (same exit-code discipline). Expect exit 0.
@@ -201,10 +204,12 @@ Then shrink the now-stale `footerActions` comment (the 8 lines starting "LOCAL's
 ### Task 3: per-command palette timeouts (#226)
 
 **Files:**
+
 - Modify: `src/tui/cliRunner.ts` (`PaletteCommand` + `cmd` helper at :13-30, roster rows for `assess`/`run-once`, `runCliCommand` timeout line at :87)
 - Test: `tests/tuiCliRunner.test.ts`
 
 **Interfaces:**
+
 - Produces: `PaletteCommand.timeoutMs: number | null` (null = default), exported `DEFAULT_TIMEOUT_MS = 120_000` and `timeoutFor(name: string): number`.
 
 - [ ] **Step 1: Write the failing tests** (new describe after `describe("PALETTE_COMMANDS roster")`; extend the import line with `timeoutFor, DEFAULT_TIMEOUT_MS`):
@@ -278,21 +283,22 @@ And in `runCliCommand`: `const timeoutMs = deps.timeoutMs ?? timeoutFor(name);`
 ### Task 4: correct the stale local-mouse help copy (#227)
 
 **Files:**
+
 - Modify: `src/tui/components/HelpModal.tsx:93`
 - Test: `tests/tuiLocalApp.test.tsx` (`describe("local help modal")`)
 
 - [ ] **Step 1: Write the failing test** (append to `describe("local help modal")`):
 
 ```tsx
-  it("help copy reflects wired LOCAL mouse support (no stale keyboard-first note)", async () => {
-    const r = renderApp({ initialUiMode: "local" });
-    await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
-    r.stdin.write("?");
-    await until(() => (r.lastFrame() ?? "").includes("local mode"));
-    const f = r.lastFrame() ?? "";
-    expect(f).not.toContain("keyboard-first");
-    expect(f).toContain("click-again");
-  });
+it("help copy reflects wired LOCAL mouse support (no stale keyboard-first note)", async () => {
+  const r = renderApp({ initialUiMode: "local" });
+  await until(() => (r.lastFrame() ?? "").includes("[LOCAL]"));
+  r.stdin.write("?");
+  await until(() => (r.lastFrame() ?? "").includes("local mode"));
+  const f = r.lastFrame() ?? "";
+  expect(f).not.toContain("keyboard-first");
+  expect(f).toContain("click-again");
+});
 ```
 
 - [ ] **Step 2: Run to verify failure** (same discipline) — expect exit 1 on `not.toContain("keyboard-first")`.
@@ -310,6 +316,7 @@ And in `runCliCommand`: `const timeoutMs = deps.timeoutMs ?? timeoutFor(name);`
 ### Task 5: ink-upgrade coupling checklist (#228)
 
 **Files:**
+
 - Create: `docs/ink-upgrade.md`
 
 - [ ] **Step 1: Write the doc** (documentation task — no test cycle; the mouseRegions suite it references already guards the coupling):

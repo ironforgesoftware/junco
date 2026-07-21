@@ -12,7 +12,7 @@
 
 - **Node ≥ 22.19.0**; ESM/NodeNext; `node:`-prefixed builtins; `.js` extensions on first-party imports; TS strict.
 - **Never import the Pi SDK at module top level in `src/`** (type-only is fine, but this plan avoids even that by using local structural types). The only runtime `await import("@earendil-works/pi-coding-agent"...)` stays inside `makePiSessionFactory`.
-- **`src/ticketSchema.ts` is a stable public contract — additive changes only.** The new `network:` frontmatter defaults to `false` and only ever *widens* one ticket; never widen a default.
+- **`src/ticketSchema.ts` is a stable public contract — additive changes only.** The new `network:` frontmatter defaults to `false` and only ever _widens_ one ticket; never widen a default.
 - **Every side effect goes behind an injectable `deps` seam** (spawn, exec-probe, clock). Tests never touch the network or a real model.
 - Dependencies are **exact-pinned**; this plan adds **no new npm dependency**.
 - **Adding a `Config` field breaks all six full-`Config` test fixtures** (`tests/{runOnce,prFlow,orphans,repo,worktree,daemon}.test.ts`). Every one must be updated in the same task. `npm run typecheck` (via `tsconfig.eslint.json`) catches misses; vitest does not type-check.
@@ -26,6 +26,7 @@
 ## File Structure
 
 **New (all pure / SDK-free unless noted):**
+
 - `src/scrubEnv.ts` — `ENV_ALLOWLIST` + `scrubEnv(source)`, extracted from `verify.ts`. Shared by verification blocks and agent bash.
 - `src/agent/sandbox/policy.ts` — `SandboxPolicy` type, `builtinDenyReadPaths(home)`, `buildPolicy(...)`.
 - `src/agent/sandbox/pathJail.ts` — `resolveWithin`, `isUnderAnyRoot`, `assertWriteAllowed`, `assertReadAllowed`, `SandboxViolation`.
@@ -36,6 +37,7 @@
 - `tests/scrubEnv.test.ts`, `tests/sandboxPolicy.test.ts`, `tests/sandboxPathJail.test.ts`, `tests/sandboxBackend.test.ts`, `tests/sandboxBashOps.test.ts`, `tests/sandboxFsOps.test.ts`, `tests/sandboxBuild.test.ts`, `tests/sandbox.integration.test.ts`.
 
 **Modified:**
+
 - `src/verify.ts` — `verificationEnv` delegates to `scrubEnv`.
 - `src/types.ts` — `SandboxConfig` interface + `sandbox` field on `Config`.
 - `src/config.ts` — `[sandbox]` zod section + `loadConfig` mapping.
@@ -52,11 +54,13 @@
 ## Task 1: Extract shared env scrub (`scrubEnv`)
 
 **Files:**
+
 - Create: `src/scrubEnv.ts`
 - Create: `tests/scrubEnv.test.ts`
 - Modify: `src/verify.ts` (lines 46–72 region)
 
 **Interfaces:**
+
 - Produces: `export const ENV_ALLOWLIST: Set<string>`; `export function scrubEnv(source?: Record<string, string | undefined>): Record<string, string>`
 - Consumers: `verify.ts` (`verificationEnv`), later `bashOps.ts`.
 
@@ -187,12 +191,14 @@ git commit -m "refactor(agent): extract shared scrubEnv from verify env allowlis
 ## Task 2: `[sandbox]` config section + `Config` field + fixtures
 
 **Files:**
+
 - Modify: `src/types.ts` (add `SandboxConfig`, add `sandbox` to `Config`)
 - Modify: `src/config.ts` (zod section ~after the `verify` block; `loadConfig` mapping)
 - Create: `tests/sandboxConfig.test.ts`
 - Modify: `tests/runOnce.test.ts`, `tests/prFlow.test.ts`, `tests/orphans.test.ts`, `tests/repo.test.ts`, `tests/worktree.test.ts`, `tests/daemon.test.ts`
 
 **Interfaces:**
+
 - Produces: `SandboxConfig { enabled: boolean; backend: "auto"|"seatbelt"|"bwrap"|"none"; network: "deny"|"allow"; extraDenyRead: string[]; extraAllowWrite: string[] }`; `Config.sandbox: SandboxConfig`.
 - Consumed by: policy/session tasks.
 
@@ -282,8 +288,8 @@ export interface SandboxConfig {
 Add to the `Config` interface (after the `assess: AssessConfig;` line):
 
 ```ts
-  // Agent execution sandbox (native OS isolation of tool subprocesses).
-  sandbox: SandboxConfig;
+// Agent execution sandbox (native OS isolation of tool subprocesses).
+sandbox: SandboxConfig;
 ```
 
 - [ ] **Step 4: Add the zod section + mapping in `src/config.ts`**
@@ -347,10 +353,12 @@ git commit -m "feat(config): add [sandbox] section (disabled by default)"
 ## Task 3: Sandbox filesystem policy
 
 **Files:**
+
 - Create: `src/agent/sandbox/policy.ts`
 - Create: `tests/sandboxPolicy.test.ts`
 
 **Interfaces:**
+
 - Consumes: `SandboxConfig` from `../../types.js`.
 - Produces:
   - `export interface SandboxPolicy { writableRoots: string[]; readDenyPaths: string[]; network: boolean; scratchDir: string }`
@@ -490,10 +498,12 @@ git commit -m "feat(sandbox): filesystem policy (writable roots + read denials)"
 ## Task 4: Path-jail assertions
 
 **Files:**
+
 - Create: `src/agent/sandbox/pathJail.ts`
 - Create: `tests/sandboxPathJail.test.ts`
 
 **Interfaces:**
+
 - Consumes: `SandboxPolicy` from `./policy.js`.
 - Produces:
   - `export class SandboxViolation extends Error {}`
@@ -564,7 +574,8 @@ describe("assertReadAllowed", () => {
     expect(() => assertReadAllowed("/home/x/.ssh/id_rsa", "/work/tree", policy)).toThrow(
       SandboxViolation,
     );
-    expect(() => assertReadAllowed("~/.ssh/id_rsa".replace("~", "/home/x"), "/work/tree", policy),
+    expect(() =>
+      assertReadAllowed("~/.ssh/id_rsa".replace("~", "/home/x"), "/work/tree", policy),
     ).toThrow(SandboxViolation);
   });
 });
@@ -647,10 +658,12 @@ git commit -m "feat(sandbox): path-jail assertions for tool fs operations"
 ## Task 5: Sandbox backends (Seatbelt / bubblewrap / none)
 
 **Files:**
+
 - Create: `src/agent/sandbox/backend.ts`
 - Create: `tests/sandboxBackend.test.ts`
 
 **Interfaces:**
+
 - Consumes: `SandboxPolicy` from `./policy.js`; `SandboxConfig["backend"]` from `../../types.js`.
 - Produces:
   - `export type ExecProbe = (cmd: string, args: string[]) => Promise<{ code: number }>`
@@ -901,10 +914,12 @@ git commit -m "feat(sandbox): seatbelt/bwrap/none backends with argv + profiles"
 ## Task 6: Sandboxed bash operations
 
 **Files:**
+
 - Create: `src/agent/sandbox/bashOps.ts`
 - Create: `tests/sandboxBashOps.test.ts`
 
 **Interfaces:**
+
 - Consumes: `SandboxBackend` from `./backend.js`; `SandboxPolicy` from `./policy.js`; `scrubEnv` from `../../scrubEnv.js`.
 - Produces (local structural type mirroring the SDK's `BashOperations` so no SDK import is needed):
   - `export interface BashExecOptions { onData: (d: Buffer) => void; signal?: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv }`
@@ -1107,10 +1122,12 @@ git commit -m "feat(sandbox): sandboxed bash operations (argv spawn + scrubbed e
 ## Task 7: Jailed filesystem operations
 
 **Files:**
+
 - Create: `src/agent/sandbox/fsOps.ts`
 - Create: `tests/sandboxFsOps.test.ts`
 
 **Interfaces:**
+
 - Consumes: `SandboxPolicy` from `./policy.js`; `assertReadAllowed`/`assertWriteAllowed` from `./pathJail.js`.
 - Produces (local structural types mirroring the SDK Operations; each wraps `node:fs/promises` with a jail check):
   - `export function makeJailedReadOperations(cwd: string, policy: SandboxPolicy): ReadOperationsLike`
@@ -1338,10 +1355,12 @@ git commit -m "feat(sandbox): jailed fs operations for read/write/edit/ls/find/g
 ## Task 8: `buildSandbox` glue + `SandboxUnavailableError`
 
 **Files:**
+
 - Create: `src/agent/sandbox/index.ts`
 - Create: `tests/sandboxBuild.test.ts`
 
 **Interfaces:**
+
 - Consumes: everything above; `SandboxConfig` from `../../types.js`.
 - Produces:
   - `export class SandboxUnavailableError extends Error {}`
@@ -1565,6 +1584,7 @@ git commit -m "feat(sandbox): buildSandbox glue (custom tools + no-ext loader)"
 This task confirms, against the installed SDK, the exact runtime import paths for `createToolDefinition` and `DefaultResourceLoader` used by Task 10. No production code file is the deliverable — a passing probe test is.
 
 **Files:**
+
 - Create: `tests/sdkImportSurface.test.ts`
 
 - [ ] **Step 1: Write the probe test**
@@ -1612,16 +1632,18 @@ git commit -m "test(sandbox): pin the SDK import surface the wiring depends on"
 ## Task 10: Wire the sandbox into `makePiSessionFactory`
 
 **Files:**
+
 - Modify: `src/agent/session.ts` (imports; `SessionOverrides`; `makePiSessionFactory` body)
 - Create: `tests/sessionSandboxWiring.test.ts`
 
 **Interfaces:**
+
 - Consumes: `buildSandbox`, `SandboxUnavailableError` from `./sandbox/index.js`; `selectBackend`, `defaultExecProbe` from `./sandbox/backend.js`; `buildPolicy` from `./sandbox/policy.js`.
 - Produces: `SessionOverrides` gains `network?: boolean`. `makePiSessionFactory` behavior unchanged when `cfg.sandbox.enabled` is false.
 
 - [ ] **Step 1: Write the failing test (behavioral seam)**
 
-Because the session factory does a real SDK import, test the *decision seam* — extract the sandbox setup into an exported helper `resolveSandbox(cfg, cwd, overrides, deps)` that returns `{ backend, policy, scratchDir } | null` and does the fail-closed check, injecting the probe + scratch maker. The factory calls it.
+Because the session factory does a real SDK import, test the _decision seam_ — extract the sandbox setup into an exported helper `resolveSandbox(cfg, cwd, overrides, deps)` that returns `{ backend, policy, scratchDir } | null` and does the fail-closed check, injecting the probe + scratch maker. The factory calls it.
 
 ```ts
 // tests/sessionSandboxWiring.test.ts
@@ -1670,12 +1692,17 @@ describe("resolveSandbox", () => {
   });
 
   it("per-ticket network override widens egress", async () => {
-    const r = await resolveSandbox(cfgWith({}), "/work", { network: true }, {
-      probe: async () => ({ code: 0 }),
-      makeScratch: () => "/tmp/scratch",
-      platform: "linux",
-      home: "/home/x",
-    });
+    const r = await resolveSandbox(
+      cfgWith({}),
+      "/work",
+      { network: true },
+      {
+        probe: async () => ({ code: 0 }),
+        makeScratch: () => "/tmp/scratch",
+        platform: "linux",
+        home: "/home/x",
+      },
+    );
     expect(r?.policy.network).toBe(true);
   });
 
@@ -1797,29 +1824,28 @@ export async function resolveSandbox(
 Inside the returned `async () => { ... }`, after the `model` is resolved and before `const { session } = await createAgentSession({...})`, insert:
 
 ```ts
-    // Sandbox (opt-in): replace built-in tools with sandboxed operations and
-    // freeze ambient extension loading. Inert when [sandbox].enabled is false.
-    let sandboxTools: unknown[] | undefined;
-    let sandboxLoader: unknown;
-    const resolved = await resolveSandbox(cfg, cwd, overrides);
-    if (resolved) {
-      const { createToolDefinition } = await import(
-        "@earendil-works/pi-coding-agent/dist/core/tools/index.js"
-      );
-      const { DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
-      const built = buildSandbox(
-        { createToolDefinition, DefaultResourceLoader },
-        {
-          cwd,
-          toolNames: overrides?.tools ?? cfg.tools,
-          backend: resolved.backend,
-          policy: resolved.policy,
-          home: homedir(),
-        },
-      );
-      sandboxTools = built.customTools;
-      sandboxLoader = built.resourceLoader;
-    }
+// Sandbox (opt-in): replace built-in tools with sandboxed operations and
+// freeze ambient extension loading. Inert when [sandbox].enabled is false.
+let sandboxTools: unknown[] | undefined;
+let sandboxLoader: unknown;
+const resolved = await resolveSandbox(cfg, cwd, overrides);
+if (resolved) {
+  const { createToolDefinition } =
+    await import("@earendil-works/pi-coding-agent/dist/core/tools/index.js");
+  const { DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
+  const built = buildSandbox(
+    { createToolDefinition, DefaultResourceLoader },
+    {
+      cwd,
+      toolNames: overrides?.tools ?? cfg.tools,
+      backend: resolved.backend,
+      policy: resolved.policy,
+      home: homedir(),
+    },
+  );
+  sandboxTools = built.customTools;
+  sandboxLoader = built.resourceLoader;
+}
 ```
 
 Then change the `createAgentSession({...})` call to spread the sandbox fields (add these two lines inside the object literal, after `sessionManager: SessionManager.inMemory(cwd),`):
@@ -1852,6 +1878,7 @@ git commit -m "feat(sandbox): wire sandbox into makePiSessionFactory (fail-close
 ## Task 11: Per-ticket `network:` frontmatter + prFlow threading
 
 **Files:**
+
 - Modify: `src/ticketSchema.ts` (add `network` to the schema, additive)
 - Modify: `src/types.ts` (add `network?: boolean` to the `Ticket` type)
 - Modify: `src/ticket.ts` (parse `network`)
@@ -1860,6 +1887,7 @@ git commit -m "feat(sandbox): wire sandbox into makePiSessionFactory (fail-close
 - Create/Modify test: `tests/ticket.test.ts` (or the existing ticket-parsing test file)
 
 **Interfaces:**
+
 - Consumes: `SessionOverrides.network` from `session.ts` (Task 10).
 - Produces: `Ticket.network?: boolean`.
 
@@ -1912,7 +1940,7 @@ In `src/types.ts`, add to the `Ticket` interface:
 In `src/ticket.ts`, where frontmatter fields are read onto the ticket (near the `tools` parsing, ~line 73), add:
 
 ```ts
-  const network = typeof fm.network === "boolean" ? fm.network : undefined;
+const network = typeof fm.network === "boolean" ? fm.network : undefined;
 ```
 
 and include `network` in the returned ticket object.
@@ -1922,17 +1950,17 @@ and include `network` in the returned ticket object.
 In `src/prFlow.ts`, change the worker factory call (~line 444):
 
 ```ts
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
-    network: task.network,
-  });
+const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
+  network: task.network,
+});
 ```
 
 and the corrective factory call (~line 640):
 
 ```ts
-        const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
-          network: task.network,
-        });
+const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
+  network: task.network,
+});
 ```
 
 Add one line to `src/planPrompt.ts`'s machine-owned-frontmatter note so the planner is told it cannot set `network` (mirror how it already lists `repo:/workdir:/tools:`).
@@ -1956,10 +1984,12 @@ git commit -m "feat(sandbox): per-ticket network: frontmatter opt-in"
 ## Task 12: Doctor preflight for the sandbox backend
 
 **Files:**
+
 - Modify: `src/doctor.ts` (add a numbered check inside the `if (cfg) { ... }` block)
 - Modify: `tests/doctor.test.ts` (add coverage)
 
 **Interfaces:**
+
 - Consumes: `selectBackend` from `./agent/sandbox/backend.js`; `DoctorDeps.execFn`.
 
 - [ ] **Step 1: Write the failing test**
@@ -2008,26 +2038,26 @@ import { selectBackend } from "./agent/sandbox/backend.js";
 Inside `runDoctor`, within the `if (cfg) { ... }` block (after the git/gh checks, before the endpoint check), add:
 
 ```ts
-    // 4a. sandbox backend (only when enabled)
-    if (cfg.sandbox.enabled) {
-      const backend = selectBackend(cfg.sandbox.backend, process.platform);
-      if (backend.name === "none") {
-        report(
-          "warn",
-          "sandbox",
-          "enabled with backend=none — env scrub + fs jail only, no OS isolation",
-        );
-      } else {
-        const ok = await backend.isAvailable((c, a) => execFn(c, a).then((r) => ({ code: r.code })));
-        report(
-          ok ? "ok" : "fail",
-          "sandbox",
-          ok
-            ? `${backend.name} available`
-            : `${backend.name} unavailable — tickets will fail closed (install it or set backend/none)`,
-        );
-      }
-    }
+// 4a. sandbox backend (only when enabled)
+if (cfg.sandbox.enabled) {
+  const backend = selectBackend(cfg.sandbox.backend, process.platform);
+  if (backend.name === "none") {
+    report(
+      "warn",
+      "sandbox",
+      "enabled with backend=none — env scrub + fs jail only, no OS isolation",
+    );
+  } else {
+    const ok = await backend.isAvailable((c, a) => execFn(c, a).then((r) => ({ code: r.code })));
+    report(
+      ok ? "ok" : "fail",
+      "sandbox",
+      ok
+        ? `${backend.name} available`
+        : `${backend.name} unavailable — tickets will fail closed (install it or set backend/none)`,
+    );
+  }
+}
 ```
 
 - [ ] **Step 4: Run tests to verify pass**
@@ -2047,6 +2077,7 @@ git commit -m "feat(doctor): preflight sandbox backend availability"
 ## Task 13: Platform-gated integration tests (real enforcement)
 
 **Files:**
+
 - Create: `tests/sandbox.integration.test.ts`
 
 **Interfaces:** Consumes the real backends + `makeSandboxedBashOperations`. These tests actually run `bash` under Seatbelt/bwrap and are skipped when the backend is unavailable, so unit CI stays green everywhere while macOS/Linux runners exercise real isolation.
@@ -2081,16 +2112,30 @@ afterEach(() => {
 });
 
 /** Run a command under the sandbox and collect exit code + output. */
-async function run(b: SandboxBackend, command: string, cwd: string, scratch: string, network = false) {
+async function run(
+  b: SandboxBackend,
+  command: string,
+  cwd: string,
+  scratch: string,
+  network = false,
+) {
   const policy = buildPolicy({
-    cfg: { enabled: true, backend: "auto", network: "deny", extraDenyRead: [], extraAllowWrite: [] },
+    cfg: {
+      enabled: true,
+      backend: "auto",
+      network: "deny",
+      extraDenyRead: [],
+      extraAllowWrite: [],
+    },
     cwd,
     scratchDir: scratch,
     home: process.env.HOME ?? "/tmp",
     stateDir: join(scratch, "state"),
     network,
   });
-  const ops = makeSandboxedBashOperations(b, policy, { env: () => ({ ...process.env, GH_TOKEN: "SECRET_TOKEN" }) });
+  const ops = makeSandboxedBashOperations(b, policy, {
+    env: () => ({ ...process.env, GH_TOKEN: "SECRET_TOKEN" }),
+  });
   let out = "";
   const res = await ops.exec(command, cwd, { onData: (d) => (out += d.toString()) });
   return { code: res.exitCode, out };
@@ -2144,7 +2189,12 @@ describe.skipIf(!process.env.CI && process.platform === "win32")("sandbox integr
     const work = tmp("junco-it-work-");
     const scratch = tmp("junco-it-scratch-");
     // ~/.ssh is in the built-in deny list; reading it must fail.
-    const r = await run(backend, `cat "${process.env.HOME}/.ssh/known_hosts" 2>&1; echo "exit=$?"`, work, scratch);
+    const r = await run(
+      backend,
+      `cat "${process.env.HOME}/.ssh/known_hosts" 2>&1; echo "exit=$?"`,
+      work,
+      scratch,
+    );
     expect(r.out).toMatch(/exit=[^0]/);
   });
 });
@@ -2169,6 +2219,7 @@ git commit -m "test(sandbox): platform-gated real-enforcement integration tests"
 ## Task 14: Documentation + dedicated-identity guidance + default decision
 
 **Files:**
+
 - Modify: `docs/configuration.md` (document `[sandbox]`)
 - Modify: `docs/operations.md` (§ Security model — dedicated GitHub identity + sandbox)
 - Modify: `ARCHITECTURE.md` (one line in the PR-flow/agent section noting the sandbox seam)
@@ -2189,6 +2240,7 @@ Add under `## [Unreleased]`:
 
 ```markdown
 ### Added
+
 - Native OS execution sandbox for the agent (`[sandbox]`, Seatbelt/macOS,
   bubblewrap/Linux): confines tool writes to the worktree, denies network by
   default (per-ticket `network: true` opt-in), scrubs credentials from the
@@ -2204,6 +2256,7 @@ Confirm `[sandbox].enabled` defaults to `false` in `src/config.ts` (Task 2). Thi
 - [ ] **Step 5: Run the full gate**
 
 Run:
+
 ```bash
 npm run lint > /tmp/l 2>&1; echo "lint: $?"
 npm run format:check > /tmp/f 2>&1; echo "fmt: $?"
@@ -2211,6 +2264,7 @@ npm run typecheck > /tmp/tc 2>&1; echo "tc: $?"
 npm run build > /tmp/b 2>&1; echo "build: $?"
 npx vitest run > /tmp/t 2>&1; echo "test: $?"; tail -6 /tmp/t
 ```
+
 Expected: all exit 0; test tally shows the new suites passing and no regressions.
 
 - [ ] **Step 6: Commit**
@@ -2232,6 +2286,7 @@ git commit -m "docs(sandbox): document [sandbox], dedicated identity, and defaul
 git fetch origin
 git merge --no-edit origin/main
 ```
+
 Resolve any conflicts (most likely in the six `Config` fixtures or `session.ts`); re-run the gate after.
 
 - [ ] **Step 2: Run the full gate one more time**
@@ -2239,6 +2294,7 @@ Resolve any conflicts (most likely in the six `Config` fixtures or `session.ts`)
 ```bash
 npm run lint && npm run format:check && npm run typecheck && npm run build && npx vitest run > /tmp/t 2>&1; echo "test: $?"; tail -8 /tmp/t
 ```
+
 Expected: green.
 
 - [ ] **Step 3: Sanity-run doctor in a sandbox (offline, disabled by default)**
@@ -2249,6 +2305,7 @@ SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
   && node /Users/alxedelweiss/junco/.claude/worktrees/worktree-2/dist/cli.js doctor ; \
   cd / && rm -rf "$SB"
 ```
+
 Expected: doctor runs; with sandbox disabled, no sandbox line (or an informational one). Enable `[sandbox].enabled=true` + `backend=seatbelt` in the sandbox config and re-run to see the availability check.
 
 - [ ] **Step 4: Strip any AI attribution and finish the branch**
@@ -2256,6 +2313,7 @@ Expected: doctor runs; with sandbox disabled, no sandbox line (or an information
 ```bash
 git log --format='%an <%ae>%n%b' origin/main..HEAD | grep -i "co-authored-by: claude" && echo "STRIP NEEDED" || echo "clean"
 ```
+
 If any trailer is present, rebase/amend it away. Then use superpowers:finishing-a-development-branch to choose merge/PR.
 
 ---

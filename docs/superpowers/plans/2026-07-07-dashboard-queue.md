@@ -29,10 +29,12 @@
 ### Task 1: `RunMetrics` progress entries gain `startedAt`
 
 **Files:**
+
 - Modify: `src/metrics.ts` (progress record type ~line 33 and ~line 59; `taskStarted` ~line 94; `setTaskProgress` ~line 111)
 - Test: `tests/metrics.test.ts` (append to the existing progress describe-block near line 274)
 
 **Interfaces:**
+
 - Consumes: existing `RunMetrics` (constructor takes `now: () => Date`).
 - Produces: `MetricsSnapshot.currentProgress` entries typed `{ turns: number; lastTool: string | null; outputTokens: number; startedAt: string; updatedAt: string }`. `taskStarted(id)` seeds an entry (`turns: 0, lastTool: null, outputTokens: 0`) stamped `startedAt = updatedAt = now`. `setTaskProgress` preserves an existing `startedAt`, defaulting to now when the entry doesn't exist. Task 2's health consumer relies on `startedAt` being present for every in-flight ticket.
 
@@ -95,17 +97,17 @@ In `src/metrics.ts`, make these four changes:
 1. `MetricsSnapshot.currentProgress` (~line 33) and the private `_progress` field (~line 59) both gain `startedAt: string`:
 
 ```ts
-  /** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
-  currentProgress: Record<
-    string,
-    {
-      turns: number;
-      lastTool: string | null;
-      outputTokens: number;
-      startedAt: string;
-      updatedAt: string;
-    }
-  >;
+/** Live per-ticket progress (turns, last tool, output tokens) keyed by id. */
+currentProgress: Record<
+  string,
+  {
+    turns: number;
+    lastTool: string | null;
+    outputTokens: number;
+    startedAt: string;
+    updatedAt: string;
+  }
+>;
 ```
 
 (mirror the same shape on the private field's type)
@@ -166,12 +168,14 @@ git commit -m "feat(metrics): stamp startedAt on in-flight ticket progress"
 ### Task 2: `queueSnapshot` module (+ `PRIORITY_RANK` promoted to types.ts)
 
 **Files:**
+
 - Modify: `src/types.ts` (add `PRIORITY_RANK` after the `Ticket` interface, ~line 156)
 - Modify: `src/runOnce.ts` (delete local `PRIORITY_RANK` at line 22; import from types)
 - Create: `src/tui/queueSnapshot.ts`
 - Test: `tests/queueSnapshot.test.ts`
 
 **Interfaces:**
+
 - Consumes: `parseTicket(path, raw, defaultTimeoutMinutes)` from `src/ticket.ts`; `queuePaths(cfg)` from `src/config.ts`; `Ticket`, `TicketGithub`, `Config` from `src/types.ts`; Task 1's `startedAt` in `/health` `currentProgress`.
 - Produces (Tasks 3–5 rely on these exact names):
   - `PRIORITY_RANK: Record<Ticket["priority"], number>` exported from `src/types.ts`.
@@ -208,7 +212,13 @@ function makeQueueCfg(root: string, overrides: Partial<Config> = {}): Config {
   } as unknown as Config;
 }
 
-function setupDirs(): { root: string; inbox: string; processing: string; done: string; failed: string } {
+function setupDirs(): {
+  root: string;
+  inbox: string;
+  processing: string;
+  done: string;
+  failed: string;
+} {
   const root = mkdtempSync(join(tmpdir(), "junco-qsnap-"));
   const dirs = {
     root,
@@ -454,10 +464,10 @@ describe("never-throws contract", () => {
 Note for the `readFileFn` fake: use a top-level `import { readFileSync } from "node:fs"` instead of `require` — this is an ESM test file. Write it as:
 
 ```ts
-    const readFileFn = (p: string): string => {
-      if (p.endsWith("gone.md")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      return readFileSync(p, "utf8");
-    };
+const readFileFn = (p: string): string => {
+  if (p.endsWith("gone.md")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  return readFileSync(p, "utf8");
+};
 ```
 
 (and add `readFileSync` to the `node:fs` import at the top).
@@ -737,11 +747,13 @@ git commit -m "feat(tui): queue snapshot — claim-order mirror of the local que
 ### Task 3: `queueFmt` helpers + `QueueStrip` component
 
 **Files:**
+
 - Create: `src/tui/queueFmt.ts`
 - Create: `src/tui/components/QueueStrip.tsx`
 - Test: `tests/tuiQueue.test.tsx`
 
 **Interfaces:**
+
 - Consumes: Task 2's `QueueSnapshot`/`QueueRunning`/`QueueWaiting` types; `TicketGithub` from `src/types.ts`.
 - Produces (Task 4 + 5 rely on):
   - `queueLabel(github: TicketGithub | null, id: string): string` — `#46 exec` / `#9 plan` / `#3 ask` for bridged tickets (`pr` renders as `exec`), else the id truncated to 24 chars with `…`.
@@ -857,9 +869,7 @@ describe("queueFmt", () => {
 
 describe("QueueStrip", () => {
   it("renders loading, idle, and error variants", () => {
-    expect(render(<QueueStrip snap={null} now={NOW} />).lastFrame()).toContain(
-      "queue — loading…",
-    );
+    expect(render(<QueueStrip snap={null} now={NOW} />).lastFrame()).toContain("queue — loading…");
     expect(render(<QueueStrip snap={IDLE} now={NOW} />).lastFrame()).toContain("queue — idle");
     expect(
       render(<QueueStrip snap={{ ...IDLE, error: "clock boom" }} now={NOW} />).lastFrame(),
@@ -973,7 +983,13 @@ export function fmtClock(iso: string): string {
 
 /** `turn 14 · bash · 12.3k tok · 4m32s` — null segments omitted. */
 export function progressLine(
-  r: { turns: number | null; lastTool: string | null; outputTokens: number | null; startedAt: string | null; stale: boolean },
+  r: {
+    turns: number | null;
+    lastTool: string | null;
+    outputTokens: number | null;
+    startedAt: string | null;
+    stale: boolean;
+  },
   now: Date,
 ): string {
   if (r.stale) return "processing (daemon down)";
@@ -1049,7 +1065,7 @@ export function QueueStrip({
         <Text key={r.id} wrap="truncate-end">
           <Text color="cyan">◐ </Text>
           <Text bold>{queueLabel(r.github, r.id)}</Text>
-          <Text dimColor>  {progressLine(r, now)}</Text>
+          <Text dimColor> {progressLine(r, now)}</Text>
         </Text>
       ))}
       {moreRunning > 0 && <Text dimColor>+{moreRunning} more running</Text>}
@@ -1063,8 +1079,8 @@ export function QueueStrip({
               {i + 1}) {queueLabel(w.github, w.id)}
             </Text>
           ))}
-          {moreNext > 0 ? <Text dimColor>  +{moreNext} more</Text> : null}
-          <Text dimColor>  [t]</Text>
+          {moreNext > 0 ? <Text dimColor> +{moreNext} more</Text> : null}
+          <Text dimColor> [t]</Text>
         </Text>
       )}
     </Box>
@@ -1090,10 +1106,12 @@ git commit -m "feat(tui): queue strip — always-on running/waiting indicators"
 ### Task 4: `QueueView` component (full queue on `t`)
 
 **Files:**
+
 - Create: `src/tui/components/QueueView.tsx`
 - Test: `tests/tuiQueue.test.tsx` (append)
 
 **Interfaces:**
+
 - Consumes: Task 2's `QueueSnapshot`, Task 3's `queueLabel`/`progressLine`/`fmtAge`/`fmtClock`.
 - Produces: `QueueView({ snap, scroll, now }: { snap: QueueSnapshot | null; scroll: number; now: Date })` — Task 5 renders it in the main-area slot and drives `scroll`.
 
@@ -1229,7 +1247,7 @@ export function QueueView({
         {"  "}
         <Text color="cyan">◐ </Text>
         <Text bold>{queueLabel(r.github, r.id)}</Text>
-        <Text dimColor>  {r.id}</Text>
+        <Text dimColor> {r.id}</Text>
       </Text>,
     );
     rows.push(
@@ -1257,8 +1275,8 @@ export function QueueView({
       <Text key={`w-${w.id}`} wrap="truncate-end">
         {"  "}
         {i + 1}. <Text bold>{queueLabel(w.github, w.id)}</Text>
-        <Text dimColor>  {w.github ? w.id : w.kind}</Text>
-        {note !== "" ? <Text color="yellow">  {note}</Text> : null}
+        <Text dimColor> {w.github ? w.id : w.kind}</Text>
+        {note !== "" ? <Text color="yellow"> {note}</Text> : null}
       </Text>,
     );
   });
@@ -1282,7 +1300,7 @@ export function QueueView({
           {r.status === "done" ? "✓" : "✗"}{" "}
         </Text>
         {queueLabel(r.github, r.id)}
-        <Text dimColor>  {fmtAge(r.finishedAt, now)}</Text>
+        <Text dimColor> {fmtAge(r.finishedAt, now)}</Text>
       </Text>,
     );
   }
@@ -1313,6 +1331,7 @@ git commit -m "feat(tui): full queue view — running/waiting/recent on t"
 ### Task 5: Wire into App, ShortcutBar, HelpOverlay, dashboardCmd
 
 **Files:**
+
 - Modify: `src/tui/App.tsx` (props ~line 31; View union ~line 48; state ~line 133; polls ~line 225; useInput ~line 432; render ~line 547)
 - Modify: `src/tui/components/ShortcutBar.tsx`
 - Modify: `src/tui/components/HelpOverlay.tsx`
@@ -1320,6 +1339,7 @@ git commit -m "feat(tui): full queue view — running/waiting/recent on t"
 - Test: `tests/tuiApp.test.tsx` (renderApp helper + new tests), `tests/dashboardCmd.test.ts` (no change expected — verify)
 
 **Interfaces:**
+
 - Consumes: Tasks 2–4 (`QueueSnapshot`, `makeQueueSnapshotFn`, `QueueStrip`, `QueueView`).
 - Produces: `AppProps` gains **required** `queueFn: () => Promise<QueueSnapshot>` and optional `queuePollMs?: number` (default `2_000`); `BarView`/`View` unions gain `"queue"`.
 
@@ -1457,6 +1477,7 @@ Expected: FAIL — TS/prop errors (`queueFn` unknown) and missing strip content.
 - [ ] **Step 3: Implement**
 
 `src/tui/components/ShortcutBar.tsx`:
+
 - `BarView` union gains `"queue"`.
 - Add a case before `"main"`:
 
@@ -1495,49 +1516,49 @@ import type { QueueSnapshot } from "./queueSnapshot.js";
 4. State (next to `health`):
 
 ```tsx
-  const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
-  const [queueNow, setQueueNow] = useState<Date>(() => new Date());
+const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
+const [queueNow, setQueueNow] = useState<Date>(() => new Date());
 ```
 
 5. Poll effect — copy the shape of the existing health-poll effect (immediate first run + interval; `queueFn` is stable from props):
 
 ```tsx
-  useEffect(() => {
-    let alive = true;
-    const run = async (): Promise<void> => {
-      const s = await queueFn();
-      if (!alive) return;
-      setQueueSnap(s);
-      setQueueNow(new Date());
-    };
-    void run();
-    const id = setInterval(() => void run(), queuePollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [queueFn, queuePollMs]);
+useEffect(() => {
+  let alive = true;
+  const run = async (): Promise<void> => {
+    const s = await queueFn();
+    if (!alive) return;
+    setQueueSnap(s);
+    setQueueNow(new Date());
+  };
+  void run();
+  const id = setInterval(() => void run(), queuePollMs);
+  return () => {
+    alive = false;
+    clearInterval(id);
+  };
+}, [queueFn, queuePollMs]);
 ```
 
 6. `useInput` — add a queue-view branch alongside the detail branch (BEFORE the main-view section):
 
 ```tsx
-    if (view === "queue") {
-      if (key.escape || input === "t") return void setView("main");
-      if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
-      if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
-      return;
-    }
+if (view === "queue") {
+  if (key.escape || input === "t") return void setView("main");
+  if (input === "]" || key.downArrow) return void setScroll((s) => s + 1);
+  if (input === "[" || key.upArrow) return void setScroll((s) => Math.max(0, s - 1));
+  return;
+}
 ```
 
 And in the main-view section (next to the `":"` handler):
 
 ```tsx
-    if (input === "t") {
-      setScroll(0);
-      setView("queue");
-      return;
-    }
+if (input === "t") {
+  setScroll(0);
+  setView("queue");
+  return;
+}
 ```
 
 7. Render — the main-area ternary chain gains a queue slot (between the `cmdOutput` case and the `IssueTable` fallback):
@@ -1551,21 +1572,21 @@ And in the main-view section (next to the `":"` handler):
 And insert the strip between the top `<Box>` and `<StatusBar …>`:
 
 ```tsx
-      <QueueStrip snap={queueSnap} now={queueNow} />
+<QueueStrip snap={queueSnap} now={queueNow} />
 ```
 
 `src/dashboardCmd.ts` — add the module to the parallel dynamic imports and wire the prop:
 
 ```ts
-  const [{ App }, { makeGhDashboardClient }, { watchlistPath }, { makeQueueSnapshotFn }, react, ink] =
-    await Promise.all([
-      import("./tui/App.js"),
-      import("./tui/ghClient.js"),
-      import("./watchlist.js"),
-      import("./tui/queueSnapshot.js"),
-      import("react"),
-      import("ink"),
-    ]);
+const [{ App }, { makeGhDashboardClient }, { watchlistPath }, { makeQueueSnapshotFn }, react, ink] =
+  await Promise.all([
+    import("./tui/App.js"),
+    import("./tui/ghClient.js"),
+    import("./watchlist.js"),
+    import("./tui/queueSnapshot.js"),
+    import("react"),
+    import("ink"),
+  ]);
 ```
 
 and in the `createElement(App, { … })` props: `queueFn: makeQueueSnapshotFn(cfg),`.
@@ -1588,6 +1609,7 @@ git commit -m "feat(dashboard): queue strip + t queue view wired into the app"
 ### Task 6: Docs + full gate
 
 **Files:**
+
 - Modify: `README.md` (dashboard key table ~line 542; palette paragraph ~line 550 unchanged; add a short queue paragraph after the watchlist paragraph ~line 552)
 - Modify: `ARCHITECTURE.md` (`tui/` row ~line 202)
 
@@ -1598,13 +1620,13 @@ git commit -m "feat(dashboard): queue strip + t queue view wired into the app"
 Add to the key table (keep the table's existing style, rows are alphabetical-ish by key group — place `t` near `r`):
 
 ```markdown
-| `t`              | queue view — running / waiting / recent tickets (the strip above the status bar shows the same at a glance)                                                                                                                                                                  |
+| `t` | queue view — running / waiting / recent tickets (the strip above the status bar shows the same at a glance) |
 ```
 
 After the watchlist paragraph (~line 552), add:
 
 ```markdown
-The **queue strip** above the status bar shows the daemon's local queue at all times: what's running (with live turn/token progress from the daemon's health endpoint), what's waiting in claim order, and how deep the queue is. Press `t` for the full view — waiting positions match the order the daemon will actually claim (priority first, then filename), deferred tickets show their retry backoff (`not before HH:MM`), and RECENT lists the last few finished tickets. The strip covers the *whole* local queue, including tickets submitted with `junco submit` — not just GitHub-dispatched ones. When the daemon is down the strip says so rather than implying queued work will run.
+The **queue strip** above the status bar shows the daemon's local queue at all times: what's running (with live turn/token progress from the daemon's health endpoint), what's waiting in claim order, and how deep the queue is. Press `t` for the full view — waiting positions match the order the daemon will actually claim (priority first, then filename), deferred tickets show their retry backoff (`not before HH:MM`), and RECENT lists the last few finished tickets. The strip covers the _whole_ local queue, including tickets submitted with `junco submit` — not just GitHub-dispatched ones. When the daemon is down the strip says so rather than implying queued work will run.
 ```
 
 - [ ] **Step 2: ARCHITECTURE.md**

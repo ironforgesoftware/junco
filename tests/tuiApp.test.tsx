@@ -470,7 +470,7 @@ describe("App", () => {
     const r = renderApp(client, wl());
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write("1"); // focus the rail
-    r.stdin.write("o");
+    r.stdin.write("b");
     await until(() => repoOpens.length === 1);
     expect(repoOpens).toEqual(["acme/api"]);
   });
@@ -485,10 +485,10 @@ describe("App", () => {
     const r = renderApp(client, wl());
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write("2");
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch")); // pane 2 focused first
+    await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 focused first
     r.stdin.write("\r"); // medium layout → detail view
     await until(() => (r.lastFrame() ?? "").includes("the body"));
-    r.stdin.write("o");
+    r.stdin.write("b");
     await until(() => issueOpens.length === 1);
     expect(issueOpens).toEqual([7]);
   });
@@ -530,7 +530,7 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t"); // focus issues pane
     await tick();
-    r.stdin.write("c");
+    r.stdin.write("n");
     await until(() => analyzed.length === 1);
     expect(analyzed).toEqual([["acme/api", 7]]);
     await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-acme-api-7-analyze"));
@@ -544,7 +544,7 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write("\t");
     await tick();
-    r.stdin.write("c");
+    r.stdin.write("n");
     await until(() => (r.lastFrame() ?? "").includes("no unowned clone available"));
   });
 
@@ -554,7 +554,7 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t");
     await tick();
-    r.stdin.write("a");
+    r.stdin.write("o");
     // The refusal is now an auto-expiring toast — assert presence, not persistence.
     await until(() => r.lastFrame()!.toLowerCase().includes("not available"));
     expect(actions).toHaveLength(0);
@@ -589,7 +589,7 @@ describe("App", () => {
     const file = wl();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -656,7 +656,7 @@ describe("App", () => {
     };
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -678,11 +678,11 @@ describe("App", () => {
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("x"); // selected = acme/api (config)
+    r.stdin.write("u"); // selected = acme/api (config)
     await until(() => (r.lastFrame() ?? "").includes("config.json"));
     r.stdin.write("j"); // select alx/coral
     await tick();
-    r.stdin.write("x");
+    r.stdin.write("u");
     // The unwatch write is observable on disk — bounded until-loop, never a fixed tick.
     await until(() => readWatchlist(file).entries.length === 0);
     expect(readWatchlist(file).entries).toEqual([]);
@@ -696,7 +696,7 @@ describe("App", () => {
     // The HelpModal is taller than a 30-row terminal; the Workspace top-aligns
     // it so the title survives even though the bottom clips.
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
-    expect(r.lastFrame()).toContain("act on issue");
+    expect(r.lastFrame()).toContain("this view"); // the derived-mnemonics section
   });
 
   // Ctrl-C quits the dashboard. In production the host renders with
@@ -822,7 +822,7 @@ describe("App", () => {
     // The persistent corrupt-watchlist signal is now the Header's compact
     // "watchlist!" banner chip (the JSON parse detail no longer shows inline).
     await until(() => (r.lastFrame() ?? "").includes("watchlist!"));
-    r.stdin.write("w"); // add flow refused
+    r.stdin.write("a"); // add flow refused
     await until(() => r.lastFrame()!.toLowerCase().includes("unreadable"));
     expect(readFileSync(file, "utf8")).toBe(before); // bytes untouched
   });
@@ -834,7 +834,7 @@ describe("App", () => {
     const file = wl();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -886,7 +886,7 @@ describe("App", () => {
     await tick();
     r.stdin.write("j"); // select alx/coral (pane 1) — its issues load
     await until(() => (r.lastFrame() ?? "").includes("●1 review"));
-    r.stdin.write("x"); // unwatch — the issues/staleAt entries drop with the mapping
+    r.stdin.write("u"); // unwatch — the issues/staleAt entries drop with the mapping
     await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
     expect(readWatchlist(file).entries).toEqual([]);
   });
@@ -906,7 +906,7 @@ describe("App", () => {
       // Issue rows start at absolute y=4 (1-based): header(1) + border(2) + title(3).
       // From pane 1 this click only focuses pane 2 + selects (never opens detail);
       // the pane-2 footer hint ("d dispatch") is the observable that it landed.
-      await fireUntil(r.stdin, click(30, 4), () => (r.lastFrame() ?? "").includes("d dispatch"));
+      await fireUntil(r.stdin, click(30, 4), () => (r.lastFrame() ?? "").includes("dispatch"));
       expect(r.lastFrame() ?? "").not.toContain("the body"); // still the list
       // Now pane 2 + already selected → a second click on the same row = Enter → detail.
       await fireUntil(r.stdin, click(30, 4), () => (r.lastFrame() ?? "").includes("the body"));
@@ -990,7 +990,7 @@ describe("App", () => {
       // the fullscreen PR overlay (its footer is the unique marker). Opening the
       // overlay unmounts the row, so the retry self-terminates.
       await fireUntil(r.stdin, click(30, 4), () =>
-        (r.lastFrame() ?? "").includes("esc back · o browser"),
+        (r.lastFrame() ?? "").includes("browser · esc back"),
       );
       r.stdin.write(ESC); // back to the prs view, side card visible again
       await until(() => (r.lastFrame() ?? "").includes("pull requests"));
@@ -1044,7 +1044,7 @@ describe("App", () => {
       await fireUntil(r.stdin, click(85, 5), () => pane3BarOn(4) && !pane3BarOn(3));
       // click-again = enter → fullscreen PR overlay (unmounts the row → self-terminates).
       await fireUntil(r.stdin, click(85, 5), () =>
-        (r.lastFrame() ?? "").includes("esc back · o browser"),
+        (r.lastFrame() ?? "").includes("browser · esc back"),
       );
       r.stdin.write(ESC); // back to main; pane-3 selection intact
       await until(() => (r.lastFrame() ?? "").includes("3 PRs"));
@@ -1079,7 +1079,7 @@ describe("App", () => {
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
       r.stdin.write("2");
-      await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+      await until(() => (r.lastFrame() ?? "").includes("dispatch"));
       r.stdin.write("\r"); // open the issue detail
       await until(() => (r.lastFrame() ?? "").includes("the body"));
       // ↗ metadata row: 1-based y=5, middle band; counted with === 1 so the retry
@@ -1097,7 +1097,7 @@ describe("App", () => {
       r.stdin.write("p");
       await until(() => (r.lastFrame() ?? "").includes("Some PR"));
       r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
-      await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
+      await until(() => (r.lastFrame() ?? "").includes("browser · esc back"));
       // ↗ metadata row of the overlay card; counted with === 1 so the retry stops
       // after the first landed click.
       await fireUntil(r.stdin, click(30, 5), () => prCalls.length === 1);
@@ -1168,7 +1168,7 @@ describe("external-repo routing", () => {
     const file = wle();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("up/stream");
     await tick();
@@ -1189,7 +1189,7 @@ describe("external-repo routing", () => {
     const file = wle();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("up/stream");
     await tick();
@@ -1208,7 +1208,7 @@ describe("external-repo routing", () => {
     const file = wle();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -1292,7 +1292,7 @@ describe("external-repo routing", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7")); // its issue loaded
     r.stdin.write("2"); // focus issues pane
     await tick();
-    r.stdin.write("c");
+    r.stdin.write("n");
     await until(() => analyzed.length === 1);
     expect(analyzed[0]).toBe("up/stream#7");
     expect(actions).toHaveLength(0); // no label flow
@@ -1312,7 +1312,7 @@ describe("external-repo routing", () => {
     await tick();
     r.stdin.write("D");
     await until(() => (r.lastFrame() ?? "").includes("not available for external repos"));
-    r.stdin.write("a"); // dismisses the toast, then re-explains
+    r.stdin.write("o"); // dismisses the toast, then re-explains
     await until(() => (r.lastFrame() ?? "").includes("not available for external repos"));
     expect(actions).toHaveLength(0);
   });
@@ -1379,7 +1379,7 @@ describe("PRs view", () => {
     await tick();
     r.stdin.write("p");
     await until(() => (r.lastFrame() ?? "").includes("My PR"));
-    r.stdin.write("o");
+    r.stdin.write("b");
     await until(() => prCalls.length > 0);
     expect(prCalls).toEqual([["acme/api", 42]]);
   });
@@ -1415,7 +1415,7 @@ describe("PRs view", () => {
     r.stdin.write(ESC); // back to the prs view
     await until(() => (r.lastFrame() ?? "").includes("p pull requests"));
     expect(r.lastFrame()).toContain("PR eleven"); // selection survived the round trip
-    r.stdin.write("o"); // o still opens the browser, unchanged
+    r.stdin.write("b"); // o still opens the browser, unchanged
     await until(() => prCalls.length > 0);
     expect(prCalls).toEqual([["acme/api", 11]]);
   });
@@ -1451,7 +1451,7 @@ describe("PRs view", () => {
       const eleven = f.indexOf("PR eleven");
       return eleven !== -1 && ten !== -1 && eleven < ten; // re-sort rendered: #11 above #10
     });
-    r.stdin.write("o"); // open the ANCHORED pr
+    r.stdin.write("b"); // open the ANCHORED pr
     await until(() => prCalls.length > 0);
     expect(prCalls).toEqual([["acme/api", 10]]); // anchor held despite the re-sort
   });
@@ -1488,7 +1488,7 @@ describe("PRs view", () => {
     await until(() => (r.lastFrame() ?? "").includes("⚑1 PR"));
     r.stdin.write("j"); // select alx/coral (pane 1)
     await tick();
-    r.stdin.write("x"); // unwatch — the prs aggregate prunes with the mapping
+    r.stdin.write("u"); // unwatch — the prs aggregate prunes with the mapping
     await until(() => !(r.lastFrame() ?? "").includes("⚑1 PR"));
     expect(readWatchlist(file).entries).toEqual([]);
     r.stdin.write("p"); // the PRs view itself must not list the pruned PR either
@@ -1509,11 +1509,11 @@ describe("command palette + focus keys", () => {
     return { runs, runCliFn };
   }
 
-  it("w opens the add-repo form; A is NOT an alias anymore", async () => {
+  it("a opens the add-repo form; capital A is assess-auto-plan, not an alias", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl2());
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await until(() => (r.lastFrame() ?? "").includes("Watch a repository"));
     r.stdin.write(ESC);
     // Wait for the form to actually close, or a late React commit could leave
@@ -1673,7 +1673,7 @@ describe("assess hotkey (s/S)", () => {
     const { runs, runCliFn } = makeAssessRunner();
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await tick();
-    r.stdin.write("S");
+    r.stdin.write("A");
     await until(() => runs.length > 0);
     expect(runs).toEqual([["assess", ["acme/api", "--auto-plan"]]]);
   });
@@ -1799,7 +1799,7 @@ describe("assess hotkey (s/S)", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write("2"); // focus issues pane
     await tick();
-    r.stdin.write("S");
+    r.stdin.write("A");
     await until(() => runs.length > 0);
     expect(runs).toEqual([["assess", ["acme/api#7", "--auto-plan"]]]);
   });
@@ -2019,7 +2019,7 @@ describe("review view (v)", () => {
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
-    r.stdin.write("x");
+    r.stdin.write("D"); // Discard (guarded mnemonic)
     await until(() => discarded.length === 1);
     expect(discarded[0]).toBe("assess-x-1");
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
@@ -2087,7 +2087,7 @@ describe("review view (v)", () => {
     await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
     r.stdin.write("\r"); // → draft preview
     await until(() => (r.lastFrame() ?? "").includes("Broken build"));
-    r.stdin.write("x"); // discard
+    r.stdin.write("D"); // Discard (guarded mnemonic)
     await until(() => discarded.length === 1);
     expect(discarded[0]).toBe(commentDraft.id);
     await until(() => (r.lastFrame() ?? "").includes("discarded")); // toast
@@ -2103,7 +2103,7 @@ describe("auto-clone add-repo", () => {
     const file = wl3();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -2125,7 +2125,7 @@ describe("auto-clone add-repo", () => {
     const file = wl3();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("alx/coral");
     await tick();
@@ -2146,7 +2146,7 @@ describe("bot access after adding an owned repo", () => {
   const wl5 = () => join(mkdtempSync(join(tmpdir(), "junco-bot-")), "wl.json");
 
   const addOwnedRepo = (r: ReturnType<typeof renderApp>) => {
-    r.stdin.write("w");
+    r.stdin.write("a");
     return tick()
       .then(() => r.stdin.write("alx/coral"))
       .then(tick)
@@ -2203,7 +2203,7 @@ describe("URL paste in add-repo", () => {
     const file = wl4();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("https://github.com/alxedelweiss/hawaiian-coral");
     await tick();
@@ -2225,7 +2225,7 @@ describe("URL paste in add-repo", () => {
     const file = wl4();
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("w");
+    r.stdin.write("a");
     await tick();
     r.stdin.write("not a repo");
     await tick();
@@ -2283,13 +2283,13 @@ describe("queue system row", () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("1 repos")); // mounted
-    r.stdin.write("t");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
     expect(r.lastFrame()).toContain("WAITING (1)");
     // esc returns focus to the rail; the queue body stays (body follows the
     // cursor, and the cursor is still on the queue row).
     r.stdin.write(ESC);
-    await until(() => (r.lastFrame() ?? "").includes("w add repo")); // rail hints back
+    await until(() => (r.lastFrame() ?? "").includes("add repo")); // rail hints back
     expect(r.lastFrame()).toContain("RUNNING (1/1)");
     // k moves the cursor back onto the repo row — the issues body returns.
     r.stdin.write("k");
@@ -2327,7 +2327,7 @@ describe("queue system row", () => {
       async () => cheapTall,
     );
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
-    r.stdin.write("t");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
     // G parks the section cursor on the LAST selectable row — the window
     // follows it to the bottom and the pane never blanks.
@@ -2338,12 +2338,14 @@ describe("queue system row", () => {
     await until(() => (r.lastFrame() ?? "").includes("row-00"));
   });
 
-  it("footer advertises t queue on the rail pane", async () => {
+  it("footer advertises the queue mnemonic on the rail pane", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-tui-q4-"));
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("1 repos")); // mounted
-    await until(() => (r.lastFrame() ?? "").includes("t queue")); // pane-1 hint set
+    // The chip renders the bare label (mnemonic char colored); scope to the
+    // footer row — "queue" is ambient in the rail's system block.
+    await until(() => ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("queue"));
   });
 });
 
@@ -2383,12 +2385,12 @@ describe("workspace filter + pane navigation (medium)", () => {
     // footer (pane 1 → unwatch; pane 2 → dispatch) rather than color.
     const { client } = makeClient({ "acme/api": [upl] });
     const r = renderApp(client, wl5());
-    await until(() => (r.lastFrame() ?? "").includes("x unwatch")); // pane 1 footer
+    await until(() => (r.lastFrame() ?? "").includes("unwatch")); // pane 1 footer
     r.stdin.write("2");
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch")); // pane 2 footer
-    expect(r.lastFrame()).not.toContain("x unwatch");
+    await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 footer
+    expect(r.lastFrame()).not.toContain("unwatch");
     r.stdin.write("1");
-    await until(() => (r.lastFrame() ?? "").includes("x unwatch"));
+    await until(() => (r.lastFrame() ?? "").includes("unwatch"));
   });
 
   it("g / G jump to the first / last issue", async () => {
@@ -2414,11 +2416,11 @@ describe("workspace filter + pane navigation (medium)", () => {
     const r = renderApp(client, wl5());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
     r.stdin.write("2");
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write("3");
     await tick();
     expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint never leaked in
-    expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
+    expect(r.lastFrame()).toContain("dispatch"); // still on pane 2
   });
 
   // → mirrors `3`/`l` at medium width: there is no pane 3 to reach, so it's inert.
@@ -2427,11 +2429,11 @@ describe("workspace filter + pane navigation (medium)", () => {
     const r = renderApp(client, wl5());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
     r.stdin.write("2");
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write(ESC + "[C"); // →
     await tick();
     expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint never leaked in
-    expect(r.lastFrame()).toContain("d dispatch"); // still on pane 2
+    expect(r.lastFrame()).toContain("dispatch"); // still on pane 2
   });
 });
 
@@ -2618,7 +2620,7 @@ describe("workspace wide mode", () => {
     await until(() => (r.lastFrame() ?? "").includes("← issues"));
     r.stdin.write("j"); // move down to #11
     await tick();
-    r.stdin.write("o");
+    r.stdin.write("b");
     await until(() => prCalls.length > 0);
     expect(prCalls).toEqual([["acme/api", 11]]);
   });
@@ -2655,14 +2657,14 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
     r.stdin.write("2"); // focus issues pane
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write("\r");
-    // The detail view's exact footer (scroll · o browser · esc back) — pane
+    // The detail view's exact footer (scroll · browser · esc back) — pane
     // 3's hint set never produces this combo (no "esc back" there).
-    await until(() => (r.lastFrame() ?? "").includes("↑/↓ scroll · o browser · esc back"));
+    await until(() => (r.lastFrame() ?? "").includes("↑/↓ scroll · browser · esc back"));
     expect(r.lastFrame()).toContain("#7 Fix uploads");
     r.stdin.write(ESC);
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
   });
 
   // Proves the autoload machinery is gone, not just unused: on the OLD code a
@@ -2681,7 +2683,7 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
     r.stdin.write("2");
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write("j");
     await tick();
     r.stdin.write("k");
@@ -2762,7 +2764,7 @@ describe("workspace wide mode", () => {
     r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
     // Pane 2's footer hint set is back — d dispatch is the reliable marker
     // regardless of the enter-key wording.
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint is gone
   });
 
@@ -2774,14 +2776,14 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("3 PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write("2"); // focus issues pane
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write(ESC + "[C"); // → focuses pane 3
     await until(() => (r.lastFrame() ?? "").includes("← issues"));
     expect(r.lastFrame()).toContain("← issues"); // pane 3 footer still carries ←
     r.stdin.write(ESC + "[D"); // ← back to pane 2
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1
-    await until(() => (r.lastFrame() ?? "").includes("x unwatch"));
+    await until(() => (r.lastFrame() ?? "").includes("unwatch"));
   });
 });
 

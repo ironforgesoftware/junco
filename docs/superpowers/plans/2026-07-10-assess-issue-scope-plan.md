@@ -4,7 +4,7 @@
 
 **Goal:** `junco assess owner/repo#N` — run the vulnerability audit scoped to the code a specific issue implicates, with filed findings carrying a `**Context:** owner/repo#N` reference (GitHub's auto-cross-reference then surfaces each finding on the issue's timeline).
 
-**Architecture:** A *prompt-scoped* assess — no new flow, store, or write kind. The assess target parser gains issue-refs (resolved through SP-2's `resolveIssueTarget`, which fail-fast fetches the issue and auto-provisions unowned clones); the ticket contract gains additive `assess.issue`/`assess.issue_title`; the audit prompt gains an untrusted issue-context section; `PendingAssess` threads an optional `issue`; `buildIssueBody` renders the context line (keeping its marker-last + truncation invariants). TUI: pane-2 `s` becomes issue-scoped for the selected issue.
+**Architecture:** A _prompt-scoped_ assess — no new flow, store, or write kind. The assess target parser gains issue-refs (resolved through SP-2's `resolveIssueTarget`, which fail-fast fetches the issue and auto-provisions unowned clones); the ticket contract gains additive `assess.issue`/`assess.issue_title`; the audit prompt gains an untrusted issue-context section; `PendingAssess` threads an optional `issue`; `buildIssueBody` renders the context line (keeping its marker-last + truncation invariants). TUI: pane-2 `s` becomes issue-scoped for the selected issue.
 
 **Tech Stack:** TypeScript (Node ≥ 22.19, ESM/NodeNext, strict), vitest, Ink TUI, `gh` behind deps seams.
 
@@ -21,29 +21,31 @@
 
 ## File Structure
 
-| File | Responsibility | Action |
-|---|---|---|
-| `src/ticketSchema.ts`, `src/types.ts`, `src/ticket.ts` | Additive `assess.issue` + `assess.issue_title` | Modify |
-| `src/assessPrompt.ts` | Optional `issueContext` section | Modify |
-| `src/assessCmd.ts` | Issue-ref target resolution + extended `buildAssessTicket` | Modify |
-| `src/assessFlow.ts`, `src/assessReview.ts` | Thread `issue` into the parked batch | Modify |
-| `src/findings.ts`, `src/assessFiling.ts` | Context line in filed issue bodies | Modify |
-| `src/tui/App.tsx`, `Chrome.tsx`, `HelpModal.tsx` | Pane-aware `s` | Modify |
-| Docs (assess.md, README, dashboard.md, tickets.md, SKILL.md, ARCHITECTURE.md if needed) | | Modify |
+| File                                                                                    | Responsibility                                             | Action |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------ |
+| `src/ticketSchema.ts`, `src/types.ts`, `src/ticket.ts`                                  | Additive `assess.issue` + `assess.issue_title`             | Modify |
+| `src/assessPrompt.ts`                                                                   | Optional `issueContext` section                            | Modify |
+| `src/assessCmd.ts`                                                                      | Issue-ref target resolution + extended `buildAssessTicket` | Modify |
+| `src/assessFlow.ts`, `src/assessReview.ts`                                              | Thread `issue` into the parked batch                       | Modify |
+| `src/findings.ts`, `src/assessFiling.ts`                                                | Context line in filed issue bodies                         | Modify |
+| `src/tui/App.tsx`, `Chrome.tsx`, `HelpModal.tsx`                                        | Pane-aware `s`                                             | Modify |
+| Docs (assess.md, README, dashboard.md, tickets.md, SKILL.md, ARCHITECTURE.md if needed) |                                                            | Modify |
 
 ---
 
 ### Task 1: additive ticket contract — `assess.issue` / `assess.issue_title`
 
 **Files:**
+
 - Modify: `src/ticketSchema.ts` (the `assess` mapping's `properties`), `src/types.ts:165`, `src/ticket.ts` (the assess parse at ~52-56)
 - Test: `tests/ticket.test.ts` (and `tests/ticketSchema.test.ts` per sibling placement)
 
 **Interfaces:**
+
 - Produces: `Ticket.assess: { autoPlan: boolean; issue?: number; issueTitle?: string } | null`. Parse: `issue` present and `Number.isInteger` → included (else omitted, mapping still valid — leniency mirrors the container's posture); `issueTitle: String(a.issue_title ?? "")` included only when `issue` is. Schema: add optional `issue` (integer) + `issue_title` (string) properties to the existing `assess` mapping with descriptions mirroring the `analyze` mapping's prose ("Issue-scoped audit: the audit prompt is steered to the code this issue implicates; filed findings carry a Context reference. Set by `junco assess owner/repo#N`.").
 
 - [ ] **Step 1: Failing test** — round-trip via real `parseTicket`: `assess:\n  auto_plan: true\n  issue: 7\n  issue_title: "Bug"` → `{ autoPlan: true, issue: 7, issueTitle: "Bug" }`; `assess: {}` → `{ autoPlan: false }` (no `issue` key — assert `t.assess?.issue` undefined); non-integer issue → mapping valid, `issue` omitted.
-- [ ] **Step 2: RED** (`issue` not on the type). 
+- [ ] **Step 2: RED** (`issue` not on the type).
 - [ ] **Step 3: Implement.** Fixture note: widening with OPTIONAL fields breaks no `assess: null` or `assess: { autoPlan }` literals — `npm run typecheck` confirms; sweep only if it flags.
 - [ ] **Step 4: GREEN** + full typecheck.
 - [ ] **Step 5: Commit** — `feat(assess): additive issue-scope ticket contract`
@@ -53,14 +55,16 @@
 ### Task 2: `buildAssessPrompt` issue-context section
 
 **Files:**
+
 - Modify: `src/assessPrompt.ts` (`buildAssessPrompt(opts: { nwo: string | null; repoPath: string; issueContext?: { nwo: string; issue: number; title: string; body: string } })`)
 - Test: `tests/assessPrompt.test.ts`
 
 **Interfaces:**
+
 - Produces: when `issueContext` is set, the prompt gains (after the audit instructions, before the output contract — read the file to place it naturally): an `## Issue context (untrusted content)` section framed with the data-not-instructions idiom used by `buildAnalyzePrompt` (`src/analyzePrompt.ts` — mirror its corrected wording: "the title and text below"), the issue ref/title/body (empty body → `(no issue body)`), and the scoping instruction: "Scope the audit to the code this issue implicates — the files, subsystems, and dependency paths it names or exercises. Findings outside that scope are still valid but secondary; prioritize the implicated area." Existing callers (no `issueContext`) produce byte-identical output — lock with a test comparing against the current golden output if one exists (read the test file; if it snapshot-asserts, that's the lock).
 
 - [ ] **Step 1: Failing test** — with `issueContext`: output contains the section header, the ref `up/stream#7`, the framing sentence, and the scoping instruction; without: output identical to before (assert the section ABSENT).
-- [ ] **Step 2: RED.** — **Step 3: Implement.** — **Step 4: GREEN.** 
+- [ ] **Step 2: RED.** — **Step 3: Implement.** — **Step 4: GREEN.**
 - [ ] **Step 5: Commit** — `feat(assess): issue-context section in the audit prompt`
 
 ---
@@ -68,10 +72,12 @@
 ### Task 3: issue-ref targets in `junco assess`
 
 **Files:**
+
 - Modify: `src/assessCmd.ts` (`runAssessCommand` target resolution + `buildAssessTicket`), `src/cli.ts` (usage line only)
 - Test: `tests/assessCmd.test.ts`
 
 **Interfaces:**
+
 - Consumes: `parseIssueRef`, `resolveIssueTarget`, `type IssueTarget` (`./externalDispatch.js` — shipped in SP-2).
 - Produces:
   - `buildAssessTicket(repoPath, opts: { autoPlan: boolean; issueContext?: { nwo: string; issue: number; title: string; body: string } }, now)` — when `issueContext` set: frontmatter `assess:` block gains `  issue: <n>` and `  issue_title: <JSON.stringify(title)>` (alongside `auto_plan` when true); body = `buildAssessPrompt({ nwo: issueContext.nwo, repoPath, issueContext })`. Without: byte-identical to today (existing golden-ticket tests must pass unedited).
@@ -87,10 +93,12 @@
 ### Task 4: thread `issue` through flow → store
 
 **Files:**
+
 - Modify: `src/assessReview.ts` (`PendingAssess` + `issue?: number` — additive, one line + comment), `src/assessFlow.ts` (park site)
 - Test: `tests/assessFlow.test.ts`
 
 **Interfaces:**
+
 - Produces: the parked batch carries `issue: ticket.assess?.issue` (omit the key when undefined — spread `...(ticket.assess?.issue !== undefined ? { issue: ticket.assess.issue } : {})` so stored JSON stays clean for unscoped runs). Old batches (no `issue`) parse fine (optional field, loose store).
 
 - [ ] **Step 1: Failing test** — assess ticket with `assess:\n  issue: 7` parks a batch where `listPending(cfg)[0].issue === 7`; unscoped ticket → `issue` undefined AND the key absent from the stored JSON (read the raw file).
@@ -102,10 +110,12 @@
 ### Task 5: context line in filed issues
 
 **Files:**
+
 - Modify: `src/findings.ts` (`buildIssueBody`, `renderIssueBody`), `src/assessFiling.ts` (the `buildIssueBody` call in `fileFindings`)
 - Test: `tests/findings.test.ts`, `tests/assessFiling.test.ts`
 
 **Interfaces:**
+
 - Produces: `buildIssueBody(f: Finding, context?: { nwo: string; issue: number }): string` — threads to `renderIssueBody(f, truncated, context)`; when set, a `**Context:** <nwo>#<issue>` section renders immediately BEFORE the machine-readable `<details>` block. INVARIANTS (read the function first — they're documented in it): the finding marker stays the literal last line; the truncation re-render path passes the same `context` (so an oversize body keeps its context line); the machine-readable JSON embeds the FINDING only (context is issue-body metadata, not part of `Finding` — do NOT add it to the JSON or the fingerprint input). `fileFindings`: `buildIssueBody(f, batch.issue !== undefined ? { nwo: batch.nwo, issue: batch.issue } : undefined)`.
 
 - [ ] **Step 1: Failing tests** — (a) `buildIssueBody(f, { nwo: "o/r", issue: 7 })` contains `**Context:** o/r#7` before `<details>` and the marker is still the last line; (b) without context → byte-identical to today (existing tests unedited); (c) truncation path (oversize description) keeps the context line; (d) `fileFindings` on a batch with `issue: 7` → the gh-fake's body-file content contains the context line; batch without → doesn't.
@@ -117,11 +127,13 @@
 ### Task 6: pane-aware `s` in the dashboard
 
 **Files:**
+
 - Modify: `src/tui/App.tsx`, `src/tui/components/Chrome.tsx` (pane-2 hints), `src/tui/components/HelpModal.tsx`
 - Test: `tests/tuiApp.test.tsx`
 
 **Interfaces:**
-- Produces: in the ISSUES pane (pane 2) with an issue selected, `s` runs an issue-scoped assess of the selected issue — reuse the existing `runAssess` machinery but pass the issue-ref target: the cleanest cut (read `runAssess` first) is a target parameter, e.g. `runAssess(autoPlan, targetOverride?: string)` defaulting to `currentNwo`, with the pane-2 branch calling `runAssess(false, \`${currentNwo}#${currentIssue.number}\`)` — the CLI (`runCliFn("assess", [target, ...]))` already accepts issue-refs after Task 3. Everywhere else (`pane 1`, global) `s`/`S` behavior is UNCHANGED. In-flight dedup: `assessInFlightRef` keys on the target string (so a repo-scoped and an issue-scoped run don't block each other, but double-pressing the same issue does). Toast: `assessing ${target}…`. Post-#97 note: the `s` binding lives in the github-mode key section; do not touch LOCAL-mode routing. Chrome pane-2 hints gain `["s","assess issue"]`; HelpModal "act on issue" gains `["s","assess scoped to this issue (findings reference it)"]`.
+
+- Produces: in the ISSUES pane (pane 2) with an issue selected, `s` runs an issue-scoped assess of the selected issue — reuse the existing `runAssess` machinery but pass the issue-ref target: the cleanest cut (read `runAssess` first) is a target parameter, e.g. `runAssess(autoPlan, targetOverride?: string)` defaulting to `currentNwo`, with the pane-2 branch calling `runAssess(false, \`${currentNwo}#${currentIssue.number}\`)` — the CLI (`runCliFn("assess", [target, ...]))` already accepts issue-refs after Task 3. Everywhere else (`pane 1`, global) `s`/`S`behavior is UNCHANGED. In-flight dedup:`assessInFlightRef`keys on the target string (so a repo-scoped and an issue-scoped run don't block each other, but double-pressing the same issue does). Toast:`assessing ${target}…`. Post-#97 note: the `s`binding lives in the github-mode key section; do not touch LOCAL-mode routing. Chrome pane-2 hints gain`["s","assess issue"]`; HelpModal "act on issue" gains `["s","assess scoped to this issue (findings reference it)"]`.
 - **Key-routing caveat:** `s` is currently a GLOBAL main-view binding (fires regardless of pane). The pane-2 issue-scoped variant must intercept BEFORE the global one when pane 2 is focused with a selection — read the useInput cascade order (pane-scoped blocks vs global block) and place accordingly; if the global `s` fires first structurally, gate it (`if (pane === 2 && currentIssue) → issue-scoped else → repo-scoped`) at the single existing binding instead of adding a second. Pick whichever matches the file's structure; state which in your report.
 
 - [ ] **Step 1: Failing tests** — (a) pane 2 focused + issue selected + `s` → `runCliFn` captured with `("assess", ["acme/api#7"])`; (b) pane 1 focused + `s` → `("assess", ["acme/api"])` (repo-scoped, unchanged); (c) existing global-`s`/`S` tests unedited-green.
@@ -133,6 +145,7 @@
 ### Task 7: docs
 
 **Files:**
+
 - Modify: `docs/assess.md` (new "Issue-scoped assess" section: target form, auto-provisioning for issue-refs vs already-watched rule for bare nwo, the Context line + timeline cross-reference, fingerprint-shared dedup), `README.md` (command-table target column), `docs/dashboard.md` (`s` key row: pane-aware), `docs/tickets.md` (assess frontmatter fields table: `issue`/`issue_title`), `skills/junco-dispatch/SKILL.md` (assess-mode blurb: issue-scoped form), `ARCHITECTURE.md` only if its assess row now misdescribes behavior (check).
 - **Staleness re-check** (the standing lesson): grep docs/ + README for claims contradicted by issue-scoped assess (e.g. "audits the whole repo" absolutes, target-form lists). Fix what's stale.
 - **Stack-agnostic sweep** over shipped files touched; prettier; `npm run format:check`.

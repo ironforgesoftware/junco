@@ -4,6 +4,7 @@ import type { Layout } from "../layout.js";
 import type { TerminalSize } from "../useTerminalSize.js";
 import type { ToastKind } from "../theme.js";
 import { Toast, Footer } from "./Chrome.js";
+import type { Chip } from "../viewActions.js";
 import { Center } from "./Modal.js";
 
 /** The fullscreen frame: header row, body (panes OR centered modal OR
@@ -13,8 +14,8 @@ export function Workspace({
   layout,
   header,
   toast,
-  hints,
-  footerActions,
+  chips,
+  chipActions,
   modal,
   modalAlign = "center",
   children,
@@ -23,9 +24,11 @@ export function Workspace({
   layout: Layout;
   header: React.ReactNode;
   toast: { kind: ToastKind; text: string } | null;
-  hints: [string, string][];
+  /** Mnemonic + structural chips for the footer row (viewActions). */
+  chips: Chip[];
   /** Hint KEY → handler; a chip with a matching entry is clickable. */
-  footerActions?: Record<string, () => void>;
+  /** Chip click handlers — mnemonic chips by ID, structural by KEY. */
+  chipActions?: Record<string, () => void>;
   modal: React.ReactNode | null;
   /** Vertical alignment for the modal body — "top" for modals taller than
    * common terminal heights, where centering would clip the title. */
@@ -47,7 +50,7 @@ export function Workspace({
         )}
       </Box>
       <Toast toast={toast} />
-      <Footer hints={hints} actions={footerActions} />
+      <Footer chips={chips} chipActions={chipActions} />
     </Box>
   );
 }

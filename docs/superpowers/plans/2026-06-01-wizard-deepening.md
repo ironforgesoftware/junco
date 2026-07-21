@@ -70,9 +70,11 @@ describe("fetchModels", () => {
     ({ ok: true, json: async () => ({ data: ids.map((id) => ({ id })) }) }) as Response;
 
   it("parses data[].id and sends Bearer auth to <base>/models", async () => {
-    let seenUrl = "", seenAuth = "";
+    let seenUrl = "",
+      seenAuth = "";
     const fetchFn = (async (url: string, init: RequestInit) => {
-      seenUrl = String(url); seenAuth = String((init.headers as Record<string,string>).Authorization);
+      seenUrl = String(url);
+      seenAuth = String((init.headers as Record<string, string>).Authorization);
       return { ok: true, json: async () => ({ data: [{ id: "m-a" }, { id: "m-b" }] }) } as Response;
     }) as unknown as typeof fetch;
     const ids = await fetchModels("http://h:1/v1", "sk-x", { fetchFn });
@@ -87,7 +89,9 @@ describe("fetchModels", () => {
   });
 
   it("returns [] when fetch throws", async () => {
-    const fetchFn = (async () => { throw new Error("down"); }) as unknown as typeof fetch;
+    const fetchFn = (async () => {
+      throw new Error("down");
+    }) as unknown as typeof fetch;
     expect(await fetchModels("http://h/v1", "k", { fetchFn })).toEqual([]);
   });
 
@@ -104,10 +108,15 @@ describe("parseModelsJson", () => {
   it("lists provider/model for every entry", () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-mj-"));
     const p = join(dir, "models.json");
-    writeFileSync(p, JSON.stringify({ providers: {
-      omlx: { models: [{ id: "alpha" }, { id: "beta" }] },
-      openai: { models: [{ id: "gpt-x" }] },
-    } }));
+    writeFileSync(
+      p,
+      JSON.stringify({
+        providers: {
+          omlx: { models: [{ id: "alpha" }, { id: "beta" }] },
+          openai: { models: [{ id: "gpt-x" }] },
+        },
+      }),
+    );
     expect(parseModelsJson(p).sort()).toEqual(["omlx/alpha", "omlx/beta", "openai/gpt-x"].sort());
     rmSync(dir, { recursive: true, force: true });
   });
@@ -133,7 +142,11 @@ import { apiBaseUrl } from "../agent/modelSetup.js";
 /** Best-effort provider label from an endpoint URL (just an internal registry label). */
 export function inferProvider(baseUrl: string): string {
   let host: string;
-  try { host = new URL(baseUrl).hostname.toLowerCase(); } catch { return "custom"; }
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return "custom";
+  }
   const known: Record<string, string> = {
     "api.openai.com": "openai",
     "openrouter.ai": "openrouter",
@@ -146,17 +159,25 @@ export function inferProvider(baseUrl: string): string {
   if (known[host]) return known[host];
   if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host.endsWith(".local"))
     return "local";
-  const labels = host.replace(/^api\./, "").split(".").filter(Boolean);
+  const labels = host
+    .replace(/^api\./, "")
+    .split(".")
+    .filter(Boolean);
   if (labels.length >= 2) return labels[labels.length - 2];
   if (labels.length === 1) return labels[0];
   return "custom";
 }
 
-export interface FetchModelsDeps { fetchFn?: typeof fetch; timeoutMs?: number }
+export interface FetchModelsDeps {
+  fetchFn?: typeof fetch;
+  timeoutMs?: number;
+}
 
 /** GET <base>/models (Bearer auth) → OpenAI-style data[].id. [] on any error/empty. */
 export async function fetchModels(
-  baseUrl: string, apiKey: string, deps: FetchModelsDeps = {},
+  baseUrl: string,
+  apiKey: string,
+  deps: FetchModelsDeps = {},
 ): Promise<string[]> {
   const fetchFn = deps.fetchFn ?? fetch;
   const timeoutMs = deps.timeoutMs ?? 5000;
@@ -172,7 +193,9 @@ export async function fetchModels(
     if (!resp.ok) return [];
     const body = (await resp.json()) as { data?: Array<{ id?: unknown }> };
     if (!Array.isArray(body?.data)) return [];
-    return body.data.map((m) => (typeof m?.id === "string" ? m.id : null)).filter((x): x is string => !!x);
+    return body.data
+      .map((m) => (typeof m?.id === "string" ? m.id : null))
+      .filter((x): x is string => !!x);
   } catch {
     return [];
   } finally {
@@ -189,9 +212,12 @@ export function parseModelsJson(path: string): string[] {
     };
     const out: string[] = [];
     for (const [provider, p] of Object.entries(data.providers ?? {}))
-      for (const m of p.models ?? []) if (typeof m?.id === "string") out.push(`${provider}/${m.id}`);
+      for (const m of p.models ?? [])
+        if (typeof m?.id === "string") out.push(`${provider}/${m.id}`);
     return out;
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 ```
 
@@ -216,7 +242,11 @@ export function parseModelsJson(path: string): string[] {
  */
 import * as clack from "@clack/prompts";
 
-export interface SelectOption { value: string; label: string; hint?: string }
+export interface SelectOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
 
 export interface Prompter {
   intro(title: string): void;
@@ -227,7 +257,10 @@ export interface Prompter {
 }
 
 export class WizardCancelled extends Error {
-  constructor() { super("Setup cancelled"); this.name = "WizardCancelled"; }
+  constructor() {
+    super("Setup cancelled");
+    this.name = "WizardCancelled";
+  }
 }
 
 export function clackPrompter(): Prompter {
@@ -240,7 +273,10 @@ export function clackPrompter(): Prompter {
         placeholder: opts.placeholder ?? opts.default,
         defaultValue: opts.default,
       });
-      if (clack.isCancel(r)) { clack.cancel("Setup cancelled."); throw new WizardCancelled(); }
+      if (clack.isCancel(r)) {
+        clack.cancel("Setup cancelled.");
+        throw new WizardCancelled();
+      }
       return (r as string) || (opts.default ?? "");
     },
     async select(opts) {
@@ -249,14 +285,23 @@ export function clackPrompter(): Prompter {
         options: opts.options.map((o) => ({ value: o.value, label: o.label, hint: o.hint })),
         initialValue: opts.initial,
       });
-      if (clack.isCancel(r)) { clack.cancel("Setup cancelled."); throw new WizardCancelled(); }
+      if (clack.isCancel(r)) {
+        clack.cancel("Setup cancelled.");
+        throw new WizardCancelled();
+      }
       return r as string;
     },
     async spinner(start, task, stop) {
       const s = clack.spinner();
       s.start(start);
-      try { const res = await task(); s.stop(stop(res)); return res; }
-      catch (e) { s.stop("failed"); throw e; }
+      try {
+        const res = await task();
+        s.stop(stop(res));
+        return res;
+      } catch (e) {
+        s.stop("failed");
+        throw e;
+      }
     },
   };
 }
@@ -284,8 +329,11 @@ expect(queuePaths(cfg).inbox.endsWith("/jv/inbox")).toBe(true); // no /Junco seg
 import { defaultAnswers } from "../src/wizard.js";
 it("defaultAnswers → ~/Junco + neutral model", () => {
   expect(defaultAnswers()).toEqual({
-    vaultRoot: "~/Junco", mode: "inline", modelId: "local/my-model",
-    baseUrl: "http://127.0.0.1:1234/v1", apiKey: "1234",
+    vaultRoot: "~/Junco",
+    mode: "inline",
+    modelId: "local/my-model",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    apiKey: "1234",
   });
 });
 ```
@@ -307,7 +355,9 @@ export function renderConfigToml(a: WizardAnswers): string {
     `id = ${tomlStr(a.modelId)}   # provider-prefixed model id`,
   ];
   if (a.mode === "models_json") {
-    lines.push(`models_json = ${tomlStr(a.modelsJson ?? "~/.pi/agent/models.json")}   # provider+model loaded from this models.json`);
+    lines.push(
+      `models_json = ${tomlStr(a.modelsJson ?? "~/.pi/agent/models.json")}   # provider+model loaded from this models.json`,
+    );
   } else {
     lines.push(
       `base_url = ${tomlStr(a.baseUrl ?? "http://127.0.0.1:1234/v1")}   # any OpenAI-compatible /v1 endpoint`,
@@ -319,8 +369,11 @@ export function renderConfigToml(a: WizardAnswers): string {
 
 export function defaultAnswers(): WizardAnswers {
   return {
-    vaultRoot: "~/Junco", mode: "inline", modelId: "local/my-model",
-    baseUrl: "http://127.0.0.1:1234/v1", apiKey: "1234",
+    vaultRoot: "~/Junco",
+    mode: "inline",
+    modelId: "local/my-model",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    apiKey: "1234",
   };
 }
 ```
@@ -341,42 +394,76 @@ import type { Prompter } from "../src/wizard/prompter.js";
 import { WizardCancelled } from "../src/wizard/prompter.js";
 
 function scriptedPrompter(a: { text?: string[]; select?: string[] } = {}): Prompter {
-  const text = [...(a.text ?? [])]; const select = [...(a.select ?? [])];
+  const text = [...(a.text ?? [])];
+  const select = [...(a.select ?? [])];
   const rec = { intros: [] as string[], notes: [] as string[] };
   const p: Prompter & { rec: typeof rec } = {
     rec,
-    intro: (t) => { rec.intros.push(t); },
-    note: (m) => { rec.notes.push(m); },
-    async text(o) { return text.length ? text.shift()! : (o.default ?? ""); },
-    async select(o) { return select.length ? select.shift()! : o.options[0].value; },
-    async spinner(_s, task) { return task(); },
+    intro: (t) => {
+      rec.intros.push(t);
+    },
+    note: (m) => {
+      rec.notes.push(m);
+    },
+    async text(o) {
+      return text.length ? text.shift()! : (o.default ?? "");
+    },
+    async select(o) {
+      return select.length ? select.shift()! : o.options[0].value;
+    },
+    async spinner(_s, task) {
+      return task();
+    },
   };
   return p;
 }
 
 describe("collectAnswers", () => {
   it("inline: picks a fetched model, no provider prefix needed when id has none", async () => {
-    const p = scriptedPrompter({ text: ["~/v", "http://127.0.0.1:1234/v1", "secret"], select: ["inline", "m-fast"] });
+    const p = scriptedPrompter({
+      text: ["~/v", "http://127.0.0.1:1234/v1", "secret"],
+      select: ["inline", "m-fast"],
+    });
     const a = await collectAnswers(p, { fetchModelsFn: async () => ["m-fast", "m-slow"] });
-    expect(a).toEqual({ vaultRoot: "~/v", mode: "inline", modelId: "local/m-fast", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "secret" });
+    expect(a).toEqual({
+      vaultRoot: "~/v",
+      mode: "inline",
+      modelId: "local/m-fast",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKey: "secret",
+    });
   });
 
   it("inline: manual entry keeps a slash-containing id unprefixed", async () => {
-    const p = scriptedPrompter({ text: ["~/v", "https://openrouter.ai/api/v1", "k", "anthropic/claude"], select: ["inline", " manual"] });
+    const p = scriptedPrompter({
+      text: ["~/v", "https://openrouter.ai/api/v1", "k", "anthropic/claude"],
+      select: ["inline", " manual"],
+    });
     const a = await collectAnswers(p, { fetchModelsFn: async () => ["x"] });
     expect(a.modelId).toBe("anthropic/claude"); // already has "/", not re-prefixed
   });
 
   it("inline: empty fetch falls straight to a manual prompt, prefixed by inferred provider", async () => {
-    const p = scriptedPrompter({ text: ["~/v", "https://api.openai.com/v1", "k", "gpt-z"], select: ["inline"] });
+    const p = scriptedPrompter({
+      text: ["~/v", "https://api.openai.com/v1", "k", "gpt-z"],
+      select: ["inline"],
+    });
     const a = await collectAnswers(p, { fetchModelsFn: async () => [] });
     expect(a.modelId).toBe("openai/gpt-z");
   });
 
   it("models_json: lists file entries", async () => {
-    const p = scriptedPrompter({ text: ["~/v", "~/m.json"], select: ["models_json", "omlx/alpha"] });
+    const p = scriptedPrompter({
+      text: ["~/v", "~/m.json"],
+      select: ["models_json", "omlx/alpha"],
+    });
     const a = await collectAnswers(p, { parseModelsJsonFn: () => ["omlx/alpha", "omlx/beta"] });
-    expect(a).toEqual({ vaultRoot: "~/v", mode: "models_json", modelId: "omlx/alpha", modelsJson: "~/m.json" });
+    expect(a).toEqual({
+      vaultRoot: "~/v",
+      mode: "models_json",
+      modelId: "omlx/alpha",
+      modelsJson: "~/m.json",
+    });
   });
 });
 ```
@@ -398,8 +485,12 @@ import { fetchModels, parseModelsJson, inferProvider } from "./wizard/models.js"
 const MANUAL = " manual"; // select sentinel for "enter manually"
 
 export interface WizardAnswers {
-  vaultRoot: string; mode: "inline" | "models_json"; modelId: string;
-  baseUrl?: string; apiKey?: string; modelsJson?: string;
+  vaultRoot: string;
+  mode: "inline" | "models_json";
+  modelId: string;
+  baseUrl?: string;
+  apiKey?: string;
+  modelsJson?: string;
 }
 
 export interface CollectDeps {
@@ -407,14 +498,23 @@ export interface CollectDeps {
   parseModelsJsonFn?: typeof parseModelsJson;
 }
 
-function hostOf(url: string): string { try { return new URL(url).host; } catch { return url; } }
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
 
 /** Show fetched ids as a select (+ manual escape hatch); empty list → manual prompt. */
 async function pickModel(p: Prompter, ids: string[]): Promise<string> {
   if (ids.length > 0) {
     const choice = await p.select({
       message: "Select a model",
-      options: [...ids.map((id) => ({ value: id, label: id })), { value: MANUAL, label: "✏️  Enter manually…" }],
+      options: [
+        ...ids.map((id) => ({ value: id, label: id })),
+        { value: MANUAL, label: "✏️  Enter manually…" },
+      ],
     });
     if (choice !== MANUAL) return choice;
   }
@@ -426,7 +526,10 @@ export async function collectAnswers(p: Prompter, deps: CollectDeps = {}): Promi
   const parseModelsJsonFn = deps.parseModelsJsonFn ?? parseModelsJson;
 
   p.intro("junco init");
-  const vaultRoot = await p.text({ message: "Where should Junco keep its tickets?", default: "~/Junco" });
+  const vaultRoot = await p.text({
+    message: "Where should Junco keep its tickets?",
+    default: "~/Junco",
+  });
   const mode = (await p.select({
     message: "How is the model configured?",
     options: [
@@ -436,13 +539,19 @@ export async function collectAnswers(p: Prompter, deps: CollectDeps = {}): Promi
   })) as WizardAnswers["mode"];
 
   if (mode === "models_json") {
-    const modelsJson = await p.text({ message: "Path to your Pi models.json?", default: "~/.pi/agent/models.json" });
+    const modelsJson = await p.text({
+      message: "Path to your Pi models.json?",
+      default: "~/.pi/agent/models.json",
+    });
     const ids = parseModelsJsonFn(expandHome(modelsJson));
     const modelId = await pickModel(p, ids);
     return { vaultRoot, mode, modelId, modelsJson };
   }
 
-  const baseUrl = await p.text({ message: "Inference endpoint base URL (OpenAI-compatible)?", default: "http://127.0.0.1:1234/v1" });
+  const baseUrl = await p.text({
+    message: "Inference endpoint base URL (OpenAI-compatible)?",
+    default: "http://127.0.0.1:1234/v1",
+  });
   const apiKey = await p.text({ message: "API key for the endpoint?", default: "1234" });
   const ids = await p.spinner(
     `Fetching models from ${hostOf(baseUrl)}…`,
@@ -469,23 +578,32 @@ export async function collectAnswers(p: Prompter, deps: CollectDeps = {}): Promi
 ```ts
 describe("runInitWizard", () => {
   let dir: string | null = null;
-  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
 
   it("writes config + requests the queue dirs", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-run-"));
     const cfgPath = join(dir, "config.toml");
-    const printed: string[] = []; const made: string[] = [];
+    const printed: string[] = [];
+    const made: string[] = [];
     const code = await runInitWizard(cfgPath, {
-      prompter: scriptedPrompter({ text: [`${dir}/vault`, "http://127.0.0.1:1234/v1", "k"], select: ["inline", "m-a"] }),
+      prompter: scriptedPrompter({
+        text: [`${dir}/vault`, "http://127.0.0.1:1234/v1", "k"],
+        select: ["inline", "m-a"],
+      }),
       fetchModelsFn: async () => ["m-a"],
-      mkdirFn: (pp) => made.push(pp), printFn: (s) => printed.push(s),
+      mkdirFn: (pp) => made.push(pp),
+      printFn: (s) => printed.push(s),
     });
     expect(code).toBe(0);
     expect(existsSync(cfgPath)).toBe(true);
     const cfg = loadConfig(cfgPath);
     expect(cfg.juncoSubdir).toBe("");
     const paths = queuePaths(cfg);
-    for (const d of [paths.inbox, paths.processing, paths.done, paths.failed]) expect(made).toContain(d);
+    for (const d of [paths.inbox, paths.processing, paths.done, paths.failed])
+      expect(made).toContain(d);
     expect(printed.join("")).toMatch(/Wrote config/);
   });
 
@@ -501,9 +619,17 @@ describe("runInitWizard", () => {
     dir = mkdtempSync(join(tmpdir(), "junco-wiz-cancel-"));
     const cfgPath = join(dir, "config.toml");
     const written: string[] = [];
-    const cancelling: Prompter = { ...scriptedPrompter(), async text() { throw new WizardCancelled(); } };
+    const cancelling: Prompter = {
+      ...scriptedPrompter(),
+      async text() {
+        throw new WizardCancelled();
+      },
+    };
     const code = await runInitWizard(cfgPath, {
-      prompter: cancelling, writeFileFn: (p2) => written.push(p2), mkdirFn: () => {}, printFn: () => {},
+      prompter: cancelling,
+      writeFileFn: (p2) => written.push(p2),
+      mkdirFn: () => {},
+      printFn: () => {},
     });
     expect(code).toBe(130);
     expect(written).toEqual([]); // nothing written when cancelled before collect finishes
@@ -540,7 +666,8 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
     } else {
       const prompter = deps.prompter ?? clackPrompter();
       answers = await collectAnswers(prompter, {
-        fetchModelsFn: deps.fetchModelsFn, parseModelsJsonFn: deps.parseModelsJsonFn,
+        fetchModelsFn: deps.fetchModelsFn,
+        parseModelsJsonFn: deps.parseModelsJsonFn,
       });
     }
     const toml = renderConfigToml(answers);
@@ -550,16 +677,17 @@ export async function runInitWizard(configPath: string, deps: WizardDeps = {}): 
 
     const cfg = loadConfigFn(resolved);
     const paths = queuePaths(cfg);
-    for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) mkdirFn(d);
+    for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot])
+      mkdirFn(d);
 
     const queueRoot = dirname(paths.inbox);
     printFn(
       `\n✓ Wrote config:  ${resolved}\n` +
-      `✓ Created queue: ${queueRoot}/{inbox,processing,done,failed}\n\n` +
-      `Next steps:\n` +
-      `  • Tweak the model/endpoint in ${resolved} if needed.\n` +
-      `  • Start the worker:  junco start --config ${resolved}\n` +
-      `  • Submit a ticket:   junco submit <ticket>.md --config ${resolved}\n`,
+        `✓ Created queue: ${queueRoot}/{inbox,processing,done,failed}\n\n` +
+        `Next steps:\n` +
+        `  • Tweak the model/endpoint in ${resolved} if needed.\n` +
+        `  • Start the worker:  junco start --config ${resolved}\n` +
+        `  • Submit a ticket:   junco submit <ticket>.md --config ${resolved}\n`,
     );
     return 0;
   } catch (e) {
@@ -610,10 +738,12 @@ const runWizard =
 ## [0.2.2] - 2026-06-01
 
 ### Added
+
 - Colorized `junco init` wizard (via `@clack/prompts`): boxed prompts, an arrow-key model picker that **discovers models from the endpoint** (`GET /v1/models`) or a Pi `models.json`, and a spinner while it fetches. Falls back to manual entry when the endpoint is unreachable.
 - Graceful cancel: Ctrl-C/Ctrl-D exits cleanly (no stack trace).
 
 ### Changed
+
 - The wizard now writes `junco_subdir = ""`, so the queue lives directly under the chosen directory (default `~/Junco/{inbox,…}`) — no redundant `Junco/` subfolder. Existing configs are unaffected (the schema default stays `Junco`).
 - Removed personal-stack example strings from the shipped wizard prompts; the provider label is inferred from the endpoint host.
 ```
@@ -641,4 +771,7 @@ rm -rf "$SB"
 - **Type consistency:** `Prompter`/`SelectOption`/`WizardCancelled` defined in T3, consumed in T5/T6/tests; `collectAnswers(p, deps)` and `WizardDeps.prompter` match; `fetchModels`/`parseModelsJson`/`inferProvider` signatures consistent T2↔T5; `expandHome` exported (T1) before use (T5). MANUAL sentinel `" manual"` identical in src + tests.
 - **Placeholder scan:** none — every code step is complete.
 - **Open assumption:** `~/Junco` (Design 2) per maintainer; one-line default change if they meant a subfolder under a chosen vault.
+
+```
+
 ```

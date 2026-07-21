@@ -73,10 +73,10 @@ describe("unified rail", () => {
     ).toBe(true);
   });
 
-  it("t jumps straight to the queue system row and focuses the body", async () => {
+  it("the queue mnemonic (e) jumps straight to the queue system row and focuses the body", async () => {
     const r = renderApp();
     await until(() => (r.lastFrame() ?? "").includes("system"));
-    r.stdin.write("t");
+    r.stdin.write("e"); // qu[e]ue — q reserved for quit, u taken by unwatch
     await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos"));
     // The queue row carries the cursor even though we never pressed j.
     expect(
@@ -161,9 +161,9 @@ describe("section bodies", () => {
     await tap(r, TO_QUEUE_ROW);
     await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos"));
     r.stdin.write("l"); // ensure body focus
-    await until(() => (r.lastFrame() ?? "").includes("R requeue"));
+    await until(() => (r.lastFrame() ?? "").includes("retry"));
     r.stdin.write(ESC);
-    await until(() => (r.lastFrame() ?? "").includes("w add repo")); // rail hint set
+    await until(() => (r.lastFrame() ?? "").includes("add repo")); // rail hint set
   });
 });
 
@@ -202,7 +202,7 @@ describe("github disabled", () => {
   it("w toasts that github is off instead of opening add-repo", async () => {
     const r = renderApp({ githubEnabled: false });
     await until(() => (r.lastFrame() ?? "").includes("system"));
-    r.stdin.write("w");
+    r.stdin.write("a"); // [a]dd repo mnemonic
     await until(() => (r.lastFrame() ?? "").toLowerCase().includes("github mode is off"));
     expect(r.lastFrame()).not.toContain("add repo to watchlist");
   });

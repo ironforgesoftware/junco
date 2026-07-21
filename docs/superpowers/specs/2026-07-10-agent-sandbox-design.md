@@ -17,7 +17,7 @@ tool (the PR-flow default), the model can run arbitrary shell as the daemon user
 - **unrestricted network egress** — `curl`, `git push`, `gh api` to anywhere.
 
 Containment today is entirely **policy-in-process**: tool-name allowlists, `allowed_repo_roots`,
-machine-owned frontmatter, and env-scrubbed + time-boxed *verification* blocks. There is no
+machine-owned frontmatter, and env-scrubbed + time-boxed _verification_ blocks. There is no
 OS-level isolation anywhere. The asymmetry is stark: ticket-authored verification bash gets a
 scrubbed env (issue #35), but model-authored bash — a far larger surface — gets everything.
 
@@ -58,7 +58,7 @@ The operator dispatches tickets (trusted authorship) that may pull in **untruste
 (repo files, issue bodies, dependency code) which can steer the model via prompt injection.
 The lethal trifecta is tool access + untrusted content + an exfil path. This design removes the
 exfil path (egress deny) and the credentials (env scrub + dedicated identity), and caps the
-blast radius (filesystem confinement), for the *trusted-author* case. The *untrusted-author*
+blast radius (filesystem confinement), for the _trusted-author_ case. The _untrusted-author_
 case (external dispatchers writing to the inbox / untrusted repos) is bounded but not solved
 until Phase 2.
 
@@ -85,7 +85,7 @@ until Phase 2.
 
 The key structural fact that makes offline deny-all egress free: **model traffic does not pass
 through the sandbox.** Pi runs in-process; the daemon (not a sandboxed child) talks to the
-inference endpoint. So the agent's tool subprocesses can be denied *all* egress — even
+inference endpoint. So the agent's tool subprocesses can be denied _all_ egress — even
 loopback — while inference, PR creation, and the whole flow keep working with no internet.
 This is the inverse of Claude Code, whose entire process sits inside the sandbox and therefore
 needs an allowlist proxy just to reach its own model.
@@ -93,7 +93,7 @@ needs an allowlist proxy just to reach its own model.
 ### 4.2 Where junco intervenes — the Pi SDK tool seam
 
 Because Pi executes tools in-process, there is **no junco-side spawn to wrap** for the agent's
-bash. Junco intervenes at tool *construction* time via SDK seams (all verified present in
+bash. Junco intervenes at tool _construction_ time via SDK seams (all verified present in
 `@earendil-works/pi-coding-agent` 0.80.3):
 
 - **`customTools: ToolDefinition[]`** on `createAgentSession(...)` — a custom tool named `bash`
@@ -141,7 +141,7 @@ silently run unsandboxed. There is **no per-command escape hatch** analogous to 
 Isolation replaces supervision (the design lesson from unattended agents like Jules/Copilot,
 and from Hermes' "containers substitute for approval prompts").
 
-Rationale for asymmetry with Claude Code (which fails *open* by default): Claude Code has a
+Rationale for asymmetry with Claude Code (which fails _open_ by default): Claude Code has a
 human in the loop who sees "sandbox unavailable, running unsandboxed" and can react. Junco does
 not. A failed ticket is recoverable (fix config, requeue); a silent unsandboxed run on an
 unattended box is not.
@@ -153,7 +153,7 @@ construction. The occasional ticket that must reach the network (e.g. `npm insta
 dependency from the registry) opts in with per-ticket frontmatter:
 
 ```yaml
-network: true     # additive to ticketSchema; default false; only widens this one ticket
+network: true # additive to ticketSchema; default false; only widens this one ticket
 ```
 
 mirroring the existing `tools:` opt-in pattern and the CLAUDE.md hard rule ("Q&A defaults are
@@ -185,6 +185,7 @@ write allow-list: the session worktree + the per-ticket scratch dir + `/dev/null
 redirected into scratch).
 
 Wiring, per CLAUDE.md's "adding a Config field" checklist:
+
 1. zod object with `.default({})` in `TomlSchema` (`src/config.ts`).
 2. camelCase fields on `Config` (`src/types.ts`), mapped in `loadConfig`, `expandHome()` applied
    to path fields.
@@ -235,7 +236,7 @@ The one genuinely reversible-but-visible choice: does `[sandbox].enabled` defaul
   behavior preserved; new users get the safe default. Requires operators to opt in.
 
 **Recommendation:** ship `enabled` defaulting to **true** with a loud CHANGELOG note and a
-one-line opt-out, *because* junco is an unattended daemon holding credentials — the failure mode
+one-line opt-out, _because_ junco is an unattended daemon holding credentials — the failure mode
 of an insecure default (silent exfil) is worse than the failure mode of a secure default (a
 ticket fails with an actionable message). Confirm at plan-review time; it is a one-line change
 either way.

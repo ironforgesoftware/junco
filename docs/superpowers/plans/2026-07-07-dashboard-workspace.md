@@ -28,10 +28,12 @@
 ### Task 1: Foundation modules — theme, window, layout, useTerminalSize
 
 **Files:**
+
 - Create: `src/tui/theme.ts`, `src/tui/window.ts`, `src/tui/layout.ts`, `src/tui/useTerminalSize.ts`
 - Test: `tests/tuiFoundation.test.ts`
 
 **Interfaces:**
+
 - Consumes: Ink's `useWindowSize` (verify the export exists in `node_modules/ink/build/index.d.ts` before writing code; it is documented in the installed readme).
 - Produces (every later task relies on these exact names):
   - `theme` const: `{ accent: "#eb6f92"; selectionBg: "#2a2e3a"; border: "gray"; success: "green"; warn: "yellow"; error: "red"; info: "cyan" }`
@@ -83,11 +85,21 @@ describe("windowSlice (follow-the-cursor)", () => {
 describe("computeLayout", () => {
   it("wide at ≥110 cols: rail 26, preview 40% capped 60", () => {
     const l = computeLayout(120, 30);
-    expect(l).toEqual({ mode: "wide", railWidth: 26, previewWidth: 48, bodyRows: 30 - CHROME_ROWS });
+    expect(l).toEqual({
+      mode: "wide",
+      railWidth: 26,
+      previewWidth: 48,
+      bodyRows: 30 - CHROME_ROWS,
+    });
     expect(computeLayout(200, 30).previewWidth).toBe(60); // cap
   });
   it("medium between 60 and 109 cols", () => {
-    expect(computeLayout(100, 30)).toEqual({ mode: "medium", railWidth: 26, previewWidth: 0, bodyRows: 27 });
+    expect(computeLayout(100, 30)).toEqual({
+      mode: "medium",
+      railWidth: 26,
+      previewWidth: 0,
+      bodyRows: 27,
+    });
   });
   it("tooSmall under 60 cols or 14 rows", () => {
     expect(computeLayout(MIN_COLS - 1, 30).mode).toBe("tooSmall");
@@ -106,6 +118,7 @@ describe("computeLayout", () => {
 - [ ] **Step 3: Implement.** First confirm the hook export: `grep -n "useWindowSize" node_modules/ink/build/index.d.ts` — expect a named export. Then:
 
 `src/tui/theme.ts`:
+
 ```ts
 /** "Slate & rose" — the junco palette (slate bird, pink bill). ONE accent;
  * structure tones are slate/gray; status colors stay semantic (state.ts).
@@ -129,6 +142,7 @@ export function toastColor(k: ToastKind): string {
 ```
 
 `src/tui/window.ts`:
+
 ```ts
 /** Slice `total` rows to a `height` window that follows `cursor` with minimal
  * movement: the window only moves when the cursor would leave it, and a stale
@@ -150,6 +164,7 @@ export function windowSlice(
 ```
 
 `src/tui/layout.ts`:
+
 ```ts
 /** Pure breakpoint math for the fullscreen workspace. The chrome is exactly
  * 3 rows (header, toast, footer) — bodyRows is what panes may fill; the total
@@ -187,6 +202,7 @@ export function computeLayout(columns: number, rows: number): Layout {
 ```
 
 `src/tui/useTerminalSize.ts`:
+
 ```ts
 import { useWindowSize } from "ink";
 
@@ -208,6 +224,7 @@ export function useTerminalSize(override?: TerminalSize): TerminalSize {
 - [ ] **Step 4: Verify green** — `npx vitest run tests/tuiFoundation.test.ts > /tmp/t1 2>&1; echo "exit: $?"; tail -5 /tmp/t1` → PASS. Also `npm run build` (exit 0) to prove the `ink` named import compiles.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/tui/theme.ts src/tui/window.ts src/tui/layout.ts src/tui/useTerminalSize.ts tests/tuiFoundation.test.ts
 git add src/tui/theme.ts src/tui/window.ts src/tui/layout.ts src/tui/useTerminalSize.ts tests/tuiFoundation.test.ts
@@ -219,10 +236,12 @@ git commit -m "feat(tui): workspace foundation — theme tokens, window slicing,
 ### Task 2: Chrome — Header, Toast, Footer, hintsFor
 
 **Files:**
+
 - Create: `src/tui/components/Chrome.tsx`
 - Test: `tests/tuiChrome.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `theme`, `ToastKind`, `toastColor` (Task 1); `LayoutMode` (Task 1).
 - Produces (Task 7/8 rely on):
   - `Header({ repoNwo, daemonUp, uptimeSeconds, queueRunning, queueWaiting, watchlistError, now }: { repoNwo: string | null; daemonUp: boolean | null; uptimeSeconds: number | null; queueRunning: number; queueWaiting: number; watchlistError: string | null; now: Date })`
@@ -243,7 +262,15 @@ const NOW = new Date("2026-07-07T14:05:00");
 describe("Header", () => {
   it("brand chip, repo, daemon up, queue chip, clock", () => {
     const f = render(
-      <Header repoNwo="acme/api" daemonUp={true} uptimeSeconds={11040} queueRunning={1} queueWaiting={2} watchlistError={null} now={NOW} />,
+      <Header
+        repoNwo="acme/api"
+        daemonUp={true}
+        uptimeSeconds={11040}
+        queueRunning={1}
+        queueWaiting={2}
+        watchlistError={null}
+        now={NOW}
+      />,
     ).lastFrame()!;
     expect(f).toContain("junco");
     expect(f).toContain("acme/api");
@@ -254,7 +281,15 @@ describe("Header", () => {
   });
   it("daemon down and watchlist warn chip", () => {
     const f = render(
-      <Header repoNwo={null} daemonUp={false} uptimeSeconds={null} queueRunning={0} queueWaiting={0} watchlistError="corrupt json" now={NOW} />,
+      <Header
+        repoNwo={null}
+        daemonUp={false}
+        uptimeSeconds={null}
+        queueRunning={0}
+        queueWaiting={0}
+        watchlistError="corrupt json"
+        now={NOW}
+      />,
     ).lastFrame()!;
     expect(f).toContain("daemon ○");
     expect(f).toContain("watchlist!");
@@ -264,14 +299,23 @@ describe("Header", () => {
 
 describe("Toast", () => {
   it("renders the text when live and a blank row when not", () => {
-    expect(render(<Toast toast={{ kind: "error", text: "gh boom" }} />).lastFrame()).toContain("gh boom");
+    expect(render(<Toast toast={{ kind: "error", text: "gh boom" }} />).lastFrame()).toContain(
+      "gh boom",
+    );
     expect(render(<Toast toast={null} />).lastFrame()).not.toContain("gh boom");
   });
 });
 
 describe("Footer / hintsFor", () => {
   it("renders key·label pairs", () => {
-    const f = render(<Footer hints={[["j/k", "move"], ["q", "quit"]]} />).lastFrame()!;
+    const f = render(
+      <Footer
+        hints={[
+          ["j/k", "move"],
+          ["q", "quit"],
+        ]}
+      />,
+    ).lastFrame()!;
     expect(f).toContain("j/k");
     expect(f).toContain("move");
     expect(f).toContain("q");
@@ -461,13 +505,7 @@ export function hintsFor(
     ];
   }
   if (pane === 3) {
-    return [
-      ["j/k · [ / ]", "scroll"],
-      panesHint,
-      ["o", "browser"],
-      ["?", "help"],
-      ["q", "quit"],
-    ];
+    return [["j/k · [ / ]", "scroll"], panesHint, ["o", "browser"], ["?", "help"], ["q", "quit"]];
   }
   return [
     ["j/k", "move"],
@@ -486,6 +524,7 @@ export function hintsFor(
 - [ ] **Step 4: Verify green** — `npx vitest run tests/tuiChrome.test.tsx > /tmp/t2 2>&1; echo "exit: $?"; tail -5 /tmp/t2` → PASS.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/tui/components/Chrome.tsx tests/tuiChrome.test.tsx
 git add src/tui/components/Chrome.tsx tests/tuiChrome.test.tsx
@@ -497,10 +536,12 @@ git commit -m "feat(tui): chrome — header chips, toast row, footer hints"
 ### Task 3: Rail — repos + compact queue card (pane 1)
 
 **Files:**
+
 - Create: `src/tui/components/Rail.tsx`
 - Test: `tests/tuiRail.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `theme` (T1), `windowSlice` (T1), `stateMeta`/`IssueLifecycle` from `src/tui/state.ts`, `QueueSnapshot` from `src/tui/queueSnapshot.ts`, `queueLabel` from `src/tui/queueFmt.ts`.
 - Produces: `Rail(props: RailProps)` and `interface RailProps { repos: RailRepo[]; selected: number; focused: boolean; queue: QueueSnapshot | null; width: number; height: number }` with `interface RailRepo { nwo: string; fromConfig: boolean; counts: Partial<Record<IssueLifecycle, number>> }` (same shape as today's `RepoRow`).
 
@@ -517,11 +558,35 @@ const QUEUE: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
   running: [
-    { id: "gh-a-b-46", github: { nwo: "a/b", issue: 46, kind: "pr" }, turns: 14, lastTool: "bash", outputTokens: 900, startedAt: null, stale: false },
+    {
+      id: "gh-a-b-46",
+      github: { nwo: "a/b", issue: 46, kind: "pr" },
+      turns: 14,
+      lastTool: "bash",
+      outputTokens: 900,
+      startedAt: null,
+      stale: false,
+    },
   ],
   waiting: [
-    { id: "w1", github: null, kind: "ask", priority: "normal", retryCount: 0, notBefore: null, deferred: false },
-    { id: "w2", github: null, kind: "pr", priority: "normal", retryCount: 0, notBefore: null, deferred: false },
+    {
+      id: "w1",
+      github: null,
+      kind: "ask",
+      priority: "normal",
+      retryCount: 0,
+      notBefore: null,
+      deferred: false,
+    },
+    {
+      id: "w2",
+      github: null,
+      kind: "pr",
+      priority: "normal",
+      retryCount: 0,
+      notBefore: null,
+      deferred: false,
+    },
   ],
   recent: [],
   error: null,
@@ -556,7 +621,11 @@ describe("Rail", () => {
     expect(f).toContain("daemon ○ down");
   });
   it("windows long repo lists to the height budget with a position line", () => {
-    const many = Array.from({ length: 30 }, (_, i) => ({ nwo: `o/r${i}`, fromConfig: false, counts: {} }));
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      nwo: `o/r${i}`,
+      fromConfig: false,
+      counts: {},
+    }));
     const f = render(
       <Rail repos={many} selected={29} focused={true} queue={null} width={26} height={16} />,
     ).lastFrame()!;
@@ -600,7 +669,14 @@ const QUEUE_CARD_ROWS = 5; // separator + "queue" + running + waiting/daemon lin
 
 /** Pane 1: watched repos on top, a compact queue card pinned below.
  * Absorbs the old RepoList and QueueStrip. */
-export function Rail({ repos, selected, focused, queue, width, height }: RailProps): React.JSX.Element {
+export function Rail({
+  repos,
+  selected,
+  focused,
+  queue,
+  width,
+  height,
+}: RailProps): React.JSX.Element {
   // height budget: 2 border rows + title + optional position line + queue card
   const listHeight = Math.max(1, height - 2 - 1 - 1 - QUEUE_CARD_ROWS);
   const prev = useRef(0);
@@ -678,6 +754,7 @@ Note: the daemon-down test asserts `"daemon ○ down"` — keep that exact strin
 - [ ] **Step 4: Verify green** — `npx vitest run tests/tuiRail.test.tsx > /tmp/t3 2>&1; echo "exit: $?"; tail -5 /tmp/t3` → PASS.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/tui/components/Rail.tsx tests/tuiRail.test.tsx
 git add src/tui/components/Rail.tsx tests/tuiRail.test.tsx
@@ -689,11 +766,13 @@ git commit -m "feat(tui): rail — repos with selection bars + compact queue car
 ### Task 4: IssueList (pane 2) + filterIssues
 
 **Files:**
+
 - Create: `src/tui/components/IssueList.tsx`
 - Modify: `src/tui/state.ts` (append `filterIssues`)
 - Test: `tests/tuiIssueList.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `theme`, `windowSlice` (T1); `DashIssue`, `deriveState`, `stateMeta` from `state.ts`; `Spinner`.
 - Produces:
   - `filterIssues(issues: DashIssue[], q: string, trigger: string): DashIssue[]` (exported from `state.ts`) — case-insensitive substring across `#<number>`, title, and state badge; empty/whitespace query returns the input array.
@@ -719,7 +798,10 @@ const iss = (number: number, title: string, labels: string[] = ["junco"]): DashI
 });
 
 describe("filterIssues", () => {
-  const list = [iss(52, "Fix reef colors", ["junco", "junco:plan-ready"]), iss(61, "Add tide tables")];
+  const list = [
+    iss(52, "Fix reef colors", ["junco", "junco:plan-ready"]),
+    iss(61, "Add tide tables"),
+  ];
   it("matches number, title, and badge, case-insensitively", () => {
     expect(filterIssues(list, "#52", "junco").map((i) => i.number)).toEqual([52]);
     expect(filterIssues(list, "TIDE", "junco").map((i) => i.number)).toEqual([61]);
@@ -740,10 +822,24 @@ describe("relTime", () => {
 });
 
 describe("IssueList", () => {
-  const three = [iss(52, "Fix reef colors", ["junco", "junco:plan-ready"]), iss(46, "Bleaching alert", ["junco", "junco:working"]), iss(61, "Add tide tables")];
+  const three = [
+    iss(52, "Fix reef colors", ["junco", "junco:plan-ready"]),
+    iss(46, "Bleaching alert", ["junco", "junco:working"]),
+    iss(61, "Add tide tables"),
+  ];
   it("numbered title with count, selection bar, badges, reltime", () => {
     const f = render(
-      <IssueList issues={three} trigger="junco" selected={0} focused={true} refreshing={false} filter="" filtering={false} height={20} now={NOW} />,
+      <IssueList
+        issues={three}
+        trigger="junco"
+        selected={0}
+        focused={true}
+        refreshing={false}
+        filter=""
+        filtering={false}
+        height={20}
+        now={NOW}
+      />,
     ).lastFrame()!;
     expect(f).toContain("2 issues · 3");
     expect(f).toContain("▌");
@@ -753,13 +849,33 @@ describe("IssueList", () => {
   });
   it("filter chip renders in the title while active", () => {
     const f = render(
-      <IssueList issues={[three[0]]} trigger="junco" selected={0} focused={true} refreshing={false} filter="reef" filtering={true} height={20} now={NOW} />,
+      <IssueList
+        issues={[three[0]]}
+        trigger="junco"
+        selected={0}
+        focused={true}
+        refreshing={false}
+        filter="reef"
+        filtering={true}
+        height={20}
+        now={NOW}
+      />,
     ).lastFrame()!;
     expect(f).toContain("/reef");
   });
   it("no-match filter empty state names the query and the way out", () => {
     const f = render(
-      <IssueList issues={[]} trigger="junco" selected={0} focused={true} refreshing={false} filter="zzz" filtering={false} height={20} now={NOW} />,
+      <IssueList
+        issues={[]}
+        trigger="junco"
+        selected={0}
+        focused={true}
+        refreshing={false}
+        filter="zzz"
+        filtering={false}
+        height={20}
+        now={NOW}
+      />,
     ).lastFrame()!;
     expect(f).toContain("no issues match /zzz");
     expect(f).toContain("esc");
@@ -767,7 +883,17 @@ describe("IssueList", () => {
   it("windows to height with a position indicator", () => {
     const many = Array.from({ length: 40 }, (_, i) => iss(i + 1, `Issue number ${i + 1}`));
     const f = render(
-      <IssueList issues={many} trigger="junco" selected={39} focused={true} refreshing={false} filter="" filtering={false} height={12} now={NOW} />,
+      <IssueList
+        issues={many}
+        trigger="junco"
+        selected={39}
+        focused={true}
+        refreshing={false}
+        filter=""
+        filtering={false}
+        height={12}
+        now={NOW}
+      />,
     ).lastFrame()!;
     expect(f).toContain("Issue number 40");
     expect(f).not.toContain("Issue number 1 "); // note trailing space — #1's row, not #10+
@@ -788,9 +914,7 @@ export function filterIssues(issues: DashIssue[], q: string, trigger: string): D
   if (s === "") return issues;
   return issues.filter((i) => {
     const badge = stateMeta(deriveState(i.labels, trigger)).badge;
-    return (
-      `#${i.number}`.includes(s) || i.title.toLowerCase().includes(s) || badge.includes(s)
-    );
+    return `#${i.number}`.includes(s) || i.title.toLowerCase().includes(s) || badge.includes(s);
   });
 }
 ```
@@ -913,6 +1037,7 @@ export function IssueList({
 - [ ] **Step 4: Verify green** — `npx vitest run tests/tuiIssueList.test.tsx tests/tuiState.test.ts > /tmp/t4 2>&1; echo "exit: $?"; tail -5 /tmp/t4` → PASS (tuiState confirms the state.ts append broke nothing).
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/tui/components/IssueList.tsx src/tui/state.ts tests/tuiIssueList.test.tsx
 git add src/tui/components/IssueList.tsx src/tui/state.ts tests/tuiIssueList.test.tsx
@@ -924,10 +1049,12 @@ git commit -m "feat(tui): issue list — row bars, windowing, live filter"
 ### Task 5: Preview (pane 3 / medium full-body)
 
 **Files:**
+
 - Create: `src/tui/components/Preview.tsx`
 - Test: `tests/tuiPreview.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `theme`, `DashIssue`, `deriveState`/`stateMeta`, `Spinner`.
 - Produces: `Preview(props: PreviewProps)`, `interface PreviewProps { issue: DashIssue | null; trigger: string; body: string | null; planComment: string | null; loading: boolean; error: string | null; scroll: number; focused: boolean; height: number; width?: number; paneNumber?: boolean }` (`paneNumber` true → title `3 preview`; false → plain title for the medium full-body view).
 
@@ -966,7 +1093,13 @@ describe("Preview", () => {
   });
   it("renders title, badge, body, and plan divider", () => {
     const f = render(
-      <Preview {...base} issue={ISSUE} body={"line one\nline two"} planComment={"<!-- junco:plan -->\nthe plan"} paneNumber />,
+      <Preview
+        {...base}
+        issue={ISSUE}
+        body={"line one\nline two"}
+        planComment={"<!-- junco:plan -->\nthe plan"}
+        paneNumber
+      />,
     ).lastFrame()!;
     expect(f).toContain("#52 Fix reef colors");
     expect(f).toContain("plan-ready");
@@ -975,13 +1108,19 @@ describe("Preview", () => {
     expect(f).toContain("the plan");
   });
   it("loading and error states", () => {
-    expect(render(<Preview {...base} issue={ISSUE} loading paneNumber />).lastFrame()).toContain("loading");
-    expect(render(<Preview {...base} issue={ISSUE} error="gh exploded" paneNumber />).lastFrame()).toContain("gh exploded");
+    expect(render(<Preview {...base} issue={ISSUE} loading paneNumber />).lastFrame()).toContain(
+      "loading",
+    );
+    expect(
+      render(<Preview {...base} issue={ISSUE} error="gh exploded" paneNumber />).lastFrame(),
+    ).toContain("gh exploded");
   });
   it("windows long bodies by scroll with a position footer", () => {
     const body = Array.from({ length: 60 }, (_, i) => `L${i + 1}`).join("\n");
     const top = render(<Preview {...base} issue={ISSUE} body={body} paneNumber />).lastFrame()!;
-    const scrolled = render(<Preview {...base} issue={ISSUE} body={body} scroll={30} paneNumber />).lastFrame()!;
+    const scrolled = render(
+      <Preview {...base} issue={ISSUE} body={body} scroll={30} paneNumber />,
+    ).lastFrame()!;
     expect(top).toContain("L1");
     expect(scrolled).not.toContain("L1\n");
     expect(scrolled).toContain("L31");
@@ -1082,6 +1221,7 @@ export function Preview({
 - [ ] **Step 4: Verify green** — `npx vitest run tests/tuiPreview.test.tsx > /tmp/t5 2>&1; echo "exit: $?"; tail -5 /tmp/t5` → PASS.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/tui/components/Preview.tsx tests/tuiPreview.test.tsx
 git add src/tui/components/Preview.tsx tests/tuiPreview.test.tsx
@@ -1093,11 +1233,13 @@ git commit -m "feat(tui): preview pane — master-detail body/plan with scroll"
 ### Task 6: Modal, HelpModal, and modal-ready Palette/AddRepoForm
 
 **Files:**
+
 - Create: `src/tui/components/Modal.tsx`, `src/tui/components/HelpModal.tsx`
 - Modify: `src/tui/components/CommandPalette.tsx`, `src/tui/components/AddRepoForm.tsx` (drop their own outer border/title — the Modal supplies both; ALL text content stays byte-identical so existing tuiPalette/tuiApp assertions keep passing)
 - Test: `tests/tuiModal.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `theme` (T1), `hintsFor`/`HintView` (T2), existing palette/add-repo props (unchanged).
 - Produces:
   - `Modal({ title, minWidth?, children })` — double border, accent border+title, paddingX 2, paddingY 1.
@@ -1150,6 +1292,7 @@ describe("HelpModal", () => {
 - [ ] **Step 3: Implement.**
 
 `src/tui/components/Modal.tsx`:
+
 ```tsx
 import React from "react";
 import { Box, Text } from "ink";
@@ -1193,6 +1336,7 @@ export function Modal({
 ```
 
 `src/tui/components/HelpModal.tsx`:
+
 ```tsx
 import React from "react";
 import { Box, Text } from "ink";
@@ -1289,6 +1433,7 @@ export function HelpModal({
 - [ ] **Step 4: Verify green + no regressions** — `npx vitest run tests/tuiModal.test.tsx tests/tuiPalette.test.tsx tests/tuiApp.test.tsx tests/tuiComponents.test.tsx > /tmp/t6 2>&1; echo "exit: $?"; tail -8 /tmp/t6`. If a tuiPalette/tuiApp/tuiComponents assertion referenced the deleted inline titles ("run a junco command" / "add repo to watchlist"), those strings are now supplied by the App-level Modal, which is NOT yet wired — update ONLY such title assertions to the still-present body text (e.g. assert `"Runs the junco CLI against this dashboard's config"` for the palette, `"Watch a repository"` for the form), noting each change in the commit message.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/tui/components/Modal.tsx src/tui/components/HelpModal.tsx src/tui/components/CommandPalette.tsx src/tui/components/AddRepoForm.tsx tests/tuiModal.test.tsx
 git add -A src/tui/components tests/tuiModal.test.tsx tests/tuiPalette.test.tsx tests/tuiApp.test.tsx tests/tuiComponents.test.tsx
@@ -1300,11 +1445,13 @@ git commit -m "feat(tui): centered modal frame, categorized help, modal-ready pa
 ### Task 7: Workspace frame + QueueView re-skin
 
 **Files:**
+
 - Create: `src/tui/components/Workspace.tsx`
 - Modify: `src/tui/components/QueueView.tsx` (theme tokens + `height`/`focused` props replacing the PAGE const)
 - Test: `tests/tuiWorkspace.test.tsx`; Modify: `tests/tuiQueue.test.tsx` (QueueView call sites gain `height={20} focused={false}`)
 
 **Interfaces:**
+
 - Consumes: T1 (`theme`, `Layout`, `TerminalSize`), T2 (`Header`/`Toast`/`Footer` are rendered BY the App and passed in as nodes).
 - Produces:
   - `Workspace({ size, layout, header, toast, hints, modal, children })` where `header: React.ReactNode`, `toast: { kind: ToastKind; text: string } | null`, `hints: [string, string][]`, `modal: React.ReactNode | null` (when non-null it renders centered INSTEAD of children), `children: React.ReactNode` (the pane row). Total height exactly `size.rows`.
@@ -1433,6 +1580,7 @@ export function Workspace({
 ```
 
 `QueueView.tsx` diff — replace the `PAGE` const and signature:
+
 - Delete `const PAGE = 24;` (and its comment).
 - Props become `{ snap, scroll, now, height, focused }: { snap: QueueSnapshot | null; scroll: number; now: Date; height: number; focused: boolean }`.
 - The outer Box gains `borderColor={focused ? theme.accent : theme.border}` and `height={height}` (import `theme`).
@@ -1443,6 +1591,7 @@ export function Workspace({
 - [ ] **Step 4: Verify green** — `npx vitest run tests/tuiWorkspace.test.tsx tests/tuiQueue.test.tsx > /tmp/t7 2>&1; echo "exit: $?"; tail -5 /tmp/t7` → PASS.
 
 - [ ] **Step 5: Commit**
+
 ```bash
 npx prettier --write src/tui/components/Workspace.tsx src/tui/components/QueueView.tsx tests/tuiWorkspace.test.tsx tests/tuiQueue.test.tsx
 git add src/tui/components/Workspace.tsx src/tui/components/QueueView.tsx tests/tuiWorkspace.test.tsx tests/tuiQueue.test.tsx
@@ -1456,11 +1605,13 @@ git commit -m "feat(tui): workspace frame + queue view re-skin (height-aware, th
 This is the big-bang task: `App.tsx` adopts the workspace, the six legacy components are deleted, `dashboardCmd` goes alt-screen, and every existing TUI test is migrated — one atomic commit, suite green.
 
 **Files:**
+
 - Modify: `src/tui/App.tsx` (major), `src/dashboardCmd.ts`, `src/tui/components/CommandOutput.tsx` (gains `height` prop)
 - Delete: `src/tui/components/{StatusBar,ShortcutBar,RepoList,IssueTable,IssueDetail,QueueStrip}.tsx`
 - Test: migrate `tests/tuiApp.test.tsx`, `tests/tuiInteractive.test.tsx`, `tests/tuiPalette.test.tsx`, `tests/tuiComponents.test.tsx`, `tests/tuiQueue.test.tsx` (QueueStrip block), `tests/dashboardCmd.test.ts`; add the new interaction tests below.
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1–7 (exact names in their Produces blocks).
 - Produces: `AppProps` gains `sizeOverride?: TerminalSize` (tests) — everything else externally unchanged; `dashboardCmd` default render uses `{ exitOnCtrlC: true, alternateScreen: true }`.
 
@@ -1475,7 +1626,12 @@ const [filter, setFilter] = useState("");
 const [filtering, setFiltering] = useState(false);
 const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(null);
 const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-const [preview, setPreview] = useState<{ body: string | null; planComment: string | null; loading: boolean; error: string | null }>({ body: null, planComment: null, loading: false, error: null });
+const [preview, setPreview] = useState<{
+  body: string | null;
+  planComment: string | null;
+  loading: boolean;
+  error: string | null;
+}>({ body: null, planComment: null, loading: false, error: null });
 const previewCache = useRef(new Map<string, { body: string; planComment: string | null }>());
 ```
 
@@ -1487,7 +1643,12 @@ const showToast = useCallback((kind: ToastKind, text: string) => {
   if (toastTimer.current) clearTimeout(toastTimer.current);
   toastTimer.current = setTimeout(() => setToast(null), 4000);
 }, []);
-useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+useEffect(
+  () => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  },
+  [],
+);
 ```
 
 - [ ] **Step 2: Filtered issues + preview autoload.**
@@ -1498,6 +1659,7 @@ const filteredIssues = useMemo(
   [currentIssues, filter, trigger],
 );
 ```
+
 All selection movement/action code that used `currentIssues` switches to `filteredIssues` (the number-anchored `selectedNum` map already survives re-filtering; the existing `issueIdxSafe` clamp handles shrinkage). Clear the filter on repo switch (`setFilter(""); setFiltering(false);` inside the repo-selection change handler).
 
 ```tsx
@@ -1529,6 +1691,7 @@ useEffect(() => {
   };
 }, [previewKey, layout.mode]);
 ```
+
 (`r` refresh additionally runs `previewCache.current.clear()`.) Simplify the `previewIssue` line to just `filteredIssues[issueIdxSafe] ?? null` — the pane doesn't gate it.
 
 - [ ] **Step 3: Input router.** Inside `useInput`, top of the main-view section, BEFORE other main handling:
@@ -1536,14 +1699,29 @@ useEffect(() => {
 ```tsx
 // `/` filter typing mode captures all printable input.
 if (filtering && view === "main") {
-  if (key.escape) { setFiltering(false); setFilter(""); return; }
-  if (key.return) { setFiltering(false); return; }
-  if (key.backspace || key.delete) { setFilter((f) => f.slice(0, -1)); return; }
-  if (input && !key.ctrl && !key.meta) { setFilter((f) => f + input); return; }
+  if (key.escape) {
+    setFiltering(false);
+    setFilter("");
+    return;
+  }
+  if (key.return) {
+    setFiltering(false);
+    return;
+  }
+  if (key.backspace || key.delete) {
+    setFilter((f) => f.slice(0, -1));
+    return;
+  }
+  if (input && !key.ctrl && !key.meta) {
+    setFilter((f) => f + input);
+    return;
+  }
   return;
 }
 ```
+
 Then add to main-view handling (keeping all existing keys):
+
 - `/` → `setFiltering(true); setPane(2); return;`
 - `1` → `setPane(1)`; `2` → `setPane(2)`; `3` → `if (layout.mode === "wide") setPane(3)`.
 - `g`/`G` → pane 1: `setRepoIdx(0)` / `setRepoIdx(repoMappings.length - 1)`; pane 2: move anchor to first/last of `filteredIssues`.
@@ -1654,6 +1832,7 @@ return (
   </Workspace>
 );
 ```
+
 (`paletteProps`/`addRepoProps` are the exact prop sets currently passed — unchanged.) `AppProps` gains `sizeOverride?: TerminalSize`. Delete the now-unused imports and the six legacy component files. `CommandOutput.tsx` gains a `height: number` prop and windows its output lines with it (replace its fixed visible-line constant with `Math.max(1, height - 5)`, keeping its header/footer rows).
 
 - [ ] **Step 5: dashboardCmd alt-screen.** In `src/dashboardCmd.ts`, the default renderFn becomes:
@@ -1663,18 +1842,19 @@ const renderFn =
   deps.renderFn ??
   ((el: React.ReactElement) => ink.render(el, { exitOnCtrlC: true, alternateScreen: true }));
 ```
+
 (Comment: alt buffer — fullscreen, zero scrollback pollution, terminal restored on exit; a no-op when non-interactive, and the TTY guard exits before this anyway.)
 
 - [ ] **Step 6: Migrate the test files.** Rules: default `renderApp` size is **medium** (inject `sizeOverride={{ columns: 100, rows: 30 }}` so legacy enter-opens-detail flows survive); add wide-mode tests at `{ columns: 130, rows: 30 }`. Every wait stays a bounded until-loop. Per file:
 
-| File | What changes |
-|---|---|
-| `tuiApp.test.tsx` | `renderApp` passes `sizeOverride` (medium). String updates: `"GitHub repositories"` → `"1 repos"`; `"issues"` title → `"2 issues"`; shortcut assertions (`"t queue"` etc.) still hold via Footer; queue-strip assertions (`"queue — 1 running · 1 waiting"`, `"#46 exec"`) move to rail equivalents (`"queue"`, `"#46 exec"`, `"1 waiting"` — waiting count is 1 in `QUEUE_SNAP`). Toast tests: failures now auto-expire — assert presence via until-loop without asserting persistence. NEW tests (medium): `/` filter narrows the list + esc clears; `1`/`2` pane jumps move the accent title; `g`/`G` jump. NEW tests (wide, 130 cols): `"3 preview"` renders; selecting an issue autoloads the body (fake client `issueDetail` → until-loop for `"the body"`); `enter` focuses pane 3 (footer shows scroll hints); `3` is inert at medium width. |
-| `tuiInteractive.test.tsx` | Same `sizeOverride` medium + same title-string updates; detail-flow tests unchanged in spirit (enter still opens detail at medium). |
-| `tuiPalette.test.tsx` | Palette/output flows unchanged; the palette title now comes from the Modal — assert `"run a junco command"` still present (Modal title). |
-| `tuiComponents.test.tsx` | Delete describe-blocks for StatusBar/ShortcutBar/RepoList/IssueTable/IssueDetail/QueueStrip (each already superseded by tuiChrome/tuiRail/tuiIssueList/tuiPreview/tuiWorkspace). Keep whatever tests target still-living components (Spinner, TextField); move them if the file empties otherwise. |
-| `tuiQueue.test.tsx` | Delete the QueueStrip describe-block (component gone; rail card covered in tuiRail). QueueView tests already migrated in Task 7. Keep queueFmt tests untouched. |
-| `dashboardCmd.test.ts` | The lazy-loading-discipline test: keep; add an assertion that the source contains `alternateScreen: true`. TTY/disabled-guard tests unchanged (renderFn fake bypasses ink). |
+| File                      | What changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tuiApp.test.tsx`         | `renderApp` passes `sizeOverride` (medium). String updates: `"GitHub repositories"` → `"1 repos"`; `"issues"` title → `"2 issues"`; shortcut assertions (`"t queue"` etc.) still hold via Footer; queue-strip assertions (`"queue — 1 running · 1 waiting"`, `"#46 exec"`) move to rail equivalents (`"queue"`, `"#46 exec"`, `"1 waiting"` — waiting count is 1 in `QUEUE_SNAP`). Toast tests: failures now auto-expire — assert presence via until-loop without asserting persistence. NEW tests (medium): `/` filter narrows the list + esc clears; `1`/`2` pane jumps move the accent title; `g`/`G` jump. NEW tests (wide, 130 cols): `"3 preview"` renders; selecting an issue autoloads the body (fake client `issueDetail` → until-loop for `"the body"`); `enter` focuses pane 3 (footer shows scroll hints); `3` is inert at medium width. |
+| `tuiInteractive.test.tsx` | Same `sizeOverride` medium + same title-string updates; detail-flow tests unchanged in spirit (enter still opens detail at medium).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `tuiPalette.test.tsx`     | Palette/output flows unchanged; the palette title now comes from the Modal — assert `"run a junco command"` still present (Modal title).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `tuiComponents.test.tsx`  | Delete describe-blocks for StatusBar/ShortcutBar/RepoList/IssueTable/IssueDetail/QueueStrip (each already superseded by tuiChrome/tuiRail/tuiIssueList/tuiPreview/tuiWorkspace). Keep whatever tests target still-living components (Spinner, TextField); move them if the file empties otherwise.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `tuiQueue.test.tsx`       | Delete the QueueStrip describe-block (component gone; rail card covered in tuiRail). QueueView tests already migrated in Task 7. Keep queueFmt tests untouched.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `dashboardCmd.test.ts`    | The lazy-loading-discipline test: keep; add an assertion that the source contains `alternateScreen: true`. TTY/disabled-guard tests unchanged (renderFn fake bypasses ink).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Representative new wide-mode test (add to `tuiApp.test.tsx`):
 
@@ -1706,6 +1886,7 @@ it("wide mode: preview pane autoloads the selected issue's body", async () => {
 - [ ] **Step 7: Full suite** — `npx vitest run > /tmp/t8 2>&1; echo "exit: $?"; tail -8 /tmp/t8` → exit 0. Then `npm run lint && npm run format:check && npm run build` → all exit 0.
 
 - [ ] **Step 8: Commit**
+
 ```bash
 npx prettier --write src/tui/App.tsx src/dashboardCmd.ts src/tui/components/CommandOutput.tsx tests/tuiApp.test.tsx tests/tuiInteractive.test.tsx tests/tuiPalette.test.tsx tests/tuiComponents.test.tsx tests/tuiQueue.test.tsx tests/dashboardCmd.test.ts
 git add -A src/tui src/dashboardCmd.ts tests
@@ -1717,6 +1898,7 @@ git commit -m "feat(dashboard): fullscreen workspace — alt-screen, responsive 
 ### Task 9: Docs + full gate + smoke checklist
 
 **Files:**
+
 - Modify: `README.md` (dashboard section: rewrite the key table, describe the workspace/preview/alt-screen), `ARCHITECTURE.md` (`tui/` row)
 
 **Interfaces:** none — documents Tasks 1–8 as shipped. Before writing, read `Chrome.tsx`/`App.tsx` `hintsFor` so every documented key matches shipped behavior. Stack-agnostic wording only.
@@ -1730,6 +1912,7 @@ git commit -m "feat(dashboard): fullscreen workspace — alt-screen, responsive 
 - [ ] **Step 4: Manual smoke checklist** (real terminal, read-only — do NOT dispatch/approve on live issues): run `node dist/cli.js dashboard` from the repo root and verify: (a) alt-screen entered and terminal restored on `q`; (b) resize wide↔narrow live-reflows 3↔2 panes; (c) shrink below 60 cols → "terminal too small", grow back → recovers; (d) `/` filter narrows + esc clears; (e) `1/2/3` focus styling moves; (f) preview autoloads on selection (wide); (g) `?` help, `:` palette, `t` queue all render centered/in-slot; (h) no frame duplication in scrollback after exit. Record the results in the commit message body (one line per check).
 
 - [ ] **Step 5: Commit**
+
 ```bash
 git add README.md ARCHITECTURE.md
 git commit -m "docs: fullscreen dashboard workspace — layout, keys, alt-screen"

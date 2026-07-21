@@ -4,7 +4,7 @@ priority: normal
 timeout_minutes: 60
 # PR-flow fields — presence of `repo:` triggers the git worktree + PR flow.
 repo: ~/code/your-project
-base_branch: main           # optional, default from config
+base_branch: main # optional, default from config
 # branch_name: junco/custom-name   # optional, default junco/<id>
 # draft: true                      # optional, default from config (draft)
 # pr_title: "Custom PR title"      # optional, default = first H1 in body

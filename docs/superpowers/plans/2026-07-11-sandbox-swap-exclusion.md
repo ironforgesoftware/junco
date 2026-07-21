@@ -33,10 +33,12 @@
 ## Task 1: The readers-writer op-lock
 
 **Files:**
+
 - Create: `src/agent/sandbox/opLock.ts`
 - Test: `tests/sandboxOpLock.test.ts`
 
 **Interfaces:**
+
 - Produces: `interface OpLock { runShared<T>(fn: () => Promise<T>): Promise<T>; runExclusive<T>(fn: () => Promise<T>): Promise<T> }`; `makeOpLock(): OpLock`.
 
 - [ ] **Step 1: Write failing tests (`tests/sandboxOpLock.test.ts`).**
@@ -113,7 +115,11 @@ describe("makeOpLock", () => {
 
   it("releases the lock even if the body throws", async () => {
     const lock = makeOpLock();
-    await expect(lock.runExclusive(async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+    await expect(
+      lock.runExclusive(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
     // lock is free again:
     await expect(lock.runShared(async () => 42)).resolves.toBe(42);
   });
@@ -195,6 +201,7 @@ export function makeOpLock(): OpLock {
 - [ ] **Step 4: Run to green.** `npx vitest run tests/sandboxOpLock.test.ts > /tmp/t1b.out 2>&1; echo "exit: $?"` → PASS (4/4).
 
 - [ ] **Step 5: Format + commit.**
+
 ```bash
 npx prettier --write src/agent/sandbox/opLock.ts tests/sandboxOpLock.test.ts
 git add -A && git commit -m "feat(sandbox): readers-writer op-lock (fs shared, bash exclusive)"
@@ -205,11 +212,13 @@ git add -A && git commit -m "feat(sandbox): readers-writer op-lock (fs shared, b
 ## Task 2: Wrap operations + wire the lock into buildSandbox
 
 **Files:**
+
 - Modify: `src/agent/sandbox/opLock.ts` (add wrappers)
 - Modify: `src/agent/sandbox/index.ts` (`buildSandbox` creates + applies the lock)
 - Test: `tests/sandboxBuild.test.ts` (mutual-exclusion property)
 
 **Interfaces:**
+
 - Consumes: `OpLock` (Task 1).
 - Produces: `lockOps<T extends object>(ops: T, lock: OpLock, mode: "shared" | "exclusive"): T` — returns an object whose every function-valued property runs under the lock in the given mode.
 
@@ -244,15 +253,31 @@ describe("sandbox op mutual-exclusion (#159)", () => {
   it("a bash exec never overlaps an fs-op", async () => {
     const lock = makeOpLock();
     const events: string[] = [];
-    const gate = (() => { let r!: () => void; const p = new Promise<void>((x) => (r = x)); return { p, r }; })();
+    const gate = (() => {
+      let r!: () => void;
+      const p = new Promise<void>((x) => (r = x));
+      return { p, r };
+    })();
 
     const fs = lockOps(
-      { writeFile: async () => { events.push("fs-in"); events.push("fs-out"); } },
+      {
+        writeFile: async () => {
+          events.push("fs-in");
+          events.push("fs-out");
+        },
+      },
       lock,
       "shared",
     );
     const bash = lockOps(
-      { exec: async () => { events.push("bash-in"); await gate.p; events.push("bash-out"); return { exitCode: 0 }; } },
+      {
+        exec: async () => {
+          events.push("bash-in");
+          await gate.p;
+          events.push("bash-out");
+          return { exitCode: 0 };
+        },
+      },
       lock,
       "exclusive",
     );
@@ -277,7 +302,10 @@ Import `makeOpLock, lockOps`. In `buildSandbox`, create one lock and wrap each t
 ```ts
 import { makeOpLock, lockOps } from "./opLock.js";
 // ...
-export function buildSandbox(factories: SdkToolFactories, opts: BuildSandboxOpts): BuildSandboxResult {
+export function buildSandbox(
+  factories: SdkToolFactories,
+  opts: BuildSandboxOpts,
+): BuildSandboxResult {
   const { cwd, toolNames, backend, policy, home, bashDeps } = opts;
   const lock = makeOpLock();
   const customTools: unknown[] = [];
@@ -304,6 +332,7 @@ export function buildSandbox(factories: SdkToolFactories, opts: BuildSandboxOpts
 - [ ] **Step 5: Run tests.** `npx vitest run tests/sandboxBuild.test.ts tests/sandbox.integration.test.ts > /tmp/t2b.out 2>&1; echo "exit: $?"` → PASS. If a `buildSandbox` test asserted the operations object identity, adjust it to expect a wrapped object (same method names, callable) — do not weaken behavioral assertions.
 
 - [ ] **Step 6: Format + commit.**
+
 ```bash
 npx prettier --write src/agent/sandbox/opLock.ts src/agent/sandbox/index.ts tests/sandboxBuild.test.ts
 git add -A && git commit -m "feat(sandbox): serialize bash against fs-ops via the op-lock at buildSandbox"
@@ -314,10 +343,12 @@ git add -A && git commit -m "feat(sandbox): serialize bash against fs-ops via th
 ## Task 3: Reap bash's process group
 
 **Files:**
+
 - Modify: `src/agent/sandbox/bashOps.ts`
 - Test: `tests/sandboxBashOps.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing `makeSandboxedBashOperations(backend, policy, deps)`; the injected `spawnFn`.
 - Produces: same signature; the spawned child is `detached`, and on close/timeout/abort the process **group** is killed.
 
@@ -339,6 +370,7 @@ it("kills the process group on completion so backgrounded children can't survive
   expect(kills).toContainEqual([-4242, "SIGKILL"]); // negative pid = the whole group
 });
 ```
+
 (Also assert the child was spawned with `detached: true` by capturing the `spawnFn` options.)
 
 - [ ] **Step 2: Run to verify failure.** `npx vitest run tests/sandboxBashOps.test.ts > /tmp/t3.out 2>&1; echo "exit: $?"` → FAIL.
@@ -353,6 +385,7 @@ it("kills the process group on completion so backgrounded children can't survive
 - [ ] **Step 4: Run to green.** `npx vitest run tests/sandboxBashOps.test.ts > /tmp/t3b.out 2>&1; echo "exit: $?"` → PASS. Confirm the abort/timeout paths still resolve `{exitCode}` (existing tests).
 
 - [ ] **Step 5: Format + commit.**
+
 ```bash
 npx prettier --write src/agent/sandbox/bashOps.ts tests/sandboxBashOps.test.ts
 git add -A && git commit -m "fix(sandbox): reap bash process group so a backgrounded swapper can't survive (#159)"
@@ -363,12 +396,14 @@ git add -A && git commit -m "fix(sandbox): reap bash process group so a backgrou
 ## Task 4: Docs + close-out
 
 **Files:**
+
 - Modify: `docs/configuration.md` (the "agent execution sandbox" section)
 - No code; update issue #159 after merge.
 
 - [ ] **Step 1: Document the mechanism + residual + throughput** in `docs/configuration.md`'s sandbox section: a short paragraph — "fs-tool operations are serialized against bash execution (and bash's process group is reaped) so a compromised agent can't win a symlink-swap race against the in-process path jail; under `sandbox.enabled` a long bash briefly blocks concurrent fs-ops. Residual: a `setsid`-escaping background process on macOS can still race the jail; the fully atomic fix (native `openat2`/`openat` resolver) is tracked on #159."
 
 - [ ] **Step 2: Full gate.**
+
 ```
 npm run lint > /tmp/g.out 2>&1; echo "lint $?"
 npm run format:check >> /tmp/g.out 2>&1; echo "fmt $?"
@@ -376,9 +411,11 @@ npm run typecheck >> /tmp/g.out 2>&1; echo "tc $?"
 npm run build >> /tmp/g.out 2>&1; echo "build $?"
 npx vitest run > /tmp/gt.out 2>&1; echo "test $?"
 ```
+
 Expected: all green.
 
 - [ ] **Step 3: Format + commit.**
+
 ```bash
 npx prettier --write docs/configuration.md
 git add -A && git commit -m "docs(sandbox): document fs-op/bash swap-exclusion + residual (#159)"

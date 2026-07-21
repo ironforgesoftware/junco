@@ -12,8 +12,8 @@ repos the operator does not own:
    which excludes `external: true` watchlist entries (`src/watchlist.ts:92`), so an
    external repo reports "not watched" (`src/assessCmd.ts:96`). The dashboard `A` key
    short-circuits earlier with a toast (`src/tui/App.tsx:772`).
-2. **The label mechanic.** Every finding issue is created *with* labels
-   (`junco:finding`, `severity/*`), and junco first *creates* those labels via
+2. **The label mechanic.** Every finding issue is created _with_ labels
+   (`junco:finding`, `severity/*`), and junco first _creates_ those labels via
    `gh label create --force` (`src/githubOutbox.ts:331`). On a repo the operator lacks
    triage rights for, both label-creation and `gh issue create --label` hard-fail, and
    the dedup scan (`fetchFindingMarkers`) filters by that label, so dedup breaks too.
@@ -27,7 +27,7 @@ own. This reverses a documented invariant and crosses a social line (auto-filing
 strangers' trackers reads as spam), so the design is built around a human confirmation
 gate rather than a silent policy flip.
 
-Notably, the assess *engine* already resolves its target from the clone's `origin`
+Notably, the assess _engine_ already resolves its target from the clone's `origin`
 remote and files there (`src/assessFlow.ts:250-260`); for an external managed clone
 `origin` **is** the upstream. The engine can already file upstream — the blockers are the
 two gates and the label mechanic above.
@@ -52,12 +52,12 @@ outward action decomposes into GitHub primitives at two privilege tiers:
 
 Capabilities map onto the unprivileged tier:
 
-| Capability                          | Primitive                    | Where            |
-| ----------------------------------- | ---------------------------- | ---------------- |
-| Assess sweep → file findings        | open issue (+ opt. labels)   | **SP-1 (this)**  |
-| Fix → fork PR                        | open PR                      | exists (dispatch)|
-| Analysis comment on an issue        | post comment                 | SP-2             |
-| Assess in an issue's context        | open issue / comment         | SP-3             |
+| Capability                   | Primitive                  | Where             |
+| ---------------------------- | -------------------------- | ----------------- |
+| Assess sweep → file findings | open issue (+ opt. labels) | **SP-1 (this)**   |
+| Fix → fork PR                | open PR                    | exists (dispatch) |
+| Analysis comment on an issue | post comment               | SP-2              |
+| Assess in an issue's context | open issue / comment       | SP-3              |
 
 ### Redrawn etiquette invariant
 
@@ -67,7 +67,7 @@ issue-tracker prohibition is lifted under a confirmation gate):
 > On any repo, junco's outward writes are limited to the unprivileged tier — opening
 > issues, opening PRs, posting comments. It never uses privileged features (labels) it
 > lacks rights for; it silently omits them. **Every outward write on a repo the operator
-> does not own is both operator-initiated *and* human-confirmed** (findings previewed
+> does not own is both operator-initiated _and_ human-confirmed** (findings previewed
 > before filing; comment text approved before posting). Junco never applies labels, edits
 > others' content, or acts on a poll/webhook it was not explicitly pointed at.
 
@@ -80,19 +80,19 @@ an intentional divergence, not part of this cleanup.
 
 ## Decisions (from brainstorming)
 
-| Decision              | Choice                                                                    |
-| --------------------- | ------------------------------------------------------------------------- |
-| Filing posture        | Preview → confirm, **universal** (owned and unowned identical)            |
-| Eligibility           | Any watchlist repo (owned or external)                                    |
-| Preview durability    | Durable review queue — audit parks findings, review/confirm later         |
-| Confirm granularity   | Per-finding select                                                        |
-| Filing mechanic       | Least-privilege: plain issue (severity in title, marker in body) + best-effort labels |
-| Dedup mechanic        | `--author @me` + body-marker scan, **one path** for owned and unowned     |
-| Freshness             | Sync external managed clones to upstream's default branch before audit; never touch owned checkouts |
+| Decision            | Choice                                                                                              |
+| ------------------- | --------------------------------------------------------------------------------------------------- |
+| Filing posture      | Preview → confirm, **universal** (owned and unowned identical)                                      |
+| Eligibility         | Any watchlist repo (owned or external)                                                              |
+| Preview durability  | Durable review queue — audit parks findings, review/confirm later                                   |
+| Confirm granularity | Per-finding select                                                                                  |
+| Filing mechanic     | Least-privilege: plain issue (severity in title, marker in body) + best-effort labels               |
+| Dedup mechanic      | `--author @me` + body-marker scan, **one path** for owned and unowned                               |
+| Freshness           | Sync external managed clones to upstream's default branch before audit; never touch owned checkouts |
 
 ## Architecture: two-phase assess
 
-Today `runAssessFlow` audits *and* files in one daemon pass. Split it:
+Today `runAssessFlow` audits _and_ files in one daemon pass. Split it:
 
 ```
 Phase A  (daemon, read-only)          Phase B  (operator, in-process)
@@ -121,12 +121,12 @@ corrupt → empty + error string the caller surfaces).
 
 ```ts
 interface PendingAssess {
-  id: string;          // = the assess ticket id (stable across requeue → re-run overwrites, no dup batch)
-  nwo: string;         // resolved from origin at audit time
-  external: boolean;   // path-based (see §2); drives label set + freshness sync
-  autoPlan: boolean;   // owned+autoPlan → trigger label at confirm; forced false when external
-  repoPath: string;    // provenance
-  createdAt: string;   // ISO (stamped by the caller; Date is injected)
+  id: string; // = the assess ticket id (stable across requeue → re-run overwrites, no dup batch)
+  nwo: string; // resolved from origin at audit time
+  external: boolean; // path-based (see §2); drives label set + freshness sync
+  autoPlan: boolean; // owned+autoPlan → trigger label at confirm; forced false when external
+  repoPath: string; // provenance
+  createdAt: string; // ISO (stamped by the caller; Date is injected)
   findings: Finding[]; // full candidate set (all ≥ minSeverity — see §2)
 }
 ```
@@ -144,7 +144,7 @@ Phases 1–7 (resolve, nwo, npm audit, agent audit, merge/filter, GitHub dedup) 
 **unchanged analysis**. Phases 8–9 (label + file) are removed from the flow. New tail:
 
 - **External detection is path-based:** `external = repoPath is under
-  resolve(cfg.github.externalReposRoot)`. Deterministic, offline, true by construction
+resolve(cfg.github.externalReposRoot)`. Deterministic, offline, true by construction
   (`ensureExternalClone` always places external clones there).
 - **Freshness sync (external only):** before the audit, `git fetch origin`, resolve
   origin's default branch (`git symbolic-ref refs/remotes/origin/HEAD`), hard-reset the
@@ -152,7 +152,7 @@ Phases 1–7 (resolve, nwo, npm audit, agent audit, merge/filter, GitHub dedup) 
   are never fetched or reset** — assess audits whatever is checked out, as today.
 - **No cap at parking.** `maxIssuesPerRun` was an auto-file spam guard; with per-finding
   human review the human is the cap. Park **all** findings ≥ `minSeverity`. The config
-  field is repurposed as the review UI's *pre-selection* count: the top-`maxIssuesPerRun`
+  field is repurposed as the review UI's _pre-selection_ count: the top-`maxIssuesPerRun`
   by severity start checked, the rest start unchecked — preserving the field's
   volume-guarding spirit under human control (no breaking config change).
 - **Audit-time GH dedup stays as a pre-filter** (drop findings already filed), so the
@@ -233,7 +233,7 @@ The `issue-create` executor is otherwise untouched; external ops simply carry `l
   #41 follow-up, unchanged.
 - **`gh issue create` on an unowned repo** requires only auth + issues enabled; `--label`
   requires triage. This is the empirical assumption to verify during implementation
-  against a *throwaway* repo the operator controls (never a real project).
+  against a _throwaway_ repo the operator controls (never a real project).
 
 ## Non-goals
 

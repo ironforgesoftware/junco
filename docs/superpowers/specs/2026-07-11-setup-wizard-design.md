@@ -58,13 +58,13 @@ name (fallback: "friend"), one line from a small rotating pool (3–5 variants, 
 seasonal pools). While the user reads, preflight probes run with spinners and settle
 into receipts: node ≥ 22.19, git present, gh present + authenticated as `<login>`,
 existing config detected (→ re-run mode) or not. Detect-then-offer: what the machine
-already has right is shown, never asked. Tip: *"Every answer lands in one editable
-file — config.json. Nothing here is permanent."*
+already has right is shown, never asked. Tip: _"Every answer lands in one editable
+file — config.json. Nothing here is permanent."_
 
 **1 · Workspace.** `vaultRoot` text field (default `~/Junco`). Writes `juncoSubdir: ""`
-exactly like today, so the queue lives directly under the chosen root. Tip: *"This is
+exactly like today, so the queue lives directly under the chosen root. Tip: _"This is
 junco's nest — tickets fly into inbox/, get worked in processing/, and land in done/ or
-failed/."*
+failed/."_
 
 **2 · Model.** Source select: inline OpenAI-compatible endpoint (default) or a Pi-style
 models.json. Inline: base URL (default `http://127.0.0.1:1234/v1`), API key, then a
@@ -73,33 +73,33 @@ live probe with receipt ("✓ reachable — 12 models found") and a model picker
 containing `/` are kept as-is (today's rules, `inferProvider` unchanged). models.json:
 path (default `~/.pi/agent/models.json`), parse, pick. An unreachable endpoint is a
 warning receipt, never a dead-end — the flight check re-probes at the finale. Tip:
-*"junco drives a coding agent through this inference endpoint. Any OpenAI-compatible
-/v1 works."* (Stack-agnostic copy — never a specific server product.)
+_"junco drives a coding agent through this inference endpoint. Any OpenAI-compatible
+/v1 works."_ (Stack-agnostic copy — never a specific server product.)
 
 **3 · Repo safety.** `git.allowedRepoRoots`: repeated add-a-folder field (submit empty
 to finish; suggestion placeholder `~/code`). Honest about the default: leaving it empty
 means tickets may target any repo path. Trust copy at the authority-transfer moment:
-*"junco only works in throwaway worktrees and opens pull requests — it never commits to
-your branches. Folders you list here are the only places a ticket can point it."*
+_"junco only works in throwaway worktrees and opens pull requests — it never commits to
+your branches. Folders you list here are the only places a ticket can point it."_
 
-**4 · GitHub bridge.** Enabled toggle, default off, with the zero-cost framing: *"Off
+**4 · GitHub bridge.** Enabled toggle, default off, with the zero-cost framing: _"Off
 means zero gh calls — junco stays fully local. Flip it later with `junco config set
-github.enabled true`."* When enabled, reveal: watched repos (repeat: `owner/repo` +
+github.enabled true`."_ When enabled, reveal: watched repos (repeat: `owner/repo` +
 local clone path, empty to finish; adding none is fine — doctor warns, dashboard `a`
 adds later) and the `requireApproval` toggle (default on) with copy explaining that
 off means plan-ready tickets auto-execute.
 
 **5 · Extras.** One multiselect, recommended set pre-checked, matching real schema
-defaults: `sandbox.enabled` (on — *"agent commands run inside an OS sandbox; if the
-backend is missing, tickets fail closed rather than run unconfined"*), `verify.enabled`
-(on — build/test before the PR opens), `observability.healthEnabled` (on — *"127.0.0.1
-only"*), `observability.transcripts` (on — the per-ticket debugging record). Footer
+defaults: `sandbox.enabled` (on — _"agent commands run inside an OS sandbox; if the
+backend is missing, tickets fail closed rather than run unconfined"_), `verify.enabled`
+(on — build/test before the PR opens), `observability.healthEnabled` (on — _"127.0.0.1
+only"_), `observability.transcripts` (on — the per-ticket debugging record). Footer
 shows the focused row's `LEVERS` description, ConfigView-style. Unchecking writes an
 explicit `false`.
 
 **6 · Review & write.** Fresh mode: the exact `config.json` to be written, with
-non-default lines highlighted, plus *"~65 more levers keep their safe defaults —
-`junco config list` shows every one."* Re-run mode: an old → new diff of just the
+non-default lines highlighted, plus _"~65 more levers keep their safe defaults —
+`junco config list` shows every one."_ Re-run mode: an old → new diff of just the
 changed paths; zero changes → "Nothing changed — config untouched." and skip to the
 finale. Confirm select: Write / Go back / Quit. On write: validate, atomic temp+rename,
 create queue dirs + worktree root, then receipts ("✓ Wrote …", "✓ Created queue …").
@@ -110,7 +110,7 @@ gh auth (warn-only), sandbox backend availability when enabled. Failures print t
 fix command but never block — config is already safely written; `junco doctor` is the
 standalone re-check. Then a staged-reveal next-steps panel (~150 ms per line):
 `junco start`, `junco submit <ticket>.md`, `junco` (dashboard), `junco config list`,
-docs link. Sign-off: *"The nest is ready. 🐦"*
+docs link. Sign-off: _"The nest is ready. 🐦"_
 
 ### Re-run mode (config exists)
 

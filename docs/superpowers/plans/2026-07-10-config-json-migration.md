@@ -45,12 +45,14 @@
 This is the one large task — schema, loader, wizard, dependency removal, and every test that feeds a file through `loadConfig` must move together or the suite goes red.
 
 **Files:**
+
 - Modify: `src/config.ts`
 - Modify: `src/wizard.ts`
 - Modify: `package.json` (remove `smol-toml`)
 - Test: `tests/config.test.ts`, `tests/wizard.test.ts`, and the string/path fixups in `tests/{doctor,cli,service,restartCmd,dashboardCmd,prsCmd,tuiCliRunner,tuiApp}.test.ts` + `tests/helpers/localFixtures.tsx`
 
 **Interfaces:**
+
 - Produces: `parseConfigFile(path: string): ConfigParsed` (nested, camelCase, defaulted — the zod output type), `assembleConfig(d: ConfigParsed): Config`, `loadConfig(path: string): Config`, `renderConfigJson(a: WizardAnswers): string`. `defaultUserConfigPath`/`resolveConfigPath` now resolve `config.json`.
 - Consumes: existing `Config`/`ModelConfig` types (`src/types.ts`), `expandHome`, `DEFAULT_COMPAT`, `DEFAULT_TOOLS`.
 
@@ -92,22 +94,26 @@ describe("loadConfig (JSON)", () => {
   });
 
   it("reads promoted first-class fields (tools, worker.commitLeftovers)", () => {
-    const cfg = loadConfig(writeJson({
-      vaultRoot: "/v",
-      tools: ["read", "bash"],
-      worker: { commitLeftovers: true, maxConcurrent: 3 },
-    }));
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        tools: ["read", "bash"],
+        worker: { commitLeftovers: true, maxConcurrent: 3 },
+      }),
+    );
     expect(cfg.tools).toEqual(["read", "bash"]);
     expect(cfg.commitLeftoversEnabled).toBe(true);
     expect(cfg.maxConcurrent).toBe(3);
   });
 
   it("reads camelCase model + observability fields", () => {
-    const cfg = loadConfig(writeJson({
-      vaultRoot: "/v",
-      model: { id: "p/m", baseUrl: "http://h:9/v1", apiKey: "k", contextWindow: 4096 },
-      observability: { healthPort: 9999, logLevel: "debug" },
-    }));
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        model: { id: "p/m", baseUrl: "http://h:9/v1", apiKey: "k", contextWindow: 4096 },
+        observability: { healthPort: 9999, logLevel: "debug" },
+      }),
+    );
     expect(cfg.model.id).toBe("p/m");
     expect(cfg.model.contextWindow).toBe(4096);
     expect(cfg.healthPort).toBe(9999);
@@ -115,21 +121,25 @@ describe("loadConfig (JSON)", () => {
   });
 
   it("merges model.compat onto DEFAULT_COMPAT (camelCase keys, no camelization)", () => {
-    const cfg = loadConfig(writeJson({
-      vaultRoot: "/v",
-      model: { compat: { supportsDeveloperRole: true, customKey: 1 } },
-    }));
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/v",
+        model: { compat: { supportsDeveloperRole: true, customKey: 1 } },
+      }),
+    );
     expect(cfg.model.compat.supportsDeveloperRole).toBe(true);
     expect((cfg.model.compat as Record<string, unknown>).customKey).toBe(1);
     expect(cfg.model.compat.maxTokensField).toBe("max_tokens"); // default preserved
   });
 
   it("expands ~ in path fields and derives github cross-field defaults", () => {
-    const cfg = loadConfig(writeJson({
-      vaultRoot: "~/Junco",
-      observability: { stateDir: "/state" },
-      github: { enabled: true, triggerLabel: "bot" },
-    }));
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "~/Junco",
+        observability: { stateDir: "/state" },
+        github: { enabled: true, triggerLabel: "bot" },
+      }),
+    );
     expect(cfg.vaultRoot).not.toContain("~");
     expect(cfg.github.askLabel).toBe("bot:ask");
     expect(cfg.github.externalReposRoot).toBe("/state/external");
@@ -157,8 +167,9 @@ describe("resolveConfigPath / defaultUserConfigPath", () => {
     expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
   });
   it("prefers ./config.json when present", () => {
-    expect(resolveConfigPath(undefined, { existsFn: (p) => p.endsWith("config.json"), cwd: () => "/w" }))
-      .toBe("/w/config.json");
+    expect(
+      resolveConfigPath(undefined, { existsFn: (p) => p.endsWith("config.json"), cwd: () => "/w" }),
+    ).toBe("/w/config.json");
   });
 });
 
@@ -184,10 +195,13 @@ Top of file — drop `import { parse as parseToml } from "smol-toml";`. Keep `re
 Path helpers — change the basename:
 
 ```ts
-export function defaultUserConfigPath(env: Record<string, string | undefined> = process.env): string {
-  const base = env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== ""
-    ? env.XDG_CONFIG_HOME
-    : join(homedir(), ".config");
+export function defaultUserConfigPath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const base =
+    env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== ""
+      ? env.XDG_CONFIG_HOME
+      : join(homedir(), ".config");
   return join(base, "junco", "config.json");
 }
 // resolveConfigPath: replace the two "config.toml" literals with "config.json".
@@ -200,97 +214,128 @@ const ConfigSchema = z.object({
   vaultRoot: z.string({ required_error: "config: vaultRoot is required" }),
   juncoSubdir: z.string().default("Junco"),
   tools: z.array(z.string()).default(DEFAULT_TOOLS),
-  model: z.object({
-    id: z.string().default("local/my-model"),
-    modelsJson: z.string().optional(),
-    api: z.string().default("openai-completions"),
-    baseUrl: z.string().default("http://127.0.0.1:1234/v1"),
-    apiKey: z.string().default("1234"),
-    reasoning: z.boolean().default(true),
-    input: z.array(z.string()).default(["text", "image"]),
-    contextWindow: z.number().default(131072),
-    maxTokens: z.number().default(49152),
-    cost: z.object({
-      input: z.number().default(0),
-      output: z.number().default(0),
-      cacheRead: z.number().default(0),
-      cacheWrite: z.number().default(0),
-    }).default({}),
-    thinkingLevel: z.string().default("medium"),
-    compat: z.record(z.unknown()).default({}),
-  }).default({}),
-  worker: z.object({
-    defaultTimeoutMinutes: z.number().min(1).default(30),
-    pollIntervalSeconds: z.number().min(1).default(15),
-    startupPollSeconds: z.number().min(1).default(30),
-    startupWait: z.boolean().default(true),
-    maxTransientRetries: z.number().int().min(0).default(2),
-    retryBackoffSeconds: z.number().min(0).default(60),
-    maxConcurrent: z.number().int().min(1).default(1),
-    commitLeftovers: z.boolean().default(false),
-  }).default({}),
-  supervisor: z.object({
-    enabled: z.boolean().default(true),
-    budgetPerKind: z.number().default(1),
-    escalationWindowTurns: z.number().default(3),
-    outputBudgetPerTurn: z.number().default(12000),
-    outputBudgetPostCommit: z.number().default(24000),
-  }).default({}),
-  git: z.object({
-    gitBin: z.string().default("git"),
-    ghBin: z.string().default("gh"),
-    defaultBaseBranch: z.string().default("main"),
-    branchPrefix: z.string().default("junco/"),
-    worktreeRoot: z.string().default("~/junco/worktrees"),
-    removeWorktreeOnSuccess: z.boolean().default(true),
-    allowedRepoRoots: z.array(z.string()).default([]),
-  }).default({}),
-  pr: z.object({
-    draftByDefault: z.boolean().default(true),
-    defaultLabels: z.array(z.string()).default([]),
-  }).default({}),
-  verify: z.object({
-    enabled: z.boolean().default(true),
-    commandTimeout: z.number().min(1).default(60),
-    blockOnFail: z.boolean().default(false),
-  }).default({}),
-  critic: z.object({
-    enabled: z.boolean().default(true),
-    maxRetries: z.number().default(1),
-    thinking: z.string().default("minimal"),
-  }).default({}),
-  planLint: z.object({
-    enabled: z.boolean().default(true),
-    blockOnError: z.boolean().default(true),
-    checkLabels: z.boolean().default(true),
-  }).default({}),
-  observability: z.object({
-    healthEnabled: z.boolean().default(true),
-    healthHost: z.string().default("127.0.0.1").transform((h) => (h.trim() === "" ? "127.0.0.1" : h)),
-    healthPort: z.number().int().min(1).max(65535).default(8787),
-    logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
-    stateDir: z.string().default("~/.local/state/junco"),
-    logToFile: z.boolean().default(true),
-    transcripts: z.boolean().default(true),
-  }).default({}),
-  github: z.object({
-    enabled: z.boolean().default(false),
-    triggerLabel: z.string().min(1).default("junco"),
-    askLabel: z.string().min(1).optional(),
-    pollIntervalSeconds: z.number().min(5).default(60),
-    requireApproval: z.boolean().default(true),
-    plannerModelId: z.string().min(1).optional(),
-    externalReposRoot: z.string().min(1).optional(),
-    repos: z.array(z.object({
-      nwo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "github.repos[].nwo must be owner/repo"),
-      path: z.string().min(1),
-    })).default([]),
-  }).default({}),
-  assess: z.object({
-    maxIssuesPerRun: z.number().int().min(1).default(20),
-    minSeverity: z.enum(["critical", "high", "medium", "low"]).default("low"),
-    npmBin: z.string().min(1).default("npm"),
-  }).default({}),
+  model: z
+    .object({
+      id: z.string().default("local/my-model"),
+      modelsJson: z.string().optional(),
+      api: z.string().default("openai-completions"),
+      baseUrl: z.string().default("http://127.0.0.1:1234/v1"),
+      apiKey: z.string().default("1234"),
+      reasoning: z.boolean().default(true),
+      input: z.array(z.string()).default(["text", "image"]),
+      contextWindow: z.number().default(131072),
+      maxTokens: z.number().default(49152),
+      cost: z
+        .object({
+          input: z.number().default(0),
+          output: z.number().default(0),
+          cacheRead: z.number().default(0),
+          cacheWrite: z.number().default(0),
+        })
+        .default({}),
+      thinkingLevel: z.string().default("medium"),
+      compat: z.record(z.unknown()).default({}),
+    })
+    .default({}),
+  worker: z
+    .object({
+      defaultTimeoutMinutes: z.number().min(1).default(30),
+      pollIntervalSeconds: z.number().min(1).default(15),
+      startupPollSeconds: z.number().min(1).default(30),
+      startupWait: z.boolean().default(true),
+      maxTransientRetries: z.number().int().min(0).default(2),
+      retryBackoffSeconds: z.number().min(0).default(60),
+      maxConcurrent: z.number().int().min(1).default(1),
+      commitLeftovers: z.boolean().default(false),
+    })
+    .default({}),
+  supervisor: z
+    .object({
+      enabled: z.boolean().default(true),
+      budgetPerKind: z.number().default(1),
+      escalationWindowTurns: z.number().default(3),
+      outputBudgetPerTurn: z.number().default(12000),
+      outputBudgetPostCommit: z.number().default(24000),
+    })
+    .default({}),
+  git: z
+    .object({
+      gitBin: z.string().default("git"),
+      ghBin: z.string().default("gh"),
+      defaultBaseBranch: z.string().default("main"),
+      branchPrefix: z.string().default("junco/"),
+      worktreeRoot: z.string().default("~/junco/worktrees"),
+      removeWorktreeOnSuccess: z.boolean().default(true),
+      allowedRepoRoots: z.array(z.string()).default([]),
+    })
+    .default({}),
+  pr: z
+    .object({
+      draftByDefault: z.boolean().default(true),
+      defaultLabels: z.array(z.string()).default([]),
+    })
+    .default({}),
+  verify: z
+    .object({
+      enabled: z.boolean().default(true),
+      commandTimeout: z.number().min(1).default(60),
+      blockOnFail: z.boolean().default(false),
+    })
+    .default({}),
+  critic: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxRetries: z.number().default(1),
+      thinking: z.string().default("minimal"),
+    })
+    .default({}),
+  planLint: z
+    .object({
+      enabled: z.boolean().default(true),
+      blockOnError: z.boolean().default(true),
+      checkLabels: z.boolean().default(true),
+    })
+    .default({}),
+  observability: z
+    .object({
+      healthEnabled: z.boolean().default(true),
+      healthHost: z
+        .string()
+        .default("127.0.0.1")
+        .transform((h) => (h.trim() === "" ? "127.0.0.1" : h)),
+      healthPort: z.number().int().min(1).max(65535).default(8787),
+      logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
+      stateDir: z.string().default("~/.local/state/junco"),
+      logToFile: z.boolean().default(true),
+      transcripts: z.boolean().default(true),
+    })
+    .default({}),
+  github: z
+    .object({
+      enabled: z.boolean().default(false),
+      triggerLabel: z.string().min(1).default("junco"),
+      askLabel: z.string().min(1).optional(),
+      pollIntervalSeconds: z.number().min(5).default(60),
+      requireApproval: z.boolean().default(true),
+      plannerModelId: z.string().min(1).optional(),
+      externalReposRoot: z.string().min(1).optional(),
+      repos: z
+        .array(
+          z.object({
+            nwo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "github.repos[].nwo must be owner/repo"),
+            path: z.string().min(1),
+          }),
+        )
+        .default([]),
+    })
+    .default({}),
+  assess: z
+    .object({
+      maxIssuesPerRun: z.number().int().min(1).default(20),
+      minSeverity: z.enum(["critical", "high", "medium", "low"]).default("low"),
+      npmBin: z.string().min(1).default("npm"),
+    })
+    .default({}),
 });
 
 export type ConfigParsed = z.infer<typeof ConfigSchema>;
@@ -319,7 +364,9 @@ export function parseConfigFile(path: string): ConfigParsed {
   try {
     raw = JSON.parse(text);
   } catch (e) {
-    throw new Error(`config: ${path} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(
+      `config: ${path} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
   return ConfigSchema.parse(raw);
 }
@@ -393,7 +440,9 @@ export function assembleConfig(d: ConfigParsed): Config {
       pollIntervalSeconds: d.github.pollIntervalSeconds,
       requireApproval: d.github.requireApproval,
       plannerModelId: d.github.plannerModelId ?? null,
-      externalReposRoot: expandHome(d.github.externalReposRoot ?? join(d.observability.stateDir, "external")),
+      externalReposRoot: expandHome(
+        d.github.externalReposRoot ?? join(d.observability.stateDir, "external"),
+      ),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
     },
     assess: {
@@ -445,10 +494,21 @@ Change `renderConfigToml` → `renderConfigJson` and assert JSON round-trips thr
 
 ```ts
 it("renders a config.json that round-trips through loadConfig", () => {
-  const json = renderConfigJson({ vaultRoot: "/v", mode: "inline", modelId: "p/m", baseUrl: "http://h/v1", apiKey: "k" });
+  const json = renderConfigJson({
+    vaultRoot: "/v",
+    mode: "inline",
+    modelId: "p/m",
+    baseUrl: "http://h/v1",
+    apiKey: "k",
+  });
   const parsed = JSON.parse(json);
-  expect(parsed).toMatchObject({ vaultRoot: "/v", juncoSubdir: "", model: { id: "p/m", baseUrl: "http://h/v1" } });
-  const dir = mkdtempSync(join(tmpdir(), "wiz-")); const p = join(dir, "config.json");
+  expect(parsed).toMatchObject({
+    vaultRoot: "/v",
+    juncoSubdir: "",
+    model: { id: "p/m", baseUrl: "http://h/v1" },
+  });
+  const dir = mkdtempSync(join(tmpdir(), "wiz-"));
+  const p = join(dir, "config.json");
   writeFileSync(p, json, "utf8");
   expect(loadConfig(p).model.id).toBe("p/m");
 });
@@ -461,7 +521,7 @@ Any test that asserted the wizard wrote a `config.toml` path must expect `config
 These reference `config.toml` only as a path string or as written body. Update each occurrence to `config.json` and (where a TOML body was written and then loaded) to a JSON body. Files: `tests/{doctor,cli,service,restartCmd,dashboardCmd,prsCmd,tuiCliRunner,tuiApp}.test.ts`, `tests/helpers/localFixtures.tsx`. Grep-drive it:
 
 Run: `grep -rn "config\.toml\|writeToml\|parseToml\|renderConfigToml" tests/`
-For each hit: rename `config.toml`→`config.json`; if the test writes a TOML *body* through `loadConfig`, replace it with `JSON.stringify({ vaultRoot: ... })`; if it only builds a `Config` literal, leave the literal (only fix an incidental `config.toml` path string).
+For each hit: rename `config.toml`→`config.json`; if the test writes a TOML _body_ through `loadConfig`, replace it with `JSON.stringify({ vaultRoot: ... })`; if it only builds a `Config` literal, leave the literal (only fix an incidental `config.toml` path string).
 
 - [ ] **Step 8: Run the full suite.**
 
@@ -470,7 +530,7 @@ Expected: PASS (exit 0). Investigate any file still assuming TOML.
 
 - [ ] **Step 9: Typecheck + format, then commit.**
 
-Run: `npx tsc --noEmit -p tsconfig.eslint.json > /tmp/t1tc.out 2>&1; echo "exit: $?"` (ignore the ~57 pre-existing unrelated errors noted in project memory; ensure no *new* config-related ones).
+Run: `npx tsc --noEmit -p tsconfig.eslint.json > /tmp/t1tc.out 2>&1; echo "exit: $?"` (ignore the ~57 pre-existing unrelated errors noted in project memory; ensure no _new_ config-related ones).
 Run: `npx prettier --write src/config.ts src/wizard.ts tests/config.test.ts tests/wizard.test.ts`
 
 ```bash
@@ -483,10 +543,12 @@ git commit -m "feat(config): load config.json (camelCase, no shims); remove smol
 ## Task 2: Lever registry + drift test
 
 **Files:**
+
 - Create: `src/configLevers.ts`
 - Test: `tests/configLevers.test.ts`
 
 **Interfaces:**
+
 - Produces: `Lever` interface; `LEVERS: Lever[]`; `getAtPath(obj, path): unknown`; `setAtPath(obj, path, value): void` (mutates, creating intermediate objects); `leverAtPath(path): Lever | undefined`.
 - Consumes: `ConfigParsed` shape / `ConfigSchema` from `src/config.ts` (export `ConfigSchema` for the drift test).
 
@@ -508,13 +570,16 @@ function schemaLeaves(schema: z.ZodTypeAny, prefix = ""): { path: string; def: z
   }
   if (s instanceof z.ZodObject) {
     return Object.entries(s.shape).flatMap(([k, v]) =>
-      schemaLeaves(v as z.ZodTypeAny, prefix ? `${prefix}.${k}` : k));
+      schemaLeaves(v as z.ZodTypeAny, prefix ? `${prefix}.${k}` : k),
+    );
   }
   return [{ path: prefix, def: schema }];
 }
 
 describe("LEVERS ↔ schema bijection", () => {
-  const leafPaths = schemaLeaves(ConfigSchema).map((l) => l.path).sort();
+  const leafPaths = schemaLeaves(ConfigSchema)
+    .map((l) => l.path)
+    .sort();
   const leverPaths = LEVERS.map((l) => l.path).sort();
 
   it("has exactly one lever per schema leaf (no missing, no orphan)", () => {
@@ -549,6 +614,7 @@ Expected: FAIL (module not found).
 - [ ] **Step 4: Write `src/configLevers.ts`.**
 
 Type + helpers, then the full `LEVERS` array. **Completeness is enforced by the drift test in Step 2** — every schema leaf below must have exactly one entry. Assign `type`/`editable`/`reload` by these rules:
+
 - `type`: `model.apiKey`→`secret`; `tools`,`pr.defaultLabels`,`git.allowedRepoRoots`,`model.input`,`model.compat`,`model.cost`,`github.repos`→`structured`(`editable:false`); zod enum→`enum`(list `enumValues`); zod number→`number`(copy `min`/`max` from the schema); zod boolean→`boolean`; else→`string`. All non-structured levers are `editable:true`.
 - `reload`: **`restart`** for `vaultRoot`, `juncoSubdir`, `github.enabled`, and `observability.{healthEnabled,healthHost,healthPort,stateDir,logToFile,transcripts}`. **`live`** for everything else — including `observability.logLevel` (the watcher re-applies it via `setLogLevel`) and `worker.maxConcurrent`.
 - `default`: copy the schema default verbatim.
@@ -568,7 +634,12 @@ export interface Lever {
 }
 
 export function getAtPath(obj: unknown, path: string): unknown {
-  return path.split(".").reduce<unknown>((acc, k) => (acc == null ? undefined : (acc as Record<string, unknown>)[k]), obj);
+  return path
+    .split(".")
+    .reduce<unknown>(
+      (acc, k) => (acc == null ? undefined : (acc as Record<string, unknown>)[k]),
+      obj,
+    );
 }
 
 export function setAtPath(obj: Record<string, unknown>, path: string, value: unknown): void {
@@ -582,43 +653,139 @@ export function setAtPath(obj: Record<string, unknown>, path: string, value: unk
 }
 
 export const LEVERS: Lever[] = [
-  { path: "vaultRoot", type: "string", default: undefined, editable: true, reload: "restart",
-    description: "Root directory Junco keeps its ticket queue under." },
-  { path: "juncoSubdir", type: "string", default: "Junco", editable: true, reload: "restart",
-    description: "Subdirectory under vaultRoot holding inbox/processing/done/failed." },
-  { path: "tools", type: "structured", default: ["read","bash","edit","write","grep","find","ls"], editable: false, reload: "live",
-    description: "Tool allowlist granted to the coding agent." },
+  {
+    path: "vaultRoot",
+    type: "string",
+    default: undefined,
+    editable: true,
+    reload: "restart",
+    description: "Root directory Junco keeps its ticket queue under.",
+  },
+  {
+    path: "juncoSubdir",
+    type: "string",
+    default: "Junco",
+    editable: true,
+    reload: "restart",
+    description: "Subdirectory under vaultRoot holding inbox/processing/done/failed.",
+  },
+  {
+    path: "tools",
+    type: "structured",
+    default: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+    editable: false,
+    reload: "live",
+    description: "Tool allowlist granted to the coding agent.",
+  },
   // --- model.* ---
-  { path: "model.id", type: "string", default: "local/my-model", editable: true, reload: "live",
-    description: "Provider-prefixed model id, e.g. openai/gpt-4o-mini." },
-  { path: "model.apiKey", type: "secret", default: "1234", editable: true, reload: "live",
-    description: "API key for the inference endpoint." },
-  { path: "model.baseUrl", type: "string", default: "http://127.0.0.1:1234/v1", editable: true, reload: "live",
-    description: "OpenAI-compatible /v1 endpoint base URL." },
-  { path: "model.maxTokens", type: "number", default: 49152, editable: true, reload: "live",
-    description: "Max output tokens per model call." },
-  { path: "model.thinkingLevel", type: "string", default: "medium", editable: true, reload: "live",
-    description: "Worker default reasoning/thinking level." },
+  {
+    path: "model.id",
+    type: "string",
+    default: "local/my-model",
+    editable: true,
+    reload: "live",
+    description: "Provider-prefixed model id, e.g. openai/gpt-4o-mini.",
+  },
+  {
+    path: "model.apiKey",
+    type: "secret",
+    default: "1234",
+    editable: true,
+    reload: "live",
+    description: "API key for the inference endpoint.",
+  },
+  {
+    path: "model.baseUrl",
+    type: "string",
+    default: "http://127.0.0.1:1234/v1",
+    editable: true,
+    reload: "live",
+    description: "OpenAI-compatible /v1 endpoint base URL.",
+  },
+  {
+    path: "model.maxTokens",
+    type: "number",
+    default: 49152,
+    editable: true,
+    reload: "live",
+    description: "Max output tokens per model call.",
+  },
+  {
+    path: "model.thinkingLevel",
+    type: "string",
+    default: "medium",
+    editable: true,
+    reload: "live",
+    description: "Worker default reasoning/thinking level.",
+  },
   // ... model.{modelsJson,api,reasoning,input,contextWindow,cost,compat} ...
   // --- worker.* ---
-  { path: "worker.maxConcurrent", type: "number", default: 1, min: 1, editable: true, reload: "live",
-    description: "Parallel ticket slots; same-repo tickets always serialize." },
-  { path: "worker.pollIntervalSeconds", type: "number", default: 15, min: 1, editable: true, reload: "live",
-    description: "Seconds between inbox polls when idle." },
-  { path: "worker.commitLeftovers", type: "boolean", default: false, editable: true, reload: "live",
-    description: "Sweep uncommitted leftovers into a final commit at run end." },
+  {
+    path: "worker.maxConcurrent",
+    type: "number",
+    default: 1,
+    min: 1,
+    editable: true,
+    reload: "live",
+    description: "Parallel ticket slots; same-repo tickets always serialize.",
+  },
+  {
+    path: "worker.pollIntervalSeconds",
+    type: "number",
+    default: 15,
+    min: 1,
+    editable: true,
+    reload: "live",
+    description: "Seconds between inbox polls when idle.",
+  },
+  {
+    path: "worker.commitLeftovers",
+    type: "boolean",
+    default: false,
+    editable: true,
+    reload: "live",
+    description: "Sweep uncommitted leftovers into a final commit at run end.",
+  },
   // ... worker.{defaultTimeoutMinutes,startupPollSeconds,startupWait,maxTransientRetries,retryBackoffSeconds} ...
   // --- observability.* ---
-  { path: "observability.logLevel", type: "enum", enumValues: ["debug","info","warn","error"], default: "info", editable: true, reload: "live",
-    description: "Daemon-wide log threshold (applied live)." },
-  { path: "observability.healthPort", type: "number", default: 8787, min: 1, max: 65535, editable: true, reload: "restart",
-    description: "Port the /health metrics server binds (restart to rebind)." },
-  { path: "observability.healthHost", type: "string", default: "127.0.0.1", editable: true, reload: "restart",
-    description: "Bind address for /health; non-loopback exposes metrics (restart to rebind)." },
+  {
+    path: "observability.logLevel",
+    type: "enum",
+    enumValues: ["debug", "info", "warn", "error"],
+    default: "info",
+    editable: true,
+    reload: "live",
+    description: "Daemon-wide log threshold (applied live).",
+  },
+  {
+    path: "observability.healthPort",
+    type: "number",
+    default: 8787,
+    min: 1,
+    max: 65535,
+    editable: true,
+    reload: "restart",
+    description: "Port the /health metrics server binds (restart to rebind).",
+  },
+  {
+    path: "observability.healthHost",
+    type: "string",
+    default: "127.0.0.1",
+    editable: true,
+    reload: "restart",
+    description: "Bind address for /health; non-loopback exposes metrics (restart to rebind).",
+  },
   // ... observability.{healthEnabled(restart),stateDir(restart),logToFile(restart),transcripts(restart)} ...
   // --- supervisor.*, git.*, pr.*, verify.*, critic.*, planLint.*, github.*, assess.* (all live except github.enabled=restart) ---
-  { path: "assess.minSeverity", type: "enum", enumValues: ["critical","high","medium","low"], default: "low", editable: true, reload: "live",
-    description: "Drop assessment findings below this severity." },
+  {
+    path: "assess.minSeverity",
+    type: "enum",
+    enumValues: ["critical", "high", "medium", "low"],
+    default: "low",
+    editable: true,
+    reload: "live",
+    description: "Drop assessment findings below this severity.",
+  },
 ];
 
 export function leverAtPath(path: string): Lever | undefined {
@@ -636,6 +803,7 @@ Expected: PASS. If "no missing/no orphan" fails, the diff lists the exact missin
 - [ ] **Step 6: Format + commit.**
 
 Run: `npx prettier --write src/configLevers.ts tests/configLevers.test.ts src/config.ts`
+
 ```bash
 git add -A
 git commit -m "feat(config): lever registry + schema-bijection drift test"
@@ -646,11 +814,13 @@ git commit -m "feat(config): lever registry + schema-bijection drift test"
 ## Task 3: `junco config` CLI
 
 **Files:**
+
 - Create: `src/configCmd.ts`
 - Modify: `src/cli.ts` (register the `config` subcommand; add it to `USAGE`)
 - Test: `tests/configCmd.test.ts`
 
 **Interfaces:**
+
 - Produces: `runConfigCommand(argv: string[], configPath: string, deps?: ConfigCmdDeps): number` where `ConfigCmdDeps = { readFileFn?; writeFileFn?; existsFn?; printFn?; errFn?; daemonRunningFn?: () => boolean }`. Subcommands: `path`, `list`, `get <path>`, `set <path> <value>`.
 - Consumes: `LEVERS`, `getAtPath`, `setAtPath`, `leverAtPath` (Task 2); `parseConfigFile`, `loadConfig`, `resolveConfigPath` (Task 1).
 
@@ -687,7 +857,9 @@ describe("junco config", () => {
 
   it("set coerces a number and writes sparsely", () => {
     const p = fixture({ vaultRoot: "/v" });
-    expect(runConfigCommand(["set", "worker.maxConcurrent", "3"], p, { printFn: () => {} })).toBe(0);
+    expect(runConfigCommand(["set", "worker.maxConcurrent", "3"], p, { printFn: () => {} })).toBe(
+      0,
+    );
     const raw = JSON.parse(readFileSync(p, "utf8"));
     expect(raw.worker.maxConcurrent).toBe(3);
     expect(raw.vaultRoot).toBe("/v"); // untouched keys preserved, nothing else added
@@ -713,7 +885,9 @@ describe("junco config", () => {
   it("set rejects a bad enum value and writes nothing", () => {
     const p = fixture({ vaultRoot: "/v" });
     const before = readFileSync(p, "utf8");
-    expect(runConfigCommand(["set", "observability.logLevel", "loud"], p, { errFn: () => {} })).toBe(1);
+    expect(
+      runConfigCommand(["set", "observability.logLevel", "loud"], p, { errFn: () => {} }),
+    ).toBe(1);
     expect(readFileSync(p, "utf8")).toBe(before);
   });
 
@@ -733,10 +907,16 @@ describe("junco config", () => {
   it("set warns to restart only for restart-kind levers", () => {
     const p = fixture({ vaultRoot: "/v" });
     let out = "";
-    runConfigCommand(["set", "observability.healthPort", "9000"], p, { printFn: (s) => (out += s), daemonRunningFn: () => true });
+    runConfigCommand(["set", "observability.healthPort", "9000"], p, {
+      printFn: (s) => (out += s),
+      daemonRunningFn: () => true,
+    });
     expect(out).toMatch(/restart/i);
     out = "";
-    runConfigCommand(["set", "worker.pollIntervalSeconds", "20"], p, { printFn: (s) => (out += s), daemonRunningFn: () => true });
+    runConfigCommand(["set", "worker.pollIntervalSeconds", "20"], p, {
+      printFn: (s) => (out += s),
+      daemonRunningFn: () => true,
+    });
     expect(out).not.toMatch(/restart/i);
   });
 });
@@ -752,7 +932,14 @@ Expected: FAIL (module not found).
 ```ts
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { LEVERS, getAtPath, setAtPath, leverAtPath, coerceLever, type Lever } from "./configLevers.js";
+import {
+  LEVERS,
+  getAtPath,
+  setAtPath,
+  leverAtPath,
+  coerceLever,
+  type Lever,
+} from "./configLevers.js";
 import { validateConfigObject } from "./config.js";
 
 export interface ConfigCmdDeps {
@@ -783,7 +970,11 @@ function getEffective(
   return v === undefined ? lever.default : v;
 }
 
-export function runConfigCommand(argv: string[], configPath: string, deps: ConfigCmdDeps = {}): number {
+export function runConfigCommand(
+  argv: string[],
+  configPath: string,
+  deps: ConfigCmdDeps = {},
+): number {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const err = deps.errFn ?? ((s: string) => process.stderr.write(s));
   const readFile = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
@@ -791,21 +982,29 @@ export function runConfigCommand(argv: string[], configPath: string, deps: Confi
   const exists = deps.existsFn ?? existsSync;
   const [sub, ...rest] = argv;
 
-  if (sub === "path") { print(configPath + "\n"); return 0; }
+  if (sub === "path") {
+    print(configPath + "\n");
+    return 0;
+  }
 
   if (sub === "list") {
     for (const l of LEVERS) {
       const cur = getEffective(readFile, exists, configPath, l);
       const val = maskFor(l, cur);
       const meta = l.type === "enum" ? l.enumValues?.join("|") : l.type;
-      print(`${l.path}\t= ${JSON.stringify(val)} (default ${JSON.stringify(l.default)}) [${meta}${l.editable ? "" : ", read-only"}]  ${l.description}\n`);
+      print(
+        `${l.path}\t= ${JSON.stringify(val)} (default ${JSON.stringify(l.default)}) [${meta}${l.editable ? "" : ", read-only"}]  ${l.description}\n`,
+      );
     }
     return 0;
   }
 
   if (sub === "get") {
     const l = leverAtPath(rest[0]);
-    if (!l) { err(`config: unknown path '${rest[0]}'\n`); return 1; }
+    if (!l) {
+      err(`config: unknown path '${rest[0]}'\n`);
+      return 1;
+    }
     print(JSON.stringify(getEffective(readFile, exists, configPath, l)) + "\n");
     return 0;
   }
@@ -813,20 +1012,37 @@ export function runConfigCommand(argv: string[], configPath: string, deps: Confi
   if (sub === "set") {
     const [path, ...valueParts] = rest;
     const l = leverAtPath(path);
-    if (!l) { err(`config: unknown path '${path}'\n`); return 1; }
-    if (!l.editable) { err(`config: '${path}' is structured — edit config.json directly\n`); return 1; }
+    if (!l) {
+      err(`config: unknown path '${path}'\n`);
+      return 1;
+    }
+    if (!l.editable) {
+      err(`config: '${path}' is structured — edit config.json directly\n`);
+      return 1;
+    }
     const c = coerceLever(l, valueParts.join(" "));
-    if ("error" in c) { err(`config: ${path}: ${c.error}\n`); return 1; }
+    if ("error" in c) {
+      err(`config: ${path}: ${c.error}\n`);
+      return 1;
+    }
     // Mutate raw (sparse), validate a defaulted copy via the schema, then atomic write.
-    const raw = exists(configPath) ? (JSON.parse(readFile(configPath)) as Record<string, unknown>) : {};
+    const raw = exists(configPath)
+      ? (JSON.parse(readFile(configPath)) as Record<string, unknown>)
+      : {};
     const old = getEffective(readFile, exists, configPath, l);
     setAtPath(raw, path, c.value);
-    try { validateConfigObject(raw); } catch (e) { err(`config: ${e instanceof Error ? e.message : String(e)}\n`); return 1; }
+    try {
+      validateConfigObject(raw);
+    } catch (e) {
+      err(`config: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
     const tmp = join(dirname(configPath), `.config.json.tmp-${process.pid}`);
     writeFile(tmp, JSON.stringify(raw, null, 2) + "\n");
     renameSync(tmp, configPath);
     print(`${path}: ${JSON.stringify(old)} → ${JSON.stringify(c.value)}\n`);
-    if (l.reload === "restart" && deps.daemonRunningFn?.()) print(`(restart the daemon to apply: junco restart)\n`);
+    if (l.reload === "restart" && deps.daemonRunningFn?.())
+      print(`(restart the daemon to apply: junco restart)\n`);
     return 0;
   }
 
@@ -856,7 +1072,8 @@ export function coerceLever(lever: Lever, raw: string): { value: unknown } | { e
       return { value: n };
     }
     case "enum":
-      if (!lever.enumValues?.includes(raw)) return { error: `expected one of ${lever.enumValues?.join("|")}` };
+      if (!lever.enumValues?.includes(raw))
+        return { error: `expected one of ${lever.enumValues?.join("|")}` };
       return { value: raw };
     case "string":
     case "secret":
@@ -894,6 +1111,7 @@ Run: `npx tsc --noEmit -p tsconfig.eslint.json 2>&1 | grep -c configCmd` → exp
 - [ ] **Step 7: Format + commit.**
 
 Run: `npx prettier --write src/configCmd.ts src/config.ts src/cli.ts tests/configCmd.test.ts`
+
 ```bash
 git add -A
 git commit -m "feat(config): junco config path/list/get/set CLI"
@@ -904,11 +1122,13 @@ git commit -m "feat(config): junco config path/list/get/set CLI"
 ## Task 4: metrics `pendingRestartFields` + status surfacing
 
 **Files:**
+
 - Modify: `src/metrics.ts` (field + snapshot + reset + `addPendingRestartFields`)
 - Modify: `src/statusCmd.ts` (display line)
 - Test: `tests/metrics.test.ts` (add cases), `tests/statusCmd.test.ts` (add a case)
 
 **Interfaces:**
+
 - Produces: `metrics.addPendingRestartFields(fields: string[]): void`; `MetricsSnapshot.pendingRestartFields: string[]`.
 - Consumes: the existing `RunMetrics`/`snapshot()` (Task 4 is independent of Tasks 2–3).
 
@@ -919,7 +1139,10 @@ it("accumulates and de-dups pending restart fields in the snapshot", () => {
   metrics.reset();
   metrics.addPendingRestartFields(["observability.healthPort", "vaultRoot"]);
   metrics.addPendingRestartFields(["vaultRoot"]);
-  expect(metrics.snapshot().pendingRestartFields).toEqual(["observability.healthPort", "vaultRoot"]);
+  expect(metrics.snapshot().pendingRestartFields).toEqual([
+    "observability.healthPort",
+    "vaultRoot",
+  ]);
 });
 ```
 
@@ -948,6 +1171,7 @@ Add a `tests/statusCmd.test.ts` case: a fake `/health` body including `pendingRe
 
 Run: `npx vitest run tests/metrics.test.ts tests/statusCmd.test.ts > /tmp/t4b.out 2>&1; echo "exit: $?"` → PASS.
 Run: `npx prettier --write src/metrics.ts src/statusCmd.ts tests/metrics.test.ts tests/statusCmd.test.ts`
+
 ```bash
 git add -A
 git commit -m "feat(metrics): expose pendingRestartFields; surface in junco status"
@@ -958,10 +1182,12 @@ git commit -m "feat(metrics): expose pendingRestartFields; surface in junco stat
 ## Task 5: ConfigHolder + config watcher
 
 **Files:**
+
 - Create: `src/configWatcher.ts`
 - Test: `tests/configWatcher.test.ts`
 
 **Interfaces:**
+
 - Produces: `interface ConfigHolder { current: Config }`; `makeConfigHolder(initial: Config): ConfigHolder`; `watchConfig(configPath, holder, deps?): { close(): void }` where deps = `{ watchFn?; loadFn?: (p)=>Config; parseFn?: (p)=>ConfigParsed; setLogLevelFn?; onRestartFields?: (f: string[]) => void; logFn?; debounceMs?; scheduleFn?: (cb, ms) => { cancel(): void } }`.
 - Consumes: `loadConfig`/`parseConfigFile`/`ConfigParsed` (Task 1); `LEVERS`/`getAtPath` (Task 2); `setLogLevel` (`src/logging.ts`); `metrics.addPendingRestartFields` (Task 4).
 
@@ -982,10 +1208,24 @@ function harness(seq: { parsed: any; config: any }[] | Error[]) {
   const restart = vi.fn();
   const holder = makeConfigHolder(baseConfig);
   const handle = watchConfig("/dir/config.json", holder, {
-    watchFn: (_dir, listener) => { fire = listener; return { close() {} }; },
-    scheduleFn: (cb) => { cb(); return { cancel() {} }; },
-    parseFn: () => { const s = seq[i]; if (s instanceof Error) throw s; return (s as any).parsed; },
-    loadFn: () => { const s = seq[i++]; if (s instanceof Error) throw s; return (s as any).config; },
+    watchFn: (_dir, listener) => {
+      fire = listener;
+      return { close() {} };
+    },
+    scheduleFn: (cb) => {
+      cb();
+      return { cancel() {} };
+    },
+    parseFn: () => {
+      const s = seq[i];
+      if (s instanceof Error) throw s;
+      return (s as any).parsed;
+    },
+    loadFn: () => {
+      const s = seq[i++];
+      if (s instanceof Error) throw s;
+      return (s as any).config;
+    },
     setLogLevelFn: setLog,
     onRestartFields: restart,
   });
@@ -994,8 +1234,10 @@ function harness(seq: { parsed: any; config: any }[] | Error[]) {
 
 it("updates the holder and re-applies logLevel on a valid change", () => {
   const h = harness([
-    { parsed: { vaultRoot: "/v", observability: { logLevel: "debug", healthPort: 8787 } },
-      config: { ...baseConfig, logLevel: "debug" } },
+    {
+      parsed: { vaultRoot: "/v", observability: { logLevel: "debug", healthPort: 8787 } },
+      config: { ...baseConfig, logLevel: "debug" },
+    },
   ]);
   h.fire();
   expect(h.holder.current.logLevel).toBe("debug");
@@ -1005,8 +1247,10 @@ it("updates the holder and re-applies logLevel on a valid change", () => {
 it("records restart-kind changes but not live ones", () => {
   // Watcher diffs the parsed file object at lever-path granularity.
   const h = harness([
-    { parsed: { vaultRoot: "/v", observability: { healthPort: 9000 } },
-      config: { ...baseConfig, healthPort: 9000 } },
+    {
+      parsed: { vaultRoot: "/v", observability: { healthPort: 9000 } },
+      config: { ...baseConfig, healthPort: 9000 },
+    },
   ]);
   h.fire();
   expect(h.restart).toHaveBeenCalledWith(expect.arrayContaining(["observability.healthPort"]));
@@ -1035,8 +1279,12 @@ import { LEVERS, getAtPath } from "./configLevers.js";
 import { setLogLevel, log } from "./logging.js";
 import { metrics } from "./metrics.js";
 
-export interface ConfigHolder { current: Config; }
-export function makeConfigHolder(initial: Config): ConfigHolder { return { current: initial }; }
+export interface ConfigHolder {
+  current: Config;
+}
+export function makeConfigHolder(initial: Config): ConfigHolder {
+  return { current: initial };
+}
 
 const RESTART_PATHS = new Set(LEVERS.filter((l) => l.reload === "restart").map((l) => l.path));
 
@@ -1053,42 +1301,76 @@ export interface WatchConfigDeps {
 
 function changedLeverPaths(prev: ConfigParsed | null, next: ConfigParsed): string[] {
   if (!prev) return [];
-  return LEVERS.filter((l) => JSON.stringify(getAtPath(prev, l.path)) !== JSON.stringify(getAtPath(next, l.path)))
-    .map((l) => l.path);
+  return LEVERS.filter(
+    (l) => JSON.stringify(getAtPath(prev, l.path)) !== JSON.stringify(getAtPath(next, l.path)),
+  ).map((l) => l.path);
 }
 
-export function watchConfig(configPath: string, holder: ConfigHolder, deps: WatchConfigDeps = {}): { close(): void } {
-  const watchFn = deps.watchFn ?? ((dir, listener) => watch(dir, (_e, fn) => { if (fn === basename(configPath)) listener(); }));
+export function watchConfig(
+  configPath: string,
+  holder: ConfigHolder,
+  deps: WatchConfigDeps = {},
+): { close(): void } {
+  const watchFn =
+    deps.watchFn ??
+    ((dir, listener) =>
+      watch(dir, (_e, fn) => {
+        if (fn === basename(configPath)) listener();
+      }));
   const loadFn = deps.loadFn ?? loadConfig;
   const parseFn = deps.parseFn ?? parseConfigFile;
   const setLogLevelFn = deps.setLogLevelFn ?? setLogLevel;
   const onRestartFields = deps.onRestartFields ?? ((f) => metrics.addPendingRestartFields(f));
   const logger = deps.logFn ?? log;
-  const schedule = deps.scheduleFn ?? ((cb, ms) => { const t = setTimeout(cb, ms); return { cancel: () => clearTimeout(t) }; });
+  const schedule =
+    deps.scheduleFn ??
+    ((cb, ms) => {
+      const t = setTimeout(cb, ms);
+      return { cancel: () => clearTimeout(t) };
+    });
   const debounceMs = deps.debounceMs ?? 200;
 
   let prevParsed: ConfigParsed | null = null;
-  try { prevParsed = parseFn(configPath); } catch { prevParsed = null; }
+  try {
+    prevParsed = parseFn(configPath);
+  } catch {
+    prevParsed = null;
+  }
   let pending: { cancel(): void } | null = null;
 
   const reload = (): void => {
     let nextParsed: ConfigParsed;
     let nextConfig: Config;
-    try { nextParsed = parseFn(configPath); nextConfig = loadFn(configPath); }
-    catch (e) { logger.error("config reload failed; keeping previous config", { error: e instanceof Error ? e.message : String(e) }); return; }
+    try {
+      nextParsed = parseFn(configPath);
+      nextConfig = loadFn(configPath);
+    } catch (e) {
+      logger.error("config reload failed; keeping previous config", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
     holder.current = nextConfig;
     setLogLevelFn(nextConfig.logLevel);
     const changed = changedLeverPaths(prevParsed, nextParsed);
     prevParsed = nextParsed;
     const restart = changed.filter((p) => RESTART_PATHS.has(p));
-    if (restart.length > 0) { onRestartFields(restart); logger.warn("config changed; restart to apply", { fields: restart }); }
+    if (restart.length > 0) {
+      onRestartFields(restart);
+      logger.warn("config changed; restart to apply", { fields: restart });
+    }
   };
 
   const watcher = watchFn(dirname(configPath), () => {
     if (pending) pending.cancel();
     pending = schedule(reload, debounceMs);
   });
-  return { close: () => { if (pending) pending.cancel(); watcher.close(); } };
+  return {
+    close: () => {
+      if (pending) pending.cancel();
+      watcher.close();
+    },
+  };
 }
 ```
 
@@ -1099,6 +1381,7 @@ Run: `npx vitest run tests/configWatcher.test.ts > /tmp/t5b.out 2>&1; echo "exit
 - [ ] **Step 5: Format + commit.**
 
 Run: `npx prettier --write src/configWatcher.ts tests/configWatcher.test.ts`
+
 ```bash
 git add -A
 git commit -m "feat(config): ConfigHolder + directory-watching hot-reload watcher"
@@ -1109,11 +1392,13 @@ git commit -m "feat(config): ConfigHolder + directory-watching hot-reload watche
 ## Task 6: Wire hot-reload into the daemon
 
 **Files:**
+
 - Modify: `src/daemon.ts` (`mainLoop` + `runScheduler` read the holder per iteration)
 - Modify: `src/cli.ts` (`start`: create holder, start watcher, pass holder into `mainLoop`)
 - Test: `tests/daemon.test.ts` (add a hot-reload case)
 
 **Interfaces:**
+
 - Consumes: `ConfigHolder` (Task 5). `MainLoopDeps`/`SchedulerDeps` gain `configHolder?: ConfigHolder`.
 - Produces: per-iteration `activeCfg()` behavior; setup-captured wiring stays on the initial `cfg`.
 
@@ -1133,12 +1418,23 @@ it("mainLoop reads the holder each iteration (live reload reaches next runOnce)"
     if (++n >= 2) stop.request();
     return true; // handled → loop continues without sleeping to idle
   };
-  await mainLoop(holder.current, stop, {}, {
-    configHolder: holder, runOnceFn,
-    sleep: async () => { await new Promise((r) => setTimeout(r, 1)); },
-    recoverOrphansFn: () => {}, pruneFn: () => {}, waitForEndpointFn: async () => {},
-    mkdirs: () => {}, startHealthServerFn: async () => null as any,
-  });
+  await mainLoop(
+    holder.current,
+    stop,
+    {},
+    {
+      configHolder: holder,
+      runOnceFn,
+      sleep: async () => {
+        await new Promise((r) => setTimeout(r, 1));
+      },
+      recoverOrphansFn: () => {},
+      pruneFn: () => {},
+      waitForEndpointFn: async () => {},
+      mkdirs: () => {},
+      startHealthServerFn: async () => null as any,
+    },
+  );
   expect(seen).toEqual([1, 99]);
 });
 ```
@@ -1180,6 +1476,7 @@ Run: `npx vitest run tests/daemon.test.ts > /tmp/t6b.out 2>&1; echo "exit: $?"` 
 - [ ] **Step 6: Format + commit.**
 
 Run: `npx prettier --write src/daemon.ts src/cli.ts tests/daemon.test.ts`
+
 ```bash
 git add -A
 git commit -m "feat(daemon): read config from a holder each iteration; watch for hot-reload"
@@ -1190,11 +1487,13 @@ git commit -m "feat(daemon): read config from a holder each iteration; watch for
 ## Task 7: TUI Config view
 
 **Files:**
+
 - Create: `src/tui/components/ConfigView.tsx`
 - Modify: `src/tui/App.tsx` (open on a free key, close on Esc; render when active)
 - Test: `tests/configView.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `LEVERS`, `getAtPath`, `setAtPath` (Task 2); `validateConfigObject`, `loadConfig` (Task 1); `tui/theme` + existing Ink components; the `ghClient.ts` atomic-write pattern.
 - Produces: `<ConfigView configPath={string} onExit={() => void} />` (Ink component).
 
@@ -1213,12 +1512,17 @@ import { join } from "node:path";
 import { ConfigView } from "../src/tui/components/ConfigView.js";
 
 async function until(fn: () => boolean, tries = 50): Promise<void> {
-  for (let i = 0; i < tries; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 5)); }
+  for (let i = 0; i < tries; i++) {
+    if (fn()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
   throw new Error("condition not met");
 }
 function fixture(obj: unknown) {
   const dir = mkdtempSync(join(tmpdir(), "cfgview-"));
-  const p = join(dir, "config.json"); writeFileSync(p, JSON.stringify(obj, null, 2), "utf8"); return p;
+  const p = join(dir, "config.json");
+  writeFileSync(p, JSON.stringify(obj, null, 2), "utf8");
+  return p;
 }
 
 it("renders sections and the focused lever description", async () => {
@@ -1250,6 +1554,7 @@ Run: `npx vitest run tests/configView.test.tsx tests/tuiApp.test.tsx > /tmp/t7b.
 - [ ] **Step 7: Format + commit.**
 
 Run: `npx prettier --write src/tui/components/ConfigView.tsx src/tui/App.tsx src/configLevers.ts tests/configView.test.tsx`
+
 ```bash
 git add -A
 git commit -m "feat(tui): in-dashboard config editor with per-lever explanations + reload markers"
@@ -1260,6 +1565,7 @@ git commit -m "feat(tui): in-dashboard config editor with per-lever explanations
 ## Task 8: Docs sweep, configuration.md shrink, CHANGELOG
 
 **Files:**
+
 - Modify: `docs/*.md`, `README.md`, `src/service.ts` (comments + emitted unit hints), `src/doctor.ts` (any `config.toml` string), `docs/configuration.md`, `CHANGELOG.md`
 - No test file (docs); the packaged-CLI smoke test in CI covers wizard/init.
 
@@ -1268,7 +1574,7 @@ git commit -m "feat(tui): in-dashboard config editor with per-lever explanations
 Run: `grep -rn "config\.toml\|smol-toml\|\.toml" src/ docs/ README.md templates/ examples/ 2>/dev/null`
 Expected remaining hits are prose/paths only (all code moved in Tasks 1–7).
 
-- [ ] **Step 2: Replace `config.toml` → `config.json` across docs + README + `service.ts` strings.** Preserve surrounding wording. Where a doc showed a TOML snippet (```toml … ```), convert it to an equivalent JSON snippet with camelCase keys. Key files: `docs/operations.md`, `docs/configuration.md`, `docs/tickets.md`, `docs/github-mode.md`, `docs/assess.md`, `docs/dashboard.md`, `docs/parallel-sessions.md`, `README.md`, `ARCHITECTURE.md` (the `config.ts` row: "zod-validated JSON → typed Config").
+- [ ] **Step 2: Replace `config.toml` → `config.json` across docs + README + `service.ts` strings.** Preserve surrounding wording. Where a doc showed a TOML snippet (`toml … `), convert it to an equivalent JSON snippet with camelCase keys. Key files: `docs/operations.md`, `docs/configuration.md`, `docs/tickets.md`, `docs/github-mode.md`, `docs/assess.md`, `docs/dashboard.md`, `docs/parallel-sessions.md`, `README.md`, `ARCHITECTURE.md` (the `config.ts` row: "zod-validated JSON → typed Config").
 
 - [ ] **Step 3: Shrink `docs/configuration.md`.** Replace the annotated per-field TOML reference with: a short intro, a **minimal `config.json` skeleton** (camelCase, a handful of common keys), and a pointer: "The full, always-current annotated reference is `junco config list` (every lever with its default, type, and one-line explanation). Edit interactively in the dashboard config view or with `junco config set <path> <value>`." Note the leftover-`.toml` guard behavior and that TOML is no longer supported.
 
@@ -1302,11 +1608,13 @@ SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
   && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" node /Users/alxedelweiss/junco/.claude/worktrees/worktree-3/dist/cli.js config list | head -3 \
   ; cd / && rm -rf "$SB"
 ```
+
 Expected: `OK config.json` and three lever lines.
 
 - [ ] **Step 7: Format + commit.**
 
 Run: `npx prettier --write docs/ README.md ARCHITECTURE.md CHANGELOG.md src/service.ts src/doctor.ts` (prettier ignores unknown types safely; scope to touched files if it complains)
+
 ```bash
 git add -A
 git commit -m "docs(config): switch references to config.json; shrink configuration.md; changelog"
@@ -1318,7 +1626,7 @@ git commit -m "docs(config): switch references to config.json; shrink configurat
 
 - **Spec coverage:** format (T1) · loadConfig+guard (T1) · registry+drift (T2) · CLI (T3) · status/health surfacing (T4) · holder+watcher (T5) · daemon wiring (T6) · TUI (T7) · docs/changelog/dependency-removal (T1+T8). Rollout steps 5 & 7 (live conversion, residual sweep) are the maintainer runbook in Appendix A (post-merge, not code).
 - **Type consistency:** `parseConfigFile`/`assembleConfig`/`loadConfig`/`ConfigParsed`/`ConfigSchema` (T1; `ConfigSchema` exported in T2 Step 1; `validateConfigObject` added T3 Step 4) consumed in T2/T3/T5. `ConfigHolder`/`makeConfigHolder`/`watchConfig` (T5) consumed in T6. `Lever`/`LEVERS`/`getAtPath`/`setAtPath`/`leverAtPath` (T2) + `coerceLever` (T3 Step 3a) consumed in T3/T5/T7. `pendingRestartFields` (T4) consumed by T5's default `onRestartFields`; T7's `↻` marker keys off each lever's `reload`. Task order (T1→T8) satisfies every consumes-before-produces edge.
-- **Placeholder note:** the `LEVERS` array (T2 Step 4) shows the pattern + a representative slice; the exhaustive-entry expansion is *enforced by the drift test*, not left to taste — the bijection assertion fails until every schema leaf has an entry. The `ConfigView` component (T7 Step 4) shows the state/handler contract with tests pinning behavior; its full JSX body follows the cited sibling view.
+- **Placeholder note:** the `LEVERS` array (T2 Step 4) shows the pattern + a representative slice; the exhaustive-entry expansion is _enforced by the drift test_, not left to taste — the bijection assertion fails until every schema leaf has an entry. The `ConfigView` component (T7 Step 4) shows the state/handler contract with tests pinning behavior; its full JSX body follows the cited sibling view.
 
 ---
 
