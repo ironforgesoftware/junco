@@ -268,3 +268,59 @@ describe("ReviewView", () => {
     expect(frame).toMatch(/dup 1h ago/);
   });
 });
+
+describe("trailing columns never wrap under long titles (#233)", () => {
+  const LONG_TITLE =
+    "an extremely long finding title that should truncate rather than push the trailing " +
+    "accounting columns onto a second visual line no matter how verbose the rule happens to be";
+  const LONG_BATCH = {
+    ...FILED_BATCH,
+    nwo: "very-long-organization-name/an-equally-long-repository-name-that-flexes",
+    findings: [{ ...FILED_BATCH.findings[0], title: LONG_TITLE }],
+  };
+
+  it("checklist row: the filed accounting stays on the finding's own line", () => {
+    const frame = render(
+      <ReviewView
+        state={state({
+          batches: [LONG_BATCH as never],
+          open: { kind: "batch", batchIdx: 0, findingCursor: 0, checked: new Set() },
+        })}
+        scroll={0}
+        height={14}
+        focused
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    const lines = frame.split("\n");
+    // The severity cell and the accounting share ONE line — the long title
+    // truncates instead of pushing `created <age>` onto a wrapped second line.
+    expect(lines.some((l) => l.includes("high") && l.includes("created"))).toBe(true);
+    // No orphaned wrap tail: any line mentioning the age also carries the verb.
+    for (const l of lines) {
+      if (l.trim().endsWith("ago") || l.trim() === "ago") {
+        expect(l).toContain("created");
+      }
+    }
+  });
+
+  it("list row: age + ownership + count stay on the batch's own line under a long nwo", () => {
+    const frame = render(
+      <ReviewView
+        state={state({ batches: [LONG_BATCH as never], open: null })}
+        scroll={0}
+        height={14}
+        focused
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    const lines = frame.split("\n");
+    const rowLine = lines.find((l) => l.includes("very-long-organization-name"));
+    expect(rowLine).toBeDefined();
+    // The trailing columns render on the SAME line, ungarbled (space-separated
+    // — the "external3" merge was the pre-existing symptom).
+    expect(rowLine).toContain("external");
+    expect(rowLine).toContain("filed 1/1");
+    expect(rowLine).not.toContain("external filed".replace(" ", "")); // no glued columns
+  });
+});
