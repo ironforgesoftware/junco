@@ -1086,38 +1086,6 @@ describe("runDoctor bot account checks", () => {
     );
   });
 
-  it("per-repo warnings name the grant command", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor(
-      "/x/config.json",
-      deps({
-        loadConfigFn: () =>
-          botConfig({
-            github: {
-              ...okConfig.github,
-              enabled: true,
-              repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
-            },
-          }),
-        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
-          if (args.includes("get-url")) {
-            return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
-          }
-          if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
-            // TRIAGE fixture from the test above, reused to pin the grant hint.
-            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
-              ? { code: 0, stdout: JSON.stringify({ viewerPermission: "TRIAGE" }), stderr: "" }
-              : { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" };
-          }
-          return { code: 0, stdout: "ok", stderr: "" };
-        },
-        printFn: (s) => lines.push(s),
-      }),
-    );
-    expect(code).toBe(0);
-    expect(lines.join("")).toMatch(/junco auth grant acme\/api/);
-  });
-
   it("bot mode: warns with the grant command on NONE permission for a watched repo", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
