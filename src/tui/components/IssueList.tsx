@@ -132,6 +132,7 @@ export function IssueList({
           <ClickableBox
             key={iss.number}
             width="100%"
+            overflow="hidden"
             backgroundColor={sel ? theme.selectionBg : undefined}
             hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             gap={1}

@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
+import { Box } from "ink";
 import { PrList } from "../src/tui/components/PrList.js";
 import { MAX_PR_BADGE_LEN } from "../src/tui/prState.js";
 import type { DashPr } from "../src/tui/prState.js";
@@ -66,5 +67,65 @@ describe("columnar PrList", () => {
     const largeLines = (largeFrame() ?? "").split("\n").length;
     expect(largeLines).toBe(smallLines);
     expect(largeFrame()).toMatch(/…3456/);
+  });
+});
+
+describe("PrList narrow-pane overflow clamp (pane-3 @ 110-col geometry)", () => {
+  // App.tsx's pane-3 wrapper at a 110-col terminal: previewWidth = min(60,
+  // floor(110*0.4)) = 44 (src/tui/layout.ts). Interior available to the row
+  // content is 44 − 2 (round border) − 2 (paddingX) = 40 columns.
+  const HEIGHT = 10;
+
+  function renderPane(prs: DashPr[]): string {
+    return (
+      render(
+        <Box width={44} height={HEIGHT}>
+          <PrList
+            prs={prs}
+            selected={0}
+            focused={true}
+            height={HEIGHT}
+            now={new Date("2026-07-20T12:00:00Z")}
+            staleAt={null}
+            window={{ start: 0, end: prs.length }}
+            showNwo={false}
+          />
+        </Box>,
+      ).lastFrame() ?? ""
+    );
+  }
+
+  // Worst case: one row hits the widest lifecycle badge ("changes-requested",
+  // 17 chars — same as MAX_PR_BADGE_LEN), another carries a double-digit
+  // checks string (✓15). Together their fixed cells structurally exceed the
+  // 40-col interior even after the dataset-derived pill-width fix — the
+  // overflow="hidden" belts are what keep this from painting past the border.
+  const worstPrs: DashPr[] = [
+    { ...pr(1, "PR one"), checks: { pass: 15, fail: 3, pending: 2, total: 20 } } as DashPr,
+    { ...pr(2, "PR two"), reviewDecision: "CHANGES_REQUESTED" } as DashPr,
+    pr(3, "PR three"),
+  ];
+
+  // Benign case: same row count, single-digit checks, no changes-requested
+  // row — the everyday dataset the pill-width fix is meant to help.
+  const benignPrs: DashPr[] = [
+    { ...pr(1, "PR one"), checks: { pass: 1, fail: 0, pending: 0, total: 1 } } as DashPr,
+    pr(2, "PR two"),
+    pr(3, "PR three"),
+  ];
+
+  it("keeps every row on one line and within the pane's outer width, worst case or benign", () => {
+    const worstLines = renderPane(worstPrs).split("\n");
+    const benignLines = renderPane(benignPrs).split("\n");
+
+    // No wrapped lines: both renders occupy exactly the same fixed height.
+    expect(worstLines.length).toBe(benignLines.length);
+
+    for (const line of worstLines) {
+      expect(line.length).toBeLessThanOrEqual(44);
+    }
+    for (const line of benignLines) {
+      expect(line.length).toBeLessThanOrEqual(44);
+    }
   });
 });

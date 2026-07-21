@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { derivePrState, prStateMeta, MAX_PR_BADGE_LEN, type DashPr } from "../prState.js";
+import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
 import { isBotAuthored } from "../state.js";
 import { fmtClock } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
@@ -71,7 +71,14 @@ export function PrList({
   onWheel,
 }: PrListProps): React.JSX.Element {
   const AGE_W = 4; // relTime can emit "365d"
-  const PILL_W = MAX_PR_BADGE_LEN + 2; // badgeText pad spaces
+  // Derive each row's lifecycle meta ONCE — reused for the pill-width calc
+  // below and the row loop, so the same badge string backs both.
+  const metaOf = prs.map((p) => prStateMeta(derivePrState(p)));
+  // Pill column sized to the CURRENT dataset's widest badge (constants or the
+  // current dataset — never the global MAX_PR_BADGE_LEN, which reserves room
+  // for "changes-requested" even when no visible row is in that state).
+  const pillInner = Math.max("state".length, ...metaOf.map((m) => m.badge.length), 0);
+  const PILL_W = pillInner + 2; // badgeText pad spaces
   const repoW = showNwo
     ? Math.min(NWO_MAX_WIDTH, Math.max("repo".length, ...prs.map((p) => p.nwo.length), 0))
     : 0;
@@ -112,8 +119,7 @@ export function PrList({
       {prs.slice(window.start, window.end).map((prItem, i) => {
         const idx = window.start + i;
         const sel = idx === selected;
-        const st = derivePrState(prItem);
-        const meta = prStateMeta(st);
+        const meta = metaOf[idx];
         const checksStr = checksToString(prItem.checks);
         const checksColor =
           prItem.checks.fail > 0
@@ -125,10 +131,13 @@ export function PrList({
         // Every cell except the title is flexShrink 0 (the Chrome.tsx header-chip
         // guarantee): a row must never wrap to a second line, or the height and
         // windowing math above corrupts. The title is the ONLY flexible cell.
+        // overflow="hidden" is the structural belt: at pathological widths the
+        // row CLIPS rather than wrapping (a clipped row beats a corrupted frame).
         return (
           <ClickableBox
             key={`${prItem.nwo}#${prItem.number}`}
             width="100%"
+            overflow="hidden"
             backgroundColor={sel ? theme.selectionBg : undefined}
             hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             gap={1}
@@ -163,7 +172,7 @@ export function PrList({
               <Text color={checksColor}>{checksStr}</Text>
             </Box>
             <Box flexShrink={0} width={PILL_W}>
-              <Badge label={meta.badge} color={meta.color} padTo={MAX_PR_BADGE_LEN} />
+              <Badge label={meta.badge} color={meta.color} padTo={pillInner} />
             </Box>
             <Box flexShrink={0} width={AGE_W} justifyContent="flex-end">
               <Text dimColor>{relTime(prItem.updatedAt, now)}</Text>

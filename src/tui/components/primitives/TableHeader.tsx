@@ -17,10 +17,12 @@ export function headerCell(col: Column): string {
 
 /** Column-header strip: bold accent labels on the hover background, cells
  * aligned to the same widths the data rows use (gap 1, mirrored). NO_COLOR →
- * bold text only. */
+ * bold text only. overflow="hidden" is the structural belt: at pathological
+ * widths the header CLIPS rather than wrapping — a clipped header beats a
+ * wrapped one. */
 export function TableHeader({ columns }: { columns: Column[] }): React.JSX.Element {
   return (
-    <Box width="100%" gap={1} backgroundColor={theme.hoverBg}>
+    <Box width="100%" gap={1} backgroundColor={theme.hoverBg} overflow="hidden">
       {columns.map((c, i) =>
         c.width === "flex" ? (
           <Box key={i} flexGrow={1} minWidth={0}>
