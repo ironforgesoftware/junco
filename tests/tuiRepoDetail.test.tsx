@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, expect, it } from "vitest";
 import { render } from "ink-testing-library";
+import { Box } from "ink";
 import { RepoDetail, repoQueueRows } from "../src/tui/components/RepoDetail.js";
 import type { UnifiedRepo } from "../src/tui/railModel.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
@@ -182,6 +183,26 @@ describe("RepoDetail", () => {
     await until(() => (lastFrame() ?? "").includes("── worktrees"));
     expect(lastFrame()).toContain("── recent tickets");
     expect(lastFrame()).toMatch(/path\s{3,}/); // StatRow padding
+  });
+
+  it("keeps the repo directory visible when the path is too long for the pane", async () => {
+    // A long common prefix with the discriminating segment last — end-truncation
+    // would show only the prefix.
+    const { lastFrame } = render(
+      <Box width={30}>
+        <RepoDetail
+          repo={{ ...repo, path: "/Users/alx/very/deeply/nested/workspace/repos/acme-api" }}
+          worktrees={[]}
+          queue={emptyQueue}
+          scroll={0}
+          height={16}
+          focused
+          now={NOW}
+        />
+      </Box>,
+    );
+    await until(() => (lastFrame() ?? "").includes("── worktrees"));
+    expect(lastFrame()).toContain("acme-api");
   });
 
   it("git error renders the error line instead of branch state", () => {

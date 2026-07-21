@@ -67,7 +67,7 @@ export function RepoDetail({
       <Text dimColor> {SOURCE_TAG[repo.source]}</Text>
     </Text>,
   );
-  lines.push(<StatRow key="p" label="path" value={repo.path} labelWidth={LW} />);
+  lines.push(<StatRow key="p" label="path" value={repo.path} labelWidth={LW} truncate="start" />);
   const g = repo.git;
   if (g === null) {
     lines.push(
