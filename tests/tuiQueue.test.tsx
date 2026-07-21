@@ -24,6 +24,7 @@ const NOW = new Date("2026-07-07T10:05:00Z");
 const IDLE: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
+  taskTimeoutSeconds: null,
   running: [],
   waiting: [],
   recent: [],
@@ -389,19 +390,19 @@ describe("QueueView", () => {
     const frame = render(
       <QueueView snap={FULL} scroll={0} now={NOW} height={20} focused={false} />,
     ).lastFrame()!;
-    expect(frame).toContain("RUNNING (1/1)");
+    expect(frame).toContain("running (1/1)");
     expect(frame).toContain("#46 exec");
     expect(frame).toContain("gh-acme-api-46"); // dim id next to the label
     expect(frame).toContain("turn 14 · bash · 12.3k tok · 4m32s");
     // BUSY's 4th waiting row is deferred, so the header surfaces the count.
-    expect(frame).toContain("WAITING (4 · 1 deferred)");
+    expect(frame).toContain("waiting (4 · 1 deferred)");
     expect(frame).toContain("1. #51 plan");
     expect(frame).toContain("2. manual-tide-fix");
     expect(frame).toContain("retry 1");
     expect(frame).toContain("not before");
     expect(frame).toContain("⏲ deferred");
     expect(frame).toContain("low"); // non-normal priority shown
-    expect(frame).toContain("RECENT");
+    expect(frame).toContain("recent");
     expect(frame).toContain("✓ #44 exec");
     expect(frame).toContain("12m ago");
     expect(frame).toContain("✗ #40 exec");
@@ -411,8 +412,8 @@ describe("QueueView", () => {
     const frame = render(
       <QueueView snap={IDLE} scroll={0} now={NOW} height={20} focused={false} />,
     ).lastFrame()!;
-    expect(frame).toContain("RUNNING (0/1)");
-    expect(frame).toContain("WAITING (0)");
+    expect(frame).toContain("running (0/1)");
+    expect(frame).toContain("waiting (0)");
     // Empty sections show an em-dash placeholder.
     expect(frame.split("—").length).toBeGreaterThanOrEqual(3);
   });
@@ -426,8 +427,8 @@ describe("QueueView", () => {
     const scrolled = render(
       <QueueView snap={FULL} scroll={6} now={NOW} height={11} focused={false} />,
     ).lastFrame()!;
-    expect(top).toContain("RUNNING");
-    expect(scrolled).not.toContain("RUNNING (1/1)");
+    expect(top).toContain("running");
+    expect(scrolled).not.toContain("running (1/1)");
   });
 
   it("loading state", () => {
@@ -629,7 +630,7 @@ describe("QueueView", () => {
       stats: mkStats({ lastPollAt: "2026-07-07T10:04:58Z" }),
     });
     expect(f).not.toContain("↻ poll");
-    expect(f).toContain("RUNNING (0/1)");
+    expect(f).toContain("running (0/1)");
   });
 
   it("running row idle past STALL_MS → a `no activity` line", () => {
@@ -664,7 +665,7 @@ describe("QueueView", () => {
         }),
       ],
     });
-    expect(f).toContain("WAITING (3 · 1 deferred · oldest 42m)");
+    expect(f).toContain("waiting (3 · 1 deferred · oldest 42m)");
   });
 
   it("WAITING header stays plain with no deferred + no queuedAt", () => {
@@ -672,7 +673,7 @@ describe("QueueView", () => {
       ...IDLE,
       waiting: [wRow({ id: "a" }), wRow({ id: "b" }), wRow({ id: "c" })],
     });
-    expect(f).toContain("WAITING (3)");
+    expect(f).toContain("waiting (3)");
     expect(f).not.toContain("deferred");
     expect(f).not.toContain("oldest");
   });
@@ -727,7 +728,7 @@ describe("QueueView", () => {
 
   it("STATS section renders all four content lines + restart notice", () => {
     const f = frameOf({ ...IDLE, stats: STATS_FULL });
-    expect(f).toContain("STATS");
+    expect(f).toContain("stats");
     expect(f).toContain("24h 14✓ 2✗ (88%) · avg 12m · ETA ~36m");
     const sevenD = f.split("\n").find((l) => l.includes("7d 84✓ 9✗"));
     expect(sevenD).toBeDefined();
@@ -742,7 +743,7 @@ describe("QueueView", () => {
 
   it("STATS section omits null-derived segments (fallback stats)", () => {
     const f = frameOf({ ...IDLE, stats: STATS_FALLBACK });
-    expect(f).toContain("STATS");
+    expect(f).toContain("stats");
     expect(f).toContain("24h 3✓ 1✗ (75%)"); // counts + rate survive
     expect(f).not.toContain("avg "); // avgDurationSeconds null
     expect(f).not.toContain("ETA"); // etaSeconds null
@@ -787,7 +788,7 @@ describe("QueueView", () => {
   });
 
   it("stats: null → no STATS section at all", () => {
-    expect(frameOf(FULL)).not.toContain("STATS"); // FULL.stats is null
+    expect(frameOf(FULL)).not.toContain("stats"); // FULL.stats is null
   });
 
   it("selectable index is stable when STATS renders — cursor stays on the same RECENT ticket", () => {
@@ -806,10 +807,10 @@ describe("QueueView", () => {
     ).lastFrame()!;
     // Without stats: cursor sits on #44, no STATS section.
     expect(noStats.split("\n").find((l) => l.includes("#44 exec"))!).toContain("▌");
-    expect(noStats).not.toContain("STATS");
+    expect(noStats).not.toContain("stats");
     // With full stats: STATS renders, yet the appended (non-pressable) rows
     // never shift the selectable index — the cursor is still on #44.
-    expect(withStats).toContain("STATS");
+    expect(withStats).toContain("stats");
     expect(withStats.split("\n").find((l) => l.includes("#44 exec"))!).toContain("▌");
   });
 });

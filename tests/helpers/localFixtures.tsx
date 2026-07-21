@@ -44,6 +44,7 @@ export async function tap(
 export const EMPTY_QUEUE: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
+  taskTimeoutSeconds: null,
   running: [],
   waiting: [],
   recent: [],

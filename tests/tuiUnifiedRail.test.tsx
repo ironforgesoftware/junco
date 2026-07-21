@@ -31,6 +31,7 @@ const NOW = new Date("2026-07-20T12:00:00Z");
 const EMPTY_QUEUE: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
+  taskTimeoutSeconds: null,
   running: [],
   waiting: [],
   recent: [],

@@ -198,7 +198,7 @@ describe("footer chips: mouse", () => {
     const x = f.split("\n")[footerY].indexOf("queue");
     // fireUntil: a press racing the region registry re-sends; the t action is
     // idempotent (re-selecting the queue row is a no-op).
-    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("RUNNING"));
+    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("running"));
     // The chip parked the cursor on the queue system row + focused its body.
     const f2 = r.lastFrame() ?? "";
     const x2 = f2.split("\n")[footerY].indexOf("← back");

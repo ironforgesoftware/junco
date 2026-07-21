@@ -50,6 +50,7 @@ const CHEAP: LocalCheap = {
   queue: {
     daemonUp: true,
     maxConcurrent: 2,
+    taskTimeoutSeconds: null,
     running: [
       {
         id: "gh-acme-api-1",

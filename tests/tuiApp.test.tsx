@@ -53,6 +53,7 @@ const RICH_HEALTH: HealthInfo = {
 const QUEUE_SNAP: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
+  taskTimeoutSeconds: null,
   running: [
     {
       id: "gh-acme-api-46",
@@ -2283,16 +2284,16 @@ describe("queue system row", () => {
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("repos")); // mounted
     r.stdin.write("e");
-    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    expect(r.lastFrame()).toContain("WAITING (1)");
+    await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
+    expect(r.lastFrame()).toContain("waiting (1)");
     // esc returns focus to the rail; the queue body stays (body follows the
     // cursor, and the cursor is still on the queue row).
     r.stdin.write(ESC);
     await until(() => (r.lastFrame() ?? "").includes("add repo")); // rail hints back
-    expect(r.lastFrame()).toContain("RUNNING (1/1)");
+    expect(r.lastFrame()).toContain("running (1/1)");
     // k moves the cursor back onto the repo row — the issues body returns.
     r.stdin.write("k");
-    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    await until(() => !(r.lastFrame() ?? "").includes("running (1/1)"));
   });
 
   it("G in a tall queue body parks the cursor at the bottom row (window follows)", async () => {
@@ -2327,7 +2328,7 @@ describe("queue system row", () => {
     );
     await until(() => (r.lastFrame() ?? "").includes("repos"));
     r.stdin.write("e");
-    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
+    await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
     // G parks the section cursor on the LAST selectable row — the window
     // follows it to the bottom and the pane never blanks.
     r.stdin.write("G");

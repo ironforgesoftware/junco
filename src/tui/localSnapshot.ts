@@ -500,6 +500,7 @@ function emptyQueue(cfg: Config): QueueSnapshot {
   return {
     daemonUp: false,
     maxConcurrent: cfg.maxConcurrent,
+    taskTimeoutSeconds: cfg.defaultTimeoutMinutes > 0 ? cfg.defaultTimeoutMinutes * 60 : null,
     running: [],
     waiting: [],
     recent: [],

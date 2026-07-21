@@ -172,9 +172,9 @@ describe("LOCAL full-screen log overlay", () => {
     await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
     r.stdin.write("t"); // inside the overlay: cycles the ticket filter
     await until(() => frame(r).includes("#alpha"));
-    // Still the overlay (not the github `t` queue view, which renders RUNNING).
+    // Still the overlay (not the github `t` queue view, which renders "running").
     expect(frame(r)).toContain("following");
-    expect(frame(r)).not.toContain("RUNNING");
+    expect(frame(r)).not.toContain("running");
   });
 
   it("the overlay owns input: `m` and `,` typed in search are chars, not mode/config toggles", async () => {
