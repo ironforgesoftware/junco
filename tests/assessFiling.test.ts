@@ -352,3 +352,50 @@ describe("fileFindings", () => {
     expect(bodies[0]).not.toContain("**Context:**");
   });
 });
+
+describe("filed-record fidelity (#232)", () => {
+  it("re-filing a created finding never downgrades its record to dup", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    const prior: PendingAssess = {
+      ...pending(false),
+      filed: {
+        f1: {
+          at: "2026-07-18T00:00:00.000Z",
+          how: "created",
+          url: "https://github.com/o/r/issues/5",
+        },
+      },
+    };
+    writePending(c, prior);
+    // The marker for f1 exists upstream → this pass dedups it.
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list")
+        return { stdout: JSON.stringify([{ body: findingMarker("f1") }]), stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+    const res = await fileFindings(c, prior, new Set(["f1"]), { ghFn, nowFn: NOW });
+    expect(res.deduped).toBe(1);
+    // The prior record survives untouched — provenance + URL are never lost.
+    const keep = {
+      at: "2026-07-18T00:00:00.000Z",
+      how: "created",
+      url: "https://github.com/o/r/issues/5",
+    };
+    expect(res.batch.filed?.f1).toEqual(keep);
+    expect(readPending(c, "assess-x-1").batch?.filed?.f1).toEqual(keep);
+  });
+
+  it("a first-time dedup (no prior record) still stamps `deduped`", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "afl-"));
+    const c = cfg(dir);
+    writePending(c, pending(false));
+    const ghFn = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list")
+        return { stdout: JSON.stringify([{ body: findingMarker("f1") }]), stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown as typeof gh;
+    const res = await fileFindings(c, pending(false), new Set(["f1"]), { ghFn, nowFn: NOW });
+    expect(res.batch.filed?.f1).toEqual({ at: AT, how: "deduped" });
+  });
+});

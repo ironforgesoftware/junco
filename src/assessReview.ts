@@ -84,3 +84,24 @@ export function discardPending(cfg: Config, id: string, deps: AssessReviewDeps =
 export function pendingCount(cfg: Config, deps: AssessReviewDeps = {}): number {
   return store.count(cfg, deps);
 }
+
+/** Upgrade a `queued` filed record once the outbox flush learns the op's real
+ * outcome (issue created, or marker-deduped). ONLY `queued` records upgrade —
+ * `created` provenance (URL included) is never overwritten (#232). Scans every
+ * parked batch for the nwo: the same fingerprint can be parked in more than
+ * one batch (assess re-runs park under the same ticket id, but a manual
+ * re-assess under a new id would not). */
+export function upgradeQueuedFiledRecord(
+  cfg: Config,
+  nwo: string,
+  fingerprint: string,
+  rec: FiledRecord,
+  deps: AssessReviewDeps = {},
+): void {
+  for (const batch of listPending(cfg, deps)) {
+    if (batch.nwo !== nwo) continue;
+    const cur = batch.filed?.[fingerprint];
+    if (cur === undefined || cur.how !== "queued") continue;
+    writePending(cfg, { ...batch, filed: { ...batch.filed, [fingerprint]: rec } }, deps);
+  }
+}

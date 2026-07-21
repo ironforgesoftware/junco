@@ -32,6 +32,7 @@ import { findingMarker, FINDING_LABEL_SPECS } from "../src/findings.js";
 import { PIDFILE_DISCRIMINATOR_PREFIX } from "../src/pidfileLock.js";
 import { GitOpError } from "../src/git.js";
 import type { Config } from "../src/types.js";
+import { writePending, readPending, type PendingAssess } from "../src/assessReview.js";
 
 function cfgAt(root: string): Config {
   return { dataDir: root } as unknown as Config;
@@ -978,5 +979,85 @@ describe("listOpsFrom / listDeadOps", () => {
     const id = enqueueOp(cfg, "dashboard", { ...LABELS });
     expect(listOpsFrom(outboxPaths(cfg).dir, {}).map((o) => o.id)).toEqual([id]);
     expect(listOps(cfg).map((o) => o.id)).toEqual([id]);
+  });
+});
+
+describe("flush upgrades queued filed records (#232)", () => {
+  const mkGh = (calls: string[][]): unknown =>
+    (async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
+      if (args[0] === "issue" && args[1] === "create")
+        return { stdout: "https://github.com/a/b/issues/42\n", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown;
+
+  const parkedBatch = (filedHow: "queued" | "created"): PendingAssess => ({
+    id: "assess-a-b-1",
+    nwo: "a/b",
+    external: false,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-19T00:00:00.000Z",
+    findings: [
+      {
+        fingerprint: "deadbeefcafebabe",
+        kind: "code",
+        severity: "high",
+        ruleId: "R1",
+        title: "One",
+        description: "d",
+        references: [],
+      },
+    ],
+    filed: {
+      deadbeefcafebabe: {
+        at: "2026-07-19T01:00:00.000Z",
+        how: filedHow,
+        ...(filedHow === "created" ? { url: "https://github.com/a/b/issues/5" } : {}),
+      },
+    },
+  });
+
+  it("a flushed issue-create upgrades the batch's queued record to created + URL", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-up-"));
+    const cfg = cfgAt(root);
+    writePending(cfg, parkedBatch("queued"));
+    enqueueOp(cfg, "assess", mkIssueCreateOp());
+    const calls: string[][] = [];
+    const r = await flushOutbox(cfg, { ghFn: mkGh(calls) as never });
+    expect(r.sent).toBe(1);
+    const rec = readPending(cfg, "assess-a-b-1").batch?.filed?.deadbeefcafebabe;
+    expect(rec?.how).toBe("created");
+    expect(rec?.url).toBe("https://github.com/a/b/issues/42");
+  });
+
+  it("a marker-deduped flush upgrades queued → deduped, and never touches created", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-up2-"));
+    const cfg = cfgAt(root);
+    writePending(cfg, parkedBatch("queued"));
+    enqueueOp(cfg, "assess", mkIssueCreateOp());
+    // The marker already exists upstream → the op dedup-returns without creating.
+    const gh = (async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "list")
+        return {
+          stdout: JSON.stringify([{ body: findingMarker("deadbeefcafebabe") }]),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "", stderr: "", code: 0 };
+    }) as unknown;
+    await flushOutbox(cfg, { ghFn: gh as never });
+    expect(readPending(cfg, "assess-a-b-1").batch?.filed?.deadbeefcafebabe?.how).toBe("deduped");
+
+    // A `created` record is never downgraded by the same dedup-return path.
+    const root2 = mkdtempSync(join(tmpdir(), "junco-obx-up3-"));
+    const cfg2 = cfgAt(root2);
+    writePending(cfg2, parkedBatch("created"));
+    enqueueOp(cfg2, "assess", mkIssueCreateOp());
+    await flushOutbox(cfg2, { ghFn: gh as never });
+    const rec2 = readPending(cfg2, "assess-a-b-1").batch?.filed?.deadbeefcafebabe;
+    expect(rec2?.how).toBe("created");
+    expect(rec2?.url).toBe("https://github.com/a/b/issues/5");
   });
 });

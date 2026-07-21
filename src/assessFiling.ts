@@ -171,8 +171,13 @@ export async function fileFindings(
   for (const f of toFile) {
     if (filed.has(f.fingerprint)) {
       result.deduped++;
-      filedMap[f.fingerprint] = { at, how: "deduped" };
-      stamped++;
+      // Never DOWNGRADE an existing record: a marker hit only says "an issue
+      // exists", which a prior `created` (with its URL) already describes
+      // better — re-checking a filed row must not erase its provenance (#232).
+      if (filedMap[f.fingerprint] === undefined) {
+        filedMap[f.fingerprint] = { at, how: "deduped" };
+        stamped++;
+      }
       continue;
     }
     const title = buildIssueTitle(f);
@@ -222,6 +227,10 @@ export async function fileFindings(
   // survive so a retry shows what already landed. (supersedes the #137
   // archive gate — with no auto-archive, a failed pass can no longer discard
   // findings, which was #137's concern.)
+  // Known, ACCEPTED race (#232 pt.3): an assess re-run of the same ticket id
+  // finishing between this pass's read and this write clobbers the fresh
+  // batch with this stale one. It self-heals on the next assess run and the
+  // fix (store-level CAS) outweighs the harm — deliberately not built.
   const updated: PendingAssess = stamped > 0 ? { ...batch, filed: filedMap } : batch;
   if (stamped > 0) writePending(cfg, updated);
   return { ...result, batch: updated };
