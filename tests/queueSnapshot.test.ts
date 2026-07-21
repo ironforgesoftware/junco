@@ -442,7 +442,9 @@ describe("stats", () => {
         gate: { state: "cooldown", reason: "rate limited", until: null },
       } as unknown as HealthBody,
     };
-    const snap = await makeQueueSnapshotFn(cfg, { nowFn: () => NOW, healthOverride })();
+    // healthOverride is a per-INVOCATION option (#235) — the factory stays
+    // hoistable with its shard memo intact.
+    const snap = await makeQueueSnapshotFn(cfg, { nowFn: () => NOW })({ healthOverride });
     expect(snap.stats).not.toBeNull();
     expect(snap.stats!.gate?.state).toBe("cooldown");
     expect(snap.stats!.lastPollAt).toBe("2026-07-15T11:59:00.000Z");

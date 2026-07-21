@@ -378,3 +378,50 @@ describe("buildQueueStats", () => {
     expect(stats.window24h.successRate).toBeNull();
   });
 });
+
+describe("mixed-source render (#236): empty 24h ledger + populated 7d ledger + dirs", () => {
+  it("window24h takes the dir-mtime fallback while perDay7d still buckets the older records", () => {
+    // Ledger: two records 2 days old (one done, one failed) — inside the 7d
+    // window, OUTSIDE the 24h window, so recs24 is empty and the 24h line
+    // must fall back to dir mtimes while the sparkline still populates.
+    const twoDaysAgo = new Date(NOW.getTime() - 2 * 86_400_000).toISOString();
+    const records = [
+      makeRecord({ at: twoDaysAgo, status: "completed" }),
+      makeRecord({ at: twoDaysAgo, status: "failed" }),
+    ];
+    const doneFiles: Record<string, { mtimeMs: number }> = {
+      "a.md": { mtimeMs: NOW.getTime() - 3600_000 }, // within 24h
+    };
+    const failedFiles: Record<string, { mtimeMs: number }> = {
+      "b.md": { mtimeMs: NOW.getTime() - 1000 }, // within 24h
+      "c.md": { mtimeMs: NOW.getTime() - 3 * 86_400_000 }, // outside 24h
+    };
+    const stats = buildQueueStats(
+      makeCfg({ queueRoot: "/q" } as never),
+      { healthBody: null, history: () => records, eligibleWaiting: 0, outbox: emptyOutbox },
+      {
+        nowFn: () => NOW,
+        readdirFn: (dir: string) => {
+          if (dir === "/q/done") return Object.keys(doneFiles);
+          if (dir === "/q/failed") return Object.keys(failedFiles);
+          return [];
+        },
+        statFn: (p: string) => {
+          const name = p.split("/").pop() as string;
+          if (name in doneFiles) return doneFiles[name];
+          if (name in failedFiles) return failedFiles[name];
+          throw new Error("ENOENT");
+        },
+      },
+    );
+    // 24h line: fallback counts from dir mtimes (no enrichment fields).
+    expect(stats.window24h.done).toBe(1);
+    expect(stats.window24h.failed).toBe(1); // only b.md is within 24h
+    expect(stats.window24h.avgDurationSeconds).toBeNull();
+    expect(stats.window24h.tokensIn).toBeNull();
+    // Sparkline: the 2-days-ago bucket comes from the LEDGER records.
+    expect(stats.perDay7d).toHaveLength(7);
+    expect(stats.perDay7d[4]).toEqual({ done: 1, failed: 1 }); // 2 days ago
+    expect(stats.perDay7d[6]).toEqual({ done: 0, failed: 0 }); // today: ledger-empty
+  });
+});
