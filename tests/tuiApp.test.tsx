@@ -921,8 +921,17 @@ describe("App", () => {
       writeWatchlist(file, [{ nwo: "beta/web", path: "/c/web" }]);
       const r = renderApp(client, file);
       await until(() => (r.lastFrame() ?? "").includes("#7"));
-      // rail row 2 (y=5 → index 1) → beta/web; setRepoIdx(1) is idempotent.
-      await fireUntil(r.stdin, click(3, 5), () => (r.lastFrame() ?? "").includes("Beta bug"));
+      // rail row 2 (y=5 → index 1) → beta/web. Anchor the retry cond on the
+      // SELECTION, not the loaded issues: a re-fired click on the now-selected
+      // row is click-again = enter (opens RepoDetail, #240), so waiting for
+      // issue content here livelocked slow runners.
+      await fireUntil(r.stdin, click(3, 5), () =>
+        (r.lastFrame() ?? "").split("\n").some((l) => l.includes("▌") && l.includes("beta/web")),
+      );
+      // A click that landed twice before React committed may have opened the
+      // RepoDetail view — esc restores main (a no-op if it never opened).
+      if ((r.lastFrame() ?? "").includes("recent tickets")) r.stdin.write(ESC);
+      await until(() => (r.lastFrame() ?? "").includes("Beta bug"));
     });
 
     it("wheel over the issue list moves the selection down one row", async () => {
