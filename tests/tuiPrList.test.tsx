@@ -6,6 +6,7 @@ import { PrList } from "../src/tui/components/PrList.js";
 import { type DashPr } from "../src/tui/prState.js";
 import { windowSlice } from "../src/tui/window.js";
 import { listRowsHeight } from "../src/tui/geometry.js";
+import { makeDashPr } from "./helpers/dashFixtures.js";
 
 const NOW = new Date("2026-07-07T14:00:00Z");
 
@@ -15,28 +16,16 @@ const pr = (
   state: string = "OPEN",
   isDraft: boolean = false,
   reviewDecision: string | null = null,
-): DashPr => ({
-  number,
-  title,
-  url: `https://github.com/a/b/pull/${number}`,
-  headRefName: `junco/ticket-${number}`,
-  baseRefName: "main",
-  isDraft,
-  state,
-  reviewDecision,
-  mergeable: "MERGEABLE",
-  mergeStateStatus: null,
-  checks: { pass: 2, fail: 0, pending: 0, total: 2 },
-  additions: 5,
-  deletions: 3,
-  changedFiles: 2,
-  createdAt: "2026-07-06T14:00:00Z",
-  updatedAt: "2026-07-07T13:00:00Z",
-  mergedAt: null,
-  author: "junco-bot",
-  labels: [],
-  nwo: "a/b",
-});
+): DashPr =>
+  makeDashPr({
+    number,
+    title,
+    headRefName: `junco/ticket-${number}`,
+    isDraft,
+    state,
+    reviewDecision,
+    mergeStateStatus: null,
+  });
 
 describe("PrList", () => {
   it("renders title with count and selection bar on first row", () => {

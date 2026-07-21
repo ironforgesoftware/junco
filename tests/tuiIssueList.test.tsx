@@ -5,16 +5,11 @@ import { IssueList, relTime, relTimeShort } from "../src/tui/components/IssueLis
 import { filterIssues, type DashIssue } from "../src/tui/state.js";
 import { windowSlice } from "../src/tui/window.js";
 import { listRowsHeight } from "../src/tui/geometry.js";
+import { makeDashIssue } from "./helpers/dashFixtures.js";
 
 const NOW = new Date("2026-07-07T14:00:00Z");
-const iss = (number: number, title: string, labels: string[] = ["junco"]): DashIssue => ({
-  number,
-  title,
-  labels,
-  updatedAt: "2026-07-07T13:00:00Z",
-  url: `https://github.com/a/b/issues/${number}`,
-  author: null,
-});
+const iss = (number: number, title: string, labels: string[] = ["junco"]): DashIssue =>
+  makeDashIssue({ number, title, labels });
 
 describe("filterIssues", () => {
   const list = [

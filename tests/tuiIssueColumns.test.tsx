@@ -5,24 +5,23 @@ import { IssueList } from "../src/tui/components/IssueList.js";
 import { MAX_STATE_BADGE_LEN, isBotAuthored } from "../src/tui/state.js";
 import { listRowsHeight } from "../src/tui/geometry.js";
 import type { DashIssue } from "../src/tui/state.js";
+import { makeDashIssue } from "./helpers/dashFixtures.js";
 
 const issues: DashIssue[] = [
-  {
+  makeDashIssue({
     number: 7,
     title: "short",
     labels: [],
     updatedAt: "2026-07-20T11:00:00Z",
     url: "u",
-    author: null,
-  },
-  {
+  }),
+  makeDashIssue({
     number: 123,
     title: "longer title",
     labels: [],
     updatedAt: "2026-07-20T10:00:00Z",
     url: "u",
-    author: null,
-  },
+  }),
 ];
 
 const props = {

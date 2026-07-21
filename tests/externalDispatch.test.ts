@@ -18,14 +18,7 @@ import {
 import { parseTicket } from "../src/ticket.js";
 import { deriveRepoContext } from "../src/repoContext.js";
 import { readWatchlist, watchlistPath } from "../src/watchlist.js";
-
-/** Same literal as Task 2's CTX / cli.test.ts's FAKE_CTX. */
-const FAKE_CTX = {
-  configDir: "/sbx/junco-gh",
-  login: "junco-agent",
-  email: "1234+junco-agent@users.noreply.github.com",
-  credentialHelper: "!gh auth git-credential",
-};
+import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 
 // ---------------------------------------------------------------------------
 // parseIssueRef
@@ -374,10 +367,10 @@ describe("resolveIssueTarget", () => {
         cloneCfgs.push(c);
         return { path: "/clones/up/stream", forkNwo: "junco-agent/stream" };
       },
-      withBotAuthFn: async (c) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c) => ({ ...c, ghAuth: GH_AUTH_CTX }),
     });
     expect(cloneCfgs).toHaveLength(1);
-    expect(cloneCfgs[0].ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(cloneCfgs[0].ghAuth?.login).toBe(GH_AUTH_CTX.login);
     expect(t.forkNwo).toBe("junco-agent/stream");
   });
 
@@ -388,7 +381,7 @@ describe("resolveIssueTarget", () => {
       ghFn,
       withBotAuthFn: async (c) => {
         botAuthCalled = true;
-        return { ...c, ghAuth: FAKE_CTX };
+        return { ...c, ghAuth: GH_AUTH_CTX };
       },
     });
     expect(botAuthCalled).toBe(false);
@@ -405,7 +398,7 @@ describe("resolveIssueTarget", () => {
       const cloneCalls: Array<{ hadAuth: boolean; fork: boolean | undefined }> = [];
       const t = await resolveIssueTarget(cfg, "up/stream#1", {
         ghFn,
-        withBotAuthFn: async (c) => ({ ...c, ghAuth: FAKE_CTX }),
+        withBotAuthFn: async (c) => ({ ...c, ghAuth: GH_AUTH_CTX }),
         classifyFn: async () => ({ mode: "direct" as const }),
         ensureCloneFn: async (c, _nwo, _deps, o) => {
           cloneCalls.push({ hadAuth: c.ghAuth !== undefined, fork: o?.fork });
@@ -448,7 +441,7 @@ describe("resolveIssueTarget", () => {
       await expect(
         resolveIssueTarget(cfg, "up/stream#3", {
           ghFn,
-          withBotAuthFn: async (c) => ({ ...c, ghAuth: FAKE_CTX }),
+          withBotAuthFn: async (c) => ({ ...c, ghAuth: GH_AUTH_CTX }),
           classifyFn: async () => ({ mode: "blocked" as const, reason: "no-access" as const }),
           ensureCloneFn: async () => {
             ensureCloneCalled = true;
@@ -482,7 +475,7 @@ describe("resolveIssueTarget", () => {
       await expect(
         resolveIssueTarget(cfg, "up/stream#5", {
           ghFn,
-          withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+          withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
           classifyFn: async () => ({ mode: "blocked" as const, reason: "sso" as const }),
         }),
       ).rejects.toThrow(/the bot's token is blocked by SAML/);

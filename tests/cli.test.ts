@@ -25,14 +25,7 @@ import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
 import { makeConfig } from "./helpers/config.js";
-
-/** Same literal as Task 2's CTX / ghAuth.test.ts's GhAuthContext fixture. */
-const FAKE_CTX = {
-  configDir: "/sbx/junco-gh",
-  login: "junco-agent",
-  email: "1234+junco-agent@users.noreply.github.com",
-  credentialHelper: "!gh auth git-credential",
-};
+import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -549,17 +542,17 @@ describe("bot auth at daemon entrypoints", () => {
 
   it("start passes the bot-attached config through to mainLoopFn", async () => {
     const deps = makeDeps({
-      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
     });
     await run(["start"], deps);
     const [seenCfg] = (deps.mainLoopFn as MockedFunction<any>).mock.calls[0];
-    expect((seenCfg as Config).ghAuth?.login).toBe(FAKE_CTX.login);
+    expect((seenCfg as Config).ghAuth?.login).toBe(GH_AUTH_CTX.login);
   });
 
   it("start's watcher re-attaches the startup ghAuth context while the reload keeps botAccount enabled, and drops it when the reload disables botAccount", async () => {
     const watchConfigFn = vi.fn(() => ({ close: vi.fn() }));
     const deps = makeDeps({
-      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
       watchConfigFn,
     });
     await run(["start"], deps);
@@ -571,7 +564,7 @@ describe("bot auth at daemon entrypoints", () => {
       vaultRoot: "/tmp/x",
       botAccount: { enabled: true, configDir: "/tmp/gh" },
     });
-    expect(assembleFn(enabledParsed).ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(assembleFn(enabledParsed).ghAuth?.login).toBe(GH_AUTH_CTX.login);
 
     const disabledParsed = ConfigSchema.parse({
       vaultRoot: "/tmp/x",
@@ -615,7 +608,7 @@ describe("bot auth at daemon entrypoints", () => {
   it("run-once hands the attached config to runOnceFn", async () => {
     let seen: Config | undefined;
     const deps = makeDeps({
-      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
       runOnceFn: async (c: Config) => {
         seen = c;
         return false;
@@ -623,7 +616,7 @@ describe("bot auth at daemon entrypoints", () => {
     });
     const code = await run(["run-once"], deps);
     expect(code).toBe(0);
-    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(seen?.ghAuth?.login).toBe(GH_AUTH_CTX.login);
   });
 });
 
@@ -1107,7 +1100,7 @@ describe("run(['outbox'])", () => {
     // Flush replays daemon-enqueued ops (comments, label flips, pushes, PR
     // creates) — it must speak as the bot, not the operator running the flush.
     let seen: Config | undefined;
-    const withBotAuthFn = vi.fn(async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }));
+    const withBotAuthFn = vi.fn(async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }));
     const runOutboxCommandFn = vi.fn(async (c: Config) => {
       seen = c;
       return 0;
@@ -1115,7 +1108,7 @@ describe("run(['outbox'])", () => {
     const code = await run(["outbox", "flush"], makeDeps({ withBotAuthFn, runOutboxCommandFn }));
     expect(code).toBe(0);
     expect(withBotAuthFn).toHaveBeenCalledTimes(1);
-    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(seen?.ghAuth?.login).toBe(GH_AUTH_CTX.login);
   });
 
   it("outbox flush refuses (exit 1) when bot auth resolution throws — never replays as human", async () => {

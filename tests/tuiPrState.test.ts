@@ -9,6 +9,7 @@ import {
   type DashPr,
   type PrLifecycle,
 } from "../src/tui/prState.js";
+import { makeDashPr } from "./helpers/dashFixtures.js";
 
 const ALL_STATES: PrLifecycle[] = [
   "merged",
@@ -23,29 +24,18 @@ const ALL_STATES: PrLifecycle[] = [
 
 /** Baseline "review-pending" PR — open, non-draft, no checks, no review decision. */
 function pr(number: number, overrides: Partial<DashPr> = {}): DashPr {
-  return {
+  return makeDashPr({
     number,
     title: `t${number}`,
-    url: `https://github.com/a/b/pull/${number}`,
-    headRefName: `junco/task-${number}`,
-    baseRefName: "main",
-    isDraft: false,
-    state: "OPEN",
-    reviewDecision: null,
-    mergeable: "MERGEABLE",
-    mergeStateStatus: "CLEAN",
     checks: { pass: 0, fail: 0, pending: 0, total: 0 },
     additions: 1,
     deletions: 0,
     changedFiles: 1,
     createdAt: "2026-07-01T00:00:00Z",
     updatedAt: "2026-07-01T00:00:00Z",
-    mergedAt: null,
     author: "alice",
-    labels: [],
-    nwo: "a/b",
     ...overrides,
-  };
+  });
 }
 
 describe("derivePrState", () => {
