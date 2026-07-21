@@ -61,11 +61,11 @@ Behavior-level prohibitions that apply regardless of how the task evolves:
 
 ## Files
 
-| File | Action | Lines | Notes |
-|---|---|---|---|
-| `src/utils/strings.ts` | new | — | `truncate` and `slugify` exports |
-| `src/utils/strings.test.ts` | new | — | Vitest unit tests for both functions |
-| `src/utils/index.ts` | modify | last line | append `export * from './strings'` |
+| File                        | Action | Lines     | Notes                                |
+| --------------------------- | ------ | --------- | ------------------------------------ |
+| `src/utils/strings.ts`      | new    | —         | `truncate` and `slugify` exports     |
+| `src/utils/strings.test.ts` | new    | —         | Vitest unit tests for both functions |
+| `src/utils/index.ts`        | modify | last line | append `export * from './strings'`   |
 
 All paths are relative to the worktree root (your cwd).
 

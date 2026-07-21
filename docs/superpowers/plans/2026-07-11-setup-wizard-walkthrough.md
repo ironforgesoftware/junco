@@ -55,10 +55,12 @@ Chapter components receive `(answers, onPatch, onNext, onBack, io)` props and ar
 ### Task 1: Copy registry (`src/wizard/tips.ts`)
 
 **Files:**
+
 - Create: `src/wizard/tips.ts`
 - Test: `tests/wizardTips.test.ts`
 
 **Interfaces:**
+
 - Produces: `BIRD: string`, `GREETINGS: readonly string[]`, `TIPS: Record<TipKey, string>` with `TipKey = "welcome" | "workspace" | "model" | "repoSafety" | "githubOff" | "githubApproval" | "extras" | "review" | "signoff"`, `NEXT_STEPS: readonly { cmd: string; blurb: string }[]`, `pickGreeting(seed: number): string`.
 
 - [ ] **Step 1: Write the failing test**
@@ -154,8 +156,7 @@ export type TipKey =
   | "signoff";
 
 export const TIPS: Record<TipKey, string> = {
-  welcome:
-    "Every answer lands in one editable file — config.json. Nothing here is permanent.",
+  welcome: "Every answer lands in one editable file — config.json. Nothing here is permanent.",
   workspace:
     "This is junco's nest — tickets fly into inbox/, get worked in processing/, and land in done/ or failed/.",
   model:
@@ -168,8 +169,7 @@ export const TIPS: Record<TipKey, string> = {
     "With approval required, a plan-ready ticket waits for you; without it, plans auto-execute on the next sweep.",
   extras:
     "The recommended set is pre-checked. Space toggles, Enter continues — each row explains itself below.",
-  review:
-    "more levers keep their safe defaults — `junco config list` shows every one.",
+  review: "more levers keep their safe defaults — `junco config list` shows every one.",
   signoff: "The nest is ready.",
 };
 
@@ -200,15 +200,20 @@ git commit -m "feat(wizard): copy registry with stack-agnostic guard"
 ### Task 2: Flow engine — answers, defaults, fresh config build (`src/wizard/flow.ts`)
 
 **Files:**
+
 - Create: `src/wizard/flow.ts`
 - Test: `tests/wizardFlow.test.ts`
 
 **Interfaces:**
+
 - Consumes: `getAtPath`/`setAtPath` from `src/configLevers.ts`, `loadConfig` from `src/config.ts` (tests only).
 - Produces (later tasks rely on these exact names):
 
 ```ts
-export interface WatchedRepoAnswer { nwo: string; path: string }
+export interface WatchedRepoAnswer {
+  nwo: string;
+  path: string;
+}
 export interface WizardAnswers {
   vaultRoot: string;
   mode: "inline" | "models_json";
@@ -448,18 +453,27 @@ git commit -m "feat(wizard): pure flow engine — answers, defaults, minimal fre
 ### Task 3: Flow engine — re-run mode (prefill, diff, apply)
 
 **Files:**
+
 - Modify: `src/wizard/flow.ts` (append)
 - Test: `tests/wizardFlow.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: `getAtPath`, `setAtPath` from `src/configLevers.ts`.
 - Produces:
 
 ```ts
-export interface AnswerDiff { path: string; from: unknown; to: unknown }
+export interface AnswerDiff {
+  path: string;
+  from: unknown;
+  to: unknown;
+}
 export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers;
 export function diffAnswers(raw: Record<string, unknown>, a: WizardAnswers): AnswerDiff[];
-export function applyAnswers(raw: Record<string, unknown>, a: WizardAnswers): Record<string, unknown>; // clone; uncovered keys preserved
+export function applyAnswers(
+  raw: Record<string, unknown>,
+  a: WizardAnswers,
+): Record<string, unknown>; // clone; uncovered keys preserved
 ```
 
 - [ ] **Step 1: Write the failing tests (append to tests/wizardFlow.test.ts)**
@@ -656,17 +670,26 @@ git commit -m "feat(wizard): re-run mode — prefill, diff, preserving apply"
 ### Task 4: Probe layer (`src/wizard/detect.ts`)
 
 **Files:**
+
 - Create: `src/wizard/detect.ts`
 - Test: `tests/wizardDetect.test.ts`
 
 **Interfaces:**
+
 - Consumes: `endpointReachable(cfg)` from `src/health.ts`, `fetchModels` from `src/wizard/models.ts`, `splitModelId` from `src/agent/modelSetup.ts`, `selectBackend`/`classifyAvailability` from `src/agent/sandbox/backend.ts`, `queuePaths` from `src/config.ts`.
 - Produces:
 
 ```ts
-export interface CheckResult { verdict: "ok" | "warn" | "fail"; label: string; detail: string }
+export interface CheckResult {
+  verdict: "ok" | "warn" | "fail";
+  label: string;
+  detail: string;
+}
 export interface DetectDeps {
-  execFn?: (cmd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+  execFn?: (
+    cmd: string,
+    args: string[],
+  ) => Promise<{ code: number; stdout: string; stderr: string }>;
   fetchModelsFn?: typeof fetchModels;
   reachableFn?: (cfg: Config) => Promise<boolean>;
   accessOkFn?: (dir: string) => boolean;
@@ -674,7 +697,7 @@ export interface DetectDeps {
   platform?: NodeJS.Platform;
 }
 export async function greetingName(deps?: DetectDeps): Promise<string>;
-export async function preflightChecks(deps?: DetectDeps): Promise<CheckResult[]>;   // node, git, gh(+auth)
+export async function preflightChecks(deps?: DetectDeps): Promise<CheckResult[]>; // node, git, gh(+auth)
 export async function flightChecks(cfg: Config, deps?: DetectDeps): Promise<CheckResult[]>;
 ```
 
@@ -689,7 +712,10 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-type Exec = (cmd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+type Exec = (
+  cmd: string,
+  args: string[],
+) => Promise<{ code: number; stdout: string; stderr: string }>;
 const okExec =
   (table: Record<string, { code: number; stdout: string }>): Exec =>
   async (cmd, args) => {
@@ -701,14 +727,20 @@ const okExec =
 function tmpCfg(extra: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "wizdetect-"));
   const p = join(dir, "config.json");
-  writeFileSync(p, JSON.stringify({ vaultRoot: join(dir, "vault"), juncoSubdir: "", ...extra }), "utf8");
+  writeFileSync(
+    p,
+    JSON.stringify({ vaultRoot: join(dir, "vault"), juncoSubdir: "", ...extra }),
+    "utf8",
+  );
   return loadConfig(p);
 }
 
 describe("greetingName", () => {
   it("returns the git first name, or 'friend' when unset", async () => {
     expect(
-      await greetingName({ execFn: okExec({ "git config user.name": { code: 0, stdout: "Ada Lovelace\n" } }) }),
+      await greetingName({
+        execFn: okExec({ "git config user.name": { code: 0, stdout: "Ada Lovelace\n" } }),
+      }),
     ).toBe("Ada");
     expect(await greetingName({ execFn: okExec({}) })).toBe("friend");
   });
@@ -747,7 +779,10 @@ describe("flightChecks", () => {
       reachableFn: async () => true,
       fetchModelsFn: async () => ["other-model"],
       accessOkFn: () => true,
-      execFn: okExec({ "gh auth status": { code: 0, stdout: "" }, "gh --version": { code: 0, stdout: "x" } }),
+      execFn: okExec({
+        "gh auth status": { code: 0, stdout: "" },
+        "gh --version": { code: 0, stdout: "x" },
+      }),
     });
     expect(res.find((r) => r.label === "inference endpoint")?.verdict).toBe("ok");
     expect(res.find((r) => r.label === "model")?.verdict).toBe("warn");
@@ -899,11 +934,19 @@ export async function flightChecks(cfg: Config, deps: DetectDeps = {}): Promise<
     const ids = await fetchModelsFn(cfg.model.baseUrl, cfg.model.apiKey);
     const { modelId } = splitModelId(cfg.model.id);
     if (ids.length === 0) {
-      out.push({ verdict: "warn", label: "model", detail: `endpoint lists no models; cannot verify ${cfg.model.id}` });
+      out.push({
+        verdict: "warn",
+        label: "model",
+        detail: `endpoint lists no models; cannot verify ${cfg.model.id}`,
+      });
     } else if (ids.includes(modelId) || ids.includes(cfg.model.id)) {
       out.push({ verdict: "ok", label: "model", detail: cfg.model.id });
     } else {
-      out.push({ verdict: "warn", label: "model", detail: `${cfg.model.id} not among ${ids.length} advertised` });
+      out.push({
+        verdict: "warn",
+        label: "model",
+        detail: `${cfg.model.id} not among ${ids.length} advertised`,
+      });
     }
   }
 
@@ -923,7 +966,11 @@ export async function flightChecks(cfg: Config, deps: DetectDeps = {}): Promise<
   if (cfg.sandbox.enabled) {
     const backend = selectBackend(cfg.sandbox.backend, deps.platform ?? process.platform);
     if (backend.name === "none") {
-      out.push({ verdict: "warn", label: "sandbox", detail: "backend=none — env scrub + fs jail only" });
+      out.push({
+        verdict: "warn",
+        label: "sandbox",
+        detail: "backend=none — env scrub + fs jail only",
+      });
     } else {
       const ok = await backend.isAvailable((c, a) => execFn(c, a).then((r) => ({ code: r.code })));
       const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, ok);
@@ -931,8 +978,16 @@ export async function flightChecks(cfg: Config, deps: DetectDeps = {}): Promise<
         outcome === "ok"
           ? { verdict: "ok", label: "sandbox", detail: `${backend.name} available` }
           : outcome === "degrade"
-            ? { verdict: "warn", label: "sandbox", detail: `${backend.name} unavailable — degrading to none` }
-            : { verdict: "fail", label: "sandbox", detail: `${backend.name} unavailable — tickets fail closed (junco doctor for the fix)` },
+            ? {
+                verdict: "warn",
+                label: "sandbox",
+                detail: `${backend.name} unavailable — degrading to none`,
+              }
+            : {
+                verdict: "fail",
+                label: "sandbox",
+                detail: `${backend.name} unavailable — tickets fail closed (junco doctor for the fix)`,
+              },
       );
     }
   }
@@ -958,11 +1013,13 @@ git commit -m "feat(wizard): preflight and flight-check probe layer"
 ### Task 5: WizardIO contract + shared TUI controls
 
 **Files:**
+
 - Create: `src/wizard/io.ts` (types only — no runtime code)
 - Create: `src/tui/wizard/controls.tsx`
 - Test: `tests/wizardChapters.test.tsx` (started here, grown by Tasks 6–10)
 
 **Interfaces:**
+
 - Produces `src/wizard/io.ts`:
 
 ```ts
@@ -972,10 +1029,10 @@ import type { CheckResult } from "./detect.js";
 export type WizardOutcome = "written" | "unchanged" | "cancelled";
 
 export interface WriteResult {
-  written: boolean;         // false on a zero-diff re-run (dirs still ensured)
+  written: boolean; // false on a zero-diff re-run (dirs still ensured)
   configPath: string;
-  queueRoot: string;        // dirname of the inbox
-  changes: AnswerDiff[];    // empty in fresh mode
+  queueRoot: string; // dirname of the inbox
+  changes: AnswerDiff[]; // empty in fresh mode
 }
 
 /** Everything the Ink app needs from the outside world. Built by
@@ -1267,10 +1324,12 @@ git commit -m "feat(wizard): WizardIO contract + shared Ink controls"
 ### Task 6: Welcome + Workspace chapters
 
 **Files:**
+
 - Create: `src/tui/wizard/chapters/Welcome.tsx`, `src/tui/wizard/chapters/Workspace.tsx`
 - Test: `tests/wizardChapters.test.tsx` (append)
 
 **Interfaces:**
+
 - Consumes: `ChapterProps`, `Tip`, `ReceiptList` from `../controls.js`; `Spinner` from `../../components/Spinner.js`; `TextField` from `../../components/TextField.js`; `TIPS`, `pickGreeting` from `../../../wizard/tips.js`.
 - Produces: `export function Welcome(props: ChapterProps)`, `export function Workspace(props: ChapterProps)`.
 
@@ -1292,7 +1351,12 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
     preflight: async () => [{ verdict: "ok", label: "git", detail: "2.44" }],
     discoverModels: async () => ["m-fast", "m-big"],
     listModelsJson: () => [],
-    write: () => ({ written: true, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] }),
+    write: () => ({
+      written: true,
+      configPath: "/tmp/config.json",
+      queueRoot: "/tmp/q",
+      changes: [],
+    }),
     flightCheck: async () => [],
     ...over,
   };
@@ -1488,7 +1552,7 @@ export function Workspace({
   return (
     <Box flexDirection="column">
       <Text>Where should junco keep its tickets?</Text>
-    <Box borderStyle="round" borderColor={theme.border} paddingX={1} width={46} marginTop={1}>
+      <Box borderStyle="round" borderColor={theme.border} paddingX={1} width={46} marginTop={1}>
         <TextField
           value={answers.vaultRoot}
           onChange={(v) => patch({ vaultRoot: v })}
@@ -1523,10 +1587,12 @@ git commit -m "feat(wizard): Welcome and Workspace chapters"
 ### Task 7: Model chapter
 
 **Files:**
+
 - Create: `src/tui/wizard/chapters/Model.tsx`
 - Test: `tests/wizardChapters.test.tsx` (append)
 
 **Interfaces:**
+
 - Consumes: `ChapterProps`, `Tip`, `Select` from `../controls.js`; `TextField`, `Spinner`; `inferProvider` from `../../../wizard/models.js`; `TIPS`.
 - Produces: `export function Model(props: ChapterProps)`. Internal step machine: `"source" → ("url" → "key" → "probe" → "pick" [→ "manual"]) | ("mjPath" → "pick" [→ "manual"])`. Provider-prefix rules identical to today's wizard: picked ids containing `/` kept as-is, bare ids get `inferProvider(baseUrl)` prefix; models.json ids arrive already prefixed.
 
@@ -1675,13 +1741,11 @@ export function Model({
   useEffect(() => {
     if (step !== "probe") return;
     let alive = true;
-    void io
-      .discoverModels(answers.baseUrl ?? "", answers.apiKey ?? "")
-      .then((found) => {
-        if (!alive) return;
-        setIds(found);
-        setStep(found.length > 0 ? "pick" : "manual");
-      });
+    void io.discoverModels(answers.baseUrl ?? "", answers.apiKey ?? "").then((found) => {
+      if (!alive) return;
+      setIds(found);
+      setStep(found.length > 0 ? "pick" : "manual");
+    });
     return () => {
       alive = false;
     };
@@ -1723,7 +1787,11 @@ export function Model({
             <Select
               focus
               options={[
-                { value: "inline", label: "Inline — an OpenAI-compatible endpoint", hint: "recommended" },
+                {
+                  value: "inline",
+                  label: "Inline — an OpenAI-compatible endpoint",
+                  hint: "recommended",
+                },
                 { value: "models_json", label: "From a Pi models.json file" },
               ]}
               onSubmit={(v) => {
@@ -1748,7 +1816,12 @@ export function Model({
       {step === "key" && (
         <>
           <Text>API key for the endpoint?</Text>
-          {field(answers.apiKey ?? "", (v) => patch({ apiKey: v }), () => setStep("probe"), "1234")}
+          {field(
+            answers.apiKey ?? "",
+            (v) => patch({ apiKey: v }),
+            () => setStep("probe"),
+            "1234",
+          )}
         </>
       )}
       {step === "probe" && (
@@ -1792,7 +1865,12 @@ export function Model({
       {step === "manual" && (
         <>
           <Text>Model id?</Text>
-          {field(manualDraft, setManualDraft, () => finish(manualDraft.trim() || "my-model"), "my-model")}
+          {field(
+            manualDraft,
+            setManualDraft,
+            () => finish(manualDraft.trim() || "my-model"),
+            "my-model",
+          )}
         </>
       )}
       <Tip>{TIPS.model}</Tip>
@@ -1819,10 +1897,12 @@ git commit -m "feat(wizard): Model chapter with live discovery"
 ### Task 8: Repo safety + GitHub chapters
 
 **Files:**
+
 - Create: `src/tui/wizard/chapters/RepoSafety.tsx`, `src/tui/wizard/chapters/Github.tsx`
 - Test: `tests/wizardChapters.test.tsx` (append)
 
 **Interfaces:**
+
 - Consumes: `ChapterProps`, `Tip`, `Select`, `TextField`, `TIPS`, `theme`.
 - Produces: `export function RepoSafety(props: ChapterProps)`, `export function Github(props: ChapterProps)`.
 
@@ -2002,7 +2082,12 @@ import type { WatchedRepoAnswer } from "../../../wizard/flow.js";
 
 type Step = "toggle" | "nwo" | "path" | "approval";
 
-export function Github({ answers, patch, onNext, setTextEditing }: ChapterProps): React.JSX.Element {
+export function Github({
+  answers,
+  patch,
+  onNext,
+  setTextEditing,
+}: ChapterProps): React.JSX.Element {
   const [step, setStep] = useState<Step>("toggle");
   const [repos, setRepos] = useState<WatchedRepoAnswer[]>(answers.github.repos);
   const [nwo, setNwo] = useState("");
@@ -2019,7 +2104,13 @@ export function Github({ answers, patch, onNext, setTextEditing }: ChapterProps)
     placeholder: string,
   ): React.JSX.Element => (
     <Box borderStyle="round" borderColor={theme.border} paddingX={1} width={46} marginTop={1}>
-      <TextField value={value} onChange={onChange} onSubmit={onSubmit} focus placeholder={placeholder} />
+      <TextField
+        value={value}
+        onChange={onChange}
+        onSubmit={onSubmit}
+        focus
+        placeholder={placeholder}
+      />
     </Box>
   );
 
@@ -2056,7 +2147,12 @@ export function Github({ answers, patch, onNext, setTextEditing }: ChapterProps)
               <Text color={theme.success}>✓</Text> {r.nwo} <Text dimColor>({r.path})</Text>
             </Text>
           ))}
-          {field(nwo, setNwo, () => (nwo.trim() === "" ? setStep("approval") : setStep("path")), "acme/api")}
+          {field(
+            nwo,
+            setNwo,
+            () => (nwo.trim() === "" ? setStep("approval") : setStep("path")),
+            "acme/api",
+          )}
         </>
       )}
       {step === "path" && (
@@ -2064,14 +2160,19 @@ export function Github({ answers, patch, onNext, setTextEditing }: ChapterProps)
           <Text>
             Local clone path for <Text color={theme.accent}>{nwo.trim()}</Text>:
           </Text>
-          {field(path, setPath, () => {
-            const entry = { nwo: nwo.trim(), path: path.trim() };
-            if (entry.path === "") return;
-            setRepos((r) => [...r, entry]);
-            setNwo("");
-            setPath("");
-            setStep("nwo");
-          }, "~/code/api (local clone path)")}
+          {field(
+            path,
+            setPath,
+            () => {
+              const entry = { nwo: nwo.trim(), path: path.trim() };
+              if (entry.path === "") return;
+              setRepos((r) => [...r, entry]);
+              setNwo("");
+              setPath("");
+              setStep("nwo");
+            },
+            "~/code/api (local clone path)",
+          )}
         </>
       )}
       {step === "approval" && (
@@ -2117,17 +2218,19 @@ git commit -m "feat(wizard): repo-safety and GitHub bridge chapters"
 ### Task 9: Extras + Review chapters
 
 **Files:**
+
 - Create: `src/tui/wizard/chapters/Extras.tsx`, `src/tui/wizard/chapters/Review.tsx`
 - Test: `tests/wizardChapters.test.tsx` (append)
 
 **Interfaces:**
+
 - Consumes: `MultiSelect`, `Select`, `Tip`, `LEVERS` from `src/configLevers.ts`, `renderConfigJson`/`diffAnswers` from `src/wizard/flow.ts`.
 - Produces: `export function Extras(props: ChapterProps)`; `export function Review(props: ReviewProps)` where:
 
 ```ts
 export interface ReviewProps extends ChapterProps {
-  onWrite: () => void;   // WizardApp: io.write(answers) then phase="finale"
-  onCancel: () => void;  // quit without writing
+  onWrite: () => void; // WizardApp: io.write(answers) then phase="finale"
+  onCancel: () => void; // quit without writing
 }
 ```
 
@@ -2160,7 +2263,12 @@ describe("Extras chapter", () => {
     await press(stdin, SPACE); // uncheck sandbox (first row)
     await press(stdin, ENTER);
     await until(() => advanced);
-    expect(answers.extras).toEqual({ sandbox: false, verify: true, health: true, transcripts: true });
+    expect(answers.extras).toEqual({
+      sandbox: false,
+      verify: true,
+      health: true,
+      transcripts: true,
+    });
   });
 });
 
@@ -2377,10 +2485,12 @@ git commit -m "feat(wizard): Extras multiselect and Review confirm chapters"
 ### Task 10: Finale chapter (flight check + staged next steps)
 
 **Files:**
+
 - Create: `src/tui/wizard/chapters/Finale.tsx`
 - Test: `tests/wizardChapters.test.tsx` (append)
 
 **Interfaces:**
+
 - Consumes: `ReceiptList`, `Spinner`, `NEXT_STEPS`, `TIPS`, `BIRD`, `WriteResult`, `WizardIO`.
 - Produces:
 
@@ -2404,7 +2514,9 @@ describe("Finale", () => {
   it("shows write receipts, flight-check results, staged next steps, sign-off", async () => {
     let done = false;
     const io = fakeIo({
-      flightCheck: async () => [{ verdict: "ok", label: "inference endpoint", detail: "http://h:1/v1" }],
+      flightCheck: async () => [
+        { verdict: "ok", label: "inference endpoint", detail: "http://h:1/v1" },
+      ],
     });
     const { lastFrame, stdin } = render(
       <Finale
@@ -2490,7 +2602,9 @@ export function Finale({ result, io, onDone, revealMs = 150 }: FinaleProps): Rea
     <Box flexDirection="column">
       <Text>
         <Text color={theme.success}>✓</Text>{" "}
-        {result.written ? `Wrote config: ${result.configPath}` : `Config untouched: ${result.configPath}`}
+        {result.written
+          ? `Wrote config: ${result.configPath}`
+          : `Config untouched: ${result.configPath}`}
       </Text>
       <Text>
         <Text color={theme.success}>✓</Text> Queue ready: {result.queueRoot}
@@ -2547,10 +2661,12 @@ git commit -m "feat(wizard): finale — flight check and staged next steps"
 ### Task 11: WizardApp — rail, router, navigation, cancel
 
 **Files:**
+
 - Create: `src/tui/wizard/WizardApp.tsx`
 - Test: `tests/wizardApp.test.tsx`
 
 **Interfaces:**
+
 - Consumes: every chapter component, `CHAPTERS`, `useTerminalSize`, `useApp`.
 - Produces:
 
@@ -2558,8 +2674,8 @@ git commit -m "feat(wizard): finale — flight check and staged next steps"
 export interface WizardAppProps {
   io: WizardIO;
   onOutcome: (o: WizardOutcome) => void; // called exactly once before exit
-  sizeOverride?: TerminalSize;           // tests inject a fixed size
-  revealMs?: number;                     // forwarded to Finale; tests pass 0
+  sizeOverride?: TerminalSize; // tests inject a fixed size
+  revealMs?: number; // forwarded to Finale; tests pass 0
 }
 export function WizardApp(props: WizardAppProps): React.JSX.Element;
 ```
@@ -2638,7 +2754,11 @@ describe("WizardApp", () => {
     await press(stdin, ENTER); // pick m-fast
     await until(() => (lastFrame() ?? "").includes("Which folders"));
     await press(stdin, ENTER); // empty roots → continue
-    await until(() => (lastFrame() ?? "").includes("GitHub bridge") || (lastFrame() ?? "").includes("Enable the GitHub"));
+    await until(
+      () =>
+        (lastFrame() ?? "").includes("GitHub bridge") ||
+        (lastFrame() ?? "").includes("Enable the GitHub"),
+    );
     await press(stdin, ENTER); // Off
     await until(() => (lastFrame() ?? "").includes("Which extras"));
     await press(stdin, ENTER); // keep recommended set
@@ -2687,11 +2807,7 @@ describe("WizardApp", () => {
 
   it("narrow terminals swap the rail for a breadcrumb", async () => {
     const { lastFrame } = render(
-      <WizardApp
-        io={fakeIo()}
-        onOutcome={() => {}}
-        sizeOverride={{ columns: 60, rows: 32 }}
-      />,
+      <WizardApp io={fakeIo()} onOutcome={() => {}} sizeOverride={{ columns: 60, rows: 32 }} />,
     );
     await until(() => (lastFrame() ?? "").includes("1/7"));
     expect(lastFrame()).not.toContain("▶ Welcome");
@@ -2736,7 +2852,12 @@ export interface WizardAppProps {
   revealMs?: number;
 }
 
-export function WizardApp({ io, onOutcome, sizeOverride, revealMs }: WizardAppProps): React.JSX.Element {
+export function WizardApp({
+  io,
+  onOutcome,
+  sizeOverride,
+  revealMs,
+}: WizardAppProps): React.JSX.Element {
   const { exit } = useApp();
   const size = useTerminalSize(sizeOverride);
   const narrow = size.columns < 80;
@@ -2851,12 +2972,14 @@ git commit -m "feat(wizard): WizardApp shell — rail, router, navigation"
 ### Task 12: Rewire `runInitWizard`, delete the clack prompter
 
 **Files:**
+
 - Rewrite: `src/wizard.ts`
 - Delete: `src/wizard/prompter.ts`
 - Modify: `package.json` (+ lockfile) via `npm uninstall @clack/prompts`
 - Rewrite: `tests/wizard.test.ts`
 
 **Interfaces:**
+
 - Consumes: everything from `flow.js`, `io.js`, `detect.js`, `models.js`, `config.js`.
 - Produces (cli.ts relies on): `runInitWizard(configPath: string, deps?: WizardDeps): Promise<number>` — 0 written/unchanged, 130 cancelled, 1 no-raw-mode. `WizardDeps` gains `collectFn?: (io: WizardIO) => Promise<WizardOutcome>` and drops `prompter`/`yes`-era fields except `yes` itself.
 
@@ -3164,6 +3287,7 @@ rm src/wizard/prompter.ts
 npm uninstall @clack/prompts
 grep -rn "clack" src/ tests/ package.json || echo "clack fully gone"
 ```
+
 Expected: "clack fully gone" (the grep finds nothing).
 
 - [ ] **Step 5: Run wizard + flow + typecheck to verify**
@@ -3186,10 +3310,12 @@ git commit -m "feat(wizard): Ink-backed runInitWizard, clack prompter removed"
 ### Task 13: CLI routing — re-run mode + help text
 
 **Files:**
+
 - Modify: `src/cli.ts` (init block at ~736–769, USAGE at ~130–174)
 - Test: `tests/cli.test.ts` (modify the init routing describe block)
 
 **Interfaces:**
+
 - Consumes: `runInitWizard` (unchanged signature). The injected `deps.runInitWizardFn` seam and `--yes` passthrough stay exactly as-is.
 
 - [ ] **Step 1: Update the routing tests**
@@ -3227,51 +3353,52 @@ Expected: exit 1 — the "routes into the wizard" test fails (old cli returns th
 - [ ] **Step 3: Rewrite the init block in src/cli.ts**
 
 ```ts
-  // ------------------------------------------------------------
-  // init: guided setup walkthrough. Fresh config → full wizard; existing
-  // config + interactive → the wizard's re-run (tune-up) mode; existing
-  // config + --yes/non-TTY → just ensure the queue dirs (never overwrite).
-  // ------------------------------------------------------------
-  if (subcommand === "init") {
-    const wantYes = values.yes as boolean;
-    const exists = existsFn(resolve(configPath));
-    // An injected runInitWizardFn counts as "interactive" (test seam).
-    const interactive = Boolean(deps.runInitWizardFn) || Boolean(process.stdin.isTTY);
+// ------------------------------------------------------------
+// init: guided setup walkthrough. Fresh config → full wizard; existing
+// config + interactive → the wizard's re-run (tune-up) mode; existing
+// config + --yes/non-TTY → just ensure the queue dirs (never overwrite).
+// ------------------------------------------------------------
+if (subcommand === "init") {
+  const wantYes = values.yes as boolean;
+  const exists = existsFn(resolve(configPath));
+  // An injected runInitWizardFn counts as "interactive" (test seam).
+  const interactive = Boolean(deps.runInitWizardFn) || Boolean(process.stdin.isTTY);
 
-    if (!exists && !wantYes && !interactive) {
-      process.stderr.write(
-        `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
-          `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.json.\n`,
-      );
-      return 1;
-    }
-
-    if (exists && (wantYes || !interactive)) {
-      // Config already present — ensure the queue dirs, never overwrite.
-      const cfg = loadConfigFn(configPath);
-      const paths = queuePaths(cfg);
-      for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
-        mkdirSync(d, { recursive: true });
-      }
-      printFn(
-        `Config already exists at ${resolve(configPath)}; ensured queue directories:\n` +
-          `  inbox:      ${paths.inbox}\n` +
-          `  processing: ${paths.processing}\n` +
-          `  done:       ${paths.done}\n` +
-          `  failed:     ${paths.failed}\n` +
-          `  worktrees:  ${cfg.worktreeRoot}\n`,
-      );
-      return 0;
-    }
-
-    const runWizard =
-      deps.runInitWizardFn ??
-      ((cp: string, o: { yes?: boolean }) => runInitWizard(cp, { yes: o.yes, printFn }));
-    return runWizard(configPath, { yes: wantYes });
+  if (!exists && !wantYes && !interactive) {
+    process.stderr.write(
+      `junco init: no config at ${resolve(configPath)} and not an interactive terminal.\n` +
+        `  Run \`junco init\` in a terminal, pass --yes to scaffold defaults, or create config.json.\n`,
+    );
+    return 1;
   }
+
+  if (exists && (wantYes || !interactive)) {
+    // Config already present — ensure the queue dirs, never overwrite.
+    const cfg = loadConfigFn(configPath);
+    const paths = queuePaths(cfg);
+    for (const d of [paths.inbox, paths.processing, paths.done, paths.failed, cfg.worktreeRoot]) {
+      mkdirSync(d, { recursive: true });
+    }
+    printFn(
+      `Config already exists at ${resolve(configPath)}; ensured queue directories:\n` +
+        `  inbox:      ${paths.inbox}\n` +
+        `  processing: ${paths.processing}\n` +
+        `  done:       ${paths.done}\n` +
+        `  failed:     ${paths.failed}\n` +
+        `  worktrees:  ${cfg.worktreeRoot}\n`,
+    );
+    return 0;
+  }
+
+  const runWizard =
+    deps.runInitWizardFn ??
+    ((cp: string, o: { yes?: boolean }) => runInitWizard(cp, { yes: o.yes, printFn }));
+  return runWizard(configPath, { yes: wantYes });
+}
 ```
 
 Update USAGE:
+
 - init line → `init         Guided setup walkthrough — writes config.json + creates the queue (re-run it anytime to tune settings)`
 - The module doc comment line 6 similarly.
 
@@ -3295,6 +3422,7 @@ git commit -m "feat(cli): junco init re-runs as a tune-up on existing configs"
 ### Task 14: Docs, changelog, full gate, smoke test
 
 **Files:**
+
 - Modify: `README.md` (quick-start / init mentions around line 152), `docs/configuration.md` (intro), `CHANGELOG.md` (Unreleased)
 
 - [ ] **Step 1: README**
@@ -3313,6 +3441,7 @@ After the intro paragraph (line 3), append to it:
 
 ```markdown
 ### Changed
+
 - `junco init` is now a full-screen guided walkthrough (Ink): chapter rail, machine
   preflight, live model discovery, repo-containment and GitHub-bridge setup, an extras
   multiselect, a review-before-write step, and a post-write flight check. Re-running
@@ -3321,6 +3450,7 @@ After the intro paragraph (line 3), append to it:
   scaffolds the same minimal default config non-interactively.
 
 ### Removed
+
 - `@clack/prompts` dependency (the old prompt-based wizard).
 ```
 
@@ -3330,6 +3460,7 @@ After the intro paragraph (line 3), append to it:
 npm run lint && npm run format:check && npm run typecheck && npm run build && npm test
 bash scripts/package-smoke.sh
 ```
+
 Expected: all green; smoke test ends with its success line. If lint flags the two
 `react-hooks/exhaustive-deps` disables in Model.tsx, keep the disables (they are
 deliberate: the effects key on `step` only) — but confirm the rule name matches the
@@ -3350,4 +3481,3 @@ git commit -m "docs: guided setup walkthrough"
 - **Spec coverage:** chapters/rail/keys (Tasks 5–11), warm-guide copy + stack-agnostic guard (Task 1), detect-then-offer + receipts (Tasks 4, 6, 10), recap-confirm-write + minimal fresh config (Tasks 2, 9), preserving re-run (Tasks 3, 12), `--yes`/exit codes/raw-mode guard (Task 12), cli routing + help (Task 13), docs/changelog/dependency removal (Tasks 12, 14). Narrow-terminal breadcrumb: Task 11. Unreachable-endpoint-no-dead-end: Model falls to manual (Task 7) + finale re-probe (Task 10).
 - **Types:** `WizardAnswers`/`WizardIO`/`WizardOutcome`/`WriteResult`/`CheckResult`/`AnswerDiff` defined once (Tasks 2–5) and consumed by name everywhere after.
 - **Known judgment calls for the implementer:** ink-testing-library timing — if a `press(ENTER)` races a probe-effect, wrap the assertion in `until()` (never lengthen `tick`). If `Select` double-fires on chapters that mount a new `Select` under a still-held Enter, debounce by checking `key.return` only after first render (add `useEffect`-gated `ready` state) — surface it in review rather than silently restructure.
-

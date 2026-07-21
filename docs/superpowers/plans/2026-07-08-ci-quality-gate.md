@@ -35,13 +35,15 @@
 
 ### Task 1: Add `typecheck` script; complete the incomplete test fixtures
 
-The gap: `tsconfig.eslint.json` includes `tests/`, but nothing runs `tsc` against it — vitest doesn't type-check and `tsconfig.json` excludes tests. Running it today reveals ~26 "incomplete literal" errors: test fixtures built before `Config`, `Ticket`, `PrOutcome`, and `MainLoopDeps` grew fields. This is the documented burn from CLAUDE.md ("Misses fail at *runtime*").
+The gap: `tsconfig.eslint.json` includes `tests/`, but nothing runs `tsc` against it — vitest doesn't type-check and `tsconfig.json` excludes tests. Running it today reveals ~26 "incomplete literal" errors: test fixtures built before `Config`, `Ticket`, `PrOutcome`, and `MainLoopDeps` grew fields. This is the documented burn from CLAUDE.md ("Misses fail at _runtime_").
 
 **Files:**
+
 - Modify: `package.json` (add `typecheck` script)
 - Modify: `tests/cli.test.ts:367`, `tests/critic.test.ts:44,107`, `tests/daemon.test.ts:42,113`, `tests/dispatch.test.ts:16`, `tests/health.test.ts:18`, `tests/pr.test.ts:75`, `tests/verify.test.ts:13,199,208,224,239,260,277,294,309`, `tests/worktree.test.ts:88`, `tests/finalize.test.ts:68`, `tests/observability.integration.test.ts:41`
 
 **Interfaces:**
+
 - Consumes: `Config`, `Ticket` (`src/types.ts:52,137`), `PrOutcome` (`src/prFlow.ts`), `MainLoopDeps` (`src/daemon.ts`).
 - Produces: `npm run typecheck` — the command Tasks 2, 3, 6, and 7 reference. After this task it still fails, but only with the ~34 one-off errors Task 2 fixes.
 
@@ -151,9 +153,11 @@ git log --format='%B' -1   # verify: no attribution trailer
 ### Task 2: Fix the remaining one-off test type errors — typecheck goes green
 
 **Files:**
+
 - Modify: `tests/guards.test.ts:41,499,507`, `tests/cli.test.ts:595-610`, `tests/daemon.test.ts:488-495`, `tests/health.test.ts:96`, `tests/githubOutbox.test.ts:~28`, `tests/outboxCmd.test.ts`, `tests/prFlow.test.ts:355-368`, `tests/tuiPrPreview.test.tsx:155,166,211`
 
 **Interfaces:**
+
 - Produces: `npm run typecheck` → exit 0. This is the state Tasks 3/6/7 assume.
 
 - [ ] **Step 1: Delete the three unused `@ts-expect-error` directives**
@@ -161,8 +165,8 @@ git log --format='%B' -1   # verify: no attribution trailer
 In `tests/guards.test.ts` at ~41, ~499, ~507, tsc reports `Unused '@ts-expect-error' directive` — the guarded call no longer errors (the signature widened). Delete the comment line only; keep the assertion below it:
 
 ```ts
-    const g = new RepetitionGuard();
-    expect(g.update(42)).toBe(false);
+const g = new RepetitionGuard();
+expect(g.update(42)).toBe(false);
 ```
 
 If deleting the directive makes tsc flag the call itself (`42` not assignable), keep the directive instead and skip — trust tsc's judgment per site.
@@ -172,7 +176,7 @@ If deleting the directive makes tsc flag the call itself (`42` not assignable), 
 `tests/cli.test.ts` (~598, ~608): `const wizard = vi.fn(async () => 0)` produces a calls tuple of `[]`, so `wizard.mock.calls[0][1]` is a type error. Give the mock the real `runInitWizardFn` signature (from `CliDeps` in `src/cli.ts`):
 
 ```ts
-    const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
+const wizard = vi.fn(async (_configPath: string, _opts: { yes?: boolean }) => 0);
 ```
 
 `tests/daemon.test.ts` (~488-495): same recipe for `startHealthServerFn` — read its parameter type from `MainLoopDeps` in `src/daemon.ts` and type the `vi.fn` callback's parameter accordingly, so `mock.calls[0][0]` has a real type. If the arg type is unwieldy, `const arg = startHealthServerFn.mock.calls[0]![0]!;` non-null assertions are acceptable after typing the fn.
@@ -219,7 +223,7 @@ The seam type is `(cfg: Config, cwd: string) => () => Promise<AgentSessionLike>`
 Three `<PrPreview ...>` renders (~155, ~166, ~211) lack the required `focused` prop. The tests currently run with `focused` as `undefined` (falsy), so preserve runtime behavior exactly:
 
 ```tsx
-      <PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />
+<PrPreview pr={testPr} branchPrefix="junco/" now={NOW} height={27} focused={false} />
 ```
 
 - [ ] **Step 7: Verify typecheck green, suite green**
@@ -243,9 +247,11 @@ git log --format='%B' -1   # verify: no attribution trailer
 ### Task 3: Restructure `test.yml` into `quality-gate.yml`
 
 **Files:**
+
 - Rename+rewrite: `.github/workflows/test.yml` → `.github/workflows/quality-gate.yml`
 
 **Interfaces:**
+
 - Produces: workflow `Quality Gate`; job id `test` with display name `test (<os>, node <version>)`; step `npm run typecheck` (from Task 1). Task 4 adds jobs `smoke` and `gate` to this same file. The final required-check context (Task 10) is `quality-gate` — defined by Task 4's gate job, not this task.
 
 - [ ] **Step 1: Rename and rewrite the workflow**
@@ -324,10 +330,12 @@ git log --format='%B' -1   # verify: no attribution trailer
 Nothing today tests the published artifact: the `files` allowlist could drop `templates/` or the `bin` wiring could break with CI green. This task adds a script that packs the tarball, installs it into a scratch prefix, and drives the installed CLI in a sandboxed HOME — plus the `gate` job that ties every leg into the one status check.
 
 **Files:**
+
 - Create: `scripts/package-smoke.sh`
 - Modify: `.github/workflows/quality-gate.yml` (append two jobs)
 
 **Interfaces:**
+
 - Consumes: job id `test` (Task 3); a built `dist/` (the workflow builds before calling the script).
 - Produces: job ids `smoke` and `gate`; **check context `quality-gate`** (the gate job's display name) — the exact string Task 10's ruleset requires.
 
@@ -385,42 +393,42 @@ Expected: final line `package smoke OK (...)`. If any assertion fails, fix the s
 Append to `.github/workflows/quality-gate.yml` (same indentation level as `test:`):
 
 ```yaml
-  smoke:
-    name: package smoke (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          # engines floor: the shipped tarball must install and run on the
-          # minimum supported node
-          node-version: "22.19.0"
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: bash scripts/package-smoke.sh
+smoke:
+  name: package smoke (${{ matrix.os }})
+  strategy:
+    fail-fast: false
+    matrix:
+      os: [ubuntu-latest, macos-latest]
+  runs-on: ${{ matrix.os }}
+  timeout-minutes: 10
+  steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        # engines floor: the shipped tarball must install and run on the
+        # minimum supported node
+        node-version: "22.19.0"
+        cache: npm
+    - run: npm ci
+    - run: npm run build
+    - run: bash scripts/package-smoke.sh
 
-  # The single status check that ties every environment leg together. Branch
-  # protection requires exactly this context: "quality-gate".
-  gate:
-    name: quality-gate
-    needs: [test, smoke]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Fail unless every leg succeeded
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
-        run: |
-          echo "::error::A quality-gate leg did not succeed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
-          exit 1
-      - name: All legs green
-        run: echo "quality gate passed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
+# The single status check that ties every environment leg together. Branch
+# protection requires exactly this context: "quality-gate".
+gate:
+  name: quality-gate
+  needs: [test, smoke]
+  if: always()
+  runs-on: ubuntu-latest
+  timeout-minutes: 5
+  steps:
+    - name: Fail unless every leg succeeded
+      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+      run: |
+        echo "::error::A quality-gate leg did not succeed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
+        exit 1
+    - name: All legs green
+      run: echo "quality gate passed — test=${{ needs.test.result }} smoke=${{ needs.smoke.result }}"
 ```
 
 - [ ] **Step 4: Sanity-check YAML + commit**
@@ -440,6 +448,7 @@ git log --format='%B' -1   # verify: no attribution trailer
 SHA pins rot without automation. Dependabot's `github-actions` ecosystem bumps the SHA and keeps the `# vX.Y.Z` comment in sync.
 
 **Files:**
+
 - Create: `.github/dependabot.yml`
 
 - [ ] **Step 1: Write the config**
@@ -470,11 +479,13 @@ git log --format='%B' -1   # verify: no attribution trailer
 ### Task 6: Publish workflow — OIDC trusted publishing + preflights
 
 **Files:**
+
 - Rewrite: `.github/workflows/publish.yml`
 
 **Interfaces:**
+
 - Consumes: `npm run typecheck` (Task 1).
-- Produces: a publish job that authenticates via OIDC only. **`secrets.NPM_TOKEN` is no longer referenced** — but the secret itself is retired in Task 10, *after* the first successful OIDC publish.
+- Produces: a publish job that authenticates via OIDC only. **`secrets.NPM_TOKEN` is no longer referenced** — but the secret itself is retired in Task 10, _after_ the first successful OIDC publish.
 
 - [ ] **Step 1: Rewrite `publish.yml`**
 
@@ -547,6 +558,7 @@ git log --format='%B' -1   # verify: no attribution trailer
 ### Task 7: Docs sync — CLAUDE.md and the README badge
 
 **Files:**
+
 - Modify: `CLAUDE.md` (Commands table, testing gotcha, CI reference, release flow)
 - Modify: `README.md:6` (badge URL)
 
@@ -565,9 +577,9 @@ Four edits (re-read the file first; quote exact current text before replacing):
 1. Commands table — add a row after Lint, and update the full gate:
    - New row: `| Typecheck | \`npm run typecheck\` (tsc over src/ + tests/ via \`tsconfig.eslint.json\` — vitest does not type-check) |`
    - Full gate row becomes: `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test`
-2. The sentence `CI (\`.github/workflows/test.yml\`) runs it on push/PR across ubuntu/macos × node 22.19/24.` → `CI (\`.github/workflows/quality-gate.yml\`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test; the aggregate \`quality-gate\` check is required to merge.`
-3. Testing gotcha #1: replace `Misses fail at *runtime* (\`undefined\` arithmetic), not compile time: vitest doesn't type-check and \`tsconfig.json\` excludes \`tests/\`.` with `\`npm run typecheck\` catches misses at CI time (vitest doesn't type-check and \`tsconfig.json\` excludes \`tests/\` — the eslint tsconfig covers them).`
-4. Release flow: in the "Once approved" sentence, change `bump \`package.json\` + \`CHANGELOG.md\` (Keep a Changelog) → merge to \`main\` → push → CI green` to `bump \`package.json\` + \`CHANGELOG.md\` (Keep a Changelog) via PR → quality gate green → merge` and change `→ npm publish with provenance` to `→ npm publish via OIDC trusted publishing with provenance (no NPM_TOKEN)`.
+2. The sentence `CI (\`.github/workflows/test.yml\`) runs it on push/PR across ubuntu/macos × node 22.19/24.`→`CI (\`.github/workflows/quality-gate.yml\`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test; the aggregate \`quality-gate\` check is required to merge.`
+3. Testing gotcha #1: replace `Misses fail at *runtime* (\`undefined\` arithmetic), not compile time: vitest doesn't type-check and \`tsconfig.json\` excludes \`tests/\`.`with`\`npm run typecheck\` catches misses at CI time (vitest doesn't type-check and \`tsconfig.json\` excludes \`tests/\` — the eslint tsconfig covers them).`
+4. Release flow: in the "Once approved" sentence, change `bump \`package.json\` + \`CHANGELOG.md\` (Keep a Changelog) → merge to \`main\` → push → CI green`to`bump \`package.json\` + \`CHANGELOG.md\` (Keep a Changelog) via PR → quality gate green → merge`and change`→ npm publish with provenance`to`→ npm publish via OIDC trusted publishing with provenance (no NPM_TOKEN)`.
 
 - [ ] **Step 3: Check for stragglers**
 
@@ -604,7 +616,7 @@ command -v zizmor >/dev/null || brew install zizmor
 zizmor .github/workflows/
 ```
 
-Expected: no High findings. Known-acceptable informational findings, if flagged: `cache: npm` in the *quality-gate* jobs (cache poisoning only matters for publishing jobs, which deliberately have no cache) and `workflow_dispatch` presence. Anything else: fix it.
+Expected: no High findings. Known-acceptable informational findings, if flagged: `cache: npm` in the _quality-gate_ jobs (cache poisoning only matters for publishing jobs, which deliberately have no cache) and `workflow_dispatch` presence. Anything else: fix it.
 
 If brew cannot install either tool, note it in the commit/PR body and rely on Task 9's live run — do not silently skip.
 

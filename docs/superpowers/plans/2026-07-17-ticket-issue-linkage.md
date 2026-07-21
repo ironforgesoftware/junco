@@ -4,7 +4,7 @@
 
 **Goal:** A locally dispatched PR-flow ticket can carry `github_request: { create_issue: true }`; at claim time the worker creates a GitHub tracking issue (under its own gh identity — the bot account when configured) on the clone's origin repo, stamps the worker-managed `github:` provenance block itself, and the existing pipeline then links the PR (`Closes owner/repo#N`) and posts lifecycle feedback.
 
-**Architecture:** Ticket-first flow. The dispatcher (e.g. the junco-dispatch skill) never touches `gh` and never writes `github:` — it writes a *request*; the worker fulfills it in `executeClaimed` (new module `src/githubIssueRequest.ts`) after the repo context is derived and before `runPrFlow`, so `makePrBody`'s existing `Closes` line (`src/prFlow.ts:299-302`) and the reporter (`src/githubReport.ts`) see stamped provenance with **zero changes to either**. Fulfillment is best-effort (failure → warn, ticket runs unlinked) and crash/requeue-safe (provenance is persisted into the claimed ticket file; a re-parse sees `github:` and skips re-creation).
+**Architecture:** Ticket-first flow. The dispatcher (e.g. the junco-dispatch skill) never touches `gh` and never writes `github:` — it writes a _request_; the worker fulfills it in `executeClaimed` (new module `src/githubIssueRequest.ts`) after the repo context is derived and before `runPrFlow`, so `makePrBody`'s existing `Closes` line (`src/prFlow.ts:299-302`) and the reporter (`src/githubReport.ts`) see stamped provenance with **zero changes to either**. Fulfillment is best-effort (failure → warn, ticket runs unlinked) and crash/requeue-safe (provenance is persisted into the claimed ticket file; a re-parse sees `github:` and skips re-creation).
 
 **Tech Stack:** TypeScript (Node ≥ 22.19, ESM/NodeNext, strict), vitest, existing seams only — `gh`/`git` from `src/git.ts` (bot auth env injected automatically via `cfg.ghAuth`), `createIssueLive` from `src/assessFiling.ts`, `nwoFromRemoteUrl` from `src/githubInbox.ts`, `upsertFrontmatterKey` from `src/requeue.ts`.
 
@@ -23,7 +23,7 @@
 
 **Behavioral decisions (settled during design — do not relitigate):**
 
-- Fulfillment runs in `executeClaimed` *before* `runPrFlow`, which means before plan-lint (which runs inside the flow). A ticket that later fails lint has already created its issue — acceptable: the reporter's terminal comment records the failure on that issue, which is exactly what a tracking record is for.
+- Fulfillment runs in `executeClaimed` _before_ `runPrFlow`, which means before plan-lint (which runs inside the flow). A ticket that later fails lint has already created its issue — acceptable: the reporter's terminal comment records the failure on that issue, which is exactly what a tracking record is for.
 - Fork-push tickets (`ctx.pushRemote !== "origin"`) are **skipped**: repos the operator does not control get no outward-facing writes beyond the PR itself (same rule as the reporter's `external` guard).
 - Q&A / assess / analyze tickets never fulfill (the call site is inside the `hasRepo`/`ctx` branch, which those flavors never reach).
 - After a successful stamp, `reporter.onStart` is invoked once more: the first invocation (top of `executeClaimed`) saw `github: null` and no-opped; the re-call flips the fresh issue to the `working` lifecycle label when GitHub mode is on. Reporter is best-effort by contract.
@@ -34,12 +34,14 @@
 ### Task 1: Ticket contract — parse `github_request`
 
 **Files:**
+
 - Modify: `src/types.ts` (Ticket interface, after the `github` field at `src/types.ts:227`)
 - Modify: `src/ticket.ts` (`parseTicket`, after the `analyze` parsing block)
 - Modify: `src/ticketSchema.ts` (new `github_request` property after the `github` property; one-sentence description tweak on `github`)
 - Test: `tests/ticket.test.ts`, `tests/ticketSchema.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `Ticket.githubRequest: { createIssue: boolean } | null` — read by Task 2 (guard) and Task 3 (call-site gate). Frontmatter spelling: `github_request: { create_issue: true }`.
 
@@ -48,33 +50,35 @@
 Append to the `describe("parseTicket", ...)` block in `tests/ticket.test.ts`:
 
 ```ts
-  it("parses github_request.create_issue: true", () => {
-    const md = `---\nid: t7\nrepo: /x\ngithub_request:\n  create_issue: true\n---\nb`;
-    expect(parseTicket("/in/t7.md", md).githubRequest).toEqual({ createIssue: true });
-  });
+it("parses github_request.create_issue: true", () => {
+  const md = `---\nid: t7\nrepo: /x\ngithub_request:\n  create_issue: true\n---\nb`;
+  expect(parseTicket("/in/t7.md", md).githubRequest).toEqual({ createIssue: true });
+});
 
-  it("defaults githubRequest to null when absent; non-true create_issue parses false", () => {
-    expect(parseTicket("/in/t8.md", `---\nid: t8\n---\nb`).githubRequest).toBeNull();
-    const md = `---\nid: t9\ngithub_request:\n  create_issue: "yes"\n---\nb`;
-    expect(parseTicket("/in/t9.md", md).githubRequest).toEqual({ createIssue: false });
-    expect(parseTicket("/in/t10.md", `---\nid: t10\ngithub_request: banana\n---\nb`).githubRequest).toBeNull();
-  });
+it("defaults githubRequest to null when absent; non-true create_issue parses false", () => {
+  expect(parseTicket("/in/t8.md", `---\nid: t8\n---\nb`).githubRequest).toBeNull();
+  const md = `---\nid: t9\ngithub_request:\n  create_issue: "yes"\n---\nb`;
+  expect(parseTicket("/in/t9.md", md).githubRequest).toEqual({ createIssue: false });
+  expect(
+    parseTicket("/in/t10.md", `---\nid: t10\ngithub_request: banana\n---\nb`).githubRequest,
+  ).toBeNull();
+});
 ```
 
 Append to `tests/ticketSchema.test.ts` (mirror the existing cast idiom at its line 20):
 
 ```ts
-  it("documents github_request as a dispatcher-settable mapping with create_issue", () => {
-    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<
-      string,
-      { type?: string; description?: string; properties?: Record<string, { type?: string }> }
-    >;
-    expect(props.github_request).toBeDefined();
-    expect(props.github_request.type).toBe("object");
-    expect(props.github_request.properties?.create_issue?.type).toBe("boolean");
-    // The request surface must say who fulfills it — the worker, not the dispatcher.
-    expect(props.github_request.description).toMatch(/worker/i);
-  });
+it("documents github_request as a dispatcher-settable mapping with create_issue", () => {
+  const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<
+    string,
+    { type?: string; description?: string; properties?: Record<string, { type?: string }> }
+  >;
+  expect(props.github_request).toBeDefined();
+  expect(props.github_request.type).toBe("object");
+  expect(props.github_request.properties?.create_issue?.type).toBe("boolean");
+  // The request surface must say who fulfills it — the worker, not the dispatcher.
+  expect(props.github_request.description).toMatch(/worker/i);
+});
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -97,12 +101,12 @@ Expected: `exit: 1`, failures mentioning `githubRequest` (property does not exis
 `src/ticket.ts` — add after the `analyze` parsing block, and thread into the returned object next to `github`:
 
 ```ts
-  const reqRaw = frontmatter.github_request;
-  let githubRequest: Ticket["githubRequest"] = null;
-  if (reqRaw !== null && typeof reqRaw === "object" && !Array.isArray(reqRaw)) {
-    // Strict-true like `network:` — anything else is a documented no.
-    githubRequest = { createIssue: (reqRaw as Record<string, unknown>).create_issue === true };
-  }
+const reqRaw = frontmatter.github_request;
+let githubRequest: Ticket["githubRequest"] = null;
+if (reqRaw !== null && typeof reqRaw === "object" && !Array.isArray(reqRaw)) {
+  // Strict-true like `network:` — anything else is a documented no.
+  githubRequest = { createIssue: (reqRaw as Record<string, unknown>).create_issue === true };
+}
 ```
 
 …and add `githubRequest,` to the return literal (next to `github,`).
@@ -148,10 +152,12 @@ git add -A && git commit -m "feat(ticket): parse dispatcher-authored github_requ
 ### Task 2: Fulfillment module — `src/githubIssueRequest.ts`
 
 **Files:**
+
 - Create: `src/githubIssueRequest.ts`
 - Test: `tests/githubIssueRequest.test.ts` (new)
 
 **Interfaces:**
+
 - Consumes: `Ticket.githubRequest` (Task 1); `git`/`gh` + `CmdResult` from `src/git.ts`; `nwoFromRemoteUrl` from `src/githubInbox.ts`; `createIssueLive(cfg, nwo, title, bodyText, labels, ghFn): Promise<string | null>` from `src/assessFiling.ts`; `upsertFrontmatterKey(content, key, value)` from `src/requeue.ts`; `parseTicket` from `src/ticket.ts`; `RepoContext` from `src/repoContext.ts` (fields used: `repo`, `pushRemote`, `prTitle`).
 - Produces: `fulfillIssueRequest(cfg: Config, ticket: Ticket, ctx: RepoContext, claimedPath: string, deps?: IssueRequestDeps): Promise<TicketGithub | null>` — Task 3's seam. Returns the stamped meta (`{ nwo, issue, kind: "pr", external: false }`) or `null` for every skip/failure path. **Never throws.**
 
@@ -215,7 +221,9 @@ function harness(opts: { originUrl?: string; issueUrl?: string | null; ghThrows?
       return Promise.resolve({
         code: 0,
         stdout:
-          opts.issueUrl === null ? "" : (opts.issueUrl ?? "https://github.com/acme/api/issues/41") + "\n",
+          opts.issueUrl === null
+            ? ""
+            : (opts.issueUrl ?? "https://github.com/acme/api/issues/41") + "\n",
         stderr: "",
       });
     },
@@ -261,21 +269,33 @@ describe("fulfillIssueRequest", () => {
 
   it("skips fork-push tickets — no outward writes to repos the operator does not control", async () => {
     const h = harness();
-    const meta = await fulfillIssueRequest(CFG, ticketOf(), ctx({ pushRemote: "fork" }), "/claim/tk-1.md", h.deps);
+    const meta = await fulfillIssueRequest(
+      CFG,
+      ticketOf(),
+      ctx({ pushRemote: "fork" }),
+      "/claim/tk-1.md",
+      h.deps,
+    );
     expect(meta).toBeNull();
     expect(h.ghCalls).toHaveLength(0);
   });
 
   it("returns null (never throws) on a non-GitHub origin, a gh failure, and an unparseable issue URL", async () => {
     const bad = harness({ originUrl: "https://gitlab.com/acme/api.git" });
-    expect(await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", bad.deps)).toBeNull();
+    expect(
+      await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", bad.deps),
+    ).toBeNull();
     expect(bad.ghCalls).toHaveLength(0);
 
     const down = harness({ ghThrows: true });
-    expect(await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", down.deps)).toBeNull();
+    expect(
+      await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", down.deps),
+    ).toBeNull();
 
     const weird = harness({ issueUrl: null });
-    expect(await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", weird.deps)).toBeNull();
+    expect(
+      await fulfillIssueRequest(CFG, ticketOf(), ctx(), "/claim/tk-1.md", weird.deps),
+    ).toBeNull();
     // No stamp on any failure path.
     expect(weird.files.get("/claim/tk-1.md")).toBe(TICKET_MD);
   });
@@ -284,7 +304,8 @@ describe("fulfillIssueRequest", () => {
     const h = harness();
     // A tab inside the block makes YAML parse fail → parseTicket falls back to
     // no-frontmatter → upsert result re-parses with github: null (#108 class).
-    const broken = "---\nid: tk-1\nrepo: /sbxroot/clone\n\tbad: indent\ngithub_request:\n  create_issue: true\n---\nBody.";
+    const broken =
+      "---\nid: tk-1\nrepo: /sbxroot/clone\n\tbad: indent\ngithub_request:\n  create_issue: true\n---\nBody.";
     h.files.set("/claim/tk-1.md", broken);
     const t = { ...ticketOf(), githubRequest: { createIssue: true } };
     const meta = await fulfillIssueRequest(CFG, t, ctx(), "/claim/tk-1.md", h.deps);
@@ -437,7 +458,12 @@ export async function fulfillIssueRequest(
     });
   }
 
-  log.info("github_request: created tracking issue", { id: ticket.id, nwo, issue: meta.issue, url });
+  log.info("github_request: created tracking issue", {
+    id: ticket.id,
+    nwo,
+    issue: meta.issue,
+    url,
+  });
   return meta;
 }
 ```
@@ -460,10 +486,12 @@ git commit -m "feat(github): claim-time tracking-issue fulfillment for github_re
 ### Task 3: Wire fulfillment into `executeClaimed`
 
 **Files:**
+
 - Modify: `src/runOnce.ts` (`RunDeps` interface; the `if (next.hasRepo)` branch of `executeClaimed`, currently `src/runOnce.ts:283-308`)
 - Test: `tests/runOnce.test.ts`
 
 **Interfaces:**
+
 - Consumes: `fulfillIssueRequest` (Task 2), `Ticket.githubRequest` (Task 1).
 - Produces: `RunDeps.fulfillIssueRequestFn?: typeof fulfillIssueRequest` (test seam, peer of `assessFlowFn`). Behavior: for a PR-flow ticket with an unfulfilled request, `next.github` is stamped before `runPrFlow` reads it, and `reporter.onStart` is re-invoked once with the linked ticket.
 
@@ -534,7 +562,10 @@ describe("github_request fulfillment wiring", () => {
     expect(calls).toBe(0);
 
     const linkedRoot = mkdtempSync(join(tmpdir(), "junco-run-"));
-    seed(linkedRoot, 'github: {nwo: "acme/api", issue: 3, kind: pr}\ngithub_request:\n  create_issue: true\n');
+    seed(
+      linkedRoot,
+      'github: {nwo: "acme/api", issue: 3, kind: pr}\ngithub_request:\n  create_issue: true\n',
+    );
     await runOnce(cfg(linkedRoot), {
       sessionFactoryFor: () => fakeFactory(),
       fulfillIssueRequestFn: () => {
@@ -573,20 +604,20 @@ Add to `RunDeps` (after `analyzeFlowFn`):
 In `executeClaimed`, inside `if (next.hasRepo) { ... if (ctx) { ... } }`, immediately after `const ctx = deriveRepoContext(...)` and its `if (ctx) {` line, before `const flow = await runPrFlow(...)`:
 
 ```ts
-          // Dispatcher-requested issue linkage: fulfilled here — after the
-          // repo context exists, before runPrFlow reads task.github — so the
-          // PR body's Closes line and the reporter both see the stamped
-          // provenance. Best-effort: null leaves the ticket unlinked. The
-          // reporter re-call is the queued→working flip the top-of-function
-          // onStart skipped while github was still null.
-          if (next.githubRequest?.createIssue && !next.github) {
-            const fulfillFn = deps.fulfillIssueRequestFn ?? fulfillIssueRequest;
-            const stamped = await fulfillFn(cfg, next, ctx, claimed);
-            if (stamped) {
-              next.github = stamped;
-              await reporter.onStart(next).catch(() => undefined);
-            }
-          }
+// Dispatcher-requested issue linkage: fulfilled here — after the
+// repo context exists, before runPrFlow reads task.github — so the
+// PR body's Closes line and the reporter both see the stamped
+// provenance. Best-effort: null leaves the ticket unlinked. The
+// reporter re-call is the queued→working flip the top-of-function
+// onStart skipped while github was still null.
+if (next.githubRequest?.createIssue && !next.github) {
+  const fulfillFn = deps.fulfillIssueRequestFn ?? fulfillIssueRequest;
+  const stamped = await fulfillFn(cfg, next, ctx, claimed);
+  if (stamped) {
+    next.github = stamped;
+    await reporter.onStart(next).catch(() => undefined);
+  }
+}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -607,10 +638,12 @@ git commit -m "feat(worker): fulfill github_request at claim time, ahead of the 
 ### Task 4: Plan-lint advisory — `github_request_scope`
 
 **Files:**
+
 - Modify: `src/planLint.ts` (new check function; register in `lintTicket` at `src/planLint.ts:530`; add one line to the "Rules enforced" header comment)
 - Test: `tests/planLint.test.ts`
 
 **Interfaces:**
+
 - Consumes: frontmatter record (already threaded into `lintTicket`).
 - Produces: warning-severity violations, rule id `github_request_scope`. Warnings never block (`LintResult.ok` ignores them) — this is authoring feedback in the transcript, not a gate.
 
@@ -638,7 +671,11 @@ describe("github_request_scope", () => {
   });
 
   it("warns on a non-mapping github_request, stays silent on a well-scoped one and on absence", () => {
-    const bad = lintTicket(VALID_BODY, { ...VALID_FM, github_request: true }, { checkLabels: false });
+    const bad = lintTicket(
+      VALID_BODY,
+      { ...VALID_FM, github_request: true },
+      { checkLabels: false },
+    );
     expect(bad.warnings.some((w) => w.rule === "github_request_scope")).toBe(true);
     const good = lintTicket(
       VALID_BODY,
@@ -675,14 +712,22 @@ function checkGithubRequestScope(frontmatter: Record<string, unknown>): LintViol
     message,
   });
   if (typeof req !== "object" || Array.isArray(req)) {
-    return [warn("github_request must be a mapping (github_request: { create_issue: true }); it will be ignored")];
+    return [
+      warn(
+        "github_request must be a mapping (github_request: { create_issue: true }); it will be ignored",
+      ),
+    ];
   }
   const v: LintViolation[] = [];
   if (frontmatter.github !== undefined && frontmatter.github !== null) {
-    v.push(warn("ticket already carries a github: provenance block; github_request will be ignored"));
+    v.push(
+      warn("ticket already carries a github: provenance block; github_request will be ignored"),
+    );
   }
   if (frontmatter.push_remote === "fork") {
-    v.push(warn("fork-push tickets never write to the upstream repo; github_request will be ignored"));
+    v.push(
+      warn("fork-push tickets never write to the upstream repo; github_request will be ignored"),
+    );
   }
   return v;
 }
@@ -691,7 +736,7 @@ function checkGithubRequestScope(frontmatter: Record<string, unknown>): LintViol
 Register it in `lintTicket` (after the `checkNoCdInSteps` push):
 
 ```ts
-  violations.push(...checkGithubRequestScope(frontmatter));
+violations.push(...checkGithubRequestScope(frontmatter));
 ```
 
 Add to the header comment's rule list:
@@ -718,6 +763,7 @@ git commit -m "feat(lint): advisory github_request_scope rule"
 ### Task 5: Docs, skill, changelog + full gate
 
 **Files:**
+
 - Modify: `docs/tickets.md` (frontmatter table + worker-managed `github:` note, currently lines 22-40)
 - Modify: `skills/junco-dispatch/SKILL.md` (new subsection under "Metadata rules")
 - Modify: `skills/junco-dispatch/TEMPLATE.md` (optional-frontmatter comment lines)
@@ -725,6 +771,7 @@ git commit -m "feat(lint): advisory github_request_scope rule"
 - Modify: `CHANGELOG.md` (`## [Unreleased]` → `### Added`)
 
 **Interfaces:**
+
 - Consumes: the shipped behavior of Tasks 1-4 — every doc claim below is a conformance assertion against it.
 - Produces: nothing code-visible.
 
@@ -733,13 +780,13 @@ git commit -m "feat(lint): advisory github_request_scope rule"
 Add a row to the frontmatter table after the `analyze` row:
 
 ```markdown
-| `github_request`  | mapping             | Dispatcher-settable. `{ create_issue: true }` asks the worker to create a GitHub tracking issue for this ticket at claim time — on the clone's origin repo, under the worker's own gh identity (the bot account when configured) — and stamp the `github:` provenance block itself, so the resulting PR closes the issue on merge. Best-effort: if creation fails (offline, no permission, non-GitHub origin) the ticket still runs, unlinked. Ignored on fork-push (`push_remote: fork`) and Q&A/assess/analyze tickets. |
+| `github_request` | mapping | Dispatcher-settable. `{ create_issue: true }` asks the worker to create a GitHub tracking issue for this ticket at claim time — on the clone's origin repo, under the worker's own gh identity (the bot account when configured) — and stamp the `github:` provenance block itself, so the resulting PR closes the issue on merge. Best-effort: if creation fails (offline, no permission, non-GitHub origin) the ticket still runs, unlinked. Ignored on fork-push (`push_remote: fork`) and Q&A/assess/analyze tickets. |
 ```
 
 Append one sentence to the existing "Worker-managed `github:` block" blockquote:
 
 ```markdown
-Local dispatches can *request* linkage without writing the block: set `github_request: { create_issue: true }` and the worker creates the issue and stamps `github:` itself.
+Local dispatches can _request_ linkage without writing the block: set `github_request: { create_issue: true }` and the worker creates the issue and stamps `github:` itself.
 ```
 
 - [ ] **Step 2: `skills/junco-dispatch/SKILL.md` + `TEMPLATE.md`**
@@ -762,8 +809,9 @@ The **worker** — not you — creates the issue at claim time under its own Git
 TEMPLATE.md — inside the fenced frontmatter example, after the `# amends_pr: 42` comment line, add:
 
 ```markdown
-# github_request:     # optional — worker creates a tracking issue and links the PR to it
-#   create_issue: true
+# github_request: # optional — worker creates a tracking issue and links the PR to it
+
+# create_issue: true
 ```
 
 - [ ] **Step 3: `ARCHITECTURE.md` + `CHANGELOG.md`**

@@ -8,7 +8,7 @@
 Make the local ticket queue visible from `junco dashboard`: an always-on compact
 **queue strip** (running ticket with live progress, next-up list, counts) plus a
 full **queue view** on `t` (running / waiting / recent, retry and backoff detail).
-Covers the *entire* local queue — GitHub-bridged and manually dispatched tickets.
+Covers the _entire_ local queue — GitHub-bridged and manually dispatched tickets.
 
 ## Background facts the design relies on
 
@@ -33,39 +33,39 @@ Covers the *entire* local queue — GitHub-bridged and manually dispatched ticke
 
 ```ts
 export interface QueueRunning {
-  id: string;                      // ticket id (stamp prefix stripped)
+  id: string; // ticket id (stamp prefix stripped)
   github: TicketGithub | null;
-  turns: number | null;            // null when no progress yet / daemon-down fallback
+  turns: number | null; // null when no progress yet / daemon-down fallback
   lastTool: string | null;
   outputTokens: number | null;
-  startedAt: string | null;        // ISO; null on daemon-down fallback
-  stale: boolean;                  // true when sourced from processing/ dir (daemon down)
+  startedAt: string | null; // ISO; null on daemon-down fallback
+  stale: boolean; // true when sourced from processing/ dir (daemon down)
 }
 
 export interface QueueWaiting {
   id: string;
   github: TicketGithub | null;
-  kind: "pr" | "ask" | "plan";     // github.kind; manual tickets: hasRepo ? "pr" : "ask"
+  kind: "pr" | "ask" | "plan"; // github.kind; manual tickets: hasRepo ? "pr" : "ask"
   priority: "low" | "normal" | "high";
   retryCount: number;
-  notBefore: string | null;        // ISO when deferred (future), else null
-  deferred: boolean;               // notBefore parseable AND in the future at snapshot time
+  notBefore: string | null; // ISO when deferred (future), else null
+  deferred: boolean; // notBefore parseable AND in the future at snapshot time
 }
 
 export interface QueueRecent {
   id: string;
   github: TicketGithub | null;
-  status: "done" | "failed";       // = which dir it sits in
-  finishedAt: string;              // file mtime, ISO
+  status: "done" | "failed"; // = which dir it sits in
+  finishedAt: string; // file mtime, ISO
 }
 
 export interface QueueSnapshot {
   daemonUp: boolean;
-  maxConcurrent: number;           // from cfg
+  maxConcurrent: number; // from cfg
   running: QueueRunning[];
-  waiting: QueueWaiting[];         // claim order (see Background)
-  recent: QueueRecent[];           // newest-first across done/ + failed/, cap 5
-  error: string | null;            // non-null → strip renders one dim error line
+  waiting: QueueWaiting[]; // claim order (see Background)
+  recent: QueueRecent[]; // newest-first across done/ + failed/, cap 5
+  error: string | null; // non-null → strip renders one dim error line
 }
 ```
 

@@ -23,7 +23,7 @@ geometry and plumbing:
 - The dashboard already auto-polls: issues 30s, PRs 60s, queue 2s, health 5s. Manual `r`
   exists in main + PRs views. Verdict (maintainer-confirmed): keep `r`, add visibility.
 - The reported "PRs lost browser routing" is **not a regression** — `o`/Enter →
-  `openPrInBrowser` is intact (`App.tsx`, prs view handler). What's missing is a *visible*
+  `openPrInBrowser` is intact (`App.tsx`, prs view handler). What's missing is a _visible_
   URL affordance; the maintainer confirmed that reading.
 - Ink 7.1.0 has no built-in mouse support. Approach chosen (of hand-rolled / community
   package / yoga-introspection registry): **hand-rolled SGR protocol + pure hit-test
@@ -127,11 +127,11 @@ trade every mouse-enabled TUI makes (htop, lazygit). No opt-out in v1 per mainta
 
 ## Section 3 — Visible browser links
 
-| Resource | Key | Visible link |
-| --- | --- | --- |
-| Repository (rail, pane 1) | `o` — **new** | none (26-col rail; key + click cover it) |
-| Issue (panes 2/3) | `o` — exists | **new** link line on the issue preview card |
-| PR (PRs view) | `o`/Enter — exists | **new** link line on the PR preview card |
+| Resource                  | Key                | Visible link                                |
+| ------------------------- | ------------------ | ------------------------------------------- |
+| Repository (rail, pane 1) | `o` — **new**      | none (26-col rail; key + click cover it)    |
+| Issue (panes 2/3)         | `o` — exists       | **new** link line on the issue preview card |
+| PR (PRs view)             | `o`/Enter — exists | **new** link line on the PR preview card    |
 
 **Link line:** a dim, fixed-position row on both preview cards directly under the card
 heading: `↗ owner/repo#123`. Its pane-relative row index is an exported geometry constant

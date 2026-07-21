@@ -21,15 +21,15 @@
 
 ## File structure (what gets created/modified)
 
-| Area | Files |
-|---|---|
-| CI / tooling | Create `.github/workflows/test.yml`, `eslint.config.js`, `.prettierrc.json`; modify `package.json` |
+| Area            | Files                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CI / tooling    | Create `.github/workflows/test.yml`, `eslint.config.js`, `.prettierrc.json`; modify `package.json`                                                                                                            |
 | Naming & polish | Modify `src/health.ts`, `src/agent/modelSetup.ts`, `src/daemon.ts`, `src/types.ts`, `src/finalize.ts`, `src/metrics.ts`, `src/worktree.ts`, `src/critic.ts`, `src/agent/session.ts`, `src/agent/runResult.ts` |
-| Resilience | Create `src/requeue.ts`; modify `src/ticket.ts`, `src/ticketSchema.ts`, `src/config.ts`, `src/runOnce.ts`, `src/prFlow.ts`, `src/orphans.ts` |
-| Shutdown | Modify `src/daemon.ts`, `src/agent/session.ts`, `src/service.ts`, `src/cli.ts` |
-| Config & CLI | Modify `src/config.ts`, `src/cli.ts`, `src/logging.ts`, `src/lock.ts`, `src/wizard.ts`; create `src/statusCmd.ts`, `src/listCmd.ts`, `src/retryCmd.ts`, `src/doctor.ts`, `src/logsCmd.ts` |
-| Capability | Modify `src/runOnce.ts`, `src/prFlow.ts`, `src/metrics.ts`, `src/daemon.ts`, `src/repo.ts`, `src/agent/session.ts` |
-| Docs / ship | Create `templates/plain/task.md`, `templates/plain/task-code.md`; modify `README.md`, `ARCHITECTURE.md`, `examples/config.toml`, `package.json`, `CHANGELOG.md` |
+| Resilience      | Create `src/requeue.ts`; modify `src/ticket.ts`, `src/ticketSchema.ts`, `src/config.ts`, `src/runOnce.ts`, `src/prFlow.ts`, `src/orphans.ts`                                                                  |
+| Shutdown        | Modify `src/daemon.ts`, `src/agent/session.ts`, `src/service.ts`, `src/cli.ts`                                                                                                                                |
+| Config & CLI    | Modify `src/config.ts`, `src/cli.ts`, `src/logging.ts`, `src/lock.ts`, `src/wizard.ts`; create `src/statusCmd.ts`, `src/listCmd.ts`, `src/retryCmd.ts`, `src/doctor.ts`, `src/logsCmd.ts`                     |
+| Capability      | Modify `src/runOnce.ts`, `src/prFlow.ts`, `src/metrics.ts`, `src/daemon.ts`, `src/repo.ts`, `src/agent/session.ts`                                                                                            |
+| Docs / ship     | Create `templates/plain/task.md`, `templates/plain/task-code.md`; modify `README.md`, `ARCHITECTURE.md`, `examples/config.toml`, `package.json`, `CHANGELOG.md`                                               |
 
 Each new `src/*.ts` gets a sibling `tests/*.test.ts`.
 
@@ -40,6 +40,7 @@ Each new `src/*.ts` gets a sibling `tests/*.test.ts`.
 ### Task 1: CI test workflow on push/PR
 
 **Files:**
+
 - Create: `.github/workflows/test.yml`
 
 - [ ] **Step 1: Write the workflow**
@@ -92,6 +93,7 @@ git commit -m "ci: run build + tests on push and PR (node 22/24 × ubuntu/macos)
 ### Task 2: Prettier + ESLint (no-floating-promises), one-time format
 
 **Files:**
+
 - Create: `.prettierrc.json`, `eslint.config.js`
 - Modify: `package.json` (devDependencies + scripts), `.github/workflows/test.yml`, all of `src/` + `tests/` (mechanical reformat)
 
@@ -121,7 +123,9 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     files: ["src/**/*.ts", "tests/**/*.ts"],
-    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
     rules: {
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/no-explicit-any": "off",
@@ -161,8 +165,8 @@ Expected: reformat-only diff, build clean, 591 tests pass.
 - [ ] **Step 7: Add lint/format steps to CI** — in `.github/workflows/test.yml`, after the `npm ci` step add:
 
 ```yaml
-      - run: npm run lint
-      - run: npm run format:check
+- run: npm run lint
+- run: npm run format:check
 ```
 
 - [ ] **Step 8: Commit (two commits — tooling, then mechanical reformat)**
@@ -179,6 +183,7 @@ git commit -m "style: one-time prettier reformat of src/ and tests/"
 ### Task 3: Repo hygiene — drop Python cache artifacts, track the plans dir
 
 **Files:**
+
 - Delete: `__pycache__/`, `.pytest_cache/`, `tests/__pycache__/`
 - Add to git: `docs/superpowers/`
 
@@ -209,6 +214,7 @@ Expected: empty (live runtime files are already gitignored).
 The shipped surface must be stack-agnostic: daemon logs currently say "oMLX reachable" even when pointed at OpenAI/OpenRouter, and bare model ids default to provider `"omlx"`.
 
 **Files:**
+
 - Modify: `src/health.ts`, `src/daemon.ts`, `src/agent/modelSetup.ts`
 - Test: `tests/health.test.ts`, `tests/daemon.test.ts`, `tests/modelSetup.test.ts` (mechanical rename), `tests/session.test.ts` (if it references `splitModelId` defaults)
 
@@ -229,7 +235,7 @@ In `MainLoopDeps` rename `waitForOmlxFn` → `waitForEndpointFn`, and in `mainLo
 - [ ] **Step 3: Change the bare-id default provider** in `src/agent/modelSetup.ts:20`:
 
 ```ts
-  if (slash === -1) return { provider: "local", modelId: full };
+if (slash === -1) return { provider: "local", modelId: full };
 ```
 
 Update the doc comment above it: `the whole string is treated as the model id under the default "local" provider`.
@@ -256,6 +262,7 @@ git commit -m "refactor: stack-agnostic endpoint naming — endpointReachable/wa
 ### Task 5: Single-source the terminal-status routing set
 
 **Files:**
+
 - Modify: `src/types.ts`, `src/finalize.ts:77`, `src/metrics.ts:26-32`
 - Test: existing `tests/finalize.test.ts` + `tests/metrics.test.ts` keep passing (no behavior change)
 
@@ -295,6 +302,7 @@ git commit -m "refactor: single-source TERMINAL_DONE_STATUSES in types.ts"
 ### Task 6: Guard the stale-worktree rename
 
 **Files:**
+
 - Modify: `src/worktree.ts` (~line 134 — the `renameSync(wtPath, backup)` inside `prepareWorktree`'s stale-dir cleanup)
 - Test: `tests/worktree.test.ts`
 
@@ -306,14 +314,14 @@ Expected: the backup-rename line inside the `existsSync(wtPath)` stale-cleanup b
 - [ ] **Step 2: Wrap it** — replace the bare `renameSync(wtPath, backup);` with:
 
 ```ts
-      try {
-        renameSync(wtPath, backup);
-      } catch (e) {
-        throw new GitOpError(
-          `stale worktree cleanup failed: could not move ${wtPath} aside: ` +
-            (e instanceof Error ? e.message : String(e)),
-        );
-      }
+try {
+  renameSync(wtPath, backup);
+} catch (e) {
+  throw new GitOpError(
+    `stale worktree cleanup failed: could not move ${wtPath} aside: ` +
+      (e instanceof Error ? e.message : String(e)),
+  );
+}
 ```
 
 (`GitOpError` is already imported in worktree.ts; verify with `grep -n "GitOpError" src/worktree.ts` and add the import from `./git.js` if absent.)
@@ -335,7 +343,11 @@ it("stale-dir backup rename failure surfaces as GitOpError, not a bare throw", a
       if (e instanceof GitOpError) throw e;
       throw new Error("expected GitOpError, got: " + e);
     }),
-  ).resolves.toBeDefined().catch(() => {/* GitOpError rejection also acceptable */});
+  )
+    .resolves.toBeDefined()
+    .catch(() => {
+      /* GitOpError rejection also acceptable */
+    });
 });
 ```
 
@@ -355,6 +367,7 @@ git commit -m "fix(worktree): surface stale-dir backup rename failures as GitOpE
 ### Task 7: Tell the critic when its diff is truncated
 
 **Files:**
+
 - Modify: `src/critic.ts` (the diff-truncation site and the critic prompt builder)
 - Test: `tests/critic.test.ts`
 
@@ -389,11 +402,11 @@ const DIFF_TRUNCATION_NOTE =
 In the prompt builder, after the diff is interpolated, append conditionally:
 
 ```ts
-  const truncationGuidance = diff.includes("DIFF TRUNCATED")
-    ? "\nNOTE: the diff above is TRUNCATED. Judge only the hunks you can see; " +
-      "do not report MISSING for items you cannot see solely because the diff is cut off. " +
-      "When truncation leaves you unsure about an item, lean PASS.\n"
-    : "";
+const truncationGuidance = diff.includes("DIFF TRUNCATED")
+  ? "\nNOTE: the diff above is TRUNCATED. Judge only the hunks you can see; " +
+    "do not report MISSING for items you cannot see solely because the diff is cut off. " +
+    "When truncation leaves you unsure about an item, lean PASS.\n"
+  : "";
 ```
 
 and include `${truncationGuidance}` in the template just before the output-contract (`JUNCO_VERIFY`) instructions.
@@ -412,6 +425,7 @@ git commit -m "fix(critic): flag truncated diffs in the prompt to prevent false 
 ### Task 8: Type the Pi event stream
 
 **Files:**
+
 - Modify: `src/agent/session.ts:22-27` (`AgentSessionLike`), `src/agent/runResult.ts`
 - Test: build is the test (type-only change)
 
@@ -448,6 +462,7 @@ git commit -m "refactor(agent): type the Pi event stream at the session boundary
 ### Task 9: New config keys + ticket frontmatter keys (`retry_count`, `not_before`, `tools`)
 
 **Files:**
+
 - Modify: `src/config.ts` (schema + loader), `src/types.ts` (Config + Ticket), `src/ticket.ts`, `src/ticketSchema.ts`
 - Test: `tests/config.test.ts`, `tests/ticket.test.ts`, `tests/ticketSchema.test.ts`
 
@@ -494,7 +509,10 @@ Append to `tests/ticket.test.ts`:
 
 ```ts
 it("parses not_before, retry_count and tools", () => {
-  const t = parseTicket("/q/a.md", `---\nid: x\nnot_before: "2099-01-01T00:00:00Z"\nretry_count: 2\ntools: [read, bash]\n---\nbody`);
+  const t = parseTicket(
+    "/q/a.md",
+    `---\nid: x\nnot_before: "2099-01-01T00:00:00Z"\nretry_count: 2\ntools: [read, bash]\n---\nbody`,
+  );
   expect(t.notBefore).toBe("2099-01-01T00:00:00Z");
   expect(t.retryCount).toBe(2);
   expect(t.tools).toEqual(["read", "bash"]);
@@ -611,6 +629,7 @@ git commit -m "feat: config + ticket contract for retries, scheduling and per-ti
 ### Task 10: `src/requeue.ts` — transient classification + requeue-to-inbox
 
 **Files:**
+
 - Create: `src/requeue.ts`
 - Test: `tests/requeue.test.ts`
 
@@ -621,13 +640,25 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { isTransientFailure, upsertFrontmatterKey, requeueTicket, CLAIM_PREFIX_RE } from "../src/requeue.js";
+import {
+  isTransientFailure,
+  upsertFrontmatterKey,
+  requeueTicket,
+  CLAIM_PREFIX_RE,
+} from "../src/requeue.js";
 import { parseTicket } from "../src/ticket.js";
 import type { Config, RunResult } from "../src/types.js";
 
 const res = (over: Partial<RunResult>): RunResult => ({
-  finalText: "", toolCalls: [], usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
-  stopReason: null, errorMessage: null, timedOut: false, durationMs: 1, abortedByGuard: false, ...over,
+  finalText: "",
+  toolCalls: [],
+  usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+  stopReason: null,
+  errorMessage: null,
+  timedOut: false,
+  durationMs: 1,
+  abortedByGuard: false,
+  ...over,
 });
 
 describe("isTransientFailure", () => {
@@ -640,7 +671,9 @@ describe("isTransientFailure", () => {
   it("never transient with commits, on timeout, on guard abort, or on clean stop", () => {
     expect(isTransientFailure(res({ errorMessage: "x" }), 2)).toBe(false);
     expect(isTransientFailure(res({ timedOut: true }), 0)).toBe(false);
-    expect(isTransientFailure(res({ abortedByGuard: true, errorMessage: "supervisor kill" }), 0)).toBe(false);
+    expect(
+      isTransientFailure(res({ abortedByGuard: true, errorMessage: "supervisor kill" }), 0),
+    ).toBe(false);
     expect(isTransientFailure(res({ stopReason: "stop" }), 0)).toBe(false);
   });
 });
@@ -655,7 +688,9 @@ describe("upsertFrontmatterKey", () => {
     expect(out).toBe("---\nretry_count: 2\nid: a\n---\nb");
   });
   it("creates frontmatter when there is none", () => {
-    expect(upsertFrontmatterKey("just a body\n", "retry_count", 1)).toBe("---\nretry_count: 1\n---\n\njust a body\n");
+    expect(upsertFrontmatterKey("just a body\n", "retry_count", 1)).toBe(
+      "---\nretry_count: 1\n---\n\njust a body\n",
+    );
   });
 });
 
@@ -666,7 +701,12 @@ describe("requeueTicket", () => {
     root = mkdtempSync(join(tmpdir(), "junco-rq-"));
     mkdirSync(join(root, "inbox"), { recursive: true });
     mkdirSync(join(root, "processing"), { recursive: true });
-    cfg = { vaultRoot: root, juncoSubdir: "", maxTransientRetries: 2, retryBackoffSeconds: 60 } as unknown as Config;
+    cfg = {
+      vaultRoot: root,
+      juncoSubdir: "",
+      maxTransientRetries: 2,
+      retryBackoffSeconds: 60,
+    } as unknown as Config;
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -757,7 +797,9 @@ export function upsertFrontmatterKey(content: string, key: string, value: string
   if (!m) return `---\n${key}: ${value}\n---\n\n${content}`;
   const block = m[1];
   const lineRe = new RegExp(`^${key}:.*$`, "m");
-  const newBlock = lineRe.test(block) ? block.replace(lineRe, `${key}: ${value}`) : `${block}\n${key}: ${value}`;
+  const newBlock = lineRe.test(block)
+    ? block.replace(lineRe, `${key}: ${value}`)
+    : `${block}\n${key}: ${value}`;
   return content.slice(0, m.index) + `---\n${newBlock}\n---` + content.slice(m.index + m[0].length);
 }
 
@@ -773,7 +815,12 @@ export interface RequeueOutcome {
  * The move is atomic: content is updated in place (tmp+rename inside
  * processing/), then renamed into inbox/ — no duplicate-visible window.
  */
-export function requeueTicket(cfg: Config, claimedPath: string, ticket: Ticket, reason: string): RequeueOutcome {
+export function requeueTicket(
+  cfg: Config,
+  claimedPath: string,
+  ticket: Ticket,
+  reason: string,
+): RequeueOutcome {
   if (ticket.retryCount >= cfg.maxTransientRetries) return { requeued: false };
   const attempt = ticket.retryCount + 1;
   const notBefore = new Date(Date.now() + cfg.retryBackoffSeconds * attempt * 1000).toISOString();
@@ -791,7 +838,13 @@ export function requeueTicket(cfg: Config, claimedPath: string, ticket: Ticket, 
   if (existsSync(join(inbox, name))) name = name.replace(/\.md$/, `-r${attempt}.md`);
   const dst = join(inbox, name);
   renameSync(claimedPath, dst);
-  log.warn("transient failure — requeued for retry", { dst, attempt, max: cfg.maxTransientRetries, reason, notBefore });
+  log.warn("transient failure — requeued for retry", {
+    dst,
+    attempt,
+    max: cfg.maxTransientRetries,
+    reason,
+    notBefore,
+  });
   return { requeued: true, dst, attempt };
 }
 ```
@@ -810,6 +863,7 @@ git commit -m "feat(requeue): transient-failure classification + atomic requeue-
 ### Task 11: Wire retries + `not_before` + readiness gate into the claim/execute paths
 
 **Files:**
+
 - Modify: `src/runOnce.ts`, `src/prFlow.ts`, `src/daemon.ts`
 - Test: `tests/runOnce.test.ts`, `tests/prFlow.test.ts`, `tests/daemon.test.ts`
 
@@ -831,14 +885,18 @@ it("treats an unparsable not_before as eligible", async () => {
 
 it("readiness gate: does not claim when readyFn says the endpoint is down", async () => {
   writeTicket("t.md", "---\nid: t\n---\nq");
-  const handled = await runOnce(cfg, { sessionFactoryFor: fakeFactory, readyFn: async () => false });
+  const handled = await runOnce(cfg, {
+    sessionFactoryFor: fakeFactory,
+    readyFn: async () => false,
+  });
   expect(handled).toBe(false);
   expect(existsSync(join(paths.inbox, "t.md"))).toBe(true); // still in inbox, not burned
 });
 
 it("Q&A transient error requeues instead of failing (budget permitting)", async () => {
   writeTicket("t.md", "---\nid: t\n---\nq");
-  const erroringFactory = () => async () => fakeSession({ throwOnPrompt: new Error("fetch failed") });
+  const erroringFactory = () => async () =>
+    fakeSession({ throwOnPrompt: new Error("fetch failed") });
   const handled = await runOnce(cfg, { sessionFactoryFor: erroringFactory });
   expect(handled).toBe(true);
   expect(readdirSync(paths.inbox).length).toBe(1); // back in inbox with retry_count 1
@@ -885,38 +943,45 @@ export interface RunDeps {
 }
 ```
 
-  - After the priority sort, filter on `not_before` (unparseable = eligible):
+- After the priority sort, filter on `not_before` (unparseable = eligible):
 
 ```ts
-  const now = Date.now();
-  const eligible = parsed.filter((t) => {
-    if (!t.notBefore) return true;
-    const ts = Date.parse(t.notBefore);
-    return Number.isNaN(ts) || ts <= now;
+const now = Date.now();
+const eligible = parsed.filter((t) => {
+  if (!t.notBefore) return true;
+  const ts = Date.parse(t.notBefore);
+  return Number.isNaN(ts) || ts <= now;
+});
+if (eligible.length === 0) return false;
+```
+
+- Before claiming (and only when there is eligible work), gate on readiness:
+
+```ts
+if (deps.readyFn && !(await deps.readyFn())) {
+  log.warn("inference endpoint not ready; leaving inbox untouched this poll", {
+    eligible: eligible.length,
   });
-  if (eligible.length === 0) return false;
+  return false;
+}
+const next = eligible[0];
 ```
 
-  - Before claiming (and only when there is eligible work), gate on readiness:
+- In the Q&A path, after `const result = await runAgent(...)` and before `finalize(...)`:
 
 ```ts
-  if (deps.readyFn && !(await deps.readyFn())) {
-    log.warn("inference endpoint not ready; leaving inbox untouched this poll", { eligible: eligible.length });
-    return false;
-  }
-  const next = eligible[0];
+if (isTransientFailure(result, 0)) {
+  const rq = requeueTicket(
+    cfg,
+    claimed,
+    next,
+    result.errorMessage ?? `stop_reason=${result.stopReason}`,
+  );
+  if (rq.requeued) return true;
+}
 ```
 
-  - In the Q&A path, after `const result = await runAgent(...)` and before `finalize(...)`:
-
-```ts
-      if (isTransientFailure(result, 0)) {
-        const rq = requeueTicket(cfg, claimed, next, result.errorMessage ?? `stop_reason=${result.stopReason}`);
-        if (rq.requeued) return true;
-      }
-```
-
-  - Imports: `import { isTransientFailure, requeueTicket } from "./requeue.js";`
+- Imports: `import { isTransientFailure, requeueTicket } from "./requeue.js";`
 
 - [ ] **Step 4: Implement `src/prFlow.ts`.**
   - Import: `import { isTransientFailure, requeueTicket } from "./requeue.js";`
@@ -924,47 +989,48 @@ export interface RunDeps {
   - Replace the Phase-5 block with:
 
 ```ts
-  // --- Phase 5: Hard-exit check (non-guard error). A guard abort is a SOFT
-  // abort; a TRANSIENT error with zero commits is requeued (budget permitting).
-  const hardError = result.errorMessage !== null && !result.abortedByGuard && !result.timedOut;
-  if (hardError) {
-    let commitsSoFar = 0;
-    try {
-      commitsSoFar = await countNewCommits(cfg, wtPath, sinceRef);
-    } catch {
-      /* unreadable worktree → treat as 0; the requeue below is still safe */
-    }
-    if (isTransientFailure(result, commitsSoFar)) {
-      const rq = requeueTicket(cfg, claimedPath, task, result.errorMessage ?? "agent session error");
-      if (rq.requeued) {
-        await cleanupWorktree(cfg, ctx, wtPath);
-        return rq.dst!;
-      }
-    }
-    prOutcome.worktreePreserved = true;
-    return finalizePr(claimedPath, result, prOutcome, { dirs });
+// --- Phase 5: Hard-exit check (non-guard error). A guard abort is a SOFT
+// abort; a TRANSIENT error with zero commits is requeued (budget permitting).
+const hardError = result.errorMessage !== null && !result.abortedByGuard && !result.timedOut;
+if (hardError) {
+  let commitsSoFar = 0;
+  try {
+    commitsSoFar = await countNewCommits(cfg, wtPath, sinceRef);
+  } catch {
+    /* unreadable worktree → treat as 0; the requeue below is still safe */
   }
+  if (isTransientFailure(result, commitsSoFar)) {
+    const rq = requeueTicket(cfg, claimedPath, task, result.errorMessage ?? "agent session error");
+    if (rq.requeued) {
+      await cleanupWorktree(cfg, ctx, wtPath);
+      return rq.dst!;
+    }
+  }
+  prOutcome.worktreePreserved = true;
+  return finalizePr(claimedPath, result, prOutcome, { dirs });
+}
 ```
 
-  (Timeout handling moves to Task 13; until then keep the old behavior for timeouts by ALSO keeping, directly above the `hardError` block: `if (result.timedOut) { prOutcome.worktreePreserved = true; return finalizePr(claimedPath, result, prOutcome, { dirs }); }` — Task 13 replaces it.)
+(Timeout handling moves to Task 13; until then keep the old behavior for timeouts by ALSO keeping, directly above the `hardError` block: `if (result.timedOut) { prOutcome.worktreePreserved = true; return finalizePr(claimedPath, result, prOutcome, { dirs }); }` — Task 13 replaces it.)
 
-  - In Phase 8, before the existing `stop_reason === "error"` failure branch, insert:
+- In Phase 8, before the existing `stop_reason === "error"` failure branch, insert:
 
 ```ts
-    if (newCommits === 0 && (result.stopReason === "error" || result.stopReason === "length")) {
-      const rq = requeueTicket(cfg, claimedPath, task, `stop_reason=${result.stopReason}`);
-      if (rq.requeued) {
-        await cleanupWorktree(cfg, ctx, wtPath);
-        return rq.dst!;
-      }
-      // budget exhausted → fall through to the existing terminal handling below
-    }
+if (newCommits === 0 && (result.stopReason === "error" || result.stopReason === "length")) {
+  const rq = requeueTicket(cfg, claimedPath, task, `stop_reason=${result.stopReason}`);
+  if (rq.requeued) {
+    await cleanupWorktree(cfg, ctx, wtPath);
+    return rq.dst!;
+  }
+  // budget exhausted → fall through to the existing terminal handling below
+}
 ```
 
 - [ ] **Step 5: Implement `src/daemon.ts`** — wire the daemon's default runOnce to the readiness probe (run-once CLI stays ungated):
 
 ```ts
-  const runOnceFn = deps.runOnceFn ?? ((c: Config) => runOnce(c, { readyFn: () => endpointReachable(c) }));
+const runOnceFn =
+  deps.runOnceFn ?? ((c: Config) => runOnce(c, { readyFn: () => endpointReachable(c) }));
 ```
 
 (`endpointReachable` is already imported after Task 4.)
@@ -973,12 +1039,18 @@ export interface RunDeps {
 
 ```ts
 it("a requeued ticket can be re-claimed and re-provisioned (no branch collision)", async () => {
-  const dst1 = await runPrFlow(cfg, task, claimedPath, ctx, { sessionFactoryFor: failingOnce, dirs });
+  const dst1 = await runPrFlow(cfg, task, claimedPath, ctx, {
+    sessionFactoryFor: failingOnce,
+    dirs,
+  });
   expect(dst1).toMatch(/inbox/);
   // re-claim (simulate the queue) and run again with a working fake session
   const claimed2 = claim(dst1, processingDir)!;
   const task2 = parseTicket(claimed2, readFileSync(claimed2, "utf8"));
-  const dst2 = await runPrFlow(cfg, task2, claimed2, freshCtx(), { sessionFactoryFor: committingFake, dirs });
+  const dst2 = await runPrFlow(cfg, task2, claimed2, freshCtx(), {
+    sessionFactoryFor: committingFake,
+    dirs,
+  });
   expect(dst2).toMatch(/done/);
 });
 ```
@@ -995,6 +1067,7 @@ git commit -m "feat(resilience): transient-failure requeue with backoff, not_bef
 ### Task 12: Orphan recovery requeues instead of failing (budget permitting)
 
 **Files:**
+
 - Modify: `src/orphans.ts`
 - Test: `tests/orphans.test.ts`
 
@@ -1002,7 +1075,11 @@ git commit -m "feat(resilience): transient-failure requeue with backoff, not_bef
 
 ```ts
 it("requeues a crashed ticket to inbox with retry_count+1 when budget remains", () => {
-  writeFileSync(join(processing, "2026-06-10T1200Z__crash.md"), "---\nid: crash\n---\nwork\n", "utf8");
+  writeFileSync(
+    join(processing, "2026-06-10T1200Z__crash.md"),
+    "---\nid: crash\n---\nwork\n",
+    "utf8",
+  );
   const moved = recoverOrphans(cfg); // cfg.maxTransientRetries = 2 (default)
   expect(moved).toHaveLength(1);
   expect(moved[0]).toContain("inbox");
@@ -1012,7 +1089,11 @@ it("requeues a crashed ticket to inbox with retry_count+1 when budget remains", 
 });
 
 it("routes to failed/ with the banner once the budget is exhausted", () => {
-  writeFileSync(join(processing, "2026-06-10T1200Z__crash.md"), "---\nid: crash\nretry_count: 2\n---\nwork\n", "utf8");
+  writeFileSync(
+    join(processing, "2026-06-10T1200Z__crash.md"),
+    "---\nid: crash\nretry_count: 2\n---\nwork\n",
+    "utf8",
+  );
   const moved = recoverOrphans(cfg);
   expect(moved[0]).toContain("failed");
   expect(readFileSync(moved[0], "utf8")).toMatch(/Orphan recovery/);
@@ -1026,14 +1107,14 @@ it("routes to failed/ with the banner once the budget is exhausted", () => {
 - [ ] **Step 3: Implement.** In `src/orphans.ts`, inside the per-orphan loop, after reading `existing`, parse and try the requeue FIRST:
 
 ```ts
-    // A crash is infrastructure, not a verdict on the ticket — requeue under
-    // the same transient budget; only an exhausted budget routes to failed/.
-    const parsed = parseTicket(orphanPath, existing);
-    const rq = requeueTicket(cfg, orphanPath, parsed, "orphan-recovery (worker crashed mid-run)");
-    if (rq.requeued) {
-      moved.push(rq.dst!);
-      continue;
-    }
+// A crash is infrastructure, not a verdict on the ticket — requeue under
+// the same transient budget; only an exhausted budget routes to failed/.
+const parsed = parseTicket(orphanPath, existing);
+const rq = requeueTicket(cfg, orphanPath, parsed, "orphan-recovery (worker crashed mid-run)");
+if (rq.requeued) {
+  moved.push(rq.dst!);
+  continue;
+}
 ```
 
 Add imports: `import { parseTicket } from "./ticket.js";` and `import { requeueTicket } from "./requeue.js";`. The existing metadata-block + banner + move-to-failed code stays as the fall-through path. Update the banner sentence "Moving to failed/ without re-running." → "Retry budget exhausted; moving to failed/. Move back to inbox/ to retry by hand."
@@ -1054,6 +1135,7 @@ git commit -m "feat(orphans): requeue crashed tickets under the transient-retry 
 A guard kill already salvages commits into a PR; a timeout currently abandons them in a preserved worktree. Treat timeout as a soft abort: skip post-session review, salvage commits, push, open the PR with a partial-run banner.
 
 **Files:**
+
 - Modify: `src/prFlow.ts`, `src/finalize.ts`, `src/types.ts`
 - Test: `tests/prFlow.test.ts`, `tests/finalize.test.ts`
 
@@ -1061,10 +1143,22 @@ A guard kill already salvages commits into a PR; a timeout currently abandons th
 
 ```ts
 it("computePrStatus: timeout with pushed commits → timeout_partial (done/); without → timeout (failed/)", () => {
-  const base = { finalText: "", toolCalls: [], usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
-    stopReason: null, errorMessage: null, timedOut: true, durationMs: 1, abortedByGuard: false };
-  expect(computePrStatus(base, { ...emptyOutcome, pushed: true } as PrOutcome, null)).toBe("timeout_partial");
-  expect(computePrStatus(base, { ...emptyOutcome, pushed: false } as PrOutcome, null)).toBe("timeout");
+  const base = {
+    finalText: "",
+    toolCalls: [],
+    usage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+    stopReason: null,
+    errorMessage: null,
+    timedOut: true,
+    durationMs: 1,
+    abortedByGuard: false,
+  };
+  expect(computePrStatus(base, { ...emptyOutcome, pushed: true } as PrOutcome, null)).toBe(
+    "timeout_partial",
+  );
+  expect(computePrStatus(base, { ...emptyOutcome, pushed: false } as PrOutcome, null)).toBe(
+    "timeout",
+  );
 });
 ```
 
@@ -1076,7 +1170,8 @@ Append to `tests/prFlow.test.ts`:
 it("a timed-out session with commits is salvaged: pushed, PR opened, status timeout_partial, ticket → done/", async () => {
   // fake session that makes a commit, then runAgent reports timedOut
   const dst = await runPrFlow(cfg, task, claimedPath, ctx, {
-    sessionFactoryFor: committingThenTimingOutFake, dirs,
+    sessionFactoryFor: committingThenTimingOutFake,
+    dirs,
   });
   expect(dst).toMatch(/done/);
   expect(readFileSync(dst, "utf8")).toMatch(/status: timeout_partial/);
@@ -1084,7 +1179,8 @@ it("a timed-out session with commits is salvaged: pushed, PR opened, status time
 
 it("a timed-out session with no commits fails with a preserved worktree", async () => {
   const dst = await runPrFlow(cfg, task, claimedPath, ctx, {
-    sessionFactoryFor: idleTimingOutFake, dirs,
+    sessionFactoryFor: idleTimingOutFake,
+    dirs,
   });
   expect(dst).toMatch(/failed/);
   expect(readFileSync(dst, "utf8")).toMatch(/timed out|timeout/i);
@@ -1110,11 +1206,12 @@ export const TERMINAL_DONE_STATUSES: ReadonlySet<string> = new Set([
   - `computePrStatus`: replace `if (result.timedOut) return "timeout";` with:
 
 ```ts
-  if (result.timedOut) return pushed ? "timeout_partial" : "timeout";
+if (result.timedOut) return pushed ? "timeout_partial" : "timeout";
 ```
 
-  (`pushed` is already computed on the first line of the function.)
-  - `renderPrResult`: extend the banner cascade with a `timeout_partial` case, after the `aborted_partial` branch:
+(`pushed` is already computed on the first line of the function.)
+
+- `renderPrResult`: extend the banner cascade with a `timeout_partial` case, after the `aborted_partial` branch:
 
 ```ts
   } else if (status === "timeout_partial") {
@@ -1128,34 +1225,34 @@ export const TERMINAL_DONE_STATUSES: ReadonlySet<string> = new Set([
   - Phase 8, before the stop-reason branches, add the zero-commit timeout gate:
 
 ```ts
-    if (newCommits === 0 && result.timedOut) {
-      const phaseError = `agent hit the ${Math.round(task.timeoutSeconds / 60)}-minute ticket timeout with no commits`;
-      prOutcome.worktreePreserved = true;
-      log.warn(`${phaseError} — preserving worktree, routing to failed`);
-      return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError });
-    }
+if (newCommits === 0 && result.timedOut) {
+  const phaseError = `agent hit the ${Math.round(task.timeoutSeconds / 60)}-minute ticket timeout with no commits`;
+  prOutcome.worktreePreserved = true;
+  log.warn(`${phaseError} — preserving worktree, routing to failed`);
+  return finalizePr(claimedPath, result, prOutcome, { dirs, phaseError });
+}
 ```
 
-  - Phase 9: `const skipPostSessionReview = result.abortedByGuard || result.timedOut;` and extend the skip-metadata line:
+- Phase 9: `const skipPostSessionReview = result.abortedByGuard || result.timedOut;` and extend the skip-metadata line:
 
 ```ts
-      prOutcome.critic = {
-        status: "skipped",
-        findings: result.timedOut ? "timed-out session" : "aborted-by-repetition session",
-        rawOutput: "",
-      };
+prOutcome.critic = {
+  status: "skipped",
+  findings: result.timedOut ? "timed-out session" : "aborted-by-repetition session",
+  rawOutput: "",
+};
 ```
 
-  - `buildPrBody`: after the existing `result.abortedByGuard` banner block, add:
+- `buildPrBody`: after the existing `result.abortedByGuard` banner block, add:
 
 ```ts
-  if (result.timedOut) {
-    parts.push(
-      "> ⚠️ **Partial run.** This PR was opened from a session that hit its ticket " +
-        "timeout — commits made before the cutoff were salvaged. Review for " +
-        "completeness; consider an amendment ticket to finish.",
-    );
-  }
+if (result.timedOut) {
+  parts.push(
+    "> ⚠️ **Partial run.** This PR was opened from a session that hit its ticket " +
+      "timeout — commits made before the cutoff were salvaged. Review for " +
+      "completeness; consider an amendment ticket to finish.",
+  );
+}
 ```
 
 - [ ] **Step 6: Run, verify pass** — target files, then full suite: `npx tsc -p tsconfig.json && npx vitest run` → PASS.
@@ -1174,6 +1271,7 @@ git commit -m "feat(prflow): salvage committed work on timeout — push, open PR
 ### Task 14: Force-stop — second signal aborts the in-flight session and salvages
 
 **Files:**
+
 - Modify: `src/daemon.ts` (StopFlag + installSignalHandlers + mainLoop default), `src/agent/session.ts` (runAgent abortSignal), `src/runOnce.ts`, `src/prFlow.ts` (thread the signal)
 - Test: `tests/daemon.test.ts`, `tests/session.test.ts`
 
@@ -1214,7 +1312,9 @@ it("an aborted external signal kills the run and salvages (abortedByGuard semant
     },
   });
   const result = await runAgent({
-    body: "x", cwd: "/tmp", timeoutMs: 5_000,
+    body: "x",
+    cwd: "/tmp",
+    timeoutMs: 5_000,
     createSession: async () => session,
     abortSignal: ac.signal,
   });
@@ -1283,9 +1383,10 @@ export function installSignalHandlers(stopFlag: StopFlag): () => void {
 In `mainLoop`, thread the signal into the default runOnce (building on Task 11's default):
 
 ```ts
-  const runOnceFn =
-    deps.runOnceFn ??
-    ((c: Config) => runOnce(c, { readyFn: () => endpointReachable(c), abortSignal: stopFlag.forceSignal }));
+const runOnceFn =
+  deps.runOnceFn ??
+  ((c: Config) =>
+    runOnce(c, { readyFn: () => endpointReachable(c), abortSignal: stopFlag.forceSignal }));
 ```
 
 - [ ] **Step 4: Implement `src/agent/session.ts`.** Add to `RunAgentOptions`:
@@ -1299,20 +1400,20 @@ In `mainLoop`, thread the signal into the default runOnce (building on Task 11's
 In `runAgent`, after the timer is set up and before `subscribe`:
 
 ```ts
-  const onExternalAbort = (): void => {
-    if (killReason === null) killReason = "force-stop requested by operator";
-    void session.abort().catch(() => {});
-  };
-  if (opts.abortSignal) {
-    if (opts.abortSignal.aborted) onExternalAbort();
-    else opts.abortSignal.addEventListener("abort", onExternalAbort, { once: true });
-  }
+const onExternalAbort = (): void => {
+  if (killReason === null) killReason = "force-stop requested by operator";
+  void session.abort().catch(() => {});
+};
+if (opts.abortSignal) {
+  if (opts.abortSignal.aborted) onExternalAbort();
+  else opts.abortSignal.addEventListener("abort", onExternalAbort, { once: true });
+}
 ```
 
 In the `finally`, before `session.dispose()`:
 
 ```ts
-    opts.abortSignal?.removeEventListener("abort", onExternalAbort);
+opts.abortSignal?.removeEventListener("abort", onExternalAbort);
 ```
 
 (No other change: a non-null `killReason` already produces `supervisor kill: …` errorMessage and `abortedByGuard: true` salvage semantics. The errorMessage will read `supervisor kill: force-stop requested by operator (no nudges issued)` — acceptable and grep-able.)
@@ -1322,8 +1423,8 @@ In the `finally`, before `session.dispose()`:
   - `PrFlowDeps` gains `abortSignal?: AbortSignal;` — pass to BOTH `runAgent` calls (worker + corrective re-dispatch). The critic's internal session is not threaded (it is short and tool-less); note this in a comment where the critic runs:
 
 ```ts
-      // Force-stop does not abort the critic: it is tool-less and bounded; a
-      // force-stopped worker session never reaches here anyway (guard-abort path).
+// Force-stop does not abort the critic: it is tool-less and bounded; a
+// force-stopped worker session never reaches here anyway (guard-abort path).
 ```
 
 - [ ] **Step 6: Run, verify pass** — `npx vitest run tests/daemon.test.ts tests/session.test.ts` → PASS; full suite green.
@@ -1340,6 +1441,7 @@ git commit -m "feat(daemon): force-stop on second signal — abort in-flight ses
 ### Task 15: Service units get real stop timeouts + state-dir log paths
 
 **Files:**
+
 - Modify: `src/service.ts`, `src/cli.ts` (service subcommand)
 - Test: `tests/service.test.ts`
 
@@ -1347,12 +1449,20 @@ git commit -m "feat(daemon): force-stop on second signal — abort in-flight ses
 
 ```ts
 it("launchd plist sets ExitTimeOut from stopTimeoutSeconds", () => {
-  const out = renderLaunchdPlist({ cliEntry: "/x/cli.js", configPath: "/x/config.toml", stopTimeoutSeconds: 2400 });
+  const out = renderLaunchdPlist({
+    cliEntry: "/x/cli.js",
+    configPath: "/x/config.toml",
+    stopTimeoutSeconds: 2400,
+  });
   expect(out).toContain("<key>ExitTimeOut</key><integer>2400</integer>");
 });
 
 it("systemd unit sets TimeoutStopSec from stopTimeoutSeconds", () => {
-  const out = renderSystemdUnit({ cliEntry: "/x/cli.js", configPath: "/x/config.toml", stopTimeoutSeconds: 2400 });
+  const out = renderSystemdUnit({
+    cliEntry: "/x/cli.js",
+    configPath: "/x/config.toml",
+    stopTimeoutSeconds: 2400,
+  });
   expect(out).toContain("TimeoutStopSec=2400");
 });
 
@@ -1374,14 +1484,14 @@ it("defaults stopTimeoutSeconds to 2400 (40 min — covers the 30-min default ti
   stopTimeoutSeconds?: number;
 ```
 
-  - `resolveOpts` resolves it: `const stopTimeoutSeconds = opts.stopTimeoutSeconds ?? 2400;` (add to the returned object).
-  - `renderLaunchdPlist`: after the `<key>ThrottleInterval</key>` line add:
+- `resolveOpts` resolves it: `const stopTimeoutSeconds = opts.stopTimeoutSeconds ?? 2400;` (add to the returned object).
+- `renderLaunchdPlist`: after the `<key>ThrottleInterval</key>` line add:
 
 ```
     <key>ExitTimeOut</key><integer>${o.stopTimeoutSeconds}</integer>
 ```
 
-  - `renderSystemdUnit`: after `RestartSec=30` add:
+- `renderSystemdUnit`: after `RestartSec=30` add:
 
 ```
 TimeoutStopSec=${o.stopTimeoutSeconds}
@@ -1390,16 +1500,16 @@ TimeoutStopSec=${o.stopTimeoutSeconds}
 - [ ] **Step 4: Implement `src/cli.ts` (service subcommand).** Derive the timeout and log dir from the config when it exists (the subcommand currently never loads config — make it best-effort):
 
 ```ts
-    let stopTimeoutSeconds: number | undefined;
-    let logDir: string | undefined;
-    try {
-      const cfg = loadConfigFn(configPath);
-      stopTimeoutSeconds = (cfg.defaultTimeoutMinutes + 10) * 60; // ticket + drain margin
-      logDir = cfg.stateDir;
-    } catch {
-      /* no config yet — renderService falls back to its defaults */
-    }
-    const rendered = renderService(platform, { cliEntry, configPath, stopTimeoutSeconds, logDir });
+let stopTimeoutSeconds: number | undefined;
+let logDir: string | undefined;
+try {
+  const cfg = loadConfigFn(configPath);
+  stopTimeoutSeconds = (cfg.defaultTimeoutMinutes + 10) * 60; // ticket + drain margin
+  logDir = cfg.stateDir;
+} catch {
+  /* no config yet — renderService falls back to its defaults */
+}
+const rendered = renderService(platform, { cliEntry, configPath, stopTimeoutSeconds, logDir });
 ```
 
 - [ ] **Step 5: Run, verify pass** — `npx vitest run tests/service.test.ts tests/cli.test.ts` → PASS; full suite green.
@@ -1418,6 +1528,7 @@ git commit -m "feat(service): stop timeouts (ExitTimeOut/TimeoutStopSec) sized t
 ### Task 16: User-level config resolution (`~/.config/junco/config.toml`)
 
 **Files:**
+
 - Modify: `src/config.ts` (add `resolveConfigPath` + `defaultUserConfigPath`), `src/cli.ts` (use it everywhere), `src/wizard.ts` (drop `--config` noise from next-steps when on the default path)
 - Test: `tests/config.test.ts`, `tests/cli.test.ts`
 
@@ -1431,7 +1542,10 @@ describe("resolveConfigPath", () => {
     expect(resolveConfigPath("rel/c.toml", { cwd: () => "/base" })).toBe("/base/rel/c.toml");
   });
   it("falls back to ./config.toml when it exists", () => {
-    const p = resolveConfigPath(undefined, { cwd: () => "/base", existsFn: (x) => x === "/base/config.toml" });
+    const p = resolveConfigPath(undefined, {
+      cwd: () => "/base",
+      existsFn: (x) => x === "/base/config.toml",
+    });
     expect(p).toBe("/base/config.toml");
   });
   it("otherwise resolves the XDG user path", () => {
@@ -1455,8 +1569,13 @@ describe("resolveConfigPath", () => {
 
 ```ts
 /** The user-level default config location (XDG_CONFIG_HOME or ~/.config). */
-export function defaultUserConfigPath(env: Record<string, string | undefined> = process.env): string {
-  const base = env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== "" ? env.XDG_CONFIG_HOME : join(homedir(), ".config");
+export function defaultUserConfigPath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const base =
+    env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== ""
+      ? env.XDG_CONFIG_HOME
+      : join(homedir(), ".config");
   return join(base, "junco", "config.toml");
 }
 
@@ -1471,7 +1590,10 @@ export interface ResolveConfigDeps {
  * (repo-local setups keep working) → the user-level default. The returned path
  * may not exist yet — first-run detection checks that separately.
  */
-export function resolveConfigPath(explicit: string | undefined, deps: ResolveConfigDeps = {}): string {
+export function resolveConfigPath(
+  explicit: string | undefined,
+  deps: ResolveConfigDeps = {},
+): string {
   const existsFn = deps.existsFn ?? existsSync;
   const cwd = deps.cwd ?? (() => process.cwd());
   if (explicit) return resolve(cwd(), explicit);
@@ -1486,31 +1608,31 @@ export function resolveConfigPath(explicit: string | undefined, deps: ResolveCon
   - Right after the `--help` early-return and the `existsFn` binding, resolve ONCE:
 
 ```ts
-  const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
+const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
 ```
 
-  - Replace every later use of `values.config as string` / `resolve(values.config as string)` with `configPath` (subcommands: service, run-once, start, inbox-path, submit, init; the first-run routing line becomes `positionals[0] ?? (existsFn(configPath) ? "start" : "init")`).
-  - Update `USAGE`:
+- Replace every later use of `values.config as string` / `resolve(values.config as string)` with `configPath` (subcommands: service, run-once, start, inbox-path, submit, init; the first-run routing line becomes `positionals[0] ?? (existsFn(configPath) ? "start" : "init")`).
+- Update `USAGE`:
 
 ```
   --config <path>       Path to config.toml
                         [default: ./config.toml if present, else ~/.config/junco/config.toml]
 ```
 
-  - Import: `import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";`
+- Import: `import { loadConfig, queuePaths, resolveConfigPath } from "./config.js";`
 
 - [ ] **Step 5: Update `src/wizard.ts` next-steps** — drop the `--config` suffixes when the wizard wrote to the resolved default. In `runInitWizard`, where the next-steps are printed:
 
 ```ts
-    const flag = resolved === resolveConfigPath(undefined) ? "" : ` --config ${resolved}`;
-    printFn(
-      `\n✓ Wrote config:  ${resolved}\n` +
-        `✓ Created queue: ${queueRoot}/{inbox,processing,done,failed}\n\n` +
-        `Next steps:\n` +
-        `  • Tweak the model/endpoint in ${resolved} if needed.\n` +
-        `  • Start the worker:  junco start${flag}\n` +
-        `  • Submit a ticket:   junco submit <ticket>.md${flag}\n`,
-    );
+const flag = resolved === resolveConfigPath(undefined) ? "" : ` --config ${resolved}`;
+printFn(
+  `\n✓ Wrote config:  ${resolved}\n` +
+    `✓ Created queue: ${queueRoot}/{inbox,processing,done,failed}\n\n` +
+    `Next steps:\n` +
+    `  • Tweak the model/endpoint in ${resolved} if needed.\n` +
+    `  • Start the worker:  junco start${flag}\n` +
+    `  • Submit a ticket:   junco submit <ticket>.md${flag}\n`,
+);
 ```
 
 (Import `resolveConfigPath` from `./config.js`.)
@@ -1534,6 +1656,7 @@ git commit -m "feat(cli): user-level config discovery — ./config.toml, else ~/
 ### Task 17: Structured logs to a state-dir file + human-readable TTY format
 
 **Files:**
+
 - Modify: `src/logging.ts`, `src/cli.ts` (start/run-once wiring)
 - Test: `tests/logging.test.ts`
 
@@ -1554,7 +1677,13 @@ it("setLogSink tees the JSON line to the sink regardless of format", () => {
 });
 
 it("formatHumanLine renders ts/level/ticket/msg and leftover fields", () => {
-  const line = formatHumanLine({ ts: "2026-06-10T12:34:56.789Z", level: "warn", ticket: "t-1", msg: "careful", extra: 7 });
+  const line = formatHumanLine({
+    ts: "2026-06-10T12:34:56.789Z",
+    level: "warn",
+    ticket: "t-1",
+    msg: "careful",
+    extra: 7,
+  });
   expect(line).toContain("12:34:56");
   expect(line).toContain("WARN");
   expect(line).toContain("[t-1]");
@@ -1607,7 +1736,10 @@ export function formatHumanLine(entry: Record<string, unknown>): string {
   const level = String(entry.level ?? "info") as Level;
   const ticket = entry.ticket && entry.ticket !== "-" ? `[${String(entry.ticket)}] ` : "";
   const rest: Record<string, unknown> = { ...entry };
-  delete rest.ts; delete rest.level; delete rest.ticket; delete rest.msg;
+  delete rest.ts;
+  delete rest.level;
+  delete rest.ticket;
+  delete rest.msg;
   const fields = Object.keys(rest).length > 0 ? " " + JSON.stringify(rest) : "";
   const color = LEVEL_COLOR[level] ?? "";
   return `${ts} ${color}${level.toUpperCase().padEnd(5)}${RESET} ${ticket}${String(entry.msg ?? "")}${fields}`;
@@ -1626,10 +1758,10 @@ export function rotateLogIfLarge(path: string, maxBytes = 10 * 1024 * 1024): voi
 and rework `emit`'s tail:
 
 ```ts
-  const entry = { ...fields, ts: new Date().toISOString(), level, ticket, msg };
-  const jsonLine = JSON.stringify(entry);
-  if (sink) sink(jsonLine);
-  process.stdout.write((format === "human" ? formatHumanLine(entry) : jsonLine) + "\n");
+const entry = { ...fields, ts: new Date().toISOString(), level, ticket, msg };
+const jsonLine = JSON.stringify(entry);
+if (sink) sink(jsonLine);
+process.stdout.write((format === "human" ? formatHumanLine(entry) : jsonLine) + "\n");
 ```
 
 Imports: `import { statSync, renameSync } from "node:fs";`
@@ -1653,7 +1785,9 @@ function setupLogOutputs(cfg: Config): () => void {
       stream.end();
     };
   } catch (e) {
-    log.warn("file logging disabled (state dir not writable)", { error: e instanceof Error ? e.message : String(e) });
+    log.warn("file logging disabled (state dir not writable)", {
+      error: e instanceof Error ? e.message : String(e),
+    });
     return () => {};
   }
 }
@@ -1662,9 +1796,9 @@ function setupLogOutputs(cfg: Config): () => void {
 Call pattern in `start` (mirror in `run-once`):
 
 ```ts
-    const cfg = loadConfigFn(configPath);
-    setLogLevel(cfg.logLevel);
-    const teardownLogs = setupLogOutputs(cfg);
+const cfg = loadConfigFn(configPath);
+setLogLevel(cfg.logLevel);
+const teardownLogs = setupLogOutputs(cfg);
 ```
 
 …and in the `start` subcommand's existing `finally` block add `teardownLogs();` (in `run-once`, wrap the `runOnceFn` call in `try { … } finally { teardownLogs(); }`).
@@ -1684,6 +1818,7 @@ git commit -m "feat(logging): JSON tee to <state_dir>/worker.log with rotation +
 ### Task 18: `junco status`
 
 **Files:**
+
 - Create: `src/statusCmd.ts`
 - Modify: `src/lock.ts` (add `readLockHolder`), `src/cli.ts` (subcommand + usage)
 - Test: `tests/statusCmd.test.ts`, `tests/lock.test.ts`
@@ -1714,10 +1849,16 @@ describe("runStatusCommand", () => {
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "junco-status-"));
-    for (const d of ["inbox", "processing", "done", "failed"]) mkdirSync(join(root, d), { recursive: true });
+    for (const d of ["inbox", "processing", "done", "failed"])
+      mkdirSync(join(root, d), { recursive: true });
     writeFileSync(join(root, "inbox", "a.md"), "x");
     writeFileSync(join(root, "failed", "b.md"), "x");
-    cfg = { vaultRoot: root, juncoSubdir: "", healthHost: "127.0.0.1", healthPort: 8787 } as unknown as Config;
+    cfg = {
+      vaultRoot: root,
+      juncoSubdir: "",
+      healthHost: "127.0.0.1",
+      healthPort: 8787,
+    } as unknown as Config;
     out = [];
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -1726,10 +1867,21 @@ describe("runStatusCommand", () => {
     const fetchFn = (async () => ({
       ok: true,
       json: async () => ({
-        status: "ok", ready: true,
-        metrics: { pid: 42, uptimeSeconds: 150, currentTicket: "t-1", currentTickets: ["t-1"],
-          tasksProcessed: 3, tasksSucceeded: 2, tasksFailed: 1,
-          totalTokensIn: 10, totalTokensOut: 20, lastTaskStatus: "completed", lastTaskAt: "2026-06-10T12:00:00Z" },
+        status: "ok",
+        ready: true,
+        metrics: {
+          pid: 42,
+          uptimeSeconds: 150,
+          currentTicket: "t-1",
+          currentTickets: ["t-1"],
+          tasksProcessed: 3,
+          tasksSucceeded: 2,
+          tasksFailed: 1,
+          totalTokensIn: 10,
+          totalTokensOut: 20,
+          lastTaskStatus: "completed",
+          lastTaskAt: "2026-06-10T12:00:00Z",
+        },
       }),
     })) as unknown as typeof fetch;
     const code = await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
@@ -1742,7 +1894,9 @@ describe("runStatusCommand", () => {
   });
 
   it("daemon down: says not running and still prints queue counts", async () => {
-    const fetchFn = (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
     const code = await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
     expect(code).toBe(0);
     const text = out.join("");
@@ -1844,7 +1998,9 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? 1500);
   try {
-    const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`, { signal: controller.signal });
+    const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`, {
+      signal: controller.signal,
+    });
     if (!resp.ok) throw new Error(`HTTP ${(resp as Response).status}`);
     const body = (await resp.json()) as {
       ready: boolean;
@@ -1862,7 +2018,9 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   } catch {
     const lockPath = deps.lockPath ?? join(dirname(paths.inbox), "worker.lock");
     const holder = lockHolderFn(lockPath);
-    daemonLine = holder ? `not responding (lock held by pid ${holder} but /health unreachable)` : "not running";
+    daemonLine = holder
+      ? `not responding (lock held by pid ${holder} but /health unreachable)`
+      : "not running";
   } finally {
     clearTimeout(timer);
   }
@@ -1885,10 +2043,10 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
 Add the subcommand handler (next to inbox-path; note the lock lives beside the config file, matching `start`):
 
 ```ts
-  if (subcommand === "status") {
-    const cfg = loadConfigFn(configPath);
-    return runStatusCommand(cfg, { printFn, lockPath: join(dirname(configPath), "worker.lock") });
-  }
+if (subcommand === "status") {
+  const cfg = loadConfigFn(configPath);
+  return runStatusCommand(cfg, { printFn, lockPath: join(dirname(configPath), "worker.lock") });
+}
 ```
 
 Import `runStatusCommand` from `./statusCmd.js`.
@@ -1907,6 +2065,7 @@ git commit -m "feat(cli): junco status — daemon, endpoint, in-flight and queue
 ### Task 19: `junco list`
 
 **Files:**
+
 - Create: `src/listCmd.ts`
 - Modify: `src/cli.ts`
 - Test: `tests/listCmd.test.ts`
@@ -1923,19 +2082,26 @@ import type { Config } from "../src/types.js";
 
 describe("ticketStatusOf", () => {
   it("reads the LAST junco-result status", () => {
-    const c = "body\n---\n<!-- junco-result\nstatus: failed\n-->\nmore\n---\n<!-- junco-result\nstatus: completed\n-->\n";
+    const c =
+      "body\n---\n<!-- junco-result\nstatus: failed\n-->\nmore\n---\n<!-- junco-result\nstatus: completed\n-->\n";
     expect(ticketStatusOf(c)).toBe("completed");
   });
   it("null when no result block", () => expect(ticketStatusOf("plain")).toBeNull());
 });
 
 describe("runListCommand", () => {
-  let root: string; let cfg: Config; let out: string[];
+  let root: string;
+  let cfg: Config;
+  let out: string[];
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "junco-list-"));
-    for (const d of ["inbox", "processing", "done", "failed"]) mkdirSync(join(root, d), { recursive: true });
+    for (const d of ["inbox", "processing", "done", "failed"])
+      mkdirSync(join(root, d), { recursive: true });
     writeFileSync(join(root, "inbox", "i1.md"), "x");
-    writeFileSync(join(root, "failed", "f1.md"), "x\n---\n<!-- junco-result\nstatus: timeout\n-->\n");
+    writeFileSync(
+      join(root, "failed", "f1.md"),
+      "x\n---\n<!-- junco-result\nstatus: timeout\n-->\n",
+    );
     cfg = { vaultRoot: root, juncoSubdir: "" } as unknown as Config;
     out = [];
   });
@@ -1998,7 +2164,11 @@ export interface ListDeps {
   limit?: number;
 }
 
-export async function runListCommand(cfg: Config, box: string | undefined, deps: ListDeps = {}): Promise<number> {
+export async function runListCommand(
+  cfg: Config,
+  box: string | undefined,
+  deps: ListDeps = {},
+): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const now = (deps.nowFn ?? Date.now)();
   const limit = deps.limit ?? 15;
@@ -2037,10 +2207,10 @@ export async function runListCommand(cfg: Config, box: string | undefined, deps:
 - [ ] **Step 4: Wire `src/cli.ts`** — USAGE line `  list [box]   List tickets per queue box (inbox|processing|done|failed)` and:
 
 ```ts
-  if (subcommand === "list") {
-    const cfg = loadConfigFn(configPath);
-    return runListCommand(cfg, positionals[1], { printFn });
-  }
+if (subcommand === "list") {
+  const cfg = loadConfigFn(configPath);
+  return runListCommand(cfg, positionals[1], { printFn });
+}
 ```
 
 - [ ] **Step 5: Run, verify pass** — target + full suite → PASS.
@@ -2057,6 +2227,7 @@ git commit -m "feat(cli): junco list — newest-first queue listing with termina
 ### Task 20: `junco retry`
 
 **Files:**
+
 - Create: `src/retryCmd.ts`
 - Modify: `src/cli.ts`
 - Test: `tests/retryCmd.test.ts`
@@ -2065,7 +2236,15 @@ git commit -m "feat(cli): junco list — newest-first queue listing with termina
 
 ```ts
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { stripResultArtifacts, removeFrontmatterKey, runRetryCommand } from "../src/retryCmd.js";
@@ -2073,7 +2252,8 @@ import type { Config } from "../src/types.js";
 
 describe("stripResultArtifacts", () => {
   it("cuts at the FIRST junco-result block (drops all appended artifacts)", () => {
-    const c = "---\nid: a\n---\nbody\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\n…\n";
+    const c =
+      "---\nid: a\n---\nbody\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\n…\n";
     expect(stripResultArtifacts(c)).toBe("---\nid: a\n---\nbody\n");
   });
   it("no-op when there is no result block", () => {
@@ -2083,18 +2263,23 @@ describe("stripResultArtifacts", () => {
 
 describe("removeFrontmatterKey", () => {
   it("removes the key line, leaves the rest", () => {
-    expect(removeFrontmatterKey("---\nid: a\nretry_count: 2\n---\nb", "retry_count")).toBe("---\nid: a\n---\nb");
+    expect(removeFrontmatterKey("---\nid: a\nretry_count: 2\n---\nb", "retry_count")).toBe(
+      "---\nid: a\n---\nb",
+    );
   });
 });
 
 describe("runRetryCommand", () => {
-  let root: string; let cfg: Config; let out: string[];
+  let root: string;
+  let cfg: Config;
+  let out: string[];
   const failedName = "2026-06-10T1200Z__fix-thing.md";
   const failedBody =
-    "---\nid: fix-thing\nretry_count: 2\nnot_before: \"2026-06-10T13:00:00Z\"\n---\nplease fix\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\nnope\n";
+    '---\nid: fix-thing\nretry_count: 2\nnot_before: "2026-06-10T13:00:00Z"\n---\nplease fix\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\nnope\n';
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "junco-retry-"));
-    for (const d of ["inbox", "processing", "done", "failed"]) mkdirSync(join(root, d), { recursive: true });
+    for (const d of ["inbox", "processing", "done", "failed"])
+      mkdirSync(join(root, d), { recursive: true });
     writeFileSync(join(root, "failed", failedName), failedBody, "utf8");
     cfg = { vaultRoot: root, juncoSubdir: "", defaultTimeoutMinutes: 30 } as unknown as Config;
     out = [];
@@ -2236,10 +2421,10 @@ export async function runRetryCommand(
 - [ ] **Step 4: Wire `src/cli.ts`** — parseArgs options gain `all: { type: "boolean", default: false }`; USAGE line `  retry <name…|--all>  Move failed tickets back to the inbox for a fresh run`; handler:
 
 ```ts
-  if (subcommand === "retry") {
-    const cfg = loadConfigFn(configPath);
-    return runRetryCommand(cfg, positionals.slice(1), { all: values.all as boolean }, { printFn });
-  }
+if (subcommand === "retry") {
+  const cfg = loadConfigFn(configPath);
+  return runRetryCommand(cfg, positionals.slice(1), { all: values.all as boolean }, { printFn });
+}
 ```
 
 - [ ] **Step 5: Run, verify pass** — target + full suite → PASS.
@@ -2256,6 +2441,7 @@ git commit -m "feat(cli): junco retry — clean failed tickets and resubmit them
 ### Task 21: `junco doctor`
 
 **Files:**
+
 - Create: `src/doctor.ts`
 - Modify: `src/cli.ts`
 - Test: `tests/doctor.test.ts`
@@ -2269,8 +2455,12 @@ import type { Config } from "../src/types.js";
 
 const okConfig = {
   model: { id: "local/m", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "k", modelsJson: null },
-  vaultRoot: "/tmp/junco-doc-vault", juncoSubdir: "", worktreeRoot: "/tmp/junco-doc-wt",
-  gitBin: "git", ghBin: "gh", hasRepoFlows: true,
+  vaultRoot: "/tmp/junco-doc-vault",
+  juncoSubdir: "",
+  worktreeRoot: "/tmp/junco-doc-wt",
+  gitBin: "git",
+  ghBin: "gh",
+  hasRepoFlows: true,
 } as unknown as Config;
 
 function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
@@ -2293,29 +2483,48 @@ describe("runDoctor", () => {
 
   it("unreachable endpoint → ✗ and exit 1", async () => {
     const lines: string[] = [];
-    const code = await runDoctor("/x/config.toml", deps({ reachableFn: async () => false, printFn: (s) => lines.push(s) }));
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({ reachableFn: async () => false, printFn: (s) => lines.push(s) }),
+    );
     expect(code).toBe(1);
     expect(lines.join("")).toMatch(/✗ .*endpoint/i);
   });
 
   it("missing gh is a warning, not a failure (Q&A-only setups are valid)", async () => {
     const lines: string[] = [];
-    const code = await runDoctor("/x/config.toml", deps({
-      execFn: async (cmd: string) => (cmd === "gh" ? { code: 127, stdout: "", stderr: "not found" } : { code: 0, stdout: "ok", stderr: "" }),
-      printFn: (s) => lines.push(s),
-    }));
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        execFn: async (cmd: string) =>
+          cmd === "gh"
+            ? { code: 127, stdout: "", stderr: "not found" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/⚠ .*gh/);
   });
 
   it("unparseable config → ✗ and exit 1, later checks skipped", async () => {
-    const code = await runDoctor("/x/config.toml", deps({ loadConfigFn: () => { throw new Error("bad toml"); } }));
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({
+        loadConfigFn: () => {
+          throw new Error("bad toml");
+        },
+      }),
+    );
     expect(code).toBe(1);
   });
 
   it("model missing from the endpoint listing → warning only", async () => {
     const lines: string[] = [];
-    const code = await runDoctor("/x/config.toml", deps({ fetchModelsFn: async () => ["other"], printFn: (s) => lines.push(s) }));
+    const code = await runDoctor(
+      "/x/config.toml",
+      deps({ fetchModelsFn: async () => ["other"], printFn: (s) => lines.push(s) }),
+    );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/⚠ .*model/i);
   });
@@ -2345,7 +2554,10 @@ import { readLockHolder } from "./lock.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
-  execFn?: (cmd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+  execFn?: (
+    cmd: string,
+    args: string[],
+  ) => Promise<{ code: number; stdout: string; stderr: string }>;
   reachableFn?: (cfg: Config) => Promise<boolean>;
   fetchModelsFn?: typeof fetchModels;
   accessOkFn?: (dir: string) => boolean;
@@ -2353,10 +2565,21 @@ export interface DoctorDeps {
   printFn?: (s: string) => void;
 }
 
-function defaultExec(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function defaultExec(
+  cmd: string,
+  args: string[],
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 10_000 }, (err, stdout, stderr) => {
-      resolve({ code: err ? ((err as NodeJS.ErrnoException & { code?: number | string }).code === "ENOENT" ? 127 : 1) : 0, stdout, stderr });
+      resolve({
+        code: err
+          ? (err as NodeJS.ErrnoException & { code?: number | string }).code === "ENOENT"
+            ? 127
+            : 1
+          : 0,
+        stdout,
+        stderr,
+      });
     });
   });
 }
@@ -2405,30 +2628,53 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   if (cfg) {
     // 3-4. git / gh
     const gitRes = await execFn(cfg.gitBin, ["--version"]);
-    report(gitRes.code === 0 ? "ok" : "fail", "git", gitRes.code === 0 ? gitRes.stdout.trim() : "not found — PR-flow tickets need git");
+    report(
+      gitRes.code === 0 ? "ok" : "fail",
+      "git",
+      gitRes.code === 0 ? gitRes.stdout.trim() : "not found — PR-flow tickets need git",
+    );
     const ghVer = await execFn(cfg.ghBin, ["--version"]);
-    if (ghVer.code !== 0) report("warn", "gh", "not found — PR-flow tickets will fail; Q&A tickets are fine");
+    if (ghVer.code !== 0)
+      report("warn", "gh", "not found — PR-flow tickets will fail; Q&A tickets are fine");
     else {
       const auth = await execFn(cfg.ghBin, ["auth", "status"]);
-      report(auth.code === 0 ? "ok" : "warn", "gh", auth.code === 0 ? "authenticated" : "installed but not authenticated (run: gh auth login)");
+      report(
+        auth.code === 0 ? "ok" : "warn",
+        "gh",
+        auth.code === 0 ? "authenticated" : "installed but not authenticated (run: gh auth login)",
+      );
     }
 
     // 5. endpoint
     const up = await reachableFn(cfg);
-    report(up ? "ok" : "fail", "inference endpoint", up ? cfg.model.baseUrl : `${cfg.model.baseUrl} unreachable`);
+    report(
+      up ? "ok" : "fail",
+      "inference endpoint",
+      up ? cfg.model.baseUrl : `${cfg.model.baseUrl} unreachable`,
+    );
 
     // 6. model advertised (warn-only: not all endpoints list models)
     if (up) {
       const ids = await fetchModelsFn(cfg.model.baseUrl, cfg.model.apiKey);
       const { modelId } = splitModelId(cfg.model.id);
-      if (ids.length === 0) report("warn", "model", "endpoint does not list models; cannot verify " + cfg.model.id);
-      else report(ids.includes(modelId) || ids.includes(cfg.model.id) ? "ok" : "warn", "model",
-        ids.includes(modelId) || ids.includes(cfg.model.id) ? cfg.model.id : `${cfg.model.id} not in the endpoint's ${ids.length} advertised models`);
+      if (ids.length === 0)
+        report("warn", "model", "endpoint does not list models; cannot verify " + cfg.model.id);
+      else
+        report(
+          ids.includes(modelId) || ids.includes(cfg.model.id) ? "ok" : "warn",
+          "model",
+          ids.includes(modelId) || ids.includes(cfg.model.id)
+            ? cfg.model.id
+            : `${cfg.model.id} not in the endpoint's ${ids.length} advertised models`,
+        );
     }
 
     // 7. queue + worktree dirs writable
     const paths = queuePaths(cfg);
-    for (const [label, dir] of [["queue", dirname(paths.inbox)], ["worktree root", cfg.worktreeRoot]] as const) {
+    for (const [label, dir] of [
+      ["queue", dirname(paths.inbox)],
+      ["worktree root", cfg.worktreeRoot],
+    ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
     }
 
@@ -2447,9 +2693,9 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
 - [ ] **Step 4: Wire `src/cli.ts`** — USAGE line `  doctor       Preflight: config, git/gh, endpoint, model, dirs, daemon` and handler (note: doctor loads config itself so it can report a broken one instead of crashing):
 
 ```ts
-  if (subcommand === "doctor") {
-    return runDoctor(configPath, { loadConfigFn, printFn });
-  }
+if (subcommand === "doctor") {
+  return runDoctor(configPath, { loadConfigFn, printFn });
+}
 ```
 
 - [ ] **Step 5: Run, verify pass** — target + full suite → PASS. Also try it live: `node dist/cli.js doctor` after `npm run build` (expect sensible output against your real config).
@@ -2466,6 +2712,7 @@ git commit -m "feat(cli): junco doctor — preflight config, toolchain, endpoint
 ### Task 22: `junco logs`
 
 **Files:**
+
 - Create: `src/logsCmd.ts`
 - Modify: `src/cli.ts`
 - Test: `tests/logsCmd.test.ts`
@@ -2481,8 +2728,11 @@ import { runLogsCommand } from "../src/logsCmd.js";
 import type { Config } from "../src/types.js";
 
 describe("runLogsCommand", () => {
-  let dir: string; let cfg: Config; let out: string[];
-  const line = (msg: string) => JSON.stringify({ ts: "2026-06-10T12:00:00.000Z", level: "info", ticket: "-", msg }) + "\n";
+  let dir: string;
+  let cfg: Config;
+  let out: string[];
+  const line = (msg: string) =>
+    JSON.stringify({ ts: "2026-06-10T12:00:00.000Z", level: "info", ticket: "-", msg }) + "\n";
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "junco-logs-"));
     cfg = { stateDir: dir } as unknown as Config;
@@ -2517,7 +2767,11 @@ describe("runLogsCommand", () => {
     const p = join(dir, "worker.log");
     writeFileSync(p, line("start"), "utf8");
     const stop = new AbortController();
-    const done = runLogsCommand(cfg, { follow: true, lines: 1 }, { printFn: (s) => out.push(s), pollMs: 20, signal: stop.signal });
+    const done = runLogsCommand(
+      cfg,
+      { follow: true, lines: 1 },
+      { printFn: (s) => out.push(s), pollMs: 20, signal: stop.signal },
+    );
     await new Promise((r) => setTimeout(r, 40));
     appendFileSync(p, line("later"), "utf8");
     await new Promise((r) => setTimeout(r, 80));
@@ -2566,12 +2820,18 @@ function render(rawLine: string, json: boolean): string {
   }
 }
 
-export async function runLogsCommand(cfg: Config, opts: LogsOpts = {}, deps: LogsDeps = {}): Promise<number> {
+export async function runLogsCommand(
+  cfg: Config,
+  opts: LogsOpts = {},
+  deps: LogsDeps = {},
+): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const json = opts.json ?? !process.stdout.isTTY;
   const path = join(cfg.stateDir, "worker.log");
   if (!existsSync(path)) {
-    print(`junco logs: no log file at ${path} (the daemon writes it once started; see [observability].state_dir)\n`);
+    print(
+      `junco logs: no log file at ${path} (the daemon writes it once started; see [observability].state_dir)\n`,
+    );
     return 1;
   }
 
@@ -2590,7 +2850,10 @@ export async function runLogsCommand(cfg: Config, opts: LogsOpts = {}, deps: Log
       } catch {
         return; // rotated away mid-poll; next tick re-stats
       }
-      if (size < pos) { pos = 0; carry = ""; } // rotation
+      if (size < pos) {
+        pos = 0;
+        carry = "";
+      } // rotation
       if (size > pos) {
         const fd = openSync(path, "r");
         try {
@@ -2623,15 +2886,19 @@ export async function runLogsCommand(cfg: Config, opts: LogsOpts = {}, deps: Log
 - [ ] **Step 4: Wire `src/cli.ts`** — parseArgs options gain `follow: { type: "boolean", short: "f", default: false }, lines: { type: "string", short: "n" }, json: { type: "boolean", default: false }`; USAGE line `  logs [-f] [-n N] [--json]   Show (or follow) the worker log, human-readable on a TTY`; handler:
 
 ```ts
-  if (subcommand === "logs") {
-    const cfg = loadConfigFn(configPath);
-    const n = values.lines !== undefined ? parseInt(values.lines as string, 10) : undefined;
-    return runLogsCommand(cfg, {
+if (subcommand === "logs") {
+  const cfg = loadConfigFn(configPath);
+  const n = values.lines !== undefined ? parseInt(values.lines as string, 10) : undefined;
+  return runLogsCommand(
+    cfg,
+    {
       follow: values.follow as boolean,
       lines: Number.isInteger(n) && n! > 0 ? n : undefined,
       json: (values.json as boolean) || undefined,
-    }, {});
-  }
+    },
+    {},
+  );
+}
 ```
 
 - [ ] **Step 5: Run, verify pass** — target + full suite → PASS.
@@ -2650,6 +2917,7 @@ git commit -m "feat(cli): junco logs — tail/follow the worker log with human f
 ### Task 23: Per-ticket `tools:` override
 
 **Files:**
+
 - Modify: `src/runOnce.ts` (Q&A path), `src/prFlow.ts` (worker + corrective sessions)
 - Test: `tests/runOnce.test.ts`, `tests/prFlow.test.ts`
 
@@ -2658,7 +2926,10 @@ git commit -m "feat(cli): junco logs — tail/follow the worker log with human f
 ```ts
 it("Q&A default stays read-only; a tools: frontmatter overrides it", async () => {
   const seen: string[][] = [];
-  const capturingFactory = (c: Config) => { seen.push(c.tools); return fakeFactory(c, ""); };
+  const capturingFactory = (c: Config) => {
+    seen.push(c.tools);
+    return fakeFactory(c, "");
+  };
   writeTicket("plain.md", "---\nid: plain\n---\nq");
   await runOnce(cfg, { sessionFactoryFor: capturingFactory });
   expect(seen[0].sort()).toEqual(["find", "grep", "ls", "read"]); // intersection of cfg.tools default
@@ -2674,7 +2945,10 @@ Append to `tests/prFlow.test.ts`:
 it("a tools: frontmatter narrows the PR-flow session's allowlist", async () => {
   const seen: string[][] = [];
   const dst = await runPrFlow(cfg, taskWithTools(["read", "edit"]), claimedPath, ctx, {
-    sessionFactoryFor: (c) => { seen.push(c.tools); return committingFake(c, ""); },
+    sessionFactoryFor: (c) => {
+      seen.push(c.tools);
+      return committingFake(c, "");
+    },
     dirs,
   });
   expect(seen[0]).toEqual(["read", "edit"]);
@@ -2688,16 +2962,16 @@ it("a tools: frontmatter narrows the PR-flow session's allowlist", async () => {
 - [ ] **Step 3: Implement `src/runOnce.ts`.** Replace the Q&A `qaCfg` line:
 
 ```ts
-      // Q&A default is the read-only subset; an explicit ticket `tools:` is an
-      // owner-authored opt-in and is used verbatim.
-      const qaTools = next.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
-      const qaCfg: Config = { ...cfg, tools: qaTools };
+// Q&A default is the read-only subset; an explicit ticket `tools:` is an
+// owner-authored opt-in and is used verbatim.
+const qaTools = next.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
+const qaCfg: Config = { ...cfg, tools: qaTools };
 ```
 
 - [ ] **Step 4: Implement `src/prFlow.ts`.** Before the Phase-4 factory construction:
 
 ```ts
-  const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
+const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
 ```
 
 and use `flowCfg` (instead of `cfg`) in BOTH `(deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath)` call sites (worker + corrective). Everything else keeps `cfg`.
@@ -2716,6 +2990,7 @@ git commit -m "feat(tickets): per-ticket tools override — Q&A stays read-only 
 ### Task 24: Live progress in metrics + `/health`
 
 **Files:**
+
 - Modify: `src/agent/runResult.ts`, `src/agent/session.ts`, `src/metrics.ts`, `src/runOnce.ts`, `src/prFlow.ts`
 - Test: `tests/runResult.test.ts`, `tests/session.test.ts`, `tests/metrics.test.ts`
 
@@ -2742,8 +3017,13 @@ it("onProgress fires on turn ends and tool starts", async () => {
       { type: "turn_end", message: { usage: { input: 1, output: 1, totalTokens: 2 } } },
     ],
   });
-  await runAgent({ body: "x", cwd: "/tmp", timeoutMs: 5000, createSession: async () => session,
-    onProgress: (p) => snaps.push(p) });
+  await runAgent({
+    body: "x",
+    cwd: "/tmp",
+    timeoutMs: 5000,
+    createSession: async () => session,
+    onProgress: (p) => snaps.push(p),
+  });
   expect(snaps.length).toBe(2);
   expect(snaps.at(-1)!.turns).toBe(1);
 });
@@ -2792,9 +3072,9 @@ In `observe`: `case "tool_execution_start":` additionally `this.lastTool = event
 In the subscribe handler, directly after `acc.observe(e);`:
 
 ```ts
-      if (opts.onProgress && (e?.type === "turn_end" || e?.type === "tool_execution_start")) {
-        opts.onProgress(acc.progress());
-      }
+if (opts.onProgress && (e?.type === "turn_end" || e?.type === "tool_execution_start")) {
+  opts.onProgress(acc.progress());
+}
 ```
 
 - [ ] **Step 5: Implement `src/metrics.ts`.**
@@ -2813,7 +3093,7 @@ In the subscribe handler, directly after `acc.observe(e);`:
   }
 ```
 
-  - `snapshot()` adds `currentProgress: { ...this._progress },` and `reset()` adds `this._progress = {};`
+- `snapshot()` adds `currentProgress: { ...this._progress },` and `reset()` adds `this._progress = {};`
 
 - [ ] **Step 6: Wire `src/runOnce.ts` + `src/prFlow.ts`.**
   - runOnce Q&A `runAgent` call gains `onProgress: (p) => metrics.setTaskProgress(next.id, p),`; in the `finally` next to `metrics.setCurrentTicket(null)` add `metrics.clearTaskProgress(next.id);`. Pass `onProgress` into `runPrFlow` deps: `PrFlowDeps` gains `onProgress?: (p: { turns: number; lastTool: string | null; outputTokens: number }) => void;` and runOnce supplies `onProgress: (p) => metrics.setTaskProgress(next.id, p)`.
@@ -2833,6 +3113,7 @@ git commit -m "feat(observability): live per-ticket progress (turns, last tool, 
 ### Task 25: Transcript sidecars (per-ticket event JSONL)
 
 **Files:**
+
 - Modify: `src/agent/session.ts`, `src/runOnce.ts`, `src/prFlow.ts`
 - Test: `tests/session.test.ts`
 
@@ -2849,7 +3130,13 @@ it("streams non-delta events to the transcript path as JSONL", async () => {
       { type: "turn_end", message: { usage: { input: 1, output: 1, totalTokens: 2 } } },
     ],
   });
-  await runAgent({ body: "x", cwd: "/tmp", timeoutMs: 5000, createSession: async () => session, transcriptPath: txPath });
+  await runAgent({
+    body: "x",
+    cwd: "/tmp",
+    timeoutMs: 5000,
+    createSession: async () => session,
+    transcriptPath: txPath,
+  });
   const lines = readFileSync(txPath, "utf8").trim().split("\n");
   expect(lines).toHaveLength(2);
   expect(JSON.parse(lines[0]).type).toBe("tool_execution_start");
@@ -2870,21 +3157,24 @@ it("streams non-delta events to the transcript path as JSONL", async () => {
 In `runAgent`, before the subscribe:
 
 ```ts
-  let transcript: import("node:fs").WriteStream | null = null;
-  if (opts.transcriptPath) {
-    try {
-      mkdirSync(dirname(opts.transcriptPath), { recursive: true });
-      transcript = createWriteStream(opts.transcriptPath, { flags: "a" });
-    } catch (e) {
-      log.warn("transcript disabled (path not writable)", { path: opts.transcriptPath, error: e instanceof Error ? e.message : String(e) });
-    }
+let transcript: import("node:fs").WriteStream | null = null;
+if (opts.transcriptPath) {
+  try {
+    mkdirSync(dirname(opts.transcriptPath), { recursive: true });
+    transcript = createWriteStream(opts.transcriptPath, { flags: "a" });
+  } catch (e) {
+    log.warn("transcript disabled (path not writable)", {
+      path: opts.transcriptPath,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
+}
 ```
 
 In the subscribe handler, after `acc.observe(e);` (before the progress hook):
 
 ```ts
-      if (transcript && e?.type !== "message_update") transcript.write(JSON.stringify(e) + "\n");
+if (transcript && e?.type !== "message_update") transcript.write(JSON.stringify(e) + "\n");
 ```
 
 In the `finally`: `transcript?.end();`
@@ -2908,6 +3198,7 @@ git commit -m "feat(observability): per-ticket transcript sidecars under <state_
 ### Task 26: `allowed_repo_roots` allowlist
 
 **Files:**
+
 - Modify: `src/repo.ts` (`validateRepoContext`)
 - Test: `tests/repo.test.ts`
 
@@ -2917,14 +3208,18 @@ git commit -m "feat(observability): per-ticket transcript sidecars under <state_
 describe("allowed_repo_roots", () => {
   it("rejects a repo outside every allowed root, before touching gh", async () => {
     const cfg2 = { ...cfg, allowedRepoRoots: ["/srv/allowed"] };
-    await expect(validateRepoContext(cfg2, { ...ctx, repo: "/home/evil/repo" })).rejects.toThrow(/allowed_repo_roots/);
+    await expect(validateRepoContext(cfg2, { ...ctx, repo: "/home/evil/repo" })).rejects.toThrow(
+      /allowed_repo_roots/,
+    );
   });
   it("accepts a repo under an allowed root (continues to the existing checks)", async () => {
     const cfg2 = { ...cfg, allowedRepoRoots: [dirname(realRepoPath)] };
     await expect(validateRepoContext(cfg2, freshCtx())).resolves.toBeTruthy();
   });
   it("an empty allowlist allows everything (default)", async () => {
-    await expect(validateRepoContext({ ...cfg, allowedRepoRoots: [] }, freshCtx())).resolves.toBeTruthy();
+    await expect(
+      validateRepoContext({ ...cfg, allowedRepoRoots: [] }, freshCtx()),
+    ).resolves.toBeTruthy();
   });
 });
 ```
@@ -2936,21 +3231,21 @@ describe("allowed_repo_roots", () => {
 - [ ] **Step 3: Implement.** In `src/repo.ts` `validateRepoContext`, as the FIRST check (before the existsSync):
 
 ```ts
-  // Containment rail: when [git].allowed_repo_roots is non-empty, a ticket may
-  // only target repos under one of those roots. The inbox is a code-execution
-  // boundary — this caps where a hostile or fat-fingered ticket can point it.
-  if (cfg.allowedRepoRoots.length > 0) {
-    const real = resolve(ctx.repo);
-    const ok = cfg.allowedRepoRoots.some((root) => {
-      const r = resolve(root);
-      return real === r || real.startsWith(r + sep);
-    });
-    if (!ok) {
-      throw new GitOpError(
-        `repo ${ctx.repo} is outside [git].allowed_repo_roots — refusing to run this ticket`,
-      );
-    }
+// Containment rail: when [git].allowed_repo_roots is non-empty, a ticket may
+// only target repos under one of those roots. The inbox is a code-execution
+// boundary — this caps where a hostile or fat-fingered ticket can point it.
+if (cfg.allowedRepoRoots.length > 0) {
+  const real = resolve(ctx.repo);
+  const ok = cfg.allowedRepoRoots.some((root) => {
+    const r = resolve(root);
+    return real === r || real.startsWith(r + sep);
+  });
+  if (!ok) {
+    throw new GitOpError(
+      `repo ${ctx.repo} is outside [git].allowed_repo_roots — refusing to run this ticket`,
+    );
   }
+}
 ```
 
 Imports: add `resolve`, `sep` to the `node:path` import.
@@ -2971,6 +3266,7 @@ git commit -m "feat(security): [git].allowed_repo_roots — confine PR-flow tick
 The largest task. The queue claim is already an atomic rename and worktrees already isolate workspaces; the work is (a) splitting `runOnce` into claim/execute halves, (b) a scheduler loop that tops up slots, (c) multi-ticket metrics.
 
 **Files:**
+
 - Modify: `src/runOnce.ts`, `src/daemon.ts`, `src/metrics.ts`
 - Test: `tests/runOnce.test.ts`, `tests/daemon.test.ts`, `tests/metrics.test.ts`
 
@@ -3014,28 +3310,37 @@ Append to `tests/daemon.test.ts`:
 
 ```ts
 describe("runScheduler", () => {
-  const fakeWork = (id: string, repoKey: string | null) =>
-    ({ ticket: { id } as Ticket, claimedPath: `/p/${id}`, repoKey });
+  const fakeWork = (id: string, repoKey: string | null) => ({
+    ticket: { id } as Ticket,
+    claimedPath: `/p/${id}`,
+    repoKey,
+  });
 
   it("runs up to max_concurrent tasks at once and per-repo serializes", async () => {
     const cfg2 = { ...cfg, maxConcurrent: 2, pollIntervalSeconds: 0.01 } as Config;
     const queue = [fakeWork("a", "/repo/X"), fakeWork("b", "/repo/X"), fakeWork("c", "/repo/Y")];
-    let peak = 0, running = 0;
+    let peak = 0,
+      running = 0;
     const order: string[] = [];
     const stopFlag = new StopFlag();
     const claimFn = async (_c: Config, opts: { skipRepoKeys?: Set<string> }) => {
       const i = queue.findIndex((w) => !w.repoKey || !opts.skipRepoKeys?.has(w.repoKey));
-      if (i === -1) { if (queue.length === 0) stopFlag.requestStop(); return null; }
+      if (i === -1) {
+        if (queue.length === 0) stopFlag.requestStop();
+        return null;
+      }
       return queue.splice(i, 1)[0];
     };
     const executeFn = async (_c: Config, w: ReturnType<typeof fakeWork>) => {
-      running++; peak = Math.max(peak, running); order.push(w.ticket.id);
+      running++;
+      peak = Math.max(peak, running);
+      order.push(w.ticket.id);
       await new Promise((r) => setTimeout(r, 30));
       running--;
     };
     await runScheduler(cfg2, stopFlag, {}, { claimFn, executeFn });
     expect(order.sort()).toEqual(["a", "b", "c"]);
-    expect(peak).toBe(2);          // c ran beside a (b blocked on repo X)
+    expect(peak).toBe(2); // c ran beside a (b blocked on repo X)
   });
 
   it("graceful stop drains in-flight work", async () => {
@@ -3099,7 +3404,10 @@ export interface ClaimOpts {
   readyFn?: () => Promise<boolean>;
 }
 
-export async function claimNextTask(cfg: Config, opts: ClaimOpts = {}): Promise<ClaimedWork | null> {
+export async function claimNextTask(
+  cfg: Config,
+  opts: ClaimOpts = {},
+): Promise<ClaimedWork | null> {
   const paths = queuePaths(cfg);
   const candidates = discoverTasks(paths.inbox);
   if (candidates.length === 0) return null;
@@ -3107,7 +3415,9 @@ export async function claimNextTask(cfg: Config, opts: ClaimOpts = {}): Promise<
   // …(existing priority sort + Task-11 not_before filter, unchanged)…
   if (eligible.length === 0) return null;
   if (opts.readyFn && !(await opts.readyFn())) {
-    log.warn("inference endpoint not ready; leaving inbox untouched this poll", { eligible: eligible.length });
+    log.warn("inference endpoint not ready; leaving inbox untouched this poll", {
+      eligible: eligible.length,
+    });
     return null;
   }
   for (const t of eligible) {
@@ -3123,7 +3433,11 @@ export async function claimNextTask(cfg: Config, opts: ClaimOpts = {}): Promise<
   return null;
 }
 
-export async function executeClaimed(cfg: Config, work: ClaimedWork, deps: RunDeps = {}): Promise<void> {
+export async function executeClaimed(
+  cfg: Config,
+  work: ClaimedWork,
+  deps: RunDeps = {},
+): Promise<void> {
   const { ticket: next, claimedPath: claimed } = work;
   await withTicket(next.id, async (): Promise<void> => {
     metrics.taskStarted(next.id);
@@ -3151,7 +3465,10 @@ Imports: `resolve` from `node:path`, `expandHome` from `./config.js`. The `metri
 
 ```ts
 export interface SchedulerDeps {
-  claimFn?: (cfg: Config, opts: { skipRepoKeys: Set<string>; readyFn?: () => Promise<boolean> }) => Promise<ClaimedWork | null>;
+  claimFn?: (
+    cfg: Config,
+    opts: { skipRepoKeys: Set<string>; readyFn?: () => Promise<boolean> },
+  ) => Promise<ClaimedWork | null>;
   executeFn?: (cfg: Config, work: ClaimedWork) => Promise<void>;
   sleep?: (seconds: number, stopFlag: StopFlagLike) => Promise<void>;
   readyFn?: () => Promise<boolean>;
@@ -3170,9 +3487,13 @@ export async function runScheduler(
   opts: { once?: boolean } = {},
   deps: SchedulerDeps = {},
 ): Promise<void> {
-  const claimFn = deps.claimFn ?? ((c: Config, o: { skipRepoKeys: Set<string>; readyFn?: () => Promise<boolean> }) => claimNextTask(c, o));
+  const claimFn =
+    deps.claimFn ??
+    ((c: Config, o: { skipRepoKeys: Set<string>; readyFn?: () => Promise<boolean> }) =>
+      claimNextTask(c, o));
   const executeFn =
-    deps.executeFn ?? ((c: Config, w: ClaimedWork) => executeClaimed(c, w, { abortSignal: stopFlag.forceSignal }));
+    deps.executeFn ??
+    ((c: Config, w: ClaimedWork) => executeClaimed(c, w, { abortSignal: stopFlag.forceSignal }));
   const sleep = deps.sleep ?? sleepInterruptible;
 
   const inflight = new Set<Promise<void>>();
@@ -3189,7 +3510,12 @@ export async function runScheduler(
       idleAnnounced = false;
       if (work.repoKey) busyRepos.add(work.repoKey);
       const p: Promise<void> = executeFn(cfg, work)
-        .catch((e) => log.error("task execution crashed", { id: work.ticket.id, error: e instanceof Error ? (e.stack ?? e.message) : String(e) }))
+        .catch((e) =>
+          log.error("task execution crashed", {
+            id: work.ticket.id,
+            error: e instanceof Error ? (e.stack ?? e.message) : String(e),
+          }),
+        )
         .finally(() => {
           inflight.delete(p);
           if (work.repoKey) busyRepos.delete(work.repoKey);
@@ -3223,16 +3549,16 @@ export async function runScheduler(
 In `mainLoop`, replace the inner `try { let idleAnnounced … while … } finally { … }` poll loop with:
 
 ```ts
-  try {
-    await runScheduler(cfg, stopFlag, opts, {
-      claimFn: deps.claimFn,
-      executeFn: deps.executeFn,
-      sleep: deps.sleep,
-      readyFn: () => endpointReachable(cfg),
-    });
-  } finally {
-    if (health) await health.close();
-  }
+try {
+  await runScheduler(cfg, stopFlag, opts, {
+    claimFn: deps.claimFn,
+    executeFn: deps.executeFn,
+    sleep: deps.sleep,
+    readyFn: () => endpointReachable(cfg),
+  });
+} finally {
+  if (health) await health.close();
+}
 ```
 
 `MainLoopDeps` gains `claimFn?/executeFn?` (same signatures as `SchedulerDeps`) and DROPS `runOnceFn` — update `tests/daemon.test.ts` call sites that injected `runOnceFn` to inject `claimFn`/`executeFn` instead (a fake `claimFn` returning one `ClaimedWork` then null + a fake `executeFn` reproduces every existing scenario; the once-mode and idle-logging assertions keep their meaning). Imports: `claimNextTask, executeClaimed, type ClaimedWork` from `./runOnce.js` (replacing the `runOnce` import).
@@ -3262,6 +3588,7 @@ git commit -m "feat(daemon): max_concurrent scheduler with per-repo serializatio
 ### Task 28: Plain ticket templates (de-Obsidian)
 
 **Files:**
+
 - Create: `templates/plain/task.md`, `templates/plain/task-code.md`
 
 - [ ] **Step 1: Write `templates/plain/task.md`**
@@ -3282,14 +3609,14 @@ Describe the task here. The body (everything after the frontmatter closing
 
 - [ ] **Step 2: Write `templates/plain/task-code.md`**
 
-```markdown
+````markdown
 ---
 id: my-code-task
 priority: normal
 timeout_minutes: 60
 # PR-flow fields — presence of `repo:` triggers the git worktree + PR flow.
 repo: ~/code/your-project
-base_branch: main           # optional, default from config
+base_branch: main # optional, default from config
 # branch_name: junco/custom-name   # optional, default junco/<id>
 # draft: true                      # optional, default from config (draft)
 # pr_title: "Custom PR title"      # optional, default = first H1 in body
@@ -3311,7 +3638,9 @@ base branch, and commit rules — you don't need to restate those.
 # after the agent finishes; failures are surfaced in the PR body.
 npm test
 ```
-```
+````
+
+````
 
 (Note: the nested fence above needs the outer block in the plan only — the FILE content uses a normal ```bash fence.)
 
@@ -3320,13 +3649,14 @@ npm test
 ```bash
 git add templates/plain
 git commit -m "feat(templates): plain ticket templates alongside the Obsidian-Templater ones"
-```
+````
 
 ---
 
 ### Task 29: Documentation sweep — README, ARCHITECTURE, example config
 
 **Files:**
+
 - Modify: `README.md`, `ARCHITECTURE.md`, `examples/config.toml`
 
 - [ ] **Step 1: README — fix the drift + document everything new.** Make these edits:
@@ -3344,7 +3674,7 @@ the user-level path unless you pass `--config`, so `junco` works from any
 directory after first-run setup.
 ```
 
-  3. **Day-2 CLI** — extend the CLI reference table/section with:
+3. **Day-2 CLI** — extend the CLI reference table/section with:
 
 ```markdown
 | `junco status` | Daemon / endpoint / in-flight / queue counts at a glance |
@@ -3354,7 +3684,7 @@ directory after first-run setup.
 | `junco logs [-f] [-n N] [--json]` | Tail / follow the worker log (human-readable on a TTY) |
 ```
 
-  4. **Reliability section** (new, after "How it works"):
+4. **Reliability section** (new, after "How it works"):
 
 ```markdown
 ## Reliability
@@ -3376,9 +3706,9 @@ directory after first-run setup.
   exit.
 ```
 
-  5. **Security model section** (new, before Troubleshooting):
+5. **Security model section** (new, before Troubleshooting):
 
-```markdown
+````markdown
 ## Security model
 
 The inbox is a **code-execution boundary**. Junco runs a coding agent with
@@ -3392,7 +3722,9 @@ PR-flow tickets to approved checkout locations:
 [git]
 allowed_repo_roots = ["~/code"]   # empty (default) = any path
 ```
-```
+````
+
+````
 
   6. **Tickets section** — document the new frontmatter keys (`tools`, `not_before`, worker-managed `retry_count`), the plain templates (`templates/plain/` for non-Obsidian users; the top-level `templates/` ones use Obsidian-Templater syntax), and a one-line caveat under `junco retry`: a ticket body containing a literal `<!-- junco-result` separator line will lose its tail when retried.
   7. **Health & observability** — document `state_dir` (worker.log + transcripts), `junco logs`, the `/health` additions (`currentTickets`, `currentProgress`), and `[worker].max_concurrent` with the per-repo serialization guarantee.
@@ -3418,7 +3750,7 @@ allowed_repo_roots = ["~/code"]   # empty (default) = any path
 # state_dir = "~/.local/state/junco"  # worker.log + transcripts/ live here
 # log_to_file = true
 # transcripts = true            # per-ticket event JSONL under <state_dir>/transcripts/
-```
+````
 
 - [ ] **Step 4: Verify docs claims against the code** — for each documented flag/command, run the matching `--help`/test once; no doc may promise what a test doesn't prove.
 
@@ -3434,6 +3766,7 @@ git commit -m "docs: reliability + security model, day-2 CLI, config resolution,
 ### Task 30: Release prep — v0.3.0 (HOLD before publish)
 
 **Files:**
+
 - Modify: `package.json`, `CHANGELOG.md`
 
 - [ ] **Step 1:** `package.json` `"version": "0.2.2"` → `"0.3.0"`.
@@ -3505,4 +3838,3 @@ git commit -m "chore(release): v0.3.0 — resilience, day-2 CLI, concurrency, ob
 - **Type consistency:** `ClaimedWork`/`claimNextTask`/`executeClaimed` (T27) match the scheduler's `SchedulerDeps` signatures; `RunDeps.readyFn`/`abortSignal` introduced T11/T14 and consumed T27; `endpointReachable` renamed T4 before first new use T11; `TERMINAL_DONE_STATUSES` created T5, extended T13; `CLAIM_PREFIX_RE` exported T10, reused T20; `formatHumanLine` exported T17, reused T22; `metrics.taskStarted/taskEnded/setTaskProgress/clearTaskProgress` introduced T24/T27 and used consistently; config fields added T9 are exactly those consumed by T10–T27.
 - **Sequencing hazards called out inline:** T11 carries a temporary timeout early-return that T13 explicitly deletes; T27 removes `MainLoopDeps.runOnceFn` and says how to migrate the daemon tests; T16 names the one mechanical test-fix rule.
 - **Placeholder scan:** every code step carries the actual code or an exact mechanical rule + verification grep; the only intentionally adaptive steps are fixture reuse instructions that name the pattern to copy from an existing test in the same file.
-

@@ -79,7 +79,7 @@ usable height.
   call carries the snapshot's number; mirror test for the PR overlay and `openPrInBrowser`.
 - **Label tests:** footer/help assertions updated to the uniform `browser` label.
 - Full gate before every commit: `npm run lint && npm run format:check && npm run typecheck
-  && npm run build && npm test`.
+&& npm run build && npm test`.
 
 ## Out of scope
 

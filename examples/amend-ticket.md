@@ -1,9 +1,10 @@
-<!-- Amend ticket: `amends_pr` adds commits to an existing PR instead of opening a new one. -->
----
+## <!-- Amend ticket: `amends_pr` adds commits to an existing PR instead of opening a new one. -->
+
 id: amend-42-fix-slugify-edge-cases-2026-05-31
 repo: ~/code/your-project
 amends_pr: 42
 timeout_minutes: 30
+
 ---
 
 # Amend PR #42: Fix slugify edge case with consecutive hyphens

@@ -17,14 +17,15 @@ One interval, `refreshPollMs` (default 30_000, replacing `issuePollMs` 30s and
 Each cycle's scope follows the view, read via refs so the interval never goes stale:
 
 - **Main view** (and its overlays: detail, palette, queue, …): `listIssues(currentNwo)`
-  + `listPrs(currentNwo)` — the rail-selected repo only. 2 API calls per cycle
-  regardless of watchlist size.
+  - `listPrs(currentNwo)` — the rail-selected repo only. 2 API calls per cycle
+    regardless of watchlist size.
 - **PR monitor** (`p` view, and `prDetail` on top of it): `listPrs(nwo)` for EVERY
   watched repo — the monitor is the one place cross-repo freshness is the point. No
   issues call. (Confirmed: `listPrs` returns junco-authored PRs only — head branch
   under `cfg.branchPrefix`, via the shared `fetchJuncoPrs` core.)
 
 Immediate cycles outside the interval:
+
 - Rail selection change (and mount): scoped cycle for the new repo (replaces the
   current `useEffect([currentNwo]) → loadIssues` body).
 - Entering the PR monitor (`p`): full sweep cycle.

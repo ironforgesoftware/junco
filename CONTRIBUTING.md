@@ -24,8 +24,8 @@ The CLI entry point after building is `dist/cli.js`. You can run it directly wit
 - **NodeNext module resolution** — import siblings with a `.js` specifier even though the source file is `.ts`. Example:
 
   ```ts
-  import { claim } from "./queue.js";   // ✓ correct
-  import { claim } from "./queue";      // ✗ breaks at runtime
+  import { claim } from "./queue.js"; // ✓ correct
+  import { claim } from "./queue"; // ✗ breaks at runtime
   ```
 
 - **Strict mode** is on. Do not disable individual strict checks.

@@ -6,12 +6,12 @@
 ## Problem
 
 Junco is configured via a TOML file parsed by the exact-pinned `smol-toml` dependency.
-TOML earns its keep today as a *human-authored, comment-annotated* file — but the maintainer
+TOML earns its keep today as a _human-authored, comment-annotated_ file — but the maintainer
 wants (a) an in-TUI config editor, (b) matching CLI support, and (c) `smol-toml` gone. A TUI
 that round-trips TOML would either drop the `#`-comment annotations (the whole reason TOML was
 chosen) or require comment-preserving edits `smol-toml` doesn't offer. Moving to JSON removes
-the dependency and the comment tension at once — the field explanations move *out* of the file
-and *into* a registry that powers the TUI screen, the CLI, and the docs from one source.
+the dependency and the comment tension at once — the field explanations move _out_ of the file
+and _into_ a registry that powers the TUI screen, the CLI, and the docs from one source.
 
 This is a **breaking config-format change**. It also touches the maintainer's **live runtime**:
 the main checkout runs a launchd daemon off a real `config.toml`. Once `smol-toml` is deleted,
@@ -36,8 +36,8 @@ as a deliberate maintainer-confirmed rollout step (never by the shipped code).
 
 1. **Hard cut, manual conversion.** No TOML-parsing code ships. `loadConfig`/`doctor` error
    clearly on a leftover `.toml`. The maintainer's live file is hand-converted at rollout.
-2. **camelCase keys** mirroring the internal `Config` type (file stays *sectioned*; `Config`
-   stays *flat*; `loadConfig` flattens).
+2. **camelCase keys** mirroring the internal `Config` type (file stays _sectioned_; `Config`
+   stays _flat_; `loadConfig` flattens).
 3. **Drop legacy shims.** Remove `pi` / `oMLX` / `omlx` entirely. Promote the tool allowlist to
    a first-class top-level `tools: string[]` (no more `--tools` inside `extra_args`) and
    `commitLeftovers` to `worker.commitLeftovers`.
@@ -88,8 +88,15 @@ camelCase, **sparse** (only what the user sets; `loadConfig` fills defaults). Il
     "compat": {}
   },
   "worker": { "maxConcurrent": 1, "pollIntervalSeconds": 15, "commitLeftovers": false },
-  "supervisor": {}, "git": {}, "pr": {}, "verify": {}, "critic": {},
-  "planLint": {}, "observability": {}, "github": {}, "assess": {}
+  "supervisor": {},
+  "git": {},
+  "pr": {},
+  "verify": {},
+  "critic": {},
+  "planLint": {},
+  "observability": {},
+  "github": {},
+  "assess": {}
 }
 ```
 
@@ -104,12 +111,14 @@ Changes vs. the TOML schema:
 ## `src/config.ts`
 
 ### Schema
+
 Rewrite `TomlSchema` as a camelCase `ConfigSchema` (zod). Every field that today falls back to
 a legacy key becomes a plain `.default(...)` (e.g. `model.api` defaults to `"openai-completions"`,
 `model.baseUrl` to `"http://127.0.0.1:1234/v1"`, `model.apiKey` to `"1234"`). Numeric bounds
 (`.min`/`.max`) and enums (`logLevel`, `assess.minSeverity`) carry over unchanged.
 
 ### `loadConfig`
+
 `read file → JSON.parse (try/catch → "config.json is not valid JSON: <msg>") → ConfigSchema.parse
 → expandHome on the path fields → compute cross-field defaults → flat Config`.
 
@@ -123,27 +132,29 @@ a legacy key becomes a plain `.default(...)` (e.g. `model.api` defaults to `"ope
   keys are camelCase now, so they merge straight onto `DEFAULT_COMPAT`.
 
 ### Path resolution + leftover-TOML guard
+
 - `resolveConfigPath`: `--config` → `./config.json` if present → `~/.config/junco/config.json`
   (still respects `XDG_CONFIG_HOME`); `defaultUserConfigPath` swaps the basename to `config.json`.
-- **Guard:** when `config.json` is absent *but* a `config.toml` sits at the resolved location,
-  `loadConfig` (and `doctor`) throw an actionable error — *"TOML config was removed in vX.Y;
-  convert to config.json (see docs/configuration.md). Your config.toml is untouched."* — never a
+- **Guard:** when `config.json` is absent _but_ a `config.toml` sits at the resolved location,
+  `loadConfig` (and `doctor`) throw an actionable error — _"TOML config was removed in vX.Y;
+  convert to config.json (see docs/configuration.md). Your config.toml is untouched."_ — never a
   raw ENOENT. This is what catches the live daemon and any npm user on upgrade.
 
 ## `src/configLevers.ts` — lever registry
 
 ```ts
 export interface Lever {
-  path: string;                 // dotted path into config.json, e.g. "worker.maxConcurrent"
+  path: string; // dotted path into config.json, e.g. "worker.maxConcurrent"
   type: "boolean" | "number" | "enum" | "string" | "secret" | "structured";
-  default: unknown;             // deep-equals the schema default (drift test)
-  editable: boolean;            // false for structured
-  reload: "live" | "restart";   // live = applied at next poll boundary; restart = needs a restart
-  description: string;          // the explanation (only hand-authored content)
-  enumValues?: string[];        // enum only
-  min?: number; max?: number;   // number bounds, mirror zod
+  default: unknown; // deep-equals the schema default (drift test)
+  editable: boolean; // false for structured
+  reload: "live" | "restart"; // live = applied at next poll boundary; restart = needs a restart
+  description: string; // the explanation (only hand-authored content)
+  enumValues?: string[]; // enum only
+  min?: number;
+  max?: number; // number bounds, mirror zod
 }
-export const LEVERS: Lever[];   // ~60 entries, in section order
+export const LEVERS: Lever[]; // ~60 entries, in section order
 ```
 
 Type assignment: `model.apiKey` → `secret`; `tools`, `defaultLabels`, `allowedRepoRoots`,
@@ -159,6 +170,7 @@ to a JSON skeleton + a pointer to `config list` rather than duplicating per-fiel
 generator script — the registry is the one home for explanations).
 
 ### Drift test — `tests/configLevers.test.ts`
+
 Walk the zod schema's leaf paths; assert a **bijection** with `LEVERS`: every schema leaf has
 exactly one lever (no missing, no orphan); each lever's `default` deep-equals the schema default;
 each lever's `type`/`enumValues`/`min`/`max` matches its schema node; and every lever carries a
@@ -167,15 +179,15 @@ types/defaults can never silently drift.
 
 ## CLI — `src/configCmd.ts`, wired in `src/cli.ts`
 
-| Command | Behavior |
-|---|---|
-| `junco config path` | Print the resolved `config.json` path. |
-| `junco config list` | Levers grouped by section: path · current value · default · type/allowed · description. Secrets masked. The annotated reference, now in-tool. |
-| `junco config get <path>` | Print the current effective value (raw if set, else default) as JSON. `get model.apiKey` prints the secret (explicit ask). |
+| Command                           | Behavior                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `junco config path`               | Print the resolved `config.json` path.                                                                                                                                                                                                                                                                                                             |
+| `junco config list`               | Levers grouped by section: path · current value · default · type/allowed · description. Secrets masked. The annotated reference, now in-tool.                                                                                                                                                                                                      |
+| `junco config get <path>`         | Print the current effective value (raw if set, else default) as JSON. `get model.apiKey` prints the secret (explicit ask).                                                                                                                                                                                                                         |
 | `junco config set <path> <value>` | Coerce per lever `type` (bool / number+bounds / enum-membership / string); reject non-editable structured paths → "edit config.json directly"; validate the whole config; **atomic write** (temp+rename); print `old → new`; if the lever is `restart`-kind, warn "restart the daemon to apply" (live levers reload on their own via the watcher). |
 
 - **Edits mutate the raw parsed JSON**, not the defaulted object → the file stays sparse (`set`
-  only ever adds the touched key). Validation runs on a defaulted *copy*; the raw+edit is written.
+  only ever adds the touched key). Validation runs on a defaulted _copy_; the raw+edit is written.
 - `set` on an unknown path, a bad enum value, an out-of-range number, or a structured path errors
   and writes nothing.
 - Atomic write reuses the `src/tui/ghClient.ts` temp+rename pattern; re-read at write time so a
@@ -203,19 +215,21 @@ types/defaults can never silently drift.
 The daemon and the editor (TUI or `config set`) are **separate processes**, so reload is
 file-driven: the daemon watches `config.json` and re-loads on change. The architecture makes the
 live subset cheap — `runOnce`/`runScheduler`/`execute`/`bridgeSweep` already take `cfg` **by
-parameter**, so re-reading at the loop top applies new values to the *next* unit of work while an
+parameter**, so re-reading at the loop top applies new values to the _next_ unit of work while an
 in-flight ticket keeps the snapshot it was called with.
 
 ### `ConfigHolder` (`src/config.ts` or `src/configHolder.ts`)
+
 A tiny mutable box — `{ current: Config }` with a guarded `set`. Created in the `start` handler,
 initialized from `loadConfig`. `mainLoop` reads `holder.current` at the top of each iteration and
-passes *that* to the worker entry points. **"live" means read from the holder at use-time** —
+passes _that_ to the worker entry points. **"live" means read from the holder at use-time** —
 so the per-sweep GitHub/outbox throttle closures and the scheduler must consult `holder.current`
 rather than a setup-captured `cfg` (the plan threads the holder into those closures; any consumer
 that can't is reclassified `restart`).
 
 ### Config watcher (`src/configWatcher.ts`, behind a `watchFn` deps seam)
-- **Watches the config's *directory*, filtered to the basename** — not the file. The atomic
+
+- **Watches the config's _directory_, filtered to the basename** — not the file. The atomic
   temp+rename write (used by TUI + CLI) swaps the inode, which staleifies a direct file-watch;
   a directory watch survives it. Events are **debounced** (~200ms) to collapse rename churn.
 - On event: re-run `loadConfig` in try/catch.
@@ -228,6 +242,7 @@ that can't is reclassified `restart`).
 - Started in the `start` handler alongside the loop; torn down in its `finally`.
 
 ### Restart-kind levers (not hot-applied)
+
 The `observability` section (health server is bound to `healthHost`/`healthPort`; `stateDir` +
 log sinks are opened once), `vaultRoot`/`juncoSubdir` (queue dirs are `mkdir`'d once and an
 in-flight worktree references them), and `github.enabled` (reporter/bridge/outbox wiring is
@@ -236,6 +251,7 @@ captured at `mainLoop` setup). Changing these updates the on-disk file and the h
 so the operator knows a restart is owed.
 
 ### Surfacing
+
 - `/health` JSON + `junco status` gain `pendingRestartFields: string[]`.
 - TUI `ConfigView` renders a `↻ restart to apply` marker on `restart`-kind levers; on save it
   toasts "applies live" vs "restart to apply" per the edited lever's `reload`.
@@ -249,9 +265,9 @@ so the operator knows a restart is owed.
    comments — explanations live in `config list`). Wizard writes `config.json`; its round-trip
    test now asserts `renderConfigJson` parses back through `loadConfig`.
 4. Sweep the **41** `config.toml` references → `config.json` (docs, README, `service.ts` comments
-   + emitted unit text, error strings, doctor). `docs/configuration.md`'s annotated TOML reference
-   shrinks to a JSON skeleton that points at `junco config list` for per-field prose.
-5. **Maintainer-confirmed live conversion** (main checkout, post-merge, *not* the shipped code):
+   - emitted unit text, error strings, doctor). `docs/configuration.md`'s annotated TOML reference
+     shrinks to a JSON skeleton that points at `junco config list` for per-field prose.
+5. **Maintainer-confirmed live conversion** (main checkout, post-merge, _not_ the shipped code):
    convert the live `config.toml` → `config.json`, rename the old file to `config.toml.bak`,
    `junco restart`, verify via `doctor` + `/health`.
 6. Version bump + CHANGELOG (Keep a Changelog; breaking: config format). **Release on HOLD.**
@@ -293,12 +309,12 @@ so the operator knows a restart is owed.
 - **Registry/schema drift** → the bijection test fails CI on any mismatch.
 - **`set` clobbering a concurrently-edited file** → re-read at write time (watchlist pattern).
 - **`fs.watch` unreliability** (macOS FSEvents vs Linux inotify; inode swap on atomic rename) →
-  watch the *directory* not the file, debounce, and re-`loadConfig`+diff on every event so a
+  watch the _directory_ not the file, debounce, and re-`loadConfig`+diff on every event so a
   spurious or coalesced event is a harmless no-op. `watchFn` is injectable for deterministic tests.
 - **Reload applied mid-ticket** → prevented by construction: in-flight work holds its `cfg`
   parameter snapshot; the holder is only re-read at the loop top / next dispatch.
 - **Malformed save crashes the daemon** → the watcher keeps the last-good config on any
   parse/validate failure; only a successful `loadConfig` swaps the holder.
-- **Breaking external dispatchers** → config is *not* `ticketSchema.ts`; dispatchers generate
+- **Breaking external dispatchers** → config is _not_ `ticketSchema.ts`; dispatchers generate
   tickets, not config, so the stable-contract rule is not implicated. Still a breaking change for
   humans, documented in CHANGELOG.

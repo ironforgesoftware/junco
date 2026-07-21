@@ -27,7 +27,7 @@ preserved.
 7. **Fullscreen TUIs own the alt buffer** (no scrollback pollution); Ink 7 has
    this native: `render(el, {alternateScreen: true})`, `useWindowSize()`.
 8. **`Text backgroundColor` covers only the character run; `Box
-   backgroundColor` fills the row** — selection bars must wrap rows in a Box.
+backgroundColor` fills the row** — selection bars must wrap rows in a Box.
 9. Windowing is the app's job: any frame taller than the terminal duplicates
    into scrollback on redraw. Every list must window to measured height.
 10. Toasts auto-clear; loading is scoped to the region loading; empty states
@@ -39,9 +39,9 @@ Named for the bird: slate-gray body, pink bill.
 
 ```ts
 export const theme = {
-  accent: "#eb6f92",        // rose — focused border/title, selection bar glyph, brand chip, active hotkeys. Nowhere else.
-  selectionBg: "#2a2e3a",   // subtle slate surface behind the selected row
-  border: "gray",           // blurred pane borders
+  accent: "#eb6f92", // rose — focused border/title, selection bar glyph, brand chip, active hotkeys. Nowhere else.
+  selectionBg: "#2a2e3a", // subtle slate surface behind the selected row
+  border: "gray", // blurred pane borders
   success: "green",
   warn: "yellow",
   error: "red",
@@ -92,7 +92,12 @@ helper `src/tui/window.ts`:
 
 ```ts
 /** Slice `total` rows to a `height` window that follows `cursor`. */
-export function windowSlice(total: number, height: number, cursor: number, prev: number): { start: number; end: number }
+export function windowSlice(
+  total: number,
+  height: number,
+  cursor: number,
+  prev: number,
+): { start: number; end: number };
 ```
 
 (follow-the-cursor: keep cursor visible, move the window minimally; `prev` is
@@ -103,17 +108,17 @@ indicator in their pane footer line when `total > height`.
 
 **Panes are numbered and titled** `1 repos`, `2 issues`, `3 preview`.
 
-| Key | Action |
-|---|---|
-| `1` `2` `3` | jump focus to pane (3 = wide mode only) |
-| `tab` / `h` / `l` | cycle / left / right (unchanged) |
-| `j`/`k`, arrows | move selection in focused list; scroll preview when pane 3 focused |
-| `[` / `]` | scroll up/down in preview/queue/output views (preserved everywhere) |
-| `g` / `G` | first / last item in focused list |
-| `/` | filter the issue list (live substring on `#num`, title, state badge); `esc` clears; filter chip shows in pane 2's title |
-| `enter` | wide: focus preview; medium: open preview full-body |
-| `d D a R o w x r : t q` | **unchanged** (dispatch, ask, approve, replan/recycle, browser, watch, unwatch, refresh, palette, queue view, quit) |
-| `?` | categorized help modal, context section first |
+| Key                     | Action                                                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `1` `2` `3`             | jump focus to pane (3 = wide mode only)                                                                                 |
+| `tab` / `h` / `l`       | cycle / left / right (unchanged)                                                                                        |
+| `j`/`k`, arrows         | move selection in focused list; scroll preview when pane 3 focused                                                      |
+| `[` / `]`               | scroll up/down in preview/queue/output views (preserved everywhere)                                                     |
+| `g` / `G`               | first / last item in focused list                                                                                       |
+| `/`                     | filter the issue list (live substring on `#num`, title, state badge); `esc` clears; filter chip shows in pane 2's title |
+| `enter`                 | wide: focus preview; medium: open preview full-body                                                                     |
+| `d D a R o w x r : t q` | **unchanged** (dispatch, ask, approve, replan/recycle, browser, watch, unwatch, refresh, palette, queue view, quit)     |
+| `?`                     | categorized help modal, context section first                                                                           |
 
 Focused pane: accent border + bold title. Blurred: gray border, normal title.
 Selection row: `▌` accent glyph + `selectionBg` full-row Box; state glyph and
@@ -121,7 +126,7 @@ badge keep their semantic colors on top of it.
 
 **Preview auto-loads** for the selected issue in wide mode: selection settles
 for 300 ms → fetch body+plan via the existing `client.issueDetail` → cache by
-`nwo#number` (invalidated by `r` refresh). No enter needed to *see* detail;
+`nwo#number` (invalidated by `r` refresh). No enter needed to _see_ detail;
 enter is only for scrolling focus. Medium mode keeps today's enter-to-open
 flow (rendered windowed instead of fixed-24-lines).
 
@@ -136,6 +141,7 @@ main area).
 ## 4. Component architecture
 
 New pure modules (unit-testable without Ink):
+
 - `src/tui/theme.ts` — tokens above.
 - `src/tui/layout.ts` — `computeLayout`, breakpoint constants.
 - `src/tui/window.ts` — `windowSlice`.
@@ -143,6 +149,7 @@ New pure modules (unit-testable without Ink):
   `override` prop for tests (ink-testing-library has no resizable stdout).
 
 New/reworked components (`src/tui/components/`):
+
 - `Chrome.tsx` — `Header` (brand chip, context, daemon/queue chips, clock) and
   `Footer` (key hints, graceful truncate) and `Toast` (severity color,
   auto-expire ~4 s via App-held timer).

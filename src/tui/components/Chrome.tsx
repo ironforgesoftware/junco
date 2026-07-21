@@ -9,19 +9,6 @@ import { TERMINAL_DONE_STATUSES } from "../../types.js";
 import type { Chip } from "../viewActions.js";
 import { ClickableBox } from "../ClickableBox.js";
 
-export type HintView =
-  | "main"
-  | "detail"
-  | "help"
-  | "addRepo"
-  | "config"
-  | "palette"
-  | "cmdOutput"
-  | "repoDetail"
-  | "prs"
-  | "prDetail"
-  | "review";
-
 function fmtUp(s: number | null): string {
   if (s === null) return "";
   if (s < 3600) return ` up ${Math.floor(s / 60)}m`;
@@ -185,25 +172,19 @@ export function chipSegments(chip: Chip): { text: string; accent: boolean }[] {
   ];
 }
 
-/** Row n: context key hints — accent key, muted label. Each hint is a
- * flexShrink-0 chip; a chip whose hint KEY has an `actions` entry is
- * clickable (mouse-driven ftue), the rest render inert. Overflow clips
- * (no ellipsis) rather than truncating — the row is informational and the
- * layout invariant (height 1, no wrap) still holds.
- * `chips` (the mnemonic path) takes precedence over the legacy `hints`
- * pairs; its actions are keyed by mnemonic ID / structural KEY. */
+/** Row n: the context's chips (viewActions) — mnemonic labels with the
+ * derived key's character in accent, structural keys key-first. A chip with a
+ * `chipActions` entry (mnemonic → by ID, structural → by KEY) is clickable;
+ * the rest render inert. Overflow clips (no ellipsis) rather than truncating
+ * — the row is informational and the one-line layout invariant holds. */
 export function Footer({
-  hints,
-  actions,
   chips,
   chipActions,
 }: {
-  hints?: [string, string][];
-  actions?: Record<string, () => void>;
-  chips?: Chip[];
+  chips: Chip[];
   chipActions?: Record<string, () => void>;
 }): React.JSX.Element {
-  if (chips !== undefined) {
+  {
     return (
       <Box paddingX={1} height={1} overflow="hidden">
         {chips.map((chip, i) => {
@@ -233,223 +214,5 @@ export function Footer({
         })}
       </Box>
     );
-  }
-  return legacyFooter(hints ?? [], actions);
-}
-
-function legacyFooter(
-  hints: [string, string][],
-  actions?: Record<string, () => void>,
-): React.JSX.Element {
-  return (
-    <Box paddingX={1} height={1} overflow="hidden">
-      {hints.map(([k, label], i) => {
-        const run = actions?.[k];
-        const chip = (
-          <Text>
-            <Text color={theme.accent}>{k}</Text>
-            <Text dimColor> {label}</Text>
-          </Text>
-        );
-        return (
-          <Box key={k} flexShrink={0}>
-            {i > 0 ? <Text dimColor> · </Text> : null}
-            {run ? (
-              <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
-                {chip}
-              </ClickableBox>
-            ) : (
-              chip
-            )}
-          </Box>
-        );
-      })}
-    </Box>
-  );
-}
-
-/** The full key set for the current context (the ? modal is the long form). */
-export function hintsFor(
-  view: HintView,
-  pane: 1 | 2 | 3,
-  mode: LayoutMode,
-  filtering: boolean,
-): [string, string][] {
-  if (filtering) {
-    return [
-      ["type", "filter"],
-      ["enter", "apply"],
-      ["esc", "clear"],
-    ];
-  }
-  switch (view) {
-    case "detail":
-      return [
-        ["↑/↓", "scroll"],
-        ["o", "browser"],
-        ["esc", "back"],
-      ];
-    case "repoDetail":
-      return [
-        ["↑/↓", "scroll"],
-        ["o", "browser"],
-        ["esc", "back"],
-      ];
-    case "prs":
-      return [
-        ["↑/↓", "move"],
-        ["enter", "detail"],
-        ["o", "browser"],
-        ["esc/p", "back"],
-      ];
-    case "prDetail":
-      return [
-        ["esc", "back"],
-        ["o", "browser"],
-      ];
-    case "review":
-      return [
-        ["↑/↓", "move"],
-        ["enter", "open/file"],
-        ["space", "toggle"],
-        ["a/n", "all/none"],
-        ["f", "file/post"],
-        ["x", "discard"],
-        ["esc", "back"],
-      ];
-    case "palette":
-      return [
-        ["type", "filter"],
-        ["↑/↓", "move"],
-        ["enter", "run"],
-        ["esc", "close"],
-      ];
-    case "cmdOutput":
-      return [
-        ["↑/↓", "scroll"],
-        ["r", "re-run"],
-        ["esc", "back"],
-      ];
-    case "addRepo":
-      return [
-        ["enter", "next/submit"],
-        ["esc", "cancel"],
-      ];
-    case "config":
-      return [
-        ["↑/↓", "field"],
-        ["←/→", "section"],
-        ["enter", "edit/toggle"],
-        ["esc", "close"],
-      ];
-    case "help":
-      return [["any key", "close"]];
-    case "main":
-      break;
-  }
-  if (pane === 1) {
-    return [
-      ["↑/↓", "move"],
-      ["w", "add repo"],
-      ["x", "unwatch"],
-      ["o", "browser"],
-      ["r", "refresh"],
-      ["s", "assess"],
-      ["t", "queue"],
-      [":", "commands"],
-      ["?", "help"],
-      ["q", "quit"],
-    ];
-  }
-  if (pane === 3) {
-    return [
-      ["↑/↓", "move"],
-      ["enter", "detail"],
-      ["←", "issues"],
-      ["o", "browser"],
-      ["?", "help"],
-      ["q", "quit"],
-    ];
-  }
-  const panesHint: [string, string] = mode === "wide" ? ["←/→", "panes"] : ["←", "repos"];
-  return [
-    ["↑/↓", "move"],
-    panesHint,
-    ["enter", "preview"],
-    ["d", "dispatch"],
-    ["a", "approve"],
-    ["c", "analyze"],
-    ["/", "filter"],
-    ["p", "PRs"],
-    ["s", "assess issue"],
-    [",", "config"],
-    ["?", "help"],
-    ["q", "quit"],
-  ];
-}
-
-/** What pane 2 currently shows in the unified view — mirrors railModel's
- * BodyKind with sections flattened for hint lookup. */
-export type BodyHintKind =
-  | "issues"
-  | "repoDetail"
-  | "queue"
-  | "outbox"
-  | "worktrees"
-  | "daemon"
-  | "logs";
-
-/** Single-surface hint sets for the unified view. Non-main views (and the
- * repo-list panes 1/3, plus the issues body) delegate to hintsFor verbatim;
- * the section/RepoDetail bodies get their own sets (unified-view spec §3). */
-export function hintsForUnified(
-  view: HintView,
-  bodyKind: BodyHintKind,
-  pane: 1 | 2 | 3,
-  mode: LayoutMode,
-  filtering: boolean,
-): [string, string][] {
-  if (filtering || view !== "main") return hintsFor(view, pane, mode, filtering);
-  if (pane === 1 || pane === 3) return hintsFor("main", pane, mode, false);
-  switch (bodyKind) {
-    case "issues":
-      return hintsFor("main", 2, mode, false);
-    case "repoDetail":
-      return [
-        ["[ ]", "scroll"],
-        ["o", "browser"],
-        ["←", "back"],
-      ];
-    case "queue":
-      return [
-        ["↑/↓", "move"],
-        ["R", "requeue"],
-        ["x", "delete"],
-        ["←", "back"],
-      ];
-    case "outbox":
-      return [
-        ["↑/↓", "move"],
-        ["f", "flush"],
-        ["←", "back"],
-      ];
-    case "worktrees":
-      return [
-        ["↑/↓", "move"],
-        ["x", "prune"],
-        ["←", "back"],
-      ];
-    case "daemon":
-      return [
-        ["[/]", "scroll"],
-        ["X", "restart"],
-        ["f", "flush"],
-        ["←", "back"],
-      ];
-    case "logs":
-      return [
-        ["enter", "open log"],
-        ["←", "back"],
-      ];
   }
 }

@@ -35,26 +35,26 @@ at all. No invariant change is needed.
 
 ## Decisions (from brainstorming)
 
-| Decision            | Choice                                                                     |
-| ------------------- | --------------------------------------------------------------------------- |
-| Packaging           | One spec (this), two implementation plans — SP-2 first, SP-3 second        |
-| CLI namespace       | `analyze` (`junco analyze <ref>` / `analyze review` / `analyze edit` / `analyze post`), mirroring assess's pattern |
-| Disclosure footer   | Default-on, removable: one-line footer appended at post time; `analyze post --no-footer` (or editing the flag off) removes it |
-| TUI scope           | Folded into the SP-2 plan (pane-2 `c` key + review-view union); SP-2 branches off main after #96 merges |
-| Draft editing       | Full text editing via `junco analyze edit <id>` ($EDITOR round-trip, git-commit style); the TUI previews and posts/discards but does not edit |
-| SP-3 trigger        | `junco assess owner/repo#N` (target parser gains issue-refs); TUI pane-2 `s` becomes issue-scoped for the selected issue |
+| Decision          | Choice                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Packaging         | One spec (this), two implementation plans — SP-2 first, SP-3 second                                                                           |
+| CLI namespace     | `analyze` (`junco analyze <ref>` / `analyze review` / `analyze edit` / `analyze post`), mirroring assess's pattern                            |
+| Disclosure footer | Default-on, removable: one-line footer appended at post time; `analyze post --no-footer` (or editing the flag off) removes it                 |
+| TUI scope         | Folded into the SP-2 plan (pane-2 `c` key + review-view union); SP-2 branches off main after #96 merges                                       |
+| Draft editing     | Full text editing via `junco analyze edit <id>` ($EDITOR round-trip, git-commit style); the TUI previews and posts/discards but does not edit |
+| SP-3 trigger      | `junco assess owner/repo#N` (target parser gains issue-refs); TUI pane-2 `s` becomes issue-scoped for the selected issue                      |
 
 ## What already exists (the reuse map)
 
-| Need                                            | Existing seam                                                    |
-| ----------------------------------------------- | ---------------------------------------------------------------- |
-| Post a comment durably + idempotently           | outbox `comment` op + `postCommentIdempotent` (`githubOutbox.ts`) |
-| Resolve `owner/repo#N` / issue URL              | `parseIssueRef` (`externalDispatch.ts`)                           |
-| Fetch issue, auto-fork/clone unowned repos      | `dispatchIssue`'s provisioning (`ensureExternalClone` + watchlist) |
-| Read-only agent run, requeue, transcript, guards| `assessFlow.ts` shape (mirrors Q&A)                               |
-| Fenced-output extraction                        | `extractLastFencedBlock` (`findings.ts`, exported)                |
-| Untrusted-text sanitization                     | `sanitizeFindingText` (HTML comments, control chars, caps)        |
-| Durable park → human confirm                    | review store pattern + CLI/TUI confirm surfaces (SP-1/#96)        |
+| Need                                             | Existing seam                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------ |
+| Post a comment durably + idempotently            | outbox `comment` op + `postCommentIdempotent` (`githubOutbox.ts`)  |
+| Resolve `owner/repo#N` / issue URL               | `parseIssueRef` (`externalDispatch.ts`)                            |
+| Fetch issue, auto-fork/clone unowned repos       | `dispatchIssue`'s provisioning (`ensureExternalClone` + watchlist) |
+| Read-only agent run, requeue, transcript, guards | `assessFlow.ts` shape (mirrors Q&A)                                |
+| Fenced-output extraction                         | `extractLastFencedBlock` (`findings.ts`, exported)                 |
+| Untrusted-text sanitization                      | `sanitizeFindingText` (HTML comments, control chars, caps)         |
+| Durable park → human confirm                     | review store pattern + CLI/TUI confirm surfaces (SP-1/#96)         |
 
 ## Shared plumbing (built in the SP-2 plan, consumed by both)
 
@@ -83,7 +83,7 @@ exact current exports** (`writePending`, `listPending`, `readPending`, `removePe
 Mirrors `assessFlow.ts` phase-for-phase: repo containment → nwo from origin → path-based
 external detection → `syncExternalClone` (external only, warning on failure) → agent run
 (read-only tool default, per-ticket `tools:` override, supervisor/guards, transcript,
-timeout, transient requeue) → **extract** the last complete ```` ```junco-comment ```` fence
+timeout, transient requeue) → **extract** the last complete ` ```junco-comment ` fence
 from `finalText` → **sanitize** → **park** → finalize with a "draft parked — run
 `junco analyze review <id>`" summary. No fence or an empty draft finalizes to failed with a
 clear message (nothing parks).
@@ -98,11 +98,11 @@ comment ceiling with headroom). `sanitizeFindingText` already does exactly this.
 **Ticket shape (additive to `ticketSchema.ts`, the stable contract):**
 
 ```yaml
-id: analyze-<owner>-<repo>-<n>        # no timestamp: queued duplicate fails loud;
-repo: "<clonePath>"                   # a re-run overwrites the parked draft (store keyed by id)
+id: analyze-<owner>-<repo>-<n> # no timestamp: queued duplicate fails loud;
+repo: "<clonePath>" # a re-run overwrites the parked draft (store keyed by id)
 analyze:
   issue: <n>
-  title: <json-string>                # machine-built, sanitized; display-only
+  title: <json-string> # machine-built, sanitized; display-only
 ```
 
 The issue body lands only in the ticket **body**, inside the same explicit
@@ -118,15 +118,15 @@ verify and test that the reporter no-ops on analyze tickets.)
 
 ```ts
 interface PendingComment {
-  id: string;          // ticket id (analyze-<owner>-<repo>-<n>)
+  id: string; // ticket id (analyze-<owner>-<repo>-<n>)
   nwo: string;
   issue: number;
-  issueTitle: string;  // sanitized, display-only
+  issueTitle: string; // sanitized, display-only
   external: boolean;
   repoPath: string;
-  createdAt: string;   // ISO
-  draft: string;       // sanitized; stored WITHOUT the footer
-  footer: boolean;     // default true; post appends the footer line when true
+  createdAt: string; // ISO
+  draft: string; // sanitized; stored WITHOUT the footer
+  footer: boolean; // default true; post appends the footer line when true
 }
 ```
 
@@ -191,7 +191,7 @@ A **prompt-scoped assess** — no new flow, no new store, no new write kind:
 - **Dedup for free:** fingerprints are computed from `kind|ruleId|locus` and are deliberately
   untouched — an issue-scoped finding and a whole-repo finding of the same defect collide,
   so re-running assess in either mode never double-files.
-- **TUI:** pane-aware `s` — issues pane (pane 2) assesses the *selected issue's* scope by
+- **TUI:** pane-aware `s` — issues pane (pane 2) assesses the _selected issue's_ scope by
   passing `owner/repo#N` to the existing CLI runner; pane 1/global `s` stays repo-scoped.
   (`S`/auto-plan downgrade for external repos already happens one layer down.)
 

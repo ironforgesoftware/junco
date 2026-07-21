@@ -8,7 +8,7 @@ seven flat sibling jobs.
 a reusable `workflow_call` sub-workflow called once per environment by a matrix job.
 GitHub's run graph then groups each environment's sub-jobs under one expandable node,
 and check names become hierarchical (`quality gate (<env>) / checks`). The PR checks
-list itself cannot literally nest — the single *required* entry remains the aggregate
+list itself cannot literally nest — the single _required_ entry remains the aggregate
 `quality-gate` check, unchanged.
 
 ## Files
@@ -68,6 +68,7 @@ skipped and reusable-workflow inner jobs — so this is the floor while covering
 OSes in parallel; a literal single check is impossible cross-OS.
 
 Consequences:
+
 - `env-gate.yml` is deleted — with one inner job per environment the reusable
   workflow added a layer with no grouping benefit.
 - Each OS job runs sequentially: full gate on the engines floor (node 22.19.0,

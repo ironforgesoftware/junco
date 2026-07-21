@@ -29,10 +29,12 @@
 ### Task 1: Uniform `o browser` label + test re-anchoring
 
 **Files:**
+
 - Modify: `src/tui/components/Chrome.tsx` (four `hintsFor` sites), `src/tui/components/HelpModal.tsx` (one row), `docs/dashboard.md` (`o` table row)
 - Test: `tests/tuiApp.test.tsx` (label waits + markers), `tests/tuiChrome.test.tsx`, `tests/tuiModal.test.tsx` (only if they assert the old labels — grep first)
 
 **Interfaces:**
+
 - Produces: footer label `browser` for `o` in: `case "prs"`, `case "prDetail"`, the pane-1 list, the pane-3 list (the `case "detail"` site already reads `browser`). Task 3's tests rely on the prDetail footer reading exactly `esc back · o browser`.
 
 **The marker subtlety (do this carefully):** several `tuiApp` tests use `"o open"` as a UNIQUE pane-3-footer marker. After the rename, `o browser` appears in MANY footers, so it cannot serve as a discriminator. Re-anchor those assertions on `"← issues"` — the hint that exists ONLY in the pane-3 footer (`["←", "issues"]`; pane 2's is `←/→ panes` wide / `← repos` medium).
@@ -40,6 +42,7 @@
 - [ ] **Step 1: Write the failing tests** (adapt the existing ones):
 
 In `tests/tuiApp.test.tsx`, by current line region:
+
 - ~729 and ~773: `includes("esc back · o open")` → `includes("esc back · o browser")` (prDetail footer waits).
 - ~1577 and ~1590: `expect(r.lastFrame()).not.toContain("o open")` (pane-3 leak negatives) → `expect(r.lastFrame()).not.toContain("← issues")`, keeping each comment.
 - ~1761, ~1780, ~1789, ~1897: `includes("o open")` pane-3-footer waits → `includes("← issues")`.
@@ -85,10 +88,12 @@ git add -A && git commit -m "feat(tui): one label for o — browser, in every fo
 ### Task 2: `hitTest` learns the detail and prDetail views
 
 **Files:**
+
 - Modify: `src/tui/hitTest.ts`
 - Test: `tests/tuiHitTest.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing `LINK_LINE_ROW` (= 3) from `src/tui/geometry.ts`.
 - Produces: `HitContext["view"]` widens to `"main" | "prs" | "detail" | "prDetail"`; in the two new views `hitTest` returns `{ type: "linkLine" }` for the middle-band `↗` row and `{ type: "none" }` everywhere else. Task 3 builds on exactly this contract.
 
@@ -130,21 +135,21 @@ In `src/tui/hitTest.ts`:
 1. Widen the context field and its doc:
 
 ```ts
-  /** The row-bearing views resolve rows; the two detail views resolve only
-   * their ↗ metadata line. Other views never call this. */
-  view: "main" | "prs" | "detail" | "prDetail";
+/** The row-bearing views resolve rows; the two detail views resolve only
+ * their ↗ metadata line. Other views never call this. */
+view: "main" | "prs" | "detail" | "prDetail";
 ```
 
 2. Directly after the body-bounds check (`if (r < 0 || r >= layout.bodyRows) return { type: "none" };`) and BEFORE the rail-band block, add:
 
 ```ts
-  if (view === "detail" || view === "prDetail") {
-    // Keyboard-owned overlays: only the ↗ metadata line is a mouse target.
-    // The card fills the middle slot to the screen edge — no right pane
-    // renders in these views, at any width.
-    if (x >= layout.railWidth && r === LINK_LINE_ROW) return { type: "linkLine" };
-    return { type: "none" };
-  }
+if (view === "detail" || view === "prDetail") {
+  // Keyboard-owned overlays: only the ↗ metadata line is a mouse target.
+  // The card fills the middle slot to the screen edge — no right pane
+  // renders in these views, at any width.
+  if (x >= layout.railWidth && r === LINK_LINE_ROW) return { type: "linkLine" };
+  return { type: "none" };
+}
 ```
 
 - [ ] **Step 4: Run to verify pass**
@@ -164,48 +169,50 @@ git add -A && git commit -m "feat(tui): hitTest resolves the ↗ line in the det
 ### Task 3: App wiring — clickable ↗ in both detail views, then the full gate
 
 **Files:**
+
 - Modify: `src/tui/App.tsx`, `docs/dashboard.md` (one sentence in the Mouse paragraph)
 - Test: `tests/tuiApp.test.tsx`
 
 **Interfaces:**
+
 - Consumes: Task 2's `hitTest` contract; Task 1's `esc back · o browser` prDetail footer (used as a test wait); existing `click(x,y)` helper and `until` in the test file.
 - Produces: `openDetailIssueInBrowser()` and `openPrDetailInBrowser()` callbacks in App — the ONE code path shared by keyboard `o` and the `↗` click in each view.
 
 - [ ] **Step 1: Write the failing tests** (append inside the `describe("mouse")` block of `tests/tuiApp.test.tsx`, where `click`, `until`, `wl`, `makeClient`, `makePr`, `okv`, `rawIssue` are in scope):
 
 ```tsx
-  it("clicking the ↗ metadata line in the issue detail opens the browser (snapshot number)", async () => {
-    const { client } = makeClient({ "acme/api": [rawIssue] });
-    const issueOpens: number[] = [];
-    client.openInBrowser = async (_nwo, num) => {
-      issueOpens.push(num);
-      return okv(undefined);
-    };
-    const r = renderApp(client, wl());
-    await until(() => (r.lastFrame() ?? "").includes("#7"));
-    r.stdin.write("2");
-    await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
-    r.stdin.write("\r"); // open the issue detail
-    await until(() => (r.lastFrame() ?? "").includes("the body"));
-    r.stdin.write(click(30, 5)); // ↗ metadata row: 1-based y=5, middle band
-    await until(() => issueOpens.length === 1);
-    expect(issueOpens).toEqual([7]);
-  });
+it("clicking the ↗ metadata line in the issue detail opens the browser (snapshot number)", async () => {
+  const { client } = makeClient({ "acme/api": [rawIssue] });
+  const issueOpens: number[] = [];
+  client.openInBrowser = async (_nwo, num) => {
+    issueOpens.push(num);
+    return okv(undefined);
+  };
+  const r = renderApp(client, wl());
+  await until(() => (r.lastFrame() ?? "").includes("#7"));
+  r.stdin.write("2");
+  await until(() => (r.lastFrame() ?? "").includes("d dispatch"));
+  r.stdin.write("\r"); // open the issue detail
+  await until(() => (r.lastFrame() ?? "").includes("the body"));
+  r.stdin.write(click(30, 5)); // ↗ metadata row: 1-based y=5, middle band
+  await until(() => issueOpens.length === 1);
+  expect(issueOpens).toEqual([7]);
+});
 
-  it("clicking the ↗ metadata line in the PR overlay opens the browser", async () => {
-    const { client, prCalls } = makeClient(
-      { "acme/api": [] },
-      { prsByRepo: { "acme/api": [makePr()] } },
-    );
-    const r = renderApp(client, wl());
-    r.stdin.write("p");
-    await until(() => (r.lastFrame() ?? "").includes("Some PR"));
-    r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
-    await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
-    r.stdin.write(click(30, 5)); // ↗ metadata row of the overlay card
-    await until(() => prCalls.length === 1);
-    expect(prCalls[0]).toEqual(["acme/api", 100]);
-  });
+it("clicking the ↗ metadata line in the PR overlay opens the browser", async () => {
+  const { client, prCalls } = makeClient(
+    { "acme/api": [] },
+    { prsByRepo: { "acme/api": [makePr()] } },
+  );
+  const r = renderApp(client, wl());
+  r.stdin.write("p");
+  await until(() => (r.lastFrame() ?? "").includes("Some PR"));
+  r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
+  await until(() => (r.lastFrame() ?? "").includes("esc back · o browser"));
+  r.stdin.write(click(30, 5)); // ↗ metadata row of the overlay card
+  await until(() => prCalls.length === 1);
+  expect(prCalls[0]).toEqual(["acme/api", 100]);
+});
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -218,22 +225,22 @@ Expected: exit 1 — both new tests time out in `until` (clicks in these views a
 (a) Extract the two shared open callbacks, placed beside `openBrowser`/`openRepoBrowser` (their bodies come verbatim from the keyboard branches that currently inline them):
 
 ```ts
-  // Snapshot-anchored browser opens for the two detail views — shared by the
-  // keyboard `o` and the ↗ line's mouse click, so the two can never diverge
-  // on WHICH resource they open (always the one frozen on screen).
-  const openDetailIssueInBrowser = useCallback(() => {
-    if (!currentNwo || !detail) return;
-    void client.openInBrowser(currentNwo, detail.issue.number).then((res) => {
-      if (!res.ok) showToast("error", res.error);
-    });
-  }, [client, currentNwo, detail, showToast]);
-  const openPrDetailInBrowser = useCallback(() => {
-    if (!prDetail) return;
-    const { nwo, number } = prDetail.pr;
-    void client.openPrInBrowser(nwo, number).then((res) => {
-      if (!res.ok) showToast("error", res.error);
-    });
-  }, [client, prDetail, showToast]);
+// Snapshot-anchored browser opens for the two detail views — shared by the
+// keyboard `o` and the ↗ line's mouse click, so the two can never diverge
+// on WHICH resource they open (always the one frozen on screen).
+const openDetailIssueInBrowser = useCallback(() => {
+  if (!currentNwo || !detail) return;
+  void client.openInBrowser(currentNwo, detail.issue.number).then((res) => {
+    if (!res.ok) showToast("error", res.error);
+  });
+}, [client, currentNwo, detail, showToast]);
+const openPrDetailInBrowser = useCallback(() => {
+  if (!prDetail) return;
+  const { nwo, number } = prDetail.pr;
+  void client.openPrInBrowser(nwo, number).then((res) => {
+    if (!res.ok) showToast("error", res.error);
+  });
+}, [client, prDetail, showToast]);
 ```
 
 (b) The keyboard branches delegate: in the `view === "detail"` block, the `o` case body becomes `return void openDetailIssueInBrowser();`; in the `view === "prDetail"` block, the `o` case body becomes `return void openPrDetailInBrowser();` (delete the inlined `client.openInBrowser(...)`/`client.openPrInBrowser(...)` bodies they replace).
@@ -241,63 +248,63 @@ Expected: exit 1 — both new tests time out in `until` (clicks in these views a
 (c) Rework `onMouseEvent`'s view routing. Replace this current block:
 
 ```ts
-    if (view === "help" || view === "palette" || view === "addRepo" || view === "prDetail") return;
-    if (ev.kind === "release") return; // presses act on press, not release
-    if (ev.kind === "press") dismissToast();
+if (view === "help" || view === "palette" || view === "addRepo" || view === "prDetail") return;
+if (ev.kind === "release") return; // presses act on press, not release
+if (ev.kind === "press") dismissToast();
 
-    // Full-body scroll views: wheel scrolls, clicks have no targets (v1).
-    if (view === "detail" || view === "queue" || view === "cmdOutput") {
-      if (ev.kind === "wheelDown") setScroll((s) => s + 1);
-      if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
-      return;
-    }
+// Full-body scroll views: wheel scrolls, clicks have no targets (v1).
+if (view === "detail" || view === "queue" || view === "cmdOutput") {
+  if (ev.kind === "wheelDown") setScroll((s) => s + 1);
+  if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
+  return;
+}
 ```
 
 with:
 
 ```ts
-    if (view === "help" || view === "palette" || view === "addRepo") return;
-    if (ev.kind === "release") return; // presses act on press, not release
-    if (ev.kind === "press") dismissToast();
+if (view === "help" || view === "palette" || view === "addRepo") return;
+if (ev.kind === "release") return; // presses act on press, not release
+if (ev.kind === "press") dismissToast();
 
-    // Full-body scroll views with no click targets: wheel scrolls only.
-    if (view === "queue" || view === "cmdOutput") {
-      if (ev.kind === "wheelDown") setScroll((s) => s + 1);
-      if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
-      return;
-    }
+// Full-body scroll views with no click targets: wheel scrolls only.
+if (view === "queue" || view === "cmdOutput") {
+  if (ev.kind === "wheelDown") setScroll((s) => s + 1);
+  if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
+  return;
+}
 
-    // The two detail views: wheel scrolls the issue detail (the PR overlay has
-    // nothing to scroll); a press on the ↗ metadata line opens the browser.
-    if (view === "detail" || view === "prDetail") {
-      if (view === "detail") {
-        if (ev.kind === "wheelDown") setScroll((s) => s + 1);
-        if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
-      }
-      if (ev.kind === "press") {
-        const hit = hitTest(
-          {
-            layout,
-            columns: size.columns,
-            view,
-            repoCount: repoMappings.length,
-            listCount: 0,
-            railStart: 0,
-            listStart: 0,
-            pane3Count: 0,
-            pane3Start: 0,
-            hasPreviewTarget: false,
-          },
-          ev.x,
-          ev.y,
-        );
-        if (hit.type === "linkLine") {
-          if (view === "detail") openDetailIssueInBrowser();
-          else openPrDetailInBrowser();
-        }
-      }
-      return;
+// The two detail views: wheel scrolls the issue detail (the PR overlay has
+// nothing to scroll); a press on the ↗ metadata line opens the browser.
+if (view === "detail" || view === "prDetail") {
+  if (view === "detail") {
+    if (ev.kind === "wheelDown") setScroll((s) => s + 1);
+    if (ev.kind === "wheelUp") setScroll((s) => Math.max(0, s - 1));
+  }
+  if (ev.kind === "press") {
+    const hit = hitTest(
+      {
+        layout,
+        columns: size.columns,
+        view,
+        repoCount: repoMappings.length,
+        listCount: 0,
+        railStart: 0,
+        listStart: 0,
+        pane3Count: 0,
+        pane3Start: 0,
+        hasPreviewTarget: false,
+      },
+      ev.x,
+      ev.y,
+    );
+    if (hit.type === "linkLine") {
+      if (view === "detail") openDetailIssueInBrowser();
+      else openPrDetailInBrowser();
     }
+  }
+  return;
+}
 ```
 
 (The zeroed list fields are never read on the detail/prDetail path — Task 2's contract.)

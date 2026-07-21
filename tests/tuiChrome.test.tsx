@@ -1,14 +1,7 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import {
-  Header,
-  Toast,
-  Footer,
-  hintsFor,
-  hintsForUnified,
-  chipSegments,
-} from "../src/tui/components/Chrome.js";
+import { Header, Toast, Footer, chipSegments } from "../src/tui/components/Chrome.js";
 import type { HealthInfo } from "../src/tui/ghClient.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
@@ -318,93 +311,6 @@ describe("Toast", () => {
   });
 });
 
-describe("Footer / hintsFor", () => {
-  it("renders key·label pairs", () => {
-    const f = render(
-      <Footer
-        hints={[
-          ["↑/↓", "move"],
-          ["q", "quit"],
-        ]}
-      />,
-    ).lastFrame()!;
-    expect(f).toContain("↑/↓");
-    expect(f).toContain("move");
-    expect(f).toContain("q");
-  });
-  it("main pane 2 wide advertises preview enter, filter, panes", () => {
-    const keys = hintsFor("main", 2, "wide", false).map(([k]) => k);
-    expect(keys).toContain("enter");
-    expect(keys).toContain("/");
-    expect(keys).toContain("←/→");
-    expect(keys).toContain("q");
-  });
-  it("main pane 2 advertises the PRs view key; t lives on the rail set", () => {
-    const pairs = hintsFor("main", 2, "wide", false);
-    expect(pairs.find(([k]) => k === "p")?.[1]).toBe("PRs");
-    // t (jump to the queue row) moved to pane 1 — the rail owns the cursor.
-    expect(pairs.findIndex(([k]) => k === "t")).toBe(-1);
-    expect(hintsFor("main", 1, "wide", false).find(([k]) => k === "t")?.[1]).toBe("queue");
-  });
-  it("medium mode: enter says preview (same word as wide) and the pane hint drops to ←/repos", () => {
-    const pairs = hintsFor("main", 2, "medium", false);
-    expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("preview");
-    expect(pairs.find(([k]) => k === "←")?.[1]).toBe("repos");
-  });
-  it("pane 1 hints: s assess, placed after refresh and before the command palette key", () => {
-    const pairs = hintsFor("main", 1, "wide", false);
-    const sIdx = pairs.findIndex(([k]) => k === "s");
-    const rIdx = pairs.findIndex(([k]) => k === "r");
-    const colonIdx = pairs.findIndex(([k]) => k === ":");
-    expect(pairs.find(([k]) => k === "s")?.[1]).toBe("assess");
-    expect(sIdx).toBeGreaterThan(rIdx);
-    expect(sIdx).toBeLessThan(colonIdx);
-  });
-  it("pane 1 footer row (with the s hint added) still renders as exactly one line", () => {
-    // ink-testing-library's stdout is hardcoded to 100 cols (narrower than the
-    // 110-col wide breakpoint this pane targets), so this is the tighter of
-    // the two cases; Footer's wrap="truncate-end" makes wrapping structurally
-    // impossible regardless of hint count — this proves the new hint didn't
-    // somehow defeat that.
-    const hints = hintsFor("main", 1, "wide", false);
-    const f = render(<Footer hints={hints} />).lastFrame()!;
-    const lines = f.split("\n").filter((l) => l.trim().length > 0);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("s assess"); // present in full, not truncated away
-  });
-  it("pane 3 hints: ↑/↓ move, enter detail, o browser", () => {
-    const pairs = hintsFor("main", 3, "wide", false);
-    expect(pairs.find(([k]) => k === "↑/↓")?.[1]).toBe("move");
-    expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
-    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("browser");
-  });
-  it("prs view: enter detail, o browser (no more combined enter-opens-browser)", () => {
-    const pairs = hintsFor("prs", 2, "wide", false);
-    expect(pairs.find(([k]) => k === "enter")?.[1]).toBe("detail");
-    expect(pairs.find(([k]) => k === "o")?.[1]).toBe("browser");
-    expect(pairs.find(([k]) => k === "o/enter")).toBeUndefined();
-  });
-  it("prDetail hints: esc back, o browser", () => {
-    expect(hintsFor("prDetail", 2, "wide", false)).toEqual([
-      ["esc", "back"],
-      ["o", "browser"],
-    ]);
-  });
-  it("filtering mode replaces everything with the filter contract", () => {
-    expect(hintsFor("main", 2, "wide", true)).toEqual([
-      ["type", "filter"],
-      ["enter", "apply"],
-      ["esc", "clear"],
-    ]);
-  });
-  it("repoDetail view keeps ↑/↓ scroll, o browser, esc back", () => {
-    const keys = hintsFor("repoDetail", 2, "wide", false).map(([k]) => k);
-    expect(keys).toContain("↑/↓");
-    expect(keys).toContain("o");
-    expect(keys).toContain("esc");
-  });
-});
-
 describe("Header unified refresh stamp", () => {
   const base = {
     repoNwo: "acme/api",
@@ -479,46 +385,6 @@ describe("Header (no mode tabs)", () => {
   });
 });
 
-describe("hintsForUnified", () => {
-  it("delegates non-main views to the existing sets", () => {
-    expect(hintsForUnified("detail", "issues", 2, "wide", false)).toEqual(
-      hintsFor("detail", 2, "wide", false),
-    );
-  });
-
-  it("main + pane 1 has no mode toggle and keeps rail verbs", () => {
-    const keys = hintsForUnified("main", "issues", 1, "wide", false).map(([k]) => k);
-    expect(keys).not.toContain("m");
-    for (const k of ["↑/↓", "w", "x", "o", "r", "s", "t", ":", "?", "q"]) {
-      expect(keys).toContain(k);
-    }
-  });
-
-  it("main + pane 2 varies by body kind", () => {
-    const q = hintsForUnified("main", "queue", 2, "wide", false).map(([k]) => k);
-    expect(q).toEqual(expect.arrayContaining(["↑/↓", "R", "x", "←"]));
-    const d = hintsForUnified("main", "daemon", 2, "wide", false).map(([k]) => k);
-    expect(d).toEqual(expect.arrayContaining(["[/]", "X", "f"]));
-    const issue = hintsForUnified("main", "issues", 2, "wide", false).map(([k]) => k);
-    expect(issue).toEqual(expect.arrayContaining(["d", "a", "/", "p"]));
-    expect(issue).not.toContain("m");
-    const r = hintsForUnified("main", "repoDetail", 2, "wide", false).map(([k]) => k);
-    expect(r).toEqual(expect.arrayContaining(["[ ]", "←"]));
-  });
-
-  it("pane 3 delegates to the existing PR-pane set", () => {
-    expect(hintsForUnified("main", "issues", 3, "wide", false)).toEqual(
-      hintsFor("main", 3, "wide", false),
-    );
-  });
-
-  it("filtering short-circuits like hintsFor", () => {
-    expect(hintsForUnified("main", "issues", 2, "wide", true)).toEqual(
-      hintsFor("main", 2, "wide", true),
-    );
-  });
-});
-
 describe("chipSegments (mnemonic rendering)", () => {
   it("splits a mnemonic label around the winning char", () => {
     expect(
@@ -585,5 +451,30 @@ describe("chipSegments (mnemonic rendering)", () => {
       { text: "o", accent: true },
       { text: "ve", accent: false },
     ]);
+  });
+});
+
+describe("Footer (chips)", () => {
+  it("renders mnemonic labels and structural key-first chips, · separated", () => {
+    const f = render(
+      <Footer
+        chips={[
+          { kind: "structural", key: "↑/↓", label: "move" },
+          { kind: "mnemonic", id: "retry", key: "t", label: "retry", charIndex: 2, guarded: false },
+          {
+            kind: "mnemonic",
+            id: "delete",
+            key: "D",
+            label: "delete",
+            charIndex: 0,
+            guarded: true,
+          },
+        ]}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("↑/↓ move");
+    expect(f).toContain("retry");
+    expect(f).toContain("Delete"); // guarded char uppercased in place
+    expect(f).toContain(" · ");
   });
 });

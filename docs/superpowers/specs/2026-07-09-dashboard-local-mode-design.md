@@ -8,7 +8,7 @@
 Give `junco dashboard` a first-class **local runtime** surface alongside its
 GitHub surface. Today the whole TUI is "a GitHub client" — watched repos,
 issues, PRs — with local state leaking in only through the `t` queue view and a
-rail card. This adds a second top-level mode, **LOCAL**, that shows and *acts on*
+rail card. This adds a second top-level mode, **LOCAL**, that shows and _acts on_
 the machine-local runtime: the four queue directories, the GitHub offline
 outbox op-log, the repos/clones/forks junco knows about and **where they live on
 disk**, the per-ticket worktrees, and the daemon/health detail. A persistent
@@ -19,7 +19,7 @@ Locked scope decisions (from the maintainer):
 - **Levers surfaced (v1):** queue dirs + repo/clone/fork paths & links (core),
   plus **Worktrees**, the **GitHub outbox op-log**, and **Daemon & health
   detail**. Locks/pidfile and orphan surfacing are deferred (future lever).
-- **Stance: actionable.** LOCAL exposes inline *mutating* actions (requeue a
+- **Stance: actionable.** LOCAL exposes inline _mutating_ actions (requeue a
   failed ticket, delete a queued ticket, flush the outbox, prune a stale
   worktree, restart the daemon) — a deliberate departure from the read-only
   north-star, reconciled by §"Action model & daemon safety".
@@ -44,7 +44,7 @@ signposts, re-confirm at implementation).
   router, no reducer.
 - **`main` IS the GitHub surface.** There is no `"github"` constant; `main`
   renders the repo rail + issues + PR panes. `pane:1|2|3` (`:72,219`) is a
-  second axis *within* `main`.
+  second axis _within_ `main`.
 - **The Rail renders above the body ternary** (`:1493`), so it shows in every
   view; the body ternary (`:1502-1587`) swaps the middle slot by `view`.
 - **Existing local precedent.** `t` → `QueueView.tsx` is a read-only windowed
@@ -110,18 +110,30 @@ const [localHeavy, setLocalHeavy]     = useState<LocalHeavy | null>(null);
 ### GitHub mode stays byte-for-byte unchanged
 
 The `useInput` cascade is **wrapped, not edited**. Layer order is load-bearing:
-the text-owning surfaces are hoisted *above* the mode split so they run in either
+the text-owning surfaces are hoisted _above_ the mode split so they run in either
 mode (this is what prevents a stranded text field in LOCAL).
 
 ```ts
 useInput((input, key) => {
-  if (isMouseInput(input)) return;                               // 1 (keep first)
-  if (view === "addRepo") { handleAddRepoInput(input, key); return; }  // 2 text
-  if (view === "palette") { handlePaletteInput(input, key); return; }  // 2 text
-  if (canToggleMode() && isModeToggle(input, key)) {             // 3 toggle
-    setUiMode((m) => (m === "github" ? "local" : "github")); dismissToast(); return;
+  if (isMouseInput(input)) return; // 1 (keep first)
+  if (view === "addRepo") {
+    handleAddRepoInput(input, key);
+    return;
+  } // 2 text
+  if (view === "palette") {
+    handlePaletteInput(input, key);
+    return;
+  } // 2 text
+  if (canToggleMode() && isModeToggle(input, key)) {
+    // 3 toggle
+    setUiMode((m) => (m === "github" ? "local" : "github"));
+    dismissToast();
+    return;
   }
-  if (uiMode === "local") { handleLocalInput(input, key); return; }    // 4 local
+  if (uiMode === "local") {
+    handleLocalInput(input, key);
+    return;
+  } // 4 local
   /* 5 ── existing github cascade, verbatim from :1064 onward ── */
 });
 ```
@@ -148,7 +160,7 @@ Render branches once, at the Workspace children:
 ### Toggle key (resolved)
 
 Tab is bound to pane-cycle (`:1223`) and `[`/`]` are scroll aliases — both
-rejected. **Canonical: `m`** (mnemonic *mode*), genuinely unbound, testable as a
+rejected. **Canonical: `m`** (mnemonic _mode_), genuinely unbound, testable as a
 literal byte, bound in layer 3 in both modes, intentionally reserved from ever
 becoming a GitHub key. **Alias: Shift+Tab** — `isModeToggle` for the Tab path
 **requires `key.shift`** so a bare Tab still reaches pane-cycle. **Mouse:** the
@@ -180,9 +192,15 @@ band **first, in `onMouseEvent`, before the per-view guard**:
 
 ```ts
 function onMouseEvent(ev) {
-  if (ev.y === 0) { const t = headerTabBands(columns).hit(ev.x); if (t) { setUiMode(t); return; } }
+  if (ev.y === 0) {
+    const t = headerTabBands(columns).hit(ev.x);
+    if (t) {
+      setUiMode(t);
+      return;
+    }
+  }
   if (confirm) return;
-  if (uiMode === "local") return;          // local body is keyboard-first in v1
+  if (uiMode === "local") return; // local body is keyboard-first in v1
   if (view === "help" || view === "palette" || view === "addRepo") return;
   /* … existing github hitTest routing, unchanged … */
 }
@@ -222,16 +240,16 @@ cursor.
 
 ### Navigation
 
-| Key | rail focus | body focus |
-|---|---|---|
-| `j`/`k`/↑/↓ | move section | move cursor |
-| `l`/→/enter | enter body | section action / open |
-| `h`/←/esc | — | back to rail |
-| `g`/`G` | first/last section | first/last row |
-| `[`/`]` | — | scroll (daemon panel) — scroll-alias parity |
-| `r` | full local refresh | full local refresh |
-| `m` / Shift+Tab | → github | → github |
-| `q` | quit | — (esc first) |
+| Key             | rail focus         | body focus                                  |
+| --------------- | ------------------ | ------------------------------------------- |
+| `j`/`k`/↑/↓     | move section       | move cursor                                 |
+| `l`/→/enter     | enter body         | section action / open                       |
+| `h`/←/esc       | —                  | back to rail                                |
+| `g`/`G`         | first/last section | first/last row                              |
+| `[`/`]`         | —                  | scroll (daemon panel) — scroll-alias parity |
+| `r`             | full local refresh | full local refresh                          |
+| `m` / Shift+Tab | → github           | → github                                    |
+| `q`             | quit               | — (esc first)                               |
 
 Section switch resets `localScroll = 0` and preserves each section's cursor via
 `localCursor[section]`, clamped on shrink like `issueIdxSafe` (`App.tsx:294-300`).
@@ -246,7 +264,7 @@ is a non-list detail panel using `localScroll` + `slice(scroll, scroll+height-3)
 
 ### Per-section bodies
 
-- **Queue** — honors "the `t` view *is* the Queue section." `QueueView` gains
+- **Queue** — honors "the `t` view _is_ the Queue section." `QueueView` gains
   **additive optional props** `selectable?`, `selectedRow?`, `onRows?`. Absent
   (GitHub `t`) → renders exactly as today (frames byte-identical). Present
   (LOCAL) → `▌` cursor on **actionable rows only**: WAITING/inbox and
@@ -306,31 +324,63 @@ per-worktree git. LOCAL gets its own snapshot, split cheap vs heavy:
 
 ```ts
 export interface LocalCheap {
-  queue: QueueSnapshot;                             // via makeQueueSnapshotFn (single /health)
+  queue: QueueSnapshot; // via makeQueueSnapshotFn (single /health)
   counts: { done: number; failed: number } | null; // only when Queue section selected
-  outbox: { depth: number; dead: number; ops: StoredOp[]; deadOps: StoredOp[]; error: string | null };
+  outbox: {
+    depth: number;
+    dead: number;
+    ops: StoredOp[];
+    deadOps: StoredOp[];
+    error: string | null;
+  };
   daemon: DaemonDetail;
   error: string | null;
 }
-export interface LocalHeavy { repos: LocalRepo[]; worktrees: LocalWorktree[]; error: string | null; }
+export interface LocalHeavy {
+  repos: LocalRepo[];
+  worktrees: LocalWorktree[];
+  error: string | null;
+}
 
 export interface LocalRepo {
-  nwo: string | null; path: string; source: "config"|"watchlist"|"external"|"clone";
-  originUrl: string | null; forkUrl: string | null; githubUrl: string | null;
-  branch: string | null; headSha: string | null; dirty: boolean | null; error: string | null;
+  nwo: string | null;
+  path: string;
+  source: "config" | "watchlist" | "external" | "clone";
+  originUrl: string | null;
+  forkUrl: string | null;
+  githubUrl: string | null;
+  branch: string | null;
+  headSha: string | null;
+  dirty: boolean | null;
+  error: string | null;
 }
 export interface LocalWorktree {
-  path: string; repoPath: string | null; repoNwo: string | null; slug: string;
-  kind: "live"|"stale"|"backup"; headSha: string | null; ageSeconds: number | null; error: string | null;
+  path: string;
+  repoPath: string | null;
+  repoNwo: string | null;
+  slug: string;
+  kind: "live" | "stale" | "backup";
+  headSha: string | null;
+  ageSeconds: number | null;
+  error: string | null;
 }
 export interface DaemonDetail {
-  up: boolean; pid: number | null; uptimeSeconds: number | null;
-  endpointReachable: boolean; healthHost: string; healthPort: number;
-  guardNudges: number | null; guardKills: number | null;
-  tokensIn: number | null; tokensOut: number | null;
+  up: boolean;
+  pid: number | null;
+  uptimeSeconds: number | null;
+  endpointReachable: boolean;
+  healthHost: string;
+  healthPort: number;
+  guardNudges: number | null;
+  guardKills: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
   tasksByStatus: Record<string, number>;
-  currentTickets: string[];   // authoritative live set — drives the prune liveness gate
-  progress: Record<string, { turns:number; lastTool:string|null; outputTokens:number; startedAt:string }>;
+  currentTickets: string[]; // authoritative live set — drives the prune liveness gate
+  progress: Record<
+    string,
+    { turns: number; lastTool: string | null; outputTokens: number; startedAt: string }
+  >;
   error: string | null;
 }
 ```
@@ -436,19 +486,19 @@ double-spawn.
 
 ### Action table (final)
 
-| Section / row | Key | Effect | Execution | Safety class |
-|---|---|---|---|---|
-| Queue · WAITING/inbox | `x` | Delete queued ticket (`inbox/<name>.md`) | **new** `junco rm <name>` | **DESTRUCTIVE — confirm** |
-| Queue · RECENT/failed | `R` | Requeue failed → inbox | `junco retry <name>` (`retryCmd.ts:40`) | SAFE (single); confirm on `--all` |
-| Queue · RUNNING/processing | — | none (non-selectable) | — | **FORBIDDEN — daemon owns `processing/`** |
-| Outbox | `f` | Flush backlog | `junco outbox flush` (`outboxCmd.ts:58`) | SAFE (flush.lock-guarded, idempotent) |
-| Outbox · dead row | — | view detail only (v1) | — | read-only (drop = future) |
-| Repos | `o` | Open origin/fork in browser | `openRepoBrowser(nwo)` — explicit local target | SAFE |
-| Repos · watchlist row | `x` | Unwatch | `unwatch(nwo)` — explicit local target | SAFE (reversible; toast no-op if not watched) |
-| Worktrees · stale/backup | `x` | Prune one worktree | **new** `junco worktree prune <path>` (lock-guarded) | **DESTRUCTIVE — confirm** |
-| Worktrees · live row | — | none (non-selectable) | — | **FORBIDDEN — in-flight ticket** |
-| Daemon | `X` | Restart daemon | `junco restart` (`restartCmd.ts:120`) | **DESTRUCTIVE — confirm (scope-aware body)** |
-| Daemon | `f` | Flush outbox (shortcut) | `junco outbox flush` | SAFE |
+| Section / row              | Key | Effect                                   | Execution                                            | Safety class                                  |
+| -------------------------- | --- | ---------------------------------------- | ---------------------------------------------------- | --------------------------------------------- |
+| Queue · WAITING/inbox      | `x` | Delete queued ticket (`inbox/<name>.md`) | **new** `junco rm <name>`                            | **DESTRUCTIVE — confirm**                     |
+| Queue · RECENT/failed      | `R` | Requeue failed → inbox                   | `junco retry <name>` (`retryCmd.ts:40`)              | SAFE (single); confirm on `--all`             |
+| Queue · RUNNING/processing | —   | none (non-selectable)                    | —                                                    | **FORBIDDEN — daemon owns `processing/`**     |
+| Outbox                     | `f` | Flush backlog                            | `junco outbox flush` (`outboxCmd.ts:58`)             | SAFE (flush.lock-guarded, idempotent)         |
+| Outbox · dead row          | —   | view detail only (v1)                    | —                                                    | read-only (drop = future)                     |
+| Repos                      | `o` | Open origin/fork in browser              | `openRepoBrowser(nwo)` — explicit local target       | SAFE                                          |
+| Repos · watchlist row      | `x` | Unwatch                                  | `unwatch(nwo)` — explicit local target               | SAFE (reversible; toast no-op if not watched) |
+| Worktrees · stale/backup   | `x` | Prune one worktree                       | **new** `junco worktree prune <path>` (lock-guarded) | **DESTRUCTIVE — confirm**                     |
+| Worktrees · live row       | —   | none (non-selectable)                    | —                                                    | **FORBIDDEN — in-flight ticket**              |
+| Daemon                     | `X` | Restart daemon                           | `junco restart` (`restartCmd.ts:120`)                | **DESTRUCTIVE — confirm (scope-aware body)**  |
+| Daemon                     | `f` | Flush outbox (shortcut)                  | `junco outbox flush`                                 | SAFE                                          |
 
 Embedded key decisions:
 
@@ -489,7 +539,7 @@ daemon-safety hardening:
    (`prepareWorktree`, `cleanupWorktree`, `pruneStaleWorktrees`). This makes
    prune and daemon provisioning mutually exclusive; they can no longer race the
    shared `.git/worktrees/<id>` metadata or `index.lock`.
-3. **Liveness gate *inside the lock*:** refuse if the worktree's `slug` matches a
+3. **Liveness gate _inside the lock_:** refuse if the worktree's `slug` matches a
    ticket in `processing/` **or** a `/health` `currentTickets` entry
    (`metrics.ts:18`) — computed as `worktreeSlug(id)` per live/processing ticket,
    matched against the worktree's slug segment (does **not** depend on the repo
@@ -499,8 +549,8 @@ daemon-safety hardening:
    back to the `processing/` scan (authoritative when no concurrent writer
    exists).
 4. **Remove:** `git worktree remove --force` then `rmdir` the empty discriminator
-   parent (mirrors `cleanupWorktree`, `:282-300`). `--force` is acceptable *only
-   because* steps 2–3 have already established, under the lock, that no live run
+   parent (mirrors `cleanupWorktree`, `:282-300`). `--force` is acceptable _only
+   because_ steps 2–3 have already established, under the lock, that no live run
    owns this tree — we do **not** rely on git's lock semantics as a backstop
    (junco never calls `git worktree lock`).
 
@@ -643,7 +693,7 @@ bounded until-loop on the frame string, then assert.
    props keep `tuiQueue` green).
 5. **ONE atomic commit** rewires `App.tsx` (uiMode state + input restructure +
    render branch + confirm), adds the Header tab + `HitContext.uiMode?` +
-   `headerTabBands` (landed *with* the rewire — it is not inert, it changes the
+   `headerTabBands` (landed _with_ the rewire — it is not inert, it changes the
    y===0 hit result and ripples into `tuiHitTest` helpers), wires `dashboardCmd`,
    and **migrates all header-row frame tests in the same commit**. Because the
    tab renders in both modes, this touches **every** full-`<App>` frame capture
@@ -673,21 +723,21 @@ Config field → no fixture edits.
 The design was adversarially red-teamed across three lenses (daemon-race/safety,
 architecture/test-fit, UX/conventions). Blockers/majors resolved:
 
-| Finding | Resolution |
-|---|---|
-| Worktree prune = second unsynchronized mutator of daemon-owned `worktreeRoot` | shared `worktrees.lock` the daemon also acquires; in-lock liveness gate |
-| "git refuses a locked tree" backstop is false | claim removed; safety is the lock + slug gate, not git semantics |
-| FS class can't distinguish live vs orphaned worktree | FS class is display-only; slug match under the lock is the sole liveness signal |
-| Enumerator `git status` takes `index.lock` on live repos | `--no-optional-locks` on every enumerator git call |
-| `mode` prop collides with `LayoutMode` | new axis renamed `uiMode` end-to-end |
-| Mouse mutates hidden github state in LOCAL | `onMouseEvent` early-returns in LOCAL after the header band; body keyboard-first |
-| Repos `x`/`o` reuse github selection → wrong target | parameterized `unwatch(nwo)`/`openRepoBrowser(nwo)` on the local cursor |
-| Double `/health` fetch per tick | single fetch threaded into queue + daemon |
-| Sync git poller blocks the Ink loop / orphans children | async `gitFn`, bounded pool, `aliveRef` + AbortController cleanup |
-| Atomic-commit test scope under-estimated | tab renders in both modes → enumerate every `lastFrame` test up front |
-| hitTest staging not inert | `HitContext.uiMode?` optional; lands with the App rewire |
-| addRepo text handler stranded in LOCAL | addRepo/palette handlers hoisted above the mode split; local `w` dropped |
-| `R` = both delete and requeue | split: `x` = destructive remove, `R` = requeue |
-| Header one-row budget at 60 cols unproven | responsive compact tab + 60-col full-chip Header test |
-| Active tab invisible under NO_COLOR | bracket-marked active tab + accent reinforcement |
-| Header tab clickable in only 4/9 views | header band resolved in `onMouseEvent` before the per-view guard |
+| Finding                                                                       | Resolution                                                                       |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Worktree prune = second unsynchronized mutator of daemon-owned `worktreeRoot` | shared `worktrees.lock` the daemon also acquires; in-lock liveness gate          |
+| "git refuses a locked tree" backstop is false                                 | claim removed; safety is the lock + slug gate, not git semantics                 |
+| FS class can't distinguish live vs orphaned worktree                          | FS class is display-only; slug match under the lock is the sole liveness signal  |
+| Enumerator `git status` takes `index.lock` on live repos                      | `--no-optional-locks` on every enumerator git call                               |
+| `mode` prop collides with `LayoutMode`                                        | new axis renamed `uiMode` end-to-end                                             |
+| Mouse mutates hidden github state in LOCAL                                    | `onMouseEvent` early-returns in LOCAL after the header band; body keyboard-first |
+| Repos `x`/`o` reuse github selection → wrong target                           | parameterized `unwatch(nwo)`/`openRepoBrowser(nwo)` on the local cursor          |
+| Double `/health` fetch per tick                                               | single fetch threaded into queue + daemon                                        |
+| Sync git poller blocks the Ink loop / orphans children                        | async `gitFn`, bounded pool, `aliveRef` + AbortController cleanup                |
+| Atomic-commit test scope under-estimated                                      | tab renders in both modes → enumerate every `lastFrame` test up front            |
+| hitTest staging not inert                                                     | `HitContext.uiMode?` optional; lands with the App rewire                         |
+| addRepo text handler stranded in LOCAL                                        | addRepo/palette handlers hoisted above the mode split; local `w` dropped         |
+| `R` = both delete and requeue                                                 | split: `x` = destructive remove, `R` = requeue                                   |
+| Header one-row budget at 60 cols unproven                                     | responsive compact tab + 60-col full-chip Header test                            |
+| Active tab invisible under NO_COLOR                                           | bracket-marked active tab + accent reinforcement                                 |
+| Header tab clickable in only 4/9 views                                        | header band resolved in `onMouseEvent` before the per-view guard                 |

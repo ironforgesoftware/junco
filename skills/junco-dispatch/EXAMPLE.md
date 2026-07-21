@@ -12,7 +12,7 @@ shape-reference, not a copy-paste source.
 
 **Rendered ticket:**
 
-```markdown
+````markdown
 ---
 id: add-changelog-2026-04-23
 created: 2026-04-23T11:30:00
@@ -70,9 +70,9 @@ _None._ Pure-content change, no existing utilities apply.
 
 ## Files
 
-| File | Action | Lines | Notes |
-|---|---|---|---|
-| `CHANGELOG.md` | new | — | seed content below |
+| File           | Action | Lines | Notes              |
+| -------------- | ------ | ----- | ------------------ |
+| `CHANGELOG.md` | new    | —     | seed content below |
 
 All paths are relative to the worktree root (your cwd).
 
@@ -96,6 +96,7 @@ All paths are relative to the worktree root (your cwd).
 
   - Initial state: Example target repo for junco.
   ```
+````
 
 - [ ] Commit: `git add CHANGELOG.md && git commit -m "docs: add CHANGELOG.md with v0.1.0 entry"`
 
@@ -134,7 +135,8 @@ worktree root.
 5. **Do not expand scope.** If you find an issue not in this plan, note it in your final summary — do not fix it.
 6. **Do not push or open a PR.** The worker handles that.
 7. **Final summary** (2–3 sentences at session end): what you did and any surprises. (Junco runs `## Verification` itself — don't restate it.)
-```
+
+````
 
 ---
 
@@ -217,9 +219,11 @@ All paths are relative to the worktree root (your cwd).
 
 - [ ] Create `HELLO-4.md` with exactly this content (single line, trailing newline):
 
-  ```
-  junco says hi, take 4
-  ```
+````
+
+junco says hi, take 4
+
+````
 
 - [ ] Commit: `git add HELLO-4.md && git commit -m "Add HELLO-4.md greeting"`
 
@@ -227,12 +231,12 @@ All paths are relative to the worktree root (your cwd).
 
 - [ ] Append the following to the end of `README.md` (preserve existing content above):
 
-  ```markdown
+```markdown
 
-  ## Provenance 4
+## Provenance 4
 
-  Example target repo for junco. Exercise run #4.
-  ```
+Example target repo for junco. Exercise run #4.
+````
 
 - [ ] Commit: `git add README.md && git commit -m "Note smoke-test provenance in README"`
 
@@ -273,7 +277,8 @@ worktree root.
 5. **Do not expand scope.** If you find an issue not in this plan, note it in your final summary — do not fix it.
 6. **Do not push or open a PR.** The worker handles that.
 7. **Final summary** (2–3 sentences at session end): what you did and any surprises. (Junco runs `## Verification` itself — don't restate it.)
-```
+
+````
 
 ---
 
@@ -323,7 +328,7 @@ Repo convention is POSIX-style text files with a trailing newline. The original 
 ```bash
 test -f HELLO.md
 [ "$(tail -c1 HELLO.md | xxd -p)" = "0a" ]
-```
+````
 
 Junco runs each fenced bash block in the worktree after your session ends and
 surfaces results in the PR body. Don't run them yourself.
@@ -344,6 +349,7 @@ surfaces results in the PR body. Don't run them yourself.
 7. After `git commit` exits 0, the commit is real. Do not `git log`/`status`/`diff` to verify.
 8. After the initial `todo_write` with `phases:`, use only the incremental fields (`start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`). Never pass `phases:` again — it wipes progress memory.
 9. **Final summary:** what you amended, which verification commands passed.
+
 ```
 
 ### Why this shape for amend tickets
@@ -359,3 +365,4 @@ surfaces results in the PR body. Don't run them yourself.
 - Example 2 is a known-good shape: in testing, a well-structured plan like this ran several times faster and used far fewer tokens than the same work given as a loose prompt. **Shape matters.**
 - When generating, don't invent richer examples than the brief warrants. A "create a file" ticket should NOT grow a "Reference — existing utilities" section with three bullets just to fill the slot.
 - Aim for the minimum plan that still contains every mandatory section (even if some are `_None_`). Consistency of shape > fullness of content.
+```

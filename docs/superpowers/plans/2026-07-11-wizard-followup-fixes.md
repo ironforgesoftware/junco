@@ -21,6 +21,7 @@
 **Files:** `src/tui/wizard/chapters/Model.tsx`, `src/tui/wizard/chapters/Review.tsx`, tests in `tests/wizardChapters.test.tsx` (+ `tests/wizardApp.test.tsx` only if existing assertions reference the raw key).
 
 Decisions:
+
 - **Model key step** keeps a local `keyDraft` state: initialized `""` in rerun mode (`io.mode === "rerun"`), `answers.apiKey ?? ""` in fresh mode. TextField gets `mask` (prop exists). Rerun placeholder: `"unchanged — enter keeps the current key"`. Submit: trimmed-empty draft → keep `answers.apiKey` untouched; otherwise `patch({ apiKey: draft })`. Then `setStep("probe")` as today (probe reads the post-patch answers on the next commit).
 - **Review redaction**: derive secret paths once — `const SECRET_PATHS = LEVERS.filter((l) => l.type === "secret").map((l) => l.path);` (today: `["model.apiKey"]`). Fresh mode: deep-clone `buildConfigObject(answers)`, `setAtPath(clone, p, "••••")` for each secret path whose `getAtPath` is a non-empty string, render the clone (import `getAtPath`/`setAtPath` from `configLevers.js`; `renderConfigJson` itself unchanged). Rerun diff: when `d.path` is in `SECRET_PATHS`, render `•••• → ••••` (both sides masked; the point is "it changed", not the values).
 - **Tests** (drive real components): key step renders `•` and never the literal key, fresh and rerun; rerun empty-submit keeps the stored key (assert `discoverModels` was called with the stored key, and `answers.apiKey` unchanged); rerun non-empty submit patches the new key; fresh Review frame contains `"••••"` and NOT the key literal; rerun diff with a changed key shows masked arrows and no literals. Grep the existing wizardApp walkthrough tests for `"1234"`/`"k"` frame assertions and adjust only if they break.
@@ -30,6 +31,7 @@ Decisions:
 **Files:** `src/wizard.ts`, `src/tui/wizard/WizardApp.tsx`, `tests/wizard.test.ts`, `tests/wizardApp.test.tsx`.
 
 Decisions:
+
 - **Truthful cancel after partial write**: `runInitWizard` keeps a closure flag `let wroteFile = false`, set immediately after the successful config write inside `io.write` (both modes). On `outcome === "cancelled"`: if `wroteFile`, print `Setup did not finish — but the config WAS written to <resolved>.\n  Run junco doctor to verify the rest.\n` (exit stays 130); else today's "nothing written" line.
 - **Tmp cleanup**: add `unlinkFn?: (p: string) => void` to `WizardDeps` (default `unlinkSync`). Wrap the rename in try/catch: on throw, best-effort `try { unlinkFn(tmp) } catch {}` then rethrow. Applies to both branches (fresh + rerun share the temp+rename shape).
 - **Banner brevity**: in WizardApp's write catch, display `const brief = msg.split("\n")[0].slice(0, 120)` (append `…` when truncated). `validateConfigObject` throws a raw ZodError whose `.message` is a multi-line JSON blob (verified `src/config.ts:364-366`), so first-line + cap is the right display trim; the full error still reaches nothing else (banner is the only consumer).
@@ -46,6 +48,7 @@ Decision: in the path-step submit, replace the existing entry instead of skippin
 **Files:** create `src/execProbe.ts`; modify `src/doctor.ts`, `src/wizard/detect.ts`, `src/wizard/flow.ts`. Tests: existing suites pin behavior (no new tests required; typecheck catches misses).
 
 Decisions:
+
 - `src/execProbe.ts` exports `defaultExec(cmd, args)` and `defaultAccessOk(dir)` — moved verbatim (10s timeout, ENOENT→127, mkdir+W_OK). Doctor and detect delete their local copies and import; keep doctor's exported behavior byte-identical (its worker.py provenance comments stay with the call sites, not the helpers).
 - `flow.ts`: inside `buildConfigObject` and `coveredPaths`, take `const d = defaultAnswers()` and use `d.modelsJson`-style fallbacks instead of repeated literals — concretely `a.modelsJson ?? d.modelsJson!`… note `defaultAnswers()` has no `modelsJson` (mode inline) — so add the models.json literal as a module const `DEFAULT_MODELS_JSON = "~/.pi/agent/models.json"` used by both sites, and `d.baseUrl!`/`d.apiKey!` for the inline pair. `answersFromConfig` github/extras fallbacks read `d.github.enabled`, `d.github.repos`, `d.github.requireApproval`, `d.extras.*` instead of literals.
 

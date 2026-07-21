@@ -24,17 +24,17 @@
 
 ## File Structure
 
-| File | Responsibility | Action |
-|---|---|---|
-| `src/assessReview.ts` | Durable `PendingAssess` store (write/list/read/remove/count) | **Create** |
-| `src/assessFiling.ts` | Least-privilege filing core: `createIssueLive` + `fileFindings` | **Create** |
-| `src/assessFlow.ts` | Phase A: audit → park batch (remove filing phases; add external detect + freshness sync) | Modify |
-| `src/externalRepo.ts` | `syncExternalClone` — fetch + hard-reset a managed clone to upstream default | Modify |
-| `src/githubOutbox.ts` | `fetchFindingMarkers` → author-scoped list query | Modify |
-| `src/assessCmd.ts` | Resolution includes external entries; `runAssessReviewCommand` / `runAssessFileCommand` | Modify |
-| `src/cli.ts` | Route `assess review` / `assess file`; `--only` option; usage text | Modify |
-| `src/statusCmd.ts`, `src/doctor.ts` | Surface pending-review count | Modify |
-| Docs | Etiquette invariant, README, skill, ARCHITECTURE.md | Modify |
+| File                                | Responsibility                                                                           | Action     |
+| ----------------------------------- | ---------------------------------------------------------------------------------------- | ---------- |
+| `src/assessReview.ts`               | Durable `PendingAssess` store (write/list/read/remove/count)                             | **Create** |
+| `src/assessFiling.ts`               | Least-privilege filing core: `createIssueLive` + `fileFindings`                          | **Create** |
+| `src/assessFlow.ts`                 | Phase A: audit → park batch (remove filing phases; add external detect + freshness sync) | Modify     |
+| `src/externalRepo.ts`               | `syncExternalClone` — fetch + hard-reset a managed clone to upstream default             | Modify     |
+| `src/githubOutbox.ts`               | `fetchFindingMarkers` → author-scoped list query                                         | Modify     |
+| `src/assessCmd.ts`                  | Resolution includes external entries; `runAssessReviewCommand` / `runAssessFileCommand`  | Modify     |
+| `src/cli.ts`                        | Route `assess review` / `assess file`; `--only` option; usage text                       | Modify     |
+| `src/statusCmd.ts`, `src/doctor.ts` | Surface pending-review count                                                             | Modify     |
+| Docs                                | Etiquette invariant, README, skill, ARCHITECTURE.md                                      | Modify     |
 
 Tests are colocated as `tests/<name>.test.ts` (vitest, excluded from `dist/`).
 
@@ -43,10 +43,12 @@ Tests are colocated as `tests/<name>.test.ts` (vitest, excluded from `dist/`).
 ### Task 1: `assessReview.ts` — durable pending store
 
 **Files:**
+
 - Create: `src/assessReview.ts`
 - Test: `tests/assessReview.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Config` (`src/types.js`, `cfg.stateDir: string`), `Finding` (`src/findings.js`).
 - Produces:
   - `interface PendingAssess { id: string; nwo: string; external: boolean; autoPlan: boolean; repoPath: string; createdAt: string; findings: Finding[] }`
@@ -67,7 +69,12 @@ import { mkdtempSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  writePending, listPending, readPending, removePending, pendingCount, assessReviewPaths,
+  writePending,
+  listPending,
+  readPending,
+  removePending,
+  pendingCount,
+  assessReviewPaths,
   type PendingAssess,
 } from "../src/assessReview.js";
 import type { Config } from "../src/types.js";
@@ -77,12 +84,23 @@ function cfg(stateDir: string): Config {
 }
 function batch(id: string): PendingAssess {
   return {
-    id, nwo: "o/r", external: true, autoPlan: false, repoPath: "/x",
+    id,
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
     createdAt: "2026-07-09T00:00:00.000Z",
-    findings: [{
-      fingerprint: "abc123", kind: "code", severity: "high", ruleId: "R", title: "T",
-      description: "d", references: [],
-    }],
+    findings: [
+      {
+        fingerprint: "abc123",
+        kind: "code",
+        severity: "high",
+        ruleId: "R",
+        title: "T",
+        description: "d",
+        references: [],
+      },
+    ],
   };
 }
 
@@ -118,7 +136,9 @@ describe("assessReview store", () => {
     const c = cfg(dir);
     writePending(c, batch("dup"));
     writePending(c, { ...batch("dup"), nwo: "o/r2" });
-    expect(readdirSync(assessReviewPaths(c).dir).filter((n) => n.endsWith(".json"))).toHaveLength(1);
+    expect(readdirSync(assessReviewPaths(c).dir).filter((n) => n.endsWith(".json"))).toHaveLength(
+      1,
+    );
     expect(readPending(c, "dup").batch?.nwo).toBe("o/r2");
   });
 });
@@ -169,7 +189,11 @@ export function assessReviewPaths(cfg: Config): { dir: string; filed: string } {
   return { dir, filed: join(dir, "filed") };
 }
 
-export function writePending(cfg: Config, batch: PendingAssess, deps: AssessReviewDeps = {}): string {
+export function writePending(
+  cfg: Config,
+  batch: PendingAssess,
+  deps: AssessReviewDeps = {},
+): string {
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
   const renameFn = deps.renameFn ?? renameSync;
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
@@ -261,10 +285,12 @@ git commit -m "feat(assess): durable pending-review store"
 ### Task 2: `fetchFindingMarkers` → author-scoped dedup
 
 **Files:**
+
 - Modify: `src/githubOutbox.ts:295-322` (`fetchFindingMarkers`)
 - Test: `tests/githubOutbox.test.ts` (update the existing `fetchFindingMarkers` test)
 
 **Interfaces:**
+
 - Produces: `fetchFindingMarkers(cfg, nwo, ghFn)` — unchanged signature; now lists `--author @me --state all` (no `--label`), still scans bodies for `<!-- junco:finding:fp -->`.
 
 - [ ] **Step 1: Write the failing test**
@@ -276,7 +302,11 @@ it("fetchFindingMarkers lists by author, not by label, and scans bodies", async 
   const calls: string[][] = [];
   const ghFn = (async (_cfg: unknown, args: string[]) => {
     calls.push(args);
-    return { stdout: JSON.stringify([{ body: `x ${findingMarker("deadbeef")} y` }]), stderr: "", code: 0 };
+    return {
+      stdout: JSON.stringify([{ body: `x ${findingMarker("deadbeef")} y` }]),
+      stderr: "",
+      code: 0,
+    };
   }) as unknown as typeof gh;
   const markers = await fetchFindingMarkers(cfgFixture(), "o/r", ghFn);
   expect(markers.has("deadbeef")).toBe(true);
@@ -317,10 +347,18 @@ export async function fetchFindingMarkers(
   const listed = await ghFn(
     cfg,
     [
-      "issue", "list", "--repo", nwo,
-      "--author", "@me",
-      "--state", "all", "--limit", "500",
-      "--json", "body",
+      "issue",
+      "list",
+      "--repo",
+      nwo,
+      "--author",
+      "@me",
+      "--state",
+      "all",
+      "--limit",
+      "500",
+      "--json",
+      "body",
     ],
     { timeoutMs: GH_TIMEOUT },
   );
@@ -350,11 +388,13 @@ git commit -m "refactor(outbox): dedup finding issues by author, not label"
 ### Task 3: `assessFiling.ts` — least-privilege filing core
 
 **Files:**
+
 - Create: `src/assessFiling.ts`
 - Modify: `src/assessFlow.ts` — remove `createIssueLive` (moved here) and its now-unused imports (do this in Step 3 here; assessFlow's own filing is removed in Task 5).
 - Test: `tests/assessFiling.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PendingAssess`, `removePending` (Task 1); `tryOrEnqueue`, `fetchFindingMarkers`, `ensureFindingLabels`, `OutboxOp` (`githubOutbox.js`); `buildIssueTitle`, `buildIssueBody`, `findingLabels`, `Finding` (`findings.js`); `gh`, `GitOpError`, `isNetworkError` (`git.js`).
 - Produces:
   - `interface FileResult { created: number; queuedOffline: number; deduped: number; failed: number; urls: string[]; warnings: string[] }`
@@ -371,7 +411,12 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileFindings } from "../src/assessFiling.js";
-import { assessReviewPaths, writePending, readPending, type PendingAssess } from "../src/assessReview.js";
+import {
+  assessReviewPaths,
+  writePending,
+  readPending,
+  type PendingAssess,
+} from "../src/assessReview.js";
 import { findingMarker } from "../src/findings.js";
 import type { Config } from "../src/types.js";
 import type { gh } from "../src/git.js";
@@ -381,11 +426,31 @@ function cfg(stateDir: string): Config {
 }
 function pending(external: boolean): PendingAssess {
   return {
-    id: "assess-x-1", nwo: "o/r", external, autoPlan: false, repoPath: "/x",
+    id: "assess-x-1",
+    nwo: "o/r",
+    external,
+    autoPlan: false,
+    repoPath: "/x",
     createdAt: "2026-07-09T00:00:00.000Z",
     findings: [
-      { fingerprint: "f1", kind: "code", severity: "high", ruleId: "R1", title: "One", description: "d1", references: [] },
-      { fingerprint: "f2", kind: "code", severity: "low", ruleId: "R2", title: "Two", description: "d2", references: [] },
+      {
+        fingerprint: "f1",
+        kind: "code",
+        severity: "high",
+        ruleId: "R1",
+        title: "One",
+        description: "d1",
+        references: [],
+      },
+      {
+        fingerprint: "f2",
+        kind: "code",
+        severity: "low",
+        ruleId: "R2",
+        title: "Two",
+        description: "d2",
+        references: [],
+      },
     ],
   };
 }
@@ -439,7 +504,8 @@ describe("fileFindings", () => {
     const ghFn = (async (_c: unknown, args: string[]) => {
       if (args[1] === "list")
         return { stdout: JSON.stringify([{ body: findingMarker("f1") }]), stderr: "", code: 0 };
-      if (args[1] === "create") return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
+      if (args[1] === "create")
+        return { stdout: "https://github.com/o/r/issues/9\n", stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     }) as unknown as typeof gh;
     const res = await fileFindings(c, pending(true), new Set(["f1", "f2"]), { ghFn });
@@ -474,7 +540,10 @@ import { tmpdir } from "node:os";
 import type { Config } from "./types.js";
 import { gh, GitOpError, isNetworkError } from "./git.js";
 import {
-  tryOrEnqueue, fetchFindingMarkers, ensureFindingLabels, type OutboxOp,
+  tryOrEnqueue,
+  fetchFindingMarkers,
+  ensureFindingLabels,
+  type OutboxOp,
 } from "./githubOutbox.js";
 import { buildIssueTitle, buildIssueBody, findingLabels, type Finding } from "./findings.js";
 import { removePending, type PendingAssess } from "./assessReview.js";
@@ -516,13 +585,24 @@ export async function createIssueLive(
     const out = await ghFn(
       cfg,
       [
-        "issue", "create", "--repo", nwo, "--title", title, "--body-file", file,
+        "issue",
+        "create",
+        "--repo",
+        nwo,
+        "--title",
+        title,
+        "--body-file",
+        file,
         ...labels.flatMap((l) => ["--label", l]),
       ],
       { timeoutMs: GH_TIMEOUT },
     );
     return (
-      out.stdout.trim().split("\n").reverse().find((l) => l.startsWith("https://")) ?? null
+      out.stdout
+        .trim()
+        .split("\n")
+        .reverse()
+        .find((l) => l.startsWith("https://")) ?? null
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -541,7 +621,12 @@ export async function fileFindings(
 ): Promise<FileResult> {
   const ghFn = deps.ghFn ?? gh;
   const result: FileResult = {
-    created: 0, queuedOffline: 0, deduped: 0, failed: 0, urls: [], warnings: [],
+    created: 0,
+    queuedOffline: 0,
+    deduped: 0,
+    failed: 0,
+    urls: [],
+    warnings: [],
   };
   const toFile = batch.findings.filter((f) => selected.has(f.fingerprint));
   if (toFile.length === 0) {
@@ -569,7 +654,10 @@ export async function fileFindings(
   if (!batch.external) {
     const union = new Set<string>();
     for (const f of toFile) {
-      for (const l of findingLabels(f, { autoPlan: batch.autoPlan, triggerLabel: cfg.github.triggerLabel })) {
+      for (const l of findingLabels(f, {
+        autoPlan: batch.autoPlan,
+        triggerLabel: cfg.github.triggerLabel,
+      })) {
         union.add(l);
       }
     }
@@ -583,7 +671,9 @@ export async function fileFindings(
     }
   }
   const labelsFor = (f: Finding): string[] =>
-    labelFree ? [] : findingLabels(f, { autoPlan: batch.autoPlan, triggerLabel: cfg.github.triggerLabel });
+    labelFree
+      ? []
+      : findingLabels(f, { autoPlan: batch.autoPlan, triggerLabel: cfg.github.triggerLabel });
 
   for (const f of toFile) {
     if (filed.has(f.fingerprint)) {
@@ -594,7 +684,12 @@ export async function fileFindings(
     const bodyText = buildIssueBody(f);
     const labels = labelsFor(f);
     const op: OutboxOp = {
-      kind: "issue-create", nwo: batch.nwo, title, bodyText, labels, fingerprint: f.fingerprint,
+      kind: "issue-create",
+      nwo: batch.nwo,
+      title,
+      bodyText,
+      labels,
+      fingerprint: f.fingerprint,
     };
     let url: string | null = null;
     try {
@@ -612,9 +707,16 @@ export async function fileFindings(
       result.warnings.push(`could not file "${title}": ${describeError(e)}`);
     }
   }
-  log.info("assess findings filed", { id: batch.id, nwo: batch.nwo, ...{
-    created: result.created, queued: result.queuedOffline, deduped: result.deduped, failed: result.failed,
-  } });
+  log.info("assess findings filed", {
+    id: batch.id,
+    nwo: batch.nwo,
+    ...{
+      created: result.created,
+      queued: result.queuedOffline,
+      deduped: result.deduped,
+      failed: result.failed,
+    },
+  });
   removePending(cfg, batch.id);
   return result;
 }
@@ -641,10 +743,12 @@ git commit -m "feat(assess): least-privilege filing core (label-free + author de
 ### Task 4: `syncExternalClone` — freshness sync
 
 **Files:**
+
 - Modify: `src/externalRepo.ts` (add `syncExternalClone`)
 - Test: `tests/externalRepo.test.ts` (add a case)
 
 **Interfaces:**
+
 - Consumes: `git` (`git.js`), `Config`.
 - Produces: `syncExternalClone(cfg, repoPath, deps?): Promise<void>` — `git fetch origin`, resolve origin's default branch via `git symbolic-ref refs/remotes/origin/HEAD`, hard-reset the working tree to it. Uses the existing `ExternalRepoDeps.gitFn` seam.
 
@@ -657,7 +761,8 @@ it("syncExternalClone fetches origin and hard-resets to the default branch", asy
   const calls: string[][] = [];
   const gitFn = (async (_c: unknown, args: string[]) => {
     calls.push(args);
-    if (args.includes("symbolic-ref")) return { stdout: "refs/remotes/origin/main\n", stderr: "", code: 0 };
+    if (args.includes("symbolic-ref"))
+      return { stdout: "refs/remotes/origin/main\n", stderr: "", code: 0 };
     return { stdout: "", stderr: "", code: 0 };
   }) as unknown as typeof git;
   await syncExternalClone(cfgFixture(), "/clones/o/r", { gitFn });
@@ -721,10 +826,12 @@ git commit -m "feat(assess): syncExternalClone — refresh managed clone to upst
 ### Task 5: `assessFlow.ts` — Phase A parks instead of files
 
 **Files:**
+
 - Modify: `src/assessFlow.ts` (remove filing phases 8-9 and `createIssueLive`; add external detect, sync call, park)
 - Test: `tests/assessFlow.test.ts` (update existing expectations + add park cases)
 
 **Interfaces:**
+
 - Consumes: `writePending`, `PendingAssess` (Task 1); `syncExternalClone` (Task 4).
 - Produces: `runAssessFlow` still returns `AssessFlowResult`, but the filing counts (`created`/`queuedOffline`/`deduped`/`failed`/`capped`/`urls`) are replaced by a single `parked: number` (findings written to the review store). Update `AssessFlowResult` accordingly.
 
@@ -736,8 +843,10 @@ In `tests/assessFlow.test.ts`, existing tests assert issues are filed (they insp
 it("parks findings in the review store instead of filing them", async () => {
   const { cfgObj, ticket, claimed } = await makeAssessFixture({
     // agent finalText carries one code finding via the junco-findings fence
-    findings: [{ kind: "code", severity: "high", ruleId: "R", title: "Bug", location: { path: "a.ts" } }],
-    originNwo: "o/r",           // owned (repoPath NOT under externalReposRoot)
+    findings: [
+      { kind: "code", severity: "high", ruleId: "R", title: "Bug", location: { path: "a.ts" } },
+    ],
+    originNwo: "o/r", // owned (repoPath NOT under externalReposRoot)
   });
   const res = await runAssessFlow(cfgObj, ticket, claimed, fakeDeps());
   expect(res.parked).toBeGreaterThanOrEqual(1);
@@ -750,9 +859,11 @@ it("parks findings in the review store instead of filing them", async () => {
 
 it("marks the batch external and forces autoPlan false when the clone is under externalReposRoot", async () => {
   const { cfgObj, ticket, claimed } = await makeAssessFixture({
-    findings: [{ kind: "code", severity: "high", ruleId: "R", title: "Bug", location: { path: "a.ts" } }],
+    findings: [
+      { kind: "code", severity: "high", ruleId: "R", title: "Bug", location: { path: "a.ts" } },
+    ],
     originNwo: "up/stream",
-    external: true,            // repoPath placed under cfg.github.externalReposRoot
+    external: true, // repoPath placed under cfg.github.externalReposRoot
     autoPlan: true,
   });
   await runAssessFlow(cfgObj, ticket, claimed, fakeDeps());
@@ -774,19 +885,24 @@ Expected: FAIL — `res.parked` undefined; `listPending` empty (flow still files
 In `src/assessFlow.ts`:
 
 1. **Imports:** remove `mkdtempSync, writeFileSync, rmSync, tmpdir` if now unused; remove `tryOrEnqueue, ensureFindingLabels, buildIssueTitle, buildIssueBody, findingLabels, type OutboxOp` if only the filing path used them (keep `buildIssueTitle` only if still referenced — it is NOT after removing the cap/overflow section, so remove it). Add:
+
 ```ts
 import { resolve as pathResolve, sep } from "node:path"; // already imports resolve/sep — reuse
 import { writePending, type PendingAssess } from "./assessReview.js";
 import { syncExternalClone } from "./externalRepo.js";
 ```
+
 2. **Delete** the local `createIssueLive` function (moved to assessFiling.ts in Task 3).
 3. **`AssessFlowResult`:** replace `found/deduped/created/queuedOffline/dropped/capped/failed/urls` filing fields with `parked: number` (keep `found`, `dropped` — they describe the audit; drop the rest). Update `buildSummary` to report "N findings awaiting review — run `junco assess file <id>`".
 4. **External detection** (after Phase 2 resolves `nwo`):
+
 ```ts
 const externalRoot = pathResolve(expandHome(cfg.github.externalReposRoot));
 const external = repoPath === externalRoot || repoPath.startsWith(externalRoot + sep);
 ```
+
 5. **Freshness sync** (external only, before the agent audit / after containment):
+
 ```ts
 if (external) {
   try {
@@ -796,7 +912,9 @@ if (external) {
   }
 }
 ```
+
 6. **Replace Phase 7-9** (cap + labels + file loop) with **park**:
+
 ```ts
 // --- Phase 7: Park all findings ≥ minSeverity for human review. No cap here —
 // per-finding confirm (junco assess file) is the volume gate. ---
@@ -812,8 +930,8 @@ const parked: PendingAssess = {
 if (afterDedup.length > 0) writePending(cfg, parked);
 counts.parked = afterDedup.length;
 ```
-   Keep Phase 6 (audit-time GH dedup pre-filter) as-is (now author-scoped via Task 2). Remove `bySeverity/toFile/overflow/cappedTitles` and the `autoPlan` local that fed labels.
-7. Update the `counts` object: drop `created/queuedOffline/deduped/capped/failed`, add `parked`. `found` = `merged.length` (pre-GH-dedup) unchanged; `deduped` (audit-time) may stay as an informational count if you keep it — simplest: keep `found`, `deduped` (audit pre-filter), `dropped`, add `parked`.
+
+Keep Phase 6 (audit-time GH dedup pre-filter) as-is (now author-scoped via Task 2). Remove `bySeverity/toFile/overflow/cappedTitles` and the `autoPlan` local that fed labels. 7. Update the `counts` object: drop `created/queuedOffline/deduped/capped/failed`, add `parked`. `found` = `merged.length` (pre-GH-dedup) unchanged; `deduped` (audit-time) may stay as an informational count if you keep it — simplest: keep `found`, `deduped` (audit pre-filter), `dropped`, add `parked`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -832,10 +950,12 @@ git commit -m "feat(assess): audit parks findings for review instead of filing"
 ### Task 6: `assessCmd.ts` — resolution includes external repos
 
 **Files:**
+
 - Modify: `src/assessCmd.ts:92-102` (nwo resolution)
 - Test: `tests/assessCmd.test.ts` (add external-resolution case)
 
 **Interfaces:**
+
 - Produces: `runAssessCommand` unchanged signature; `junco assess <external-nwo>` now resolves to the managed clone path instead of failing "not watched".
 
 - [ ] **Step 1: Write the failing test**
@@ -847,12 +967,22 @@ it("resolves an external watchlist entry to its clone path", async () => {
   const dir = mkdtempSync(join(tmpdir(), "acmd-"));
   const c = cfg(dir); // stateDir = dir
   // write a watchlist with an external entry
-  writeWatchlist(watchlistPath(c), [{ nwo: "up/stream", path: join(dir, "clone"), external: true }]);
+  writeWatchlist(watchlistPath(c), [
+    { nwo: "up/stream", path: join(dir, "clone"), external: true },
+  ]);
   let submitted = "";
-  const code = await runAssessCommand(c, "up/stream", { autoPlan: false }, {
-    printFn: () => {},
-    submitFn: ((_c, content) => { submitted = content; return "/dst"; }) as never,
-  });
+  const code = await runAssessCommand(
+    c,
+    "up/stream",
+    { autoPlan: false },
+    {
+      printFn: () => {},
+      submitFn: ((_c, content) => {
+        submitted = content;
+        return "/dst";
+      }) as never,
+    },
+  );
   expect(code).toBe(0);
   expect(submitted).toContain(JSON.stringify(join(dir, "clone")));
 });
@@ -909,11 +1039,13 @@ git commit -m "feat(assess): allow external watchlist repos as assess targets"
 ### Task 7: `junco assess review` subcommand
 
 **Files:**
+
 - Modify: `src/assessCmd.ts` (add `runAssessReviewCommand`)
 - Modify: `src/cli.ts:397-406` (route `assess review`), `src/cli.ts:95` (usage)
 - Test: `tests/assessCmd.test.ts`
 
 **Interfaces:**
+
 - Consumes: `listPending`, `readPending` (Task 1).
 - Produces: `runAssessReviewCommand(cfg, id: string | undefined, deps?): Promise<number>` — no id → list batches (`id · nwo · N findings · age`); with id → print each finding's fingerprint, severity, title.
 
@@ -924,12 +1056,28 @@ it("assess review lists pending batches and shows one", async () => {
   const dir = mkdtempSync(join(tmpdir(), "arv-"));
   const c = cfg(dir);
   writePending(c, {
-    id: "assess-x-1", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x",
+    id: "assess-x-1",
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
     createdAt: "2026-07-09T00:00:00.000Z",
-    findings: [{ fingerprint: "f1", kind: "code", severity: "high", ruleId: "R", title: "Bug", description: "", references: [] }],
+    findings: [
+      {
+        fingerprint: "f1",
+        kind: "code",
+        severity: "high",
+        ruleId: "R",
+        title: "Bug",
+        description: "",
+        references: [],
+      },
+    ],
   });
   let out = "";
-  const print = (s: string) => { out += s; };
+  const print = (s: string) => {
+    out += s;
+  };
   expect(await runAssessReviewCommand(c, undefined, { printFn: print })).toBe(0);
   expect(out).toContain("assess-x-1");
   expect(out).toContain("o/r");
@@ -988,7 +1136,12 @@ export async function runAssessReviewCommand(
     print(`  ${f.fingerprint}  [${f.severity}]  ${f.title}\n`);
   }
   print(`\nfile all: junco assess file ${batch.id} --all\n`);
-  print(`file some: junco assess file ${batch.id} --only ${batch.findings.map((f) => f.fingerprint).slice(0, 2).join(",")}\n`);
+  print(
+    `file some: junco assess file ${batch.id} --only ${batch.findings
+      .map((f) => f.fingerprint)
+      .slice(0, 2)
+      .join(",")}\n`,
+  );
   return 0;
 }
 ```
@@ -1005,11 +1158,17 @@ if (subcommand === "assess") {
   }
   // (file branch added in Task 8)
   const { runAssessCommand } = await import("./assessCmd.js");
-  return runAssessCommand(cfg, positionals[1], { autoPlan: values["auto-plan"] === true }, { printFn });
+  return runAssessCommand(
+    cfg,
+    positionals[1],
+    { autoPlan: values["auto-plan"] === true },
+    { printFn },
+  );
 }
 ```
 
 Update the usage line at `src/cli.ts:95`:
+
 ```
   assess <path|owner/repo> [--auto-plan]  audit a repo; findings await review (junco assess review)
   assess review [<id>]                    list pending assess reviews, or show one
@@ -1032,11 +1191,13 @@ git commit -m "feat(assess): junco assess review — list/show pending findings"
 ### Task 8: `junco assess file` subcommand
 
 **Files:**
+
 - Modify: `src/assessCmd.ts` (add `runAssessFileCommand`)
 - Modify: `src/cli.ts` (route `assess file`; add `only` parseArgs option; usage)
 - Test: `tests/assessCmd.test.ts`
 
 **Interfaces:**
+
 - Consumes: `readPending` (Task 1), `fileFindings` (Task 3).
 - Produces: `runAssessFileCommand(cfg, id, opts: { all: boolean; only: string | undefined }, deps?): Promise<number>` — requires `all` or `only`; maps to a `Set<fingerprint>`; calls `fileFindings`; prints counts + URLs.
 
@@ -1047,27 +1208,62 @@ it("assess file requires a selection and files the chosen findings", async () =>
   const dir = mkdtempSync(join(tmpdir(), "afc-"));
   const c = cfg(dir);
   writePending(c, {
-    id: "assess-x-1", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x",
+    id: "assess-x-1",
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
     createdAt: "2026-07-09T00:00:00.000Z",
     findings: [
-      { fingerprint: "f1", kind: "code", severity: "high", ruleId: "R", title: "One", description: "", references: [] },
-      { fingerprint: "f2", kind: "code", severity: "low", ruleId: "R", title: "Two", description: "", references: [] },
+      {
+        fingerprint: "f1",
+        kind: "code",
+        severity: "high",
+        ruleId: "R",
+        title: "One",
+        description: "",
+        references: [],
+      },
+      {
+        fingerprint: "f2",
+        kind: "code",
+        severity: "low",
+        ruleId: "R",
+        title: "Two",
+        description: "",
+        references: [],
+      },
     ],
   });
   let out = "";
-  const print = (s: string) => { out += s; };
+  const print = (s: string) => {
+    out += s;
+  };
 
   // no selection → usage error, files nothing
-  expect(await runAssessFileCommand(c, "assess-x-1", { all: false, only: undefined }, { printFn: print })).toBe(2);
+  expect(
+    await runAssessFileCommand(
+      c,
+      "assess-x-1",
+      { all: false, only: undefined },
+      { printFn: print },
+    ),
+  ).toBe(2);
 
   const ghFn = (async (_c: unknown, args: string[]) => {
     if (args[1] === "list") return { stdout: "[]", stderr: "", code: 0 };
-    if (args[1] === "create") return { stdout: "https://github.com/o/r/issues/1\n", stderr: "", code: 0 };
+    if (args[1] === "create")
+      return { stdout: "https://github.com/o/r/issues/1\n", stderr: "", code: 0 };
     return { stdout: "", stderr: "", code: 0 };
   }) as never;
 
   out = "";
-  const code = await runAssessFileCommand(c, "assess-x-1", { all: false, only: "f1" }, { printFn: print, fileDeps: { ghFn } });
+  const code = await runAssessFileCommand(
+    c,
+    "assess-x-1",
+    { all: false, only: "f1" },
+    { printFn: print, fileDeps: { ghFn } },
+  );
   expect(code).toBe(0);
   expect(out).toContain("filed 1");
 });
@@ -1118,7 +1314,12 @@ export async function runAssessFileCommand(
   }
   const selected = opts.all
     ? new Set(batch.findings.map((f) => f.fingerprint))
-    : new Set((opts.only ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+    : new Set(
+        (opts.only ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
 
   const res = await fileFn(cfg, batch, selected, deps.fileDeps ?? {});
   print(
@@ -1133,17 +1334,19 @@ export async function runAssessFileCommand(
 In `src/cli.ts`: add `only: { type: "string" }` to the parseArgs `options` (near `all` on line 179), route the `file` sub, and add usage:
 
 ```ts
-  if (sub === "file") {
-    const { runAssessFileCommand } = await import("./assessCmd.js");
-    return runAssessFileCommand(
-      cfg,
-      positionals[2],
-      { all: values.all === true, only: values.only as string | undefined },
-      { printFn },
-    );
-  }
+if (sub === "file") {
+  const { runAssessFileCommand } = await import("./assessCmd.js");
+  return runAssessFileCommand(
+    cfg,
+    positionals[2],
+    { all: values.all === true, only: values.only as string | undefined },
+    { printFn },
+  );
+}
 ```
+
 Usage line:
+
 ```
   assess file <id> --all | --only <fp,...>  file reviewed findings as issues
 ```
@@ -1165,11 +1368,13 @@ git commit -m "feat(assess): junco assess file — confirm and file reviewed fin
 ### Task 9: surface pending-review count in status + doctor
 
 **Files:**
+
 - Modify: `src/statusCmd.ts:94-98`
 - Modify: `src/doctor.ts:201-206` (mirror the outbox backlog check)
 - Test: `tests/statusCmd.test.ts` (if present; else assert via a focused unit test)
 
 **Interfaces:**
+
 - Consumes: `pendingCount` (Task 1).
 
 - [ ] **Step 1: Write the failing test**
@@ -1180,9 +1385,21 @@ In `tests/statusCmd.test.ts` (match its existing harness; if the file does not e
 it("status shows the pending assess-review count", async () => {
   const dir = mkdtempSync(join(tmpdir(), "st-"));
   const c = cfg(dir);
-  writePending(c, { id: "a", nwo: "o/r", external: true, autoPlan: false, repoPath: "/x", createdAt: "2026-07-09T00:00:00.000Z", findings: [] });
+  writePending(c, {
+    id: "a",
+    nwo: "o/r",
+    external: true,
+    autoPlan: false,
+    repoPath: "/x",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    findings: [],
+  });
   let out = "";
-  await runStatusCommand(c, { printFn: (s: string) => { out += s; } /* + any required stubs */ });
+  await runStatusCommand(c, {
+    printFn: (s: string) => {
+      out += s;
+    } /* + any required stubs */,
+  });
   expect(out).toContain("assess review");
   expect(out).toMatch(/1 pending/);
 });
@@ -1200,10 +1417,10 @@ In `src/statusCmd.ts`, add after the outbox block (line ~98):
 ```ts
 import { pendingCount } from "./assessReview.js";
 // ...
-  const reviews = pendingCount(cfg);
-  if (reviews > 0) {
-    print(`assess review: ${reviews} pending (junco assess review)\n`);
-  }
+const reviews = pendingCount(cfg);
+if (reviews > 0) {
+  print(`assess review: ${reviews} pending (junco assess review)\n`);
+}
 ```
 
 In `src/doctor.ts`, mirror the outbox backlog finding (after the `outboxDepth` block, ~line 205):
@@ -1211,11 +1428,15 @@ In `src/doctor.ts`, mirror the outbox backlog finding (after the `outboxDepth` b
 ```ts
 import { pendingCount } from "./assessReview.js";
 // ...
-    const reviews = pendingCount(cfg);
-    if (reviews > 0) {
-      findings.push({ level: "info", message: `${reviews} assess finding(s) awaiting review (junco assess review)` });
-    }
+const reviews = pendingCount(cfg);
+if (reviews > 0) {
+  findings.push({
+    level: "info",
+    message: `${reviews} assess finding(s) awaiting review (junco assess review)`,
+  });
+}
 ```
+
 (Match `doctor.ts`'s actual finding-push shape — use its existing `level`/`message` object form.)
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1235,6 +1456,7 @@ git commit -m "feat(assess): surface pending review count in status and doctor"
 ### Task 10: documentation
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-07-08-external-repo-dispatch-design.md` (invariant pointer)
 - Modify: `README.md` (assess section)
 - Modify: `skills/junco-dispatch/SKILL.md` (or the packaged skill's assess-mode text — locate with grep)
