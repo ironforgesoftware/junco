@@ -22,6 +22,29 @@ with useful live metrics, and highlight bot-authored issues/PRs.
 - New header chips are driven from `localCheap.queue.stats` (`QueueStats`) —
   no new fetches, one source of truth. Extending `ghClient.HealthInfo` for
   stats was rejected (duplicate parse of the same /health body, no ledger).
+- Component richness (user-directed expansion): build an in-house primitives
+  kit and adopt richer UI elements across the dashboard (§6–§7).
+
+## Research: modern TUI patterns → junco
+
+Surveyed: lazygit/btop (persistent multi-panel, fixed geometry), k9s
+(drill-down + breadcrumb orientation, tables with header rows and status
+pills), gh-dash (columnar PR/issue tables, state badges), btop/glances (stat
+cards, gauges, sparklines), Textual's widget set (DataTable, Sparkline,
+ProgressBar, Rule, scrollable viewports with visible scrollbars) and the Ink
+ecosystem (`@inkjs/ui`: Spinner/ProgressBar/Badge/StatusMessage/Alert +
+input kit).
+
+Mapping onto junco: fixed geometry → §3 reserved slot; breadcrumbs → §2
+header trail; tables + pills → §§3–4; stat cards/sparklines/gauges →
+ActivityCard + DaemonSection (§§3, 7); visible scrollbars → §6 Scrollbar;
+dialog buttons → §7 confirm upgrade.
+
+**Build vs buy:** primitives are built in-house rather than adopting
+`@inkjs/ui`. Reasons: junco already owns a Spinner (precedent), the theme
+system (`theme.ts`, NO_COLOR discipline, chalk downsampling) would fight
+`@inkjs/ui`'s context-based theming, deps are exact-pinned and audited, and
+the needed surface is ~7 small pure components. No new dependencies.
 
 ## 1. Declutter
 
@@ -143,10 +166,11 @@ The header row costs one content row per list; windowing math
 
 ## 5. Bot-authored highlighting
 
-- `DashIssue` and `DashPr` gain `author: string | null`; `listIssues`/
-  `listPrs` add `author` to their `--json` field lists (`.author.login`).
-  Cached entries written before this change parse to `null` → no highlight
-  until the next fresh fetch. Additive — no cache-format break.
+- `DashPr` already carries `author` (no fetch change). `DashIssue` gains
+  `author: string | null`; `listIssues` adds `author` to its `--json` field
+  list (`.author.login`). Cached issue entries written before this change
+  parse to `null` → no highlight until the next fresh fetch. Additive — no
+  cache-format break.
 - Bot login resolution: when `cfg.botAccount.enabled`, resolve once, lazily,
   via `gh api user --jq .login` with `GH_CONFIG_DIR` pointed at
   `cfg.botAccount.configDir` — the doctor's existing probe shape, extracted
@@ -160,23 +184,89 @@ The header row costs one content row per list; windowing math
   variants). HelpModal legend gains one line: accent `#` = opened by the
   junco bot.
 
-## 6. Tests & docs
+## 6. Component kit (`src/tui/components/primitives/`)
+
+Each primitive is a pure, themed component with an exported pure
+string/segment builder (the `chipSegments` pattern) so tests assert structure
+without ANSI. NO_COLOR degradation noted per primitive.
+
+- **`Badge`** — state pill: `label` on a semantic `backgroundColor` with
+  black text; `padTo` prop pads the label so pill columns align. NO_COLOR →
+  bare label text (chalk strips bg), same width.
+- **`Gauge`** — `▰▰▰▱▱▱` fill bar: `value/max` → filled cells over `width`,
+  optional trailing label (`23m/45m`). `value === null` → all-track dim bar.
+  Glyph pair carries meaning colorlessly.
+- **`Sparkline`** — wraps the existing `fmtSpark` bars with an optional
+  accent color; dim when all-zero.
+- **`Rule`** — titled divider `── title ─────────` (bold title, dim line);
+  replaces the rail's bare `─…` separator and sections detail panels.
+- **`Scrollbar`** — right-edge vertical track (`│` dim) with a proportional
+  thumb (`█`); props `{offset, viewport, total, height}`. Hidden when
+  `total <= viewport`.
+- **`StatRow`** — aligned key/value line for detail panels: dim label column
+  (fixed width per panel), bold value, optional dim hint suffix.
+- **`Button`** — `[ y confirm ]` chip: bracketed label with the key in
+  accent, `tone: "danger" | "neutral" | "primary"` background; clickable via
+  `ClickableBox`. NO_COLOR → brackets + bold key.
+- **`TableHeader`** — the §4 column-header strip (lives in primitives/).
+
+## 7. Component adoption
+
+- **Lists (§3/§4)**: state cells become `Badge` pills (fixed `padTo` from the
+  meta tables); both lists gain `TableHeader` strips.
+- **QueueView**: group headers (`running`/`waiting`/`recent`) restyle as
+  header strips; each running row gains a time-budget `Gauge` (elapsed since
+  `startedAt` vs the configured task timeout) under its progress line — the
+  determinate data /health actually has. Phase-index progress needs a daemon
+  change → out of scope, noted as future.
+- **DaemonSection**: restyled as a `StatRow` grid (state, uptime, tasks,
+  tokens, cost, endpoint, `refreshed` line from §1) with `Rule` section
+  dividers, the gate as a `Badge`, and — when a daily budget is configured —
+  a spend `Gauge` (`todayUsd/dailyBudgetUsd`). (§2's "no spend chip" applies
+  to the top bar only; the daemon panel is its detail home.)
+- **RepoDetail**: section headers restyle as `Rule`s; key/value lines adopt
+  `StatRow`.
+- **Scrollbar adoption**: Preview, PrPreview, CommandOutput, LogView
+  (overlay variant), DaemonSection, RepoDetail — every pane that already
+  tracks `scroll`/`onScrollMax`.
+- **Confirm modal**: the `y/enter confirm · n/esc cancel` hint line becomes
+  two `Button`s (`[ y confirm ]` danger-toned when `confirm.danger`,
+  `[ esc cancel ]` neutral), mouse-clickable, keyboard behavior unchanged.
+- **Header (§2 addendum)**: the right-side pulse groups its chips with dim
+  `│` separators — warnings │ record (`24h`, `last`) │ live (`▸ run`,
+  `eta`) │ system (`daemon`, `◐⏳`, `⇡`). The left cell becomes a breadcrumb
+  trail (`crumbs: string[]` joined with dim `▸`): main view `acme/reef`;
+  issue detail `acme/reef ▸ #124`; PR detail `acme/reef ▸ PR #86`; system
+  body `system ▸ queue`; full-screen views their name (`pull requests`,
+  `review`). Replaces the bare `repoNwo` prop.
+
+## 8. Tests & docs
 
 - Retarget existing assertions on `1 repos` / `2 issues` / `3 PRs` /
   `p pull requests` titles and the digit hotkeys.
-- New: ActivityCard rendering (bars/degenerate stats/null), reserved-slot
-  presence across body kinds (issues/section/repoDetail select → middle pane
-  width constant), header-strip segments (structural helper tests — frames
-  strip ANSI), fixed badge/checks column widths, bot-highlight cell color
-  (structural), daemon-panel `refreshed` line, header chip set (24h/run/eta/
-  gate/restart-pending visibility rules), removed digit hotkeys no-op.
+- Every primitive ships with unit tests over its pure builder (Badge padding,
+  Gauge fill math incl. null/zero/overflow, Sparkline scaling, Scrollbar
+  thumb geometry, Button segments, Rule width, TableHeader cells).
+- New behavior tests: ActivityCard rendering (bars/degenerate stats/null),
+  reserved-slot presence across body kinds (issues/section/repoDetail select
+  → middle pane width constant), fixed badge/checks column widths,
+  bot-highlight cell color (structural), daemon-panel `refreshed` line +
+  StatRow grid, header chip set and grouping (24h/run/eta/gate/
+  restart-pending visibility rules), breadcrumb composition per view,
+  confirm-modal buttons (click + keyboard parity), QueueView running-row
+  gauge, removed digit hotkeys no-op.
 - Docs: `docs/dashboard.md` (top-bar chip table, third-column behavior,
-  headers, bot highlight), `ARCHITECTURE.md` tui row if the component list
-  changes, CHANGELOG entry under the pending 0.9.0 block.
+  headers, primitives glossary, bot highlight), `ARCHITECTURE.md` tui row if
+  the component list changes, CHANGELOG entry under the pending 0.9.0 block.
 
 ## Out of scope
 
-- Spend/budget chip (explicitly declined).
-- QueueView columnization (narrative view; styling only).
-- Any daemon/health endpoint changes — the TUI consumes existing fields only.
-- Detail views (Preview/PrPreview) styling.
+- Spend/budget chip in the top bar (explicitly declined; daemon panel gauge
+  is in, §8).
+- QueueView columnization (narrative view; header styling + gauge only).
+- Any daemon/health endpoint changes — the TUI consumes existing fields
+  only. Future: a phase-index field in `currentProgress` would upgrade the
+  running-row gauge from time-budget to phase progress.
+- Detail views (Preview/PrPreview) content redesign (they gain scrollbars
+  only).
+- New dependencies (`@inkjs/ui` evaluated and declined — see Research).
