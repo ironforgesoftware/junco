@@ -66,6 +66,7 @@ import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
 import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
+import { Button } from "./components/primitives/Button.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
 import { useLogTail } from "./useLogTail.js";
@@ -2713,7 +2714,19 @@ export function App(props: AppProps): React.JSX.Element {
     <Modal title={confirm.title} minWidth={54}>
       <Box flexDirection="column" gap={1}>
         <Text color={confirm.danger ? theme.error : undefined}>{confirm.body}</Text>
-        <Text dimColor>y/enter confirm · n/esc cancel</Text>
+        <Box gap={2}>
+          <Button
+            keyHint="y"
+            label="confirm"
+            tone={confirm.danger ? "danger" : "primary"}
+            onPress={() => {
+              const fn = confirm.onConfirm;
+              setConfirm(null);
+              fn();
+            }}
+          />
+          <Button keyHint="esc" label="cancel" tone="neutral" onPress={() => setConfirm(null)} />
+        </Box>
       </Box>
     </Modal>
   ) : view === "help" ? (
