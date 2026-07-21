@@ -162,3 +162,41 @@ describe("readTaskHistory", () => {
     expect(out.map((r) => r.id)).toEqual(["x"]);
   });
 });
+
+describe("coverage additions (#236)", () => {
+  it("monthsBetween Dec→Jan rollover: a window straddling the year boundary reads both shards", () => {
+    const files: Record<string, string> = {
+      [join("/data", "history", "tasks-2026-12.jsonl")]:
+        JSON.stringify(rec({ at: "2026-12-20T10:00:00.000Z", id: "december" })) + "\n",
+      [join("/data", "history", "tasks-2027-01.jsonl")]:
+        JSON.stringify(rec({ at: "2027-01-05T10:00:00.000Z", id: "january" })) + "\n",
+    };
+    const read = makeTaskHistoryReader(cfg, {
+      readFileFn: (p: string) => {
+        if (!(p in files)) throw new Error("ENOENT");
+        return files[p];
+      },
+      statFn: (p: string) => {
+        if (!(p in files)) throw new Error("ENOENT");
+        return { mtimeMs: 1 };
+      },
+      nowFn: () => new Date("2027-01-10T12:00:00Z"),
+    });
+    // since mid-December, now mid-January: the m===12 → m=0,y++ arm runs and
+    // BOTH shards are enumerated (oldest first).
+    expect(read(new Date("2026-12-15T00:00:00Z")).map((r) => r.id)).toEqual([
+      "december",
+      "january",
+    ]);
+  });
+
+  it("real-fs round-trip: appendTaskRecord's on-disk format parses back field-for-field", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const realCfg = { dataDir: mkdtempSync(join(tmpdir(), "junco-hist-")) } as unknown as Config;
+    const record = rec({ id: "round-trip", nwo: "acme/api", issue: 7, prUrl: "https://x/pr/1" });
+    appendTaskRecord(realCfg, record); // real fs — no deps injected
+    const back = readTaskHistory(realCfg, { since: new Date("2026-07-01T00:00:00Z") });
+    expect(back).toEqual([record]);
+  });
+});

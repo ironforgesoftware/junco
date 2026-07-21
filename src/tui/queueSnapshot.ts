@@ -85,10 +85,17 @@ export interface QueueSnapshotDeps {
   statFn?: (p: string) => { mtimeMs: number };
   fetchFn?: typeof fetch;
   nowFn?: () => Date;
+}
+
+/** Per-invocation options for the snapshot function a factory returns. */
+export interface QueueSnapshotOpts {
   /** Pre-fetched /health, threaded in by makeLocalCheapFn so the queue layer
-   * issues no second request (one consistent daemonUp per cheap tick). Absent
-   * (undefined) keeps the self-fetch path; present → a HealthBody means daemon
-   * up (use its metrics); null means daemon down → processing/ fallback. */
+   * issues no second request (one consistent daemonUp per cheap tick). A
+   * PER-INVOCATION value (not a factory dep) so the factory — and the
+   * task-history shard memo living in its closure — can be constructed once
+   * and held across ticks (#235). Absent (undefined) keeps the self-fetch
+   * path; present → a HealthBody means daemon up (use its metrics); null
+   * means daemon down → processing/ fallback. */
   healthOverride?: { body: HealthBody | null };
 }
 
@@ -111,7 +118,7 @@ interface HealthProgress {
 export function makeQueueSnapshotFn(
   cfg: Config,
   deps: QueueSnapshotDeps = {},
-): () => Promise<QueueSnapshot> {
+): (opts?: QueueSnapshotOpts) => Promise<QueueSnapshot> {
   const readdirFn = deps.readdirFn ?? readdirSync;
   const readFileFn = deps.readFileFn ?? ((p: string): string => readFileSync(p, "utf8"));
   const statFn = deps.statFn ?? statSync;
@@ -157,7 +164,7 @@ export function makeQueueSnapshotFn(
     return typeof r === "string" && r !== "" ? r : null;
   };
 
-  return async (): Promise<QueueSnapshot> => {
+  return async (opts: QueueSnapshotOpts = {}): Promise<QueueSnapshot> => {
     const base: QueueSnapshot = {
       daemonUp: false,
       maxConcurrent: cfg.maxConcurrent,
@@ -242,8 +249,8 @@ export function makeQueueSnapshotFn(
       // fetchHealthBody (which owns the timeout/abort and the healthEnabled gate).
       // A null body means the daemon is down → the processing/ fallback below.
       const body =
-        deps.healthOverride !== undefined
-          ? deps.healthOverride.body
+        opts.healthOverride !== undefined
+          ? opts.healthOverride.body
           : await fetchHealthBody(cfg, { fetchFn });
       if (body !== null) {
         daemonUp = true;

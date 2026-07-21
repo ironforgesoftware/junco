@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeLocalCheapFn, type HealthBody } from "../src/tui/localSnapshot.js";
@@ -134,5 +134,46 @@ describe("makeLocalCheapFn", () => {
     expect(cheap.daemon.up).toBe(false);
     expect(cheap.queue.daemonUp).toBe(false);
     expect(cheap.error).toBeNull();
+  });
+});
+
+describe("history-shard amortization across cheap ticks (#235)", () => {
+  it("parses the current shard ONCE across two ticks (factory + memo are hoisted)", async () => {
+    const cfg = makeCfg(mkdtempSync(join(tmpdir(), "junco-cheap-hist-")));
+    const NOW = new Date("2026-07-20T12:00:00Z");
+    const histDir = join(cfg.dataDir, "history");
+    mkdirSync(histDir, { recursive: true });
+    writeFileSync(
+      join(histDir, "tasks-2026-07.jsonl"),
+      JSON.stringify({
+        v: 1,
+        at: "2026-07-20T11:00:00Z",
+        id: "t1",
+        kind: "pr",
+        status: "completed",
+        durationSeconds: 60,
+        tokensIn: 1,
+        tokensOut: 1,
+        costUsd: 0,
+        retryCount: 0,
+      }) + "\n",
+    );
+    const shardReads: string[] = [];
+    const readFileFn = (p: string): string => {
+      if (p.includes("tasks-2026-07")) shardReads.push(p);
+      return readFileSync(p, "utf8");
+    };
+    const fn = makeLocalCheapFn(cfg, {
+      fetchFn: recordingFetch([]),
+      nowFn: () => NOW,
+      readFileFn,
+    });
+    const first = await fn();
+    expect(first.queue.stats?.window24h.done).toBe(1); // the shard feeds stats
+    await fn();
+    // The queue-snapshot factory (and the per-shard mtime memo living in its
+    // closure) must survive across ticks — a fresh factory per tick re-parses
+    // the shard every ~3s for the life of the dashboard (#235).
+    expect(shardReads).toHaveLength(1);
   });
 });

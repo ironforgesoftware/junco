@@ -536,6 +536,18 @@ export function makeLocalCheapFn(
   // at construction, so per-call deps injection elsewhere stays isolated.
   const cachedReachable =
     deps.reachableFn ?? makeCachedProbe(() => endpointReachable(cfg, { fetchFn: deps.fetchFn }));
+  // Constructed ONCE per factory, like cachedReachable above: the queue-
+  // snapshot factory carries the task-history per-shard memo in its closure
+  // (queueSnapshot.ts historyReader) — rebuilding it per tick re-parses the
+  // current shard every ~3s for the life of the dashboard (#235). The
+  // per-tick /health body is threaded per-INVOCATION via QueueSnapshotOpts,
+  // so hoisting costs no second fetch and daemonUp stays consistent.
+  const queueSnapshotFn = makeQueueSnapshotFn(cfg, {
+    readdirFn: deps.readdirFn,
+    readFileFn: deps.readFileFn,
+    statFn: deps.statFn,
+    nowFn: deps.nowFn,
+  });
   return async (opts: { section?: LocalSection } = {}): Promise<LocalCheap> => {
     const base: LocalCheap = {
       queue: emptyQueue(cfg),
@@ -547,13 +559,7 @@ export function makeLocalCheapFn(
     try {
       const healthBody = await fetchHealthBody(cfg, deps);
 
-      const queue = await makeQueueSnapshotFn(cfg, {
-        readdirFn: deps.readdirFn,
-        readFileFn: deps.readFileFn,
-        statFn: deps.statFn,
-        nowFn: deps.nowFn,
-        healthOverride: { body: healthBody },
-      })();
+      const queue = await queueSnapshotFn({ healthOverride: { body: healthBody } });
 
       let counts: LocalCheap["counts"] = null;
       if (opts.section === "queue") {
