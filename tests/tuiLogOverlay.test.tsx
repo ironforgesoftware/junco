@@ -247,3 +247,16 @@ describe("LOCAL full-screen log overlay", () => {
     await fireUntil(r.stdin, press, () => frame(r).includes("following"));
   });
 });
+
+describe("overlay hint dedup (#238)", () => {
+  it("the key hints render ONCE — the Chrome chip row, not a second LogView footer", async () => {
+    const deps = fakeFs(logLine({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "seed-x" }));
+    const r = await openToLogs(deps, "seed-x");
+    await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
+    const f = frame(r);
+    // One source of truth for the overlay's key hints: the footer chip row
+    // (which carries the clickable esc). LogView's internal duplicate is gone.
+    expect(f.split("l level").length - 1).toBe(1);
+    expect(f.split("esc close").length - 1).toBe(1);
+  });
+});

@@ -88,3 +88,19 @@ describe("logs system row", () => {
     expect(sectionBadge("logs", null, null)).toBe("");
   });
 });
+
+describe("daemon liveness in the logs header (#239)", () => {
+  it("a down daemon marks the logs body — old lines never read as live", async () => {
+    const fs = spyFakeFs(
+      logLine({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "stale-l" }),
+    );
+    const r = renderApp({
+      localCheapFn: async () => ({ ...CHEAP, daemon: { ...CHEAP.daemon, up: false } }),
+      logReaderDeps: fs.deps,
+      logsPollMs: 15,
+    });
+    await until(() => (r.lastFrame() ?? "").includes("system"));
+    await fireUntil(r.stdin, "G", () => (r.lastFrame() ?? "").includes("stale-l"));
+    await until(() => (r.lastFrame() ?? "").includes("daemon ○ — showing last logs"));
+  });
+});
