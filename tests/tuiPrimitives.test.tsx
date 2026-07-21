@@ -5,6 +5,8 @@ import { Box, Text } from "ink";
 import { Badge, badgeText } from "../src/tui/components/primitives/Badge.js";
 import { Rule, ruleText } from "../src/tui/components/primitives/Rule.js";
 import { StatRow, statRowText } from "../src/tui/components/primitives/StatRow.js";
+import { Gauge, gaugeText } from "../src/tui/components/primitives/Gauge.js";
+import { Sparkline } from "../src/tui/components/primitives/Sparkline.js";
 
 describe("badgeText", () => {
   it("wraps the label in one pad space each side", () => {
@@ -59,5 +61,38 @@ describe("StatRow", () => {
       <StatRow label="state" value="up 2h" labelWidth={8} hint="pid 42" />,
     );
     expect(lastFrame()).toBe("state   up 2h pid 42");
+  });
+});
+
+describe("gaugeText", () => {
+  it("fills proportionally", () => {
+    expect(gaugeText(5, 10, 10)).toBe("▰▰▰▰▰▱▱▱▱▱");
+  });
+  it("clamps overflow to full", () => {
+    expect(gaugeText(99, 10, 8)).toBe("▰▰▰▰▰▰▰▰");
+  });
+  it("null value renders all track", () => {
+    expect(gaugeText(null, 10, 6)).toBe("▱▱▱▱▱▱");
+  });
+  it("zero/negative max renders all track", () => {
+    expect(gaugeText(3, 0, 6)).toBe("▱▱▱▱▱▱");
+  });
+  it("negative width renders empty", () => {
+    expect(gaugeText(5, 10, -3)).toBe("");
+    expect(gaugeText(null, 10, -3)).toBe("");
+  });
+  it("negative max renders all track", () => {
+    expect(gaugeText(3, -5, 6)).toBe("▱▱▱▱▱▱");
+  });
+  it("Gauge appends the label after the bar", () => {
+    const { lastFrame } = render(<Gauge value={5} max={10} width={4} label="23m / 45m" />);
+    expect(lastFrame()).toBe("▰▰▱▱ 23m / 45m");
+  });
+});
+
+describe("Sparkline", () => {
+  it("renders fmtSpark bars", () => {
+    const { lastFrame } = render(<Sparkline values={[0, 1, 2, 4]} />);
+    expect(lastFrame()).toBe("▁▃▅█");
   });
 });
