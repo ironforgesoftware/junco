@@ -40,16 +40,19 @@ describe("mouse row/wheel on the issues surface", () => {
     await fireUntil(r.stdin, press(x, y), () => (r.lastFrame() ?? "").includes("preview · #2"));
   });
 
-  it("wheel over the rail moves the repo selection", async () => {
+  it("wheel over the rail moves the selection down the row union", async () => {
     const r = renderApp(); // fixture seeds ≥2 repos
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
-    // wheelDown inside the rail band; the mover clamps at the last repo, so
-    // re-sending is idempotent. The selected repo's nwo also shows in the
-    // header, so anchor on the rail row that carries BOTH the nwo AND the `▌`
-    // selection bar (the header never renders the bar).
-    await fireUntil(r.stdin, wheelDown(2, 4), () =>
-      (r.lastFrame() ?? "").split("\n").some((l) => l.includes("beta/two") && l.includes("▌")),
-    );
+    // wheelDown inside the rail band. The unified rail wheels over the WHOLE
+    // row union (repos then system rows), so a re-sent wheel keeps walking —
+    // the cond must be "moved OFF the first repo", which stays true however
+    // far the retries walk (unlike anchoring on one specific row, which a
+    // slow-runner retry walks straight past — the pre-unified flake).
+    await fireUntil(r.stdin, wheelDown(2, 4), () => {
+      const lines = (r.lastFrame() ?? "").split("\n");
+      const onFirstRepo = lines.some((l) => l.includes("▌") && l.includes("acme/api"));
+      return !onFirstRepo && lines.some((l) => l.includes("▌"));
+    });
   });
 });
 
