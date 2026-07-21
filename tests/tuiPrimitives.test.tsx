@@ -99,6 +99,7 @@ describe("Sparkline", () => {
 
 import { Scrollbar, scrollbarCells } from "../src/tui/components/primitives/Scrollbar.js";
 import { Button } from "../src/tui/components/primitives/Button.js";
+import { TableHeader, headerCell } from "../src/tui/components/primitives/TableHeader.js";
 
 describe("scrollbarCells", () => {
   it("empty when content fits", () => {
@@ -133,5 +134,30 @@ describe("Button", () => {
       </Box>,
     );
     expect(lastFrame()).toBe(" y confirm |");
+  });
+});
+
+describe("TableHeader", () => {
+  it("headerCell pads left/right per align", () => {
+    expect(headerCell({ label: "#", width: 5, align: "right" })).toBe("    #");
+    expect(headerCell({ label: "age", width: 5 })).toBe("age  ");
+    expect(headerCell({ label: "title", width: "flex" })).toBe("title");
+  });
+  it("renders every label in one row", () => {
+    const { lastFrame } = render(
+      <TableHeader
+        columns={[
+          { label: "", width: 2 },
+          { label: "#", width: 5, align: "right" },
+          { label: "title", width: "flex" },
+          { label: "age", width: 4, align: "right" },
+        ]}
+      />,
+    );
+    const f = lastFrame() ?? "";
+    expect(f).toContain("#");
+    expect(f).toContain("title");
+    expect(f).toContain("age");
+    expect(f.split("\n")).toHaveLength(1);
   });
 });
