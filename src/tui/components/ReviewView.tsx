@@ -165,18 +165,30 @@ export function ReviewView({
               gap={1}
               onPress={onFindingPress ? () => onFindingPress(idx) : undefined}
             >
-              <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
-              <Text>{on ? "[x]" : rec ? " ✓ " : "[ ]"}</Text>
-              <Text color={SEV_COLOR[f.severity]}>{f.severity.padEnd(8)}</Text>
+              {/* Fixed cells pin (flexShrink 0) so the flexing title is the ONLY
+                  thing that yields — without this a long title shrinks the
+                  trailing accounting below content width and it WRAPS onto a
+                  second visual line (#233; Rail's assess-column precedent). */}
+              <Box flexShrink={0}>
+                <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text>{on ? "[x]" : rec ? " ✓ " : "[ ]"}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text color={SEV_COLOR[f.severity]}>{f.severity.padEnd(8)}</Text>
+              </Box>
               <Box flexGrow={1} minWidth={0}>
                 <Text wrap="truncate" dimColor={!sel}>
                   {f.title}
                 </Text>
               </Box>
               {rec && (
-                <Text
-                  dimColor
-                >{`${rec.how === "deduped" ? "dup" : rec.how} ${fmtAge(rec.at, now)}`}</Text>
+                <Box flexShrink={0}>
+                  <Text
+                    dimColor
+                  >{`${rec.how === "deduped" ? "dup" : rec.how} ${fmtAge(rec.at, now)}`}</Text>
+                </Box>
               )}
             </ClickableBox>
           );
@@ -216,19 +228,29 @@ export function ReviewView({
               gap={1}
               onPress={onRowPress ? () => onRowPress(idx) : undefined}
             >
-              <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
+              {/* Same pin discipline as the checklist rows (#233): only the
+                  nwo flexes; age/ownership/count never shrink or wrap. */}
+              <Box flexShrink={0}>
+                <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
+              </Box>
               <Box flexGrow={1} minWidth={0}>
                 <Text wrap="truncate" dimColor={!sel}>
                   {b.nwo}
                 </Text>
               </Box>
-              <Text dimColor>{fmtAge(b.createdAt, now)}</Text>
-              <Text dimColor>{b.external ? "external" : "owned"}</Text>
-              {filedCount > 0 ? (
-                <Text color={theme.accent}>{`filed ${filedCount}/${b.findings.length}`}</Text>
-              ) : (
-                <Text color={theme.accent}>{`${b.findings.length}`}</Text>
-              )}
+              <Box flexShrink={0}>
+                <Text dimColor>{fmtAge(b.createdAt, now)}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text dimColor>{b.external ? "external" : "owned"}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                {filedCount > 0 ? (
+                  <Text color={theme.accent}>{`filed ${filedCount}/${b.findings.length}`}</Text>
+                ) : (
+                  <Text color={theme.accent}>{`${b.findings.length}`}</Text>
+                )}
+              </Box>
             </ClickableBox>
           );
         }
@@ -242,14 +264,21 @@ export function ReviewView({
             gap={1}
             onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
-            <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
-            <Text dimColor={!sel}>{`${d.nwo}#${d.issue}`}</Text>
+            {/* Same pin discipline (#233): the draft preview is the flexer. */}
+            <Box flexShrink={0}>
+              <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
+            </Box>
+            <Box flexShrink={0}>
+              <Text dimColor={!sel}>{`${d.nwo}#${d.issue}`}</Text>
+            </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate" dimColor={!sel}>
                 {firstDraftLine(d.draft)}
               </Text>
             </Box>
-            <Text dimColor>comment</Text>
+            <Box flexShrink={0}>
+              <Text dimColor>comment</Text>
+            </Box>
           </ClickableBox>
         );
       })}
