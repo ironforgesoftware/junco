@@ -128,8 +128,8 @@ describe("runDoctor", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).not.toMatch(/inference endpoint/i);
-    expect(lines.join("\n")).toMatch(/model — anthropic\/claude-x resolves via catalog/i);
+    expect(lines.join("")).not.toMatch(/inference endpoint/i);
+    expect(lines.join("")).toMatch(/model — anthropic\/claude-x resolves via catalog/i);
   });
 
   it("reports probe-disabled (not catalog-eligible) when worker.endpointProbe=never on a non-catalog model", async () => {
@@ -144,10 +144,10 @@ describe("runDoctor", () => {
       deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /inference endpoint.*probe disabled.*worker\.endpointProbe=never/i,
     );
-    expect(lines.join("\n")).not.toMatch(/catalog-eligible/i);
+    expect(lines.join("")).not.toMatch(/catalog-eligible/i);
   });
 
   it("does not report sandbox when disabled (default)", async () => {
@@ -484,7 +484,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(1);
-    expect(lines.join("\n")).toMatch(/✗ model — no catalog match for anthropic\/claude-x/);
+    expect(lines.join("")).toMatch(/✗ model — no catalog match for anthropic\/claude-x/);
   });
 
   it("key source: config literal", async () => {
@@ -500,7 +500,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ key source — config literal \(model\.apiKey\)/);
+    expect(lines.join("")).toMatch(/✓ key source — config literal \(model\.apiKey\)/);
   });
 
   it("key source: $VAR reference resolves", async () => {
@@ -516,7 +516,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /✓ key source — \$MY_ANTHROPIC_KEY \(resolved from the environment\)/,
     );
   });
@@ -534,10 +534,10 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ key source — ANTHROPIC_API_KEY present in the environment/);
+    expect(lines.join("")).toMatch(/✓ key source — ANTHROPIC_API_KEY present in the environment/);
     // apiKey is null → the auth check has nothing to send, so it notes that
     // instead of silently skipping.
-    expect(lines.join("\n")).toMatch(/⚠ auth — no key configured/);
+    expect(lines.join("")).toMatch(/⚠ auth — no key configured/);
   });
 
   it("key source: none — warns for a non-local provider with the generic env-var name", async () => {
@@ -553,7 +553,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /⚠ key source — no key configured — the SDK will typically look for ANTHROPIC_API_KEY-style env vars at request time/,
     );
   });
@@ -572,7 +572,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ auth — auth verified/);
+    expect(lines.join("")).toMatch(/✓ auth — auth verified/);
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.anthropic.com/v1/models");
@@ -638,7 +638,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(1);
-    expect(lines.join("\n")).toMatch(/✗ auth — auth rejected \(check the key\)/);
+    expect(lines.join("")).toMatch(/✗ auth — auth rejected \(check the key\)/);
   });
 
   it("auth check: 403 → fail (auth rejected)", async () => {
@@ -654,7 +654,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(1);
-    expect(lines.join("\n")).toMatch(/✗ auth — auth rejected \(check the key\)/);
+    expect(lines.join("")).toMatch(/✗ auth — auth rejected \(check the key\)/);
   });
 
   it("auth check: network error → warn (endpoint unreachable), does not fail doctor", async () => {
@@ -672,7 +672,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/⚠ auth — endpoint unreachable/);
+    expect(lines.join("")).toMatch(/⚠ auth — endpoint unreachable/);
   });
 
   it("auth check: unknown api family → skip with a note, no request sent", async () => {
@@ -689,7 +689,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /✓ auth — unknown api "mistral-conversations" — auth check skipped/,
     );
     expect(fetchFn).not.toHaveBeenCalled();
@@ -709,7 +709,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).not.toMatch(/auth —/);
+    expect(lines.join("")).not.toMatch(/auth —/);
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
@@ -724,7 +724,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).not.toMatch(/planner model/);
+    expect(lines.join("")).not.toMatch(/planner model/);
   });
 
   it("planner preflight: plannerModelId set → resolves ok, alongside an ordinary local primary model", async () => {
@@ -743,7 +743,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ planner model — openai\/gpt-4o resolves via catalog/);
+    expect(lines.join("")).toMatch(/✓ planner model — openai\/gpt-4o resolves via catalog/);
   });
 
   it("planner preflight: a miss warns (not fails) — ordinary tickets don't use it", async () => {
@@ -764,16 +764,14 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
-      /⚠ planner model — no catalog match for openai\/does-not-exist/,
-    );
+    expect(lines.join("")).toMatch(/⚠ planner model — no catalog match for openai\/does-not-exist/);
   });
 
   it("local config: byte-identical output — no hosted-preflight lines leak in (regression)", async () => {
     const lines: string[] = [];
     const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(code).toBe(0);
-    const out = lines.join("\n");
+    const out = lines.join("");
     expect(out).not.toMatch(/resolves via/);
     expect(out).not.toMatch(/key source/);
     expect(out).not.toMatch(/planner model/);
