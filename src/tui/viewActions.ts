@@ -135,12 +135,13 @@ function mainStructural(body: MainBody, pane: 1 | 2 | 3, mode: LayoutMode): Chip
   if (pane === 3) return [s("↑/↓", "move"), s("enter", "detail"), s("←", "issues")];
   switch (body) {
     case "issues":
+      // No `,` config chip: the pane-2 row is width-budgeted at 120 cols
+      // (Footer clips, never wraps) — config stays on the key + help modal.
       return [
         s("↑/↓", "move"),
         mode === "wide" ? s("←/→", "panes") : s("←", "repos"),
         s("enter", "preview"),
         s("/", "filter"),
-        s(",", "config"),
       ];
     case "repoDetail":
       return [s("[ ]", "scroll"), s("←", "back")];
@@ -197,10 +198,11 @@ const LOG_OVERLAY_STRUCTURAL: Chip[] = [
 
 // ── assembly ───────────────────────────────────────────────────────────────
 
-/** Which mnemonic ids render as chips per main pane (the keymap always
- * carries everything — chips are the pane-relevant subset, like the old
- * pane-filtered hint sets). */
-const RAIL_CHIP_IDS = new Set([
+/** Which mnemonic ids render as chips per main pane, in CHIP ORDER (verbs
+ * before globals on pane 2 — the derivation order is globals-first, which
+ * reads wrong in the footer). The keymap always carries everything — chips
+ * are the pane-relevant subset, like the old pane-filtered hint sets. */
+const RAIL_CHIP_ORDER = [
   "addRepo",
   "unwatch",
   "browser",
@@ -210,17 +212,9 @@ const RAIL_CHIP_IDS = new Set([
   "commands",
   "quit",
   "help",
-]);
-const ISSUES_CHIP_IDS = new Set([
-  "dispatch",
-  "approve",
-  "analyze",
-  "assess",
-  "prs",
-  "quit",
-  "help",
-]);
-const PANE3_CHIP_IDS = new Set(["browser", "quit", "help"]);
+];
+const ISSUES_CHIP_ORDER = ["dispatch", "approve", "analyze", "assess", "prs", "quit", "help"];
+const PANE3_CHIP_ORDER = ["browser", "quit", "help"];
 
 function mnemonicChip(d: DerivedMnemonic): Chip {
   return {
@@ -249,20 +243,24 @@ export function buildContextBindings(
         excluded: MAIN_EXCLUDED,
       });
       const visible = all.filter((d) => !d.hidden);
-      const chipIds =
+      const chipOrder =
         pane === 1
-          ? RAIL_CHIP_IDS
+          ? RAIL_CHIP_ORDER
           : pane === 3
-            ? PANE3_CHIP_IDS
+            ? PANE3_CHIP_ORDER
             : context.body === "issues"
-              ? ISSUES_CHIP_IDS
+              ? ISSUES_CHIP_ORDER
               : // Section/RepoDetail bodies: the body's own verbs (globals
                 // live on the rail chips; the keymap carries them anyway).
-                new Set(BODY_VERBS[context.body].filter((o) => !o.hidden).map((o) => o.id));
+                BODY_VERBS[context.body].filter((o) => !o.hidden).map((o) => o.id);
+      const byId = new Map(visible.map((d) => [d.id, d]));
       return {
         chips: [
           ...mainStructural(context.body, pane, mode),
-          ...visible.filter((d) => chipIds.has(d.id)).map(mnemonicChip),
+          ...chipOrder.flatMap((id) => {
+            const d = byId.get(id);
+            return d !== undefined ? [mnemonicChip(d)] : [];
+          }),
         ],
         keymap: toKeymap(all),
         all,

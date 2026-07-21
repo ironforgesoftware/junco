@@ -69,7 +69,7 @@ describe("modal-ish views: mouse", () => {
   it("addRepo modal: click outside cancels back to main", async () => {
     const r = renderApp();
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
-    r.stdin.write("w");
+    r.stdin.write("a"); // [a]dd repo mnemonic
     await until(() => (r.lastFrame() ?? "").includes("add repo to watchlist"));
     r.stdin.write(press(0, 5)); // far left — outside the centered modal box
     await until(() => !(r.lastFrame() ?? "").includes("add repo to watchlist"));
@@ -89,7 +89,7 @@ describe("rail system rows: mouse", () => {
     );
     await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos")); // queue body up
     // Click-again = enter: body focus — the queue body's chips replace the rail's.
-    await fireUntil(r.stdin, press(3, y), () => (r.lastFrame() ?? "").includes("R requeue"));
+    await fireUntil(r.stdin, press(3, y), () => (r.lastFrame() ?? "").includes("retry"));
   });
 
   it("hovering a rail row does not crash; a click then selects it", async () => {
@@ -188,13 +188,14 @@ describe("review view: mouse", () => {
 });
 
 describe("footer chips: mouse", () => {
-  it("footer chip: clicking 't queue' jumps to the queue row; '← back' returns to the rail", async () => {
+  it("footer chip: clicking the 'queue' mnemonic jumps to the queue row; '← back' returns to the rail", async () => {
     const r = renderApp();
-    // Mount lands on pane 1 (rail), whose hint set carries the "t queue" chip.
-    await until(() => (r.lastFrame() ?? "").includes("t queue"));
+    // Mount lands on pane 1 (rail), whose chip row carries the bare "queue"
+    // label (mnemonic char colored — invisible in stripped frames).
+    await until(() => ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("queue"));
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("t queue");
+    const x = f.split("\n")[footerY].indexOf("queue");
     // fireUntil: a press racing the region registry re-sends; the t action is
     // idempotent (re-selecting the queue row is a no-op).
     await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("RUNNING"));
@@ -205,7 +206,7 @@ describe("footer chips: mouse", () => {
     // press lands on the rail hint row at worst (a harmless toast), never a
     // destructive chip.
     await fireUntil(r.stdin, press(x2, footerY), () =>
-      (r.lastFrame() ?? "").includes("w add repo"),
+      ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("add repo"),
     );
   });
 
@@ -269,7 +270,7 @@ describe("footer chips: mouse", () => {
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("o browser"); // pane-1 hint set at mount
+    const x = f.split("\n")[footerY].indexOf("browser"); // pane-1 chip row at mount
     await fireUntil(r.stdin, press(x, footerY), () => repoOpens === 1); // counted-once = idempotent-safe
     expect(repoOpens).toBe(1);
     expect(issueOpens).toBe(0); // the old flat map would have opened the issue here
@@ -286,11 +287,11 @@ describe("footer chips: mouse", () => {
     };
     const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
-    r.stdin.write("l"); // pane 2 — the only hint set carrying "c analyze"
-    await until(() => (r.lastFrame() ?? "").includes("c analyze"));
+    r.stdin.write("l"); // pane 2 — the only chip row carrying "analyze"
+    await until(() => (r.lastFrame() ?? "").includes("analyze"));
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("c analyze");
+    const x = f.split("\n")[footerY].indexOf("analyze");
     await fireUntil(r.stdin, press(x, footerY), () => analyzeCalls === 1); // counted-once = idempotent-safe
     expect(analyzeCalls).toBe(1);
     // The keyboard recipe's success toast lands once the stubbed promise
@@ -303,7 +304,7 @@ describe("footer chips: mouse", () => {
   it("help modal: a footer press underneath is a miss — closes help, never quits", async () => {
     let exited = false;
     const r = renderApp({ onExit: () => (exited = true) });
-    await until(() => (r.lastFrame() ?? "").includes("q quit"));
+    await until(() => ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("quit"));
     r.stdin.write("?");
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard"));
     // While help is open the hints swap to the modal's own set ("any key

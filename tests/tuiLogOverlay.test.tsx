@@ -255,8 +255,15 @@ describe("overlay hint dedup (#238)", () => {
     await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
     const f = frame(r);
     // One source of truth for the overlay's key hints: the footer chip row
-    // (which carries the clickable esc). LogView's internal duplicate is gone.
-    expect(f.split("l level").length - 1).toBe(1);
+    // (which carries the clickable esc). LogView's internal duplicate is gone
+    // — the mnemonic chips render bare labels, so the old "l level" key-first
+    // pair must not appear anywhere, and each label renders exactly once in
+    // the footer row.
+    expect(f.split("l level").length - 1).toBe(0);
+    const footerRow = f.split("\n").at(-1) ?? "";
+    for (const label of ["follow", "level", "ticket"]) {
+      expect(footerRow.split(label).length - 1).toBe(1);
+    }
     expect(f.split("esc close").length - 1).toBe(1);
   });
 });

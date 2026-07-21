@@ -15,7 +15,9 @@ describe("Workspace", () => {
         layout={computeLayout(size.columns, size.rows)}
         header={<Text>HEADER</Text>}
         toast={{ kind: "info", text: "hello toast" }}
-        hints={[["q", "quit"]]}
+        chips={[
+          { kind: "mnemonic", id: "quit", key: "q", label: "quit", charIndex: 0, guarded: false },
+        ]}
         modal={null}
       >
         <Text>BODY</Text>
@@ -35,7 +37,7 @@ describe("Workspace", () => {
         layout={computeLayout(40, 10)}
         header={<Text>H</Text>}
         toast={null}
-        hints={[]}
+        chips={[]}
         modal={null}
       >
         <Text>NEVER</Text>
@@ -52,7 +54,7 @@ describe("Workspace", () => {
         layout={computeLayout(size.columns, size.rows)}
         header={<Text>H</Text>}
         toast={null}
-        hints={[]}
+        chips={[]}
         modal={<Text>MODAL CONTENT</Text>}
       >
         <Text>HIDDEN BODY</Text>

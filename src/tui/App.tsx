@@ -23,7 +23,7 @@ import { computeLayout } from "./layout.js";
 import { windowSlice } from "./window.js";
 import { listRowsHeight, railListHeight } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
-import { Header, hintsForUnified, type BodyHintKind, type HintView } from "./components/Chrome.js";
+import { Header } from "./components/Chrome.js";
 import { LogView } from "./components/LogView.js";
 import { cycleLevel, distinctTickets, type LogFilters } from "./logFilter.js";
 import type { LocalCheap, LocalHeavy, LocalSection } from "./localSnapshot.js";
@@ -40,6 +40,7 @@ import {
 import { UnifiedRail } from "./components/UnifiedRail.js";
 import { RepoDetail } from "./components/RepoDetail.js";
 import { OutboxSection, WorktreesSection, DaemonSection } from "./components/sections.js";
+import { buildContextBindings, type BindingContext } from "./viewActions.js";
 import type { AssessHistory } from "../assessHistory.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
@@ -121,21 +122,6 @@ export interface AppProps {
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
 // terminals only).
 type Pane = 1 | 2 | 3;
-
-// Footer hints while the full-screen log overlay owns input. `esc` is the only
-// actionable chip (footerActions closes the overlay); the movement/filter hints
-// are display-only (inert chips), mirroring how movement hints render elsewhere.
-// This replaces the stale LOCAL rail chips (`q quit`, `→ open`, …) that would
-// otherwise act while their keys are swallowed by the overlay. (#225 class.)
-const LOG_OVERLAY_HINTS: [string, string][] = [
-  ["f", "follow"],
-  ["l", "level"],
-  ["t", "ticket"],
-  ["/", "search"],
-  ["[ ]", "scroll"],
-  ["G", "bottom"],
-  ["esc", "close"],
-];
 
 /** What a loader actually delivered — the unified cycle aggregates these to
  * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
@@ -1554,6 +1540,568 @@ export function App(props: AppProps): React.JSX.Element {
     setView("repoDetail");
   };
 
+  // ── Derived-mnemonic bindings (mnemonic spec §2/§4): ONE context table
+  // drives the footer chips, the help modal, and the keyboard dispatch tail —
+  // render and input consume the same derivation and cannot drift. ──
+  const bindingContext: BindingContext = useMemo((): BindingContext => {
+    if (logOverlay) return { kind: "logOverlay" };
+    if (filtering) return { kind: "structuralOnly", view: "filtering" };
+    switch (view) {
+      case "help":
+      case "palette":
+      case "addRepo":
+      case "config":
+        return { kind: "structuralOnly", view };
+      case "detail":
+      case "repoDetail":
+      case "prs":
+      case "prDetail":
+      case "review":
+      case "cmdOutput":
+        return { kind: "view", view };
+      case "main":
+        return {
+          kind: "main",
+          body:
+            body?.kind === "issues"
+              ? "issues"
+              : body?.kind === "section"
+                ? body.section
+                : "repoDetail",
+        };
+    }
+  }, [logOverlay, filtering, view, body]);
+  const bindings = useMemo(
+    () => buildContextBindings(bindingContext, pane, layout.mode),
+    [bindingContext, pane, layout.mode],
+  );
+
+  // ── THE action table: id-keyed handlers shared by the keyboard dispatch
+  // tail AND the footer chips — one implementation per verb, guards included.
+  // (Replaces the key-keyed footerActions whose entries duplicated every
+  // keyboard branch verbatim; that drift class is structurally gone.) ──
+  const actionHandlers: Record<string, () => void> = useMemo((): Record<string, () => void> => {
+    if (confirm !== null) return {}; // destructive confirm owns input
+    const close = (): void => {
+      if (logOverlay) {
+        setLogOverlay(false);
+        setLogSearchMode(false);
+        return;
+      }
+      if (view === "prDetail") return void setView(prDetail?.from ?? "main");
+      if (view === "cmdOutput") return void setView("palette");
+      setView("main");
+    };
+    if (logOverlay) {
+      return {
+        close,
+        follow: () => {
+          // Pause lands at the tail first (toEnd) so the paused window shows
+          // the newest lines, not a jump to the top.
+          if (logFollow) {
+            setLogFollow(false);
+            toEnd();
+          } else {
+            setLogFollow(true);
+          }
+        },
+        level: () => setLogFilters((f) => ({ ...f, minLevel: cycleLevel(f.minLevel) })),
+        ticket: () => {
+          // Cycle null (all) → each ticket present in the buffer → back to null.
+          const opts: (string | null)[] = [null, ...distinctTickets(logEntries)];
+          const idx = opts.indexOf(logFilters.ticket);
+          setLogFilters((f) => ({ ...f, ticket: opts[(idx + 1) % opts.length] }));
+        },
+      };
+    }
+    switch (view) {
+      case "detail":
+        return { browser: openDetailIssueInBrowser, close };
+      case "prDetail":
+        return { browser: openPrDetailInBrowser, close };
+      case "repoDetail":
+        return {
+          close,
+          browser: () => {
+            const nwo = repoDetailTarget?.nwo;
+            if (nwo !== null && nwo !== undefined) openRepoBrowser(nwo);
+            else showToast("info", "no GitHub URL");
+          },
+        };
+      case "prs":
+        return { browser: openSelectedPr, close };
+      case "cmdOutput":
+        return {
+          close,
+          ...(cmd && !cmd.running
+            ? { reRun: () => runPaletteCommand(cmd.name, cmd.extraArgs) }
+            : {}),
+        };
+      case "review": {
+        // Optimistic removal shared by post and discard: drop the draft, close
+        // the preview, clamp the cursor to the (shrunk) combined list.
+        const dropDraft = (id: string): void => {
+          setReviewState((s) => {
+            const drafts = s.drafts.filter((d) => d.id !== id);
+            const total = s.batches.length + drafts.length;
+            return { ...s, drafts, open: null, cursor: Math.min(s.cursor, Math.max(0, total - 1)) };
+          });
+        };
+        return {
+          close,
+          all: () =>
+            setReviewState((s) => {
+              const batch = s.open?.kind === "batch" ? s.batches[s.open.batchIdx] : undefined;
+              return s.open && s.open.kind === "batch" && batch
+                ? {
+                    ...s,
+                    open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) },
+                  }
+                : s;
+            }),
+          none: () =>
+            setReviewState((s) =>
+              s.open && s.open.kind === "batch"
+                ? { ...s, open: { ...s.open, checked: new Set() } }
+                : s,
+            ),
+          file: () => {
+            const rs = reviewState;
+            if (rs.open?.kind === "draft") {
+              const draft = rs.drafts[rs.open.draftIdx];
+              if (!draft) return;
+              const id = draft.id;
+              showToast("info", `posting ${draft.nwo}#${draft.issue}…`);
+              void client.postCommentDraft(id).then((res) => {
+                if (!aliveRef.current) return;
+                if (res.ok) {
+                  const { outcome, url } = res.value;
+                  showToast(
+                    "success",
+                    outcome === "queued"
+                      ? "queued offline — will post on next flush"
+                      : url
+                        ? `posted ${url}`
+                        : "posted",
+                  );
+                  dropDraft(id);
+                } else {
+                  showToast("error", res.error);
+                }
+              });
+              return;
+            }
+            if (rs.open?.kind === "batch") {
+              const open = rs.open;
+              const batch = rs.batches[open.batchIdx];
+              if (!batch) return;
+              const fps = batch.findings
+                .map((f) => f.fingerprint)
+                .filter((fp) => open.checked.has(fp));
+              if (fps.length === 0) return void showToast("info", "nothing selected");
+              const id = batch.id;
+              showToast("info", `filing ${fps.length} on ${batch.nwo}…`);
+              void client.fileReview(id, fps).then((res) => {
+                if (!aliveRef.current) return;
+                if (res.ok) {
+                  const v = res.value;
+                  showToast(
+                    "success",
+                    `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`,
+                  );
+                  setReviewState((s) => {
+                    const batches = s.batches.map((b) => (b.id === id ? v.batch : b));
+                    const nextOpen =
+                      s.open && s.open.kind === "batch"
+                        ? {
+                            ...s.open,
+                            checked: new Set(
+                              [...s.open.checked].filter((fp) => !v.batch.filed?.[fp]),
+                            ),
+                          }
+                        : s.open;
+                    return { ...s, batches, open: nextOpen };
+                  });
+                } else {
+                  showToast("error", res.error);
+                }
+              });
+            }
+          },
+          discard: () => {
+            const rs = reviewState;
+            if (rs.open?.kind === "draft") {
+              const draft = rs.drafts[rs.open.draftIdx];
+              if (!draft) return;
+              const id = draft.id;
+              void client.discardCommentDraft(id).then((res) => {
+                if (!aliveRef.current) return;
+                if (res.ok) {
+                  showToast("success", "discarded");
+                  dropDraft(id);
+                } else {
+                  showToast("error", res.error);
+                }
+              });
+              return;
+            }
+            if (rs.open?.kind === "batch") {
+              const batch = rs.batches[rs.open.batchIdx];
+              if (!batch) return;
+              const id = batch.id;
+              void client.discardReview(id).then((res) => {
+                if (!aliveRef.current) return;
+                if (res.ok) {
+                  showToast("success", "discarded");
+                  setReviewState((s) => {
+                    const batches = s.batches.filter((b) => b.id !== id);
+                    const total = batches.length + s.drafts.length;
+                    return {
+                      ...s,
+                      batches,
+                      open: null,
+                      cursor: Math.min(s.cursor, Math.max(0, total - 1)),
+                    };
+                  });
+                } else {
+                  showToast("error", res.error);
+                }
+              });
+            }
+          },
+        };
+      }
+      case "palette":
+      case "addRepo":
+      case "config":
+      case "help":
+        return {};
+      case "main": {
+        const currentExternal = currentRepo?.external === true;
+        return {
+          quit: () => {
+            exit();
+            onExit();
+          },
+          help: () => setView("help"),
+          queue: () => {
+            setRailSel(sysKey("queue"));
+            setPane(2);
+          },
+          prs: () => {
+            setView("prs");
+            void refreshAll({ scope: "monitor" });
+          },
+          review: () => {
+            setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
+            setView("review");
+            void Promise.all([client.listReview(), client.listCommentDrafts()]).then(
+              ([rev, drafts]) => {
+                if (!aliveRef.current) return;
+                if (rev.ok && drafts.ok) {
+                  setReviewState((s) => ({
+                    ...s,
+                    loading: false,
+                    error: null,
+                    batches: rev.value,
+                    drafts: drafts.value,
+                    cursor: 0,
+                  }));
+                } else {
+                  const error = !rev.ok ? rev.error : !drafts.ok ? drafts.error : "unknown error";
+                  setReviewState((s) => ({ ...s, loading: false, error }));
+                }
+              },
+            );
+          },
+          commands: () => {
+            setPaletteFilter("");
+            setPaletteSel(0);
+            setPaletteArgsMode(false);
+            setPaletteArgs("");
+            setView("palette");
+          },
+          addRepo: () => {
+            if (!props.githubEnabled)
+              return void showToast("info", "github mode is off ([github] enabled=false)");
+            if (watchlistError)
+              return void showToast("error", "watchlist unreadable — fix it before adding");
+            setAddRepoError(null);
+            setView("addRepo");
+          },
+          refresh: () => {
+            void forceLocalRefresh();
+            if (currentNwo) {
+              setRefreshing(true);
+              void refreshAll().finally(() => setRefreshing(false));
+            }
+          },
+          unwatch: () => {
+            if (selectedRow?.kind === "repo" && selectedRow.repo.watched && selectedRow.repo.nwo) {
+              return void unwatch(selectedRow.repo.nwo);
+            }
+            showToast("info", "not in watchlist");
+          },
+          // Pane-aware: 1 → the selected rail repo, 3 → the selected PR,
+          // 2 issues → the selected issue.
+          browser: () => {
+            if (pane === 1 || body?.kind !== "issues") {
+              if (selectedRow?.kind === "repo" && selectedRow.repo.nwo)
+                return void openRepoBrowser(selectedRow.repo.nwo);
+              return void showToast("info", "no GitHub URL");
+            }
+            if (pane === 3) {
+              if (selectedPane3Pr) {
+                const { nwo, number } = selectedPane3Pr;
+                void client.openPrInBrowser(nwo, number).then((res) => {
+                  if (!aliveRef.current) return;
+                  if (!res.ok) showToast("error", res.error);
+                });
+              }
+              return;
+            }
+            void openBrowser();
+          },
+          // Pane-aware like the old `s`: issues pane with a selection scopes
+          // to the issue; everywhere else repo-scoped.
+          assess: () => {
+            if (pane === 2 && body?.kind === "issues" && currentNwo && currentIssue) {
+              return void runAssess(false, `${currentNwo}#${currentIssue.number}`);
+            }
+            void runAssess(false);
+          },
+          assessAutoPlan: () => {
+            if (pane === 2 && body?.kind === "issues" && currentNwo && currentIssue) {
+              return void runAssess(true, `${currentNwo}#${currentIssue.number}`);
+            }
+            void runAssess(true);
+          },
+          dispatch: () => {
+            if (body?.kind !== "issues") return;
+            if (!currentExternal) return void runAction("dispatch");
+            if (!currentNwo || !currentIssue) return;
+            const num = currentIssue.number;
+            showToast("info", `dispatching ${currentNwo}#${num}…`);
+            void client.dispatchTicket(currentNwo, num).then((res) => {
+              if (!aliveRef.current) return;
+              if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
+              else showToast("error", res.error);
+            });
+          },
+          dispatchAsk: () => {
+            if (body?.kind !== "issues") return;
+            if (currentExternal) {
+              return void showToast(
+                "error",
+                "not available for external repos — dispatch queues a fork-PR ticket",
+              );
+            }
+            void runAction("dispatchAsk");
+          },
+          approve: () => {
+            if (body?.kind !== "issues") return;
+            if (currentExternal) {
+              return void showToast(
+                "error",
+                "not available for external repos — dispatch queues a fork-PR ticket",
+              );
+            }
+            void runAction("approve");
+          },
+          replan: () => {
+            if (body?.kind !== "issues") return;
+            if (currentExternal) {
+              return void showToast(
+                "error",
+                "not available for external repos — dispatch queues a fork-PR ticket",
+              );
+            }
+            const st = currentIssue ? deriveState(currentIssue.labels, trigger) : "raw";
+            void runAction(st === "plan-ready" || st === "approved" ? "replan" : "recycle");
+          },
+          analyze: () => {
+            if (body?.kind !== "issues") return;
+            if (!currentNwo || !currentIssue) return;
+            const num = currentIssue.number;
+            showToast("info", `drafting analysis for ${currentNwo}#${num}…`);
+            void client.analyzeIssue(currentNwo, num).then((res) => {
+              if (!aliveRef.current) return;
+              if (res.ok)
+                showToast("success", `analysis queued: ${res.value.id} · v to review when parked`);
+              else showToast("error", res.error);
+            });
+          },
+          // Section-body verbs — the ex-handleSectionBodyInput recipes,
+          // localTarget guards included (highlight == target invariant).
+          retry: () => {
+            if (sysSection !== "queue") return;
+            const tgt = localTarget;
+            if (tgt?.kind === "recent" && tgt.status === "failed")
+              return void runLocalAction("retry", [tgt.id], { label: "requeue" });
+            if (tgt?.kind === "recent" && tgt.status === "done")
+              return void showToast("info", "done tickets can't be requeued");
+          },
+          delete: () => {
+            if (sysSection !== "queue") return;
+            const tgt = localTarget;
+            if (tgt?.kind !== "waiting") return;
+            askConfirm({
+              title: "delete queued ticket",
+              danger: true,
+              body: `Delete inbox/${tgt.id}.md? (best-effort; the daemon may have claimed it)`,
+              onConfirm: () => runLocalAction("rm", [tgt.id]),
+            });
+          },
+          flush: () => {
+            if (sysSection === "outbox" || sysSection === "daemon")
+              runLocalAction("outbox", ["flush"], { label: "flush" });
+          },
+          prune: () => {
+            if (sysSection !== "worktrees") return;
+            const tgt = localTarget;
+            if (tgt?.kind !== "worktree") return;
+            if (tgt.klass === "live") return void showToast("info", "live worktree — not prunable");
+            askConfirm({
+              title: "prune worktree",
+              danger: true,
+              body: `Prune ${tgt.slug} (${tgt.klass})? git worktree remove --force under the daemon lock.`,
+              onConfirm: () => runLocalAction("worktree", ["prune", tgt.path], { label: "prune" }),
+            });
+          },
+          restart: () => {
+            if (sysSection !== "daemon") return;
+            const n = localCheap?.daemon.currentTickets.length ?? 0;
+            askConfirm({
+              title: "restart daemon",
+              danger: true,
+              body: `Restart will interrupt ${n} in-flight ticket(s) (soft-abort, committed work salvaged). Continue?`,
+              onConfirm: () => runLocalAction("restart", [], { label: "restart" }),
+            });
+          },
+        };
+      }
+    }
+  }, [
+    confirm,
+    logOverlay,
+    logFollow,
+    logFilters,
+    logEntries,
+    toEnd,
+    view,
+    cmd,
+    prDetail,
+    selectedPr,
+    reviewState,
+    watchlistError,
+    pane,
+    currentRepo,
+    currentNwo,
+    currentIssue,
+    selectedPane3Pr,
+    selectedRow,
+    body,
+    sysSection,
+    localTarget,
+    localCheap,
+    repoDetailTarget,
+    client,
+    trigger,
+    exit,
+    onExit,
+    forceLocalRefresh,
+    runLocalAction,
+    askConfirm,
+    openRepoBrowser,
+    openDetailIssueInBrowser,
+    openPrDetailInBrowser,
+    openSelectedPr,
+    runPaletteCommand,
+    refreshAll,
+    showToast,
+    runAction,
+    runAssess,
+    openBrowser,
+    unwatch,
+    props.githubEnabled,
+  ]);
+
+  // Clickable STRUCTURAL chips (key-keyed): the non-derivable siblings of the
+  // action table — esc/enter/←/, recipes per context.
+  const structuralChipActions: Record<string, () => void> = useMemo((): Record<
+    string,
+    () => void
+  > => {
+    if (confirm !== null) return {};
+    if (logOverlay)
+      return {
+        esc: () => {
+          setLogOverlay(false);
+          setLogSearchMode(false);
+        },
+      };
+    switch (view) {
+      case "detail":
+      case "repoDetail":
+      case "review":
+        return { esc: () => setView("main") };
+      case "prDetail":
+        return { esc: () => setView(prDetail?.from ?? "main") };
+      case "prs":
+        return {
+          "esc/p": () => setView("main"),
+          enter: () => openPrDetail(selectedPr, "prs"),
+        };
+      case "cmdOutput":
+        return { esc: () => setView("palette") };
+      case "palette":
+        return { esc: () => setView("main"), enter: () => paletteEnter() };
+      case "addRepo":
+      case "config":
+        return { esc: () => setView("main") };
+      case "help":
+        return {};
+      case "main":
+        return {
+          ",": () => setView("config"),
+          "←": () => setPane(1),
+          "/": () => {
+            if (body?.kind !== "issues") return;
+            setFiltering(true);
+            setPane(2);
+          },
+          enter: () => {
+            if (pane === 3) return void openPrDetail(selectedPane3Pr, "main");
+            if (pane === 1 && selectedRow?.kind === "repo")
+              return void openRepoDetailView(selectedRow.repo);
+            if (sysSection === "logs") return void onLogExpand();
+            if (pane === 2 && body?.kind === "issues") void openDetail();
+          },
+        };
+    }
+  }, [
+    confirm,
+    logOverlay,
+    view,
+    prDetail,
+    selectedPr,
+    pane,
+    body,
+    sysSection,
+    selectedRow,
+    selectedPane3Pr,
+    openPrDetail,
+    openRepoDetailView,
+    onLogExpand,
+    openDetail,
+    paletteEnter,
+  ]);
+  // Chip click resolution: mnemonic chips by ID, structural chips by KEY.
+  const chipActions = useMemo(
+    () => ({ ...structuralChipActions, ...actionHandlers }),
+    [structuralChipActions, actionHandlers],
+  );
+
   // A press that hit no region. Modal-ish views read it as esc/cancel; the
   // confirm modal deliberately IGNORES it (destructive confirmation stays
   // keyboard-only). Everything else: no-op.
@@ -1610,32 +2158,9 @@ export function App(props: AppProps): React.JSX.Element {
       }
       return;
     }
-    if (key.escape || input === "q") {
+    if (key.escape) {
       setLogOverlay(false);
       setLogSearchMode(false);
-      return;
-    }
-    if (input === "f") {
-      // Pause must land at the tail first (toEnd) so the paused window shows
-      // the newest lines, not a jump to the top.
-      if (logFollow) {
-        setLogFollow(false);
-        toEnd();
-      } else {
-        setLogFollow(true);
-      }
-      return;
-    }
-    if (input === "l") {
-      setLogFilters((f) => ({ ...f, minLevel: cycleLevel(f.minLevel) }));
-      return;
-    }
-    if (input === "t") {
-      // Cycle null (all) → each ticket present in the buffer → back to null.
-      const opts: (string | null)[] = [null, ...distinctTickets(logEntries)];
-      const idx = opts.indexOf(logFilters.ticket);
-      const next = opts[(idx + 1) % opts.length];
-      setLogFilters((f) => ({ ...f, ticket: next }));
       return;
     }
     if (input === "/") {
@@ -1660,6 +2185,10 @@ export function App(props: AppProps): React.JSX.Element {
       scrollBy(1);
       return;
     }
+    // Derived-mnemonic tail (follow/level/ticket + the reserved q close) —
+    // the overlay owns input, so its dispatch lives here, not the cascade's.
+    const actionId = bindings.keymap.get(input);
+    if (actionId !== undefined) actionHandlers[actionId]?.();
     return;
   };
 
@@ -1671,18 +2200,9 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (sysSection === "daemon") {
+      // Scroll-only panel; Restart/flush dispatch at layer 3d.
       if (input === "[" || key.upArrow) return void scrollBy(-1);
       if (input === "]" || key.downArrow) return void scrollBy(1);
-      if (input === "X") {
-        const n = localCheap?.daemon.currentTickets.length ?? 0;
-        return void askConfirm({
-          title: "restart daemon",
-          danger: true,
-          body: `Restart will interrupt ${n} in-flight ticket(s) (soft-abort, committed work salvaged). Continue?`,
-          onConfirm: () => runLocalAction("restart", [], { label: "restart" }),
-        });
-      }
-      if (input === "f") return void runLocalAction("outbox", ["flush"], { label: "flush" });
       return;
     }
     if (sysSection === "logs") {
@@ -1700,42 +2220,8 @@ export function App(props: AppProps): React.JSX.Element {
         ...m,
         [sysSection]: Math.max(0, localRows.length - 1),
       }));
-    const t = localTarget;
-    if (sysSection === "queue") {
-      if (input === "R") {
-        // R acts on exactly the highlighted row (localRows is index-aligned
-        // with QueueView's cursor). Only a FAILED recent row is requeuable;
-        // a done row is highlightable but guarded into a safe toast — never a
-        // retry of a different, non-highlighted target.
-        if (t?.kind === "recent" && t.status === "failed")
-          return void runLocalAction("retry", [t.id], { label: "requeue" });
-        if (t?.kind === "recent" && t.status === "done")
-          return void showToast("info", "done tickets can't be requeued");
-        return;
-      }
-      if (input === "x" && t?.kind === "waiting")
-        return void askConfirm({
-          title: "delete queued ticket",
-          danger: true,
-          body: `Delete inbox/${t.id}.md? (best-effort; the daemon may have claimed it)`,
-          onConfirm: () => runLocalAction("rm", [t.id]),
-        });
-    }
-    if (sysSection === "outbox" && input === "f")
-      return void runLocalAction("outbox", ["flush"], { label: "flush" });
-    if (sysSection === "worktrees" && input === "x" && t?.kind === "worktree") {
-      // x acts on exactly the highlighted worktree (localRows is index-aligned
-      // with WorktreesSection's cursor). A live worktree is highlightable but
-      // guarded — the daemon may own it — so x on it is a safe toast, never a
-      // prune of a different, non-highlighted row.
-      if (t.klass === "live") return void showToast("info", "live worktree — not prunable");
-      return void askConfirm({
-        title: "prune worktree",
-        danger: true,
-        body: `Prune ${t.slug} (${t.klass})? git worktree remove --force under the daemon lock.`,
-        onConfirm: () => runLocalAction("worktree", ["prune", t.path], { label: "prune" }),
-      });
-    }
+    // Named section verbs (retry/Delete/flush/Prune) dispatch at layer 3d —
+    // their handlers keep the highlight == target guards (localTarget).
   };
 
   useGuardedInput((input, key) => {
@@ -1783,6 +2269,19 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
+    // layer 3d — derived-mnemonic dispatch (mnemonic spec §4). The keymap
+    // never contains structural keys, and every text-owning context
+    // (filtering/palette/addRepo/config) is structuralOnly with an EMPTY
+    // keymap, so this sits safely ahead of the view branches. Help stays
+    // any-key-close because its context derives nothing either.
+    if (view !== "help") {
+      const actionId = bindings.keymap.get(input);
+      if (actionId !== undefined) {
+        actionHandlers[actionId]?.();
+        return;
+      }
+    }
+
     // layer 4 ── the view cascade ──
 
     if (view === "help") {
@@ -1791,15 +2290,7 @@ export function App(props: AppProps): React.JSX.Element {
     }
 
     if (view === "repoDetail") {
-      // esc AND q both return (the prDetail rule: no dedicated re-open key to
-      // double as close, so q fills that slot).
-      if (key.escape || input === "q") return void setView("main");
-      if (input === "o") {
-        const nwo = repoDetailTarget?.nwo;
-        if (nwo !== null && nwo !== undefined) openRepoBrowser(nwo);
-        else showToast("info", "no GitHub URL");
-        return;
-      }
+      if (key.escape) return void setView("main");
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
       return;
@@ -1807,7 +2298,6 @@ export function App(props: AppProps): React.JSX.Element {
 
     if (view === "detail") {
       if (key.escape) return void setView("main");
-      if (input === "o") return void openDetailIssueInBrowser();
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
       return;
@@ -1817,12 +2307,11 @@ export function App(props: AppProps): React.JSX.Element {
       // esc AND q both return — unlike the issue detail view, the overlay has
       // no dedicated re-open key to double as its close key, so q (otherwise
       // the global quit key, unreachable from any sub-view) fills that slot.
-      if (key.escape || input === "q") {
+      if (key.escape) {
         // `from`'s pane/selection state was never touched while the overlay
         // was open, so returning here restores it for free.
         return void setView(prDetail?.from ?? "main");
       }
-      if (input === "o") return void openPrDetailInBrowser();
       return;
     }
 
@@ -1832,9 +2321,7 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "k" || key.upArrow) return void movePr(-1);
       if (input === "g") return void movePrTo(0);
       if (input === "G") return void movePrTo(prs.length - 1);
-      if (input === "o") return void openSelectedPr();
       if (key.return) return void openPrDetail(selectedPr, "prs");
-      if (input === "r") return void refreshAll();
       return;
     }
 
@@ -1863,72 +2350,23 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.escape) return void setView("palette");
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
-      if (input === "r" && cmd && !cmd.running) {
-        return void runPaletteCommand(cmd.name, cmd.extraArgs);
-      }
       return;
     }
 
     if (view === "review") {
       const rs = reviewState;
-      // Comment-draft preview mode: scroll, post (f/enter), discard (x), back.
+      // Comment-draft preview mode: scroll + post (enter) + back — the named
+      // verbs (file/post, Discard, all/none) dispatch via the derived keymap.
       if (rs.open && rs.open.kind === "draft") {
-        const draft = rs.drafts[rs.open.draftIdx];
         if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
         if (input === "k" || key.upArrow) return void scrollBy(-1);
         if (input === "j" || key.downArrow) return void scrollBy(1);
-        // Optimistic removal shared by post and discard: drop the draft, close
-        // the preview, clamp the cursor to the (shrunk) combined list.
-        const dropDraft = (id: string): void => {
-          setReviewState((s) => {
-            const drafts = s.drafts.filter((d) => d.id !== id);
-            const total = s.batches.length + drafts.length;
-            return { ...s, drafts, open: null, cursor: Math.min(s.cursor, Math.max(0, total - 1)) };
-          });
-        };
-        if (input === "f" || key.return) {
-          if (!draft) return;
-          const id = draft.id;
-          showToast("info", `posting ${draft.nwo}#${draft.issue}…`);
-          void client.postCommentDraft(id).then((res) => {
-            if (!aliveRef.current) return;
-            if (res.ok) {
-              const { outcome, url } = res.value;
-              showToast(
-                "success",
-                outcome === "queued"
-                  ? "queued offline — will post on next flush"
-                  : url
-                    ? `posted ${url}`
-                    : "posted",
-              );
-              dropDraft(id);
-            } else {
-              showToast("error", res.error);
-            }
-          });
-          return;
-        }
-        if (input === "x") {
-          if (!draft) return;
-          const id = draft.id;
-          void client.discardCommentDraft(id).then((res) => {
-            if (!aliveRef.current) return;
-            if (res.ok) {
-              showToast("success", "discarded");
-              dropDraft(id);
-            } else {
-              showToast("error", res.error);
-            }
-          });
-          return;
-        }
+        if (key.return) return void actionHandlers["file"]?.();
         return;
       }
       // Assess checklist mode.
       if (rs.open && rs.open.kind === "batch") {
-        const open = rs.open; // stable narrowed binding — survives closures below
-        const batch = rs.batches[open.batchIdx];
+        const batch = rs.batches[rs.open.batchIdx];
         if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
         if (input === "k" || key.upArrow) {
           return void setReviewState((s) =>
@@ -1962,81 +2400,11 @@ export function App(props: AppProps): React.JSX.Element {
             return { ...s, open: { ...s.open, checked } };
           });
         }
-        if (input === "a") {
-          return void setReviewState((s) =>
-            s.open && s.open.kind === "batch" && batch
-              ? {
-                  ...s,
-                  open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) },
-                }
-              : s,
-          );
-        }
-        if (input === "n") {
-          return void setReviewState((s) =>
-            s.open && s.open.kind === "batch"
-              ? { ...s, open: { ...s.open, checked: new Set() } }
-              : s,
-          );
-        }
-        if (input === "x") {
-          if (!batch) return;
-          const id = batch.id;
-          void client.discardReview(id).then((res) => {
-            if (!aliveRef.current) return;
-            if (res.ok) {
-              showToast("success", "discarded");
-              setReviewState((s) => {
-                const batches = s.batches.filter((b) => b.id !== id);
-                const total = batches.length + s.drafts.length;
-                return {
-                  ...s,
-                  batches,
-                  open: null,
-                  cursor: Math.min(s.cursor, Math.max(0, total - 1)),
-                };
-              });
-            } else {
-              showToast("error", res.error);
-            }
-          });
-          return;
-        }
-        if (input === "f" || key.return) {
-          if (!batch) return;
-          const fps = batch.findings.map((f) => f.fingerprint).filter((fp) => open.checked.has(fp));
-          if (fps.length === 0) return void showToast("info", "nothing selected");
-          const id = batch.id;
-          showToast("info", `filing ${fps.length} on ${batch.nwo}…`);
-          void client.fileReview(id, fps).then((res) => {
-            if (!aliveRef.current) return;
-            if (res.ok) {
-              const v = res.value;
-              showToast(
-                "success",
-                `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`,
-              );
-              setReviewState((s) => {
-                const batches = s.batches.map((b) => (b.id === id ? v.batch : b));
-                const open =
-                  s.open && s.open.kind === "batch"
-                    ? {
-                        ...s.open,
-                        checked: new Set([...s.open.checked].filter((fp) => !v.batch.filed?.[fp])),
-                      }
-                    : s.open;
-                return { ...s, batches, open };
-              });
-            } else {
-              showToast("error", res.error);
-            }
-          });
-          return;
-        }
+        if (key.return) return void actionHandlers["file"]?.();
         return;
       }
       // Combined-list mode: cursor over batches then drafts; enter opens either.
-      if (key.escape || input === "v") return void setView("main");
+      if (key.escape) return void setView("main");
       if (input === "k" || key.upArrow)
         return void setReviewState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
       if (input === "j" || key.downArrow) {
@@ -2096,27 +2464,9 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
 
-    if (input === "q") {
-      exit();
-      onExit();
-      return;
-    }
-    if (input === "?") return void setView("help");
-    if (input === "t") {
-      // Alias: jump the rail cursor to the queue system row and focus its body
-      // (the closest muscle-memory equivalent of the retired queue View).
-      setRailSel(sysKey("queue"));
-      setPane(2);
-      return;
-    }
-    // `,` (open config) is handled by layer 3c above, ahead of this cascade.
-    if (input === "p") {
-      setView("prs");
-      // Entering the monitor: immediate full sweep (scope override — viewRef
-      // still reads "main" until this render commits).
-      void refreshAll({ scope: "monitor" });
-      return;
-    }
+    // Named verbs (quit/help/queue/PRs/review/…) dispatched at layer 3d via
+    // the derived keymap; `,` config at layer 3c. `:` stays a structural
+    // symbol alias for the palette alongside the derived `c` commands key.
     if (input === ":") {
       setPaletteFilter("");
       setPaletteSel(0);
@@ -2149,89 +2499,12 @@ export function App(props: AppProps): React.JSX.Element {
     }
     if (input === "i") return void setPane(2);
 
-    // `w` is the watchlist key (opens add-repo) — a gh-backed flow, so it
-    // toasts instead of opening when github is off.
-    if (input === "w") {
-      if (!props.githubEnabled) {
-        showToast("info", "github mode is off ([github] enabled=false)");
-        return;
-      }
-      if (watchlistError) {
-        showToast("error", "watchlist unreadable — fix it before adding");
-        return;
-      }
-      setAddRepoError(null);
-      setView("addRepo");
-      return;
-    }
-    if (input === "r") {
-      // One refresh verb for the whole surface: local snapshots always, plus
-      // the gh cycle when an issues row is selected (spec §3).
-      void forceLocalRefresh();
-      if (currentNwo) {
-        setRefreshing(true);
-        void refreshAll().finally(() => setRefreshing(false));
-      }
-      return;
-    }
-    // `s`/`S` assess the rail-selected repo — global to the main view (the
-    // selection is global state), unlike `d`/`D`/`a` below which are scoped
-    // to the issues pane because they act on the selected ISSUE. Exception:
-    // with the issues pane (2) focused AND an issue selected, `s`/`S` scope
-    // the assess to that issue (owner/repo#N — the CLI accepts issue-refs).
-    // This is a single global binding structurally ahead of the pane-scoped
-    // blocks below, so the pane-2 variant is gated here rather than added as
-    // a second binding further down.
-    if (input === "s" || input === "S") {
-      const autoPlan = input === "S";
-      if (pane === 2 && currentNwo && currentIssue) {
-        return void runAssess(autoPlan, `${currentNwo}#${currentIssue.number}`);
-      }
-      return void runAssess(autoPlan);
-    }
-    // `v` opens the review queue — parked assess batches (findings awaiting
-    // human confirmation) AND parked comment drafts (analyze output awaiting a
-    // post/discard decision), fetched together.
-    if (input === "v") {
-      setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
-      setView("review");
-      void Promise.all([client.listReview(), client.listCommentDrafts()]).then(([rev, drafts]) => {
-        if (!aliveRef.current) return;
-        if (rev.ok && drafts.ok) {
-          setReviewState((s) => ({
-            ...s,
-            loading: false,
-            error: null,
-            batches: rev.value,
-            drafts: drafts.value,
-            cursor: 0,
-          }));
-        } else {
-          const error = !rev.ok ? rev.error : !drafts.ok ? drafts.error : "unknown error";
-          setReviewState((s) => ({ ...s, loading: false, error }));
-        }
-      });
-      return;
-    }
-
     if (pane === 1) {
       if (input === "j" || key.downArrow) return void moveRail(1);
       if (input === "k" || key.upArrow) return void moveRail(-1);
       if (input === "g") return void moveRailTo(0);
       if (input === "G") return void moveRailTo(railRows.length - 1);
-      // Repo-only verbs: harmless toasts on system rows / rows without a URL.
-      if (input === "x") {
-        if (selectedRow?.kind === "repo" && selectedRow.repo.watched && selectedRow.repo.nwo) {
-          return void unwatch(selectedRow.repo.nwo);
-        }
-        return void showToast("info", "not in watchlist");
-      }
-      if (input === "o") {
-        if (selectedRow?.kind === "repo" && selectedRow.repo.nwo) {
-          return void openRepoBrowser(selectedRow.repo.nwo);
-        }
-        return void showToast("info", "no GitHub URL");
-      }
+      // Named verbs (unwatch/browser/assess/…) dispatch at layer 3d.
       if (key.return) {
         // enter: repo rows open the full-width RepoDetail; the logs row opens
         // the overlay directly; other system rows focus the body.
@@ -2251,16 +2524,6 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "k" || key.upArrow) return void movePane3(-1);
       if (input === "g") return void movePane3To(0);
       if (input === "G") return void movePane3To(repoPrs.length - 1);
-      if (input === "o") {
-        if (selectedPane3Pr) {
-          const { nwo, number } = selectedPane3Pr;
-          void client.openPrInBrowser(nwo, number).then((res) => {
-            if (!aliveRef.current) return;
-            if (!res.ok) showToast("error", res.error);
-          });
-        }
-        return;
-      }
       if (key.return) return void openPrDetail(selectedPane3Pr, "main");
       return;
     }
@@ -2292,49 +2555,8 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "g") return void moveIssueTo(0);
     if (input === "G") return void moveIssueTo(filteredIssues.length - 1);
     if (key.return) return void openDetail();
-    // External (fork-PR) repos have no upstream label lifecycle: `d` queues a
-    // ticket via the dispatch core; the label-driven keys explain instead of
-    // acting. Owned repos keep the existing optimistic label flow untouched.
-    const currentExternal = currentRepo?.external === true;
-    if (input === "d") {
-      if (!currentExternal) return void runAction("dispatch");
-      if (!currentNwo || !currentIssue) return;
-      const num = currentIssue.number;
-      showToast("info", `dispatching ${currentNwo}#${num}…`);
-      void client.dispatchTicket(currentNwo, num).then((res) => {
-        if (!aliveRef.current) return;
-        if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
-        else showToast("error", res.error);
-      });
-      return;
-    }
-    if (input === "D" || input === "a" || input === "R") {
-      if (currentExternal) {
-        return void showToast(
-          "error",
-          "not available for external repos — d dispatches a fork-PR ticket",
-        );
-      }
-      if (input === "D") return void runAction("dispatchAsk");
-      if (input === "a") return void runAction("approve");
-      const st = currentIssue ? deriveState(currentIssue.labels, trigger) : "raw";
-      return void runAction(st === "plan-ready" || st === "approved" ? "replan" : "recycle");
-    }
-    // Analysis drafting works on BOTH owned and external repos — unlike
-    // D/a/R above, it never gates on currentExternal.
-    if (input === "c") {
-      if (!currentNwo || !currentIssue) return;
-      const num = currentIssue.number;
-      showToast("info", `drafting analysis for ${currentNwo}#${num}…`);
-      void client.analyzeIssue(currentNwo, num).then((res) => {
-        if (!aliveRef.current) return;
-        if (res.ok)
-          showToast("success", `analysis queued: ${res.value.id} · v to review when parked`);
-        else showToast("error", res.error);
-      });
-      return;
-    }
-    if (input === "o") return void openBrowser();
+    // Named issue verbs (dispatch/approve/analyze + shift variants)
+    // dispatch at layer 3d via the derived keymap.
   });
 
   // Review-view mouse handlers — duplicate the key recipes EXACTLY (same
@@ -2407,295 +2629,6 @@ export function App(props: AppProps): React.JSX.Element {
     setSectionCursor((m) => ({ ...m, [sysSection]: idx }));
   };
 
-  // Footer chip click targets: hint KEY → the same handler its keyboard
-  // recipe already calls (mouse and keyboard can never diverge on what a key
-  // does — same discipline as the review-view mouse handlers above). A key
-  // with no entry here renders as an inert chip (movement/typing hints).
-  // "main" is pane-aware exactly where the keyboard cascade is: `o`/`enter`
-  // mean different things per pane (repo / issue / PR) and `d`/`a` carry the
-  // external-repo gate — each entry below duplicates its keyboard branch
-  // verbatim, including the guards.
-  const footerActions: Record<string, () => void> = useMemo((): Record<string, () => void> => {
-    if (confirm !== null) return {}; // destructive confirm owns input — every chip inert
-    // The log overlay owns input while open: only its `esc` chip acts (closes
-    // the overlay); the movement/filter hints (LOG_OVERLAY_HINTS) render inert
-    // — stale chips must never carry live handlers under the modal. (#225 class.)
-    if (logOverlay) {
-      return {
-        esc: () => {
-          setLogOverlay(false);
-          setLogSearchMode(false);
-        },
-      };
-    }
-    switch (view) {
-      case "detail":
-        return {
-          o: openDetailIssueInBrowser,
-          esc: () => setView("main"),
-        };
-      case "prDetail":
-        return { esc: () => setView(prDetail?.from ?? "main"), o: openPrDetailInBrowser };
-      case "repoDetail":
-        return {
-          esc: () => setView("main"),
-          o: () => {
-            const nwo = repoDetailTarget?.nwo;
-            if (nwo !== null && nwo !== undefined) openRepoBrowser(nwo);
-            else showToast("info", "no GitHub URL");
-          },
-        };
-      case "prs":
-        return {
-          enter: () => openPrDetail(selectedPr, "prs"),
-          o: openSelectedPr,
-          "esc/p": () => setView("main"),
-        };
-      case "cmdOutput":
-        return {
-          esc: () => setView("palette"),
-          ...(cmd && !cmd.running ? { r: () => runPaletteCommand(cmd.name, cmd.extraArgs) } : {}),
-        };
-      case "palette":
-        return { esc: () => setView("main"), enter: () => paletteEnter() };
-      case "addRepo":
-        return { esc: () => setView("main") };
-      case "config":
-        return { esc: () => setView("main") };
-      case "review":
-        return { esc: () => setView("main") };
-      case "help":
-        return {};
-      case "main": {
-        const currentExternal = currentRepo?.external === true;
-        return {
-          q: () => {
-            exit();
-            onExit();
-          },
-          "?": () => setView("help"),
-          t: () => {
-            setRailSel(sysKey("queue"));
-            setPane(2);
-          },
-          p: () => {
-            setView("prs");
-            void refreshAll({ scope: "monitor" });
-          },
-          ":": () => {
-            setPaletteFilter("");
-            setPaletteSel(0);
-            setPaletteArgsMode(false);
-            setPaletteArgs("");
-            setView("palette");
-          },
-          ",": () => setView("config"),
-          w: () => {
-            if (!props.githubEnabled)
-              return void showToast("info", "github mode is off ([github] enabled=false)");
-            if (watchlistError)
-              return void showToast("error", "watchlist unreadable — fix it before adding");
-            setAddRepoError(null);
-            setView("addRepo");
-          },
-          r: () => {
-            void forceLocalRefresh();
-            if (currentNwo) {
-              setRefreshing(true);
-              void refreshAll().finally(() => setRefreshing(false));
-            }
-          },
-          // "back to the rail" chip for the section/RepoDetail body hint sets.
-          "←": () => setPane(1),
-          // The section bodies' action chips — duplicate the keyboard recipes
-          // (handleSectionBodyInput) verbatim, guards included.
-          ...(body?.kind === "section"
-            ? {
-                R: () => {
-                  if (sysSection !== "queue") return;
-                  const tgt = localTarget;
-                  if (tgt?.kind === "recent" && tgt.status === "failed")
-                    return void runLocalAction("retry", [tgt.id], { label: "requeue" });
-                  if (tgt?.kind === "recent" && tgt.status === "done")
-                    return void showToast("info", "done tickets can't be requeued");
-                },
-                x: () => {
-                  const tgt = localTarget;
-                  if (sysSection === "queue" && tgt?.kind === "waiting") {
-                    return void askConfirm({
-                      title: "delete queued ticket",
-                      danger: true,
-                      body: `Delete inbox/${tgt.id}.md? (best-effort; the daemon may have claimed it)`,
-                      onConfirm: () => runLocalAction("rm", [tgt.id]),
-                    });
-                  }
-                  if (sysSection === "worktrees" && tgt?.kind === "worktree") {
-                    if (tgt.klass === "live")
-                      return void showToast("info", "live worktree — not prunable");
-                    return void askConfirm({
-                      title: "prune worktree",
-                      danger: true,
-                      body: `Prune ${tgt.slug} (${tgt.klass})? git worktree remove --force under the daemon lock.`,
-                      onConfirm: () =>
-                        runLocalAction("worktree", ["prune", tgt.path], { label: "prune" }),
-                    });
-                  }
-                },
-                f: () => {
-                  if (sysSection === "outbox" || sysSection === "daemon")
-                    runLocalAction("outbox", ["flush"], { label: "flush" });
-                },
-                X: () => {
-                  if (sysSection !== "daemon") return;
-                  const n = localCheap?.daemon.currentTickets.length ?? 0;
-                  askConfirm({
-                    title: "restart daemon",
-                    danger: true,
-                    body: `Restart will interrupt ${n} in-flight ticket(s) (soft-abort, committed work salvaged). Continue?`,
-                    onConfirm: () => runLocalAction("restart", [], { label: "restart" }),
-                  });
-                },
-              }
-            : {}),
-          // "enter detail": pane 3 → the selected PR's overlay; pane 2 issues →
-          // the issue detail; pane 1 / logs section → the row-kind enter recipe.
-          enter: () => {
-            if (pane === 3) return void openPrDetail(selectedPane3Pr, "main");
-            if (pane === 1 && selectedRow?.kind === "repo")
-              return void openRepoDetailView(selectedRow.repo);
-            if (sysSection === "logs") return void onLogExpand();
-            if (pane === 2 && body?.kind === "issues") void openDetail();
-          },
-          // `s` chip covers BOTH hint rows that carry it — pane 1 ("assess",
-          // repo-scoped) and pane 2 ("assess issue", issue-scoped) — via the
-          // same pane gate as the keyboard `s` branch. The `S` auto-plan
-          // variant has no hint chip, so autoPlan is always false here.
-          s: () => {
-            if (pane === 2 && currentNwo && currentIssue) {
-              return void runAssess(false, `${currentNwo}#${currentIssue.number}`);
-            }
-            void runAssess(false);
-          },
-          // `d`/`a` chips render only in pane 2's hint set — duplicate that
-          // pane's keyboard branches verbatim, external-repo gate included.
-          d: () => {
-            if (!currentExternal) return void runAction("dispatch");
-            if (!currentNwo || !currentIssue) return;
-            const num = currentIssue.number;
-            showToast("info", `dispatching ${currentNwo}#${num}…`);
-            void client.dispatchTicket(currentNwo, num).then((res) => {
-              if (!aliveRef.current) return;
-              if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
-              else showToast("error", res.error);
-            });
-          },
-          a: () => {
-            if (currentExternal) {
-              return void showToast(
-                "error",
-                "not available for external repos — d dispatches a fork-PR ticket",
-              );
-            }
-            void runAction("approve");
-          },
-          // "c analyze" renders only in pane 2's hint set — the keyboard `c`
-          // branch verbatim (works on owned AND external repos, no gate).
-          c: () => {
-            if (!currentNwo || !currentIssue) return;
-            const num = currentIssue.number;
-            showToast("info", `drafting analysis for ${currentNwo}#${num}…`);
-            void client.analyzeIssue(currentNwo, num).then((res) => {
-              if (!aliveRef.current) return;
-              if (res.ok)
-                showToast("success", `analysis queued: ${res.value.id} · v to review when parked`);
-              else showToast("error", res.error);
-            });
-          },
-          // "o browser" opens a different resource per pane: 1 → the selected
-          // repo, 3 → the selected PR, 2 → the selected issue — each arm is
-          // its pane's keyboard `o` branch verbatim.
-          o: () => {
-            if (pane === 1) {
-              if (selectedRow?.kind === "repo" && selectedRow.repo.nwo)
-                return void openRepoBrowser(selectedRow.repo.nwo);
-              return void showToast("info", "no GitHub URL");
-            }
-            if (pane === 3) {
-              if (selectedPane3Pr) {
-                const { nwo, number } = selectedPane3Pr;
-                void client.openPrInBrowser(nwo, number).then((res) => {
-                  if (!aliveRef.current) return;
-                  if (!res.ok) showToast("error", res.error);
-                });
-              }
-              return;
-            }
-            void openBrowser();
-          },
-          "/": () => {
-            if (body?.kind !== "issues") return;
-            setFiltering(true);
-            setPane(2);
-          },
-        };
-      }
-    }
-  }, [
-    confirm,
-    logOverlay,
-    view,
-    cmd,
-    prDetail,
-    selectedPr,
-    watchlistError,
-    pane,
-    currentRepo,
-    currentNwo,
-    currentIssue,
-    selectedPane3Pr,
-    selectedRow,
-    body,
-    sysSection,
-    localTarget,
-    localCheap,
-    repoDetailTarget,
-    client,
-    exit,
-    onExit,
-    forceLocalRefresh,
-    runLocalAction,
-    askConfirm,
-    onLogExpand,
-    openRepoDetailView,
-    openDetailIssueInBrowser,
-    openPrDetailInBrowser,
-    openPrDetail,
-    openSelectedPr,
-    openRepoBrowser,
-    runPaletteCommand,
-    paletteEnter,
-    refreshAll,
-    showToast,
-    openDetail,
-    runAction,
-    runAssess,
-    openBrowser,
-  ]);
-
-  // What pane 2 currently shows, flattened for the hint lookup.
-  const bodyHintKind: BodyHintKind =
-    body?.kind === "issues" ? "issues" : body?.kind === "section" ? body.section : "repoDetail";
-  const hints: [string, string][] = logOverlay
-    ? // The overlay owns input — its own hint set (esc = close, the rest
-      // display-only), never the body chips underneath. (#225 class.)
-      LOG_OVERLAY_HINTS
-    : view === "repoDetail"
-      ? [
-          ["↑/↓", "scroll"],
-          ["o", "browser"],
-          ["esc", "back"],
-        ]
-      : hintsForUnified(view as HintView, bodyHintKind, pane, layout.mode, filtering);
   const listHeight = layout.bodyRows;
   const paletteProps = {
     commands: PALETTE_COMMANDS,
@@ -2768,8 +2701,8 @@ export function App(props: AppProps): React.JSX.Element {
         />
       }
       toast={toast}
-      hints={hints}
-      footerActions={footerActions}
+      chips={bindings.chips}
+      chipActions={chipActions}
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}
     >
