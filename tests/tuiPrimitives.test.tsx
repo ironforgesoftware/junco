@@ -7,6 +7,7 @@ import { Rule, ruleText } from "../src/tui/components/primitives/Rule.js";
 import { StatRow, statRowText } from "../src/tui/components/primitives/StatRow.js";
 import { Gauge, gaugeText } from "../src/tui/components/primitives/Gauge.js";
 import { Sparkline } from "../src/tui/components/primitives/Sparkline.js";
+import { SectionStrip } from "../src/tui/components/primitives/SectionStrip.js";
 
 describe("badgeText", () => {
   it("wraps the label in one pad space each side", () => {
@@ -61,6 +62,43 @@ describe("StatRow", () => {
       <StatRow label="state" value="up 2h" labelWidth={8} hint="pid 42" />,
     );
     expect(lastFrame()).toBe("state   up 2h pid 42");
+  });
+});
+
+describe("StatRow truncation", () => {
+  it("defaults to truncating the value's end", () => {
+    const { lastFrame } = render(
+      <Box width={20}>
+        <StatRow label="path" value="/home/alx/repos/acme-api" labelWidth={8} />
+      </Box>,
+    );
+    expect(lastFrame()).toContain("/home/a"); // prefix survives
+    expect(lastFrame()).not.toContain("acme-api");
+  });
+
+  it('truncate="start" keeps the discriminating tail', () => {
+    const { lastFrame } = render(
+      <Box width={20}>
+        <StatRow label="path" value="/home/alx/repos/acme-api" labelWidth={8} truncate="start" />
+      </Box>,
+    );
+    expect(lastFrame()).toContain("acme-api");
+  });
+
+  it("in the label-eating garble zone, the label cell stays whole and the value keeps its tail", () => {
+    // At width=30 the old single-<Text> implementation truncates the whole
+    // flattened "label+value" string from the front, landing mid-label: it
+    // renders "…h    /home/alx/repos/acme-api" (only the last letter of
+    // "path" survives). The fixed layout pins the label cell so it never
+    // shrinks, truncating only the value.
+    const { lastFrame } = render(
+      <Box width={30}>
+        <StatRow label="path" value="/home/alx/repos/acme-api" labelWidth={8} truncate="start" />
+      </Box>,
+    );
+    const f = lastFrame() ?? "";
+    expect(f).toMatch(/path {4}/); // full padded label, never partially eaten
+    expect(f).toContain("acme-api"); // value's discriminating tail survives
   });
 });
 
@@ -178,6 +216,21 @@ describe("Button", () => {
       </Box>,
     );
     expect(lastFrame()).toBe(" y confirm |");
+  });
+});
+
+describe("SectionStrip", () => {
+  it("renders the label and an optional dim extra on one row", () => {
+    const { lastFrame } = render(
+      <SectionStrip label="running" extra={<Text dimColor> (1/2)</Text>} />,
+    );
+    expect(lastFrame()).toBe("running (1/2)");
+    expect((lastFrame() ?? "").split("\n")).toHaveLength(1);
+  });
+
+  it("renders the bare label with no extra", () => {
+    const { lastFrame } = render(<SectionStrip label="recent" />);
+    expect(lastFrame()).toBe("recent");
   });
 });
 

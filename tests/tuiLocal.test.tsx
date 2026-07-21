@@ -4,6 +4,8 @@ import { render } from "ink-testing-library";
 import { OutboxSection, WorktreesSection, DaemonSection } from "../src/tui/components/sections.js";
 import type { LocalCheap, LocalHeavy, DaemonDetail } from "../src/tui/localSnapshot.js";
 import type { StoredOp } from "../src/githubOutbox.js";
+import { sectionRowsHeight } from "../src/tui/geometry.js";
+import { windowSlice } from "../src/tui/window.js";
 
 const NOW = new Date("2026-07-09T12:00:00Z");
 
@@ -199,6 +201,53 @@ describe("OutboxSection", () => {
     ).lastFrame()!;
     expect(f).toContain("2/5");
   });
+
+  it("position line survives the App's real section window at a realistic bodyRows (#251 regression)", () => {
+    const bodyRows = 20;
+    const win = sectionRowsHeight(bodyRows); // the window App.tsx actually hands the pane
+    // lastError: null so the selected op doesn't expand an extra detail row —
+    // isolates the window-vs-clip mismatch from that orthogonal behavior.
+    const manyOps: StoredOp[] = Array.from({ length: win + 1 }, (_, i) => ({
+      ...OP,
+      id: `op-${i}`,
+      path: `/x/github-outbox/op-${i}.json`,
+      lastError: null,
+    }));
+    const f = render(
+      <OutboxSection
+        outbox={{ depth: manyOps.length, dead: 0, ops: manyOps, deadOps: [], error: null }}
+        cursor={0}
+        window={windowSlice(manyOps.length, win, 0, 0)}
+        height={bodyRows}
+        focused
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain(`1/${manyOps.length}`);
+  });
+
+  it("never renders more lines than height, even with far more ops than fit", () => {
+    for (const bodyRows of [8, 14, 20, 30]) {
+      const win = sectionRowsHeight(bodyRows);
+      const manyOps: StoredOp[] = Array.from({ length: 50 }, (_, i) => ({
+        ...OP,
+        id: `op-${i}`,
+        path: `/x/github-outbox/op-${i}.json`,
+        lastError: null,
+      }));
+      const f = render(
+        <OutboxSection
+          outbox={{ depth: manyOps.length, dead: 0, ops: manyOps, deadOps: [], error: null }}
+          cursor={0}
+          window={windowSlice(manyOps.length, win, 0, 0)}
+          height={bodyRows}
+          focused
+          now={NOW}
+        />,
+      ).lastFrame()!;
+      expect(f.split("\n").length).toBeLessThanOrEqual(bodyRows);
+    }
+  });
 });
 
 describe("WorktreesSection", () => {
@@ -314,7 +363,15 @@ describe("DaemonSection", () => {
       <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
     ).lastFrame()!;
     expect(f).toContain("rate limited");
-    expect(f).not.toContain("rate_limited —");
+    // No reason → nothing is inserted between the endpoint row and the next
+    // stat row (health). A dangling reason row would land exactly there, so
+    // pin the row that follows the endpoint row rather than the endpoint
+    // row's own content.
+    const lines = f.split("\n").map((l) => l.replace(/[│─]/g, "").trim());
+    const iEndpoint = lines.findIndex((l) => l.includes("rate limited"));
+    expect(iEndpoint).toBeGreaterThanOrEqual(0);
+    expect(lines[iEndpoint]).toMatch(/^endpoint\s+rate limited$/);
+    expect(lines[iEndpoint + 1]).toContain("health");
   });
 
   it("gate ok/null but endpoint unreachable → unreachable value, no reason line", () => {

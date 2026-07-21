@@ -35,10 +35,13 @@ export function relTimeShort(iso: string, now: Date): string {
 
 const AGE_W = 4; // relTime can emit "365d"
 const PILL_W = MAX_STATE_BADGE_LEN + 2; // badgeText pad spaces
+const GUTTER_W = 1;
+const GLYPH_W = 1;
+const NUM_W = 5;
 const COLUMNS: Column[] = [
-  { label: "", width: 1 },
-  { label: "", width: 1 },
-  { label: "#", width: 5, align: "right" },
+  { label: "", width: GUTTER_W },
+  { label: "", width: GLYPH_W },
+  { label: "#", width: NUM_W, align: "right" },
   { label: "title", width: "flex" },
   { label: "state", width: PILL_W },
   { label: "age", width: AGE_W, align: "right" },
@@ -128,6 +131,7 @@ export function IssueList({
         const sel = idx === selected;
         const st = deriveState(iss.labels, trigger);
         const meta = stateMeta(st);
+        const botAuthored = isBotAuthored(iss.author, botLogin);
         return (
           <ClickableBox
             key={iss.number}
@@ -138,16 +142,16 @@ export function IssueList({
             gap={1}
             onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
-            <Box flexShrink={0} width={1}>
+            <Box flexShrink={0} width={GUTTER_W}>
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             </Box>
-            <Box flexShrink={0} width={1}>
+            <Box flexShrink={0} width={GLYPH_W}>
               <Text color={meta.color}>{meta.glyph}</Text>
             </Box>
-            <Box flexShrink={0} width={5}>
+            <Box flexShrink={0} width={NUM_W}>
               <Text
-                color={isBotAuthored(iss.author, botLogin) ? theme.accent : undefined}
-                dimColor={!sel && !isBotAuthored(iss.author, botLogin)}
+                color={botAuthored ? theme.accent : undefined}
+                dimColor={!sel && !botAuthored}
                 wrap="truncate-start"
               >
                 {`#${iss.number}`.padStart(5)}

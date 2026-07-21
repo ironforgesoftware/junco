@@ -13,7 +13,7 @@ import { ClickableBox } from "../ClickableBox.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
 import { clampScroll, maxScroll } from "../window.js";
 import { StatRow } from "./primitives/StatRow.js";
-import { Rule } from "./primitives/Rule.js";
+import { Rule, DETAIL_RULE_WIDTH } from "./primitives/Rule.js";
 import { Badge } from "./primitives/Badge.js";
 import { Gauge } from "./primitives/Gauge.js";
 import { Scrollbar } from "./primitives/Scrollbar.js";
@@ -191,7 +191,12 @@ export function OutboxSection({
       );
     }
   }
-  return React.cloneElement(border, {}, rows.slice(0, Math.max(1, height - 3)));
+  // Interior rows available inside the bordered pane: height minus the top
+  // and bottom border (paddingX is horizontal-only, so it costs no rows).
+  // The header row above already spends the pane's one title row, and the
+  // optional trailing position line is the other row sectionRowsHeight
+  // reserves — so the pane's full interior, not one row less, is the clip.
+  return React.cloneElement(border, {}, rows.slice(0, Math.max(1, height - 2)));
 }
 
 /** Per-ticket worktrees. The FS class (live/stale/backup) is display-only —
@@ -343,7 +348,7 @@ export function DaemonSection({
       hint="github data"
     />,
   );
-  lines.push(<Rule key="r-ep" title="endpoint" width={24} />);
+  lines.push(<Rule key="r-ep" title="endpoint" width={DETAIL_RULE_WIDTH} />);
   const gateState = daemon.gate?.state ?? "ok";
   const epColor = GATE_RED.has(gateState)
     ? theme.error
@@ -380,7 +385,7 @@ export function DaemonSection({
       labelWidth={LW}
     />,
   );
-  lines.push(<Rule key="r-act" title="activity" width={24} />);
+  lines.push(<Rule key="r-act" title="activity" width={DETAIL_RULE_WIDTH} />);
   lines.push(
     <StatRow
       key="g"

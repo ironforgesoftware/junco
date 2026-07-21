@@ -73,7 +73,7 @@ export function HelpModal({
           ["←/→ · h/l · tab", "switch panes"],
           ["[ / ]", "scroll (alias of ↑/↓ in views)"],
           ["g/G", "first / last"],
-          ["enter", "open detail — repo (pane 1), issue (pane 2), PR (pane 3 / PRs view)"],
+          ["enter", "open detail — repo (rail), issue (list), PR (monitor / PRs view)"],
           ["/", "filter issues (esc clears)"],
           [",", "config editor"],
           [":", "command palette (alias of the commands chip)"],

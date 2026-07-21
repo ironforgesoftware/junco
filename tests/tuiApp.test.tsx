@@ -1153,6 +1153,34 @@ describe("App", () => {
   });
 });
 
+describe("header breadcrumbs", () => {
+  const wlc = () => join(mkdtempSync(join(tmpdir(), "junco-crumb-")), "wl.json");
+
+  it("shows the repo alone in the main view, then repo ▸ #N in the issue detail", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wlc());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    expect(r.lastFrame()).toContain("acme/api");
+    expect(r.lastFrame()).not.toContain("▸ #7");
+    // Enter on pane 1's repo row opens RepoDetail, not the issues body (see
+    // App's pane===1 return-key branch) — so focus pane 2 explicitly first,
+    // mirroring "o in the detail view opens the snapshotted issue" above.
+    r.stdin.write(ESC + "[C"); // → pane 2 (issues)
+    await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 focused
+    r.stdin.write("\r"); // open the issue detail
+    await until(() => (r.lastFrame() ?? "").includes("acme/api ▸ #7"));
+  });
+
+  it("shows system ▸ <section> when a system row's body is open", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wlc());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    // ONE watched repo in this watchlist, so a single `j` lands on the queue row.
+    r.stdin.write("j");
+    await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
+  });
+});
+
 describe("external-repo routing", () => {
   const wle = () => join(mkdtempSync(join(tmpdir(), "junco-ext-")), "wl.json");
   const upIssue: DashIssue = {
@@ -2781,8 +2809,8 @@ describe("workspace wide mode", () => {
 // ---------------------------------------------------------------------------
 // Unified view-scoped refresh (r scopes to the selected repo; the PR monitor
 // sweeps every watched repo). The header's ↻ stamp UI is gone (declutter
-// sweep) — refreshedAt bookkeeping continues internally for a future daemon
-// panel, but has no visible surface to assert against here.
+// sweep) — refreshedAt bookkeeping is asserted through the daemon panel's
+// `refreshed` StatRow instead.
 // ---------------------------------------------------------------------------
 
 describe("unified refresh", () => {
@@ -2846,5 +2874,59 @@ describe("unified refresh", () => {
     }
     await until(() => (r.lastFrame() ?? "").includes("refreshed"));
     await until(() => (r.lastFrame() ?? "").includes("↻")); // non-null stamp, not the "—" placeholder
+  });
+
+  /** Walk the rail to the daemon system row: acme/api → alx/coral → queue →
+   * outbox → worktrees → daemon (the twoRepoWl watchlist's row order). */
+  const toDaemonRow = (r: ReturnType<typeof renderApp>): void => {
+    for (const k of "jjjjj") r.stdin.write(k);
+  };
+
+  it("offline: the daemon panel's stamp shows the OLDEST cache age, not the cycle time", async () => {
+    const staleIso = new Date(Date.now() - 5 * 60_000).toISOString();
+    const base = makeClient({ "acme/api": [rawIssue] }).client;
+    const client: DashboardClient = {
+      ...base,
+      listIssues: async () => okv({ issues: [rawIssue], staleAt: null }),
+      listPrs: async () => okv({ prs: [], staleAt: staleIso }), // cache-served
+    };
+    const r = renderApp(client, twoRepoWl());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    toDaemonRow(r);
+    // 5m, not 0s: one source was served from cache, so the cycle is only as
+    // fresh as its oldest input.
+    await until(() => (r.lastFrame() ?? "").includes("↻ 5m ago"));
+  });
+
+  it("a cycle where nothing delivered never advances the stamp", async () => {
+    // A stale (5m old) baseline, not "just now": `queueNow` (the daemon
+    // panel's relative-time anchor) freezes at mount and never re-polls in
+    // this harness (queuePollMs is fixed absurdly high), so a same-instant
+    // "0s ago" before AND after a broken guard would clamp to identical text
+    // (relTimeShort floors negative deltas at 0). Anchoring the baseline 5
+    // minutes in the past makes a wrongly-advanced stamp visibly diverge.
+    const staleIso = new Date(Date.now() - 5 * 60_000).toISOString();
+    const base = makeClient({ "acme/api": [rawIssue] }).client;
+    let fail = false;
+    const client: DashboardClient = {
+      ...base,
+      listIssues: async () =>
+        fail
+          ? ({ ok: false, error: "net down" } as const)
+          : okv({ issues: [rawIssue], staleAt: null }),
+      listPrs: async () =>
+        fail ? ({ ok: false, error: "net down" } as const) : okv({ prs: [], staleAt: staleIso }), // cache-served, 5m old
+    };
+    const r = renderApp(client, twoRepoWl());
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // initial mount cycle lands: stamp = 5m old
+    fail = true;
+    // `r` is pressed while STILL on the acme/api issues row — the refresh
+    // action only fires the network cycle when a repo is selected
+    // (currentNwo set); from the daemon row it would be a local-only no-op.
+    r.stdin.write("r");
+    await until(() => (r.lastFrame() ?? "").includes("net down")); // failure surfaced
+    toDaemonRow(r);
+    // Still 5m, not reset to "0s ago": the failed cycle delivered nothing.
+    await until(() => (r.lastFrame() ?? "").includes("↻ 5m ago"));
   });
 });

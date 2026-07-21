@@ -15,7 +15,7 @@ import { clampScroll, maxScroll } from "../window.js";
 import { fmtAge } from "../queueFmt.js";
 import { truncStart, fmtDur, SOURCE_TAG } from "./sections.js";
 import { StatRow } from "./primitives/StatRow.js";
-import { Rule } from "./primitives/Rule.js";
+import { Rule, DETAIL_RULE_WIDTH } from "./primitives/Rule.js";
 import { Scrollbar } from "./primitives/Scrollbar.js";
 import type { UnifiedRepo } from "../railModel.js";
 import type { LocalWorktree } from "../localSnapshot.js";
@@ -67,7 +67,7 @@ export function RepoDetail({
       <Text dimColor> {SOURCE_TAG[repo.source]}</Text>
     </Text>,
   );
-  lines.push(<StatRow key="p" label="path" value={repo.path} labelWidth={LW} />);
+  lines.push(<StatRow key="p" label="path" value={repo.path} labelWidth={LW} truncate="start" />);
   const g = repo.git;
   if (g === null) {
     lines.push(
@@ -100,7 +100,7 @@ export function RepoDetail({
     lines.push(<StatRow key={`c-${c}`} label="clone" value={truncStart(c, 40)} labelWidth={LW} />);
   }
 
-  lines.push(<Rule key="wh" title="worktrees" width={24} />);
+  lines.push(<Rule key="wh" title="worktrees" width={DETAIL_RULE_WIDTH} />);
   const wts = worktrees ?? [];
   if (wts.length === 0) {
     lines.push(
@@ -120,7 +120,7 @@ export function RepoDetail({
     );
   }
 
-  lines.push(<Rule key="qh" title="recent tickets" width={24} />);
+  lines.push(<Rule key="qh" title="recent tickets" width={DETAIL_RULE_WIDTH} />);
   const rows = repoQueueRows(queue, repo.path);
   const activity: { id: string; glyph: string; color: string | undefined; at: string | null }[] = [
     ...rows.running.map((r) => ({ id: r.id, glyph: "◐", color: theme.info, at: r.startedAt })),
