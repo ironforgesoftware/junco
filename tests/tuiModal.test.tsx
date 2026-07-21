@@ -38,28 +38,15 @@ describe("HelpModal", () => {
     expect(f).toContain("PR tracking"); // p key documented in panes & views
   });
 
-  it("local-mode help lists the mode swap, section keys, and the action/safety table", () => {
-    const f = render(
-      <HelpModal
-        view="main"
-        pane={2}
-        mode="wide"
-        trigger="junco"
-        uiMode="local"
-        localSection="worktrees"
-      />,
-    ).lastFrame()!;
-    expect(f).toContain("local mode");
-    expect(f).toContain("m"); // mode swap
-    expect(f).toContain("Shift+Tab");
-    expect(f).toContain("prune"); // worktrees action
-    expect(f).toContain("restart"); // daemon action
-    expect(f).toContain("[ / ]"); // daemon panel scroll
-  });
-
-  it("github help is unchanged when uiMode is absent", () => {
+  it("renders ONE unified reference: system-row verbs present, no mode toggle", () => {
     const f = render(<HelpModal view="main" pane={2} mode="wide" trigger="junco" />).lastFrame()!;
-    expect(f).toContain("act on issue");
+    expect(f).toContain("system rows"); // the section-verbs block
+    expect(f).toContain("requeue"); // queue R
+    expect(f).toContain("prune"); // worktrees x
+    expect(f).toContain("restart"); // daemon X
+    expect(f).toContain("full-screen live log"); // logs enter
+    expect(f).not.toContain("Shift+Tab"); // the mode toggle is gone
     expect(f).not.toContain("local mode");
+    expect(f).toContain("jump to the queue row"); // t retargeted from "queue view"
   });
 });
