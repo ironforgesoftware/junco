@@ -6,6 +6,7 @@ import type { HealthInfo } from "../ghClient.js";
 import { fmtCompact } from "../queueFmt.js";
 import { relTime, relTimeShort } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
+import type { Chip } from "../viewActions.js";
 import { ClickableBox } from "../ClickableBox.js";
 
 export type HintView =
@@ -163,18 +164,83 @@ export function Toast({
   );
 }
 
+/** Pure segment split for one chip — the mnemonic renderer's core, exported
+ * for structural tests (frames strip ANSI, so accent PLACEMENT is asserted
+ * here, not from rendered frames). Mnemonic chips render their label with the
+ * winning char in accent (uppercased in place when guarded — the shift cue);
+ * structural chips and charIndex-null mnemonics render key-first. */
+export function chipSegments(chip: Chip): { text: string; accent: boolean }[] {
+  if (chip.kind === "mnemonic" && chip.charIndex !== null) {
+    const i = chip.charIndex;
+    const ch = chip.guarded ? chip.label[i].toUpperCase() : chip.label[i];
+    return [
+      ...(i > 0 ? [{ text: chip.label.slice(0, i), accent: false }] : []),
+      { text: ch, accent: true },
+      ...(i + 1 < chip.label.length ? [{ text: chip.label.slice(i + 1), accent: false }] : []),
+    ];
+  }
+  return [
+    { text: chip.key, accent: true },
+    { text: ` ${chip.label}`, accent: false },
+  ];
+}
+
 /** Row n: context key hints — accent key, muted label. Each hint is a
  * flexShrink-0 chip; a chip whose hint KEY has an `actions` entry is
  * clickable (mouse-driven ftue), the rest render inert. Overflow clips
  * (no ellipsis) rather than truncating — the row is informational and the
- * layout invariant (height 1, no wrap) still holds. */
+ * layout invariant (height 1, no wrap) still holds.
+ * `chips` (the mnemonic path) takes precedence over the legacy `hints`
+ * pairs; its actions are keyed by mnemonic ID / structural KEY. */
 export function Footer({
   hints,
   actions,
+  chips,
+  chipActions,
 }: {
-  hints: [string, string][];
+  hints?: [string, string][];
   actions?: Record<string, () => void>;
+  chips?: Chip[];
+  chipActions?: Record<string, () => void>;
 }): React.JSX.Element {
+  if (chips !== undefined) {
+    return (
+      <Box paddingX={1} height={1} overflow="hidden">
+        {chips.map((chip, i) => {
+          const id = chip.kind === "mnemonic" ? chip.id : chip.key;
+          const run = chipActions?.[id];
+          const body = (
+            <Text>
+              {chipSegments(chip).map((seg, j) => (
+                <Text key={j} color={seg.accent ? theme.accent : undefined} dimColor={!seg.accent}>
+                  {seg.text}
+                </Text>
+              ))}
+            </Text>
+          );
+          return (
+            <Box key={`${id}-${i}`} flexShrink={0}>
+              {i > 0 ? <Text dimColor> · </Text> : null}
+              {run ? (
+                <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
+                  {body}
+                </ClickableBox>
+              ) : (
+                body
+              )}
+            </Box>
+          );
+        })}
+      </Box>
+    );
+  }
+  return legacyFooter(hints ?? [], actions);
+}
+
+function legacyFooter(
+  hints: [string, string][],
+  actions?: Record<string, () => void>,
+): React.JSX.Element {
   return (
     <Box paddingX={1} height={1} overflow="hidden">
       {hints.map(([k, label], i) => {

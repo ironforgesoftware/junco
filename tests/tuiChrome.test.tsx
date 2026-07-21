@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { Header, Toast, Footer, hintsFor, hintsForUnified } from "../src/tui/components/Chrome.js";
+import {
+  Header,
+  Toast,
+  Footer,
+  hintsFor,
+  hintsForUnified,
+  chipSegments,
+} from "../src/tui/components/Chrome.js";
 import type { HealthInfo } from "../src/tui/ghClient.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
@@ -509,5 +516,74 @@ describe("hintsForUnified", () => {
     expect(hintsForUnified("main", "issues", 2, "wide", true)).toEqual(
       hintsFor("main", 2, "wide", true),
     );
+  });
+});
+
+describe("chipSegments (mnemonic rendering)", () => {
+  it("splits a mnemonic label around the winning char", () => {
+    expect(
+      chipSegments({
+        kind: "mnemonic",
+        id: "analyze",
+        key: "n",
+        label: "analyze",
+        charIndex: 1,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "a", accent: false },
+      { text: "n", accent: true },
+      { text: "alyze", accent: false },
+    ]);
+  });
+
+  it("uppercases the winning char in place for guarded keys", () => {
+    expect(
+      chipSegments({
+        kind: "mnemonic",
+        id: "delete",
+        key: "D",
+        label: "delete",
+        charIndex: 0,
+        guarded: true,
+      })[0],
+    ).toEqual({ text: "D", accent: true });
+  });
+
+  it("null charIndex and structural chips render key-first", () => {
+    expect(chipSegments({ kind: "structural", key: "esc", label: "back" })).toEqual([
+      { text: "esc", accent: true },
+      { text: " back", accent: false },
+    ]);
+    expect(
+      chipSegments({
+        kind: "mnemonic",
+        id: "help",
+        key: "?",
+        label: "help",
+        charIndex: null,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "?", accent: true },
+      { text: " help", accent: false },
+    ]);
+  });
+
+  it("a winning char mid-label keeps prefix and suffix intact", () => {
+    expect(
+      chipSegments({
+        kind: "mnemonic",
+        id: "approve",
+        key: "o",
+        label: "approve",
+        charIndex: 4,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "appr", accent: false },
+      { text: "o", accent: true },
+      { text: "ve", accent: false },
+    ]);
   });
 });
