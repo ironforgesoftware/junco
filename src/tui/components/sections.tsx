@@ -13,7 +13,7 @@ import { ClickableBox } from "../ClickableBox.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
 import { clampScroll, maxScroll } from "../window.js";
 import { StatRow } from "./primitives/StatRow.js";
-import { Rule } from "./primitives/Rule.js";
+import { Rule, DETAIL_RULE_WIDTH } from "./primitives/Rule.js";
 import { Badge } from "./primitives/Badge.js";
 import { Gauge } from "./primitives/Gauge.js";
 import { Scrollbar } from "./primitives/Scrollbar.js";
@@ -343,7 +343,7 @@ export function DaemonSection({
       hint="github data"
     />,
   );
-  lines.push(<Rule key="r-ep" title="endpoint" width={24} />);
+  lines.push(<Rule key="r-ep" title="endpoint" width={DETAIL_RULE_WIDTH} />);
   const gateState = daemon.gate?.state ?? "ok";
   const epColor = GATE_RED.has(gateState)
     ? theme.error
@@ -380,7 +380,7 @@ export function DaemonSection({
       labelWidth={LW}
     />,
   );
-  lines.push(<Rule key="r-act" title="activity" width={24} />);
+  lines.push(<Rule key="r-act" title="activity" width={DETAIL_RULE_WIDTH} />);
   lines.push(
     <StatRow
       key="g"

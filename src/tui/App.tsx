@@ -21,7 +21,7 @@ import type { UpdateInfo } from "../updateCheck.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
 import { computeLayout } from "./layout.js";
 import { windowSlice } from "./window.js";
-import { listRowsHeight, railListHeight } from "./geometry.js";
+import { listRowsHeight, railListHeight, sectionRowsHeight } from "./geometry.js";
 import { Workspace } from "./components/Workspace.js";
 import { Header } from "./components/Chrome.js";
 import { LogView } from "./components/LogView.js";
@@ -547,7 +547,7 @@ export function App(props: AppProps): React.JSX.Element {
     sysSection !== null
       ? windowSlice(
           localRows.length,
-          listRowsHeight(layout.bodyRows),
+          sectionRowsHeight(layout.bodyRows),
           localCursorSafe,
           sectionPrev.current[sysSection],
         )

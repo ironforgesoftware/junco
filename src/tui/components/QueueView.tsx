@@ -16,6 +16,7 @@ import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { clampScroll, maxScroll } from "../window.js";
 import { Gauge } from "./primitives/Gauge.js";
+import { SectionStrip } from "./primitives/SectionStrip.js";
 
 /** A running row is flagged stalled when its last progress update is older than
  * this — the supervisor's nudge window, surfaced so the operator sees a wedged
@@ -108,23 +109,6 @@ export function QueueView({
     );
   };
 
-  // One-row section strip: a hover-tinted band carrying the bold/accented
-  // section label plus an optional dim extra (counts, poll heartbeat, …).
-  // Replaces the old bare bold-text group headers with the same row budget —
-  // one row in, one row out, so windowing/scroll math is untouched.
-  const strip = (
-    key: string,
-    label: string,
-    extra?: React.JSX.Element | null,
-  ): React.JSX.Element => (
-    <Box key={key} width="100%" backgroundColor={theme.hoverBg}>
-      <Text bold color={theme.accent}>
-        {label}
-      </Text>
-      {extra ?? null}
-    </Box>
-  );
-
   // Wraps an actionable row's Text in a ClickableBox when `selectable` — the
   // non-selectable GitHub `t` view never wraps, so its rows stay byte-
   // identical to before mouse support existed. Hover on the selected row keeps
@@ -178,13 +162,15 @@ export function QueueView({
   const pollAge =
     snap.daemonUp && st !== null && st.lastPollAt !== null ? fmtAge(st.lastPollAt, now) : null;
   rows.push(
-    strip(
-      "run-h",
-      "running",
-      <Text dimColor>{` (${snap.running.length}/${snap.maxConcurrent})${
-        pollAge !== null ? ` · ↻ poll ${pollAge}` : ""
-      }`}</Text>,
-    ),
+    <SectionStrip
+      key="run-h"
+      label="running"
+      extra={
+        <Text dimColor>{` (${snap.running.length}/${snap.maxConcurrent})${
+          pollAge !== null ? ` · ↻ poll ${pollAge}` : ""
+        }`}</Text>
+      }
+    />,
   );
   if (snap.running.length === 0) dash("run-none");
   for (const r of snap.running) {
@@ -242,7 +228,13 @@ export function QueueView({
   const waitSegs = [String(snap.waiting.length)];
   if (deferredCount > 0) waitSegs.push(`${deferredCount} deferred`);
   if (oldestQ !== null) waitSegs.push(`oldest ${fmtAgeShort(oldestQ, now)}`);
-  rows.push(strip("wait-h2", "waiting", <Text dimColor>{` (${waitSegs.join(" · ")})`}</Text>));
+  rows.push(
+    <SectionStrip
+      key="wait-h2"
+      label="waiting"
+      extra={<Text dimColor>{` (${waitSegs.join(" · ")})`}</Text>}
+    />,
+  );
   if (snap.waiting.length === 0) dash("wait-none");
   snap.waiting.forEach((w, i) => {
     const note = waitingNote(w);
@@ -273,7 +265,7 @@ export function QueueView({
       {" "}
     </Text>,
   );
-  rows.push(strip("rec-h2", "recent", null));
+  rows.push(<SectionStrip key="rec-h2" label="recent" />);
   // LOCAL only: RECENT caps at 5, so surface the full done/failed totals here.
   if (counts) {
     rows.push(
@@ -326,7 +318,7 @@ export function QueueView({
         {" "}
       </Text>,
     );
-    rows.push(strip("stats-t", "stats", null));
+    rows.push(<SectionStrip key="stats-t" label="stats" />);
 
     // 24h: counts + success rate always render; avg/ETA only with a populated
     // ledger (avgDurationSeconds drives both; ETA also drops when zero).

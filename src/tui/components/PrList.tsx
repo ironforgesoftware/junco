@@ -176,6 +176,7 @@ export function PrList({
         const idx = window.start + i;
         const sel = idx === selected;
         const meta = metaOf[idx];
+        const botAuthored = isBotAuthored(prItem.author, botLogin);
         const checksStr = checksToString(prItem.checks);
         const checksColor =
           prItem.checks.fail > 0
@@ -207,8 +208,8 @@ export function PrList({
             </Box>
             <Box flexShrink={0} width={5}>
               <Text
-                color={isBotAuthored(prItem.author, botLogin) ? theme.accent : undefined}
-                dimColor={!sel && !isBotAuthored(prItem.author, botLogin)}
+                color={botAuthored ? theme.accent : undefined}
+                dimColor={!sel && !botAuthored}
                 wrap="truncate-start"
               >
                 {`#${prItem.number}`.padStart(5)}

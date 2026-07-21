@@ -5,6 +5,7 @@ import {
   SYSTEM_BLOCK_ROWS,
   listRowsHeight,
   railListHeight,
+  sectionRowsHeight,
 } from "../src/tui/geometry.js";
 
 describe("geometry", () => {
@@ -22,5 +23,13 @@ describe("geometry", () => {
   it("pins the pane-relative anchor rows", () => {
     expect(PANE_CONTENT_ROW).toBe(2); // border(0) + title(1)
     expect(LINK_LINE_ROW).toBe(3); // border(0) + title(1) + heading(2)
+  });
+
+  it("sectionRowsHeight budgets a header-less body (borders + title + position)", () => {
+    // The section bodies (outbox, worktrees) have no column-header strip, so they
+    // get one row MORE than the issue/PR lists at the same terminal height.
+    expect(sectionRowsHeight(20)).toBe(16);
+    expect(listRowsHeight(20)).toBe(15);
+    expect(sectionRowsHeight(2)).toBe(1); // clamped, never below 1
   });
 });

@@ -7,6 +7,7 @@ import { Rule, ruleText } from "../src/tui/components/primitives/Rule.js";
 import { StatRow, statRowText } from "../src/tui/components/primitives/StatRow.js";
 import { Gauge, gaugeText } from "../src/tui/components/primitives/Gauge.js";
 import { Sparkline } from "../src/tui/components/primitives/Sparkline.js";
+import { SectionStrip } from "../src/tui/components/primitives/SectionStrip.js";
 
 describe("badgeText", () => {
   it("wraps the label in one pad space each side", () => {
@@ -178,6 +179,21 @@ describe("Button", () => {
       </Box>,
     );
     expect(lastFrame()).toBe(" y confirm |");
+  });
+});
+
+describe("SectionStrip", () => {
+  it("renders the label and an optional dim extra on one row", () => {
+    const { lastFrame } = render(
+      <SectionStrip label="running" extra={<Text dimColor> (1/2)</Text>} />,
+    );
+    expect(lastFrame()).toBe("running (1/2)");
+    expect((lastFrame() ?? "").split("\n")).toHaveLength(1);
+  });
+
+  it("renders the bare label with no extra", () => {
+    const { lastFrame } = render(<SectionStrip label="recent" />);
+    expect(lastFrame()).toBe("recent");
   });
 });
 

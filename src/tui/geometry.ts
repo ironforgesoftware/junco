@@ -29,3 +29,10 @@ export function railListHeight(bodyRows: number): number {
 export function listRowsHeight(bodyRows: number): number {
   return Math.max(1, bodyRows - 5);
 }
+
+/** Rows a header-less section body (outbox, worktrees) can show: borders(2) +
+ * title(1) + position line(1). The issue/PR lists spend one more on their
+ * column-header strip — see listRowsHeight. */
+export function sectionRowsHeight(bodyRows: number): number {
+  return Math.max(1, bodyRows - 4);
+}

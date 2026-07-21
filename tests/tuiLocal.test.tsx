@@ -314,7 +314,10 @@ describe("DaemonSection", () => {
       <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
     ).lastFrame()!;
     expect(f).toContain("rate limited");
-    expect(f).not.toContain("rate_limited —");
+    // No reason → no trailing reason line under the endpoint row. The badge is
+    // the last thing on its line and nothing follows it.
+    const endpointLine = f.split("\n").find((l) => l.includes("rate limited")) ?? "";
+    expect(endpointLine.replace(/[│─]/g, "").trim()).toMatch(/^endpoint\s+rate limited$/);
   });
 
   it("gate ok/null but endpoint unreachable → unreachable value, no reason line", () => {
