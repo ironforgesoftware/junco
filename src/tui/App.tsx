@@ -64,7 +64,7 @@ import { ReviewView, type ReviewState } from "./components/ReviewView.js";
 import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
-import { theme, type ToastKind } from "./theme.js";
+import { theme } from "./theme.js";
 import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
 import { Button } from "./components/primitives/Button.js";
@@ -72,6 +72,7 @@ import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
 import { useLogTail } from "./useLogTail.js";
 import type { LogReaderDeps } from "../logReader.js";
+import { useToast } from "./hooks/useToast.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -320,8 +321,7 @@ export function App(props: AppProps): React.JSX.Element {
   });
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
-  const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { toast, showToast, dismissToast } = useToast();
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
   const [queueNow, setQueueNow] = useState<Date>(() => new Date());
@@ -555,18 +555,6 @@ export function App(props: AppProps): React.JSX.Element {
         )
       : { start: 0, end: 0 };
   if (sysSection !== null) sectionPrev.current[sysSection] = sectionWin.start;
-
-  const showToast = useCallback((kind: ToastKind, text: string) => {
-    setToast({ kind, text });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 4000);
-  }, []);
-  useEffect(
-    () => () => {
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-    },
-    [],
-  );
 
   const currentIssues = currentNwo ? (issues[currentNwo] ?? []) : [];
   // The live `/` filter is applied before selection resolves; the number anchor
@@ -1546,18 +1534,6 @@ export function App(props: AppProps): React.JSX.Element {
     if (repoPrs.length === 0) return;
     const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
     setPane3SelNum(repoPrs[clamped].number);
-  };
-
-  // Dismiss an active toast on the next input (keyboard keystroke or mouse
-  // press) — shared so both useGuardedInput and the mouse press-observer
-  // (useOnAnyMousePress below) apply the same rule.
-  const dismissToast = (): void => {
-    if (!toast) return;
-    setToast(null);
-    if (toastTimer.current) {
-      clearTimeout(toastTimer.current);
-      toastTimer.current = null;
-    }
   };
 
   // Rail movement: anchor the KEY of the landed row (never a bare index) so a
