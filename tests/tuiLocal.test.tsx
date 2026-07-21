@@ -314,10 +314,15 @@ describe("DaemonSection", () => {
       <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
     ).lastFrame()!;
     expect(f).toContain("rate limited");
-    // No reason → no trailing reason line under the endpoint row. The badge is
-    // the last thing on its line and nothing follows it.
-    const endpointLine = f.split("\n").find((l) => l.includes("rate limited")) ?? "";
-    expect(endpointLine.replace(/[│─]/g, "").trim()).toMatch(/^endpoint\s+rate limited$/);
+    // No reason → nothing is inserted between the endpoint row and the next
+    // stat row (health). A dangling reason row would land exactly there, so
+    // pin the row that follows the endpoint row rather than the endpoint
+    // row's own content.
+    const lines = f.split("\n").map((l) => l.replace(/[│─]/g, "").trim());
+    const iEndpoint = lines.findIndex((l) => l.includes("rate limited"));
+    expect(iEndpoint).toBeGreaterThanOrEqual(0);
+    expect(lines[iEndpoint]).toMatch(/^endpoint\s+rate limited$/);
+    expect(lines[iEndpoint + 1]).toContain("health");
   });
 
   it("gate ok/null but endpoint unreachable → unreachable value, no reason line", () => {
