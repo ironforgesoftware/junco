@@ -78,6 +78,7 @@ import { useHealth } from "./hooks/useHealth.js";
 import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
 import { useAssessHistory } from "./hooks/useAssessHistory.js";
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
+import { useBotLogin } from "./hooks/useBotLogin.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -376,7 +377,7 @@ export function App(props: AppProps): React.JSX.Element {
   // The junco bot account's gh login (resolved once via botLoginFn); null when
   // the feature is inert (disabled, unresolvable, or botLoginFn absent) — rows
   // opened by this login render their number cell in accent (IssueList/PrList).
-  const [botLogin, setBotLogin] = useState<string | null>(null);
+  const botLogin = useBotLogin(props.botLoginFn);
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
 
@@ -902,20 +903,6 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [refreshAll, refreshPollMs]);
-
-  // Bot-account identity probe: fires once on mount (absent botLoginFn → the
-  // feature stays inert, botLogin stays null). `on` guards a late resolution
-  // against a post-unmount setState.
-  useEffect(() => {
-    if (!props.botLoginFn) return;
-    let on = true;
-    void props.botLoginFn().then((l) => {
-      if (on) setBotLogin(l);
-    });
-    return () => {
-      on = false;
-    };
-  }, [props.botLoginFn]);
 
   // Full sweep on mount and whenever the watchlist changes (refreshAll's
   // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
