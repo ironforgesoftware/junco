@@ -102,7 +102,7 @@ describe("UnifiedRail", () => {
     expect(f).toContain("(cfg)");
     expect(f).toContain("scratch"); // local row = path tail
     expect(f).toContain("(clone)"); // local row source tag
-    expect(f).toContain("system");
+    expect(f).toContain("── system"); // Rule-drawn separator + title, merged into one row
     for (const s of ["queue", "outbox", "worktrees", "daemon", "logs"]) {
       expect(f).toContain(s);
     }

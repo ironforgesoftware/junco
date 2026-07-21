@@ -9,7 +9,7 @@ import {
 
 describe("geometry", () => {
   it("mirrors the rail repo-row budget: borders + title + position line + system block", () => {
-    expect(SYSTEM_BLOCK_ROWS).toBe(7); // separator + "system" header + five rows
+    expect(SYSTEM_BLOCK_ROWS).toBe(6); // one titled Rule ("system") + five rows
     expect(railListHeight(30)).toBe(30 - 4 - SYSTEM_BLOCK_ROWS);
     expect(railListHeight(5)).toBe(1); // clamps at 1, never 0/negative
   });

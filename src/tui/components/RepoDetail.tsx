@@ -7,13 +7,16 @@
  */
 
 import React from "react";
-import { Text } from "ink";
+import { Box, Text } from "ink";
 import { resolve } from "node:path";
 import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { clampScroll, maxScroll } from "../window.js";
 import { fmtAge } from "../queueFmt.js";
 import { truncStart, fmtDur, SOURCE_TAG } from "./sections.js";
+import { StatRow } from "./primitives/StatRow.js";
+import { Rule } from "./primitives/Rule.js";
+import { Scrollbar } from "./primitives/Scrollbar.js";
 import type { UnifiedRepo } from "../railModel.js";
 import type { LocalWorktree } from "../localSnapshot.js";
 import type { QueueSnapshot, QueueRunning, QueueWaiting, QueueRecent } from "../queueSnapshot.js";
@@ -56,6 +59,7 @@ export function RepoDetail({
   /** Reports `maxScroll(lines, visible)` DURING render (DaemonSection rule). */
   onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
+  const LW = 8;
   const lines: React.JSX.Element[] = [];
   lines.push(
     <Text key="t" bold color={focused ? theme.accent : undefined} wrap="truncate">
@@ -63,11 +67,7 @@ export function RepoDetail({
       <Text dimColor> {SOURCE_TAG[repo.source]}</Text>
     </Text>,
   );
-  lines.push(
-    <Text key="p" wrap="truncate">
-      path <Text dimColor>{repo.path}</Text>
-    </Text>,
-  );
+  lines.push(<StatRow key="p" label="path" value={repo.path} labelWidth={LW} />);
   const g = repo.git;
   if (g === null) {
     lines.push(
@@ -83,34 +83,24 @@ export function RepoDetail({
     );
   } else {
     lines.push(
-      <Text key="g" wrap="truncate">
-        branch {g.branch ?? "?"}
-        {g.headSha !== null ? `@${g.headSha.slice(0, 7)}` : ""}
-        {g.dirty === true && <Text color={theme.warn}> ✎ dirty</Text>}
-      </Text>,
+      <StatRow
+        key="g"
+        label="branch"
+        value={`${g.branch ?? "?"}${g.headSha !== null ? `@${g.headSha.slice(0, 7)}` : ""}`}
+        labelWidth={LW}
+        hint={g.dirty === true ? "✎ dirty" : undefined}
+        color={g.dirty === true ? theme.warn : undefined}
+      />,
     );
     if (g.originUrl !== null) {
-      lines.push(
-        <Text key="o" dimColor wrap="truncate">
-          origin {g.originUrl}
-        </Text>,
-      );
+      lines.push(<StatRow key="o" label="origin" value={g.originUrl} labelWidth={LW} />);
     }
   }
   for (const c of repo.clones) {
-    lines.push(
-      <Text key={`c-${c}`} dimColor wrap="truncate">
-        clone {truncStart(c, 40)}
-      </Text>,
-    );
+    lines.push(<StatRow key={`c-${c}`} label="clone" value={truncStart(c, 40)} labelWidth={LW} />);
   }
 
-  lines.push(
-    <Text key="wh" bold>
-      {" "}
-      worktrees
-    </Text>,
-  );
+  lines.push(<Rule key="wh" title="worktrees" width={24} />);
   const wts = worktrees ?? [];
   if (wts.length === 0) {
     lines.push(
@@ -130,12 +120,7 @@ export function RepoDetail({
     );
   }
 
-  lines.push(
-    <Text key="qh" bold>
-      {" "}
-      recent tickets
-    </Text>,
-  );
+  lines.push(<Rule key="qh" title="recent tickets" width={24} />);
   const rows = repoQueueRows(queue, repo.path);
   const activity: { id: string; glyph: string; color: string | undefined; at: string | null }[] = [
     ...rows.running.map((r) => ({ id: r.id, glyph: "◐", color: theme.info, at: r.startedAt })),
@@ -182,7 +167,12 @@ export function RepoDetail({
       height={height}
       onWheel={onWheel}
     >
-      {lines.slice(start, start + visible)}
+      <Box flexGrow={1}>
+        <Box flexDirection="column" flexGrow={1} minWidth={0}>
+          {lines.slice(start, start + visible)}
+        </Box>
+        <Scrollbar offset={start} viewport={visible} total={lines.length} height={visible} />
+      </Box>
     </ClickableBox>
   );
 }

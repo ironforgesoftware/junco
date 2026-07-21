@@ -4,9 +4,10 @@
  * budget changes here, every consumer moves together instead of drifting.
  */
 
-/** Pinned system block in the unified rail: separator + "system" header +
- * the five section rows (queue/outbox/worktrees/daemon/logs). */
-export const SYSTEM_BLOCK_ROWS = 7;
+/** Pinned system block in the unified rail: one titled Rule ("system",
+ * separator + header merged into a single row) + the five section rows
+ * (queue/outbox/worktrees/daemon/logs). */
+export const SYSTEM_BLOCK_ROWS = 6;
 
 /** First content row inside a bordered pane, pane-relative
  * (0 = top border, 1 = title row, 2 = first content row). */
