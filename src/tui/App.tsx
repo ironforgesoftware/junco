@@ -77,6 +77,7 @@ import { useConfirm } from "./hooks/useConfirm.js";
 import { useHealth } from "./hooks/useHealth.js";
 import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
 import { useAssessHistory } from "./hooks/useAssessHistory.js";
+import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -371,7 +372,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [logSearchMode, setLogSearchMode] = useState(false);
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
-  const [updateLatest, setUpdateLatest] = useState<string | null>(null);
+  const updateLatest = useUpdateCheck(props.checkUpdateFn);
   // The junco bot account's gh login (resolved once via botLoginFn); null when
   // the feature is inert (disabled, unresolvable, or botLoginFn absent) — rows
   // opened by this login render their number cell in accent (IssueList/PrList).
@@ -901,28 +902,6 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [refreshAll, refreshPollMs]);
-
-  // Update-check polling: fires once on mount (never blocks first paint —
-  // async post-mount) and every 24h thereafter. Absent checkUpdateFn (tests,
-  // or a config with updateCheck disabled upstream) → chip/help line stay off.
-  useEffect(() => {
-    const fn = props.checkUpdateFn;
-    if (!fn) return;
-    let cancelled = false;
-    const tick = (): void => {
-      void fn()
-        .then((info) => {
-          if (!cancelled) setUpdateLatest(info !== null && info.available ? info.latest : null);
-        })
-        .catch(() => {}); // checkForUpdate never throws; belt for injected fakes
-    };
-    tick();
-    const t = setInterval(tick, 24 * 60 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [props.checkUpdateFn]);
 
   // Bot-account identity probe: fires once on mount (absent botLoginFn → the
   // feature stays inert, botLogin stays null). `on` guards a late resolution
