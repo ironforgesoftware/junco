@@ -75,6 +75,7 @@ import type { LogReaderDeps } from "../logReader.js";
 import { useToast } from "./hooks/useToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
 import { useHealth } from "./hooks/useHealth.js";
+import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -317,8 +318,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
   const health = useHealth(client, healthPollMs);
-  const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
-  const [queueNow, setQueueNow] = useState<Date>(() => new Date());
+  const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
   const [assessHistory, setAssessHistory] = useState<Map<string, AssessHistory>>(new Map());
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
@@ -900,23 +900,6 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [refreshAll, refreshPollMs]);
-
-  // Queue polling (also fires once on mount).
-  useEffect(() => {
-    let alive = true;
-    const run = async (): Promise<void> => {
-      const s = await queueFn();
-      if (!alive) return;
-      setQueueSnap(s);
-      setQueueNow(new Date());
-    };
-    void run();
-    const id = setInterval(() => void run(), queuePollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [queueFn, queuePollMs]);
 
   // Assess-history polling (also fires once on mount). Slower than the queue
   // cadence: a record only changes when an assess run finalizes (#193).
