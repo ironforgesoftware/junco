@@ -33,6 +33,7 @@ import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 import { run, cloneHarness } from "./helpers/gitHarness.js";
+import { ghCases, ghShim, gitFailShim } from "./helpers/ghScript.js";
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -544,7 +545,7 @@ exit 1
     done
     echo "https://github.com/owner/repo/pull/456"; exit 0`;
     const cfg = makeConfig(h, {
-      ghBin: ghShim("gh-tokens-capture.sh", prCreate),
+      ghBin: ghShim(h.root, "gh-tokens-capture.sh", prCreate),
       criticEnabled: true,
       criticMaxRetries: 1,
       verifyEnabled: false,
@@ -810,7 +811,7 @@ exit 1
   }, 20000);
 
   it("offline GUARD-abort with commits routes to done/ (aborted_partial), no false 'no committed work' banner (#123/#125)", async () => {
-    const cfg = makeConfig(h, { gitBin: gitFailShim("git-offkill.sh", "push", NET) });
+    const cfg = makeConfig(h, { gitBin: gitFailShim(h.root, "git-offkill.sh", "push", NET) });
     const { task, path } = makeTicket(
       h,
       "offkill.md",
@@ -874,54 +875,6 @@ exit 1
   // Offline endgame (outbox) — Task 4
   // -------------------------------------------------------------------------
 
-  /**
-   * Write an executable git shim that fails the named subcommand with a
-   * scripted stderr line and delegates everything else to the real git — the
-   * gitBin equivalent of the fake-gh script. `subcommand` is matched as a
-   * standalone argv token (none of the flow's other git calls carry it).
-   */
-  function gitFailShim(name: string, subcommand: string, stderrLine: string): string {
-    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    const p = join(h.root, name);
-    writeFileSync(
-      p,
-      `#!/bin/sh
-for arg in "$@"; do
-  if [ "$arg" = "${subcommand}" ]; then
-    echo ${JSON.stringify(stderrLine)} >&2
-    exit 1
-  fi
-done
-exec ${JSON.stringify(realGit)} "$@"
-`,
-      "utf8",
-    );
-    chmodSync(p, 0o755);
-    return p;
-  }
-
-  /** A fake gh that answers `repo view` but fails `pr create` however scripted. */
-  function ghShim(name: string, prCreateBody: string): string {
-    const p = join(h.root, name);
-    writeFileSync(
-      p,
-      `#!/bin/sh
-args="$*"
-case "$args" in
-  "repo view --json nameWithOwner -q .nameWithOwner"*)
-    echo "owner/repo"; exit 0 ;;
-  "pr create "*)
-    ${prCreateBody} ;;
-  *)
-    echo "fake-gh: unhandled: $args" >&2; exit 1 ;;
-esac
-`,
-      "utf8",
-    );
-    chmodSync(p, 0o755);
-    return p;
-  }
-
   const NET = "connect: network is unreachable";
 
   async function runFlowWithOfflinePush(): Promise<{
@@ -929,7 +882,7 @@ esac
     cfg: Config;
   }> {
     // Real gh (repo view works, but push dies first); git shim fails `push`.
-    const cfg = makeConfig(h, { gitBin: gitFailShim("git-offpush.sh", "push", NET) });
+    const cfg = makeConfig(h, { gitBin: gitFailShim(h.root, "git-offpush.sh", "push", NET) });
     const { task, path } = makeTicket(
       h,
       "offpush.md",
@@ -950,7 +903,9 @@ esac
     cfg: Config;
   }> {
     // Real git (push lands on the bare remote); fake-gh fails `pr create` offline.
-    const cfg = makeConfig(h, { ghBin: ghShim("gh-offpr.sh", `echo "${NET}" >&2; exit 1`) });
+    const cfg = makeConfig(h, {
+      ghBin: ghShim(h.root, "gh-offpr.sh", `echo "${NET}" >&2; exit 1`),
+    });
     const { task, path } = makeTicket(
       h,
       "offpr.md",
@@ -970,7 +925,12 @@ esac
   }> {
     // Non-network push failure ("denied") — not ours to queue.
     const cfg = makeConfig(h, {
-      gitBin: gitFailShim("git-denied.sh", "push", "remote: Permission to owner/repo.git denied"),
+      gitBin: gitFailShim(
+        h.root,
+        "git-denied.sh",
+        "push",
+        "remote: Permission to owner/repo.git denied",
+      ),
     });
     const { task, path } = makeTicket(
       h,
@@ -1007,7 +967,7 @@ esac
     // false. The ONLINE twin lands timeout_partial → done/; computePrStatus must
     // treat the queued op as "pushed" so this offline salvage routes to done/ the
     // same way — not to failed/ as bare `timeout`.
-    const cfg = makeConfig(h, { gitBin: gitFailShim("git-offtimeout.sh", "push", NET) });
+    const cfg = makeConfig(h, { gitBin: gitFailShim(h.root, "git-offtimeout.sh", "push", NET) });
     const { task, path } = makeTicket(
       h,
       "offtimeout.md",
@@ -1063,8 +1023,8 @@ esac
     done
     echo "https://github.com/owner/repo/pull/123"; exit 0`;
     const cfg = makeConfig(h, {
-      ghBin: ghShim("gh-capture.sh", prCreate),
-      gitBin: gitFailShim("git-nofetch.sh", "fetch", NET),
+      ghBin: ghShim(h.root, "gh-capture.sh", prCreate),
+      gitBin: gitFailShim(h.root, "git-nofetch.sh", "fetch", NET),
     });
     const { task, path } = makeTicket(
       h,
@@ -1087,32 +1047,9 @@ esac
 
   /** A fake gh built from a case-map: keys are argv-prefix globs, values are
    * `sh` bodies. Always answers `repo view`. Unhandled args exit 1. */
-  function ghCases(name: string, cases: Record<string, string>): string {
-    const branches = Object.entries(cases)
-      .map(([glob, body]) => `  ${glob})\n    ${body} ;;`)
-      .join("\n");
-    const p = join(h.root, name);
-    writeFileSync(
-      p,
-      `#!/bin/sh
-args="$*"
-case "$args" in
-  "repo view --json nameWithOwner -q .nameWithOwner"*)
-    echo "owner/repo"; exit 0 ;;
-${branches}
-  *)
-    echo "fake-gh: unhandled: $args" >&2; exit 1 ;;
-esac
-`,
-      "utf8",
-    );
-    chmodSync(p, 0o755);
-    return p;
-  }
-
   it("resume (requeued ticket): a pushed branch with no PR force-pushes over the stale tip and opens a PR", async () => {
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-resume.sh", {
+      ghBin: ghCases(h.root, "gh-resume.sh", {
         '"pr list "*': 'echo "[]"; exit 0',
         '"pr create "*': 'echo "https://github.com/owner/repo/pull/123"; exit 0',
       }),
@@ -1152,7 +1089,7 @@ esac
 
   it("fresh ticket: a colliding PR-less remote branch is REFUSED, not force-pushed (issue #70)", async () => {
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-refuse.sh", {
+      ghBin: ghCases(h.root, "gh-refuse.sh", {
         '"pr list "*': 'echo "[]"; exit 0',
         '"pr create "*': 'echo "https://github.com/owner/repo/pull/999"; exit 0',
       }),
@@ -1189,7 +1126,7 @@ esac
 
   it("idempotent create: gh pr create 'already exists' recovers the URL via pr list → completed", async () => {
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-exists.sh", {
+      ghBin: ghCases(h.root, "gh-exists.sh", {
         '"pr create "*': 'echo "a pull request for branch junco/idem already exists" >&2; exit 1',
         '"pr list "*':
           'echo \'[{"number":456,"url":"https://github.com/owner/repo/pull/456"}]\'; exit 0',
@@ -1215,7 +1152,7 @@ esac
 
   it("deterministic gh pr create failure fails terminally (branch pushed, open manually), never requeues (issue #73)", async () => {
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-nogo.sh", {
+      ghBin: ghCases(h.root, "gh-nogo.sh", {
         // A deterministic create failure (not network, not "already exists") —
         // it would fail identically on every retry.
         '"pr create "*':
@@ -1252,7 +1189,7 @@ esac
     // outbox — it neither requeues nor fails terminally (issue #73 leaves this
     // untouched: transient create failures are still handled durably).
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-net.sh", {
+      ghBin: ghCases(h.root, "gh-net.sh", {
         '"pr create "*': 'echo "error connecting to api.github.com" >&2; exit 1',
       }),
     });
@@ -1280,11 +1217,11 @@ esac
     const NET = "connect: network is unreachable";
     // gh answers repo view + the amend PR view; git shim fails only `push`.
     const cfg = makeConfig(h, {
-      ghBin: ghCases("gh-amend.sh", {
+      ghBin: ghCases(h.root, "gh-amend.sh", {
         '"pr view "*':
           'echo \'{"state":"OPEN","headRefName":"junco/amend-me","baseRefName":"main","isDraft":true,"url":"https://github.com/owner/repo/pull/42","isCrossRepository":false}\'; exit 0',
       }),
-      gitBin: gitFailShim("git-amendpush.sh", "push", NET),
+      gitBin: gitFailShim(h.root, "git-amendpush.sh", "push", NET),
     });
 
     // Seed an existing open-PR head branch on origin (validate + amend fetch).
