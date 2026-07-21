@@ -28,6 +28,7 @@ import { gh, git, GitOpError, isNetworkError } from "./git.js";
 import { acquirePidfileLock } from "./pidfileLock.js";
 import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
+import { upgradeQueuedFiledRecord } from "./assessReview.js";
 import { OUTBOX_SUBDIR } from "./dataTree.js";
 
 export type OutboxOp =
@@ -691,6 +692,24 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           return;
         }
         case "issue-create": {
+          // Best-effort filed-accounting upgrade: the flush is the moment a
+          // `queued` stamp learns its real outcome (#232). Never fails the op
+          // — the issue landed either way; the accounting is descriptive.
+          const upgradeRecord = (how: "created" | "deduped", url: string | null): void => {
+            try {
+              upgradeQueuedFiledRecord(cfg, op.nwo, op.fingerprint, {
+                at: new Date().toISOString(),
+                how,
+                ...(url !== null ? { url } : {}),
+              });
+            } catch (e) {
+              log.warn("outbox: filed-record upgrade failed", {
+                nwo: op.nwo,
+                fingerprint: op.fingerprint,
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
+          };
           // Labels FIRST: `gh issue create --label X` hard-fails on a missing
           // label. (The dedup list-scan below is author-scoped, not
           // label-scoped, so it no longer needs the label to exist.)
@@ -700,12 +719,18 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           // convergence depends on op N+1's list seeing the issue op N just
           // created.
           const markers = await fetchFindingMarkers(cfg, op.nwo, ghFn);
-          if (markers.has(op.fingerprint)) return; // already filed
+          if (markers.has(op.fingerprint)) {
+            // Already filed upstream — a still-`queued` stamp becomes `deduped`
+            // (a `created` stamp is left alone; upgradeQueuedFiledRecord only
+            // ever touches `queued`).
+            upgradeRecord("deduped", null);
+            return;
+          }
           const dir = mkdtempSync(join(tmpdir(), "junco-obxi-"));
           const file = join(dir, "issue.md");
           writeFileSync(file, op.bodyText, "utf8");
           try {
-            await ghFn(
+            const out = await ghFn(
               cfg,
               [
                 "issue",
@@ -720,6 +745,13 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
               ],
               { timeoutMs: GH_TIMEOUT },
             );
+            const url =
+              out.stdout
+                .trim()
+                .split("\n")
+                .reverse()
+                .find((l) => l.startsWith("https://")) ?? null;
+            upgradeRecord("created", url);
           } finally {
             rmSync(dir, { recursive: true, force: true });
           }
