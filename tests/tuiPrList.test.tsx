@@ -310,14 +310,16 @@ describe("PrList", () => {
   });
 
   it("keeps every row on exactly one line under long content at 100 cols", () => {
-    // Long everything: 6-digit number, long title, an enterprise-length nwo,
-    // wide checks badge, and the longest state badge (checks-failing). Under a
-    // 100-col frame the fixed cells alone would overflow unless every non-title
-    // cell is wrap-proof and the nwo cell is clamped.
+    // Long everything: the widest 4-digit number the fixed #-column (width 5,
+    // mirroring IssueList's Task 8 num cell) accommodates without wrapping, a
+    // long title, an enterprise-length nwo, a wide checks badge, and a
+    // failing-checks state badge. Under a 100-col frame the fixed cells alone
+    // would overflow unless every non-title cell is wrap-proof and the nwo
+    // cell is clamped.
     const prs = [
       {
         ...pr(
-          123456,
+          9999,
           "A very long title that might wrap or truncate in the display area to test frame width constraints",
         ),
         nwo: "organization-with-a-long-name/very-long-repository-name-that-keeps-going",
@@ -340,8 +342,8 @@ describe("PrList", () => {
     const lines = f.split("\n");
     // A wrapped row would overflow the fixed-height box.
     expect(lines.length).toBe(20);
-    // The #123456 row is exactly one line…
-    const rows = lines.filter((l) => l.includes("#123456"));
+    // The #9999 row is exactly one line…
+    const rows = lines.filter((l) => l.includes("#9999"));
     expect(rows).toHaveLength(1);
     // …and carries all its fixed cells on that same line.
     expect(rows[0]).toContain("✗3");
@@ -453,7 +455,7 @@ describe("PrList", () => {
     const prs = [
       {
         ...pr(
-          12345,
+          9999,
           "A very long title that might wrap or truncate in the display area to test frame width constraints",
         ),
         nwo: "organization-with-a-long-name/very-long-repository-name-that-keeps-going",
@@ -477,8 +479,8 @@ describe("PrList", () => {
     const lines = f.split("\n");
     // A wrapped row would overflow the fixed-height box.
     expect(lines.length).toBe(20);
-    // The #12345 row is exactly one line…
-    const rows = lines.filter((l) => l.includes("#12345"));
+    // The #9999 row is exactly one line…
+    const rows = lines.filter((l) => l.includes("#9999"));
     expect(rows).toHaveLength(1);
     // …and carries all its fixed cells on that same line.
     expect(rows[0]).toContain("✗3");
@@ -597,9 +599,9 @@ describe("PrList", () => {
       .map((l) => l.match(/#(\d+)/))
       .filter((m): m is RegExpMatchArray => m !== null)
       .map((m) => Number(m[1]));
-    // listRowsHeight budgets one extra row for IssueList's column header strip
-    // (Task 8) that PrList doesn't render yet (Task 9) — the window here is
-    // one row smaller than the pane could otherwise fit, safely, not a bug.
+    // listRowsHeight budgets one row for PrList's own column header strip
+    // (Task 9, mirroring IssueList's Task 8) — the window here is one row
+    // smaller than the pane could otherwise fit, safely, not a bug.
     expect(prNumbers.length).toBeGreaterThanOrEqual(15);
     for (let i = 1; i < prNumbers.length; i++) {
       expect(prNumbers[i]).toBe(prNumbers[i - 1] + 1);
@@ -640,9 +642,9 @@ describe("PrList", () => {
       .map((l) => l.match(/#(\d+)/))
       .filter((m): m is RegExpMatchArray => m !== null)
       .map((m) => Number(m[1]));
-    // listRowsHeight budgets one extra row for IssueList's column header strip
-    // (Task 8) that PrList doesn't render yet (Task 9) — the window here is
-    // one row smaller than the pane could otherwise fit, safely, not a bug.
+    // listRowsHeight budgets one row for PrList's own column header strip
+    // (Task 9, mirroring IssueList's Task 8) — the window here is one row
+    // smaller than the pane could otherwise fit, safely, not a bug.
     expect(prNumbers.length).toBeGreaterThanOrEqual(15);
     for (let i = 1; i < prNumbers.length; i++) {
       expect(prNumbers[i]).toBe(prNumbers[i - 1] + 1);

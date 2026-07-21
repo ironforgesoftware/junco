@@ -980,9 +980,11 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("pull requests"));
       await until(() => (r.lastFrame() ?? "").includes("Some PR"));
       // Click-again = enter: row 0 is selected from mount, so the click opens
-      // the fullscreen PR overlay (its footer is the unique marker). Opening the
+      // the fullscreen PR overlay (its footer is the unique marker). PrList's
+      // column header strip (Task 9) shifts row 0 down one line vs. the
+      // pre-header layout, so row 0 now sits at y=5 (was y=4). Opening the
       // overlay unmounts the row, so the retry self-terminates.
-      await fireUntil(r.stdin, click(30, 4), () =>
+      await fireUntil(r.stdin, click(30, 5), () =>
         (r.lastFrame() ?? "").includes("browser · esc back"),
       );
       r.stdin.write(ESC); // back to the prs view, side card visible again
@@ -1027,23 +1029,28 @@ describe("App", () => {
         </MouseProvider>,
       );
       await until(() => (r.lastFrame() ?? "").includes("PRs"));
-      await until(() => (r.lastFrame() ?? "").includes("Some PR"));
+      // "Some PR"'s title cell truncates to "Some …" in this narrow band once
+      // the checks/state/age columns claim their dataset-stable widths (Task
+      // 9) — gate readiness on the PR number instead, which always survives.
+      await until(() => (r.lastFrame() ?? "").includes("#100"));
       // Pane-3 band at 130 cols starts at x=78 (0-based); its ▌ selection bar
-      // and rows live there. Rows start at frame line 3 (0-based), like every list.
+      // and rows live there. PrList's column header strip (Task 9) shifts
+      // every row down one line vs. the pre-header layout: row 0 now sits at
+      // frame line 4 (0-based), row 1 at line 5.
       const pane3BarOn = (line: number): boolean =>
         ((r.lastFrame() ?? "").split("\n")[line] ?? "").slice(78).includes("▌");
-      await until(() => pane3BarOn(3)); // row 0 selected on load
-      // 1-based y=5 → row 1: focus pane 3 + select (idempotent to the fixed row).
-      await fireUntil(r.stdin, click(85, 5), () => pane3BarOn(4) && !pane3BarOn(3));
+      await until(() => pane3BarOn(4)); // row 0 selected on load
+      // 1-based y=6 → row 1 (line 5): focus pane 3 + select (idempotent to the fixed row).
+      await fireUntil(r.stdin, click(85, 6), () => pane3BarOn(5) && !pane3BarOn(4));
       // click-again = enter → fullscreen PR overlay (unmounts the row → self-terminates).
-      await fireUntil(r.stdin, click(85, 5), () =>
+      await fireUntil(r.stdin, click(85, 6), () =>
         (r.lastFrame() ?? "").includes("browser · esc back"),
       );
       r.stdin.write(ESC); // back to main; pane-3 selection intact
       await until(() => (r.lastFrame() ?? "").includes("PRs"));
-      await until(() => pane3BarOn(4));
+      await until(() => pane3BarOn(5));
       // wheelUp over the monitor moves the selection up; the mover clamps at row 0.
-      await fireUntil(r.stdin, `\u001b[<64;85;5M`, () => pane3BarOn(3) && !pane3BarOn(4));
+      await fireUntil(r.stdin, `\u001b[<64;85;6M`, () => pane3BarOn(4) && !pane3BarOn(5));
       r.unmount();
     });
 

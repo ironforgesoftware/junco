@@ -69,6 +69,9 @@ export function prStateMeta(s: PrLifecycle): { glyph: string; color: string; bad
   return META[s];
 }
 
+/** Longest lifecycle badge — the pill column's shared inner width. */
+export const MAX_PR_BADGE_LEN = Math.max(...Object.values(META).map((m) => m.badge.length));
+
 /** Reduce a `statusCheckRollup` array (gh pr list --json statusCheckRollup) to
  * pass/fail/pending counts. Elements are either CheckRun-shaped
  * (`status`/`conclusion`) or legacy StatusContext-shaped (`state`). Anything

@@ -1,12 +1,16 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
+import { derivePrState, prStateMeta, MAX_PR_BADGE_LEN, type DashPr } from "../prState.js";
 import { fmtClock } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { TableHeader, type Column } from "./primitives/TableHeader.js";
+import { Badge } from "./primitives/Badge.js";
 
-function checksToString(checks: {
+/** Exported for the header width-calc test (checks column width derives from
+ * the widest rendered string across the current dataset). */
+export function checksToString(checks: {
   pass: number;
   fail: number;
   pending: number;
@@ -61,6 +65,23 @@ export function PrList({
   onPanePress,
   onWheel,
 }: PrListProps): React.JSX.Element {
+  const AGE_W = 4; // relTime can emit "365d"
+  const PILL_W = MAX_PR_BADGE_LEN + 2; // badgeText pad spaces
+  const repoW = showNwo
+    ? Math.min(NWO_MAX_WIDTH, Math.max("repo".length, ...prs.map((p) => p.nwo.length), 0))
+    : 0;
+  const checksW = Math.max("checks".length, ...prs.map((p) => checksToString(p.checks).length), 0);
+  const columns: Column[] = [
+    { label: "", width: 1 },
+    { label: "", width: 1 },
+    { label: "#", width: 5, align: "right" },
+    { label: "title", width: "flex" },
+    ...(showNwo ? [{ label: "repo", width: repoW } as Column] : []),
+    { label: "checks", width: checksW },
+    { label: "state", width: PILL_W },
+    { label: "age", width: AGE_W, align: "right" },
+  ];
+
   return (
     <ClickableBox
       flexDirection="column"
@@ -76,6 +97,7 @@ export function PrList({
         {title ?? `pull requests · ${prs.length}`}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
+      <TableHeader columns={columns} />
       {prs.length === 0 && (
         <Text dimColor>
           {emptyText ??
@@ -107,34 +129,32 @@ export function PrList({
             gap={1}
             onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
-            <Box flexShrink={0}>
+            <Box flexShrink={0} width={1}>
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             </Box>
-            <Box flexShrink={0}>
+            <Box flexShrink={0} width={1}>
               <Text color={meta.color}>{meta.glyph}</Text>
             </Box>
-            <Box flexShrink={0}>
+            <Box flexShrink={0} width={5}>
               <Text dimColor={!sel}>{`#${prItem.number}`.padStart(5)}</Text>
             </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{prItem.title}</Text>
             </Box>
             {showNwo && (
-              <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
+              <Box flexShrink={0} width={repoW}>
                 <Text dimColor wrap="truncate-start">
                   {prItem.nwo}
                 </Text>
               </Box>
             )}
-            {checksStr !== "" && (
-              <Box flexShrink={0}>
-                <Text color={checksColor}>{checksStr}</Text>
-              </Box>
-            )}
-            <Box flexShrink={0}>
-              <Text color={meta.color}>{meta.badge}</Text>
+            <Box flexShrink={0} width={checksW}>
+              <Text color={checksColor}>{checksStr}</Text>
             </Box>
-            <Box flexShrink={0}>
+            <Box flexShrink={0} width={PILL_W}>
+              <Badge label={meta.badge} color={meta.color} padTo={MAX_PR_BADGE_LEN} />
+            </Box>
+            <Box flexShrink={0} width={AGE_W} justifyContent="flex-end">
               <Text dimColor>{relTime(prItem.updatedAt, now)}</Text>
             </Box>
           </ClickableBox>
