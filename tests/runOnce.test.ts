@@ -23,6 +23,7 @@ import type { TaskRecord } from "../src/taskHistory.js";
 import { listPending } from "../src/assessReview.js";
 import { draftCount } from "../src/commentReview.js";
 import { makeGithubReporter } from "../src/githubReport.js";
+import { fakeSession, type FakeSessionFactory } from "./helpers/fakeSession.js";
 import { makeSpendLedger } from "../src/spendLedger.js";
 import { makeConfig } from "./helpers/config.js";
 
@@ -59,61 +60,11 @@ function cfg(root: string): Config {
   );
 }
 
-function fakeFactory() {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        l({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "reply!" },
-        });
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 5));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
-}
-
-// A scriptable session (parameterized on the emitted text) — used by the
-// assess end-to-end test below, mirroring tests/assessFlow.test.ts's
-// fakeSession helper.
-function fakeSession(finalText: string) {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        l({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: finalText },
-        });
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 1));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
+// The default Q&A session: replies "reply!" with zero reported cost. The 5ms
+// prompt() delay is the original local fixture's — long enough that the
+// subscribe-time event burst always lands inside the awaited prompt.
+function fakeFactory(): FakeSessionFactory {
+  return fakeSession("reply!", 0, 5);
 }
 
 describe("runOnce", () => {

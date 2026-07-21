@@ -10,6 +10,7 @@ import { fingerprintFinding, findingMarker } from "../src/findings.js";
 import { GitOpError } from "../src/git.js";
 import type { Config, Ticket } from "../src/types.js";
 import { makeConfig } from "./helpers/config.js";
+import { fakeSession, fakeMultiMessageSession, throwingSession } from "./helpers/fakeSession.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures — the shared Config fixture (incl. `assess`), a scriptable
@@ -93,81 +94,6 @@ function claim(j: string, content: string, id = "assess-1"): { path: string; tic
 
 function ticketContent(repo: string, extra = ""): string {
   return `---\nid: assess-1\nrepo: ${JSON.stringify(repo)}\n${extra}---\n# Assess ${repo}\nscan for vulns\n`;
-}
-
-/** A scriptable AgentSessionLike that emits `finalText` as one text delta.
- * `costUsd` (default 0) lands in the turn's usage.cost.total — runResult.ts
- * folds that into RunResult.usage.costUsd, which is what a `deps.spend` wire
- * records (Phase-3 Task 3). */
-function fakeSession(finalText: string, costUsd = 0) {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        l({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: finalText },
-        });
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2, cost: { total: costUsd } },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 1));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
-}
-
-/** A scriptable AgentSessionLike that emits each of `messages` as its own
- * assistant message (message_start + text_delta), reproducing #36's
- * finalText = last-message-only. */
-function fakeMultiMessageSession(messages: string[]) {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        for (const m of messages) {
-          l({ type: "message_start", message: { role: "assistant" } });
-          l({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: m } });
-        }
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 1));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
-}
-
-/** A session whose prompt() throws — the Q&A transient-failure signature. */
-function throwingSession() {
-  return async () => ({
-    subscribe() {
-      return () => {};
-    },
-    async prompt() {
-      throw new Error("fetch failed: ECONNREFUSED");
-    },
-    dispose() {},
-    abort: async () => {},
-  });
 }
 
 function findingsFence(arr: unknown[]): string {

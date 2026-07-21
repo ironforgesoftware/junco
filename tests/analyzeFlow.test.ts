@@ -7,6 +7,7 @@ import { listDrafts, draftCount } from "../src/commentReview.js";
 import { parseTicket } from "../src/ticket.js";
 import type { Config, Ticket } from "../src/types.js";
 import { makeConfig } from "./helpers/config.js";
+import { fakeSession, fakeMultiMessageSession, throwingSession } from "./helpers/fakeSession.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures — the shared Config fixture, a scriptable AgentSessionLike, and
@@ -90,82 +91,6 @@ function ticketContent(repo: string, issue = 5, title = "Investigate the crash")
 /** A junco-comment fenced block carrying `text`. */
 function commentFence(text: string): string {
   return "```junco-comment\n" + text + "\n```";
-}
-
-/** A scriptable AgentSessionLike that emits `finalText` as one text delta.
- * `costUsd` (default 0) lands in the turn's usage.cost.total — runResult.ts
- * folds that into RunResult.usage.costUsd, which is what a `deps.spend` wire
- * records (Phase-3 Task 3). */
-function fakeSession(finalText: string, costUsd = 0) {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        l({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: finalText },
-        });
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2, cost: { total: costUsd } },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 1));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
-}
-
-/** A scriptable AgentSessionLike that emits each of `messages` as its own
- * assistant message (message_start + text_delta), reproducing #36's
- * finalText = last-message-only while allText keeps the whole run —
- * the same fixture as tests/assessFlow.test.ts's fakeMultiMessageSession. */
-function fakeMultiMessageSession(messages: string[]) {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        for (const m of messages) {
-          l({ type: "message_start", message: { role: "assistant" } });
-          l({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: m } });
-        }
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 1));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
-}
-
-/** A session whose prompt() throws — the Q&A transient-failure signature. */
-function throwingSession() {
-  return async () => ({
-    subscribe() {
-      return () => {};
-    },
-    async prompt() {
-      throw new Error("fetch failed: ECONNREFUSED");
-    },
-    dispose() {},
-    abort: async () => {},
-  });
 }
 
 /** A git fake that answers `remote get-url origin` and records every call, so a
