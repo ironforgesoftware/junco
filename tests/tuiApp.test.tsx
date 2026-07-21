@@ -2814,4 +2814,19 @@ describe("unified refresh", () => {
     await until(() => listPrCalls.length >= p0 + 2);
     expect(listPrCalls.slice(p0, p0 + 2).sort()).toEqual(["acme/api", "alx/coral"]);
   });
+
+  it("selecting the daemon system row surfaces the refreshed stamp once a cycle lands", async () => {
+    // Task 6: refreshedAt is no longer a dead lint-bridge state — the daemon
+    // panel's "refreshed" StatRow is its one consumer.
+    const { client } = makeScopeClient();
+    const r = renderApp(client, twoRepoWl());
+    await until(() => (r.lastFrame() ?? "").includes("#7")); // initial mount cycle lands
+    for (const k of "jjjjj") {
+      // acme/api → alx/coral → queue → outbox → worktrees → daemon
+      r.stdin.write(k);
+      await tick();
+    }
+    await until(() => (r.lastFrame() ?? "").includes("refreshed"));
+    await until(() => (r.lastFrame() ?? "").includes("↻")); // non-null stamp, not the "—" placeholder
+  });
 });

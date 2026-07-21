@@ -274,13 +274,10 @@ export function App(props: AppProps): React.JSX.Element {
   const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
   // When the last unified refresh cycle completed. Cache-served (offline)
   // sources pull it back to the oldest cache staleAt, so data that arrived
-  // stale never reads as fresh. No header UI reads this today (the ↻ chip
-  // was dropped in the declutter sweep) — Task 6 wires it into the daemon
-  // panel.
+  // stale never reads as fresh. Surfaced in the daemon panel's "refreshed"
+  // stat row (no header UI reads this — the ↻ chip was dropped in the
+  // declutter sweep).
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
-  // Bridge: the ↻ header chip is gone and the daemon panel doesn't consume the
-  // stamp until the next task's commit — keep the state referenced for lint.
-  void refreshedAt;
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
   const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
@@ -2915,6 +2912,8 @@ export function App(props: AppProps): React.JSX.Element {
                   return (
                     <DaemonSection
                       daemon={localCheap?.daemon ?? null}
+                      refreshedAt={refreshedAt}
+                      now={queueNow}
                       scroll={scroll}
                       height={listHeight}
                       focused={pane === 2}
