@@ -24,6 +24,16 @@ export interface DashIssue {
   labels: string[];
   updatedAt: string;
   url: string;
+  /** Issue opener's login; null on pre-field cache entries. */
+  author: string | null;
+}
+
+/** True when a list row was opened by the configured bot account. */
+export function isBotAuthored(
+  author: string | null | undefined,
+  botLogin: string | null | undefined,
+): boolean {
+  return typeof author === "string" && author !== "" && author === botLogin;
 }
 
 export type DashAction = "dispatch" | "dispatchAsk" | "approve" | "replan" | "recycle";

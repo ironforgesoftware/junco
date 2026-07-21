@@ -87,6 +87,7 @@ export function HelpModal({
           ["Delete / Prune", "remove a queued ticket / stale worktree (shift, confirmed)"],
           ["Restart", "restart the daemon (shift, confirmed; work salvaged)"],
           ["enter on logs", "full-screen live log (follow · level · ticket · / search)"],
+          ["accent #", "issue/PR opened by the junco bot account"],
         ]}
       />
       <Section

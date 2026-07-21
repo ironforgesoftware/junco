@@ -344,6 +344,7 @@ const rawIssue: DashIssue = {
   labels: ["junco"],
   updatedAt: "2026-07-06T10:00:00Z",
   url: "https://github.com/acme/api/issues/7",
+  author: null,
 };
 const readyIssue: DashIssue = { ...rawIssue, number: 9, labels: ["junco", "junco:plan-ready"] };
 
@@ -1160,6 +1161,7 @@ describe("external-repo routing", () => {
     labels: ["junco"],
     updatedAt: "2026-07-06T10:00:00Z",
     url: "https://github.com/up/stream/issues/7",
+    author: null,
   };
 
   it("addRepo routes a no-push repo to external fork provisioning", async () => {
@@ -2357,6 +2359,7 @@ describe("workspace filter + pane navigation (medium)", () => {
     labels: ["junco"],
     updatedAt: "2026-07-06T10:00:00Z",
     url: "https://github.com/acme/api/issues/7",
+    author: null,
   };
   const db: DashIssue = {
     number: 9,
@@ -2364,6 +2367,7 @@ describe("workspace filter + pane navigation (medium)", () => {
     labels: ["junco"],
     updatedAt: "2026-07-06T09:00:00Z",
     url: "https://github.com/acme/api/issues/9",
+    author: null,
   };
 
   it("/ filters the issue list, then esc clears it", async () => {

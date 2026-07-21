@@ -123,6 +123,9 @@ export interface AppProps {
    * MUST stay `undefined` so the hook's effect dep array keeps a stable
    * identity and never teardown/re-seeds per render. */
   logReaderDeps?: LogReaderDeps;
+  /** Resolves the junco bot account's gh login (dashboardCmd wires
+   * resolveBotLogin); absent in tests → no bot-authored highlighting. */
+  botLoginFn?: () => Promise<string | null>;
 }
 
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
@@ -371,6 +374,10 @@ export function App(props: AppProps): React.JSX.Element {
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const [updateLatest, setUpdateLatest] = useState<string | null>(null);
+  // The junco bot account's gh login (resolved once via botLoginFn); null when
+  // the feature is inert (disabled, unresolvable, or botLoginFn absent) — rows
+  // opened by this login render their number cell in accent (IssueList/PrList).
+  const [botLogin, setBotLogin] = useState<string | null>(null);
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
 
@@ -979,6 +986,20 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(t);
     };
   }, [props.checkUpdateFn]);
+
+  // Bot-account identity probe: fires once on mount (absent botLoginFn → the
+  // feature stays inert, botLogin stays null). `on` guards a late resolution
+  // against a post-unmount setState.
+  useEffect(() => {
+    if (!props.botLoginFn) return;
+    let on = true;
+    void props.botLoginFn().then((l) => {
+      if (on) setBotLogin(l);
+    });
+    return () => {
+      on = false;
+    };
+  }, [props.botLoginFn]);
 
   // Full sweep on mount and whenever the watchlist changes (refreshAll's
   // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
@@ -2863,6 +2884,7 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={prStaleAt}
               window={prWindow}
+              botLogin={botLogin}
               onRowPress={(i) => {
                 if (confirm !== null) return;
                 if (i === prIdxSafe) return void openPrDetail(selectedPr, "prs");
@@ -2973,6 +2995,7 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
+              botLogin={botLogin}
               onRowPress={(i) => {
                 if (confirm !== null) return;
                 if (pane === 2 && i === issueIdxSafe) return void openDetail();
@@ -3007,6 +3030,7 @@ export function App(props: AppProps): React.JSX.Element {
                   window={pane3Window}
                   title={pane3Title}
                   emptyText="no junco PRs for this repo"
+                  botLogin={botLogin}
                   onRowPress={(i) => {
                     if (confirm !== null) return;
                     if (pane === 3 && i === pane3IdxSafe) {

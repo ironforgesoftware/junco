@@ -2,14 +2,28 @@ import React from "react";
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import { IssueList } from "../src/tui/components/IssueList.js";
-import { MAX_STATE_BADGE_LEN } from "../src/tui/state.js";
+import { MAX_STATE_BADGE_LEN, isBotAuthored } from "../src/tui/state.js";
 import { listRowsHeight } from "../src/tui/geometry.js";
 import type { DashIssue } from "../src/tui/state.js";
 
 const issues: DashIssue[] = [
-  { number: 7, title: "short", labels: [], updatedAt: "2026-07-20T11:00:00Z", url: "u" },
-  { number: 123, title: "longer title", labels: [], updatedAt: "2026-07-20T10:00:00Z", url: "u" },
-] as DashIssue[];
+  {
+    number: 7,
+    title: "short",
+    labels: [],
+    updatedAt: "2026-07-20T11:00:00Z",
+    url: "u",
+    author: null,
+  },
+  {
+    number: 123,
+    title: "longer title",
+    labels: [],
+    updatedAt: "2026-07-20T10:00:00Z",
+    url: "u",
+    author: null,
+  },
+];
 
 const props = {
   issues,
@@ -55,8 +69,9 @@ describe("columnar IssueList", () => {
         labels: [],
         updatedAt: "2026-07-20T11:00:00Z",
         url: "u",
+        author: null,
       },
-    ] as DashIssue[];
+    ];
     const { lastFrame: smallFrame } = render(
       <IssueList {...props} issues={[issues[0]]} window={{ start: 0, end: 1 }} />,
     );
@@ -67,5 +82,33 @@ describe("columnar IssueList", () => {
     const largeLines = (largeFrame() ?? "").split("\n").length;
     expect(largeLines).toBe(smallLines);
     expect(largeFrame()).toMatch(/…3456/);
+  });
+});
+
+describe("isBotAuthored", () => {
+  it("true only when author matches botLogin exactly", () => {
+    expect(isBotAuthored("junco-bot", "junco-bot")).toBe(true);
+  });
+  it("false on null author, undefined author, or a mismatch", () => {
+    expect(isBotAuthored(null, "junco-bot")).toBe(false);
+    expect(isBotAuthored(undefined, "junco-bot")).toBe(false);
+    expect(isBotAuthored("human", "junco-bot")).toBe(false);
+  });
+  it("false when botLogin itself is null or undefined", () => {
+    expect(isBotAuthored("junco-bot", null)).toBe(false);
+    expect(isBotAuthored("junco-bot", undefined)).toBe(false);
+  });
+});
+
+describe("bot-authored row rendering", () => {
+  it("renders without crashing when botLogin is set on a mix of authors", () => {
+    const withAuthors = issues.map((i, idx) => ({
+      ...i,
+      author: idx === 0 ? "junco-bot" : "human",
+    }));
+    const { lastFrame } = render(
+      <IssueList {...props} issues={withAuthors} botLogin="junco-bot" selected={1} />,
+    );
+    expect(lastFrame()).toContain("title");
   });
 });

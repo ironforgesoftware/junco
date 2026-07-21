@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, MAX_PR_BADGE_LEN, type DashPr } from "../prState.js";
+import { isBotAuthored } from "../state.js";
 import { fmtClock } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
 import { ClickableBox } from "../ClickableBox.js";
@@ -40,6 +41,9 @@ export interface PrListProps {
   showNwo?: boolean; // show nwo cell; default true for multi-repo view
   title?: string; // pane title; default "pull requests · N"
   emptyText?: string; // empty-state message; default the cross-repo copy below
+  /** The junco bot account's gh login (App resolves it via botLoginFn); rows
+   * opened by this login render their number cell in accent. */
+  botLogin?: string | null;
   /** Mouse: press on a PR row (registry index into prs). */
   onRowPress?: (index: number) => void;
   /** Mouse: press on the pane background (no row). */
@@ -61,6 +65,7 @@ export function PrList({
   showNwo = true,
   title,
   emptyText,
+  botLogin,
   onRowPress,
   onPanePress,
   onWheel,
@@ -136,7 +141,11 @@ export function PrList({
               <Text color={meta.color}>{meta.glyph}</Text>
             </Box>
             <Box flexShrink={0} width={5}>
-              <Text dimColor={!sel} wrap="truncate-start">
+              <Text
+                color={isBotAuthored(prItem.author, botLogin) ? theme.accent : undefined}
+                dimColor={!sel && !isBotAuthored(prItem.author, botLogin)}
+                wrap="truncate-start"
+              >
                 {`#${prItem.number}`.padStart(5)}
               </Text>
             </Box>

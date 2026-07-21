@@ -1,7 +1,13 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { deriveState, stateMeta, MAX_STATE_BADGE_LEN, type DashIssue } from "../state.js";
+import {
+  deriveState,
+  stateMeta,
+  isBotAuthored,
+  MAX_STATE_BADGE_LEN,
+  type DashIssue,
+} from "../state.js";
 import { Spinner } from "./Spinner.js";
 import { fmtClock } from "../queueFmt.js";
 import { ClickableBox } from "../ClickableBox.js";
@@ -51,6 +57,9 @@ export interface IssueListProps {
   /** listIssues' cache-served fetchedAt (offline) — null when the list is fresh. */
   staleAt: string | null;
   window: { start: number; end: number };
+  /** The junco bot account's gh login (App resolves it via botLoginFn); rows
+   * opened by this login render their number cell in accent. */
+  botLogin?: string | null;
   /** Mouse: press on an issue row (registry index into the filtered list). */
   onRowPress?: (index: number) => void;
   /** Mouse: press on the pane background (no row). */
@@ -73,6 +82,7 @@ export function IssueList({
   now,
   staleAt,
   window,
+  botLogin,
   onRowPress,
   onPanePress,
   onWheel,
@@ -134,7 +144,11 @@ export function IssueList({
               <Text color={meta.color}>{meta.glyph}</Text>
             </Box>
             <Box flexShrink={0} width={5}>
-              <Text dimColor={!sel} wrap="truncate-start">
+              <Text
+                color={isBotAuthored(iss.author, botLogin) ? theme.accent : undefined}
+                dimColor={!sel && !isBotAuthored(iss.author, botLogin)}
+                wrap="truncate-start"
+              >
                 {`#${iss.number}`.padStart(5)}
               </Text>
             </Box>

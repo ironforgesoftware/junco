@@ -13,6 +13,7 @@ const iss = (number: number, title: string, labels: string[] = ["junco"]): DashI
   labels,
   updatedAt: "2026-07-07T13:00:00Z",
   url: `https://github.com/a/b/issues/${number}`,
+  author: null,
 });
 
 describe("filterIssues", () => {
