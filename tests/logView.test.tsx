@@ -201,7 +201,7 @@ describe("LogView — full variant", () => {
       <LogView
         variant="full"
         entries={buf}
-        height={12} // visible = 8 → maxScroll(40, 8) = 32
+        height={12} // visible = 9 (border 2 + header 1; no internal footer, #238) → maxScroll(40, 9) = 31
         focused
         hasFile
         filters={F()}
@@ -212,7 +212,7 @@ describe("LogView — full variant", () => {
         }}
       />,
     );
-    expect(reported).toBe(32);
+    expect(reported).toBe(31);
   });
 
   it("searchMode renders a live search prompt in the header, even before a char is typed", () => {
@@ -263,5 +263,46 @@ describe("LogView — full variant", () => {
     ).lastFrame()!;
     expect(frame).toContain('"boot"');
     expect(frame).not.toContain("/boot▏");
+  });
+});
+
+describe("LogView — daemon liveness marker (#239)", () => {
+  const buf = [e({ msg: "old line" })];
+
+  it("daemonUp=false marks the header in BOTH variants — distinct from the follow dot", () => {
+    const section = render(
+      <LogView
+        variant="section"
+        entries={buf}
+        height={10}
+        focused={false}
+        hasFile
+        daemonUp={false}
+      />,
+    ).lastFrame()!;
+    expect(section).toContain("daemon ○");
+    expect(section).toContain("last logs"); // "showing last logs" wording
+    const full = render(
+      <LogView variant="full" entries={buf} height={12} focused hasFile daemonUp={false} follow />,
+    ).lastFrame()!;
+    expect(full).toContain("daemon ○");
+    // The follow indicator is still its own, separate signal.
+    expect(full).toContain("following");
+  });
+
+  it("daemonUp true or absent renders no liveness marker", () => {
+    for (const daemonUp of [true, undefined]) {
+      const frame = render(
+        <LogView
+          variant="section"
+          entries={buf}
+          height={10}
+          focused={false}
+          hasFile
+          daemonUp={daemonUp}
+        />,
+      ).lastFrame()!;
+      expect(frame).not.toContain("daemon ○");
+    }
   });
 });

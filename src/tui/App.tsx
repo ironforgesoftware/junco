@@ -199,6 +199,13 @@ function truncateNwoStart(nwo: string): string {
   return `…${nwo.slice(nwo.length - (NWO_MAX_WIDTH - 1))}`;
 }
 
+/** Compile-time exhaustiveness for the section-body switch (#238): adding a
+ * SystemSection member without wiring its body arm fails to type-check
+ * (`section` no longer narrows to never); the throw is unreachable at runtime. */
+function assertNeverSection(section: never): never {
+  throw new Error(`unhandled system section: ${String(section)}`);
+}
+
 /** First non-empty, trimmed line of a captured CLI output — where assessCmd's
  * queued / "not watched" / "already queued" messages live (src/assessCmd.ts
  * prints exactly one line per outcome, sometimes followed by blank padding). */
@@ -2783,6 +2790,7 @@ export function App(props: AppProps): React.JSX.Element {
           height={listHeight}
           focused
           hasFile={logHasFile}
+          daemonUp={localCheap ? localCheap.daemon.up : undefined}
           onScrollMax={onScrollMax}
           onWheel={(d) => {
             // Wheel-up pauses follow (landing at the tail first), mirroring the
@@ -2909,60 +2917,79 @@ export function App(props: AppProps): React.JSX.Element {
               onScrollMax={onScrollMax}
             />
           ) : body?.kind === "section" ? (
-            body.section === "queue" ? (
-              <QueueView
-                snap={localCheap?.queue ?? null}
-                scroll={scroll}
-                now={queueNow}
-                height={listHeight}
-                focused={pane === 2}
-                selectable
-                selectedRow={localCursorSafe}
-                counts={localCheap?.counts ?? null}
-                onRowPress={sectionRowPress}
-                onScrollMax={onScrollMax}
-              />
-            ) : body.section === "outbox" ? (
-              <OutboxSection
-                outbox={localCheap?.outbox ?? null}
-                cursor={localCursorSafe}
-                window={sectionWin}
-                height={listHeight}
-                focused={pane === 2}
-                now={queueNow}
-                onRowPress={sectionRowPress}
-              />
-            ) : body.section === "worktrees" ? (
-              <WorktreesSection
-                worktrees={localHeavy?.worktrees ?? null}
-                error={localHeavy?.error ?? null}
-                cursor={localCursorSafe}
-                window={sectionWin}
-                height={listHeight}
-                focused={pane === 2}
-                onRowPress={sectionRowPress}
-              />
-            ) : body.section === "daemon" ? (
-              <DaemonSection
-                daemon={localCheap?.daemon ?? null}
-                scroll={scroll}
-                height={listHeight}
-                focused={pane === 2}
-                onWheel={(d) => scrollBy(d)}
-                onScrollMax={onScrollMax}
-              />
-            ) : (
-              // The section variant reports no scrollable max (its whole
-              // surface is click-to-expand), so no onWheel.
-              <LogView
-                variant="section"
-                entries={logEntries}
-                height={listHeight}
-                focused={pane === 2}
-                hasFile={logHasFile}
-                onExpand={onLogExpand}
-              />
-            )
+            // Exhaustive over SystemSection (#238): a switch with a never
+            // guard, so adding a section without wiring its body fails to
+            // type-check instead of silently rendering the terminal arm.
+            ((section: SystemSection): React.JSX.Element => {
+              switch (section) {
+                case "queue":
+                  return (
+                    <QueueView
+                      snap={localCheap?.queue ?? null}
+                      scroll={scroll}
+                      now={queueNow}
+                      height={listHeight}
+                      focused={pane === 2}
+                      selectable
+                      selectedRow={localCursorSafe}
+                      counts={localCheap?.counts ?? null}
+                      onRowPress={sectionRowPress}
+                      onScrollMax={onScrollMax}
+                    />
+                  );
+                case "outbox":
+                  return (
+                    <OutboxSection
+                      outbox={localCheap?.outbox ?? null}
+                      cursor={localCursorSafe}
+                      window={sectionWin}
+                      height={listHeight}
+                      focused={pane === 2}
+                      now={queueNow}
+                      onRowPress={sectionRowPress}
+                    />
+                  );
+                case "worktrees":
+                  return (
+                    <WorktreesSection
+                      worktrees={localHeavy?.worktrees ?? null}
+                      error={localHeavy?.error ?? null}
+                      cursor={localCursorSafe}
+                      window={sectionWin}
+                      height={listHeight}
+                      focused={pane === 2}
+                      onRowPress={sectionRowPress}
+                    />
+                  );
+                case "daemon":
+                  return (
+                    <DaemonSection
+                      daemon={localCheap?.daemon ?? null}
+                      scroll={scroll}
+                      height={listHeight}
+                      focused={pane === 2}
+                      onWheel={(d) => scrollBy(d)}
+                      onScrollMax={onScrollMax}
+                    />
+                  );
+                case "logs":
+                  // The section variant reports no scrollable max (its whole
+                  // surface is click-to-expand), so no onWheel.
+                  return (
+                    <LogView
+                      variant="section"
+                      entries={logEntries}
+                      height={listHeight}
+                      focused={pane === 2}
+                      hasFile={logHasFile}
+                      daemonUp={localCheap ? localCheap.daemon.up : undefined}
+                      onExpand={onLogExpand}
+                    />
+                  );
+                default:
+                  return assertNeverSection(section);
+              }
+            })(body.section)
           ) : (
             <IssueList
               issues={filteredIssues}

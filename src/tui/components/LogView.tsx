@@ -15,12 +15,30 @@ const NO_FILE = "no log file yet — the daemon writes it once started";
 // uppercase labels below.
 const NULL_LEVEL = "·····";
 
+/** Header liveness note when the daemon is down (#239): worker.log is still
+ * readable (the last tail on disk), so say exactly that instead of letting
+ * old lines sit under a header that could read as live. */
+function DownNote({ daemonUp }: { daemonUp?: boolean }): React.JSX.Element | null {
+  if (daemonUp !== false) return null;
+  return (
+    <>
+      {"  "}
+      <Text dimColor>daemon ○ — showing last logs</Text>
+    </>
+  );
+}
+
 interface LogViewProps {
   variant: "section" | "full";
   entries: LogEntry[]; // the raw buffer (unfiltered)
   height: number;
   focused: boolean;
   hasFile: boolean; // false → the daemon-not-started placeholder
+  /** Daemon liveness (cheap-poll `daemon.up`) — false marks the header with a
+   * dim `daemon ○ — showing last logs` note so old lines never read as live.
+   * DISTINCT from the follow indicator (● following is follow-state, #239).
+   * Absent (tests / pre-first-tick) → no marker. */
+  daemonUp?: boolean;
   // full-variant only:
   filters?: LogFilters;
   follow?: boolean;
@@ -81,11 +99,11 @@ function level(l: LogEntry["level"]): React.JSX.Element {
  *   tighter than the plan's `height-2` so the frame never exceeds `height` (the
  *   Ink duplicate-redraw hazard QueueView guards against with the same math).
  * - `full`: a scrollable window over `filterEntries(entries, filters)` with
- *   filter chips + a follow/paused indicator in the header and a key-hint
- *   footer. `visible = max(1, height-4)` (border 2 + header 1 + footer 1);
- *   `start` follows the tail (`maxScroll`) or clamps `scroll` when paused; the
- *   reported `maxScroll` lets the owner clamp its offset without duplicating the
- *   arithmetic.
+ *   filter chips + a follow/paused indicator in the header (the key hints live
+ *   in the Chrome LOG_OVERLAY_HINTS chip row — one source, #238). `visible =
+ *   max(1, height-3)` (border 2 + header 1); `start` follows the tail
+ *   (`maxScroll`) or clamps `scroll` when paused; the reported `maxScroll`
+ *   lets the owner clamp its offset without duplicating the arithmetic.
  */
 export function LogView(props: LogViewProps): React.JSX.Element {
   return props.variant === "section" ? sectionView(props) : fullView(props);
@@ -120,6 +138,7 @@ function sectionView(props: LogViewProps): React.JSX.Element {
         ) : (
           ""
         )}
+        <DownNote daemonUp={props.daemonUp} />
       </Text>
       {hasFile ? (
         tail.map((en, i) => <LogRow key={i} entry={en} />)
@@ -139,7 +158,9 @@ function fullView(props: LogViewProps): React.JSX.Element {
   const scroll = props.scroll ?? 0;
 
   const rows = filterEntries(entries, filters);
-  const visible = Math.max(1, height - 4);
+  // border 2 + header 1 — the old internal key-hint footer is gone (#238):
+  // the Chrome LOG_OVERLAY_HINTS chip row is the one source of overlay hints.
+  const visible = Math.max(1, height - 3);
   const max = maxScroll(rows.length, visible);
   onScrollMax?.(max);
   const start = follow ? max : clampScroll(scroll, rows.length, visible);
@@ -189,12 +210,10 @@ function fullView(props: LogViewProps): React.JSX.Element {
         ) : (
           <Text color={theme.warn}>⏸ paused</Text>
         )}
+        <DownNote daemonUp={props.daemonUp} />
       </Text>
       {body}
       <Box flexGrow={1} />
-      <Text dimColor wrap="truncate-end">
-        f follow · l level · t ticket · / search · G bottom · esc close
-      </Text>
     </ClickableBox>
   );
 }
