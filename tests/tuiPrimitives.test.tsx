@@ -100,6 +100,8 @@ describe("Sparkline", () => {
 import { Scrollbar, scrollbarCells } from "../src/tui/components/primitives/Scrollbar.js";
 import { Button } from "../src/tui/components/primitives/Button.js";
 import { TableHeader, headerCell } from "../src/tui/components/primitives/TableHeader.js";
+import { Preview } from "../src/tui/components/Preview.js";
+import type { DashIssue } from "../src/tui/state.js";
 
 describe("scrollbarCells", () => {
   it("empty when content fits", () => {
@@ -118,6 +120,48 @@ describe("scrollbarCells", () => {
   it("Scrollbar renders null when content fits", () => {
     const { lastFrame } = render(<Scrollbar offset={0} viewport={10} total={5} height={10} />);
     expect(lastFrame()).toBe("");
+  });
+});
+
+describe("Preview pane scrollbar (Task 15)", () => {
+  const ISSUE: DashIssue = {
+    number: 9,
+    title: "Some issue",
+    labels: [],
+    updatedAt: "2026-07-07T13:00:00Z",
+    url: "https://github.com/a/b/issues/9",
+    author: null,
+  };
+  const base = {
+    issue: ISSUE,
+    trigger: "junco",
+    planComment: null as string | null,
+    loading: false,
+    error: null as string | null,
+    scroll: 0,
+    focused: false,
+  };
+
+  it("renders a scrollbar thumb + track when the body overflows the viewport", () => {
+    const body = Array.from({ length: 50 }, (_, i) => `L${i + 1}`).join("\n");
+    const f = render(<Preview {...base} body={body} height={12} />).lastFrame()!;
+    expect(f).toContain("█");
+    expect(f).toContain("│");
+  });
+
+  it("renders no scrollbar glyphs when the body fits in the viewport", () => {
+    const body = Array.from({ length: 3 }, (_, i) => `L${i + 1}`).join("\n");
+    const f = render(<Preview {...base} body={body} height={12} />).lastFrame()!;
+    // The pane's own round border reuses "│" for its left/right edges, so
+    // strip the border column off each row before asserting — this proves no
+    // *extra* scrollbar track/thumb column appears in the interior, without
+    // being trivially true/false from the border glyph itself.
+    const interior = f
+      .split("\n")
+      .map((line) => line.slice(1, -1))
+      .join("\n");
+    expect(interior).not.toContain("█");
+    expect(interior).not.toContain("│");
   });
 });
 
