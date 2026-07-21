@@ -69,7 +69,11 @@ Structural keys are fixed and never derived:
 | `,` / `:`                                   | config editor / command palette (`:` is a fixed alias of the `commands` chip)                                           |
 | `esc`                                       | back / close                                                                                                            |
 
-The derived keys, per context (these are pinned by tests — the footer always shows the live truth):
+The derived keys, per context. Every key below works wherever its context is
+active; the footer shows the pane-relevant subset (chip order lives in
+`src/tui/viewActions.ts`), so a key can be live without a chip — `v` review is
+keymap-only, and `p` PRs renders as a chip on the issues body alone. Press `?`
+for the full per-view list.
 
 | Context                         | Keys                                                                                                                                                        |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
