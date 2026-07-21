@@ -128,6 +128,53 @@ describe("PrList narrow-pane overflow clamp (pane-3 @ 110-col geometry)", () => 
       expect(line.length).toBeLessThanOrEqual(44);
     }
   });
+
+  function renderPaneBudgeted(prs: DashPr[], paneWidth: number): string {
+    return (
+      render(
+        <Box width={paneWidth} height={HEIGHT}>
+          <PrList
+            prs={prs}
+            selected={0}
+            focused={true}
+            height={HEIGHT}
+            now={new Date("2026-07-20T12:00:00Z")}
+            staleAt={null}
+            window={{ start: 0, end: prs.length }}
+            showNwo={false}
+            paneWidth={paneWidth}
+          />
+        </Box>,
+      ).lastFrame() ?? ""
+    );
+  }
+
+  it("drops the checks column rather than the age column when the pane is tight", () => {
+    const f = renderPaneBudgeted(worstPrs, 44);
+    expect(f).toContain("age"); // the header cell survives…
+    // worstPrs' updatedAt is exactly 60 minutes before `now`, and relTime's
+    // `m <= 60` branch renders that as "60m" (not "1h") — see IssueList.tsx.
+    expect(f).toContain("60m"); // …and so do the row values
+    // Check the HEADER row specifically, not the whole frame: worstPrs' first
+    // row has checks.fail > 0, so its lifecycle is "checks-failing" — a state
+    // pill whose badge text literally contains the substring "checks". A
+    // whole-frame assertion would false-fail on that pill text even though the
+    // checks *column* is correctly gone.
+    const headerLine = f.split("\n").find((l) => l.includes("title")) ?? "";
+    expect(headerLine).not.toContain("checks");
+  });
+
+  it("keeps the checks column when the pane is wide enough", () => {
+    // previewWidth caps at 60 (layout.ts PREVIEW_CAP) — the widest pane 3 gets.
+    const f = renderPaneBudgeted(worstPrs, 60);
+    expect(f).toContain("checks");
+    expect(f).toContain("age");
+  });
+
+  it("budgets nothing when paneWidth is absent (the full-width PRs view)", () => {
+    const spec = prListColumns({ prs: worstPrs, showNwo: true });
+    expect(spec.showChecks).toBe(true);
+  });
 });
 
 describe("prListColumns (dataset-derived widths)", () => {

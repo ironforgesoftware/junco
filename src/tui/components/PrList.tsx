@@ -33,9 +33,18 @@ export const NWO_MAX_WIDTH = 24;
 /** Widest the age cell can need — `relTime` can emit "365d". */
 const AGE_W = 4;
 
+/** Smallest title cell worth rendering. The title is the flexible column, so it
+ * absorbs whatever the fixed cells leave; below this it stops being readable and
+ * we would rather drop a fixed column than shave the title to nothing. */
+const MIN_TITLE_W = 10;
+
 export interface PrListColumnOpts {
   prs: DashPr[];
   showNwo: boolean;
+  /** Outer width of the pane this list renders into — App passes
+   * `layout.previewWidth` for the repo-scoped monitor. Undefined means no budget
+   * pressure (the full-width PRs view), and every column always renders. */
+  paneWidth?: number;
 }
 
 export interface PrListColumnSpec {
@@ -44,30 +53,50 @@ export interface PrListColumnSpec {
   pillInner: number;
   repoW: number;
   checksW: number;
+  /** False when the width budget dropped the checks column. */
+  showChecks: boolean;
 }
 
 /** The single source of truth for this list's geometry: header cells and row
  * cells both read it, so they can never drift. Widths come from the CURRENT
  * dataset (or the header labels' own widths) — never from the selected row, so
- * moving the cursor can never shift a column. */
-export function prListColumns({ prs, showNwo }: PrListColumnOpts): PrListColumnSpec {
+ * moving the cursor can never shift a column.
+ *
+ * When `paneWidth` is given and the fixed cells cannot leave the title a
+ * readable share, the CHECKS column drops. It is the only column whose signal
+ * has another home: `derivePrState` folds checks-failing / checks-pending into
+ * the lifecycle the state pill renders. Dropping it beats letting the row's
+ * `overflow="hidden"` belt clip the trailing `age` cell away silently (#247). */
+export function prListColumns({ prs, showNwo, paneWidth }: PrListColumnOpts): PrListColumnSpec {
   const badges = prs.map((p) => prStateMeta(derivePrState(p)).badge);
   const pillInner = Math.max("state".length, ...badges.map((b) => b.length), 0);
   const repoW = showNwo
     ? Math.min(NWO_MAX_WIDTH, Math.max("repo".length, ...prs.map((p) => p.nwo.length), 0))
     : 0;
   const checksW = Math.max("checks".length, ...prs.map((p) => checksToString(p.checks).length), 0);
-  const columns: Column[] = [
+
+  const build = (withChecks: boolean): Column[] => [
     { label: "", width: 1 },
     { label: "", width: 1 },
     { label: "#", width: 5, align: "right" },
     { label: "title", width: "flex" },
     ...(showNwo ? [{ label: "repo", width: repoW } as Column] : []),
-    { label: "checks", width: checksW },
+    ...(withChecks ? [{ label: "checks", width: checksW } as Column] : []),
     { label: "state", width: pillInner + 2 },
     { label: "age", width: AGE_W, align: "right" },
   ];
-  return { columns, pillInner, repoW, checksW };
+
+  // Interior = pane width minus the round border (2) and paddingX (2). Every
+  // adjacent pair costs one gap column (TableHeader and the rows both gap 1).
+  const fits = (cols: Column[]): boolean => {
+    if (paneWidth === undefined) return true;
+    const fixed = cols.reduce((n, c) => n + (c.width === "flex" ? 0 : c.width), 0);
+    return fixed + (cols.length - 1) + MIN_TITLE_W <= paneWidth - 4;
+  };
+
+  const withChecks = build(true);
+  const showChecks = fits(withChecks);
+  return { columns: showChecks ? withChecks : build(false), pillInner, repoW, checksW, showChecks };
 }
 
 export interface PrListProps {
@@ -90,6 +119,8 @@ export interface PrListProps {
   onPanePress?: () => void;
   /** Mouse: wheel over the pane (down → +1, up → −1). */
   onWheel?: (dir: 1 | -1) => void;
+  /** Outer pane width, for the column budget — see prListColumns. */
+  paneWidth?: number;
 }
 
 /** Pane 2: windowed PR rows with full-row selection bars and aligned
@@ -109,8 +140,13 @@ export function PrList({
   onRowPress,
   onPanePress,
   onWheel,
+  paneWidth,
 }: PrListProps): React.JSX.Element {
-  const { columns, pillInner, repoW, checksW } = prListColumns({ prs, showNwo });
+  const { columns, pillInner, repoW, checksW, showChecks } = prListColumns({
+    prs,
+    showNwo,
+    paneWidth,
+  });
   const PILL_W = pillInner + 2;
   const metaOf = prs.map((p) => prStateMeta(derivePrState(p)));
 
@@ -188,9 +224,11 @@ export function PrList({
                 </Text>
               </Box>
             )}
-            <Box flexShrink={0} width={checksW}>
-              <Text color={checksColor}>{checksStr}</Text>
-            </Box>
+            {showChecks && (
+              <Box flexShrink={0} width={checksW}>
+                <Text color={checksColor}>{checksStr}</Text>
+              </Box>
+            )}
             <Box flexShrink={0} width={PILL_W}>
               <Badge label={meta.badge} color={meta.color} padTo={pillInner} />
             </Box>

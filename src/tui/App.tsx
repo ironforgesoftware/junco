@@ -3044,6 +3044,7 @@ export function App(props: AppProps): React.JSX.Element {
                   title={pane3Title}
                   emptyText="no junco PRs for this repo"
                   botLogin={botLogin}
+                  paneWidth={layout.previewWidth}
                   onRowPress={(i) => {
                     if (confirm !== null) return;
                     if (pane === 3 && i === pane3IdxSafe) {
