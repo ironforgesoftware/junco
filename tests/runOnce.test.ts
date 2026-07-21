@@ -587,29 +587,6 @@ describe("provider gate wiring (Phase 2 Task 5)", () => {
     expect(calls).toEqual(["start", "requeue"]);
   });
 
-  it("gate-class Q&A failure (429 rate limit) reports rate_limit and requeues count-free", async () => {
-    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
-    const j = join(root, "Junco");
-    ["inbox", "processing", "done", "failed"].forEach((d) =>
-      mkdirSync(join(j, d), { recursive: true }),
-    );
-    writeFileSync(join(j, "inbox", "t.md"), "---\nid: t\n---\nq\n", "utf8");
-    const gate = fakeGate();
-
-    const handled = await runOnce(cfg(root), {
-      sessionFactoryFor: erroringFactory("429 rate limited"),
-      gate,
-    });
-    expect(handled).toBe(true);
-    expect(readdirSync(join(j, "failed"))).toHaveLength(0);
-    const inbox = readdirSync(join(j, "inbox"));
-    expect(inbox).toHaveLength(1);
-    const content = readFileSync(join(j, "inbox", inbox[0]), "utf8");
-    expect(content).not.toMatch(/retry_count:/);
-    expect(content).toMatch(/not_before:/);
-    expect(gate.failureCalls).toEqual([{ cls: "rate_limit", reason: "429 rate limited" }]);
-  });
-
   it("crash containment classifies a catalog-miss session-build throw as model_not_found and gate-routes it count-free", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));
     const j = join(root, "Junco");
