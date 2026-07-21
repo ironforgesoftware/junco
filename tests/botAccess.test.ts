@@ -2,16 +2,10 @@ import { describe, it, expect } from "vitest";
 import { classifyRepoAccess, ssoMessage } from "../src/botAccess.js";
 import type { Config, GhAuthContext } from "../src/types.js";
 import { GitOpError, type CmdResult, type GitCallOpts } from "../src/git.js";
-
-const CTX: GhAuthContext = {
-  configDir: "/sbx/junco-gh",
-  login: "junco-agent",
-  email: "1+junco-agent@users.noreply.github.com",
-  credentialHelper: "!gh auth git-credential",
-};
+import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 
 // Minimal cfg — botAccess only reads ghBin/ghAuth via the gh() seam.
-const CFG = { ghBin: "gh", ghAuth: CTX } as unknown as Config;
+const CFG = { ghBin: "gh", ghAuth: GH_AUTH_CTX } as unknown as Config;
 
 /** Fake gh() that records the cfg identity it was called with and scripts
  * responses per args-key. Discriminating on cfg.ghAuth presence pins identity
@@ -147,7 +141,7 @@ const AMBIENT_CFG = {
   ghBin: "gh",
   botAccount: { enabled: true, configDir: "/sbx/junco-gh" },
 } as unknown as Config;
-const withBotAuthFn = async (c: Config) => ({ ...c, ghAuth: CTX });
+const withBotAuthFn = async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX });
 
 const PUT = "api repos/acme/api/collaborators/junco-agent -X PUT -f permission=push";
 const LIST = "api /user/repository_invitations?per_page=100";

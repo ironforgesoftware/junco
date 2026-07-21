@@ -11,6 +11,7 @@ import type { PendingAssess } from "../src/assessReview.js";
 import type { FileResult } from "../src/assessFiling.js";
 import type { PendingComment } from "../src/commentReview.js";
 import type { RepoAccess } from "../src/botAccess.js";
+import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 
 const cfg = {
   ghBin: "gh",
@@ -36,19 +37,11 @@ const cfg = {
   assess: { fileAs: "me" },
 } as unknown as Config;
 
-/** Same literal as Task 2's CTX / cli.test.ts's FAKE_CTX. */
-const FAKE_CTX = {
-  configDir: "/sbx/junco-gh",
-  login: "junco-agent",
-  email: "1234+junco-agent@users.noreply.github.com",
-  credentialHelper: "!gh auth git-credential",
-};
-
 /** botAccount.enabled=true — ensureBotAccess's non-short-circuit paths need
  * this; withBotAuthFn is always injected alongside it so the real withBotAuth
  * (which spawns the real `gh` binary) never runs in these tests. */
 const enabledCfg = { ...cfg, botAccount: { enabled: true, configDir: "/tmp/junco-gh" } } as Config;
-const attachFakeCtx = async (c: Config): Promise<Config> => ({ ...c, ghAuth: FAKE_CTX });
+const attachFakeCtx = async (c: Config): Promise<Config> => ({ ...c, ghAuth: GH_AUTH_CTX });
 
 const NET = new GitOpError("gh failed", "connect: network is unreachable", 1);
 
@@ -664,14 +657,14 @@ describe("prepareExternalRepo", () => {
     const r = await makeGhDashboardClient(cfg, {
       ...fakes(),
       ensureCloneFn,
-      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
     }).prepareExternalRepo("up/stream");
     expect(r).toEqual({
       ok: true,
       value: { path: "/x/external/up/stream", forkNwo: "junco-agent/stream" },
     });
     expect(cloneCfgs).toHaveLength(1);
-    expect(cloneCfgs[0].ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(cloneCfgs[0].ghAuth?.login).toBe(GH_AUTH_CTX.login);
   });
 
   it("bot auth failure (enabled but unauthed) → ok:false with the actionable message, never throws", async () => {
@@ -839,7 +832,7 @@ describe("fileReview", () => {
     });
     const r = await client.fileReview("assess-x-1", ["f1"]);
     expect(r.ok).toBe(true);
-    expect(fileFindingsFn.mock.calls[0]?.[0].ghAuth).toEqual(FAKE_CTX);
+    expect(fileFindingsFn.mock.calls[0]?.[0].ghAuth).toEqual(GH_AUTH_CTX);
     expect(readPendingFn).toHaveBeenCalledWith(botFileCfg, "assess-x-1");
   });
 
@@ -1062,7 +1055,7 @@ describe("ensureBotAccess", () => {
     const r = await client.ensureBotAccess("acme/api");
     expect(r).toEqual({ ok: true, value: { skipped: true } });
     expect(classifyFn).toHaveBeenCalledWith(
-      expect.objectContaining({ ghAuth: FAKE_CTX }),
+      expect.objectContaining({ ghAuth: GH_AUTH_CTX }),
       "acme/api",
       expect.anything(),
     );

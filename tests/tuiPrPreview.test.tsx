@@ -3,6 +3,7 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { PrPreview } from "../src/tui/components/PrPreview.js";
 import { type DashPr } from "../src/tui/prState.js";
+import { makeDashPr } from "./helpers/dashFixtures.js";
 
 const NOW = new Date("2026-07-07T14:00:00Z");
 
@@ -15,29 +16,8 @@ function visibleWidth(line: string): number {
   return line.replace(OSC_RE, "").length;
 }
 
-const pr = (number: number, overrides: Partial<DashPr> = {}): DashPr => ({
-  number,
-  title: `Test PR #${number}`,
-  url: `https://github.com/a/b/pull/${number}`,
-  headRefName: "junco/task-42",
-  baseRefName: "main",
-  isDraft: false,
-  state: "OPEN",
-  reviewDecision: null,
-  mergeable: "MERGEABLE",
-  mergeStateStatus: "CLEAN",
-  checks: { pass: 2, fail: 0, pending: 0, total: 2 },
-  additions: 5,
-  deletions: 3,
-  changedFiles: 2,
-  createdAt: "2026-07-06T14:00:00Z",
-  updatedAt: "2026-07-07T13:00:00Z",
-  mergedAt: null,
-  author: "alice",
-  labels: [],
-  nwo: "a/b",
-  ...overrides,
-});
+const pr = (number: number, overrides: Partial<DashPr> = {}): DashPr =>
+  makeDashPr({ number, headRefName: "junco/task-42", author: "alice", ...overrides });
 
 const base = {
   branchPrefix: "junco/",

@@ -3,15 +3,13 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { Preview } from "../src/tui/components/Preview.js";
 import type { DashIssue } from "../src/tui/state.js";
+import { makeDashIssue } from "./helpers/dashFixtures.js";
 
-const ISSUE: DashIssue = {
+const ISSUE: DashIssue = makeDashIssue({
   number: 52,
   title: "Fix reef colors",
   labels: ["junco", "junco:plan-ready"],
-  updatedAt: "2026-07-07T13:00:00Z",
-  url: "https://github.com/a/b/issues/52",
-  author: null,
-};
+});
 const base = {
   issue: ISSUE,
   trigger: "junco",

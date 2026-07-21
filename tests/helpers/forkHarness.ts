@@ -9,23 +9,13 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { run } from "./gitHarness.js";
 
 export const FORK_NWO = "me/stream";
 
-export function run(args: string[], cwd?: string): string {
-  return execFileSync(args[0], args.slice(1), {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "CI",
-      GIT_AUTHOR_EMAIL: "ci@example.com",
-      GIT_COMMITTER_NAME: "CI",
-      GIT_COMMITTER_EMAIL: "ci@example.com",
-    },
-  });
-}
+// `run` is re-exported so the four suites that import it from here keep working;
+// the implementation lives in gitHarness.ts (this was the 6th copy of it).
+export { run };
 
 export function setupForkHarness(tmpRoot: string): {
   upstream: string; // bare, what `origin` points at

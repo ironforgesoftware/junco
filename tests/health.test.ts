@@ -9,77 +9,41 @@ import { describe, it, expect, vi } from "vitest";
 import type { Config, ModelConfig } from "../src/types.js";
 import type { StopFlagLike } from "../src/health.js";
 import { endpointReachable, waitForEndpoint, probePolicy, makeCachedProbe } from "../src/health.js";
+import { makeConfig as baseConfig } from "./helpers/config.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+// gh is never invoked here, so ghBin stays at the shared helper's poisoned
+// default (/nonexistent/gh) rather than the real, authenticated gh.
 function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
+  const base = baseConfig({
     dataDir: "/tmp/vault/state",
     queueRoot: "/tmp/vault/Junco",
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    worktreeRoot: "/tmp/worktrees",
+    tools: [],
+    criticEnabled: true,
+    planLintEnabled: true,
+    verifyEnabled: true,
+    supervisorEnabled: false,
+    healthEnabled: false,
+    removeWorktreeOnSuccess: true,
+  });
+  return {
+    ...base,
     model: {
+      ...base.model,
       id: "omlx/test-model",
-      source: "auto",
       // This fixture's baseUrl below IS explicit, so baseUrlExplicit is true —
       // otherwise catalogEligible's auto-heuristic (non-"local" provider + no
       // explicit baseUrl) would wrongly treat this inline/local model as
       // catalog-eligible and shouldProbeEndpoint would skip these tests' probe.
       baseUrlExplicit: true,
-      retry: { maxRetries: null, baseDelayMs: null },
-      modelsJson: null,
-      api: "openai-completions",
       baseUrl: "http://127.0.0.1:1234/v1/models",
-      apiKey: "test-key",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 131072,
-      maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
     },
-    tools: [],
-    defaultTimeoutMinutes: 30,
-    pollIntervalSeconds: 15,
-    startupPollSeconds: 30,
-    startupWait: true,
-    maxTransientRetries: 2,
-    retryBackoffSeconds: 60,
-    maxConcurrent: 1,
-    endpointProbe: "auto",
-    supervisorEnabled: false,
-    supervisorBudgetPerKind: 1,
-    supervisorEscalationWindow: 3,
-    supervisorOutputBudgetPerTurn: 12000,
-    supervisorOutputBudgetPostCommit: 24000,
-    gitBin: "git",
-    ghBin: "gh",
-    defaultBaseBranch: "main",
-    branchPrefix: "junco/",
-    worktreeRoot: "/tmp/worktrees",
-    removeWorktreeOnSuccess: true,
-    allowedRepoRoots: [],
-    draftByDefault: true,
-    defaultLabels: [],
-    verifyEnabled: true,
-    verifyCommandTimeout: 60,
-    verifyBlockOnFail: false,
-    criticEnabled: true,
-    criticMaxRetries: 1,
-    criticThinking: "minimal",
-    planLintEnabled: true,
     planLintBlockOnError: true,
     planLintCheckLabels: true,
-    commitLeftoversEnabled: false,
-    dailyBudgetUsd: 0,
-    healthEnabled: false,
-    healthHost: "127.0.0.1",
-    healthPort: 8787,
-    logLevel: "info",
-    logToFile: false,
-    transcriptsEnabled: false,
     github: {
       enabled: false,
       triggerLabel: "junco",
@@ -89,14 +53,6 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       requireApproval: true,
       plannerModelId: null,
       externalReposRoot: "/tmp/junco-test-external",
-    },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-    sandbox: {
-      enabled: false,
-      backend: "auto",
-      network: "deny",
-      extraDenyRead: [],
-      extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     ...overrides,

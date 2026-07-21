@@ -9,95 +9,46 @@ import { parseTicket } from "../src/ticket.js";
 import { fingerprintFinding, findingMarker } from "../src/findings.js";
 import { GitOpError } from "../src/git.js";
 import type { Config, Ticket } from "../src/types.js";
+import { makeConfig } from "./helpers/config.js";
+import { fakeSession, fakeMultiMessageSession, throwingSession } from "./helpers/fakeSession.js";
 
 // ---------------------------------------------------------------------------
-// Fixtures — a full Config (copied from tests/runOnce.test.ts, incl. `assess`),
-// a scriptable AgentSessionLike, and scriptable gh/git/runCmd fakes. No
-// network, no real model; everything lives under real tmpdirs.
+// Fixtures — the shared Config fixture (incl. `assess`), a scriptable
+// AgentSessionLike, and scriptable gh/git/runCmd fakes. No network, no real
+// model; everything lives under real tmpdirs.
 // ---------------------------------------------------------------------------
 
 function cfg(root: string): Config {
-  return {
-    dataDir: root,
-    queueRoot: join(root, "Junco"),
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    model: {
-      id: "m",
-      source: "auto",
-      baseUrlExplicit: false,
-      retry: { maxRetries: null, baseDelayMs: null },
-      modelsJson: null,
-      api: "openai-completions",
-      baseUrl: "u",
-      apiKey: "k",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 131072,
-      maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  return makeConfig(
+    {
+      dataDir: root,
+      queueRoot: join(root, "Junco"),
+      worktreeRoot: "/tmp/worktrees",
+      tools: ["read"],
+      criticEnabled: true,
+      planLintEnabled: true,
+      verifyEnabled: true,
+      supervisorEnabled: true,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: true,
     },
-    tools: ["read"],
-    defaultTimeoutMinutes: 1,
-    pollIntervalSeconds: 15,
-    startupPollSeconds: 30,
-    startupWait: true,
-    endpointProbe: "auto",
-    maxTransientRetries: 2,
-    retryBackoffSeconds: 60,
-    maxConcurrent: 1,
-    supervisorEnabled: true,
-    supervisorBudgetPerKind: 1,
-    supervisorEscalationWindow: 3,
-    supervisorOutputBudgetPerTurn: 12000,
-    supervisorOutputBudgetPostCommit: 24000,
-    gitBin: "git",
-    ghBin: "gh",
-    defaultBaseBranch: "main",
-    branchPrefix: "junco/",
-    worktreeRoot: "/tmp/worktrees",
-    removeWorktreeOnSuccess: true,
-    allowedRepoRoots: [],
-    draftByDefault: true,
-    defaultLabels: [],
-    verifyEnabled: true,
-    verifyCommandTimeout: 60,
-    verifyBlockOnFail: false,
-    criticEnabled: true,
-    criticMaxRetries: 1,
-    criticThinking: "minimal",
-    planLintEnabled: true,
-    planLintBlockOnError: true,
-    planLintCheckLabels: true,
-    commitLeftoversEnabled: false,
-    dailyBudgetUsd: 0,
-    healthEnabled: false,
-    healthHost: "127.0.0.1",
-    healthPort: 8787,
-    logLevel: "info",
-    github: {
-      enabled: false,
-      triggerLabel: "junco",
-      askLabel: "junco:ask",
-      pollIntervalSeconds: 60,
-      repos: [],
-      requireApproval: true,
-      plannerModelId: null,
-      externalReposRoot: "/tmp/junco-test-external",
+    {
+      defaultTimeoutMinutes: 1, // short so timeout paths are reachable in-test
+      planLintBlockOnError: true,
+      planLintCheckLabels: true,
+      github: {
+        enabled: false,
+        triggerLabel: "junco",
+        askLabel: "junco:ask",
+        pollIntervalSeconds: 60,
+        repos: [],
+        requireApproval: true,
+        plannerModelId: null,
+        externalReposRoot: "/tmp/junco-test-external",
+      },
+      botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-    sandbox: {
-      enabled: false,
-      backend: "auto",
-      network: "deny",
-      extraDenyRead: [],
-      extraAllowWrite: [],
-    },
-    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    logToFile: false,
-    transcriptsEnabled: false,
-  };
+  );
 }
 
 /** A sandbox with the four queue dirs and a claimed assess ticket in
@@ -143,81 +94,6 @@ function claim(j: string, content: string, id = "assess-1"): { path: string; tic
 
 function ticketContent(repo: string, extra = ""): string {
   return `---\nid: assess-1\nrepo: ${JSON.stringify(repo)}\n${extra}---\n# Assess ${repo}\nscan for vulns\n`;
-}
-
-/** A scriptable AgentSessionLike that emits `finalText` as one text delta.
- * `costUsd` (default 0) lands in the turn's usage.cost.total — runResult.ts
- * folds that into RunResult.usage.costUsd, which is what a `deps.spend` wire
- * records (Phase-3 Task 3). */
-function fakeSession(finalText: string, costUsd = 0) {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        l({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: finalText },
-        });
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2, cost: { total: costUsd } },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 1));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
-}
-
-/** A scriptable AgentSessionLike that emits each of `messages` as its own
- * assistant message (message_start + text_delta), reproducing #36's
- * finalText = last-message-only. */
-function fakeMultiMessageSession(messages: string[]) {
-  return async () => ({
-    subscribe(l: (e: any) => void) {
-      queueMicrotask(() => {
-        for (const m of messages) {
-          l({ type: "message_start", message: { role: "assistant" } });
-          l({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: m } });
-        }
-        l({
-          type: "turn_end",
-          message: {
-            stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
-          },
-        });
-        l({ type: "agent_end", messages: [], willRetry: false });
-      });
-      return () => {};
-    },
-    async prompt() {
-      await new Promise((r) => setTimeout(r, 1));
-    },
-    dispose() {},
-    abort: async () => {},
-  });
-}
-
-/** A session whose prompt() throws — the Q&A transient-failure signature. */
-function throwingSession() {
-  return async () => ({
-    subscribe() {
-      return () => {};
-    },
-    async prompt() {
-      throw new Error("fetch failed: ECONNREFUSED");
-    },
-    dispose() {},
-    abort: async () => {},
-  });
 }
 
 function findingsFence(arr: unknown[]): string {

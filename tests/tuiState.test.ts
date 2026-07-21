@@ -6,16 +6,11 @@ import {
   sortIssues,
   type DashIssue,
 } from "../src/tui/state.js";
+import { makeDashIssue } from "./helpers/dashFixtures.js";
 
 const T = "junco";
-const iss = (n: number, labels: string[], updatedAt: string): DashIssue => ({
-  number: n,
-  title: `t${n}`,
-  labels,
-  updatedAt,
-  url: `https://github.com/a/b/issues/${n}`,
-  author: null,
-});
+const iss = (n: number, labels: string[], updatedAt: string): DashIssue =>
+  makeDashIssue({ number: n, title: `t${n}`, labels, updatedAt });
 
 describe("deriveState", () => {
   it.each([

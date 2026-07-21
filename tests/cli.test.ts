@@ -24,14 +24,8 @@ import { run } from "../src/cli.js";
 import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
-
-/** Same literal as Task 2's CTX / ghAuth.test.ts's GhAuthContext fixture. */
-const FAKE_CTX = {
-  configDir: "/sbx/junco-gh",
-  login: "junco-agent",
-  email: "1234+junco-agent@users.noreply.github.com",
-  credentialHelper: "!gh auth git-credential",
-};
+import { makeConfig } from "./helpers/config.js";
+import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -548,17 +542,17 @@ describe("bot auth at daemon entrypoints", () => {
 
   it("start passes the bot-attached config through to mainLoopFn", async () => {
     const deps = makeDeps({
-      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
     });
     await run(["start"], deps);
     const [seenCfg] = (deps.mainLoopFn as MockedFunction<any>).mock.calls[0];
-    expect((seenCfg as Config).ghAuth?.login).toBe(FAKE_CTX.login);
+    expect((seenCfg as Config).ghAuth?.login).toBe(GH_AUTH_CTX.login);
   });
 
   it("start's watcher re-attaches the startup ghAuth context while the reload keeps botAccount enabled, and drops it when the reload disables botAccount", async () => {
     const watchConfigFn = vi.fn(() => ({ close: vi.fn() }));
     const deps = makeDeps({
-      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
       watchConfigFn,
     });
     await run(["start"], deps);
@@ -570,7 +564,7 @@ describe("bot auth at daemon entrypoints", () => {
       vaultRoot: "/tmp/x",
       botAccount: { enabled: true, configDir: "/tmp/gh" },
     });
-    expect(assembleFn(enabledParsed).ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(assembleFn(enabledParsed).ghAuth?.login).toBe(GH_AUTH_CTX.login);
 
     const disabledParsed = ConfigSchema.parse({
       vaultRoot: "/tmp/x",
@@ -614,7 +608,7 @@ describe("bot auth at daemon entrypoints", () => {
   it("run-once hands the attached config to runOnceFn", async () => {
     let seen: Config | undefined;
     const deps = makeDeps({
-      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }),
+      withBotAuthFn: async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }),
       runOnceFn: async (c: Config) => {
         seen = c;
         return false;
@@ -622,7 +616,7 @@ describe("bot auth at daemon entrypoints", () => {
     });
     const code = await run(["run-once"], deps);
     expect(code).toBe(0);
-    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(seen?.ghAuth?.login).toBe(GH_AUTH_CTX.login);
   });
 });
 
@@ -826,89 +820,38 @@ describe("lock path derivation", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * Full Config object satisfying all required fields for tests that touch the
- * real FS (inbox-path, submit, init). dataDir/queueRoot are overridden per
- * test in freshDispatchVault() so they track that test's own tmpdir.
+ * The shared Config fixture, for tests that touch the real FS (inbox-path,
+ * submit, init). dataDir/queueRoot are overridden per test in
+ * freshDispatchVault() so they track that test's own tmpdir.
  */
-const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = {
-  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-  model: {
-    id: "test-model",
-    source: "auto",
-    baseUrlExplicit: false,
-    retry: { maxRetries: null, baseDelayMs: null },
-    modelsJson: null,
-    api: "openai-completions",
-    baseUrl: "http://127.0.0.1:1234/v1",
-    apiKey: "test",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 131072,
-    maxTokens: 49152,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    thinkingLevel: "medium",
-    compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = makeConfig(
+  {
+    // placeholders — freshDispatchVault() overwrites both with its own tmpdir
+    dataDir: "",
+    queueRoot: "",
+    worktreeRoot: "/tmp/worktrees",
+    tools: ["read"],
+    criticEnabled: false,
+    planLintEnabled: false,
+    verifyEnabled: false,
+    supervisorEnabled: false,
+    healthEnabled: false,
+    removeWorktreeOnSuccess: true,
   },
-  tools: ["read"],
-  defaultTimeoutMinutes: 30,
-  pollIntervalSeconds: 15,
-  startupPollSeconds: 30,
-  startupWait: true,
-  endpointProbe: "auto",
-  maxTransientRetries: 2,
-  retryBackoffSeconds: 60,
-  maxConcurrent: 1,
-  supervisorEnabled: false,
-  supervisorBudgetPerKind: 1,
-  supervisorEscalationWindow: 3,
-  supervisorOutputBudgetPerTurn: 12000,
-  supervisorOutputBudgetPostCommit: 24000,
-  gitBin: "git",
-  ghBin: "gh",
-  defaultBaseBranch: "main",
-  branchPrefix: "junco/",
-  worktreeRoot: "/tmp/worktrees",
-  removeWorktreeOnSuccess: true,
-  allowedRepoRoots: [],
-  draftByDefault: true,
-  defaultLabels: [],
-  verifyEnabled: false,
-  verifyCommandTimeout: 60,
-  verifyBlockOnFail: false,
-  planLintEnabled: false,
-  planLintBlockOnError: false,
-  planLintCheckLabels: false,
-  commitLeftoversEnabled: false,
-  dailyBudgetUsd: 0,
-  criticEnabled: false,
-  criticMaxRetries: 1,
-  criticThinking: "minimal",
-  healthEnabled: false,
-  healthHost: "127.0.0.1",
-  healthPort: 8787,
-  logLevel: "info",
-  logToFile: false,
-  transcriptsEnabled: false,
-  github: {
-    enabled: false,
-    triggerLabel: "junco",
-    askLabel: "junco:ask",
-    pollIntervalSeconds: 60,
-    repos: [],
-    requireApproval: true,
-    plannerModelId: null,
-    externalReposRoot: "/tmp/junco-test-external",
+  {
+    github: {
+      enabled: false,
+      triggerLabel: "junco",
+      askLabel: "junco:ask",
+      pollIntervalSeconds: 60,
+      repos: [],
+      requireApproval: true,
+      plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
+    },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
   },
-  assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-  sandbox: {
-    enabled: false,
-    backend: "auto",
-    network: "deny",
-    extraDenyRead: [],
-    extraAllowWrite: [],
-  },
-  botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-};
+);
 
 let dispatchTmpDirs: string[] = [];
 
@@ -1157,7 +1100,7 @@ describe("run(['outbox'])", () => {
     // Flush replays daemon-enqueued ops (comments, label flips, pushes, PR
     // creates) — it must speak as the bot, not the operator running the flush.
     let seen: Config | undefined;
-    const withBotAuthFn = vi.fn(async (c: Config) => ({ ...c, ghAuth: FAKE_CTX }));
+    const withBotAuthFn = vi.fn(async (c: Config) => ({ ...c, ghAuth: GH_AUTH_CTX }));
     const runOutboxCommandFn = vi.fn(async (c: Config) => {
       seen = c;
       return 0;
@@ -1165,7 +1108,7 @@ describe("run(['outbox'])", () => {
     const code = await run(["outbox", "flush"], makeDeps({ withBotAuthFn, runOutboxCommandFn }));
     expect(code).toBe(0);
     expect(withBotAuthFn).toHaveBeenCalledTimes(1);
-    expect(seen?.ghAuth?.login).toBe(FAKE_CTX.login);
+    expect(seen?.ghAuth?.login).toBe(GH_AUTH_CTX.login);
   });
 
   it("outbox flush refuses (exit 1) when bot auth resolution throws — never replays as human", async () => {

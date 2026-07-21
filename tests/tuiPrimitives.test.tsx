@@ -140,6 +140,7 @@ import { Button } from "../src/tui/components/primitives/Button.js";
 import { TableHeader, headerCell } from "../src/tui/components/primitives/TableHeader.js";
 import { Preview } from "../src/tui/components/Preview.js";
 import type { DashIssue } from "../src/tui/state.js";
+import { makeDashIssue } from "./helpers/dashFixtures.js";
 
 describe("scrollbarCells", () => {
   it("empty when content fits", () => {
@@ -162,14 +163,7 @@ describe("scrollbarCells", () => {
 });
 
 describe("Preview pane scrollbar (Task 15)", () => {
-  const ISSUE: DashIssue = {
-    number: 9,
-    title: "Some issue",
-    labels: [],
-    updatedAt: "2026-07-07T13:00:00Z",
-    url: "https://github.com/a/b/issues/9",
-    author: null,
-  };
+  const ISSUE: DashIssue = makeDashIssue({ number: 9, title: "Some issue", labels: [] });
   const base = {
     issue: ISSUE,
     trigger: "junco",

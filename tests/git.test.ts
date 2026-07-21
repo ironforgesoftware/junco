@@ -16,7 +16,7 @@ import {
   gh,
   ghAuthEnv,
 } from "../src/git.js";
-import type { GhAuthContext } from "../src/types.js";
+import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 
 // ---------------------------------------------------------------------------
 // GitOpError
@@ -276,13 +276,6 @@ describe("gh", () => {
 // bot auth env injection
 // ---------------------------------------------------------------------------
 
-const CTX: GhAuthContext = {
-  configDir: "/sbx/junco-gh",
-  login: "junco-agent",
-  email: "1234+junco-agent@users.noreply.github.com",
-  credentialHelper: "!gh auth git-credential",
-};
-
 function writeEnvEcho(path: string): void {
   writeFileSync(
     path,
@@ -297,7 +290,7 @@ function writeEnvEcho(path: string): void {
 
 describe("bot auth env injection", () => {
   it("ghAuthEnv builds the child env pair (and clears inherited GH_TOKEN/GITHUB_TOKEN)", () => {
-    expect(ghAuthEnv(CTX)).toEqual({
+    expect(ghAuthEnv(GH_AUTH_CTX)).toEqual({
       GH_CONFIG_DIR: "/sbx/junco-gh",
       GIT_TERMINAL_PROMPT: "0",
       GH_TOKEN: "",
@@ -318,7 +311,7 @@ describe("bot auth env injection", () => {
     process.env.GH_TOKEN = "bogus-parent-token";
     process.env.GITHUB_TOKEN = "bogus-parent-github-token";
     try {
-      const r = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"]);
+      const r = await gh({ ghBin: fake, ghAuth: GH_AUTH_CTX }, ["api", "user"]);
       expect(r.stdout).toContain("token=[] ghtoken=[]");
     } finally {
       if (prevGh === undefined) delete process.env.GH_TOKEN;
@@ -332,7 +325,7 @@ describe("bot auth env injection", () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
     const fake = join(dir, "fake-gh");
     writeEnvEcho(fake);
-    const r = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"], {
+    const r = await gh({ ghBin: fake, ghAuth: GH_AUTH_CTX }, ["api", "user"], {
       env: { GH_CONFIG_DIR: "/caller/override" },
     });
     expect(r.stdout).toContain("cfgdir=/caller/override");
@@ -342,7 +335,7 @@ describe("bot auth env injection", () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
     const fake = join(dir, "fake-gh");
     writeEnvEcho(fake);
-    const withAuth = await gh({ ghBin: fake, ghAuth: CTX }, ["api", "user"]);
+    const withAuth = await gh({ ghBin: fake, ghAuth: GH_AUTH_CTX }, ["api", "user"]);
     expect(withAuth.stdout).toContain("cfgdir=/sbx/junco-gh");
     expect(withAuth.stdout).toContain("prompt=0");
     const without = await gh({ ghBin: fake }, ["api", "user"]);
@@ -353,7 +346,7 @@ describe("bot auth env injection", () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-git-test-"));
     const fake = join(dir, "fake-git");
     writeEnvEcho(fake);
-    const r = await git({ gitBin: fake, ghAuth: CTX }, ["push", "origin", "b"]);
+    const r = await git({ gitBin: fake, ghAuth: GH_AUTH_CTX }, ["push", "origin", "b"]);
     expect(r.stdout).toContain("cfgdir=/sbx/junco-gh");
     expect(r.stdout).toContain(
       "argv=-c credential.helper= -c credential.helper=!gh auth git-credential push origin b",

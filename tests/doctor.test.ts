@@ -14,9 +14,14 @@ import type { ResolvedModelInfo } from "../src/agent/session.js";
 
 const okConfig = {
   model: { id: "local/m", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "k", modelsJson: null },
-  dataDir: "/tmp/junco-doc-state",
-  queueRoot: "/tmp/junco-doc-vault",
-  worktreeRoot: "/tmp/junco-doc-wt",
+  // Synthetic, non-existent by construction — NOT /tmp. Several tests below run
+  // the real fs against these and assert exact warning counts; with real /tmp
+  // paths they passed only because those dirs happened not to exist, and a
+  // stray `mkdir /tmp/junco-doc-state/assess-review` turned 4 of them red.
+  // Completes the hermeticity fix #199.3 started for two of the tests.
+  dataDir: "/sbxroot/junco-doc-state",
+  queueRoot: "/sbxroot/junco-doc-vault",
+  worktreeRoot: "/sbxroot/junco-doc-wt",
   legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   gitBin: "git",
   ghBin: "gh",
@@ -128,8 +133,8 @@ describe("runDoctor", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).not.toMatch(/inference endpoint/i);
-    expect(lines.join("\n")).toMatch(/model — anthropic\/claude-x resolves via catalog/i);
+    expect(lines.join("")).not.toMatch(/inference endpoint/i);
+    expect(lines.join("")).toMatch(/model — anthropic\/claude-x resolves via catalog/i);
   });
 
   it("reports probe-disabled (not catalog-eligible) when worker.endpointProbe=never on a non-catalog model", async () => {
@@ -144,16 +149,10 @@ describe("runDoctor", () => {
       deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /inference endpoint.*probe disabled.*worker\.endpointProbe=never/i,
     );
-    expect(lines.join("\n")).not.toMatch(/catalog-eligible/i);
-  });
-
-  it("does not report sandbox when disabled (default)", async () => {
-    const lines: string[] = [];
-    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(lines.join("")).not.toMatch(/sandbox/i);
+    expect(lines.join("")).not.toMatch(/catalog-eligible/i);
   });
 
   it("reports ✓ when the enabled sandbox backend is available", async () => {
@@ -484,7 +483,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(1);
-    expect(lines.join("\n")).toMatch(/✗ model — no catalog match for anthropic\/claude-x/);
+    expect(lines.join("")).toMatch(/✗ model — no catalog match for anthropic\/claude-x/);
   });
 
   it("key source: config literal", async () => {
@@ -500,7 +499,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ key source — config literal \(model\.apiKey\)/);
+    expect(lines.join("")).toMatch(/✓ key source — config literal \(model\.apiKey\)/);
   });
 
   it("key source: $VAR reference resolves", async () => {
@@ -516,7 +515,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /✓ key source — \$MY_ANTHROPIC_KEY \(resolved from the environment\)/,
     );
   });
@@ -534,10 +533,10 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ key source — ANTHROPIC_API_KEY present in the environment/);
+    expect(lines.join("")).toMatch(/✓ key source — ANTHROPIC_API_KEY present in the environment/);
     // apiKey is null → the auth check has nothing to send, so it notes that
     // instead of silently skipping.
-    expect(lines.join("\n")).toMatch(/⚠ auth — no key configured/);
+    expect(lines.join("")).toMatch(/⚠ auth — no key configured/);
   });
 
   it("key source: none — warns for a non-local provider with the generic env-var name", async () => {
@@ -553,7 +552,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /⚠ key source — no key configured — the SDK will typically look for ANTHROPIC_API_KEY-style env vars at request time/,
     );
   });
@@ -572,7 +571,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ auth — auth verified/);
+    expect(lines.join("")).toMatch(/✓ auth — auth verified/);
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.anthropic.com/v1/models");
@@ -638,7 +637,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(1);
-    expect(lines.join("\n")).toMatch(/✗ auth — auth rejected \(check the key\)/);
+    expect(lines.join("")).toMatch(/✗ auth — auth rejected \(check the key\)/);
   });
 
   it("auth check: 403 → fail (auth rejected)", async () => {
@@ -654,7 +653,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(1);
-    expect(lines.join("\n")).toMatch(/✗ auth — auth rejected \(check the key\)/);
+    expect(lines.join("")).toMatch(/✗ auth — auth rejected \(check the key\)/);
   });
 
   it("auth check: network error → warn (endpoint unreachable), does not fail doctor", async () => {
@@ -672,7 +671,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/⚠ auth — endpoint unreachable/);
+    expect(lines.join("")).toMatch(/⚠ auth — endpoint unreachable/);
   });
 
   it("auth check: unknown api family → skip with a note, no request sent", async () => {
@@ -689,7 +688,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
+    expect(lines.join("")).toMatch(
       /✓ auth — unknown api "mistral-conversations" — auth check skipped/,
     );
     expect(fetchFn).not.toHaveBeenCalled();
@@ -709,7 +708,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).not.toMatch(/auth —/);
+    expect(lines.join("")).not.toMatch(/auth —/);
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
@@ -724,7 +723,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).not.toMatch(/planner model/);
+    expect(lines.join("")).not.toMatch(/planner model/);
   });
 
   it("planner preflight: plannerModelId set → resolves ok, alongside an ordinary local primary model", async () => {
@@ -743,7 +742,7 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/✓ planner model — openai\/gpt-4o resolves via catalog/);
+    expect(lines.join("")).toMatch(/✓ planner model — openai\/gpt-4o resolves via catalog/);
   });
 
   it("planner preflight: a miss warns (not fails) — ordinary tickets don't use it", async () => {
@@ -764,31 +763,37 @@ describe("runDoctor hosted-aware preflight", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(
-      /⚠ planner model — no catalog match for openai\/does-not-exist/,
-    );
+    expect(lines.join("")).toMatch(/⚠ planner model — no catalog match for openai\/does-not-exist/);
   });
 
-  it("local config: byte-identical output — no hosted-preflight lines leak in (regression)", async () => {
+  it("default config: a clean report — no optional-feature lines leak in (regression)", async () => {
+    // One doctor run over the default okConfig. Every default-OFF feature must
+    // stay silent; asserting all absences here against a single output is
+    // exactly equivalent to (and replaces) the seven scattered one-absence
+    // tests that each re-ran the whole doctor. Each feature's PRESENCE behavior
+    // is still tested in its own describe.
     const lines: string[] = [];
     const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(code).toBe(0);
-    const out = lines.join("\n");
+    const out = lines.join("");
+    // hosted-preflight lines
     expect(out).not.toMatch(/resolves via/);
     expect(out).not.toMatch(/key source/);
     expect(out).not.toMatch(/planner model/);
     expect(out).not.toMatch(/✓ auth —|✗ auth —|⚠ auth —/);
+    // default-off features (formerly one full doctor run each)
+    expect(out).not.toMatch(/sandbox/i);
+    expect(out).not.toMatch(/github/);
+    expect(out).not.toMatch(/bot account/i);
+    expect(out).not.toMatch(/outbox/);
+    expect(out).not.toMatch(/assess review/);
+    expect(out).not.toMatch(/analyze drafts/);
+    expect(out).not.toMatch(/assess history/);
     expect(out).toMatch(/ready — 0 failure\(s\), 0 warning\(s\)/);
   });
 });
 
 describe("runDoctor github checks", () => {
-  it("disabled bridge → no github lines at all", async () => {
-    const lines: string[] = [];
-    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(lines.join("")).not.toMatch(/github/);
-  });
-
   it("warns when enabled with no repos", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
@@ -901,12 +906,6 @@ describe("runDoctor github checks", () => {
 });
 
 describe("runDoctor bot account checks", () => {
-  it("does not report bot account when disabled (default)", async () => {
-    const lines: string[] = [];
-    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(lines.join("")).not.toMatch(/bot account/i);
-  });
-
   it("bot mode: reports identity when the bot login differs from the ambient login", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
@@ -1088,38 +1087,6 @@ describe("runDoctor bot account checks", () => {
     );
   });
 
-  it("per-repo warnings name the grant command", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor(
-      "/x/config.json",
-      deps({
-        loadConfigFn: () =>
-          botConfig({
-            github: {
-              ...okConfig.github,
-              enabled: true,
-              repos: [{ nwo: "acme/api", path: "/tmp/clone" }],
-            },
-          }),
-        execFn: async (_cmd: string, args: string[], opts?: { env?: Record<string, string> }) => {
-          if (args.includes("get-url")) {
-            return { code: 0, stdout: "git@github.com:acme/api.git\n", stderr: "" };
-          }
-          if (args[0] === "repo" && args[1] === "view" && args.includes("viewerPermission")) {
-            // TRIAGE fixture from the test above, reused to pin the grant hint.
-            return opts?.env?.GH_CONFIG_DIR === "/sbx/junco-gh"
-              ? { code: 0, stdout: JSON.stringify({ viewerPermission: "TRIAGE" }), stderr: "" }
-              : { code: 0, stdout: JSON.stringify({ viewerPermission: "WRITE" }), stderr: "" };
-          }
-          return { code: 0, stdout: "ok", stderr: "" };
-        },
-        printFn: (s) => lines.push(s),
-      }),
-    );
-    expect(code).toBe(0);
-    expect(lines.join("")).toMatch(/junco auth grant acme\/api/);
-  });
-
   it("bot mode: warns with the grant command on NONE permission for a watched repo", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
@@ -1245,13 +1212,6 @@ describe("runDoctor bot account checks", () => {
 });
 
 describe("runDoctor outbox checks", () => {
-  it("no backlog, no dead-letters → no outbox lines, still ready", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/outbox/);
-  });
-
   it("warns on a queued backlog (does not fail doctor)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obx-"));
     const { dir } = outboxPaths({ dataDir: stateDir } as unknown as Config);
@@ -1290,13 +1250,6 @@ describe("runDoctor outbox checks", () => {
 });
 
 describe("runDoctor assess review checks", () => {
-  it("no pending reviews → no assess review line", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/assess review/);
-  });
-
   it("reports pending reviews as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-review-"));
     writePending({ dataDir: stateDir } as unknown as Config, {
@@ -1324,13 +1277,6 @@ describe("runDoctor assess review checks", () => {
 });
 
 describe("runDoctor analyze review checks", () => {
-  it("no pending drafts → no analyze drafts line", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/analyze drafts/);
-  });
-
   it("reports pending drafts as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-draft-"));
     writeDraft({ dataDir: stateDir } as unknown as Config, {
@@ -1360,13 +1306,6 @@ describe("runDoctor analyze review checks", () => {
 });
 
 describe("runDoctor assess history checks", () => {
-  it("no repo has assess history → no assess history line", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/assess history/);
-  });
-
   it("reports per-repo assess history informationally — never as a warning", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-"));
     recordRun({ dataDir } as unknown as Config, "o/r", {

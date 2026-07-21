@@ -19,90 +19,40 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { inboxPath, submitTicket } from "../src/dispatch.js";
+import { makeConfig as baseConfig } from "./helpers/config.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const CONFIG_DEFAULTS: Omit<Config, "dataDir" | "queueRoot"> = {
-  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-  model: {
-    id: "test-model",
-    source: "auto",
-    baseUrlExplicit: false,
-    retry: { maxRetries: null, baseDelayMs: null },
-    modelsJson: null,
-    api: "openai-completions",
-    baseUrl: "http://127.0.0.1:1234/v1",
-    apiKey: "test",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 131072,
-    maxTokens: 49152,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    thinkingLevel: "medium",
-    compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+const CONFIG_DEFAULTS: Omit<Config, "dataDir" | "queueRoot"> = baseConfig(
+  {
+    // placeholders — makeConfig() below overwrites both with the test's tmpdir
+    dataDir: "",
+    queueRoot: "",
+    worktreeRoot: "/tmp/worktrees",
+    tools: ["read", "bash"],
+    criticEnabled: false,
+    planLintEnabled: false,
+    verifyEnabled: false,
+    supervisorEnabled: false,
+    healthEnabled: false,
+    removeWorktreeOnSuccess: true,
   },
-  tools: ["read", "bash"],
-  defaultTimeoutMinutes: 30,
-  pollIntervalSeconds: 15,
-  startupPollSeconds: 30,
-  startupWait: true,
-  endpointProbe: "auto",
-  maxTransientRetries: 2,
-  retryBackoffSeconds: 60,
-  maxConcurrent: 1,
-  supervisorEnabled: false,
-  supervisorBudgetPerKind: 1,
-  supervisorEscalationWindow: 3,
-  supervisorOutputBudgetPerTurn: 12000,
-  supervisorOutputBudgetPostCommit: 24000,
-  gitBin: "git",
-  ghBin: "gh",
-  defaultBaseBranch: "main",
-  branchPrefix: "junco/",
-  worktreeRoot: "/tmp/worktrees",
-  removeWorktreeOnSuccess: true,
-  allowedRepoRoots: [],
-  draftByDefault: true,
-  defaultLabels: [],
-  verifyEnabled: false,
-  verifyCommandTimeout: 60,
-  verifyBlockOnFail: false,
-  planLintEnabled: false,
-  planLintBlockOnError: false,
-  planLintCheckLabels: false,
-  commitLeftoversEnabled: false,
-  dailyBudgetUsd: 0,
-  criticEnabled: false,
-  criticMaxRetries: 1,
-  criticThinking: "minimal",
-  healthEnabled: false,
-  healthHost: "127.0.0.1",
-  healthPort: 8787,
-  logLevel: "info",
-  logToFile: false,
-  transcriptsEnabled: false,
-  github: {
-    enabled: false,
-    triggerLabel: "junco",
-    askLabel: "junco:ask",
-    pollIntervalSeconds: 60,
-    repos: [],
-    requireApproval: true,
-    plannerModelId: null,
-    externalReposRoot: "/tmp/junco-test-external",
+  {
+    github: {
+      enabled: false,
+      triggerLabel: "junco",
+      askLabel: "junco:ask",
+      pollIntervalSeconds: 60,
+      repos: [],
+      requireApproval: true,
+      plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
+    },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
   },
-  assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-  sandbox: {
-    enabled: false,
-    backend: "auto",
-    network: "deny",
-    extraDenyRead: [],
-    extraAllowWrite: [],
-  },
-  botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-};
+);
 
 function makeConfig(vaultRoot: string): Config {
   return { ...CONFIG_DEFAULTS, dataDir: vaultRoot, queueRoot: join(vaultRoot, "Junco") };

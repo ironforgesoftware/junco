@@ -1,0 +1,42 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Same grouping rationale as quality-gate.yml: PRs per ref (a force-push
+# cancels the superseded run), pushes per SHA (so rapid merges don't leave a
+# commit with a cancelled run).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ONE leg only, deliberately. The quality gate's ubuntu x macos matrix would
+  # produce two different coverage numbers, because sandbox.integration.test.ts
+  # is platform-gated and skips when the Seatbelt/bwrap binary is absent. The
+  # floor lives in vitest.config.ts's coverage.thresholds; this job enforces it.
+  coverage:
+    name: coverage floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false # nothing here pushes; don't leave a token in .git/config
+      # repo/pr/worktree tests create real commits in temp repos
+      - run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "junco-ci"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run --coverage

@@ -7,6 +7,7 @@ import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { CmdResult, gh } from "../src/git.js";
 import type { DashPr } from "../src/tui/prState.js";
+import { makeDashPr } from "./helpers/dashFixtures.js";
 
 function cfg(repos: GithubRepoMapping[] = []): Config {
   return {
@@ -190,28 +191,19 @@ describe("runPrsCommand", () => {
 });
 
 describe("formatPrLine", () => {
-  const basePr: DashPr = {
+  const basePr: DashPr = makeDashPr({
     number: 42,
     title: "Short title",
     url: "https://github.com/acme/api/pull/42",
     headRefName: "junco/short-title",
-    baseRefName: "main",
-    isDraft: false,
-    state: "OPEN",
-    reviewDecision: null,
-    mergeable: "MERGEABLE",
-    mergeStateStatus: "CLEAN",
     checks: { pass: 2, fail: 1, pending: 0, total: 3 },
     additions: 1,
     deletions: 1,
     changedFiles: 1,
     createdAt: "2026-07-01T00:00:00Z",
     updatedAt: "2026-07-06T00:00:00Z",
-    mergedAt: null,
-    author: "junco-bot",
-    labels: [],
     nwo: "acme/api",
-  };
+  });
 
   it("formats #num, badge, checks, title, and url, in that order, url last", () => {
     const line = formatPrLine(basePr);

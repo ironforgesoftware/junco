@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { migrateStateTree, pendingMigrations, stateTreeMigrations } from "../src/dataMigrate.js";
+import { makeConfig as baseConfig } from "./helpers/config.js";
 
 function freshRoot(): string {
   return mkdtempSync(join(tmpdir(), "junco-dm-"));
@@ -32,88 +33,37 @@ function freshRoot(): string {
  * `overrides`. */
 function makeConfig(overrides: Partial<Config> = {}): Config {
   const dataDir = overrides.dataDir ?? "/tmp/vault/state";
-  return {
-    dataDir,
-    queueRoot: join(dataDir, "queue"),
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    model: {
-      id: "omlx/test-model",
-      source: "auto",
-      baseUrlExplicit: false,
-      retry: { maxRetries: null, baseDelayMs: null },
-      modelsJson: null,
-      api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1",
-      apiKey: "test-key",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 131072,
-      maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  return baseConfig(
+    {
+      dataDir,
+      queueRoot: join(dataDir, "queue"),
+      worktreeRoot: "/tmp/worktrees",
+      tools: [],
+      criticEnabled: true,
+      planLintEnabled: true,
+      verifyEnabled: true,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: true,
     },
-    tools: [],
-    defaultTimeoutMinutes: 30,
-    pollIntervalSeconds: 15,
-    startupPollSeconds: 30,
-    startupWait: true,
-    endpointProbe: "auto",
-    maxTransientRetries: 2,
-    retryBackoffSeconds: 60,
-    maxConcurrent: 1,
-    dailyBudgetUsd: 0,
-    supervisorEnabled: false,
-    supervisorBudgetPerKind: 1,
-    supervisorEscalationWindow: 3,
-    supervisorOutputBudgetPerTurn: 12000,
-    supervisorOutputBudgetPostCommit: 24000,
-    gitBin: "git",
-    ghBin: "gh",
-    defaultBaseBranch: "main",
-    branchPrefix: "junco/",
-    worktreeRoot: "/tmp/worktrees",
-    removeWorktreeOnSuccess: true,
-    allowedRepoRoots: [],
-    draftByDefault: true,
-    defaultLabels: [],
-    verifyEnabled: true,
-    verifyCommandTimeout: 60,
-    verifyBlockOnFail: false,
-    criticEnabled: true,
-    criticMaxRetries: 1,
-    criticThinking: "minimal",
-    planLintEnabled: true,
-    planLintBlockOnError: true,
-    planLintCheckLabels: true,
-    commitLeftoversEnabled: false,
-    healthEnabled: false,
-    healthHost: "127.0.0.1",
-    healthPort: 0,
-    logLevel: "info",
-    logToFile: false,
-    transcriptsEnabled: false,
-    github: {
-      enabled: false,
-      triggerLabel: "junco",
-      askLabel: "junco:ask",
-      pollIntervalSeconds: 60,
-      repos: [],
-      requireApproval: true,
-      plannerModelId: null,
-      externalReposRoot: join(dataDir, "clones", "external"),
+    {
+      healthPort: 0, // never binds (healthEnabled: false), so claim no real port
+      planLintBlockOnError: true,
+      planLintCheckLabels: true,
+      github: {
+        enabled: false,
+        triggerLabel: "junco",
+        askLabel: "junco:ask",
+        pollIntervalSeconds: 60,
+        repos: [],
+        requireApproval: true,
+        plannerModelId: null,
+        externalReposRoot: join(dataDir, "clones", "external"),
+      },
+      botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
+      ...overrides,
     },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-    sandbox: {
-      enabled: false,
-      backend: "auto",
-      network: "deny",
-      extraDenyRead: [],
-      extraAllowWrite: [],
-    },
-    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    ...overrides,
-  };
+  );
 }
 
 const base = makeConfig();

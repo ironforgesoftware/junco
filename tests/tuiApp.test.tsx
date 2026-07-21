@@ -16,6 +16,7 @@ import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import type { AssessHistory } from "../src/assessHistory.js";
 import { until, fireUntil } from "./helpers/until.js";
+import { makeDashPr, makeDashIssue } from "./helpers/dashFixtures.js";
 
 // Every App mount registers a `process.on("exit")` listener via MouseProvider;
 // this file's ~57 renders never unmount on their own, which trips Node's
@@ -312,40 +313,30 @@ function makePrSeqClient(sequence: DashPr[][]) {
   return { client, prCalls, advance };
 }
 
-/** DashPr fixture — junco-branch head so it survives the branch-prefix filter;
- * override the fields a test cares about. */
-const makePr = (over: Partial<DashPr> = {}): DashPr => ({
-  number: 100,
-  title: "Some PR",
-  url: "https://github.com/acme/api/pull/100",
-  headRefName: "junco/some-slug",
-  baseRefName: "main",
-  isDraft: false,
-  state: "OPEN",
-  reviewDecision: null,
-  mergeable: "MERGEABLE",
-  mergeStateStatus: "CLEAN",
-  checks: { pass: 1, fail: 0, pending: 0, total: 1 },
-  additions: 10,
-  deletions: 2,
-  changedFiles: 3,
-  createdAt: "2026-07-05T10:00:00Z",
-  updatedAt: "2026-07-06T10:00:00Z",
-  mergedAt: null,
-  author: "junco-bot",
-  labels: [],
-  nwo: "acme/api",
-  ...over,
-});
+/** This file's DashPr baseline — an acme/api PR whose junco-branch head
+ * survives the branch-prefix filter; override the fields a test cares about. */
+const makePr = (over: Partial<DashPr> = {}): DashPr =>
+  makeDashPr({
+    number: 100,
+    title: "Some PR",
+    url: "https://github.com/acme/api/pull/100",
+    headRefName: "junco/some-slug",
+    checks: { pass: 1, fail: 0, pending: 0, total: 1 },
+    additions: 10,
+    deletions: 2,
+    changedFiles: 3,
+    createdAt: "2026-07-05T10:00:00Z",
+    updatedAt: "2026-07-06T10:00:00Z",
+    nwo: "acme/api",
+    ...over,
+  });
 
-const rawIssue: DashIssue = {
+const rawIssue: DashIssue = makeDashIssue({
   number: 7,
   title: "Fix uploads",
-  labels: ["junco"],
   updatedAt: "2026-07-06T10:00:00Z",
   url: "https://github.com/acme/api/issues/7",
-  author: null,
-};
+});
 const readyIssue: DashIssue = { ...rawIssue, number: 9, labels: ["junco", "junco:plan-ready"] };
 
 function renderApp(
@@ -1183,14 +1174,12 @@ describe("header breadcrumbs", () => {
 
 describe("external-repo routing", () => {
   const wle = () => join(mkdtempSync(join(tmpdir(), "junco-ext-")), "wl.json");
-  const upIssue: DashIssue = {
+  const upIssue: DashIssue = makeDashIssue({
     number: 7,
     title: "Stream bug",
-    labels: ["junco"],
     updatedAt: "2026-07-06T10:00:00Z",
     url: "https://github.com/up/stream/issues/7",
-    author: null,
-  };
+  });
 
   it("addRepo routes a no-push repo to external fork provisioning", async () => {
     const { client } = makeClient({ "acme/api": [] });
@@ -2381,22 +2370,18 @@ describe("queue system row", () => {
 
 describe("workspace filter + pane navigation (medium)", () => {
   const wl5 = () => join(mkdtempSync(join(tmpdir(), "junco-ws-")), "wl.json");
-  const upl: DashIssue = {
+  const upl: DashIssue = makeDashIssue({
     number: 7,
     title: "Fix uploads",
-    labels: ["junco"],
     updatedAt: "2026-07-06T10:00:00Z",
     url: "https://github.com/acme/api/issues/7",
-    author: null,
-  };
-  const db: DashIssue = {
+  });
+  const db: DashIssue = makeDashIssue({
     number: 9,
     title: "Database migration",
-    labels: ["junco"],
     updatedAt: "2026-07-06T09:00:00Z",
     url: "https://github.com/acme/api/issues/9",
-    author: null,
-  };
+  });
 
   it("/ filters the issue list, then esc clears it", async () => {
     const { client } = makeClient({ "acme/api": [upl, db] });

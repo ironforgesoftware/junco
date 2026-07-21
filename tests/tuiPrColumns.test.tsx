@@ -5,30 +5,23 @@ import { Box } from "ink";
 import { PrList, prListColumns } from "../src/tui/components/PrList.js";
 import { MAX_PR_BADGE_LEN } from "../src/tui/prState.js";
 import type { DashPr } from "../src/tui/prState.js";
+import { makeDashPr } from "./helpers/dashFixtures.js";
 
 const pr = (n: number, title: string): DashPr =>
-  ({
+  makeDashPr({
     number: n,
     title,
     url: "u",
     headRefName: "junco/x",
-    baseRefName: "main",
-    isDraft: false,
-    state: "OPEN",
-    reviewDecision: null,
     mergeable: null,
     mergeStateStatus: null,
-    checks: { pass: 2, fail: 0, pending: 0, total: 2 },
     additions: 1,
     deletions: 1,
     changedFiles: 1,
     createdAt: "2026-07-20T10:00:00Z",
     updatedAt: "2026-07-20T11:00:00Z",
-    mergedAt: null,
-    author: "junco-bot",
-    labels: [],
     nwo: "acme/site",
-  }) as DashPr;
+  });
 
 const props = {
   prs: [pr(1, "one"), pr(22, "two")],

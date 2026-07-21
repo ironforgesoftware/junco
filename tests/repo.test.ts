@@ -10,52 +10,22 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
 
 import { validateRepoContext, resolveAmendTarget } from "../src/repo.js";
 import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
+import { makeConfig as baseConfig } from "./helpers/config.js";
+import { run, cloneHarness } from "./helpers/gitHarness.js";
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
 // ---------------------------------------------------------------------------
 
-function run(args: string[], cwd?: string): string {
-  return execFileSync(args[0], args.slice(1), {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "CI",
-      GIT_AUTHOR_EMAIL: "ci@example.com",
-      GIT_COMMITTER_NAME: "CI",
-      GIT_COMMITTER_EMAIL: "ci@example.com",
-    },
-  });
-}
-
-function setupGitHarness(tmpRoot: string): {
-  remote: string;
-  work: string;
-} {
-  const remote = join(tmpRoot, "remote.git");
-  const work = join(tmpRoot, "work");
-
-  run(["git", "init", "--bare", "-b", "main", remote]);
-  run(["git", "init", "-b", "main", work]);
-  run(["git", "-C", work, "config", "user.email", "ci@example.com"]);
-  run(["git", "-C", work, "config", "user.name", "CI"]);
-  run(["git", "-C", work, "config", "commit.gpgsign", "false"]);
-
-  writeFileSync(join(work, "README.md"), "seed\n");
-  run(["git", "-C", work, "add", "README.md"]);
-  run(["git", "-C", work, "commit", "-m", "seed"]);
-  run(["git", "-C", work, "remote", "add", "origin", remote]);
-  run(["git", "-C", work, "push", "-u", "origin", "main"]);
-
-  return { remote, work };
-}
+// run() and the bare-remote-plus-clone tree now live in tests/helpers/gitHarness.ts.
+// cloneHarness copies a once-per-process template (~7ms) instead of rebuilding it
+// with 10 git subprocesses (~142ms) per test.
+const setupGitHarness = cloneHarness;
 
 /**
  * Write a fake gh script to `scriptPath` and chmod +x.
@@ -99,87 +69,36 @@ esac
 }
 
 function makeConfig(work: string, ghBin: string): Config {
-  return {
-    dataDir: "/tmp/vault/state",
-    queueRoot: "/tmp/vault/Junco",
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    model: {
-      id: "test/model",
-      source: "auto",
-      baseUrlExplicit: false,
-      retry: { maxRetries: null, baseDelayMs: null },
-      modelsJson: null,
-      api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1",
-      apiKey: "test",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 131072,
-      maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  return baseConfig(
+    {
+      dataDir: "/tmp/vault/state",
+      queueRoot: "/tmp/vault/Junco",
+      worktreeRoot: join(work, "wts"),
+      tools: [],
+      criticEnabled: true,
+      planLintEnabled: true,
+      verifyEnabled: true,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: true,
     },
-    tools: [],
-    defaultTimeoutMinutes: 30,
-    pollIntervalSeconds: 15,
-    startupPollSeconds: 30,
-    startupWait: true,
-    endpointProbe: "auto",
-    maxTransientRetries: 2,
-    retryBackoffSeconds: 60,
-    maxConcurrent: 1,
-    supervisorEnabled: false,
-    supervisorBudgetPerKind: 1,
-    supervisorEscalationWindow: 3,
-    supervisorOutputBudgetPerTurn: 12000,
-    supervisorOutputBudgetPostCommit: 24000,
-    gitBin: "git",
-    ghBin,
-    defaultBaseBranch: "main",
-    branchPrefix: "junco/",
-    worktreeRoot: join(work, "wts"),
-    removeWorktreeOnSuccess: true,
-    allowedRepoRoots: [],
-    draftByDefault: true,
-    defaultLabels: [],
-    verifyEnabled: true,
-    verifyCommandTimeout: 60,
-    verifyBlockOnFail: false,
-    criticEnabled: true,
-    criticMaxRetries: 1,
-    criticThinking: "minimal",
-    planLintEnabled: true,
-    planLintBlockOnError: true,
-    planLintCheckLabels: true,
-    commitLeftoversEnabled: false,
-    dailyBudgetUsd: 0,
-    healthEnabled: false,
-    healthHost: "127.0.0.1",
-    healthPort: 8787,
-    logLevel: "info",
-    github: {
-      enabled: false,
-      triggerLabel: "junco",
-      askLabel: "junco:ask",
-      pollIntervalSeconds: 60,
-      repos: [],
-      requireApproval: true,
-      plannerModelId: null,
-      externalReposRoot: "/tmp/junco-test-external",
+    {
+      ghBin, // the caller's fake gh script — never the real, authenticated gh
+      planLintBlockOnError: true,
+      planLintCheckLabels: true,
+      github: {
+        enabled: false,
+        triggerLabel: "junco",
+        askLabel: "junco:ask",
+        pollIntervalSeconds: 60,
+        repos: [],
+        requireApproval: true,
+        plannerModelId: null,
+        externalReposRoot: "/tmp/junco-test-external",
+      },
+      botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-    sandbox: {
-      enabled: false,
-      backend: "auto",
-      network: "deny",
-      extraDenyRead: [],
-      extraAllowWrite: [],
-    },
-    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    logToFile: false,
-    transcriptsEnabled: false,
-  };
+  );
 }
 
 function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoContext {
