@@ -16,14 +16,16 @@ function fmtUp(s: number | null): string {
   return ` up ${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }
 
-/** Row 1: brand mark · active repo · (right) the pulse — review count, task
- * record, last task, tokens, bridge errors, daemon, queue, unpushed.
+/** Row 1: brand mark · breadcrumb trail · (right) the pulse. The trail is
+ * crumbs joined by a dim "▸" — the only flexible element in the row. The
+ * pulse is four groups — warnings │ record (24h + last) │ live (run + eta) │
+ * system (daemon/queue/unpushed) — each joined to the next by a dim "│".
  *
  * One-line invariant (layout.ts budgets exactly CHROME_ROWS): the root Box is
- * height 1, the brand and chip group are flexShrink 0, and the repo name is
- * the ONLY flexible element — it truncates to absorb all width pressure. The
- * chip set is also responsive: below the wide breakpoint the record/last/tok/
- * bridge chips drop (they live in `junco status` for narrow terminals). */
+ * height 1, the brand and chip group are flexShrink 0, and the breadcrumb
+ * trail truncates to absorb all width pressure. The chip set is also
+ * responsive: below the wide breakpoint, the wide-only members of each group
+ * drop (they live in `junco status` for narrow terminals). */
 export function Header({
   crumbs,
   health,

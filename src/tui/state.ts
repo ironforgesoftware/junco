@@ -24,7 +24,10 @@ export interface DashIssue {
   labels: string[];
   updatedAt: string;
   url: string;
-  /** Issue opener's login; null on pre-field cache entries. */
+  /** Issue opener's login. Pre-field cache entries (written before this field
+   * existed) deserialize with the key ABSENT — `undefined` at runtime, not
+   * `null`, despite the type below. `isBotAuthored` accepts `undefined` too
+   * and treats it the same as `null`: non-bot. */
   author: string | null;
 }
 
