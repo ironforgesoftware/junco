@@ -319,10 +319,10 @@ export async function enumerateWorktrees(
 }
 
 /** Trimmed projection of GateStatus for the dashboard: state + reason only —
- * rendered fields (LocalDashboard.tsx reads `daemon.gate.state`/`.reason`
+ * rendered fields (sections.tsx reads `daemon.gate.state`/`.reason`
  * exclusively). Drops `since` and `until` (neither is rendered) and loses the
  * branded GateStateKind (the dashboard only switches on a handful of known
- * strings, see LocalDashboard.tsx's gate-color sets). */
+ * strings, see sections.tsx's gate-color sets). */
 export interface DaemonGateInfo {
   state: string;
   reason: string | null;

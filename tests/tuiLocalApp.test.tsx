@@ -1,7 +1,7 @@
 // App-level unified-view suite: the single rail (repos + system rows), body
 // routing per row kind, the removed mode toggle, and github-disabled
 // fallbacks. (The file name is tuiLocalApp for continuity with the LOCAL-mode
-// suite it replaced; the LocalDashboard *component* suite owns tuiLocal.)
+// suite it replaced; the section-component suite owns tuiLocal.)
 // Fixtures + renderApp live in ./helpers/localFixtures.
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";

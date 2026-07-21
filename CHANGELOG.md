@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the dashboard's GITHUB/LOCAL two-mode split is gone — one unified view. The rail lists every repo junco knows about (watched GitHub repos _and_ local checkouts discovered on disk) with a pinned `system` group (queue, outbox, worktrees, daemon, logs) below; the body follows the cursor. The `m`/Shift+Tab mode toggle and the header tab pair are removed; `t` now jumps to the queue system row instead of opening a separate queue view; `enter` on a rail repo row opens a new repo detail panel (path, origin, branch@sha, dirty flag, worktrees, recent queue activity — also the body for local-only checkouts, and for every repo when `github.enabled = false`). Queue snapshot rows now carry the ticket's `repo:` path so the panel can scope queue activity per repo.
+
 ### Added
 
 - `junco assess discard <id>` — explicitly archive a pending review batch; filing no longer auto-archives.

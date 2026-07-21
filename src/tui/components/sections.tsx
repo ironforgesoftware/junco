@@ -3,7 +3,7 @@
  * the per-ticket worktrees, and the daemon/health detail, plus the shared
  * section-badge derivation. Near-pure (window/cursor/scroll come in as props)
  * so they render identically as unified-view body arms and in tests.
- * (Relocated from LocalDashboard.tsx — history there.)
+ * (Relocated from the retired LocalDashboard.tsx — history in git.)
  */
 
 import React from "react";

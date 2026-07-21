@@ -6,8 +6,6 @@ import type { HealthInfo } from "../ghClient.js";
 import { fmtCompact } from "../queueFmt.js";
 import { relTime, relTimeShort } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
-import type { UiMode } from "../geometry.js";
-import type { LocalSection } from "../localSnapshot.js";
 import { ClickableBox } from "../ClickableBox.js";
 
 export type HintView =
@@ -18,7 +16,7 @@ export type HintView =
   | "config"
   | "palette"
   | "cmdOutput"
-  | "queue"
+  | "repoDetail"
   | "prs"
   | "prDetail"
   | "review";
@@ -50,9 +48,6 @@ export function Header({
   prAttention,
   prFailing,
   refreshedAt,
-  uiMode,
-  githubEnabled,
-  onModeTab,
   updateLatest,
 }: {
   repoNwo: string | null;
@@ -78,13 +73,6 @@ export function Header({
    * was served offline) — the top bar's single ↻ stamp. Null until the first
    * cycle completes. */
   refreshedAt: string | null;
-  /** Present only in the two-mode App; absent → legacy single-surface header
-   * (byte-identical to pre-Stage-E rendering — no tab segment at all). */
-  uiMode?: UiMode;
-  /** When false the GITHUB tab dims (the mode is off in config). */
-  githubEnabled?: boolean;
-  /** Click handler for the GITHUB/LOCAL tabs (region-based; Task 5). */
-  onModeTab?: (m: UiMode) => void;
   /** Latest npm version when newer than the running one; null/absent → no chip. */
   updateLatest?: string | null;
 }): React.JSX.Element {
@@ -101,17 +89,6 @@ export function Header({
   const lastTaskAt = health?.lastTaskAt ?? null;
   const totalTokensOut = health?.totalTokensOut ?? null;
   const bridgeErrors = health?.bridgeErrors ?? null;
-  // Fixed-width tab labels ("[GITHUB]"/"[G]" = 8/3, "[LOCAL]"/"[L]" = 7/3): the
-  // inactive (unbracketed, shorter) label pads out to the SAME column width as
-  // the active one so toggling modes never reflows the row. Purely
-  // presentational now — clicks resolve against each tab's own ClickableBox
-  // region (no mirrored hit-test bands to keep in lockstep).
-  const ghWidth = wide ? 8 : 3;
-  const loWidth = wide ? 7 : 3;
-  const ghLabel =
-    uiMode === "github" ? (wide ? "[GITHUB]" : "[G]") : (wide ? "github" : "g").padEnd(ghWidth);
-  const loLabel =
-    uiMode === "local" ? (wide ? "[LOCAL]" : "[L]") : (wide ? "local" : "l").padEnd(loWidth);
   return (
     <Box paddingX={1} gap={2} height={1}>
       <Box flexShrink={0}>
@@ -121,31 +98,6 @@ export function Header({
           junco
         </Text>
       </Box>
-      {uiMode !== undefined && (
-        <Box flexShrink={0}>
-          <ClickableBox
-            onPress={onModeTab ? () => onModeTab("github") : undefined}
-            hoverBg={theme.hoverBg}
-          >
-            <Text
-              color={uiMode === "github" ? theme.accent : undefined}
-              bold={uiMode === "github"}
-              dimColor={githubEnabled === false}
-            >
-              {ghLabel}
-            </Text>
-          </ClickableBox>
-          <Text> </Text>
-          <ClickableBox
-            onPress={onModeTab ? () => onModeTab("local") : undefined}
-            hoverBg={theme.hoverBg}
-          >
-            <Text color={uiMode === "local" ? theme.accent : undefined} bold={uiMode === "local"}>
-              {loLabel}
-            </Text>
-          </ClickableBox>
-        </Box>
-      )}
       <Box flexShrink={1} minWidth={0}>
         <Text bold wrap="truncate">
           {repoNwo ?? "no repo"}
@@ -271,10 +223,11 @@ export function hintsFor(
         ["o", "browser"],
         ["esc", "back"],
       ];
-    case "queue":
+    case "repoDetail":
       return [
         ["↑/↓", "scroll"],
-        ["esc/t", "back"],
+        ["o", "browser"],
+        ["esc", "back"],
       ];
     case "prs":
       return [
@@ -331,14 +284,13 @@ export function hintsFor(
   if (pane === 1) {
     return [
       ["↑/↓", "move"],
-      ["→", "issues"],
       ["w", "add repo"],
       ["x", "unwatch"],
       ["o", "browser"],
       ["r", "refresh"],
       ["s", "assess"],
+      ["t", "queue"],
       [":", "commands"],
-      ["m", "local"],
       ["?", "help"],
       ["q", "quit"],
     ];
@@ -362,69 +314,12 @@ export function hintsFor(
     ["a", "approve"],
     ["c", "analyze"],
     ["/", "filter"],
-    ["t", "queue"],
     ["p", "PRs"],
     ["s", "assess issue"],
     [",", "config"],
-    ["m", "local"],
     ["?", "help"],
     ["q", "quit"],
   ];
-}
-
-/** Local-mode key hints — GitHub `hintsFor` is untouched; this is a sibling
- * for the LOCAL surface. `m`/Shift+Tab is the global mode swap (also in the
- * github main set so it is discoverable from both sides). */
-export function localHintsFor(section: LocalSection, focus: "rail" | "body"): [string, string][] {
-  if (focus === "rail") {
-    return [
-      ["↑/↓", "section"],
-      ["→", "open"],
-      ["m", "github"],
-      ["r", "refresh"],
-      ["?", "help"],
-      ["q", "quit"],
-    ];
-  }
-  switch (section) {
-    case "queue":
-      return [
-        ["↑/↓", "move"],
-        ["R", "requeue"],
-        ["x", "delete"],
-        ["←", "back"],
-      ];
-    case "outbox":
-      return [
-        ["↑/↓", "move"],
-        ["f", "flush"],
-        ["←", "back"],
-      ];
-    case "repos":
-      return [
-        ["↑/↓", "move"],
-        ["o", "browser"],
-        ["x", "unwatch"],
-        ["←", "back"],
-      ];
-    case "worktrees":
-      return [
-        ["↑/↓", "move"],
-        ["x", "prune"],
-        ["←", "back"],
-      ];
-    case "daemon":
-      return [
-        ["[/]", "scroll"],
-        ["X", "restart"],
-        ["f", "flush"],
-        ["←", "back"],
-      ];
-    case "logs":
-      // Compact tail: → / Enter (or a click on the pane, or a click-again on the
-      // rail row) opens the full-screen overlay; `←` returns to the rail.
-      return [["←", "back"]];
-  }
 }
 
 /** What pane 2 currently shows in the unified view — mirrors railModel's
@@ -438,9 +333,9 @@ export type BodyHintKind =
   | "daemon"
   | "logs";
 
-/** Single-surface hint sets for the unified view. Non-main views delegate to
- * hintsFor verbatim; main is pane- and body-kind-aware. Replaces the
- * hintsFor/localHintsFor pair once App swaps over (unified-view spec §3). */
+/** Single-surface hint sets for the unified view. Non-main views (and the
+ * repo-list panes 1/3, plus the issues body) delegate to hintsFor verbatim;
+ * the section/RepoDetail bodies get their own sets (unified-view spec §3). */
 export function hintsForUnified(
   view: HintView,
   bodyKind: BodyHintKind,
@@ -449,29 +344,10 @@ export function hintsForUnified(
   filtering: boolean,
 ): [string, string][] {
   if (filtering || view !== "main") return hintsFor(view, pane, mode, filtering);
-  // Pane 1 (rail): one row's worth of chips — enter (repo detail) and → (body
-  // focus) live in the help modal instead; the row must not clip `q quit` at
-  // the 120-col test width (Footer clips, never wraps).
-  if (pane === 1) {
-    return [
-      ["↑/↓", "move"],
-      ["w", "add repo"],
-      ["x", "unwatch"],
-      ["o", "browser"],
-      ["r", "refresh"],
-      ["s", "assess"],
-      ["t", "queue"],
-      [":", "commands"],
-      ["?", "help"],
-      ["q", "quit"],
-    ];
-  }
-  if (pane === 3) return hintsFor("main", 3, mode, false);
+  if (pane === 1 || pane === 3) return hintsFor("main", pane, mode, false);
   switch (bodyKind) {
     case "issues":
-      // Pane-2 issue verbs minus the dead mode toggle and the t queue-view
-      // key (t now jumps the RAIL cursor, so it reads as a rail hint).
-      return hintsFor("main", 2, mode, false).filter(([k]) => k !== "m" && k !== "t");
+      return hintsFor("main", 2, mode, false);
     case "repoDetail":
       return [
         ["[ ]", "scroll"],

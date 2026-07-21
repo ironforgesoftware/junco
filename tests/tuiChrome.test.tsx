@@ -1,14 +1,7 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import {
-  Header,
-  Toast,
-  Footer,
-  hintsFor,
-  hintsForUnified,
-  localHintsFor,
-} from "../src/tui/components/Chrome.js";
+import { Header, Toast, Footer, hintsFor, hintsForUnified } from "../src/tui/components/Chrome.js";
 import type { HealthInfo } from "../src/tui/ghClient.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
@@ -339,13 +332,12 @@ describe("Footer / hintsFor", () => {
     expect(keys).toContain("←/→");
     expect(keys).toContain("q");
   });
-  it("main pane 2 advertises the PRs view key, placed next to the queue key", () => {
+  it("main pane 2 advertises the PRs view key; t lives on the rail set", () => {
     const pairs = hintsFor("main", 2, "wide", false);
-    const pIdx = pairs.findIndex(([k]) => k === "p");
-    const tIdx = pairs.findIndex(([k]) => k === "t");
     expect(pairs.find(([k]) => k === "p")?.[1]).toBe("PRs");
-    expect(tIdx).toBeGreaterThanOrEqual(0);
-    expect(Math.abs(pIdx - tIdx)).toBe(1);
+    // t (jump to the queue row) moved to pane 1 — the rail owns the cursor.
+    expect(pairs.findIndex(([k]) => k === "t")).toBe(-1);
+    expect(hintsFor("main", 1, "wide", false).find(([k]) => k === "t")?.[1]).toBe("queue");
   });
   it("medium mode: enter says preview (same word as wide) and the pane hint drops to ←/repos", () => {
     const pairs = hintsFor("main", 2, "medium", false);
@@ -398,10 +390,11 @@ describe("Footer / hintsFor", () => {
       ["esc", "clear"],
     ]);
   });
-  it("queue view keeps ↑/↓ scroll and esc/t back", () => {
-    const keys = hintsFor("queue", 2, "wide", false).map(([k]) => k);
+  it("repoDetail view keeps ↑/↓ scroll, o browser, esc back", () => {
+    const keys = hintsFor("repoDetail", 2, "wide", false).map(([k]) => k);
     expect(keys).toContain("↑/↓");
-    expect(keys).toContain("esc/t");
+    expect(keys).toContain("o");
+    expect(keys).toContain("esc");
   });
 });
 
@@ -439,7 +432,7 @@ describe("Header unified refresh stamp", () => {
   });
 });
 
-describe("Header mode tabs", () => {
+describe("Header (no mode tabs)", () => {
   const base = {
     repoNwo: "acme/api",
     health: UP_BARE,
@@ -454,31 +447,12 @@ describe("Header mode tabs", () => {
     refreshedAt: null,
   } as const;
 
-  it("absent uiMode renders no tab (byte-for-byte legacy header)", () => {
+  it("renders no tab segment (the mode toggle is gone)", () => {
     const f = render(<Header {...base} mode="wide" />).lastFrame()!;
     expect(f).not.toContain("[GITHUB]");
     expect(f).not.toContain("[LOCAL]");
-  });
-
-  it("github active: [GITHUB] bracketed, local plain — survives NO_COLOR", () => {
-    const f = render(<Header {...base} mode="wide" uiMode="github" githubEnabled />).lastFrame()!;
-    expect(f).toContain("[GITHUB]");
-    expect(f).toContain("local");
-    expect(f).not.toContain("[LOCAL]");
-  });
-
-  it("local active: github plain, [LOCAL] bracketed", () => {
-    const f = render(<Header {...base} mode="wide" uiMode="local" githubEnabled />).lastFrame()!;
-    expect(f).toContain("[LOCAL]");
-    expect(f).toContain("github");
-    expect(f).not.toContain("[GITHUB]");
-  });
-
-  it("compact form below the wide breakpoint: single-letter tabs", () => {
-    const f = render(<Header {...base} mode="medium" uiMode="github" githubEnabled />).lastFrame()!;
-    expect(f).toContain("[G]");
-    expect(f).toContain("l");
-    expect(f).not.toContain("[GITHUB]");
+    expect(f).toContain("junco");
+    expect(f).toContain("acme/api");
   });
 
   it("columns=60 (medium, narrowest) with a full chip set stays one row (no wrap)", () => {
@@ -486,8 +460,6 @@ describe("Header mode tabs", () => {
       <Header
         {...base}
         mode="medium"
-        uiMode="local"
-        githubEnabled
         reviewCount={2}
         queueRunning={1}
         queueWaiting={1}
@@ -497,46 +469,6 @@ describe("Header mode tabs", () => {
     ).lastFrame()!;
     const lines = f.split("\n").filter((l) => l.trim().length > 0);
     expect(lines).toHaveLength(1);
-  });
-
-  it("renders the tabs after the brand, GITHUB before LOCAL", () => {
-    // Presentational ordering only — clicks resolve against each tab's own
-    // ClickableBox region now (headerTabBands is gone), so this just pins the
-    // draw order the region rects inherit: brand < GITHUB < LOCAL.
-    const f = render(<Header {...base} mode="wide" uiMode="github" githubEnabled />).lastFrame()!;
-    const brandAt = f.indexOf("junco");
-    const ghAt = f.indexOf("[GITHUB]");
-    const loAt = f.indexOf("local");
-    expect(brandAt).toBeGreaterThanOrEqual(0);
-    expect(ghAt).toBeGreaterThan(brandAt);
-    expect(loAt).toBeGreaterThan(ghAt);
-  });
-});
-
-describe("localHintsFor", () => {
-  it("rail focus advertises the global mode + section keys", () => {
-    const keys = localHintsFor("queue", "rail").map(([k]) => k);
-    expect(keys).toContain("↑/↓");
-    expect(keys).toContain("m");
-    expect(keys).toContain("q");
-  });
-  it("queue body advertises R requeue and x delete", () => {
-    const pairs = localHintsFor("queue", "body");
-    expect(pairs.find(([k]) => k === "R")?.[1]).toBe("requeue");
-    expect(pairs.find(([k]) => k === "x")?.[1]).toBe("delete");
-  });
-  it("worktrees body advertises x prune; daemon advertises X restart and [/] scroll", () => {
-    expect(localHintsFor("worktrees", "body").find(([k]) => k === "x")?.[1]).toBe("prune");
-    const daemon = localHintsFor("daemon", "body").map(([k]) => k);
-    expect(daemon).toContain("X");
-    expect(daemon).toContain("[/]");
-  });
-});
-
-describe("hintsFor github main still discovers the mode key", () => {
-  it("main pane 2 wide includes m local", () => {
-    const pairs = hintsFor("main", 2, "wide", false);
-    expect(pairs.find(([k]) => k === "m")?.[1]).toBe("local");
   });
 });
 

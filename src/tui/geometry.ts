@@ -4,11 +4,6 @@
  * budget changes here, every consumer moves together instead of drifting.
  */
 
-/** Worst-case queue-card rows in the rail: separator + title + running +
- * more-running + waiting + daemon-down. (Moved from Rail.tsx.)
- * Deleted with the legacy Rail once the unified swap lands. */
-export const QUEUE_CARD_ROWS = 6;
-
 /** Pinned system block in the unified rail: separator + "system" header +
  * the five section rows (queue/outbox/worktrees/daemon/logs). */
 export const SYSTEM_BLOCK_ROWS = 7;
@@ -32,5 +27,3 @@ export function railListHeight(bodyRows: number): number {
 export function listRowsHeight(bodyRows: number): number {
   return Math.max(1, bodyRows - 4);
 }
-
-export type UiMode = "github" | "local";
