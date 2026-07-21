@@ -11,8 +11,9 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | Action    | Command                                                                                              |
 | --------- | ---------------------------------------------------------------------------------------------------- |
 | Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                        |
-| All tests | `npm test` (vitest, ~1,500 tests, under a minute)                                                    |
+| All tests | `npm test` (vitest, ~3,100 tests, ~25s)                                                              |
 | One file  | `npx vitest run tests/<name>.test.ts`                                                                |
+| Coverage  | `npx vitest run --coverage` (floor pinned by `vitest.config.ts` thresholds; CI job `coverage`)       |
 | Lint      | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`)                |
 | Typecheck | `npm run typecheck` (tsc over src/ + tests/ via `tsconfig.eslint.json` — vitest does not type-check) |
 | Format    | `npm run format` / `npm run format:check` (prettier, 100 cols)                                       |
@@ -36,7 +37,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 
 ## Testing gotchas (each of these has burned a session)
 
-- **Adding a `Config` field? Update every test fixture that builds a full `Config` literal** — `tests/{runOnce,prFlow,orphans,repo,worktree,daemon}.test.ts` each have a `makeConfig`/`cfg()` helper. `npm run typecheck` catches misses at CI time (vitest doesn't type-check and `tsconfig.json` excludes `tests/` — the eslint tsconfig covers them).
+- **Adding a `Config` field? Add it to `tests/helpers/config.ts` and nowhere else** — it is the only full `Config` literal in the suite (it replaced 19). `makeConfig` returns `Config` unasserted, so a new field is a type error _there_, not a silent drift across fixtures. Its `ConfigSeams` are the ten keys whose value changes what a test exercises (`dataDir`, `queueRoot`, `worktreeRoot`, `tools`, and the six feature toggles); put the field there instead if callers must state it. `ghBin` defaults to `/nonexistent/gh` on purpose — a test needing `gh` passes its own fake. Shared fixtures: `tests/helpers/{config,gitHarness,fakeSession,until,forkHarness,localFixtures}`.
 - Scheduler/daemon tests: an instant-resolve fake `sleep` starves the macrotask queue (the loop spins on microtasks; `setTimeout`-based fake tasks never settle → OOM). Yield a real tick: `await new Promise((r) => setTimeout(r, 1))`.
 - Repo/PR/worktree tests run a real git harness (bare remote + clone in tmp); they need `git config user.*` (CI sets it globally).
 - Prettier may reformat files between your read and your edit; re-read before editing and run `npx prettier --write` on touched files before committing.
