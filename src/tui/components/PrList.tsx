@@ -30,6 +30,46 @@ export function checksToString(checks: {
  * this same clamp instead of inventing a second budget. */
 export const NWO_MAX_WIDTH = 24;
 
+/** Widest the age cell can need — `relTime` can emit "365d". */
+const AGE_W = 4;
+
+export interface PrListColumnOpts {
+  prs: DashPr[];
+  showNwo: boolean;
+}
+
+export interface PrListColumnSpec {
+  columns: Column[];
+  /** Inner pill width (badge text without the two pad spaces) — the Badge's `padTo`. */
+  pillInner: number;
+  repoW: number;
+  checksW: number;
+}
+
+/** The single source of truth for this list's geometry: header cells and row
+ * cells both read it, so they can never drift. Widths come from the CURRENT
+ * dataset (or the header labels' own widths) — never from the selected row, so
+ * moving the cursor can never shift a column. */
+export function prListColumns({ prs, showNwo }: PrListColumnOpts): PrListColumnSpec {
+  const badges = prs.map((p) => prStateMeta(derivePrState(p)).badge);
+  const pillInner = Math.max("state".length, ...badges.map((b) => b.length), 0);
+  const repoW = showNwo
+    ? Math.min(NWO_MAX_WIDTH, Math.max("repo".length, ...prs.map((p) => p.nwo.length), 0))
+    : 0;
+  const checksW = Math.max("checks".length, ...prs.map((p) => checksToString(p.checks).length), 0);
+  const columns: Column[] = [
+    { label: "", width: 1 },
+    { label: "", width: 1 },
+    { label: "#", width: 5, align: "right" },
+    { label: "title", width: "flex" },
+    ...(showNwo ? [{ label: "repo", width: repoW } as Column] : []),
+    { label: "checks", width: checksW },
+    { label: "state", width: pillInner + 2 },
+    { label: "age", width: AGE_W, align: "right" },
+  ];
+  return { columns, pillInner, repoW, checksW };
+}
+
 export interface PrListProps {
   prs: DashPr[]; // already sorted by the App
   selected: number; // index into prs
@@ -70,29 +110,9 @@ export function PrList({
   onPanePress,
   onWheel,
 }: PrListProps): React.JSX.Element {
-  const AGE_W = 4; // relTime can emit "365d"
-  // Derive each row's lifecycle meta ONCE — reused for the pill-width calc
-  // below and the row loop, so the same badge string backs both.
+  const { columns, pillInner, repoW, checksW } = prListColumns({ prs, showNwo });
+  const PILL_W = pillInner + 2;
   const metaOf = prs.map((p) => prStateMeta(derivePrState(p)));
-  // Pill column sized to the CURRENT dataset's widest badge (constants or the
-  // current dataset — never the global MAX_PR_BADGE_LEN, which reserves room
-  // for "changes-requested" even when no visible row is in that state).
-  const pillInner = Math.max("state".length, ...metaOf.map((m) => m.badge.length), 0);
-  const PILL_W = pillInner + 2; // badgeText pad spaces
-  const repoW = showNwo
-    ? Math.min(NWO_MAX_WIDTH, Math.max("repo".length, ...prs.map((p) => p.nwo.length), 0))
-    : 0;
-  const checksW = Math.max("checks".length, ...prs.map((p) => checksToString(p.checks).length), 0);
-  const columns: Column[] = [
-    { label: "", width: 1 },
-    { label: "", width: 1 },
-    { label: "#", width: 5, align: "right" },
-    { label: "title", width: "flex" },
-    ...(showNwo ? [{ label: "repo", width: repoW } as Column] : []),
-    { label: "checks", width: checksW },
-    { label: "state", width: PILL_W },
-    { label: "age", width: AGE_W, align: "right" },
-  ];
 
   return (
     <ClickableBox
