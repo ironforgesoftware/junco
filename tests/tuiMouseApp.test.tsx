@@ -1,9 +1,9 @@
 // App-level mouse routing through the hit-region registry (MouseProvider +
 // ClickableBox). A press/wheel is resolved to the deepest registered region
 // under the pointer's real yoga rect — no mirrored geometry, no hitTest. These
-// specs exercise the GITHUB surface (issue rows, the rail wheel) and the header
-// mode tabs; renderApp mounts at the wide breakpoint (WIDE_COLS_TEST) so the
-// bracketed `[GITHUB]`/`[LOCAL]` tabs render and the pane bands are stable.
+// specs exercise the unified surface (issue rows, rail rows — repo AND system
+// — plus footer chips); renderApp mounts at the wide breakpoint
+// (WIDE_COLS_TEST) so the pane bands are stable.
 import { describe, it, afterEach, expect } from "vitest";
 import { cleanup } from "ink-testing-library";
 import { until, fireUntil } from "./helpers/until.js";
@@ -21,17 +21,9 @@ const wheelDown = (x: number, y: number): string => `\u001b[<65;${x + 1};${y + 1
 const lineOf = (frame: string, needle: string): number =>
   frame.split("\n").findIndex((l) => l.includes(needle));
 
-// Header tab click bands (wide mode), mirroring Chrome.tsx's Header layout:
-// paddingX(1) + "🐦 junco" (8 cols — the bird emoji is width 2) + gap(2) = 11
-// cols before the GITHUB tab, then the fixed-width `[GITHUB]`/`github` slot
-// (ghWidth=8) + a 1-col gutter before the LOCAL slot. (These were the
-// now-deleted headerTabBands' githubStart/localStart.)
-const GITHUB_TAB_START = 11;
-const LOCAL_TAB_START = GITHUB_TAB_START + 8 + 1; // 20
-
-describe("mouse row/wheel in GITHUB", () => {
+describe("mouse row/wheel on the issues surface", () => {
   it("clicking an issue row selects it; clicking again opens the detail", async () => {
-    const r = renderApp({ initialUiMode: "github" }); // fixture seeds ≥2 issues
+    const r = renderApp(); // fixture seeds ≥2 issues
     await until(() => lineOf(r.lastFrame() ?? "", "#2") >= 0);
     const y = lineOf(r.lastFrame() ?? "", "#2");
     // Middle column band at WIDE_COLS_TEST=120: rail [0,26), issues [26,72),
@@ -48,22 +40,25 @@ describe("mouse row/wheel in GITHUB", () => {
     await fireUntil(r.stdin, press(x, y), () => (r.lastFrame() ?? "").includes("preview · #2"));
   });
 
-  it("wheel over the rail moves the repo selection", async () => {
-    const r = renderApp({ initialUiMode: "github" }); // fixture seeds ≥2 repos
+  it("wheel over the rail moves the selection down the row union", async () => {
+    const r = renderApp(); // fixture seeds ≥2 repos
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
-    // wheelDown inside the rail band; the mover clamps at the last repo, so
-    // re-sending is idempotent. The selected repo's nwo also shows in the
-    // header, so anchor on the rail row that carries BOTH the nwo AND the `▌`
-    // selection bar (the header never renders the bar).
-    await fireUntil(r.stdin, wheelDown(2, 4), () =>
-      (r.lastFrame() ?? "").split("\n").some((l) => l.includes("beta/two") && l.includes("▌")),
-    );
+    // wheelDown inside the rail band. The unified rail wheels over the WHOLE
+    // row union (repos then system rows), so a re-sent wheel keeps walking —
+    // the cond must be "moved OFF the first repo", which stays true however
+    // far the retries walk (unlike anchoring on one specific row, which a
+    // slow-runner retry walks straight past — the pre-unified flake).
+    await fireUntil(r.stdin, wheelDown(2, 4), () => {
+      const lines = (r.lastFrame() ?? "").split("\n");
+      const onFirstRepo = lines.some((l) => l.includes("▌") && l.includes("acme/api"));
+      return !onFirstRepo && lines.some((l) => l.includes("▌"));
+    });
   });
 });
 
 describe("modal-ish views: mouse", () => {
   it("help modal: any click closes it", async () => {
-    const r = renderApp({ initialUiMode: "github" });
+    const r = renderApp();
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     r.stdin.write("?");
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard"));
@@ -72,7 +67,7 @@ describe("modal-ish views: mouse", () => {
   });
 
   it("addRepo modal: click outside cancels back to main", async () => {
-    const r = renderApp({ initialUiMode: "github" });
+    const r = renderApp();
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     r.stdin.write("w");
     await until(() => (r.lastFrame() ?? "").includes("add repo to watchlist"));
@@ -81,24 +76,31 @@ describe("modal-ish views: mouse", () => {
   });
 });
 
-describe("header mode tabs", () => {
-  it("a header-band click toggles the mode", async () => {
-    const r = renderApp({ initialUiMode: "github" });
-    await until(() => (r.lastFrame() ?? "").includes("[GITHUB]"));
-    // handleModeTab is a no-op once already local, so re-sending is idempotent.
-    await fireUntil(r.stdin, press(LOCAL_TAB_START, 0), () =>
-      (r.lastFrame() ?? "").includes("[LOCAL]"),
+describe("rail system rows: mouse", () => {
+  it("clicking a system row selects it; click-again focuses the body", async () => {
+    const r = renderApp();
+    await until(() => (r.lastFrame() ?? "").includes("system"));
+    // Pre-click, the only "queue" line on screen is the rail's system row
+    // (the issues body says nothing about queues).
+    const y = lineOf(r.lastFrame() ?? "", "queue");
+    // Click selects the row (idempotent once selected — re-send is safe).
+    await fireUntil(r.stdin, press(3, y), () =>
+      (r.lastFrame() ?? "").split("\n").some((l) => l.includes("▌") && l.includes("queue")),
     );
+    await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos")); // queue body up
+    // Click-again = enter: body focus — the queue body's chips replace the rail's.
+    await fireUntil(r.stdin, press(3, y), () => (r.lastFrame() ?? "").includes("R requeue"));
   });
 
-  it("hovering a header tab does not crash and hover moves with the pointer", async () => {
-    const r = renderApp({ initialUiMode: "github" });
-    await until(() => (r.lastFrame() ?? "").includes("[GITHUB]"));
-    // b=35 → button-less motion (hover) over the LOCAL tab.
-    r.stdin.write(`\u001b[<35;${LOCAL_TAB_START + 1};1M`);
+  it("hovering a rail row does not crash; a click then selects it", async () => {
+    const r = renderApp();
+    await until(() => (r.lastFrame() ?? "").includes("beta/two"));
+    const y = lineOf(r.lastFrame() ?? "", "beta/two");
+    // b=35 → button-less motion (hover) over the row.
+    r.stdin.write(`\u001b[<35;4;${y + 1}M`);
     await until(() => (r.lastFrame() ?? "") !== ""); // hover styling is cosmetic — frame stays renderable
-    await fireUntil(r.stdin, press(LOCAL_TAB_START, 0), () =>
-      (r.lastFrame() ?? "").includes("[LOCAL]"),
+    await fireUntil(r.stdin, press(3, y), () =>
+      (r.lastFrame() ?? "").split("\n").some((l) => l.includes("▌") && l.includes("beta/two")),
     );
   });
 });
@@ -157,7 +159,7 @@ describe("review view: mouse", () => {
 
   it("review: click a batch row twice to open it; click a finding to toggle its checkbox", async () => {
     const client = { ...stubClient, listReview: async () => okv([batch1, batch2]) };
-    const r = renderApp({ initialUiMode: "github", client });
+    const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r2")); // both batches listed
@@ -186,23 +188,25 @@ describe("review view: mouse", () => {
 });
 
 describe("footer chips: mouse", () => {
-  it("footer chip: clicking 't queue' opens the queue view; 'esc/t' closes it", async () => {
-    const r = renderApp({ initialUiMode: "github" });
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
-    // Mount lands on pane 1 (rail) whose hint set has no "t" entry — "t queue"
-    // only appears once pane 2 (issues) is focused, mirroring how a user
-    // would actually reach it.
-    r.stdin.write("l");
+  it("footer chip: clicking 't queue' jumps to the queue row; '← back' returns to the rail", async () => {
+    const r = renderApp();
+    // Mount lands on pane 1 (rail), whose hint set carries the "t queue" chip.
     await until(() => (r.lastFrame() ?? "").includes("t queue"));
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
     const x = f.split("\n")[footerY].indexOf("t queue");
-    r.stdin.write(press(x, footerY));
-    await until(() => (r.lastFrame() ?? "").includes("RUNNING"));
+    // fireUntil: a press racing the region registry re-sends; the t action is
+    // idempotent (re-selecting the queue row is a no-op).
+    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("RUNNING"));
+    // The chip parked the cursor on the queue system row + focused its body.
     const f2 = r.lastFrame() ?? "";
-    const x2 = f2.split("\n")[footerY].indexOf("esc/t");
-    r.stdin.write(press(x2, footerY));
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    const x2 = f2.split("\n")[footerY].indexOf("← back");
+    // Back on the rail: its hint set (with the add-repo chip) returns. A re-sent
+    // press lands on the rail hint row at worst (a harmless toast), never a
+    // destructive chip.
+    await fireUntil(r.stdin, press(x2, footerY), () =>
+      (r.lastFrame() ?? "").includes("w add repo"),
+    );
   });
 
   it("pane 3 focused: the 'enter detail' chip opens the PR overlay, not the issue detail", async () => {
@@ -233,7 +237,7 @@ describe("footer chips: mouse", () => {
       ...stubClient,
       listPrs: async (nwo: string) => okv({ prs: nwo === "acme/api" ? [pr] : [], staleAt: null }),
     };
-    const r = renderApp({ initialUiMode: "github", client });
+    const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("#100")); // PR row loaded in pane 3
     r.stdin.write("3"); // focus pane 3 (wide layout)
     await until(() => (r.lastFrame() ?? "").includes("enter detail")); // pane-3 hint set
@@ -261,7 +265,7 @@ describe("footer chips: mouse", () => {
         return okv(undefined);
       },
     };
-    const r = renderApp({ initialUiMode: "github", client });
+    const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
@@ -280,7 +284,7 @@ describe("footer chips: mouse", () => {
         return okv({ id: "analyze-acme-api-1" });
       },
     };
-    const r = renderApp({ initialUiMode: "github", client });
+    const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     r.stdin.write("l"); // pane 2 — the only hint set carrying "c analyze"
     await until(() => (r.lastFrame() ?? "").includes("c analyze"));
@@ -296,23 +300,19 @@ describe("footer chips: mouse", () => {
     );
   });
 
-  it("LOCAL help modal: the stale rail chip underneath 'q' stays inert — closes help, does not quit", async () => {
+  it("help modal: a footer press underneath is a miss — closes help, never quits", async () => {
     let exited = false;
-    const r = renderApp({ initialUiMode: "local", onExit: () => (exited = true) });
+    const r = renderApp({ onExit: () => (exited = true) });
     await until(() => (r.lastFrame() ?? "").includes("q quit"));
     r.stdin.write("?");
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard"));
-    // LOCAL's `hints` computation doesn't special-case view==="help" (unlike
-    // github's, which swaps to hintsFor("help",...)) so the rail's hint row —
-    // "q quit" included — is still the last frame line while the modal is up.
-    // The "q" chip must render inert there (no footerActions entry for
-    // view==="help"): a press with no region under it falls through to the
-    // pre-existing onMouseMiss("help") handler, which closes the modal —
+    // While help is open the hints swap to the modal's own set ("any key
+    // close") with NO live chips: a press on the footer band hits no region
+    // and falls through to onMouseMiss("help"), which closes the modal —
     // exactly "any key closes help", never a quit.
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("q quit");
-    r.stdin.write(press(x, footerY));
+    r.stdin.write(press(4, footerY));
     await until(() => !(r.lastFrame() ?? "").includes("junco dashboard"));
     expect(exited).toBe(false);
   });

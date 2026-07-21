@@ -63,6 +63,7 @@ const QUEUE_SNAP: QueueSnapshot = {
       startedAt: "2026-07-07T10:00:00Z",
       updatedAt: null,
       stale: false,
+      repoPath: null,
     },
   ],
   waiting: [
@@ -75,6 +76,7 @@ const QUEUE_SNAP: QueueSnapshot = {
       notBefore: null,
       deferred: false,
       queuedAt: null,
+      repoPath: null,
     },
   ],
   recent: [],
@@ -83,8 +85,8 @@ const QUEUE_SNAP: QueueSnapshot = {
   stats: null,
 };
 
-// LOCAL snapshot for the github-default App tests — the LOCAL surface is never
-// visited here, so a benign default keeps initialUiMode="github" frames intact.
+// Cheap snapshot for the App tests — feeds the rail's system badges and the
+// queue section body (its queue mirrors QUEUE_SNAP so both surfaces agree).
 const LOCAL_CHEAP: LocalCheap = {
   queue: QUEUE_SNAP,
   counts: null,
@@ -352,6 +354,7 @@ function renderApp(
   queueFn: () => Promise<QueueSnapshot> = async () => QUEUE_SNAP,
   onExit: () => void = () => {},
   assessHistoryFn: () => Promise<AssessHistory[]> = async () => [],
+  localCheapFn: () => Promise<LocalCheap> = async () => LOCAL_CHEAP,
 ) {
   return render(
     <MouseProvider>
@@ -369,11 +372,10 @@ function renderApp(
         queuePollMs={999999}
         queueFn={queueFn}
         assessHistoryFn={assessHistoryFn}
-        localCheapFn={async () => LOCAL_CHEAP}
+        localCheapFn={localCheapFn}
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
         localHeavyPollMs={999999}
-        initialUiMode="github"
         githubEnabled
         runCliFn={runCliFn}
         // Medium layout: single body pane, so enter still opens the detail view
@@ -963,7 +965,6 @@ describe("App", () => {
             localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
             localCheapPollMs={999999}
             localHeavyPollMs={999999}
-            initialUiMode="github"
             githubEnabled
             sizeOverride={{ columns: 130, rows: 30 }}
             onExit={() => {}}
@@ -1017,7 +1018,6 @@ describe("App", () => {
             localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
             localCheapPollMs={999999}
             localHeavyPollMs={999999}
-            initialUiMode="github"
             githubEnabled
             sizeOverride={{ columns: 130, rows: 30 }}
             onExit={() => {}}
@@ -1704,7 +1704,6 @@ describe("assess hotkey (s/S)", () => {
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
         localHeavyPollMs={999999}
-        initialUiMode="github"
         githubEnabled
         runCliFn={runCliFn}
         sizeOverride={{ columns: 100, rows: 30 }}
@@ -2257,38 +2256,42 @@ describe("refresh animation", () => {
   });
 });
 
-describe("queue rail + queue view", () => {
-  it("renders the queue card in the rail from the initial poll", async () => {
+describe("queue system row", () => {
+  it("the rail's queue row badges the running count from the cheap poll", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-tui-q-"));
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
-    // The old QueueStrip counts line is gone; the rail's compact queue card
-    // carries the running label + waiting count instead.
-    await until(() => (r.lastFrame() ?? "").includes("#46 exec"));
-    expect(r.lastFrame()).toContain("1 waiting"); // QUEUE_SNAP has one waiting ticket
+    // The queue-card lines are gone; the queue SYSTEM row carries a ▸1 badge
+    // (one running ticket in LOCAL_CHEAP.queue) and the header keeps ◐/⏳.
+    await until(() =>
+      (r.lastFrame() ?? "").split("\n").some((l) => l.includes("queue") && l.includes("▸1")),
+    );
+    expect(r.lastFrame()).toContain("◐1"); // header chip (QUEUE_SNAP running)
   });
 
-  it("t opens the queue view, esc returns; t toggles too", async () => {
+  it("t jumps to the queue row and shows the queue body; k returns to issues", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-tui-q2-"));
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
-    await until(() => (r.lastFrame() ?? "").includes("#46 exec")); // queue snapshot loaded
+    await until(() => (r.lastFrame() ?? "").includes("1 repos")); // mounted
     r.stdin.write("t");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
     expect(r.lastFrame()).toContain("WAITING (1)");
+    // esc returns focus to the rail; the queue body stays (body follows the
+    // cursor, and the cursor is still on the queue row).
     r.stdin.write(ESC);
-    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    r.stdin.write("t");
-    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    r.stdin.write("t"); // t closes as well
+    await until(() => (r.lastFrame() ?? "").includes("w add repo")); // rail hints back
+    expect(r.lastFrame()).toContain("RUNNING (1/1)");
+    // k moves the cursor back onto the repo row — the issues body returns.
+    r.stdin.write("k");
     await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
   });
 
-  it("queue view scrolls with ] and [, and stops at the bottom", async () => {
+  it("G in a tall queue body parks the cursor at the bottom row (window follows)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-tui-q3-"));
     const { client } = makeClient({ "acme/api": [rawIssue] });
-    // A queue taller than the pane — the clamp makes a short queue unscrollable
-    // (correctly), so overscroll can no longer stand in for real scrolling.
+    // A queue taller than the pane, fed through the CHEAP snapshot (the queue
+    // section body reads localCheap.queue, not the header's queueFn).
     const tall: QueueSnapshot = {
       ...QUEUE_SNAP,
       waiting: Array.from({ length: 30 }, (_, i) => ({
@@ -2300,34 +2303,38 @@ describe("queue rail + queue view", () => {
         notBefore: null,
         deferred: false,
         queuedAt: null,
+        repoPath: null,
       })),
     };
-    const r = renderApp(client, join(dir, "wl.json"), 999999, undefined, async () => tall);
-    await until(() => (r.lastFrame() ?? "").includes("#46 exec"));
+    const cheapTall = { ...LOCAL_CHEAP, queue: tall };
+    const r = renderApp(
+      client,
+      join(dir, "wl.json"),
+      999999,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => cheapTall,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
     r.stdin.write("t");
     await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    // ] scrolls the RUNNING header out of the window…
-    r.stdin.write("]");
-    r.stdin.write("]");
-    await until(() => !(r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    // …and [ brings it back.
-    r.stdin.write("[");
-    r.stdin.write("[");
-    await until(() => (r.lastFrame() ?? "").includes("RUNNING (1/1)"));
-    // Pressing well past the end parks at the bottom: the last row stays visible
-    // and the pane never blanks.
-    for (let i = 0; i < 60; i++) r.stdin.write("]");
+    // G parks the section cursor on the LAST selectable row — the window
+    // follows it to the bottom and the pane never blanks.
+    r.stdin.write("G");
     await until(() => (r.lastFrame() ?? "").includes("row-29"));
-    expect(r.lastFrame()).toContain("row-29");
+    // g returns to the top.
+    r.stdin.write("g");
+    await until(() => (r.lastFrame() ?? "").includes("row-00"));
   });
 
-  it("footer advertises t queue when the issues pane is focused", async () => {
+  it("footer advertises t queue on the rail pane", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-tui-q4-"));
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("1 repos")); // mounted
-    r.stdin.write("2"); // focus the issues pane — its footer carries the t hint
-    await until(() => (r.lastFrame() ?? "").includes("t queue"));
+    await until(() => (r.lastFrame() ?? "").includes("t queue")); // pane-1 hint set
   });
 });
 
@@ -2441,7 +2448,6 @@ describe("workspace wide mode", () => {
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
         localHeavyPollMs={999999}
-        initialUiMode="github"
         githubEnabled
         sizeOverride={{ columns: 130, rows: 30 }}
         onExit={() => {}}
@@ -2547,7 +2553,6 @@ describe("workspace wide mode", () => {
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
         localHeavyPollMs={999999}
-        initialUiMode="github"
         githubEnabled
         sizeOverride={{ columns: 130, rows: 30 }}
         onExit={() => {}}
@@ -2736,7 +2741,6 @@ describe("workspace wide mode", () => {
         localHeavyFn={async () => ({ repos: [], worktrees: [], error: null })}
         localCheapPollMs={999999}
         localHeavyPollMs={999999}
-        initialUiMode="github"
         githubEnabled
         sizeOverride={size}
         onExit={() => {}}

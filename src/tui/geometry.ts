@@ -4,9 +4,9 @@
  * budget changes here, every consumer moves together instead of drifting.
  */
 
-/** Worst-case queue-card rows in the rail: separator + title + running +
- * more-running + waiting + daemon-down. (Moved from Rail.tsx.) */
-export const QUEUE_CARD_ROWS = 6;
+/** Pinned system block in the unified rail: separator + "system" header +
+ * the five section rows (queue/outbox/worktrees/daemon/logs). */
+export const SYSTEM_BLOCK_ROWS = 7;
 
 /** First content row inside a bordered pane, pane-relative
  * (0 = top border, 1 = title row, 2 = first content row). */
@@ -18,14 +18,12 @@ export const PANE_CONTENT_ROW = 2;
 export const LINK_LINE_ROW = 3;
 
 /** Repo rows the rail can show: borders(2) + title(1) + position line(1)
- * + the pinned queue card. */
+ * + the pinned system block. */
 export function railListHeight(bodyRows: number): number {
-  return Math.max(1, bodyRows - 4 - QUEUE_CARD_ROWS);
+  return Math.max(1, bodyRows - 4 - SYSTEM_BLOCK_ROWS);
 }
 
 /** Rows the issue/PR lists can show: borders(2) + title(1) + position line(1). */
 export function listRowsHeight(bodyRows: number): number {
   return Math.max(1, bodyRows - 4);
 }
-
-export type UiMode = "github" | "local";

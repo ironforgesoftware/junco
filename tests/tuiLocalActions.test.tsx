@@ -1,16 +1,27 @@
-// LOCAL-mode spawned actions: each fires the real junco CLI via runCliFn and
+// Section-body spawned actions: each fires the real junco CLI via runCliFn and
 // toasts, deduped in-flight. Fixtures/renderApp are shared from ./helpers.
 //
 // State-dependent keystrokes are separated by `await until(<marker>)`, never
 // fired as a synchronous burst: ink runs useInput against the last committed
 // render, so a second key issued before React commits would see a stale
-// closure. Markers: the rail position line ("N/6") for the section, the body
-// footer ("back") for rail→body focus, and the ▌ selection glyph for the row.
+// closure. Markers: section-body content for the rail move, the body footer
+// ("back") for rail→body focus, and the ▌ selection glyph for the row.
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import type { LocalCheap, LocalHeavy } from "../src/tui/localSnapshot.js";
 import { until } from "./helpers/until.js";
-import { renderApp, stubClient, okv, CHEAP, HEAVY } from "./helpers/localFixtures.js";
+import {
+  renderApp,
+  stubClient,
+  okv,
+  CHEAP,
+  HEAVY,
+  TO_QUEUE_ROW,
+  TO_OUTBOX_ROW,
+  TO_WORKTREES_ROW,
+  TO_DAEMON_ROW,
+  tap,
+} from "./helpers/localFixtures.js";
 
 afterEach(cleanup);
 
@@ -24,17 +35,18 @@ const selOn = (r: R, text: string): boolean =>
     .split("\n")
     .some((l) => l.includes(text) && l.includes("▌"));
 
-describe("local actions spawn the real CLI (fire-and-toast)", () => {
+describe("section actions spawn the real CLI (fire-and-toast)", () => {
   it("R on a failed RECENT row → junco retry <name>", async () => {
     const calls: [string, string[]][] = [];
     const r = renderApp({
-      initialUiMode: "local",
       runCliFn: async (n, a) => {
         calls.push([n, a]);
         return { code: 0, output: "requeued gh-acme-api-9", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6")); // queue section
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_QUEUE_ROW); // rail → queue system row
+    await until(() => frame(r).includes("sub-fix-typos")); // queue body up
     r.stdin.write("l"); // enter body
     await until(() => frame(r).includes("back")); // body focus (footer)
     // The two selectable queue rows are WAITING then failed RECENT (the RUNNING
@@ -50,13 +62,14 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
   it("x on a WAITING inbox row confirms, then y spawns junco rm <name>", async () => {
     const calls: [string, string[]][] = [];
     const r = renderApp({
-      initialUiMode: "local",
       runCliFn: async (n, a) => {
         calls.push([n, a]);
         return { code: 0, output: "removed", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6"));
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_QUEUE_ROW);
+    await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
     await until(() => selOn(r, "sub-fix-typos")); // cursor on the WAITING row
     r.stdin.write("x"); // opens confirm (destructive)
@@ -70,13 +83,14 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
   it("confirm-cancel (n) spawns nothing", async () => {
     const calls: [string, string[]][] = [];
     const r = renderApp({
-      initialUiMode: "local",
       runCliFn: async (n, a) => {
         calls.push([n, a]);
         return { code: 0, output: "", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6"));
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_QUEUE_ROW);
+    await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
     await until(() => selOn(r, "sub-fix-typos"));
     r.stdin.write("x");
@@ -89,13 +103,14 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
   it("RUNNING/processing rows are never selectable — no action spawns", async () => {
     const calls: unknown[] = [];
     const r = renderApp({
-      initialUiMode: "local",
       runCliFn: async () => {
         calls.push(1);
         return { code: 0, output: "", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6"));
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_QUEUE_ROW);
+    await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
     await until(() => frame(r).includes("back"));
     r.stdin.write("g"); // top selectable row — the WAITING row, NOT the running row
@@ -108,15 +123,14 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
   it("outbox f flushes; daemon f/X flush/restart", async () => {
     const calls: [string, string[]][] = [];
     const r = renderApp({
-      initialUiMode: "local",
       runCliFn: async (n, a) => {
         calls.push([n, a]);
         return { code: 0, output: "flushed 2", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6"));
-    r.stdin.write("j"); // → outbox section
-    await until(() => frame(r).includes("2/6"));
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_OUTBOX_ROW); // rail → outbox system row
+    await until(() => frame(r).includes("acme/api#1")); // outbox body up
     r.stdin.write("l"); // enter body
     await until(() => frame(r).includes("back"));
     r.stdin.write("f");
@@ -127,19 +141,14 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
   it("worktree x on a stale row confirms → y → junco worktree prune <path>", async () => {
     const calls: [string, string[]][] = [];
     const r = renderApp({
-      initialUiMode: "local",
       runCliFn: async (n, a) => {
         calls.push([n, a]);
         return { code: 0, output: "pruned", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6"));
-    r.stdin.write("j");
-    await until(() => frame(r).includes("2/6"));
-    r.stdin.write("j");
-    await until(() => frame(r).includes("3/6"));
-    r.stdin.write("j"); // → worktrees section
-    await until(() => frame(r).includes("4/6") && frame(r).includes("fix-typos"));
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_WORKTREES_ROW); // rail → worktrees system row
+    await until(() => frame(r).includes("fix-typos")); // worktrees body up
     r.stdin.write("l"); // enter body
     await until(() => selOn(r, "fix-typos")); // cursor on the stale worktree
     r.stdin.write("x");
@@ -150,12 +159,10 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
   });
 
   it("daemon restart confirm body carries the in-flight ticket count", async () => {
-    const r = renderApp({ initialUiMode: "local" });
-    await until(() => frame(r).includes("1/6"));
-    r.stdin.write("G"); // → logs (last section); k steps up to daemon
-    await until(() => frame(r).includes("6/6"));
-    r.stdin.write("k"); // → daemon section
-    await until(() => frame(r).includes("5/6"));
+    const r = renderApp();
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_DAEMON_ROW); // rail → daemon system row
+    await until(() => frame(r).includes("4242")); // daemon body up
     r.stdin.write("l"); // enter the daemon body (X is a body action)
     await until(() => frame(r).includes("back"));
     r.stdin.write("X");
@@ -163,7 +170,7 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
     expect(frame(r)).toMatch(/1 in-flight ticket/); // currentTickets.length === 1
   });
 
-  it("Repos x/o act on the local cursor target, not github currentRepo", async () => {
+  it("rail o opens the SELECTED row's repo in the browser", async () => {
     const opens: string[] = [];
     const client = {
       ...stubClient,
@@ -172,27 +179,32 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
         return okv(undefined);
       },
     };
-    const r = renderApp({ initialUiMode: "local", client });
-    await until(() => frame(r).includes("1/6"));
-    r.stdin.write("j");
-    await until(() => frame(r).includes("2/6"));
-    r.stdin.write("j"); // → repos section
-    await until(() => frame(r).includes("3/6") && frame(r).includes("acme/api"));
-    r.stdin.write("l"); // enter body
-    await until(() => selOn(r, "acme/api")); // cursor on the LocalRepo
+    const r = renderApp({ client });
+    await until(() => frame(r).includes("system"));
+    r.stdin.write("j"); // → beta/two (rail cursor moves off acme/api)
+    await until(() => selOn(r, "beta/two"));
     r.stdin.write("o");
     await until(() => opens.length === 1);
-    expect(opens[0]).toBe("acme/api"); // the LocalRepo under the cursor
+    expect(opens[0]).toBe("beta/two"); // the rail row under the cursor
   });
 
-  it("header-tab click toggles mode from a non-main github view (prs)", async () => {
-    const r = renderApp({ initialUiMode: "github" });
-    await until(() => frame(r).includes("[GITHUB]"));
-    r.stdin.write("p"); // github prs view
-    await until(() => frame(r).toLowerCase().includes("pull requests"));
-    // m still crosses from prs (the raw-SGR header click is covered in tuiMouse):
-    r.stdin.write("m");
-    await until(() => frame(r).includes("[LOCAL]"));
+  it("rail o on a system row is a safe toast, never a browser open", async () => {
+    const opens: string[] = [];
+    const client = {
+      ...stubClient,
+      openRepoInBrowser: async (nwo: string) => {
+        opens.push(nwo);
+        return okv(undefined);
+      },
+    };
+    const r = renderApp({ client });
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_QUEUE_ROW); // park on the queue system row
+    await until(() => frame(r).includes("sub-fix-typos"));
+    r.stdin.write("1"); // focus the rail pane (o is pane-scoped)
+    r.stdin.write("o");
+    await until(() => frame(r).toLowerCase().includes("no github url"));
+    expect(opens).toHaveLength(0);
   });
 });
 
@@ -201,11 +213,11 @@ describe("local actions spawn the real CLI (fire-and-toast)", () => {
 // The bug was one cursor integer indexing two different lists (the rendered
 // list vs. a pre-filtered action list), so the cursor lit one row while the
 // action mutated another, non-highlighted, non-confirmed row.
-describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
+describe("section cursor highlight is aligned with the x/R action target", () => {
   it("queue: a done RECENT row precedes a failed one — highlight == R target, done never retries the failed row", async () => {
     // recent[0] = done (newer), recent[1] = failed (older). With waiting=[],
     // the done row is visual index 0 (where the cursor starts). Under the bug,
-    // R here retried the failed row (localRowsFor filtered to failed-only) even
+    // R here retried the failed row (the rows fn filtered to failed-only) even
     // though the DONE row was highlighted — and the failed row was unreachable.
     const cheap: LocalCheap = {
       ...CHEAP,
@@ -222,6 +234,7 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
             resultStatus: null,
             durationSeconds: null,
             prUrl: null,
+            repoPath: null,
           },
           {
             id: "gh-acme-api-8",
@@ -231,20 +244,22 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
             resultStatus: null,
             durationSeconds: null,
             prUrl: null,
+            repoPath: null,
           },
         ],
       },
     };
     const calls: [string, string[]][] = [];
     const r = renderApp({
-      initialUiMode: "local",
       localCheapFn: async () => cheap,
       runCliFn: async (n, a) => {
         calls.push([n, a]);
         return { code: 0, output: "requeued gh-acme-api-8", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6")); // queue section
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_QUEUE_ROW);
+    await until(() => frame(r).includes("#7")); // queue body up (recent rows)
     r.stdin.write("l"); // enter body
     await until(() => frame(r).includes("back"));
     // Cursor starts on the DONE row (#7, visual index 0) — highlight lands there.
@@ -267,7 +282,7 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
 
   it("worktrees: a live row precedes stale ones — highlight == prune target, a live worktree is never the prune target", async () => {
     // worktrees[0] = live (cursor starts here), [1] and [2] = stale. Under the
-    // bug, localRowsFor filtered live out, so the cursor lit the live row while
+    // bug, the rows fn filtered live out, so the cursor lit the live row while
     // x confirmed a prune of a different (stale) row.
     const heavy: LocalHeavy = {
       ...HEAVY,
@@ -306,20 +321,15 @@ describe("LOCAL cursor highlight is aligned with the x/R action target", () => {
     };
     const calls: [string, string[]][] = [];
     const r = renderApp({
-      initialUiMode: "local",
       localHeavyFn: async () => heavy,
       runCliFn: async (n, a) => {
         calls.push([n, a]);
         return { code: 0, output: "pruned", timedOut: false };
       },
     });
-    await until(() => frame(r).includes("1/6"));
-    r.stdin.write("j");
-    await until(() => frame(r).includes("2/6"));
-    r.stdin.write("j");
-    await until(() => frame(r).includes("3/6"));
-    r.stdin.write("j"); // → worktrees section
-    await until(() => frame(r).includes("4/6") && frame(r).includes("live-one"));
+    await until(() => frame(r).includes("system"));
+    await tap(r, TO_WORKTREES_ROW); // rail → worktrees system row
+    await until(() => frame(r).includes("live-one")); // worktrees body up
     r.stdin.write("l"); // enter body
     // Cursor starts on the LIVE worktree — highlight lands there.
     await until(() => selOn(r, "live-one"));

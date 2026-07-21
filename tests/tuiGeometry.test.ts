@@ -2,15 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   LINK_LINE_ROW,
   PANE_CONTENT_ROW,
-  QUEUE_CARD_ROWS,
+  SYSTEM_BLOCK_ROWS,
   listRowsHeight,
   railListHeight,
 } from "../src/tui/geometry.js";
 
 describe("geometry", () => {
-  it("mirrors the Rail row budget: borders + title + position line + queue card", () => {
-    // Rail.tsx historically computed max(1, height − 2 − 1 − 1 − QUEUE_CARD_ROWS).
-    expect(railListHeight(27)).toBe(27 - 4 - QUEUE_CARD_ROWS);
+  it("mirrors the rail repo-row budget: borders + title + position line + system block", () => {
+    expect(SYSTEM_BLOCK_ROWS).toBe(7); // separator + "system" header + five rows
+    expect(railListHeight(30)).toBe(30 - 4 - SYSTEM_BLOCK_ROWS);
     expect(railListHeight(5)).toBe(1); // clamps at 1, never 0/negative
   });
 

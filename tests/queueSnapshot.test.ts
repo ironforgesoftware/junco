@@ -173,6 +173,7 @@ describe("running", () => {
         startedAt: "2026-07-07T10:00:00.000Z",
         updatedAt: "2026-07-07T10:04:00.000Z",
         stale: false,
+        repoPath: "/c/api",
       },
     ]);
   });
@@ -192,6 +193,7 @@ describe("running", () => {
         startedAt: null,
         updatedAt: null,
         stale: false,
+        repoPath: null,
       },
     ]);
   });
@@ -215,6 +217,7 @@ describe("running", () => {
         startedAt: null,
         updatedAt: null,
         stale: true,
+        repoPath: null,
       },
     ]);
   });
@@ -258,6 +261,32 @@ describe("recent", () => {
     expect(snap.recent[0].id).toBe("done-4"); // highest mtime
     expect(snap.recent.map((r) => r.status)).toContain("failed");
     expect(new Date(snap.recent[0].finishedAt).getTime()).toBe(4000);
+  });
+});
+
+describe("repoPath", () => {
+  it("carries the ticket's repo path on waiting/running/recent rows", async () => {
+    const d = setupDirs();
+    writeTicket(d.inbox, "with-repo.md", "id: with-repo\nrepo: /tmp/proj-a");
+    writeTicket(d.inbox, "no-repo.md", "id: no-repo");
+    // Daemon down → running falls back to processing/ (repoPath from the file).
+    writeTicket(d.processing, "2026-07-07T1005Z__proc-b.md", "id: proc-b\nrepo: /tmp/proj-b");
+    writeTicket(d.done, "2026-07-07T1006Z__done-c.md", "id: done-c\nrepo: /tmp/proj-c");
+    const snap = await makeQueueSnapshotFn(makeQueueCfg(d.root), { fetchFn: downFetch })();
+    expect(snap.waiting.find((w) => w.id === "with-repo")?.repoPath).toBe("/tmp/proj-a");
+    expect(snap.waiting.find((w) => w.id === "no-repo")?.repoPath).toBeNull();
+    expect(snap.running[0]?.repoPath).toBe("/tmp/proj-b");
+    expect(snap.recent[0]?.repoPath).toBe("/tmp/proj-c");
+  });
+
+  it("daemon up: running repoPath comes from the processing/ ticket map", async () => {
+    const d = setupDirs();
+    writeTicket(d.processing, "2026-07-07T1005Z__run-x.md", "id: run-x\nrepo: /tmp/proj-x");
+    const snap = await makeQueueSnapshotFn(makeQueueCfg(d.root), {
+      fetchFn: healthFetch({ currentTickets: ["run-x", "mystery"], currentProgress: {} }),
+    })();
+    expect(snap.running.find((r) => r.id === "run-x")?.repoPath).toBe("/tmp/proj-x");
+    expect(snap.running.find((r) => r.id === "mystery")?.repoPath).toBeNull();
   });
 });
 

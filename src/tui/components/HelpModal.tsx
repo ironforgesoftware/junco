@@ -2,10 +2,8 @@ import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { Modal } from "./Modal.js";
-import { hintsFor, localHintsFor, type HintView } from "./Chrome.js";
+import { hintsFor, type HintView } from "./Chrome.js";
 import type { LayoutMode } from "../layout.js";
-import type { UiMode } from "../geometry.js";
-import type { LocalSection } from "../localSnapshot.js";
 
 function Section({ title, rows }: { title: string; rows: [string, string][] }): React.JSX.Element {
   return (
@@ -23,90 +21,23 @@ function Section({ title, rows }: { title: string; rows: [string, string][] }): 
   );
 }
 
-/** Categorized help, k9s-style: what applies to the CURRENT view first. */
+/** Categorized help, k9s-style: what applies to the CURRENT view first. One
+ * unified reference — the rail is the single navigation spine (repos + the
+ * pinned system rows), so there is no per-mode variant anymore. */
 export function HelpModal({
   view,
   pane,
   mode,
   trigger,
-  uiMode,
-  localSection,
   updateLatest,
 }: {
   view: HintView;
   pane: 1 | 2 | 3;
   mode: LayoutMode;
   trigger: string;
-  /** Present + "local" ⇒ render the LOCAL key/action/safety reference instead
-   * of the github help below. Absent/"github" leaves this component
-   * byte-identical to its pre-Stage-E rendering. */
-  uiMode?: UiMode;
-  /** Which LOCAL section is focused — its own keys render first, k9s-style,
-   * same as `view`/`pane` do for the github help. Defaults to "queue". */
-  localSection?: LocalSection;
   /** Latest npm version when newer than the running one; null/absent → no line. */
   updateLatest?: string | null;
 }): React.JSX.Element {
-  if (uiMode === "local") {
-    return (
-      <Modal title="junco dashboard — local mode keys" minWidth={64}>
-        <Text dimColor>
-          local mode: the machine-local runtime — queue, outbox, repos, worktrees, daemon
-        </Text>
-        <Section title="this section" rows={localHintsFor(localSection ?? "queue", "body")} />
-        <Section
-          title="modes & navigate"
-          rows={[
-            ["m · Shift+Tab", "swap GITHUB ↔ LOCAL (or click the header tab)"],
-            ["↑/↓ · j/k", "move section (rail) / cursor (body)"],
-            ["→ · l · enter", "enter the section body"],
-            ["← · h · esc", "back to the section rail"],
-            ["g / G", "first / last"],
-            ["[ / ]", "scroll the daemon body (that section only)"],
-            ["r", "full local refresh (from the section rail)"],
-          ]}
-        />
-        <Section
-          title="actions & safety"
-          rows={[
-            ["R", "requeue a failed ticket (junco retry)"],
-            [
-              "x",
-              "remove under cursor — delete queued ticket / prune worktree / unwatch repo (confirmed when destructive)",
-            ],
-            ["f", "flush the GitHub outbox backlog"],
-            ["o", "open a repo's origin/fork in the browser"],
-            ["X", "restart the daemon (confirmed; interrupts in-flight tickets, work salvaged)"],
-          ]}
-        />
-        <Section
-          title="cross-mode divergences"
-          rows={[
-            [
-              "x / R / X",
-              "local-only: remove / requeue / restart (github x = unwatch, R = re-plan)",
-            ],
-            [
-              "running / live rows",
-              "never selectable — the daemon owns processing/ and live worktrees",
-            ],
-            [
-              "mouse",
-              "parity with github: click selects/focuses · click-again enters/opens · wheel scrolls",
-            ],
-          ]}
-        />
-        {updateLatest != null && (
-          <Box marginTop={1}>
-            <Text color={theme.accent}>⬆ junco v{updateLatest} available — run: junco update</Text>
-          </Box>
-        )}
-        <Box marginTop={1}>
-          <Text dimColor>press any key to close</Text>
-        </Box>
-      </Modal>
-    );
-  }
   return (
     <Modal title="junco dashboard — keys" minWidth={64}>
       <Text dimColor>
@@ -121,7 +52,7 @@ export function HelpModal({
           ["[ / ]", "scroll (alias of ↑/↓ in views)"],
           ["g/G", "first / last"],
           ["1/2/3", "jump pane directly (3 = PRs for the selected repo, wide)"],
-          ["enter", "open detail — issue (pane 2) or PR (pane 3 / PRs view)"],
+          ["enter", "open detail — repo (pane 1), issue (pane 2), PR (pane 3 / PRs view)"],
         ]}
       />
       <Section
@@ -146,10 +77,21 @@ export function HelpModal({
           ["s", "assess the selected repo (audit for vulnerabilities, file issues)"],
           ["S", "assess with --auto-plan (findings carry the trigger label)"],
           ["v", "assess review queue"],
-          ["t", "queue view"],
+          ["t", "jump to the queue row"],
           ["p", "PR tracking — junco-authored PRs across watched repos"],
           [",", "config editor — edit live settings, per-lever descriptions"],
           [":", "command palette"],
+        ]}
+      />
+      <Section
+        title="system rows"
+        rows={[
+          ["queue…logs", "pinned below the repos — enter/→ opens the body"],
+          ["R", "requeue a failed ticket (queue row)"],
+          ["x", "delete queued ticket / prune worktree (confirmed)"],
+          ["f", "flush the GitHub outbox backlog"],
+          ["X", "restart the daemon (confirmed; work salvaged)"],
+          ["enter on logs", "full-screen live log (f follow · l level · t ticket · / search)"],
         ]}
       />
       <Section
