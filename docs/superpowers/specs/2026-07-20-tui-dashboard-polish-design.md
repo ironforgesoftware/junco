@@ -226,9 +226,10 @@ without ANSI. NO_COLOR degradation noted per primitive.
   to the top bar only; the daemon panel is its detail home.)
 - **RepoDetail**: section headers restyle as `Rule`s; key/value lines adopt
   `StatRow`.
-- **Scrollbar adoption**: Preview, PrPreview, CommandOutput, LogView
-  (overlay variant), DaemonSection, RepoDetail — every pane that already
-  tracks `scroll`/`onScrollMax`.
+- **Scrollbar adoption**: Preview, CommandOutput, LogView (overlay variant),
+  DaemonSection, RepoDetail — every pane that already tracks
+  `scroll`/`onScrollMax`. (PrPreview is a fixed card with no scroll offset —
+  no bar.)
 - **Confirm modal**: the `y/enter confirm · n/esc cancel` hint line becomes
   two `Button`s (`[ y confirm ]` danger-toned when `confirm.danger`,
   `[ esc cancel ]` neutral), mouse-clickable, keyboard behavior unchanged.
