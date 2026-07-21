@@ -24,6 +24,7 @@ import { GitOpError } from "../src/git.js";
 import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
+import { makeConfig as baseConfig } from "./helpers/config.js";
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
@@ -73,87 +74,36 @@ function setupGitHarness(tmpRoot: string): {
 }
 
 function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
-  return {
-    dataDir: "/tmp/vault/state",
-    queueRoot: "/tmp/vault/Junco",
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    model: {
-      id: "test/model",
-      source: "auto",
-      baseUrlExplicit: false,
-      retry: { maxRetries: null, baseDelayMs: null },
-      modelsJson: null,
-      api: "openai-completions",
-      baseUrl: "http://127.0.0.1:1234/v1",
-      apiKey: "test",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 131072,
-      maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  return baseConfig(
+    {
+      dataDir: "/tmp/vault/state",
+      queueRoot: "/tmp/vault/Junco",
+      worktreeRoot: join(tmpRoot, "wts"),
+      tools: [],
+      criticEnabled: true,
+      planLintEnabled: true,
+      verifyEnabled: true,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: true,
     },
-    tools: [],
-    defaultTimeoutMinutes: 30,
-    pollIntervalSeconds: 15,
-    startupPollSeconds: 30,
-    startupWait: true,
-    endpointProbe: "auto",
-    maxTransientRetries: 2,
-    retryBackoffSeconds: 60,
-    maxConcurrent: 1,
-    supervisorEnabled: false,
-    supervisorBudgetPerKind: 1,
-    supervisorEscalationWindow: 3,
-    supervisorOutputBudgetPerTurn: 12000,
-    supervisorOutputBudgetPostCommit: 24000,
-    gitBin: "git",
-    ghBin,
-    defaultBaseBranch: "main",
-    branchPrefix: "junco/",
-    worktreeRoot: join(tmpRoot, "wts"),
-    removeWorktreeOnSuccess: true,
-    allowedRepoRoots: [],
-    draftByDefault: true,
-    defaultLabels: [],
-    verifyEnabled: true,
-    verifyCommandTimeout: 60,
-    verifyBlockOnFail: false,
-    criticEnabled: true,
-    criticMaxRetries: 1,
-    criticThinking: "minimal",
-    planLintEnabled: true,
-    planLintBlockOnError: true,
-    planLintCheckLabels: true,
-    commitLeftoversEnabled: false,
-    dailyBudgetUsd: 0,
-    healthEnabled: false,
-    healthHost: "127.0.0.1",
-    healthPort: 8787,
-    logLevel: "info",
-    logToFile: false,
-    transcriptsEnabled: false,
-    github: {
-      enabled: false,
-      triggerLabel: "junco",
-      askLabel: "junco:ask",
-      pollIntervalSeconds: 60,
-      repos: [],
-      requireApproval: true,
-      plannerModelId: null,
-      externalReposRoot: "/tmp/junco-test-external",
+    {
+      ghBin, // the caller's fake gh script; gh-free tests keep the parameter default
+      planLintBlockOnError: true,
+      planLintCheckLabels: true,
+      github: {
+        enabled: false,
+        triggerLabel: "junco",
+        askLabel: "junco:ask",
+        pollIntervalSeconds: 60,
+        repos: [],
+        requireApproval: true,
+        plannerModelId: null,
+        externalReposRoot: "/tmp/junco-test-external",
+      },
+      botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-    sandbox: {
-      enabled: false,
-      backend: "auto",
-      network: "deny",
-      extraDenyRead: [],
-      extraAllowWrite: [],
-    },
-    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-  };
+  );
 }
 
 function makeContext(work: string, overrides: Partial<RepoContext> = {}): RepoContext {

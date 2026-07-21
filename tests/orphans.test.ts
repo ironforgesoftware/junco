@@ -4,93 +4,45 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { recoverOrphans } from "../src/orphans.js";
 import type { Config } from "../src/types.js";
+import { makeConfig as baseConfig } from "./helpers/config.js";
 
 const roots: string[] = [];
 
 function makeConfig(): { cfg: Config; root: string } {
   const root = mkdtempSync(join(tmpdir(), "junco-orphans-"));
   roots.push(root);
-  const cfg: Config = {
-    dataDir: root,
-    queueRoot: join(root, "Junco"),
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-    model: {
-      id: "m",
-      source: "auto",
-      baseUrlExplicit: false,
-      retry: { maxRetries: null, baseDelayMs: null },
-      modelsJson: null,
-      api: "openai-completions",
-      baseUrl: "u",
-      apiKey: "k",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 131072,
-      maxTokens: 49152,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      thinkingLevel: "medium",
-      compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  // gh is never invoked by recoverOrphans, so ghBin stays at the shared
+  // helper's poisoned default (/nonexistent/gh).
+  const cfg: Config = baseConfig(
+    {
+      dataDir: root,
+      queueRoot: join(root, "Junco"),
+      worktreeRoot: "/tmp/worktrees",
+      tools: ["read"],
+      criticEnabled: true,
+      planLintEnabled: true,
+      verifyEnabled: true,
+      supervisorEnabled: true,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: true,
     },
-    tools: ["read"],
-    defaultTimeoutMinutes: 1,
-    pollIntervalSeconds: 15,
-    startupPollSeconds: 30,
-    startupWait: true,
-    endpointProbe: "auto",
-    maxTransientRetries: 2,
-    retryBackoffSeconds: 60,
-    maxConcurrent: 1,
-    supervisorEnabled: true,
-    supervisorBudgetPerKind: 1,
-    supervisorEscalationWindow: 3,
-    supervisorOutputBudgetPerTurn: 12000,
-    supervisorOutputBudgetPostCommit: 24000,
-    gitBin: "git",
-    ghBin: "gh",
-    defaultBaseBranch: "main",
-    branchPrefix: "junco/",
-    worktreeRoot: "/tmp/worktrees",
-    removeWorktreeOnSuccess: true,
-    allowedRepoRoots: [],
-    draftByDefault: true,
-    defaultLabels: [],
-    verifyEnabled: true,
-    verifyCommandTimeout: 60,
-    verifyBlockOnFail: false,
-    criticEnabled: true,
-    criticMaxRetries: 1,
-    criticThinking: "minimal",
-    planLintEnabled: true,
-    planLintBlockOnError: true,
-    planLintCheckLabels: true,
-    commitLeftoversEnabled: false,
-    dailyBudgetUsd: 0,
-    healthEnabled: false,
-    healthHost: "127.0.0.1",
-    healthPort: 8787,
-    logLevel: "info",
-    github: {
-      enabled: false,
-      triggerLabel: "junco",
-      askLabel: "junco:ask",
-      pollIntervalSeconds: 60,
-      repos: [],
-      requireApproval: true,
-      plannerModelId: null,
-      externalReposRoot: "/tmp/junco-test-external",
+    {
+      defaultTimeoutMinutes: 1,
+      planLintBlockOnError: true,
+      planLintCheckLabels: true,
+      github: {
+        enabled: false,
+        triggerLabel: "junco",
+        askLabel: "junco:ask",
+        pollIntervalSeconds: 60,
+        repos: [],
+        requireApproval: true,
+        plannerModelId: null,
+        externalReposRoot: "/tmp/junco-test-external",
+      },
+      botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
     },
-    assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-    sandbox: {
-      enabled: false,
-      backend: "auto",
-      network: "deny",
-      extraDenyRead: [],
-      extraAllowWrite: [],
-    },
-    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-    logToFile: false,
-    transcriptsEnabled: false,
-  };
+  );
   return { cfg, root };
 }
 
