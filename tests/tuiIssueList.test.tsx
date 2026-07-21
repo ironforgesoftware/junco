@@ -59,7 +59,7 @@ describe("IssueList", () => {
     iss(46, "Bleaching alert", ["junco", "junco:working"]),
     iss(61, "Add tide tables"),
   ];
-  it("numbered title with count, selection bar, badges, reltime", () => {
+  it("title with count, selection bar, badges, reltime", () => {
     const f = render(
       <IssueList
         issues={three}
@@ -75,7 +75,7 @@ describe("IssueList", () => {
         window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
-    expect(f).toContain("2 issues · 3");
+    expect(f).toContain("issues · 3");
     expect(f).toContain("▌");
     expect(f).toContain("#52");
     expect(f).toContain("plan-ready");

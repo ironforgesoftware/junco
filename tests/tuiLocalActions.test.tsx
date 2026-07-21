@@ -201,8 +201,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("system"));
     await tap(r, TO_QUEUE_ROW); // park on the queue system row
     await until(() => frame(r).includes("sub-fix-typos"));
-    r.stdin.write("1"); // focus the rail pane
-    r.stdin.write("b"); // [b]rowser mnemonic
+    r.stdin.write("b"); // [b]rowser mnemonic — the queue-row tap already focused the rail
     await until(() => frame(r).toLowerCase().includes("no github url"));
     expect(opens).toHaveLength(0);
   });

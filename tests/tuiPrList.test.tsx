@@ -52,7 +52,7 @@ describe("PrList", () => {
         window={{ start: 0, end: prs.length }}
       />,
     ).lastFrame()!;
-    expect(f).toContain("p pull requests · 2");
+    expect(f).toContain("pull requests · 2");
     expect(f).toContain("▌");
   });
 
@@ -277,8 +277,8 @@ describe("PrList", () => {
     ).lastFrame()!;
 
     // focused version should have the title with accent
-    expect(f1).toContain("p pull requests");
-    expect(f2).toContain("p pull requests");
+    expect(f1).toContain("pull requests");
+    expect(f2).toContain("pull requests");
   });
 
   it("fits all content within 100 columns max frame width", () => {
@@ -499,12 +499,12 @@ describe("PrList", () => {
         now={NOW}
         staleAt={null}
         window={{ start: 0, end: prs.length }}
-        title="3 PRs · acme/reef"
+        title="PRs · acme/reef"
       />,
     ).lastFrame()!;
 
-    expect(f).toContain("3 PRs · acme/reef");
-    expect(f).not.toContain("p pull requests");
+    expect(f).toContain("PRs · acme/reef");
+    expect(f).not.toContain("pull requests");
   });
 
   it("renders an emptyText override on empty rows, replacing the default copy", () => {
@@ -538,7 +538,7 @@ describe("PrList", () => {
       />,
     ).lastFrame()!;
 
-    expect(f).toContain("p pull requests · 0");
+    expect(f).toContain("pull requests · 0");
     expect(f).toContain("no junco PRs found across watched repos");
   });
 
@@ -548,7 +548,7 @@ describe("PrList", () => {
     // constrains it by wrapping in a fixed-width Box, mirroring App.tsx's
     // pane-3 wrapper: <Box width={layout.previewWidth} height={listHeight}>.
     // Long title that would collide with " offline · HH:MM" (~16 cols) suffix.
-    const longTitle = "3 PRs · acme/rgesoftware/junco"; // ~31 chars; with suffix ~47 chars total
+    const longTitle = "PRs · acme/rgesoftware/junco"; // ~29 chars; with suffix ~45 chars total
     const prs = Array.from({ length: 17 }, (_, i) => pr(i + 1, `PR ${i + 1}`));
 
     const f = render(

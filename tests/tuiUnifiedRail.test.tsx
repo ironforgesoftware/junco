@@ -129,7 +129,7 @@ describe("UnifiedRail", () => {
     expect(f).toContain("▸1"); // queue running badge
     expect(f).toContain("⇡2"); // outbox depth badge
     expect(f).toContain("⚑1"); // stale worktree badge
-    expect(f).toContain("●"); // daemon up badge
+    expect(f).toContain("up"); // daemon up badge
   });
 
   it("gate-paused shows ⚠ on the queue row", () => {

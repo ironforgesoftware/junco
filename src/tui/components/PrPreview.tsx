@@ -13,7 +13,7 @@ export interface PrPreviewProps {
   height: number;
   width?: number; // set → fixed width; undefined → flexGrow 1
   focused: boolean;
-  titleLabel?: string; // pane title prefix; default "3 pr" for the p-view's pane-3 slot
+  titleLabel?: string; // pane title prefix; default "pr"
   /** Mouse: press on the ↗ metadata line (opens the PR in the browser). */
   onLinkPress?: () => void;
 }
@@ -61,7 +61,7 @@ export function PrPreview({
   height,
   width,
   focused,
-  titleLabel = "3 pr",
+  titleLabel = "pr",
   onLinkPress,
 }: PrPreviewProps): React.JSX.Element {
   // Height budget (mirrors Preview.tsx): borders ×2 + pane title. Content rows

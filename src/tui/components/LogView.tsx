@@ -23,7 +23,7 @@ function DownNote({ daemonUp }: { daemonUp?: boolean }): React.JSX.Element | nul
   return (
     <>
       {"  "}
-      <Text dimColor>daemon ○ — showing last logs</Text>
+      <Text dimColor>daemon down — showing last logs</Text>
     </>
   );
 }
@@ -35,7 +35,7 @@ interface LogViewProps {
   focused: boolean;
   hasFile: boolean; // false → the daemon-not-started placeholder
   /** Daemon liveness (cheap-poll `daemon.up`) — false marks the header with a
-   * dim `daemon ○ — showing last logs` note so old lines never read as live.
+   * dim `daemon down — showing last logs` note so old lines never read as live.
    * DISTINCT from the follow indicator (● following is follow-state, #239).
    * Absent (tests / pre-first-tick) → no marker. */
   daemonUp?: boolean;

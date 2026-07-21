@@ -42,7 +42,7 @@ export function sectionBadge(
       return n > 0 ? `⚑${n}` : "";
     }
     case "daemon":
-      return cheap.daemon.up ? "●" : "○";
+      return cheap.daemon.up ? "up" : "down";
     case "repos":
       return "";
     // The live/follow indicator lives in the LogView header (● following /

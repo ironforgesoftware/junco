@@ -73,7 +73,6 @@ export function HelpModal({
           ["←/→ · h/l · tab", "switch panes"],
           ["[ / ]", "scroll (alias of ↑/↓ in views)"],
           ["g/G", "first / last"],
-          ["1/2/3", "jump pane directly (3 = PRs for the selected repo, wide)"],
           ["enter", "open detail — repo (pane 1), issue (pane 2), PR (pane 3 / PRs view)"],
           ["/", "filter issues (esc clears)"],
           [",", "config editor"],

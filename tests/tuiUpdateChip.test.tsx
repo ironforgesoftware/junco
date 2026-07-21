@@ -8,7 +8,7 @@ import { buildContextBindings } from "../src/tui/viewActions.js";
 import { until } from "./helpers/until.js";
 
 const headerProps = {
-  repoNwo: "acme/site",
+  crumbs: ["acme/site"],
   health: null,
   reviewCount: 0,
   now: new Date("2026-07-16T12:00:00Z"),
@@ -19,7 +19,6 @@ const headerProps = {
   outboxDepth: 0,
   prAttention: 0,
   prFailing: false,
-  refreshedAt: null,
 };
 
 describe("Header update chip", () => {

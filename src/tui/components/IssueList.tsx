@@ -76,7 +76,7 @@ export function IssueList({
       onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined}>
-        2 issues · {issues.length}
+        issues · {issues.length}
         {filter !== "" && (
           <Text color={theme.accent} bold={filtering}>
             {" "}

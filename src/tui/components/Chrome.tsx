@@ -4,7 +4,7 @@ import { theme, toastColor, type ToastKind } from "../theme.js";
 import type { LayoutMode } from "../layout.js";
 import type { HealthInfo } from "../ghClient.js";
 import { fmtCompact } from "../queueFmt.js";
-import { relTime, relTimeShort } from "./IssueList.js";
+import { relTime } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
 import type { Chip } from "../viewActions.js";
 import { ClickableBox } from "../ClickableBox.js";
@@ -24,7 +24,7 @@ function fmtUp(s: number | null): string {
  * chip set is also responsive: below the wide breakpoint the record/last/tok/
  * bridge chips drop (they live in `junco status` for narrow terminals). */
 export function Header({
-  repoNwo,
+  crumbs,
   health,
   reviewCount,
   now,
@@ -35,10 +35,11 @@ export function Header({
   outboxDepth,
   prAttention,
   prFailing,
-  refreshedAt,
   updateLatest,
+  stats: _stats,
+  runningIds: _runningIds,
 }: {
-  repoNwo: string | null;
+  crumbs: string[];
   /** Extended /health snapshot, null before the first poll resolves. */
   health: HealthInfo | null;
   /** Issues (across the repos loaded so far) in plan-ready or approved state. */
@@ -57,12 +58,12 @@ export function Header({
   prAttention: number;
   /** True when any of those PRs is checks-failing — picks the chip's color. */
   prFailing: boolean;
-  /** Last completed unified refresh cycle (oldest cache age when any source
-   * was served offline) — the top bar's single ↻ stamp. Null until the first
-   * cycle completes. */
-  refreshedAt: string | null;
   /** Latest npm version when newer than the running one; null/absent → no chip. */
   updateLatest?: string | null;
+  /** Task 7 wires these. */
+  stats?: unknown;
+  /** Task 7 wires these. */
+  runningIds?: string[];
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -70,8 +71,8 @@ export function Header({
     daemonUp === null
       ? "daemon …"
       : daemonUp
-        ? `daemon ●${fmtUp(health?.uptimeSeconds ?? null)}`
-        : "daemon ○";
+        ? `daemon${fmtUp(health?.uptimeSeconds ?? null)}`
+        : "daemon down";
   const lastStatus = health?.lastTaskStatus ?? null;
   const lastGood = lastStatus !== null && TERMINAL_DONE_STATUSES.has(lastStatus);
   const lastTaskAt = health?.lastTaskAt ?? null;
@@ -88,7 +89,7 @@ export function Header({
       </Box>
       <Box flexShrink={1} minWidth={0}>
         <Text bold wrap="truncate">
-          {repoNwo ?? "no repo"}
+          {crumbs.join(" ▸ ")}
         </Text>
       </Box>
       <Box flexGrow={1} />
@@ -120,7 +121,6 @@ export function Header({
           <Text color={theme.warn}>bridge ✗{bridgeErrors}</Text>
         )}
         <Text color={daemonUp ? theme.success : theme.warn}>{daemon}</Text>
-        {refreshedAt !== null && <Text dimColor>↻ {relTimeShort(refreshedAt, now)}</Text>}
         {queueRunning + queueWaiting > 0 && (
           <Text color={theme.info}>
             ◐{queueRunning} ⏳{queueWaiting}

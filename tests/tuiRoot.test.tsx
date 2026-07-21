@@ -170,7 +170,7 @@ describe("Root FTUE switcher", () => {
     // makeAppProps mounts the real App in github mode at 120 cols — its
     // bracketed mode tab is the header proof the App path was taken (not the
     // wizard, which would print "junco setup").
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     expect(r.lastFrame() ?? "").not.toContain("junco setup");
   });
 
@@ -199,7 +199,7 @@ describe("Root FTUE switcher", () => {
     expect(buildAppProps).not.toHaveBeenCalled(); // wizard first — no App yet
     await driveToWritten(r.stdin, () => r.lastFrame());
     await press(r.stdin, "q"); // result is set — q finishes → outcome "written"
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"), LONG_TRIES);
+    await until(() => (r.lastFrame() ?? "").includes("repos"), LONG_TRIES);
     expect(loadSpy).toHaveBeenCalledTimes(1);
     expect(loadSpy).toHaveBeenCalledWith("/tmp/x/config.json");
     // Every App render received the config loadConfigFn returned — never a stale one.
@@ -224,7 +224,7 @@ describe("Root FTUE switcher", () => {
         onFinalExitCode={onCode}
       />,
     );
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     // Open the command palette, filter to "setup", run it.
     r.stdin.write(":");
     await until(() => (r.lastFrame() ?? "").includes("run a junco command"));
@@ -235,7 +235,7 @@ describe("Root FTUE switcher", () => {
     expect(runCli).not.toHaveBeenCalled(); // in-process — nothing spawned
     // Cancel the re-run: dashboard resumes, config never reloaded, no exit.
     r.stdin.write("q");
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     expect(loadSpy).not.toHaveBeenCalled(); // config untouched on a re-run cancel
     expect(onCode).not.toHaveBeenCalled(); // re-run cancel never exits the host
   });

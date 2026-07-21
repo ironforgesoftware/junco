@@ -34,7 +34,7 @@ export interface PrListProps {
   staleAt: string | null; // any repo served from cache → oldest fetchedAt
   window: { start: number; end: number };
   showNwo?: boolean; // show nwo cell; default true for multi-repo view
-  title?: string; // pane title; default "p pull requests · N"
+  title?: string; // pane title; default "pull requests · N"
   emptyText?: string; // empty-state message; default the cross-repo copy below
   /** Mouse: press on a PR row (registry index into prs). */
   onRowPress?: (index: number) => void;
@@ -73,7 +73,7 @@ export function PrList({
       onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
-        {title ?? `p pull requests · ${prs.length}`}
+        {title ?? `pull requests · ${prs.length}`}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
       {prs.length === 0 && (

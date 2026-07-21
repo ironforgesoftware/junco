@@ -175,7 +175,7 @@ interface PrDetailState {
   from: "main" | "prs";
 }
 
-/** Pane 3's title composes "3 PRs · <nwo>" from a nwo of unbounded length —
+/** Pane 3's title composes "PRs · <nwo>" from a nwo of unbounded length —
  * mirrors PrList's own truncate-start nwo cell (NWO_MAX_WIDTH) so the title
  * clamps to the same budget rather than wrapping the pane onto a second line,
  * which would corrupt PrList's height/windowing math (CHROME one-line
@@ -272,10 +272,15 @@ export function App(props: AppProps): React.JSX.Element {
   const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
   // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
   const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
-  // The top bar's single ↻ stamp: when the last unified refresh cycle
-  // completed. Cache-served (offline) sources pull it back to the oldest
-  // cache staleAt, so data that arrived stale never reads as fresh.
+  // When the last unified refresh cycle completed. Cache-served (offline)
+  // sources pull it back to the oldest cache staleAt, so data that arrived
+  // stale never reads as fresh. No header UI reads this today (the ↻ chip
+  // was dropped in the declutter sweep) — Task 6 wires it into the daemon
+  // panel.
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
+  // Bridge: the ↻ header chip is gone and the daemon panel doesn't consume the
+  // stamp until the next task's commit — keep the state referenced for lint.
+  void refreshedAt;
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
   const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
@@ -603,9 +608,9 @@ export function App(props: AppProps): React.JSX.Element {
         : Math.min(lastPane3IdxRef.current, repoPrs.length - 1);
   lastPane3IdxRef.current = pane3IdxSafe;
   const selectedPane3Pr = repoPrs[pane3IdxSafe] ?? null;
-  // Pane 3's title identifies the scoped repo (mockup: "3 PRs · acme/reef");
+  // Pane 3's title identifies the scoped repo (mockup: "PRs · acme/reef");
   // no repo selected (empty rail) falls back to the bare pane label.
-  const pane3Title = currentNwo ? `3 PRs · ${truncateNwoStart(currentNwo)}` : "3 PRs";
+  const pane3Title = currentNwo ? `PRs · ${truncateNwoStart(currentNwo)}` : "PRs";
 
   // Window slices live HERE (not inside the list components) so that rendering
   // and mouse hit-testing share one offset — the sticky prevStart refs move up
@@ -2502,12 +2507,6 @@ export function App(props: AppProps): React.JSX.Element {
       setPane(2);
       return;
     }
-    if (input === "1") return void setPane(1);
-    if (input === "2") return void setPane(2);
-    if (input === "3") {
-      if (layout.mode === "wide" && body?.kind === "issues") setPane(3);
-      return;
-    }
     const maxPane: Pane = layout.mode === "wide" && body?.kind === "issues" ? 3 : 2;
     if (key.tab) {
       return void setPane((p) => (p >= maxPane ? 1 : ((p + 1) as Pane)));
@@ -2704,7 +2703,7 @@ export function App(props: AppProps): React.JSX.Element {
       layout={layout}
       header={
         <Header
-          repoNwo={currentNwo ?? null}
+          crumbs={[currentNwo ?? "no repo"]}
           health={health}
           reviewCount={reviewCount}
           now={queueNow}
@@ -2715,7 +2714,6 @@ export function App(props: AppProps): React.JSX.Element {
           outboxDepth={queueSnap?.outboxDepth ?? 0}
           prAttention={prAttention}
           prFailing={prFailing}
-          refreshedAt={refreshedAt}
           updateLatest={updateLatest}
         />
       }

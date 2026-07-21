@@ -81,7 +81,7 @@ export function UnifiedRail({
       onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined}>
-        1 repos
+        repos
       </Text>
       {repoCount === 0 && <Text dimColor>none — press w to add</Text>}
       {repoRows.slice(window.start, window.end).map((row, i) => {
