@@ -51,6 +51,7 @@ import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
 import { PrList, NWO_MAX_WIDTH } from "./components/PrList.js";
 import { PrPreview } from "./components/PrPreview.js";
+import { ActivityCard, ReservedNote } from "./components/ActivityCard.js";
 import { derivePrState, sortPrs, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
 import { HelpModal } from "./components/HelpModal.js";
@@ -3018,6 +3019,18 @@ export function App(props: AppProps): React.JSX.Element {
                   onWheel={(d) => movePane3(d)}
                 />
               </Box>
+            ) : view === "main" && body?.kind === "section" ? (
+              <ActivityCard
+                stats={localCheap?.queue.stats ?? queueSnap?.stats ?? null}
+                width={layout.previewWidth}
+                height={listHeight}
+              />
+            ) : view === "main" && body?.kind === "repoDetail" ? (
+              <ReservedNote
+                text="local repo — no linked PRs"
+                width={layout.previewWidth}
+                height={listHeight}
+              />
             ) : null)}
         </>
       )}
