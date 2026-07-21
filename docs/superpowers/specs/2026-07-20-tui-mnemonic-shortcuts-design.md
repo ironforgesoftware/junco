@@ -95,15 +95,19 @@ A derivation context is **(view, bodyKind)** — NOT pane. Contexts:
 
 Canonical option order inside a `main:*` context: **main globals first, in
 fixed order** (add repo, unwatch, browser, refresh, assess, queue, review,
-PRs, commands), **then the body's verbs** (e.g. queue: requeue, delete;
+PRs, commands), **then the body's verbs** (e.g. queue: retry, delete;
 issues: dispatch, approve, analyze), **then hidden variants** (dispatch as
 ask, assess auto-plan, re-plan — issues only). Globals derive identically in
 every main context by construction (same prefix list), so cross-body
 consistency of the shared verbs is a free property; body verbs claim from
-what remains.
+what remains. The queue body's requeue verb is labeled `retry` — the CLI verb
+it spawns (`junco retry`), and a label whose letters don't exhaust against
+the global claims.
 
-Guarded (uppercase) verbs: delete, prune, restart, discard (review). Hidden:
-dispatch-as-ask (guarded), assess-auto-plan (guarded), re-plan.
+Guarded (uppercase) verbs: delete, prune, restart, discard (review), and
+re-plan (it rewinds lifecycle state — and guarding keeps it off the
+exhaustion fallback, landing it on today's `R`). Hidden: dispatch-as-ask
+(guarded), assess-auto-plan (guarded), re-plan (guarded).
 
 Per-context `excluded` letters = that context's structural keys: main
 contexts `{j,k,h,l,g,G,i}` (movement + pane alias); logOverlay `{G}` (bottom
