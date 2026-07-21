@@ -1153,6 +1153,34 @@ describe("App", () => {
   });
 });
 
+describe("header breadcrumbs", () => {
+  const wlc = () => join(mkdtempSync(join(tmpdir(), "junco-crumb-")), "wl.json");
+
+  it("shows the repo alone in the main view, then repo ▸ #N in the issue detail", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wlc());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    expect(r.lastFrame()).toContain("acme/api");
+    expect(r.lastFrame()).not.toContain("▸ #7");
+    // Enter on pane 1's repo row opens RepoDetail, not the issues body (see
+    // App's pane===1 return-key branch) — so focus pane 2 explicitly first,
+    // mirroring "o in the detail view opens the snapshotted issue" above.
+    r.stdin.write(ESC + "[C"); // → pane 2 (issues)
+    await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 focused
+    r.stdin.write("\r"); // open the issue detail
+    await until(() => (r.lastFrame() ?? "").includes("acme/api ▸ #7"));
+  });
+
+  it("shows system ▸ <section> when a system row's body is open", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wlc());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    // ONE watched repo in this watchlist, so a single `j` lands on the queue row.
+    r.stdin.write("j");
+    await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
+  });
+});
+
 describe("external-repo routing", () => {
   const wle = () => join(mkdtempSync(join(tmpdir(), "junco-ext-")), "wl.json");
   const upIssue: DashIssue = {

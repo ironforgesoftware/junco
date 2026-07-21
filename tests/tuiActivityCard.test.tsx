@@ -3,8 +3,9 @@ import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "ink-testing-library";
 import { ActivityCard, ReservedNote } from "../src/tui/components/ActivityCard.js";
 import type { QueueStats } from "../src/tui/queueStats.js";
+import type { LocalRepo } from "../src/tui/localSnapshot.js";
 import { until } from "./helpers/until.js";
-import { renderApp, TO_QUEUE_ROW, tap } from "./helpers/localFixtures.js";
+import { renderApp, TO_QUEUE_ROW, tap, HEAVY } from "./helpers/localFixtures.js";
 
 afterEach(cleanup);
 
@@ -66,5 +67,38 @@ describe("reserved third slot (App integration)", () => {
     await tap(r, TO_QUEUE_ROW); // acme/api → beta/two → queue
     await until(() => (r.lastFrame() ?? "").includes("activity"));
     expect(r.lastFrame()).toContain("activity");
+  });
+
+  it("a local-only repo row reserves the third column with the local note", async () => {
+    // A local-only row (buildUnifiedRepos' "unclaimed heavy candidate" path —
+    // railModel.ts) enters the rail via localHeavyFn's repos, not the watched
+    // configRepos/watchlist union. A prop override on THIS render is enough
+    // (no shared fixture/constant edit, so TO_QUEUE_ROW etc. elsewhere are
+    // untouched): append one candidate that matches neither watched nwo
+    // (acme/api, beta/two) nor path, so it lands as an unwatched "repoDetail"
+    // row (bodyKindFor) after the two watched rows.
+    const localOnly: LocalRepo = {
+      nwo: null,
+      path: "/local/only-repo",
+      source: "clone",
+      originUrl: null,
+      forkUrl: null,
+      githubUrl: null,
+      branch: "main",
+      headSha: "abc1111",
+      dirty: false,
+      error: null,
+    };
+    const r = renderApp({
+      localHeavyFn: async () => ({ ...HEAVY, repos: [...HEAVY.repos, localOnly] }),
+    });
+    await until(() => (r.lastFrame() ?? "").includes("system"));
+    // Wait for the heavy poll's local-only candidate to actually land in the
+    // rail before counting steps — it's delivered async, one tick after mount.
+    // The rail's narrow column END-truncates the label (Ink wrap="truncate"),
+    // so match the surviving PREFIX, not the (truncated-away) path tail.
+    await until(() => (r.lastFrame() ?? "").includes("/local/only"));
+    await tap(r, "jj"); // acme/api → beta/two → the local-only row
+    await until(() => (r.lastFrame() ?? "").includes("local repo — no linked PRs"));
   });
 });
