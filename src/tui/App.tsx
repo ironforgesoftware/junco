@@ -76,6 +76,7 @@ import { useToast } from "./hooks/useToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
 import { useHealth } from "./hooks/useHealth.js";
 import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
+import { useAssessHistory } from "./hooks/useAssessHistory.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -319,7 +320,7 @@ export function App(props: AppProps): React.JSX.Element {
   const { toast, showToast, dismissToast } = useToast();
   const health = useHealth(client, healthPollMs);
   const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
-  const [assessHistory, setAssessHistory] = useState<Map<string, AssessHistory>>(new Map());
+  const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
   const [paletteFilter, setPaletteFilter] = useState("");
@@ -900,23 +901,6 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [refreshAll, refreshPollMs]);
-
-  // Assess-history polling (also fires once on mount). Slower than the queue
-  // cadence: a record only changes when an assess run finalizes (#193).
-  useEffect(() => {
-    let alive = true;
-    const run = async (): Promise<void> => {
-      const rows = await assessHistoryFn();
-      if (!alive) return;
-      setAssessHistory(new Map(rows.map((h) => [h.id, h])));
-    };
-    void run();
-    const id = setInterval(() => void run(), assessHistoryPollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [assessHistoryFn, assessHistoryPollMs]);
 
   // Update-check polling: fires once on mount (never blocks first paint —
   // async post-mount) and every 24h thereafter. Absent checkUpdateFn (tests,
