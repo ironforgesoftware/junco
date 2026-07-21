@@ -14,9 +14,14 @@ import type { ResolvedModelInfo } from "../src/agent/session.js";
 
 const okConfig = {
   model: { id: "local/m", baseUrl: "http://127.0.0.1:1234/v1", apiKey: "k", modelsJson: null },
-  dataDir: "/tmp/junco-doc-state",
-  queueRoot: "/tmp/junco-doc-vault",
-  worktreeRoot: "/tmp/junco-doc-wt",
+  // Synthetic, non-existent by construction — NOT /tmp. Several tests below run
+  // the real fs against these and assert exact warning counts; with real /tmp
+  // paths they passed only because those dirs happened not to exist, and a
+  // stray `mkdir /tmp/junco-doc-state/assess-review` turned 4 of them red.
+  // Completes the hermeticity fix #199.3 started for two of the tests.
+  dataDir: "/sbxroot/junco-doc-state",
+  queueRoot: "/sbxroot/junco-doc-vault",
+  worktreeRoot: "/sbxroot/junco-doc-wt",
   legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
   gitBin: "git",
   ghBin: "gh",
