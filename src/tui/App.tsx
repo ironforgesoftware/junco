@@ -60,7 +60,7 @@ import { AddRepoForm } from "./components/AddRepoForm.js";
 import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
-import { ReviewView, type ReviewState } from "./components/ReviewView.js";
+import { ReviewView } from "./components/ReviewView.js";
 import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
@@ -79,6 +79,7 @@ import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
 import { useAssessHistory } from "./hooks/useAssessHistory.js";
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 import { useBotLogin } from "./hooks/useBotLogin.js";
+import { useReview } from "./hooks/useReview.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -309,14 +310,22 @@ export function App(props: AppProps): React.JSX.Element {
   const [view, setView] = useState<View>("main");
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [prDetail, setPrDetail] = useState<PrDetailState | null>(null);
-  const [reviewState, setReviewState] = useState<ReviewState>({
-    loading: false,
-    error: null,
-    batches: [],
-    drafts: [],
-    cursor: 0,
-    open: null,
-  });
+  // Flips false on unmount so every async `.then`/`await` continuation below can
+  // bail before touching state after the dashboard has exited. `assess` and the
+  // other spawned CLIs can resolve up to cliRunner's 120s timeout past unmount;
+  // the optimistic/browser/detail handlers resolve fast but carry the same guard
+  // for consistency (post-unmount setState is a silent no-op under React 19, so
+  // this is a uniformity guard, not a live-bug fix). Declared here (ahead of its
+  // original spot) so useReview below — and the scrollKey memo further down that
+  // reads reviewState — can both see it.
+  const aliveRef = useRef(true);
+  useEffect(
+    () => () => {
+      aliveRef.current = false;
+    },
+    [],
+  );
+  const { reviewState, setReviewState, loadReview } = useReview({ client, aliveRef });
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
@@ -923,20 +932,6 @@ export function App(props: AppProps): React.JSX.Element {
       return { ...prev, [nwo]: arr.map((i) => (i.number === num ? { ...i, labels } : i)) };
     });
   }, []);
-
-  // Flips false on unmount so every async `.then`/`await` continuation below can
-  // bail before touching state after the dashboard has exited. `assess` and the
-  // other spawned CLIs can resolve up to cliRunner's 120s timeout past unmount;
-  // the optimistic/browser/detail handlers resolve fast but carry the same guard
-  // for consistency (post-unmount setState is a silent no-op under React 19, so
-  // this is a uniformity guard, not a live-bug fix).
-  const aliveRef = useRef(true);
-  useEffect(
-    () => () => {
-      aliveRef.current = false;
-    },
-    [],
-  );
 
   // Optimistic action: apply the label delta locally, call gh with the ORIGINAL
   // labels, restore + toast on failure.
@@ -1745,24 +1740,7 @@ export function App(props: AppProps): React.JSX.Element {
           review: () => {
             setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
             setView("review");
-            void Promise.all([client.listReview(), client.listCommentDrafts()]).then(
-              ([rev, drafts]) => {
-                if (!aliveRef.current) return;
-                if (rev.ok && drafts.ok) {
-                  setReviewState((s) => ({
-                    ...s,
-                    loading: false,
-                    error: null,
-                    batches: rev.value,
-                    drafts: drafts.value,
-                    cursor: 0,
-                  }));
-                } else {
-                  const error = !rev.ok ? rev.error : !drafts.ok ? drafts.error : "unknown error";
-                  setReviewState((s) => ({ ...s, loading: false, error }));
-                }
-              },
-            );
+            void loadReview();
           },
           commands: () => {
             setPaletteFilter("");
@@ -1943,6 +1921,7 @@ export function App(props: AppProps): React.JSX.Element {
     prDetail,
     selectedPr,
     reviewState,
+    loadReview,
     watchlistError,
     pane,
     currentRepo,
