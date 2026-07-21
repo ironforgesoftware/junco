@@ -938,3 +938,55 @@ The body must contain a `Closes #247` … `Closes #253` line per issue so mergin
 - [ ] **Step 4: Report the PR URL and CI status**
 
 Run `gh pr checks <number>` once CI has started; report the URL and the check states.
+
+---
+
+## Corrections (written after execution)
+
+Four things above were proven wrong while this plan was being executed. The
+shipped code is correct; these notes exist so nobody re-derives the mistakes
+from the task text, which is left unedited as the historical record.
+
+**Task 3, Step 1 — the second test did not discriminate.** As written (walk to
+the daemon row, then press `r`) it passes against broken code, for two
+independent reasons. The refresh action only fires a network cycle when a repo
+row is selected — `currentNwo` is unset once the body is a system section, so
+`r` from the daemon row is a local-only no-op and `refreshAll` never runs. And
+the daemon panel's relative-time anchor freezes at mount in this harness, so a
+`↻ 0s ago` baseline still reads `0s` even when the stamp wrongly advances
+(`relTimeShort` floors negative deltas at zero). Shipped fix (`623b707`): press
+`r` while still on the issues row, and anchor the baseline five minutes in the
+past so a wrongly-advanced stamp visibly diverges.
+
+**Task 5, item 7 — the replacement assertion still could not fail.** The gate
+reason renders as its OWN row (`<Text key="gate-r">` in `sections.tsx`), not
+appended to the badge's line, so an assertion scoped to the line containing
+`rate limited` can never see a dangling reason row. Shipped fix (`f086076`):
+pin the row that FOLLOWS the endpoint row — `lines[iEndpoint + 1]` must contain
+`health`.
+
+**Task 6 — `truncate="start"` does not cleanly drop the label.** The plan called
+the label loss acceptable. Measuring Ink showed something worse: `wrap` applies
+to the whole flattened label+value string, so the label is the FIRST casualty
+and renders as a fragment (`…th`, `…h`) in a band of roughly one to six
+characters over budget, which also breaks column alignment with sibling rows.
+Shipped fix (`46ac457`): a pinned `flexShrink={0}` label cell plus a
+`flexGrow={1} minWidth={0}` value cell that carries the wrap — the pattern
+already used in `IssueList`, `PrList`, `Chrome`, `UnifiedRail`, `ReviewView`,
+and `TableHeader`. (The primitive still wraps to two lines if its container is
+narrower than `labelWidth` — unreachable at any width this app supports.)
+
+**Task 5, item 6 had a consequence the plan did not anticipate.** Widening the
+section-body budget to `sectionRowsHeight` exposed a stale `height - 3` clip
+inside `OutboxSection`, calibrated to the old budget, which then silently
+dropped that pane's position line — the exact failure class this plan set out
+to fix. Caught by the whole-branch review, not by any task-scoped one. Shipped
+fix (`77ab3ca`): `height - 2`, derived from the pane's real interior, plus a
+guard test proving the pane still cannot overflow.
+
+**The rule that caught the first three:** a test asserting behavior that
+already works proves nothing by passing. Every such test here had to be shown
+failing first, by deliberately breaking the implementation it covers and
+restoring it afterwards. Reviewers were also told not to defer to this plan's
+judgment — the third correction came from a reviewer measuring Ink's actual
+behavior instead of accepting the plan's claim about it.
