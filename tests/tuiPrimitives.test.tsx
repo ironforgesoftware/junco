@@ -96,3 +96,42 @@ describe("Sparkline", () => {
     expect(lastFrame()).toBe("▁▃▅█");
   });
 });
+
+import { Scrollbar, scrollbarCells } from "../src/tui/components/primitives/Scrollbar.js";
+import { Button } from "../src/tui/components/primitives/Button.js";
+
+describe("scrollbarCells", () => {
+  it("empty when content fits", () => {
+    expect(scrollbarCells(0, 10, 8, 10)).toEqual([]);
+  });
+  it("thumb at top for offset 0", () => {
+    expect(scrollbarCells(0, 5, 10, 4)).toEqual(["█", "█", "│", "│"]);
+  });
+  it("thumb at bottom for max offset", () => {
+    expect(scrollbarCells(5, 5, 10, 4)).toEqual(["│", "│", "█", "█"]);
+  });
+  it("thumb never shorter than one cell", () => {
+    const cells = scrollbarCells(0, 2, 200, 6);
+    expect(cells.filter((c) => c === "█")).toHaveLength(1);
+  });
+  it("Scrollbar renders null when content fits", () => {
+    const { lastFrame } = render(<Scrollbar offset={0} viewport={10} total={5} height={10} />);
+    expect(lastFrame()).toBe("");
+  });
+});
+
+describe("Button", () => {
+  it("neutral tone renders bracketed key + label", () => {
+    const { lastFrame } = render(<Button keyHint="esc" label="cancel" tone="neutral" />);
+    expect(lastFrame()).toBe("[ esc cancel ]");
+  });
+  it("primary tone renders padded key + label (pill)", () => {
+    const { lastFrame } = render(
+      <Box>
+        <Button keyHint="y" label="confirm" tone="primary" />
+        <Text>|</Text>
+      </Box>,
+    );
+    expect(lastFrame()).toBe(" y confirm |");
+  });
+});
