@@ -20,7 +20,7 @@
 
 ## The derived maps (hand-run, normative for the pinned tests)
 
-Main-context globals (identical across every `main:*` body): `a` addRepo, `u` unwatch, `b` browser, `r` refresh, `s` assess (charIndex 1), `e` queue (charIndex 2), `v` review (charIndex 2), `p` prs, `c` commands, reserved `q` quit / `?` help. Body additions — issues: `d` dispatch, `o` approve (charIndex 4), `n` analyze (charIndex 1), hidden `D` dispatchAsk / `S` assessAutoPlan / `R` replan; queue: `t` retry (charIndex 2), `D` delete; outbox: `f` flush; worktrees: `P` prune; daemon: `R` restart, `f` flush; repoDetail/logs: globals only. Overlay views (no globals): detail/prDetail/repoDetailView/prs: `b` browser; cmdOutput: `r` reRun; review: `a` all, `n` none, `f` file, `D` discard; logOverlay: `f` follow, `l` level, `t` ticket (reserved `q` close).
+Main-context globals (identical across every `main:*` body): `a` addRepo, `u` unwatch, `b` browser, `r` refresh, `s` assess (charIndex 1), `e` queue (charIndex 2), `v` review (charIndex 2), `p` prs, `c` commands, reserved `q` quit / `?` help. Body additions — issues: `d` dispatch, `o` approve (charIndex 4), `n` analyze (charIndex 1), hidden `D` dispatchAsk / `A` assessAutoPlan (its own label's first letter, uppercased) / `R` replan; queue: `t` retry (charIndex 2), `D` delete; outbox: `f` flush; worktrees: `P` prune; daemon: `R` restart, `f` flush; repoDetail/logs: globals only. Overlay views (no globals; each also carries a hidden reserved `q` close): detail/prDetail/repoDetailView/prs: `b` browser; cmdOutput: `r` reRun; review: `a` all, `n` none, `f` file, `D` discard; logOverlay: `f` follow, `l` level, `t` ticket (reserved `q` close).
 
 ---
 
