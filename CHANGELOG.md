@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `junco assess` filing (CLI `assess file`, TUI `f`) stamps per-finding filed accounting (created/queued/deduped — shown as "dup" in the TUI — + timestamp + URL) and keeps the batch in the review list; the TUI review view shows batch age, `filed n/m` chips, and per-finding ✓ accounting, and `x` discards an open batch.
+- Dashboard polish: digit-free panes (1/2/3 keys removed), grouped live-metric top bar (24h record, running ticket, ETA, gate/restart warnings; breadcrumb trail), columnar issue/PR tables with header strips and state pills, always-reserved third column (activity card), daemon panel stat grid with refresh stamp and spend gauge, scrollbars, clickable confirm buttons, bot-authored rows highlighted.
 
 ## [0.8.0] - 2026-07-17
 
