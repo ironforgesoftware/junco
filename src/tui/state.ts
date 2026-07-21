@@ -57,6 +57,9 @@ export function stateMeta(s: IssueLifecycle): { glyph: string; color: string; ba
   return META[s];
 }
 
+/** Longest lifecycle badge — the pill column's shared inner width. */
+export const MAX_STATE_BADGE_LEN = Math.max(...Object.values(META).map((m) => m.badge.length));
+
 const ACTIONS: Record<IssueLifecycle, DashAction[]> = {
   raw: ["dispatch", "dispatchAsk"],
   planning: [],

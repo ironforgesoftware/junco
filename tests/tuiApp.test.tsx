@@ -889,13 +889,14 @@ describe("App", () => {
       const { client } = makeClient({ "acme/api": [rawIssue] });
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
-      // Issue rows start at absolute y=4 (1-based): header(1) + border(2) + title(3).
-      // From pane 1 this click only focuses pane 2 + selects (never opens detail);
-      // the pane-2 footer hint ("d dispatch") is the observable that it landed.
-      await fireUntil(r.stdin, click(30, 4), () => (r.lastFrame() ?? "").includes("dispatch"));
+      // Issue rows start at absolute y=5 (1-based): header(1) + border(2) + title(3)
+      // + column header strip(4). From pane 1 this click only focuses pane 2 +
+      // selects (never opens detail); the pane-2 footer hint ("d dispatch") is
+      // the observable that it landed.
+      await fireUntil(r.stdin, click(30, 5), () => (r.lastFrame() ?? "").includes("dispatch"));
       expect(r.lastFrame() ?? "").not.toContain("the body"); // still the list
       // Now pane 2 + already selected → a second click on the same row = Enter → detail.
-      await fireUntil(r.stdin, click(30, 4), () => (r.lastFrame() ?? "").includes("the body"));
+      await fireUntil(r.stdin, click(30, 5), () => (r.lastFrame() ?? "").includes("the body"));
     });
 
     it("click on a rail row switches repos", async () => {
@@ -910,9 +911,14 @@ describe("App", () => {
       // rail row 2 (y=5 → index 1) → beta/web. Anchor the retry cond on the
       // SELECTION, not the loaded issues: a re-fired click on the now-selected
       // row is click-again = enter (opens RepoDetail, #240), so waiting for
-      // issue content here livelocked slow runners.
+      // issue content here livelocked slow runners. Scope the check to the
+      // rail's own column band (0-25) — pane 2's selected-row line can share a
+      // frame line with an unrelated rail row (they render side by side), so
+      // an unscoped substring check can false-positive off pane 2's content.
       await fireUntil(r.stdin, click(3, 5), () =>
-        (r.lastFrame() ?? "").split("\n").some((l) => l.includes("▌") && l.includes("beta/web")),
+        (r.lastFrame() ?? "")
+          .split("\n")
+          .some((l) => l.slice(0, 26).includes("▌") && l.slice(0, 26).includes("beta/web")),
       );
       // A click that landed twice before React committed may have opened the
       // RepoDetail view — esc restores main (a no-op if it never opened).
@@ -924,15 +930,16 @@ describe("App", () => {
       const { client } = makeClient({ "acme/api": [rawIssue, readyIssue] });
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
-      // Selection starts on row 0 (frame line 3); after one wheel-down the issue
-      // pane's ▌ bar must be on row 1 (frame line 4) — whatever issue sorts there.
+      // Selection starts on row 0 (frame line 4, after the column header strip);
+      // after one wheel-down the issue pane's ▌ bar must be on row 1 (frame
+      // line 5) — whatever issue sorts there.
       // (The rail's own ▌ sits left of x=26; slice the line to the issues pane.)
       const issueBarOn = (line: number): boolean =>
         ((r.lastFrame() ?? "").split("\n")[line] ?? "").slice(26).includes("▌");
-      await until(() => issueBarOn(3));
+      await until(() => issueBarOn(4));
       // wheelDown moves the selection down one row; the mover clamps at the last
       // row, so re-sending is idempotent.
-      await fireUntil(r.stdin, wheelDown(30, 5), () => issueBarOn(4) && !issueBarOn(3));
+      await fireUntil(r.stdin, wheelDown(30, 5), () => issueBarOn(5) && !issueBarOn(4));
     });
 
     it("prs view: click the selected row opens the PR; ↗ link line opens it too (wide)", async () => {
@@ -1124,8 +1131,8 @@ describe("App", () => {
       // Same coordinates that, in the main view, focus pane 2 and (on a second
       // click) open the issue-detail overlay — see "first click focuses pane 2
       // + selects" above. Here they must be a total no-op.
-      r.stdin.write(click(30, 4));
-      r.stdin.write(click(30, 4));
+      r.stdin.write(click(30, 5));
+      r.stdin.write(click(30, 5));
       r.stdin.write(wheelDown(30, 5));
       await wait(50);
       expect(r.lastFrame() ?? "").toContain("o/r"); // still the batch list

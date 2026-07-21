@@ -14,8 +14,8 @@ describe("geometry", () => {
     expect(railListHeight(5)).toBe(1); // clamps at 1, never 0/negative
   });
 
-  it("mirrors the IssueList/PrList row budget: borders + title + position line", () => {
-    expect(listRowsHeight(27)).toBe(23);
+  it("mirrors the IssueList/PrList row budget: borders + title + header strip + position line", () => {
+    expect(listRowsHeight(27)).toBe(22);
     expect(listRowsHeight(3)).toBe(1);
   });
 

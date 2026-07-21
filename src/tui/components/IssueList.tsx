@@ -1,10 +1,12 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
-import { deriveState, stateMeta, type DashIssue } from "../state.js";
+import { deriveState, stateMeta, MAX_STATE_BADGE_LEN, type DashIssue } from "../state.js";
 import { Spinner } from "./Spinner.js";
 import { fmtClock } from "../queueFmt.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { TableHeader, type Column } from "./primitives/TableHeader.js";
+import { Badge } from "./primitives/Badge.js";
 
 export function relTime(iso: string, now: Date): string {
   const ms = now.getTime() - (Date.parse(iso) || now.getTime());
@@ -24,6 +26,17 @@ export function relTimeShort(iso: string, now: Date): string {
   if (s < 60) return `${s}s`;
   return relTime(iso, now);
 }
+
+const AGE_W = 4; // relTime can emit "365d"
+const PILL_W = MAX_STATE_BADGE_LEN + 2; // badgeText pad spaces
+const COLUMNS: Column[] = [
+  { label: "", width: 1 },
+  { label: "", width: 1 },
+  { label: "#", width: 5, align: "right" },
+  { label: "title", width: "flex" },
+  { label: "state", width: PILL_W },
+  { label: "age", width: AGE_W, align: "right" },
+];
 
 export interface IssueListProps {
   issues: DashIssue[]; // already filtered by the App
@@ -91,6 +104,7 @@ export function IssueList({
         )}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
+      <TableHeader columns={COLUMNS} />
       {issues.length === 0 && filter !== "" && (
         <Text dimColor>no issues match /{filter} — esc clears the filter</Text>
       )}
@@ -113,14 +127,24 @@ export function IssueList({
             gap={1}
             onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
-            <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
-            <Text color={meta.color}>{meta.glyph}</Text>
-            <Text dimColor={!sel}>{`#${iss.number}`.padStart(5)}</Text>
+            <Box flexShrink={0} width={1}>
+              <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
+            </Box>
+            <Box flexShrink={0} width={1}>
+              <Text color={meta.color}>{meta.glyph}</Text>
+            </Box>
+            <Box flexShrink={0} width={5}>
+              <Text dimColor={!sel}>{`#${iss.number}`.padStart(5)}</Text>
+            </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{iss.title}</Text>
             </Box>
-            <Text color={meta.color}>{meta.badge}</Text>
-            <Text dimColor>{relTime(iss.updatedAt, now)}</Text>
+            <Box flexShrink={0} width={PILL_W}>
+              <Badge label={meta.badge} color={meta.color} padTo={MAX_STATE_BADGE_LEN} />
+            </Box>
+            <Box flexShrink={0} width={AGE_W} justifyContent="flex-end">
+              <Text dimColor>{relTime(iss.updatedAt, now)}</Text>
+            </Box>
           </ClickableBox>
         );
       })}

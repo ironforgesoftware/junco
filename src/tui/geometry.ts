@@ -23,7 +23,8 @@ export function railListHeight(bodyRows: number): number {
   return Math.max(1, bodyRows - 4 - SYSTEM_BLOCK_ROWS);
 }
 
-/** Rows the issue/PR lists can show: borders(2) + title(1) + position line(1). */
+/** Rows the issue/PR lists can show: borders(2) + title(1) + header strip(1)
+ * + position line(1). */
 export function listRowsHeight(bodyRows: number): number {
-  return Math.max(1, bodyRows - 4);
+  return Math.max(1, bodyRows - 5);
 }
