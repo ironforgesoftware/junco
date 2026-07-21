@@ -63,6 +63,8 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
     expect(f).toContain("🐦");
@@ -87,6 +89,8 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
     expect(f).toContain("daemon down");
@@ -107,6 +111,8 @@ describe("Header", () => {
         outboxDepth={3}
         prAttention={0}
         prFailing={false}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
     expect(withDepth).toContain("⇡3 unpushed");
@@ -124,6 +130,8 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
     expect(noDepth).not.toContain("unpushed");
@@ -141,16 +149,17 @@ describe("Header pulse", () => {
     outboxDepth: 0,
     prAttention: 0,
     prFailing: false,
+    stats: null,
+    runningIds: [],
   };
 
-  it("renders the full pulse row when healthy: review, task counts, last-task, tokens, bridge", () => {
+  it("renders the full pulse row when healthy: review, last-task, bridge (since-restart task counts and tokens are gone)", () => {
     const f = render(<Header {...base} health={HEALTHY} reviewCount={3} />).lastFrame()!;
     expect(f).toContain("●3 review");
-    expect(f).toContain("✓8");
-    expect(f).toContain("✗2");
     expect(f).toContain("last ✓ 2m");
-    expect(f).toContain("tok 45k");
     expect(f).toContain("bridge ✗1");
+    expect(f).not.toContain("✓8");
+    expect(f).not.toContain("tok 45k");
   });
 
   it("review chip hidden at 0, shown at 3", () => {
@@ -159,14 +168,6 @@ describe("Header pulse", () => {
 
     const shown = render(<Header {...base} health={HEALTHY} reviewCount={3} />).lastFrame()!;
     expect(shown).toContain("●3 review");
-  });
-
-  it("hides the ✗ failure segment when tasksFailed is 0", () => {
-    const f = render(
-      <Header {...base} health={{ ...HEALTHY, tasksFailed: 0, bridgeErrors: 0 }} reviewCount={0} />,
-    ).lastFrame()!;
-    expect(f).toContain("✓8");
-    expect(f).not.toContain("✗");
   });
 
   it("last-task glyph is ✓ for a terminal-done status, ✗ for anything else", () => {
@@ -183,18 +184,6 @@ describe("Header pulse", () => {
       <Header {...base} health={{ ...HEALTHY, lastTaskStatus: "failed" }} reviewCount={0} />,
     ).lastFrame()!;
     expect(bad).toContain("last ✗");
-  });
-
-  it("tok chip hidden when totalTokensOut is 0 or null", () => {
-    const zero = render(
-      <Header {...base} health={{ ...HEALTHY, totalTokensOut: 0 }} reviewCount={0} />,
-    ).lastFrame()!;
-    expect(zero).not.toContain("tok ");
-
-    const nullTok = render(
-      <Header {...base} health={{ ...HEALTHY, totalTokensOut: null }} reviewCount={0} />,
-    ).lastFrame()!;
-    expect(nullTok).not.toContain("tok ");
   });
 
   it("bridge chip only shown when bridgeErrors > 0", () => {
@@ -214,7 +203,7 @@ describe("Header pulse", () => {
     expect(f).not.toContain("bridge");
   });
 
-  it("medium mode keeps only the essential chips (record/last/tok/bridge drop by design)", () => {
+  it("medium mode keeps only the essential chips (record/last/bridge drop by design)", () => {
     const f = render(
       <Header
         {...base}
@@ -230,7 +219,6 @@ describe("Header pulse", () => {
     expect(f).toContain("daemon up");
     expect(f).toContain("◐1 ⏳1");
     expect(f).toContain("⇡4 unpushed");
-    expect(f).not.toContain("✓8");
     expect(f).not.toContain("last");
     expect(f).not.toContain("tok ");
     expect(f).not.toContain("bridge");
@@ -247,6 +235,8 @@ describe("Header PR attention chip", () => {
     queueWaiting: 0,
     watchlistError: null,
     outboxDepth: 0,
+    stats: null,
+    runningIds: [],
   };
 
   it("hidden at 0, shown as ⚑N PR at 3", () => {
@@ -317,6 +307,8 @@ describe("Header (no mode tabs)", () => {
     outboxDepth: 0,
     prAttention: 0,
     prFailing: false,
+    stats: null,
+    runningIds: [],
   };
 
   it("renders no tab segment (the mode toggle is gone)", () => {

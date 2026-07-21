@@ -39,7 +39,12 @@ import {
 } from "./railModel.js";
 import { UnifiedRail } from "./components/UnifiedRail.js";
 import { RepoDetail } from "./components/RepoDetail.js";
-import { OutboxSection, WorktreesSection, DaemonSection } from "./components/sections.js";
+import {
+  OutboxSection,
+  WorktreesSection,
+  DaemonSection,
+  truncStart,
+} from "./components/sections.js";
 import { buildContextBindings, type BindingContext } from "./viewActions.js";
 import type { AssessHistory } from "../assessHistory.js";
 import { IssueList } from "./components/IssueList.js";
@@ -608,6 +613,19 @@ export function App(props: AppProps): React.JSX.Element {
   // Pane 3's title identifies the scoped repo (mockup: "PRs · acme/reef");
   // no repo selected (empty rail) falls back to the bare pane label.
   const pane3Title = currentNwo ? `PRs · ${truncateNwoStart(currentNwo)}` : "PRs";
+
+  // Header breadcrumb trail — the active view's scope, most-general first.
+  const crumbs = useMemo((): string[] => {
+    if (view === "prs") return ["pull requests"];
+    if (view === "review") return ["review"];
+    if (view === "cmdOutput" && cmd) return ["command", cmd.title];
+    if (view === "detail" && detail) return [detail.nwo, `#${detail.issue.number}`];
+    if (view === "prDetail" && prDetail) return [prDetail.pr.nwo, `PR #${prDetail.pr.number}`];
+    if (view === "repoDetail" && repoDetailTarget)
+      return [repoDetailTarget.nwo ?? truncStart(repoDetailTarget.path, 30)];
+    if (body?.kind === "section") return ["system", body.section];
+    return [currentNwo ?? "no repo"];
+  }, [view, cmd, detail, prDetail, repoDetailTarget, body, currentNwo]);
 
   // Window slices live HERE (not inside the list components) so that rendering
   // and mouse hit-testing share one offset — the sticky prevStart refs move up
@@ -2700,7 +2718,7 @@ export function App(props: AppProps): React.JSX.Element {
       layout={layout}
       header={
         <Header
-          crumbs={[currentNwo ?? "no repo"]}
+          crumbs={crumbs}
           health={health}
           reviewCount={reviewCount}
           now={queueNow}
@@ -2712,6 +2730,8 @@ export function App(props: AppProps): React.JSX.Element {
           prAttention={prAttention}
           prFailing={prFailing}
           updateLatest={updateLatest}
+          stats={localCheap?.queue.stats ?? queueSnap?.stats ?? null}
+          runningIds={(localCheap?.queue ?? queueSnap)?.running.map((r) => r.id) ?? []}
         />
       }
       toast={toast}

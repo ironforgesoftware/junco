@@ -2441,21 +2441,20 @@ describe("workspace wide mode", () => {
 
   // Wide terminals get the FULL header pulse (record, last task, tokens) —
   // the same fixture that medium mode drops down to essentials.
-  it("wide mode renders the full header pulse", async () => {
+  it("wide mode renders the full header pulse (since-restart task counts and tokens are gone)", async () => {
     const { client: base } = makeClient({ "acme/api": [rawIssue, readyIssue] });
     const client: DashboardClient = { ...base, health: async () => RICH_HEALTH };
     const r = renderWide(client, wl6());
-    await until(() => (r.lastFrame() ?? "").includes("✓8"));
+    await until(() => (r.lastFrame() ?? "").includes("last ✓"));
     const birdLine = r
       .lastFrame()!
       .split("\n")
       .find((l) => l.includes("🐦"))!;
     expect(birdLine).toContain("●1 review");
-    expect(birdLine).toContain("✓8");
-    expect(birdLine).toContain("✗2");
     expect(birdLine).toContain("last ✓");
-    expect(birdLine).toContain("tok 45k");
     expect(birdLine).toContain("daemon up");
+    expect(birdLine).not.toContain("✓8");
+    expect(birdLine).not.toContain("tok 45k");
   });
 
   // Pane 3 is narrow (capped by layout.previewWidth) and its rows carry a

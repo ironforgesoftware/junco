@@ -3,11 +3,12 @@ import { Box, Text } from "ink";
 import { theme, toastColor, type ToastKind } from "../theme.js";
 import type { LayoutMode } from "../layout.js";
 import type { HealthInfo } from "../ghClient.js";
-import { fmtCompact } from "../queueFmt.js";
+import { fmtDurShort } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
 import type { Chip } from "../viewActions.js";
 import { ClickableBox } from "../ClickableBox.js";
+import type { QueueStats } from "../queueStats.js";
 
 function fmtUp(s: number | null): string {
   if (s === null) return "";
@@ -36,8 +37,8 @@ export function Header({
   prAttention,
   prFailing,
   updateLatest,
-  stats: _stats,
-  runningIds: _runningIds,
+  stats,
+  runningIds,
 }: {
   crumbs: string[];
   /** Extended /health snapshot, null before the first poll resolves. */
@@ -60,10 +61,11 @@ export function Header({
   prFailing: boolean;
   /** Latest npm version when newer than the running one; null/absent → no chip. */
   updateLatest?: string | null;
-  /** Task 7 wires these. */
-  stats?: unknown;
-  /** Task 7 wires these. */
-  runningIds?: string[];
+  /** Derived queue stats (task-history ledger + /health gate/spend/guards) —
+   * null before the first snapshot resolves. */
+  stats: QueueStats | null;
+  /** IDs of the currently-running tickets, in running order. */
+  runningIds: string[];
 }): React.JSX.Element {
   const wide = mode === "wide";
   const daemonUp = health === null ? null : health.up;
@@ -76,8 +78,107 @@ export function Header({
   const lastStatus = health?.lastTaskStatus ?? null;
   const lastGood = lastStatus !== null && TERMINAL_DONE_STATUSES.has(lastStatus);
   const lastTaskAt = health?.lastTaskAt ?? null;
-  const totalTokensOut = health?.totalTokensOut ?? null;
   const bridgeErrors = health?.bridgeErrors ?? null;
+
+  const w = stats?.window24h ?? null;
+  const gate = stats?.gate ?? null;
+  const warnChips: React.JSX.Element[] = [];
+  if (wide && updateLatest != null)
+    warnChips.push(
+      <Text key="up" color={theme.accent}>
+        ⬆ v{updateLatest}
+      </Text>,
+    );
+  if (watchlistError !== null)
+    warnChips.push(
+      <Text key="wl" color={theme.warn}>
+        watchlist!
+      </Text>,
+    );
+  if (gate !== null && gate.state !== "ok")
+    warnChips.push(
+      <Text key="gate" color={theme.warn}>
+        gate ⚠ {(gate.reason ?? gate.state.replace(/_/g, " ")).slice(0, 24)}
+      </Text>,
+    );
+  if ((stats?.pendingRestartFields.length ?? 0) > 0)
+    warnChips.push(
+      <Text key="rp" color={theme.warn}>
+        restart pending
+      </Text>,
+    );
+  if (wide && bridgeErrors !== null && bridgeErrors > 0)
+    warnChips.push(
+      <Text key="br" color={theme.warn}>
+        bridge ✗{bridgeErrors}
+      </Text>,
+    );
+  if (reviewCount > 0)
+    warnChips.push(
+      <Text key="rv" color={theme.warn}>
+        ●{reviewCount} review
+      </Text>,
+    );
+  if (prAttention > 0)
+    warnChips.push(
+      <Text key="pr" color={prFailing ? theme.error : theme.warn}>
+        ⚑{prAttention} PR
+      </Text>,
+    );
+
+  const recordChips: React.JSX.Element[] = [];
+  if (wide && w !== null && w.done + w.failed > 0)
+    recordChips.push(
+      <Text key="24h">
+        24h <Text color={theme.success}>✓{w.done}</Text>{" "}
+        <Text color={w.failed > 0 ? theme.error : undefined}>✗{w.failed}</Text>
+        {w.successRate !== null ? ` ${Math.round(w.successRate * 100)}%` : ""}
+      </Text>,
+    );
+  if (wide && lastTaskAt !== null)
+    recordChips.push(
+      <Text key="last">
+        last <Text color={lastGood ? theme.success : theme.error}>{lastGood ? "✓" : "✗"}</Text>{" "}
+        {relTime(lastTaskAt, now)}
+      </Text>,
+    );
+
+  const liveChips: React.JSX.Element[] = [];
+  if (runningIds.length > 0)
+    liveChips.push(
+      <Text key="run" color={theme.info}>
+        ▸ {runningIds[0].slice(0, 20)}
+        {runningIds.length > 1 ? ` +${runningIds.length - 1}` : ""}
+      </Text>,
+    );
+  if (wide && queueWaiting > 0 && stats?.etaSeconds != null && stats.etaSeconds !== 0)
+    liveChips.push(
+      <Text key="eta" dimColor>
+        eta {fmtDurShort(stats.etaSeconds)}
+      </Text>,
+    );
+
+  const systemChips: React.JSX.Element[] = [];
+  systemChips.push(
+    <Text key="d" color={daemonUp ? theme.success : theme.warn}>
+      {daemon}
+    </Text>,
+  );
+  if (queueRunning + queueWaiting > 0)
+    systemChips.push(
+      <Text key="q" color={theme.info}>
+        ◐{queueRunning} ⏳{queueWaiting}
+      </Text>,
+    );
+  if (outboxDepth > 0)
+    systemChips.push(
+      <Text key="ob" color={theme.warn}>
+        ⇡{outboxDepth} unpushed
+      </Text>,
+    );
+
+  const groups = [warnChips, recordChips, liveChips, systemChips].filter((g) => g.length > 0);
+
   return (
     <Box paddingX={1} gap={2} height={1}>
       <Box flexShrink={0}>
@@ -89,44 +190,22 @@ export function Header({
       </Box>
       <Box flexShrink={1} minWidth={0}>
         <Text bold wrap="truncate">
-          {crumbs.join(" ▸ ")}
+          {crumbs.map((c, i) => (
+            <React.Fragment key={i}>
+              {i > 0 ? <Text dimColor> ▸ </Text> : null}
+              {c}
+            </React.Fragment>
+          ))}
         </Text>
       </Box>
       <Box flexGrow={1} />
-      <Box flexShrink={0} gap={2}>
-        {wide && updateLatest != null && <Text color={theme.accent}>⬆ v{updateLatest}</Text>}
-        {watchlistError !== null && <Text color={theme.warn}>watchlist!</Text>}
-        {reviewCount > 0 && <Text color={theme.warn}>●{reviewCount} review</Text>}
-        {prAttention > 0 && (
-          <Text color={prFailing ? theme.error : theme.warn}>⚑{prAttention} PR</Text>
-        )}
-        {wide && health?.up && (
-          <Text>
-            <Text color={theme.success}>✓{health.tasksSucceeded ?? 0}</Text>
-            {(health.tasksFailed ?? 0) > 0 && (
-              <Text color={theme.error}> ✗{health.tasksFailed}</Text>
-            )}
-          </Text>
-        )}
-        {wide && lastTaskAt !== null && (
-          <Text>
-            last <Text color={lastGood ? theme.success : theme.error}>{lastGood ? "✓" : "✗"}</Text>{" "}
-            {relTime(lastTaskAt, now)}
-          </Text>
-        )}
-        {wide && totalTokensOut !== null && totalTokensOut > 0 && (
-          <Text dimColor>tok {fmtCompact(totalTokensOut)}</Text>
-        )}
-        {wide && bridgeErrors !== null && bridgeErrors > 0 && (
-          <Text color={theme.warn}>bridge ✗{bridgeErrors}</Text>
-        )}
-        <Text color={daemonUp ? theme.success : theme.warn}>{daemon}</Text>
-        {queueRunning + queueWaiting > 0 && (
-          <Text color={theme.info}>
-            ◐{queueRunning} ⏳{queueWaiting}
-          </Text>
-        )}
-        {outboxDepth > 0 && <Text color={theme.warn}>⇡{outboxDepth} unpushed</Text>}
+      <Box flexShrink={0} gap={1}>
+        {groups.map((g, gi) => (
+          <React.Fragment key={gi}>
+            {gi > 0 ? <Text dimColor>│</Text> : null}
+            <Box gap={2}>{g}</Box>
+          </React.Fragment>
+        ))}
       </Box>
     </Box>
   );

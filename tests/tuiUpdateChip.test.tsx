@@ -19,6 +19,8 @@ const headerProps = {
   outboxDepth: 0,
   prAttention: 0,
   prFailing: false,
+  stats: null,
+  runningIds: [],
 };
 
 describe("Header update chip", () => {
