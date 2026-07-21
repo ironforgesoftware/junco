@@ -9,7 +9,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, type Key } from "ink";
 import { bumpRender } from "./renderCount.js";
-import type { DashboardClient, HealthInfo } from "./ghClient.js";
+import type { DashboardClient } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
 import { lifecycleLabels, parseRepoInput } from "../githubInbox.js";
@@ -74,6 +74,7 @@ import { useLogTail } from "./useLogTail.js";
 import type { LogReaderDeps } from "../logReader.js";
 import { useToast } from "./hooks/useToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
+import { useHealth } from "./hooks/useHealth.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -315,7 +316,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
-  const [health, setHealth] = useState<HealthInfo | null>(null);
+  const health = useHealth(client, healthPollMs);
   const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
   const [queueNow, setQueueNow] = useState<Date>(() => new Date());
   const [assessHistory, setAssessHistory] = useState<Map<string, AssessHistory>>(new Map());
@@ -899,21 +900,6 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(id);
     };
   }, [refreshAll, refreshPollMs]);
-
-  // Health polling (also fires once on mount).
-  useEffect(() => {
-    let alive = true;
-    const run = async (): Promise<void> => {
-      const h = await client.health();
-      if (alive) setHealth(h);
-    };
-    void run();
-    const id = setInterval(() => void run(), healthPollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [client, healthPollMs]);
 
   // Queue polling (also fires once on mount).
   useEffect(() => {
