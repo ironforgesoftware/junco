@@ -31,6 +31,7 @@ tickets/
 htmlcov/
 .coverage
 .coverage.*
+coverage/
 dist/
 build/
 *.egg-info/
