@@ -7,7 +7,6 @@
  * gitDiff path; runCriticPass is driven by an injected fake AgentSessionLike.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -22,24 +21,11 @@ import {
   buildCorrectivePrompt,
 } from "../src/critic.js";
 import { makeConfig } from "./helpers/config.js";
+import { run, cloneHarness } from "./helpers/gitHarness.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function run(argv: string[], cwd?: string): string {
-  return execFileSync(argv[0], argv.slice(1), {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "CI",
-      GIT_AUTHOR_EMAIL: "ci@example.com",
-      GIT_COMMITTER_NAME: "CI",
-      GIT_COMMITTER_EMAIL: "ci@example.com",
-    },
-  });
-}
 
 function makeCfg(overrides: Partial<Config> = {}): Config {
   return makeConfig(
@@ -164,22 +150,10 @@ function fakeMultiMessageCriticSession(messages: string[]) {
   };
 }
 
-/** Bare remote + working clone with a base commit. Returns {remote, work}. */
-function setupGitHarness(tmpRoot: string): { remote: string; work: string } {
-  const remote = join(tmpRoot, "remote.git");
-  const work = join(tmpRoot, "work");
-  run(["git", "init", "--bare", "-b", "main", remote]);
-  run(["git", "init", "-b", "main", work]);
-  run(["git", "-C", work, "config", "user.email", "ci@example.com"]);
-  run(["git", "-C", work, "config", "user.name", "CI"]);
-  run(["git", "-C", work, "config", "commit.gpgsign", "false"]);
-  writeFileSync(join(work, "README.md"), "seed\n");
-  run(["git", "-C", work, "add", "README.md"]);
-  run(["git", "-C", work, "commit", "-m", "seed"]);
-  run(["git", "-C", work, "remote", "add", "origin", remote]);
-  run(["git", "-C", work, "push", "-u", "origin", "main"]);
-  return { remote, work };
-}
+// run() + the bare-remote-plus-clone tree live in tests/helpers/gitHarness.ts.
+// cloneHarness copies a once-per-process template (~7ms) rather than rebuilding
+// it with 10 git subprocesses (~142ms) per test.
+const setupGitHarness = cloneHarness;
 
 let tmpRoot: string;
 beforeEach(() => {

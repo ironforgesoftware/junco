@@ -32,22 +32,11 @@ import type { AgentSessionLike } from "../src/agent/session.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
+import { run, cloneHarness } from "./helpers/gitHarness.js";
 
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
-
-const GIT_ENV = {
-  ...process.env,
-  GIT_AUTHOR_NAME: "CI",
-  GIT_AUTHOR_EMAIL: "ci@example.com",
-  GIT_COMMITTER_NAME: "CI",
-  GIT_COMMITTER_EMAIL: "ci@example.com",
-};
-
-function run(args: string[], cwd?: string): string {
-  return execFileSync(args[0], args.slice(1), { cwd, encoding: "utf8", env: GIT_ENV });
-}
 
 interface Harness {
   root: string;
@@ -62,24 +51,14 @@ interface Harness {
 
 function setup(): Harness {
   const root = mkdtempSync(join(tmpdir(), "junco-prflow-"));
-  const remote = join(root, "remote.git");
-  const work = join(root, "work");
+  // Bare remote + seeded clone, copied from a once-per-process template (~7ms)
+  // instead of rebuilt with 10 git subprocesses (~142ms) per test.
+  const { remote, work } = cloneHarness(root);
   const wtsRoot = join(root, "wts");
   const processing = join(root, "processing");
   const done = join(root, "done");
   const failed = join(root, "failed");
   [wtsRoot, processing, done, failed].forEach((d) => mkdirSync(d, { recursive: true }));
-
-  run(["git", "init", "--bare", "-b", "main", remote]);
-  run(["git", "init", "-b", "main", work]);
-  run(["git", "-C", work, "config", "user.email", "ci@example.com"]);
-  run(["git", "-C", work, "config", "user.name", "CI"]);
-  run(["git", "-C", work, "config", "commit.gpgsign", "false"]);
-  writeFileSync(join(work, "README.md"), "seed\n");
-  run(["git", "-C", work, "add", "README.md"]);
-  run(["git", "-C", work, "commit", "-m", "seed"]);
-  run(["git", "-C", work, "remote", "add", "origin", remote]);
-  run(["git", "-C", work, "push", "-u", "origin", "main"]);
 
   // Fake gh: `repo view` → nwo; `pr create` → a canned URL.
   const ghBin = join(root, "fake-gh.sh");

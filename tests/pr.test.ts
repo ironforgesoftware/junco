@@ -10,7 +10,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
 
 import {
   countNewCommits,
@@ -25,53 +24,16 @@ import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
+import { run, cloneHarness } from "./helpers/gitHarness.js";
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
 // ---------------------------------------------------------------------------
 
-function run(args: string[], cwd?: string): string {
-  return execFileSync(args[0], args.slice(1), {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "CI",
-      GIT_AUTHOR_EMAIL: "ci@example.com",
-      GIT_COMMITTER_NAME: "CI",
-      GIT_COMMITTER_EMAIL: "ci@example.com",
-    },
-  });
-}
-
-/** Set up a bare remote + seeded working clone in tmp. Returns paths. */
-function setupGitHarness(tmpRoot: string): {
-  remote: string;
-  work: string;
-} {
-  const remote = join(tmpRoot, "remote.git");
-  const work = join(tmpRoot, "work");
-
-  // Init bare remote
-  run(["git", "init", "--bare", "-b", "main", remote]);
-
-  // Init working repo
-  run(["git", "init", "-b", "main", work]);
-  run(["git", "-C", work, "config", "user.email", "ci@example.com"]);
-  run(["git", "-C", work, "config", "user.name", "CI"]);
-  run(["git", "-C", work, "config", "commit.gpgsign", "false"]);
-
-  // Seed a commit
-  writeFileSync(join(work, "README.md"), "seed\n");
-  run(["git", "-C", work, "add", "README.md"]);
-  run(["git", "-C", work, "commit", "-m", "seed"]);
-
-  // Connect to remote + push
-  run(["git", "-C", work, "remote", "add", "origin", remote]);
-  run(["git", "-C", work, "push", "-u", "origin", "main"]);
-
-  return { remote, work };
-}
+// run() + the bare-remote-plus-clone tree live in tests/helpers/gitHarness.ts.
+// cloneHarness copies a once-per-process template (~7ms) rather than rebuilding
+// it with 10 git subprocesses (~142ms) per test.
+const setupGitHarness = cloneHarness;
 
 function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
   return baseConfig(

@@ -38,55 +38,19 @@ import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 import { setupForkHarness } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
+import { run, cloneHarness } from "./helpers/gitHarness.js";
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
 // ---------------------------------------------------------------------------
 
-function run(args: string[], cwd?: string): string {
-  return execFileSync(args[0], args.slice(1), {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "CI",
-      GIT_AUTHOR_EMAIL: "ci@example.com",
-      GIT_COMMITTER_NAME: "CI",
-      GIT_COMMITTER_EMAIL: "ci@example.com",
-    },
-  });
-}
-
-/** Set up a bare remote + seeded working clone in tmp. Returns paths. */
-function setupGitHarness(tmpRoot: string): {
-  remote: string;
-  work: string;
-  wtsRoot: string;
-} {
-  const remote = join(tmpRoot, "remote.git");
-  const work = join(tmpRoot, "work");
-  const wtsRoot = join(tmpRoot, "wts");
-
-  // Init bare remote
-  run(["git", "init", "--bare", "-b", "main", remote]);
-
-  // Init working repo
-  run(["git", "init", "-b", "main", work]);
-  run(["git", "-C", work, "config", "user.email", "ci@example.com"]);
-  run(["git", "-C", work, "config", "user.name", "CI"]);
-  run(["git", "-C", work, "config", "commit.gpgsign", "false"]);
-
-  // Seed a commit
-  const readmePath = join(work, "README.md");
-  writeFileSync(readmePath, "seed\n");
-  run(["git", "-C", work, "add", "README.md"]);
-  run(["git", "-C", work, "commit", "-m", "seed"]);
-
-  // Connect to remote + push
-  run(["git", "-C", work, "remote", "add", "origin", remote]);
-  run(["git", "-C", work, "push", "-u", "origin", "main"]);
-
-  return { remote, work, wtsRoot };
+// run() + the bare-remote-plus-clone tree live in tests/helpers/gitHarness.ts.
+// cloneHarness copies a once-per-process template (~7ms) rather than rebuilding
+// it with 10 git subprocesses (~142ms) per test. wtsRoot stays local: it is this
+// suite's worktree parent dir, not part of the shared harness.
+function setupGitHarness(tmpRoot: string): { remote: string; work: string; wtsRoot: string } {
+  const { remote, work } = cloneHarness(tmpRoot);
+  return { remote, work, wtsRoot: join(tmpRoot, "wts") };
 }
 
 // gh is not used in worktree tests, so ghBin stays at the shared helper's
