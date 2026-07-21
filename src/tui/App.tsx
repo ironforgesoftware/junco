@@ -8,6 +8,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, type Key } from "ink";
+import { bumpRender } from "./renderCount.js";
 import type { DashboardClient, HealthInfo } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
@@ -266,6 +267,7 @@ export function App(props: AppProps): React.JSX.Element {
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
   const { exit } = useApp();
+  bumpRender("App"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
 
   const size = useTerminalSize(props.sizeOverride);
   const layout = useMemo(() => computeLayout(size.columns, size.rows), [size]);
