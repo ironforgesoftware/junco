@@ -134,7 +134,9 @@ export function IssueList({
               <Text color={meta.color}>{meta.glyph}</Text>
             </Box>
             <Box flexShrink={0} width={5}>
-              <Text dimColor={!sel}>{`#${iss.number}`.padStart(5)}</Text>
+              <Text dimColor={!sel} wrap="truncate-start">
+                {`#${iss.number}`.padStart(5)}
+              </Text>
             </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{iss.title}</Text>

@@ -136,7 +136,9 @@ export function PrList({
               <Text color={meta.color}>{meta.glyph}</Text>
             </Box>
             <Box flexShrink={0} width={5}>
-              <Text dimColor={!sel}>{`#${prItem.number}`.padStart(5)}</Text>
+              <Text dimColor={!sel} wrap="truncate-start">
+                {`#${prItem.number}`.padStart(5)}
+              </Text>
             </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{prItem.title}</Text>

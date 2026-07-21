@@ -47,4 +47,25 @@ describe("columnar IssueList", () => {
   it("listRowsHeight budgets the header strip", () => {
     expect(listRowsHeight(20)).toBe(15);
   });
+  it("truncates 5+-digit issue numbers to preserve row height", () => {
+    const largeIssues: DashIssue[] = [
+      {
+        number: 123456,
+        title: "large id",
+        labels: [],
+        updatedAt: "2026-07-20T11:00:00Z",
+        url: "u",
+      },
+    ] as DashIssue[];
+    const { lastFrame: smallFrame } = render(
+      <IssueList {...props} issues={[issues[0]]} window={{ start: 0, end: 1 }} />,
+    );
+    const { lastFrame: largeFrame } = render(
+      <IssueList {...props} issues={largeIssues} window={{ start: 0, end: 1 }} />,
+    );
+    const smallLines = (smallFrame() ?? "").split("\n").length;
+    const largeLines = (largeFrame() ?? "").split("\n").length;
+    expect(largeLines).toBe(smallLines);
+    expect(largeFrame()).toMatch(/…3456/);
+  });
 });

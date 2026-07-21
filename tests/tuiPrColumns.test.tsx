@@ -54,4 +54,17 @@ describe("columnar PrList", () => {
   it("badge width covers the longest pr badge", () => {
     expect(MAX_PR_BADGE_LEN).toBeGreaterThanOrEqual("checks-failing".length);
   });
+  it("truncates 5+-digit PR numbers to preserve row height", () => {
+    const largeNumPrs = [pr(123456, "large id")];
+    const { lastFrame: smallFrame } = render(
+      <PrList {...props} prs={[pr(1, "one")]} window={{ start: 0, end: 1 }} />,
+    );
+    const { lastFrame: largeFrame } = render(
+      <PrList {...props} prs={largeNumPrs} window={{ start: 0, end: 1 }} />,
+    );
+    const smallLines = (smallFrame() ?? "").split("\n").length;
+    const largeLines = (largeFrame() ?? "").split("\n").length;
+    expect(largeLines).toBe(smallLines);
+    expect(largeFrame()).toMatch(/…3456/);
+  });
 });
