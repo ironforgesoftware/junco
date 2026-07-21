@@ -64,7 +64,7 @@ describe("CommandPalette mouse (App integration)", () => {
       timedOut: false,
     }));
     const r = renderApp({ runCliFn });
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     r.stdin.write(":");
     await until(() => (r.lastFrame() ?? "").includes("run a junco command"));
     // "doctor" has no argsHint, so entering on it runs immediately (unlike

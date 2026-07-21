@@ -280,12 +280,12 @@ describe("LogView — daemon liveness marker (#239)", () => {
         daemonUp={false}
       />,
     ).lastFrame()!;
-    expect(section).toContain("daemon ○");
+    expect(section).toContain("daemon down");
     expect(section).toContain("last logs"); // "showing last logs" wording
     const full = render(
       <LogView variant="full" entries={buf} height={12} focused hasFile daemonUp={false} follow />,
     ).lastFrame()!;
-    expect(full).toContain("daemon ○");
+    expect(full).toContain("daemon down");
     // The follow indicator is still its own, separate signal.
     expect(full).toContain("following");
   });
@@ -302,7 +302,7 @@ describe("LogView — daemon liveness marker (#239)", () => {
           daemonUp={daemonUp}
         />,
       ).lastFrame()!;
-      expect(frame).not.toContain("daemon ○");
+      expect(frame).not.toContain("daemon down");
     }
   });
 });

@@ -44,6 +44,7 @@ export async function tap(
 export const EMPTY_QUEUE: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
+  taskTimeoutSeconds: null,
   running: [],
   waiting: [],
   recent: [],
@@ -186,6 +187,7 @@ export const ISSUES: DashIssue[] = [
     labels: ["junco"],
     updatedAt: "2026-07-06T10:00:00Z",
     url: "https://github.com/acme/api/issues/1",
+    author: null,
   },
   {
     number: 2,
@@ -193,6 +195,7 @@ export const ISSUES: DashIssue[] = [
     labels: ["junco"],
     updatedAt: "2026-07-06T09:00:00Z",
     url: "https://github.com/acme/api/issues/2",
+    author: null,
   },
 ];
 

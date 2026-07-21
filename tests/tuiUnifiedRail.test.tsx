@@ -31,6 +31,7 @@ const NOW = new Date("2026-07-20T12:00:00Z");
 const EMPTY_QUEUE: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
+  taskTimeoutSeconds: null,
   running: [],
   waiting: [],
   recent: [],
@@ -101,7 +102,7 @@ describe("UnifiedRail", () => {
     expect(f).toContain("(cfg)");
     expect(f).toContain("scratch"); // local row = path tail
     expect(f).toContain("(clone)"); // local row source tag
-    expect(f).toContain("system");
+    expect(f).toContain("── system"); // Rule-drawn separator + title, merged into one row
     for (const s of ["queue", "outbox", "worktrees", "daemon", "logs"]) {
       expect(f).toContain(s);
     }
@@ -129,7 +130,7 @@ describe("UnifiedRail", () => {
     expect(f).toContain("▸1"); // queue running badge
     expect(f).toContain("⇡2"); // outbox depth badge
     expect(f).toContain("⚑1"); // stale worktree badge
-    expect(f).toContain("●"); // daemon up badge
+    expect(f).toContain("up"); // daemon up badge
   });
 
   it("gate-paused shows ⚠ on the queue row", () => {

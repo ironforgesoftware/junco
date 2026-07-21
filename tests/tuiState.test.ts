@@ -14,6 +14,7 @@ const iss = (n: number, labels: string[], updatedAt: string): DashIssue => ({
   labels,
   updatedAt,
   url: `https://github.com/a/b/issues/${n}`,
+  author: null,
 });
 
 describe("deriveState", () => {

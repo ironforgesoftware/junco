@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { Spinner } from "./Spinner.js";
 import { clampScroll, maxScroll } from "../window.js";
+import { Scrollbar } from "./primitives/Scrollbar.js";
 
 export function CommandOutput({
   title,
@@ -48,11 +49,21 @@ export function CommandOutput({
           [{status}]
         </Text>
       </Text>
-      {visible.map((l, i) => (
-        <Text key={i} wrap="truncate-end">
-          {l || " "}
-        </Text>
-      ))}
+      <Box flexGrow={1}>
+        <Box flexDirection="column" flexGrow={1} minWidth={0}>
+          {visible.map((l, i) => (
+            <Text key={i} wrap="truncate-end">
+              {l || " "}
+            </Text>
+          ))}
+        </Box>
+        <Scrollbar
+          offset={start}
+          viewport={visibleLines}
+          total={lines.length}
+          height={visibleLines}
+        />
+      </Box>
       {lines.length > visibleLines && (
         <Text dimColor>
           ↑/↓ scroll · {start + 1}-{Math.min(start + visibleLines, lines.length)}/{lines.length}

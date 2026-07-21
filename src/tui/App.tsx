@@ -39,13 +39,19 @@ import {
 } from "./railModel.js";
 import { UnifiedRail } from "./components/UnifiedRail.js";
 import { RepoDetail } from "./components/RepoDetail.js";
-import { OutboxSection, WorktreesSection, DaemonSection } from "./components/sections.js";
+import {
+  OutboxSection,
+  WorktreesSection,
+  DaemonSection,
+  truncStart,
+} from "./components/sections.js";
 import { buildContextBindings, type BindingContext } from "./viewActions.js";
 import type { AssessHistory } from "../assessHistory.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
 import { PrList, NWO_MAX_WIDTH } from "./components/PrList.js";
 import { PrPreview } from "./components/PrPreview.js";
+import { ActivityCard, ReservedNote } from "./components/ActivityCard.js";
 import { derivePrState, sortPrs, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
 import { HelpModal } from "./components/HelpModal.js";
@@ -60,6 +66,7 @@ import type { QueueSnapshot } from "./queueSnapshot.js";
 import { theme, type ToastKind } from "./theme.js";
 import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
+import { Button } from "./components/primitives/Button.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
 import { useLogTail } from "./useLogTail.js";
@@ -117,6 +124,9 @@ export interface AppProps {
    * MUST stay `undefined` so the hook's effect dep array keeps a stable
    * identity and never teardown/re-seeds per render. */
   logReaderDeps?: LogReaderDeps;
+  /** Resolves the junco bot account's gh login (dashboardCmd wires
+   * resolveBotLogin); absent in tests → no bot-authored highlighting. */
+  botLoginFn?: () => Promise<string | null>;
 }
 
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
@@ -175,7 +185,7 @@ interface PrDetailState {
   from: "main" | "prs";
 }
 
-/** Pane 3's title composes "3 PRs · <nwo>" from a nwo of unbounded length —
+/** Pane 3's title composes "PRs · <nwo>" from a nwo of unbounded length —
  * mirrors PrList's own truncate-start nwo cell (NWO_MAX_WIDTH) so the title
  * clamps to the same budget rather than wrapping the pane onto a second line,
  * which would corrupt PrList's height/windowing math (CHROME one-line
@@ -272,9 +282,11 @@ export function App(props: AppProps): React.JSX.Element {
   const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
   // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
   const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
-  // The top bar's single ↻ stamp: when the last unified refresh cycle
-  // completed. Cache-served (offline) sources pull it back to the oldest
-  // cache staleAt, so data that arrived stale never reads as fresh.
+  // When the last unified refresh cycle completed. Cache-served (offline)
+  // sources pull it back to the oldest cache staleAt, so data that arrived
+  // stale never reads as fresh. Surfaced in the daemon panel's "refreshed"
+  // stat row (no header UI reads this — the ↻ chip was dropped in the
+  // declutter sweep).
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
   // so a poll that re-sorts the list keeps the cursor on the same issue.
@@ -363,6 +375,10 @@ export function App(props: AppProps): React.JSX.Element {
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const [updateLatest, setUpdateLatest] = useState<string | null>(null);
+  // The junco bot account's gh login (resolved once via botLoginFn); null when
+  // the feature is inert (disabled, unresolvable, or botLoginFn absent) — rows
+  // opened by this login render their number cell in accent (IssueList/PrList).
+  const [botLogin, setBotLogin] = useState<string | null>(null);
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
 
@@ -603,9 +619,22 @@ export function App(props: AppProps): React.JSX.Element {
         : Math.min(lastPane3IdxRef.current, repoPrs.length - 1);
   lastPane3IdxRef.current = pane3IdxSafe;
   const selectedPane3Pr = repoPrs[pane3IdxSafe] ?? null;
-  // Pane 3's title identifies the scoped repo (mockup: "3 PRs · acme/reef");
+  // Pane 3's title identifies the scoped repo (mockup: "PRs · acme/reef");
   // no repo selected (empty rail) falls back to the bare pane label.
-  const pane3Title = currentNwo ? `3 PRs · ${truncateNwoStart(currentNwo)}` : "3 PRs";
+  const pane3Title = currentNwo ? `PRs · ${truncateNwoStart(currentNwo)}` : "PRs";
+
+  // Header breadcrumb trail — the active view's scope, most-general first.
+  const crumbs = useMemo((): string[] => {
+    if (view === "prs") return ["pull requests"];
+    if (view === "review") return ["review"];
+    if (view === "cmdOutput" && cmd) return ["command", cmd.title];
+    if (view === "detail" && detail) return [detail.nwo, `#${detail.issue.number}`];
+    if (view === "prDetail" && prDetail) return [prDetail.pr.nwo, `PR #${prDetail.pr.number}`];
+    if (view === "repoDetail" && repoDetailTarget)
+      return [repoDetailTarget.nwo ?? truncStart(repoDetailTarget.path, 30)];
+    if (body?.kind === "section") return ["system", body.section];
+    return [currentNwo ?? "no repo"];
+  }, [view, cmd, detail, prDetail, repoDetailTarget, body, currentNwo]);
 
   // Window slices live HERE (not inside the list components) so that rendering
   // and mouse hit-testing share one offset — the sticky prevStart refs move up
@@ -958,6 +987,20 @@ export function App(props: AppProps): React.JSX.Element {
       clearInterval(t);
     };
   }, [props.checkUpdateFn]);
+
+  // Bot-account identity probe: fires once on mount (absent botLoginFn → the
+  // feature stays inert, botLogin stays null). `on` guards a late resolution
+  // against a post-unmount setState.
+  useEffect(() => {
+    if (!props.botLoginFn) return;
+    let on = true;
+    void props.botLoginFn().then((l) => {
+      if (on) setBotLogin(l);
+    });
+    return () => {
+      on = false;
+    };
+  }, [props.botLoginFn]);
 
   // Full sweep on mount and whenever the watchlist changes (refreshAll's
   // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
@@ -2502,12 +2545,6 @@ export function App(props: AppProps): React.JSX.Element {
       setPane(2);
       return;
     }
-    if (input === "1") return void setPane(1);
-    if (input === "2") return void setPane(2);
-    if (input === "3") {
-      if (layout.mode === "wide" && body?.kind === "issues") setPane(3);
-      return;
-    }
     const maxPane: Pane = layout.mode === "wide" && body?.kind === "issues" ? 3 : 2;
     if (key.tab) {
       return void setPane((p) => (p >= maxPane ? 1 : ((p + 1) as Pane)));
@@ -2677,7 +2714,19 @@ export function App(props: AppProps): React.JSX.Element {
     <Modal title={confirm.title} minWidth={54}>
       <Box flexDirection="column" gap={1}>
         <Text color={confirm.danger ? theme.error : undefined}>{confirm.body}</Text>
-        <Text dimColor>y/enter confirm · n/esc cancel</Text>
+        <Box gap={2}>
+          <Button
+            keyHint="y"
+            label="confirm"
+            tone={confirm.danger ? "danger" : "primary"}
+            onPress={() => {
+              const fn = confirm.onConfirm;
+              setConfirm(null);
+              fn();
+            }}
+          />
+          <Button keyHint="esc" label="cancel" tone="neutral" onPress={() => setConfirm(null)} />
+        </Box>
       </Box>
     </Modal>
   ) : view === "help" ? (
@@ -2704,7 +2753,7 @@ export function App(props: AppProps): React.JSX.Element {
       layout={layout}
       header={
         <Header
-          repoNwo={currentNwo ?? null}
+          crumbs={crumbs}
           health={health}
           reviewCount={reviewCount}
           now={queueNow}
@@ -2715,8 +2764,9 @@ export function App(props: AppProps): React.JSX.Element {
           outboxDepth={queueSnap?.outboxDepth ?? 0}
           prAttention={prAttention}
           prFailing={prFailing}
-          refreshedAt={refreshedAt}
           updateLatest={updateLatest}
+          stats={localCheap?.queue.stats ?? queueSnap?.stats ?? null}
+          runningIds={(localCheap?.queue ?? queueSnap)?.running.map((r) => r.id) ?? []}
         />
       }
       toast={toast}
@@ -2847,6 +2897,7 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={prStaleAt}
               window={prWindow}
+              botLogin={botLogin}
               onRowPress={(i) => {
                 if (confirm !== null) return;
                 if (i === prIdxSafe) return void openPrDetail(selectedPr, "prs");
@@ -2917,6 +2968,8 @@ export function App(props: AppProps): React.JSX.Element {
                   return (
                     <DaemonSection
                       daemon={localCheap?.daemon ?? null}
+                      refreshedAt={refreshedAt}
+                      now={queueNow}
                       scroll={scroll}
                       height={listHeight}
                       focused={pane === 2}
@@ -2955,6 +3008,7 @@ export function App(props: AppProps): React.JSX.Element {
               now={queueNow}
               staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
+              botLogin={botLogin}
               onRowPress={(i) => {
                 if (confirm !== null) return;
                 if (pane === 2 && i === issueIdxSafe) return void openDetail();
@@ -2989,6 +3043,7 @@ export function App(props: AppProps): React.JSX.Element {
                   window={pane3Window}
                   title={pane3Title}
                   emptyText="no junco PRs for this repo"
+                  botLogin={botLogin}
                   onRowPress={(i) => {
                     if (confirm !== null) return;
                     if (pane === 3 && i === pane3IdxSafe) {
@@ -3001,6 +3056,18 @@ export function App(props: AppProps): React.JSX.Element {
                   onWheel={(d) => movePane3(d)}
                 />
               </Box>
+            ) : view === "main" && body?.kind === "section" ? (
+              <ActivityCard
+                stats={localCheap?.queue.stats ?? queueSnap?.stats ?? null}
+                width={layout.previewWidth}
+                height={listHeight}
+              />
+            ) : view === "main" && body?.kind === "repoDetail" ? (
+              <ReservedNote
+                text="local repo — no linked PRs"
+                width={layout.previewWidth}
+                height={listHeight}
+              />
             ) : null)}
         </>
       )}

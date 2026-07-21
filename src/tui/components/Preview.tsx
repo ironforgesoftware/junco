@@ -6,6 +6,7 @@ import { hyperlink, shortResourceRef } from "../links.js";
 import { Spinner } from "./Spinner.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { clampScroll, maxScroll } from "../window.js";
+import { Scrollbar } from "./primitives/Scrollbar.js";
 
 export interface PreviewProps {
   issue: DashIssue;
@@ -85,12 +86,17 @@ export function Preview({
         </Text>
       )}
       {error !== null && <Text color={theme.error}>{error}</Text>}
-      {visible.map((l, i) => (
-        <Text key={i} wrap="truncate-end">
-          {l || " "}
-        </Text>
-      ))}
-      <Box flexGrow={1} />
+      <Box flexGrow={1}>
+        <Box flexDirection="column" flexGrow={1} minWidth={0}>
+          {visible.map((l, i) => (
+            <Text key={i} wrap="truncate-end">
+              {l || " "}
+            </Text>
+          ))}
+          <Box flexGrow={1} />
+        </Box>
+        <Scrollbar offset={start} viewport={viewHeight} total={lines.length} height={viewHeight} />
+      </Box>
       {lines.length > viewHeight && (
         <Text dimColor>
           ↑/↓ scroll · {start + 1}-{Math.min(start + viewHeight, lines.length)}/{lines.length}

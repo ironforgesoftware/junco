@@ -13,6 +13,7 @@ const iss = (number: number, title: string, labels: string[] = ["junco"]): DashI
   labels,
   updatedAt: "2026-07-07T13:00:00Z",
   url: `https://github.com/a/b/issues/${number}`,
+  author: null,
 });
 
 describe("filterIssues", () => {
@@ -59,7 +60,7 @@ describe("IssueList", () => {
     iss(46, "Bleaching alert", ["junco", "junco:working"]),
     iss(61, "Add tide tables"),
   ];
-  it("numbered title with count, selection bar, badges, reltime", () => {
+  it("title with count, selection bar, badges, reltime", () => {
     const f = render(
       <IssueList
         issues={three}
@@ -75,7 +76,7 @@ describe("IssueList", () => {
         window={{ start: 0, end: three.length }}
       />,
     ).lastFrame()!;
-    expect(f).toContain("2 issues · 3");
+    expect(f).toContain("issues · 3");
     expect(f).toContain("▌");
     expect(f).toContain("#52");
     expect(f).toContain("plan-ready");

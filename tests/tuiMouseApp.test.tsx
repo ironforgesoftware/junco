@@ -42,7 +42,7 @@ describe("mouse row/wheel on the issues surface", () => {
 
   it("wheel over the rail moves the selection down the row union", async () => {
     const r = renderApp(); // fixture seeds ≥2 repos
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     // wheelDown inside the rail band. The unified rail wheels over the WHOLE
     // row union (repos then system rows), so a re-sent wheel keeps walking —
     // the cond must be "moved OFF the first repo", which stays true however
@@ -59,7 +59,7 @@ describe("mouse row/wheel on the issues surface", () => {
 describe("modal-ish views: mouse", () => {
   it("help modal: any click closes it", async () => {
     const r = renderApp();
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     r.stdin.write("?");
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard"));
     r.stdin.write(press(2, 2)); // anywhere — HelpModal registers no regions
@@ -68,7 +68,7 @@ describe("modal-ish views: mouse", () => {
 
   it("addRepo modal: click outside cancels back to main", async () => {
     const r = renderApp();
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     r.stdin.write("a"); // [a]dd repo mnemonic
     await until(() => (r.lastFrame() ?? "").includes("add repo to watchlist"));
     r.stdin.write(press(0, 5)); // far left — outside the centered modal box
@@ -160,7 +160,7 @@ describe("review view: mouse", () => {
   it("review: click a batch row twice to open it; click a finding to toggle its checkbox", async () => {
     const client = { ...stubClient, listReview: async () => okv([batch1, batch2]) };
     const r = renderApp({ client });
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r2")); // both batches listed
     const x = 5;
@@ -198,7 +198,7 @@ describe("footer chips: mouse", () => {
     const x = f.split("\n")[footerY].indexOf("queue");
     // fireUntil: a press racing the region registry re-sends; the t action is
     // idempotent (re-selecting the queue row is a no-op).
-    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("RUNNING"));
+    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("running"));
     // The chip parked the cursor on the queue system row + focused its body.
     const f2 = r.lastFrame() ?? "";
     const x2 = f2.split("\n")[footerY].indexOf("← back");
@@ -240,7 +240,8 @@ describe("footer chips: mouse", () => {
     };
     const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("#100")); // PR row loaded in pane 3
-    r.stdin.write("3"); // focus pane 3 (wide layout)
+    r.stdin.write("\u001b[C"); // → pane 2
+    r.stdin.write("\u001b[C"); // → pane 3 (wide layout)
     await until(() => (r.lastFrame() ?? "").includes("enter detail")); // pane-3 hint set
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
@@ -267,7 +268,7 @@ describe("footer chips: mouse", () => {
       },
     };
     const r = renderApp({ client });
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
     const x = f.split("\n")[footerY].indexOf("browser"); // pane-1 chip row at mount
@@ -286,7 +287,7 @@ describe("footer chips: mouse", () => {
       },
     };
     const r = renderApp({ client });
-    await until(() => (r.lastFrame() ?? "").includes("1 repos"));
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     r.stdin.write("l"); // pane 2 — the only chip row carrying "analyze"
     await until(() => (r.lastFrame() ?? "").includes("analyze"));
     const f = r.lastFrame() ?? "";

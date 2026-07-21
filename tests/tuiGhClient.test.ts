@@ -120,11 +120,30 @@ describe("listIssues", () => {
             labels: ["junco", "junco:plan-ready"],
             updatedAt: "2026-07-06T10:00:00Z",
             url: "https://github.com/acme/api/issues/42",
+            author: null,
           },
         ],
         staleAt: null,
       },
     });
+  });
+
+  it("maps gh json author.login when present", async () => {
+    const f = fakes({
+      issues: [
+        {
+          number: 43,
+          title: "Add caching",
+          labels: [],
+          updatedAt: "2026-07-06T10:00:00Z",
+          url: "https://github.com/acme/api/issues/43",
+          author: { login: "junco-bot" },
+        },
+      ],
+    });
+    const c = makeGhDashboardClient(cfg, f);
+    const r = await c.listIssues("acme/api");
+    expect(r.ok && r.value.issues[0]?.author).toBe("junco-bot");
   });
 
   it("gh failure → ok:false, never throws", async () => {

@@ -4,6 +4,7 @@ import { render } from "ink-testing-library";
 import { RepoDetail, repoQueueRows } from "../src/tui/components/RepoDetail.js";
 import type { UnifiedRepo } from "../src/tui/railModel.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
+import { until } from "./helpers/until.js";
 
 const repo: UnifiedRepo = {
   key: "/dev/scratch",
@@ -21,6 +22,7 @@ const NOW = new Date("2026-07-20T12:00:00Z");
 const emptyQueue: QueueSnapshot = {
   daemonUp: true,
   maxConcurrent: 1,
+  taskTimeoutSeconds: null,
   running: [],
   waiting: [],
   recent: [],
@@ -137,6 +139,49 @@ describe("RepoDetail", () => {
     const f = lastFrame() ?? "";
     expect(f).toContain("loading");
     expect(f).toContain("none"); // empty worktrees + tickets sections
+  });
+
+  it("renders titled rules and stat rows", async () => {
+    // reuse the existing render fixture in this file
+    const { lastFrame } = render(
+      <RepoDetail
+        repo={repo}
+        worktrees={[
+          {
+            path: "/wt/s-fix",
+            repoPath: "/dev/scratch",
+            repoNwo: null,
+            slug: "s-fix",
+            kind: "stale",
+            headSha: "beefcafe0000",
+            ageSeconds: 7980,
+            error: null,
+          },
+        ]}
+        queue={{
+          ...emptyQueue,
+          recent: [
+            {
+              id: "add-readme",
+              github: null,
+              status: "done",
+              repoPath: "/dev/scratch",
+              finishedAt: "2026-07-20T11:00:00Z",
+              resultStatus: "done",
+              durationSeconds: 60,
+              prUrl: null,
+            },
+          ],
+        }}
+        scroll={0}
+        height={24}
+        focused
+        now={NOW}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("── worktrees"));
+    expect(lastFrame()).toContain("── recent tickets");
+    expect(lastFrame()).toMatch(/path\s{3,}/); // StatRow padding
   });
 
   it("git error renders the error line instead of branch state", () => {

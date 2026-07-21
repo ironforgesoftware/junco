@@ -12,6 +12,12 @@ import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
 import { clampScroll, maxScroll } from "../window.js";
+import { StatRow } from "./primitives/StatRow.js";
+import { Rule } from "./primitives/Rule.js";
+import { Badge } from "./primitives/Badge.js";
+import { Gauge } from "./primitives/Gauge.js";
+import { Scrollbar } from "./primitives/Scrollbar.js";
+import { relTimeShort } from "./IssueList.js";
 import type {
   LocalCheap,
   LocalHeavy,
@@ -42,7 +48,7 @@ export function sectionBadge(
       return n > 0 ? `⚑${n}` : "";
     }
     case "daemon":
-      return cheap.daemon.up ? "●" : "○";
+      return cheap.daemon.up ? "up" : "down";
     case "repos":
       return "";
     // The live/follow indicator lives in the LogView header (● following /
@@ -74,9 +80,10 @@ export const SOURCE_TAG: Record<LocalRepo["source"], string> = {
   clone: "(clone)",
 };
 
-// Provider-gate (Task 9/10) severity buckets for the daemon panel's
-// endpoint dot — latched auth/quota/config failures outrank a transient
-// rate-limit/outage backoff, which in turn outranks a plain probe miss.
+// Provider-gate (Task 9/10) severity buckets for the daemon panel's endpoint
+// row (Badge color when non-ok, else the reachable/unreachable text color) —
+// latched auth/quota/config failures outrank a transient rate-limit/outage
+// backoff, which in turn outranks a plain probe miss.
 const GATE_RED = new Set(["auth_error", "quota_exhausted", "misconfig"]);
 const GATE_YELLOW = new Set(["rate_limited", "outage_backoff", "budget_exhausted"]);
 
@@ -259,10 +266,13 @@ export function WorktreesSection({
 /** Daemon & health detail — a scrollable non-list panel (`scroll` is clamped
  * into `[0, maxScroll(rows, visible)]` before it slices the built rows,
  * mirroring QueueView, so a past-the-end offset lands on the bottom row
- * instead of blanking the pane). Stack-agnostic wording: "inference
- * endpoint", never a specific server. */
+ * instead of blanking the pane). Stack-agnostic wording: the endpoint row
+ * reads "reachable"/"unreachable" (or a gate-state badge), never a specific
+ * server name. */
 export function DaemonSection({
   daemon,
+  refreshedAt,
+  now,
   scroll,
   height,
   focused,
@@ -270,6 +280,10 @@ export function DaemonSection({
   onScrollMax,
 }: {
   daemon: DaemonDetail | null;
+  /** The unified refresh cycle's last-completed stamp (App.tsx refreshedAt) —
+   * null when no cycle has landed yet. */
+  refreshedAt: string | null;
+  now: Date;
   scroll: number;
   height: number;
   focused: boolean;
@@ -305,19 +319,31 @@ export function DaemonSection({
       </Text>,
     );
   }
-  if (!daemon.up) {
-    lines.push(
-      <Text key="down" color={theme.warn}>
-        ○ not running
-      </Text>,
-    );
-  } else {
-    lines.push(
-      <Text key="pid">
-        pid {daemon.pid ?? "?"} · up {fmtDur(daemon.uptimeSeconds)}
-      </Text>,
-    );
-  }
+  const LW = 11;
+  lines.push(
+    daemon.up ? (
+      <StatRow
+        key="state"
+        label="state"
+        value={`up ${fmtDur(daemon.uptimeSeconds)}`}
+        labelWidth={LW}
+        color={theme.success}
+        hint={`pid ${daemon.pid ?? "?"}`}
+      />
+    ) : (
+      <StatRow key="state" label="state" value="down" labelWidth={LW} color={theme.warn} />
+    ),
+  );
+  lines.push(
+    <StatRow
+      key="refreshed"
+      label="refreshed"
+      value={refreshedAt !== null ? `↻ ${relTimeShort(refreshedAt, now)} ago` : "—"}
+      labelWidth={LW}
+      hint="github data"
+    />,
+  );
+  lines.push(<Rule key="r-ep" title="endpoint" width={24} />);
   const gateState = daemon.gate?.state ?? "ok";
   const epColor = GATE_RED.has(gateState)
     ? theme.error
@@ -326,49 +352,91 @@ export function DaemonSection({
       : daemon.endpointReachable
         ? theme.success
         : theme.warn;
-  const epDot = epColor === theme.success ? "●" : "○";
   lines.push(
     <Text key="ep">
-      <Text color={epColor}>{epDot}</Text> inference endpoint
+      <Text dimColor>{"endpoint".padEnd(LW)}</Text>
+      {gateState !== "ok" ? (
+        <Badge label={gateState.replace(/_/g, " ")} color={epColor} />
+      ) : (
+        <Text bold color={epColor}>
+          {daemon.endpointReachable ? "reachable" : "unreachable"}
+        </Text>
+      )}
     </Text>,
   );
-  if (daemon.gate !== null && daemon.gate.state !== "ok") {
+  if (daemon.gate !== null && daemon.gate.state !== "ok" && daemon.gate.reason !== null) {
     lines.push(
-      <Text key="gate" color={epColor} wrap="truncate-end">
-        {daemon.gate.state}
-        {daemon.gate.reason !== null ? ` — ${daemon.gate.reason}` : ""}
+      <Text key="gate-r" color={epColor} wrap="truncate-end">
+        {" ".repeat(LW)}
+        {daemon.gate.reason}
       </Text>,
     );
   }
   lines.push(
-    <Text key="hp" dimColor>
-      health {daemon.healthHost}:{daemon.healthPort}
-    </Text>,
+    <StatRow
+      key="hp"
+      label="health"
+      value={`${daemon.healthHost}:${daemon.healthPort}`}
+      labelWidth={LW}
+    />,
+  );
+  lines.push(<Rule key="r-act" title="activity" width={24} />);
+  lines.push(
+    <StatRow
+      key="g"
+      label="guard"
+      value={`${daemon.guardNudges ?? 0} nudges · ${daemon.guardKills ?? 0} kills`}
+      labelWidth={LW}
+    />,
   );
   lines.push(
-    <Text key="g">
-      guard: nudges {daemon.guardNudges ?? 0} · kills {daemon.guardKills ?? 0}
-    </Text>,
-  );
-  lines.push(
-    <Text key="tok" dimColor>
-      tok in {daemon.tokensIn ?? 0} · out {daemon.tokensOut ?? 0}
-    </Text>,
+    <StatRow
+      key="tok"
+      label="tokens"
+      value={`${daemon.tokensIn ?? 0} in · ${daemon.tokensOut ?? 0} out`}
+      labelWidth={LW}
+    />,
   );
   if (daemon.spend !== null) {
-    const spendLine =
-      daemon.spend.dailyBudgetUsd > 0
-        ? `spend $${daemon.spend.todayUsd.toFixed(2)} today / $${daemon.spend.dailyBudgetUsd.toFixed(2)} budget`
-        : `spend $${daemon.spend.todayUsd.toFixed(2)} today`;
     lines.push(
-      <Text key="spend" dimColor>
-        {spendLine}
-      </Text>,
+      <StatRow
+        key="spend"
+        label="spend"
+        value={`$${daemon.spend.todayUsd.toFixed(2)} today`}
+        labelWidth={LW}
+        hint={
+          daemon.spend.dailyBudgetUsd > 0
+            ? `of $${daemon.spend.dailyBudgetUsd.toFixed(2)} budget`
+            : undefined
+        }
+      />,
     );
+    if (daemon.spend.dailyBudgetUsd > 0) {
+      lines.push(
+        <Text key="spend-g">
+          {" ".repeat(LW)}
+          <Gauge
+            value={daemon.spend.todayUsd}
+            max={daemon.spend.dailyBudgetUsd}
+            width={12}
+            color={
+              daemon.spend.todayUsd / daemon.spend.dailyBudgetUsd >= 0.8 ? theme.warn : theme.info
+            }
+          />
+        </Text>,
+      );
+    }
   }
   const statuses = Object.entries(daemon.tasksByStatus);
   if (statuses.length > 0) {
-    lines.push(<Text key="tbs">{statuses.map(([k, v]) => `${k}:${v}`).join(" · ")}</Text>);
+    lines.push(
+      <StatRow
+        key="tbs"
+        label="tasks"
+        value={statuses.map(([k, v]) => `${k}:${v}`).join(" · ")}
+        labelWidth={LW}
+      />,
+    );
   }
   for (const [id, p] of Object.entries(daemon.progress)) {
     lines.push(
@@ -382,5 +450,14 @@ export function DaemonSection({
   const visible = Math.max(1, height - 3);
   onScrollMax?.(maxScroll(lines.length, visible));
   const start = clampScroll(scroll, lines.length, visible);
-  return React.cloneElement(border, {}, lines.slice(start, start + visible));
+  return React.cloneElement(
+    border,
+    {},
+    <Box flexGrow={1}>
+      <Box flexDirection="column" flexGrow={1} minWidth={0}>
+        {lines.slice(start, start + visible)}
+      </Box>
+      <Scrollbar offset={start} viewport={visible} total={lines.length} height={visible} />
+    </Box>,
+  );
 }

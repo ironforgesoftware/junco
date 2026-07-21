@@ -15,6 +15,7 @@ import {
 import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { clampScroll, maxScroll } from "../window.js";
+import { Gauge } from "./primitives/Gauge.js";
 
 /** A running row is flagged stalled when its last progress update is older than
  * this — the supervisor's nudge window, surfaced so the operator sees a wedged
@@ -107,6 +108,23 @@ export function QueueView({
     );
   };
 
+  // One-row section strip: a hover-tinted band carrying the bold/accented
+  // section label plus an optional dim extra (counts, poll heartbeat, …).
+  // Replaces the old bare bold-text group headers with the same row budget —
+  // one row in, one row out, so windowing/scroll math is untouched.
+  const strip = (
+    key: string,
+    label: string,
+    extra?: React.JSX.Element | null,
+  ): React.JSX.Element => (
+    <Box key={key} width="100%" backgroundColor={theme.hoverBg}>
+      <Text bold color={theme.accent}>
+        {label}
+      </Text>
+      {extra ?? null}
+    </Box>
+  );
+
   // Wraps an actionable row's Text in a ClickableBox when `selectable` — the
   // non-selectable GitHub `t` view never wraps, so its rows stay byte-
   // identical to before mouse support existed. Hover on the selected row keeps
@@ -160,10 +178,13 @@ export function QueueView({
   const pollAge =
     snap.daemonUp && st !== null && st.lastPollAt !== null ? fmtAge(st.lastPollAt, now) : null;
   rows.push(
-    <Text key="run-h" bold>
-      RUNNING ({snap.running.length}/{snap.maxConcurrent})
-      {pollAge !== null ? <Text dimColor>{` · ↻ poll ${pollAge}`}</Text> : null}
-    </Text>,
+    strip(
+      "run-h",
+      "running",
+      <Text dimColor>{` (${snap.running.length}/${snap.maxConcurrent})${
+        pollAge !== null ? ` · ↻ poll ${pollAge}` : ""
+      }`}</Text>,
+    ),
   );
   if (snap.running.length === 0) dash("run-none");
   for (const r of snap.running) {
@@ -181,6 +202,24 @@ export function QueueView({
         {progressLine(r, now)}
       </Text>,
     );
+    // Time-budget gauge: only for a genuinely running row (not the daemon-down
+    // stale fallback, which has no startedAt) and only when the config task
+    // timeout is known.
+    if (!r.stale && r.startedAt !== null && snap.taskTimeoutSeconds !== null) {
+      const elapsedS = Math.max(0, Math.floor((now.getTime() - Date.parse(r.startedAt)) / 1000));
+      rows.push(
+        <Text key={`rg-${r.id}`} wrap="truncate-end">
+          {"     "}
+          <Gauge
+            value={elapsedS}
+            max={snap.taskTimeoutSeconds}
+            width={12}
+            color={elapsedS / snap.taskTimeoutSeconds >= 0.8 ? theme.warn : theme.info}
+            label={`${fmtDurShort(elapsedS)} / ${fmtDurShort(snap.taskTimeoutSeconds)} budget`}
+          />
+        </Text>,
+      );
+    }
     // Stall warning, aligned under the progress line. Never for stale rows
     // (daemon down — their updatedAt is a fallback null anyway) and only past
     // the nudge window.
@@ -203,11 +242,7 @@ export function QueueView({
   const waitSegs = [String(snap.waiting.length)];
   if (deferredCount > 0) waitSegs.push(`${deferredCount} deferred`);
   if (oldestQ !== null) waitSegs.push(`oldest ${fmtAgeShort(oldestQ, now)}`);
-  rows.push(
-    <Text key="wait-h2" bold>
-      {`WAITING (${waitSegs.join(" · ")})`}
-    </Text>,
-  );
+  rows.push(strip("wait-h2", "waiting", <Text dimColor>{` (${waitSegs.join(" · ")})`}</Text>));
   if (snap.waiting.length === 0) dash("wait-none");
   snap.waiting.forEach((w, i) => {
     const note = waitingNote(w);
@@ -238,11 +273,7 @@ export function QueueView({
       {" "}
     </Text>,
   );
-  rows.push(
-    <Text key="rec-h2" bold>
-      RECENT
-    </Text>,
-  );
+  rows.push(strip("rec-h2", "recent", null));
   // LOCAL only: RECENT caps at 5, so surface the full done/failed totals here.
   if (counts) {
     rows.push(
@@ -295,11 +326,7 @@ export function QueueView({
         {" "}
       </Text>,
     );
-    rows.push(
-      <Text key="stats-t" bold>
-        STATS
-      </Text>,
-    );
+    rows.push(strip("stats-t", "stats", null));
 
     // 24h: counts + success rate always render; avg/ETA only with a populated
     // ledger (avgDurationSeconds drives both; ETA also drops when zero).

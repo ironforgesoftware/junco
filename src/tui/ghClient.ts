@@ -305,7 +305,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
               "--limit",
               "200",
               "--json",
-              "number,title,labels,updatedAt,url",
+              "number,title,labels,updatedAt,url,author",
             ],
             { timeoutMs: GH_TIMEOUT, retryNetwork: true },
           );
@@ -315,6 +315,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
             labels: { name: string }[];
             updatedAt: string;
             url: string;
+            author?: { login?: string } | null;
           }[];
           const issues = raw.map((i) => ({
             number: i.number,
@@ -322,6 +323,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
             labels: i.labels.map((l) => l.name),
             updatedAt: i.updatedAt,
             url: i.url,
+            author: i.author?.login ?? null,
           }));
           writeCache(nwo, issues);
           return { issues, staleAt: null };

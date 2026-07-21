@@ -50,6 +50,7 @@ const CHEAP: LocalCheap = {
   queue: {
     daemonUp: true,
     maxConcurrent: 2,
+    taskTimeoutSeconds: null,
     running: [
       {
         id: "gh-acme-api-1",
@@ -238,87 +239,134 @@ describe("WorktreesSection", () => {
 
 describe("DaemonSection", () => {
   it("renders pid, uptime, endpoint, guards, tokens, per-ticket progress", () => {
-    const f = render(<DaemonSection daemon={DAEMON} scroll={0} height={20} focused />).lastFrame()!;
+    const f = render(
+      <DaemonSection daemon={DAEMON} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
     expect(f).toContain("pid 4242");
     expect(f).toContain("up 2h13m"); // 8000s
-    expect(f).toContain("inference endpoint");
+    expect(f).toContain("endpoint");
+    expect(f).toContain("reachable");
     expect(f).toContain("127.0.0.1:8787");
-    expect(f).toContain("nudges 1");
-    expect(f).toContain("kills 0");
+    expect(f).toContain("1 nudges");
+    expect(f).toContain("0 kills");
     expect(f).toContain("turn 3");
   });
 
-  it("daemon down → ○ not running", () => {
+  it("up but pid unknown (null) → hint still shows 'pid ?', never dropped", () => {
     const f = render(
-      <DaemonSection daemon={{ ...DAEMON, up: false }} scroll={0} height={20} focused={false} />,
+      <DaemonSection
+        daemon={{ ...DAEMON, pid: null }}
+        scroll={0}
+        height={20}
+        focused
+        refreshedAt={null}
+        now={NOW}
+      />,
     ).lastFrame()!;
-    expect(f).toContain("○ not running");
+    expect(f).toContain("pid ?");
   });
 
-  it("gate null (plain ok case) → filled dot, no reason line", () => {
-    const f = render(<DaemonSection daemon={DAEMON} scroll={0} height={20} focused />).lastFrame()!;
-    expect(f).toContain("● inference endpoint");
+  it("daemon down → state row shows down, no dot glyphs anywhere", () => {
+    const f = render(
+      <DaemonSection
+        daemon={{ ...DAEMON, up: false }}
+        scroll={0}
+        height={20}
+        focused={false}
+        refreshedAt={null}
+        now={NOW}
+      />,
+    ).lastFrame()!;
+    expect(f).toContain("down");
+    expect(f).not.toContain("○");
+    expect(f).not.toContain("●");
+  });
+
+  it("gate null (plain ok case) → reachable value, no dot glyphs, no reason line", () => {
+    const f = render(
+      <DaemonSection daemon={DAEMON} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    expect(f).toContain("reachable");
+    expect(f).not.toContain("○");
+    expect(f).not.toContain("●");
     expect(f).not.toContain("auth_error");
     expect(f).not.toContain("rate_limited");
   });
 
-  it("auth_error gate → hollow dot + `state — reason` line (red-dot case)", () => {
+  it("auth_error gate → red badge + reason line", () => {
     const daemon = {
       ...DAEMON,
       gate: { state: "auth_error", reason: "invalid api key" },
     };
-    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
-    expect(f).toContain("○ inference endpoint");
-    expect(f).toContain("auth_error — invalid api key");
+    const f = render(
+      <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    expect(f).toContain("auth error"); // Badge label: underscores → spaces
+    expect(f).toContain("invalid api key");
   });
 
-  it("rate_limited gate with no reason → state-only line, no dangling dash", () => {
+  it("rate_limited gate with no reason → badge only, no dangling reason line", () => {
     const daemon = {
       ...DAEMON,
       gate: { state: "rate_limited", reason: null },
     };
-    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
-    expect(f).toContain("rate_limited");
+    const f = render(
+      <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    expect(f).toContain("rate limited");
     expect(f).not.toContain("rate_limited —");
   });
 
-  it("gate ok/null but endpoint unreachable → hollow dot, no reason line", () => {
+  it("gate ok/null but endpoint unreachable → unreachable value, no reason line", () => {
     const daemon = { ...DAEMON, endpointReachable: false, gate: null };
-    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
-    expect(f).toContain("○ inference endpoint");
+    const f = render(
+      <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    expect(f).toContain("unreachable");
     expect(f).not.toContain("auth_error");
   });
 
-  it("budget_exhausted gate → YELLOW (warn) dot, not a filled green dot, + reason line", () => {
+  it("budget_exhausted gate → badge case (not the reachable/unreachable fallback) + reason line", () => {
     const daemon = {
       ...DAEMON,
       gate: { state: "budget_exhausted", reason: "daily budget $3.00 reached ($5.00 spent)" },
     };
-    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
-    // The hollow dot proves it took the warn/error branch, not the
-    // endpointReachable-driven green "●" fallback a missing GATE_YELLOW entry
-    // would fall through to.
-    expect(f).toContain("○ inference endpoint");
-    expect(f).not.toContain("● inference endpoint");
-    expect(f).toContain("budget_exhausted — daily budget $3.00 reached ($5.00 spent)");
+    const f = render(
+      <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    // The color isn't observable in a captured frame (non-TTY strips ANSI,
+    // same convention as tuiChrome.test.tsx) — this proves the GATE_YELLOW
+    // badge branch fired instead of the reachable/unreachable fallback text.
+    expect(f).toContain("budget exhausted");
+    expect(f).not.toContain("reachable");
+    expect(f).toContain("daily budget $3.00 reached ($5.00 spent)");
   });
 
   it("no spend on the daemon detail (older daemon / no ledger wired) → no spend ticker line", () => {
-    const f = render(<DaemonSection daemon={DAEMON} scroll={0} height={20} focused />).lastFrame()!;
-    expect(f).not.toContain("spend $");
+    const f = render(
+      <DaemonSection daemon={DAEMON} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    expect(f).not.toContain("spend");
   });
 
   it("spend present, no budget configured (dailyBudgetUsd 0) → ticker shows today's spend only", () => {
     const daemon = { ...DAEMON, spend: { todayUsd: 1.5, dailyBudgetUsd: 0 } };
-    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
-    expect(f).toContain("spend $1.50 today");
+    const f = render(
+      <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    expect(f).toContain("$1.50 today");
     expect(f).not.toContain("budget");
+    expect(f).not.toContain("▰");
   });
 
-  it("spend present with a budget configured → ticker shows today's spend / budget", () => {
+  it("spend present with a budget configured → ticker shows today's spend / budget + gauge", () => {
     const daemon = { ...DAEMON, spend: { todayUsd: 2.345, dailyBudgetUsd: 10 } };
-    const f = render(<DaemonSection daemon={daemon} scroll={0} height={20} focused />).lastFrame()!;
-    expect(f).toContain("spend $2.35 today / $10.00 budget");
+    const f = render(
+      <DaemonSection daemon={daemon} scroll={0} height={20} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
+    expect(f).toContain("$2.35 today");
+    expect(f).toContain("of $10.00 budget");
+    expect(f).toContain("▰"); // spend gauge (2.345/10 budget)
   });
 
   it("a past-the-end scroll clamps to the bottom instead of blanking the pane", () => {
@@ -337,7 +385,9 @@ describe("DaemonSection", () => {
         ]),
       ),
     };
-    const f = render(<DaemonSection daemon={busy} scroll={999} height={8} focused />).lastFrame()!;
+    const f = render(
+      <DaemonSection daemon={busy} scroll={999} height={8} focused refreshedAt={null} now={NOW} />,
+    ).lastFrame()!;
     expect(f).toContain("row-11");
     expect(f).not.toContain("row-00");
   });
@@ -350,11 +400,66 @@ describe("DaemonSection", () => {
         scroll={0}
         height={40}
         focused
+        refreshedAt={null}
+        now={NOW}
         onScrollMax={(m) => {
           reported = m;
         }}
       />,
     );
     expect(reported).toBe(0); // a tall pane fits the whole panel
+  });
+
+  it("renders stat rows, refreshed stamp, and spend gauge", () => {
+    const daemon: DaemonDetail = {
+      up: true,
+      pid: 42,
+      uptimeSeconds: 7980,
+      endpointReachable: true,
+      healthHost: "127.0.0.1",
+      healthPort: 8787,
+      guardNudges: 1,
+      guardKills: 0,
+      tokensIn: 10,
+      tokensOut: 20,
+      tasksByStatus: { done: 3 },
+      currentTickets: [],
+      progress: {},
+      gate: { state: "ok", reason: null },
+      spend: { todayUsd: 1.5, dailyBudgetUsd: 5 },
+      error: null,
+    };
+    const { lastFrame } = render(
+      <DaemonSection
+        daemon={daemon}
+        refreshedAt="2026-07-20T11:59:28Z"
+        now={new Date("2026-07-20T12:00:00Z")}
+        scroll={0}
+        height={24}
+        focused
+      />,
+    );
+    const f = lastFrame() ?? "";
+    expect(f).toContain("state");
+    expect(f).toContain("up 2h13m");
+    expect(f).toContain("pid 42");
+    expect(f).toContain("refreshed");
+    expect(f).toContain("↻ 32s ago");
+    expect(f).toContain("▰"); // spend gauge (1.5/5 budget)
+    expect(f).toContain("── activity");
+  });
+
+  it("renders — for a never-refreshed stamp", () => {
+    const { lastFrame } = render(
+      <DaemonSection
+        daemon={DAEMON}
+        refreshedAt={null}
+        now={new Date()}
+        scroll={0}
+        height={24}
+        focused
+      />,
+    );
+    expect(lastFrame()).toContain("refreshed  —");
   });
 });

@@ -68,6 +68,8 @@ export interface QueueRecent {
 export interface QueueSnapshot {
   daemonUp: boolean;
   maxConcurrent: number;
+  /** Config default task budget — drives the running-row gauge; null when unknown. */
+  taskTimeoutSeconds: number | null;
   running: QueueRunning[];
   waiting: QueueWaiting[]; // claim order
   recent: QueueRecent[]; // newest-first, cap 5
@@ -168,6 +170,7 @@ export function makeQueueSnapshotFn(
     const base: QueueSnapshot = {
       daemonUp: false,
       maxConcurrent: cfg.maxConcurrent,
+      taskTimeoutSeconds: cfg.defaultTimeoutMinutes > 0 ? cfg.defaultTimeoutMinutes * 60 : null,
       running: [],
       waiting: [],
       recent: [],

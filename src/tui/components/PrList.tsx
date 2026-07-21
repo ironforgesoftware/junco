@@ -2,11 +2,16 @@ import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
+import { isBotAuthored } from "../state.js";
 import { fmtClock } from "../queueFmt.js";
 import { relTime } from "./IssueList.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { TableHeader, type Column } from "./primitives/TableHeader.js";
+import { Badge } from "./primitives/Badge.js";
 
-function checksToString(checks: {
+/** Exported for the header width-calc test (checks column width derives from
+ * the widest rendered string across the current dataset). */
+export function checksToString(checks: {
   pass: number;
   fail: number;
   pending: number;
@@ -34,8 +39,11 @@ export interface PrListProps {
   staleAt: string | null; // any repo served from cache → oldest fetchedAt
   window: { start: number; end: number };
   showNwo?: boolean; // show nwo cell; default true for multi-repo view
-  title?: string; // pane title; default "p pull requests · N"
+  title?: string; // pane title; default "pull requests · N"
   emptyText?: string; // empty-state message; default the cross-repo copy below
+  /** The junco bot account's gh login (App resolves it via botLoginFn); rows
+   * opened by this login render their number cell in accent. */
+  botLogin?: string | null;
   /** Mouse: press on a PR row (registry index into prs). */
   onRowPress?: (index: number) => void;
   /** Mouse: press on the pane background (no row). */
@@ -57,10 +65,35 @@ export function PrList({
   showNwo = true,
   title,
   emptyText,
+  botLogin,
   onRowPress,
   onPanePress,
   onWheel,
 }: PrListProps): React.JSX.Element {
+  const AGE_W = 4; // relTime can emit "365d"
+  // Derive each row's lifecycle meta ONCE — reused for the pill-width calc
+  // below and the row loop, so the same badge string backs both.
+  const metaOf = prs.map((p) => prStateMeta(derivePrState(p)));
+  // Pill column sized to the CURRENT dataset's widest badge (constants or the
+  // current dataset — never the global MAX_PR_BADGE_LEN, which reserves room
+  // for "changes-requested" even when no visible row is in that state).
+  const pillInner = Math.max("state".length, ...metaOf.map((m) => m.badge.length), 0);
+  const PILL_W = pillInner + 2; // badgeText pad spaces
+  const repoW = showNwo
+    ? Math.min(NWO_MAX_WIDTH, Math.max("repo".length, ...prs.map((p) => p.nwo.length), 0))
+    : 0;
+  const checksW = Math.max("checks".length, ...prs.map((p) => checksToString(p.checks).length), 0);
+  const columns: Column[] = [
+    { label: "", width: 1 },
+    { label: "", width: 1 },
+    { label: "#", width: 5, align: "right" },
+    { label: "title", width: "flex" },
+    ...(showNwo ? [{ label: "repo", width: repoW } as Column] : []),
+    { label: "checks", width: checksW },
+    { label: "state", width: PILL_W },
+    { label: "age", width: AGE_W, align: "right" },
+  ];
+
   return (
     <ClickableBox
       flexDirection="column"
@@ -73,9 +106,10 @@ export function PrList({
       onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined} wrap="truncate">
-        {title ?? `p pull requests · ${prs.length}`}
+        {title ?? `pull requests · ${prs.length}`}
         {staleAt !== null && <Text color={theme.warn}> offline · {fmtClock(staleAt)}</Text>}
       </Text>
+      <TableHeader columns={columns} />
       {prs.length === 0 && (
         <Text dimColor>
           {emptyText ??
@@ -85,8 +119,7 @@ export function PrList({
       {prs.slice(window.start, window.end).map((prItem, i) => {
         const idx = window.start + i;
         const sel = idx === selected;
-        const st = derivePrState(prItem);
-        const meta = prStateMeta(st);
+        const meta = metaOf[idx];
         const checksStr = checksToString(prItem.checks);
         const checksColor =
           prItem.checks.fail > 0
@@ -98,43 +131,50 @@ export function PrList({
         // Every cell except the title is flexShrink 0 (the Chrome.tsx header-chip
         // guarantee): a row must never wrap to a second line, or the height and
         // windowing math above corrupts. The title is the ONLY flexible cell.
+        // overflow="hidden" is the structural belt: at pathological widths the
+        // row CLIPS rather than wrapping (a clipped row beats a corrupted frame).
         return (
           <ClickableBox
             key={`${prItem.nwo}#${prItem.number}`}
             width="100%"
+            overflow="hidden"
             backgroundColor={sel ? theme.selectionBg : undefined}
             hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             gap={1}
             onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
-            <Box flexShrink={0}>
+            <Box flexShrink={0} width={1}>
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             </Box>
-            <Box flexShrink={0}>
+            <Box flexShrink={0} width={1}>
               <Text color={meta.color}>{meta.glyph}</Text>
             </Box>
-            <Box flexShrink={0}>
-              <Text dimColor={!sel}>{`#${prItem.number}`.padStart(5)}</Text>
+            <Box flexShrink={0} width={5}>
+              <Text
+                color={isBotAuthored(prItem.author, botLogin) ? theme.accent : undefined}
+                dimColor={!sel && !isBotAuthored(prItem.author, botLogin)}
+                wrap="truncate-start"
+              >
+                {`#${prItem.number}`.padStart(5)}
+              </Text>
             </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text wrap="truncate">{prItem.title}</Text>
             </Box>
             {showNwo && (
-              <Box flexShrink={0} width={Math.min(prItem.nwo.length, NWO_MAX_WIDTH)}>
+              <Box flexShrink={0} width={repoW}>
                 <Text dimColor wrap="truncate-start">
                   {prItem.nwo}
                 </Text>
               </Box>
             )}
-            {checksStr !== "" && (
-              <Box flexShrink={0}>
-                <Text color={checksColor}>{checksStr}</Text>
-              </Box>
-            )}
-            <Box flexShrink={0}>
-              <Text color={meta.color}>{meta.badge}</Text>
+            <Box flexShrink={0} width={checksW}>
+              <Text color={checksColor}>{checksStr}</Text>
             </Box>
-            <Box flexShrink={0}>
+            <Box flexShrink={0} width={PILL_W}>
+              <Badge label={meta.badge} color={meta.color} padTo={pillInner} />
+            </Box>
+            <Box flexShrink={0} width={AGE_W} justifyContent="flex-end">
               <Text dimColor>{relTime(prItem.updatedAt, now)}</Text>
             </Box>
           </ClickableBox>

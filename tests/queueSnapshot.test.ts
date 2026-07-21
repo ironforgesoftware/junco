@@ -238,6 +238,35 @@ describe("running", () => {
   });
 });
 
+describe("taskTimeoutSeconds", () => {
+  it("derives from cfg.defaultTimeoutMinutes (30m → 1800s)", async () => {
+    const d = setupDirs();
+    const snap = await makeQueueSnapshotFn(makeQueueCfg(d.root), { fetchFn: downFetch })();
+    expect(snap.taskTimeoutSeconds).toBe(1800);
+  });
+
+  it("cfg.defaultTimeoutMinutes <= 0 → null (unknown budget)", async () => {
+    const d = setupDirs();
+    const snap = await makeQueueSnapshotFn(
+      makeQueueCfg(d.root, { defaultTimeoutMinutes: 0 } as Partial<Config>),
+      { fetchFn: downFetch },
+    )();
+    expect(snap.taskTimeoutSeconds).toBeNull();
+  });
+
+  it("survives the never-throws error path (still carried on the base object)", async () => {
+    const d = setupDirs();
+    const snap = await makeQueueSnapshotFn(makeQueueCfg(d.root), {
+      fetchFn: downFetch,
+      nowFn: () => {
+        throw new Error("clock boom");
+      },
+    })();
+    expect(snap.error).toBe("clock boom");
+    expect(snap.taskTimeoutSeconds).toBe(1800);
+  });
+});
+
 describe("recent", () => {
   it("merges done+failed newest-first by mtime, caps at 5, status from dir", async () => {
     const d = setupDirs();

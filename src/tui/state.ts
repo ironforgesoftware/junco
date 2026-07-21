@@ -24,6 +24,19 @@ export interface DashIssue {
   labels: string[];
   updatedAt: string;
   url: string;
+  /** Issue opener's login. Pre-field cache entries (written before this field
+   * existed) deserialize with the key ABSENT — `undefined` at runtime, not
+   * `null`, despite the type below. `isBotAuthored` accepts `undefined` too
+   * and treats it the same as `null`: non-bot. */
+  author: string | null;
+}
+
+/** True when a list row was opened by the configured bot account. */
+export function isBotAuthored(
+  author: string | null | undefined,
+  botLogin: string | null | undefined,
+): boolean {
+  return typeof author === "string" && author !== "" && author === botLogin;
 }
 
 export type DashAction = "dispatch" | "dispatchAsk" | "approve" | "replan" | "recycle";
@@ -56,6 +69,9 @@ const META: Record<IssueLifecycle, { glyph: string; color: string; badge: string
 export function stateMeta(s: IssueLifecycle): { glyph: string; color: string; badge: string } {
   return META[s];
 }
+
+/** Longest lifecycle badge — the pill column's shared inner width. */
+export const MAX_STATE_BADGE_LEN = Math.max(...Object.values(META).map((m) => m.badge.length));
 
 const ACTIONS: Record<IssueLifecycle, DashAction[]> = {
   raw: ["dispatch", "dispatchAsk"],

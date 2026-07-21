@@ -52,7 +52,7 @@ describe("Header", () => {
   it("emoji brand mark, wordmark, repo, daemon up, queue chip", () => {
     const f = render(
       <Header
-        repoNwo="acme/api"
+        crumbs={["acme/api"]}
         health={UP_BARE}
         reviewCount={0}
         now={NOW}
@@ -63,13 +63,14 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
-        refreshedAt={null}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
     expect(f).toContain("🐦");
     expect(f).toContain("junco");
     expect(f).toContain("acme/api");
-    expect(f).toContain("daemon ●");
+    expect(f).toContain("daemon up");
     expect(f).toContain("3h4m");
     expect(f).toContain("◐1 ⏳2");
     expect(f).not.toMatch(/\d{2}:\d{2}/);
@@ -77,7 +78,7 @@ describe("Header", () => {
   it("daemon down and watchlist warn chip", () => {
     const f = render(
       <Header
-        repoNwo={null}
+        crumbs={["no repo"]}
         health={DOWN}
         reviewCount={0}
         now={NOW}
@@ -88,17 +89,18 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
-        refreshedAt={null}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
-    expect(f).toContain("daemon ○");
+    expect(f).toContain("daemon down");
     expect(f).toContain("watchlist!");
     expect(f).not.toContain("◐0"); // queue chip hidden when empty
   });
   it("shows the unpushed outbox chip when depth > 0, hidden at 0", () => {
     const withDepth = render(
       <Header
-        repoNwo="acme/api"
+        crumbs={["acme/api"]}
         health={{ ...UP_BARE, uptimeSeconds: 60 }}
         reviewCount={0}
         now={NOW}
@@ -109,14 +111,15 @@ describe("Header", () => {
         outboxDepth={3}
         prAttention={0}
         prFailing={false}
-        refreshedAt={null}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
     expect(withDepth).toContain("⇡3 unpushed");
 
     const noDepth = render(
       <Header
-        repoNwo="acme/api"
+        crumbs={["acme/api"]}
         health={{ ...UP_BARE, uptimeSeconds: 60 }}
         reviewCount={0}
         now={NOW}
@@ -127,7 +130,8 @@ describe("Header", () => {
         outboxDepth={0}
         prAttention={0}
         prFailing={false}
-        refreshedAt={null}
+        stats={null}
+        runningIds={[]}
       />,
     ).lastFrame()!;
     expect(noDepth).not.toContain("unpushed");
@@ -136,7 +140,7 @@ describe("Header", () => {
 
 describe("Header pulse", () => {
   const base = {
-    repoNwo: "acme/api",
+    crumbs: ["acme/api"],
     now: NOW,
     mode: "wide" as const,
     queueRunning: 0,
@@ -145,17 +149,17 @@ describe("Header pulse", () => {
     outboxDepth: 0,
     prAttention: 0,
     prFailing: false,
-    refreshedAt: null,
+    stats: null,
+    runningIds: [],
   };
 
-  it("renders the full pulse row when healthy: review, task counts, last-task, tokens, bridge", () => {
+  it("renders the full pulse row when healthy: review, last-task, bridge (since-restart task counts and tokens are gone)", () => {
     const f = render(<Header {...base} health={HEALTHY} reviewCount={3} />).lastFrame()!;
     expect(f).toContain("●3 review");
-    expect(f).toContain("✓8");
-    expect(f).toContain("✗2");
     expect(f).toContain("last ✓ 2m");
-    expect(f).toContain("tok 45k");
     expect(f).toContain("bridge ✗1");
+    expect(f).not.toContain("✓8");
+    expect(f).not.toContain("tok 45k");
   });
 
   it("review chip hidden at 0, shown at 3", () => {
@@ -164,14 +168,6 @@ describe("Header pulse", () => {
 
     const shown = render(<Header {...base} health={HEALTHY} reviewCount={3} />).lastFrame()!;
     expect(shown).toContain("●3 review");
-  });
-
-  it("hides the ✗ failure segment when tasksFailed is 0", () => {
-    const f = render(
-      <Header {...base} health={{ ...HEALTHY, tasksFailed: 0, bridgeErrors: 0 }} reviewCount={0} />,
-    ).lastFrame()!;
-    expect(f).toContain("✓8");
-    expect(f).not.toContain("✗");
   });
 
   it("last-task glyph is ✓ for a terminal-done status, ✗ for anything else", () => {
@@ -190,18 +186,6 @@ describe("Header pulse", () => {
     expect(bad).toContain("last ✗");
   });
 
-  it("tok chip hidden when totalTokensOut is 0 or null", () => {
-    const zero = render(
-      <Header {...base} health={{ ...HEALTHY, totalTokensOut: 0 }} reviewCount={0} />,
-    ).lastFrame()!;
-    expect(zero).not.toContain("tok ");
-
-    const nullTok = render(
-      <Header {...base} health={{ ...HEALTHY, totalTokensOut: null }} reviewCount={0} />,
-    ).lastFrame()!;
-    expect(nullTok).not.toContain("tok ");
-  });
-
   it("bridge chip only shown when bridgeErrors > 0", () => {
     const f = render(
       <Header {...base} health={{ ...HEALTHY, bridgeErrors: 0 }} reviewCount={0} />,
@@ -211,7 +195,7 @@ describe("Header pulse", () => {
 
   it("daemon-down hides every health-dependent chip", () => {
     const f = render(<Header {...base} health={DOWN} reviewCount={0} />).lastFrame()!;
-    expect(f).toContain("daemon ○");
+    expect(f).toContain("daemon down");
     expect(f).not.toContain("✓");
     expect(f).not.toContain("✗");
     expect(f).not.toContain("last");
@@ -219,7 +203,7 @@ describe("Header pulse", () => {
     expect(f).not.toContain("bridge");
   });
 
-  it("medium mode keeps only the essential chips (record/last/tok/bridge drop by design)", () => {
+  it("medium mode keeps only the essential chips (record/last/bridge drop by design)", () => {
     const f = render(
       <Header
         {...base}
@@ -232,10 +216,9 @@ describe("Header pulse", () => {
       />,
     ).lastFrame()!;
     expect(f).toContain("●2 review");
-    expect(f).toContain("daemon ●");
+    expect(f).toContain("daemon up");
     expect(f).toContain("◐1 ⏳1");
     expect(f).toContain("⇡4 unpushed");
-    expect(f).not.toContain("✓8");
     expect(f).not.toContain("last");
     expect(f).not.toContain("tok ");
     expect(f).not.toContain("bridge");
@@ -244,7 +227,7 @@ describe("Header pulse", () => {
 
 describe("Header PR attention chip", () => {
   const base = {
-    repoNwo: "acme/api",
+    crumbs: ["acme/api"],
     health: UP_BARE,
     reviewCount: 0,
     now: NOW,
@@ -252,7 +235,8 @@ describe("Header PR attention chip", () => {
     queueWaiting: 0,
     watchlistError: null,
     outboxDepth: 0,
-    refreshedAt: null,
+    stats: null,
+    runningIds: [],
   };
 
   it("hidden at 0, shown as ⚑N PR at 3", () => {
@@ -311,43 +295,9 @@ describe("Toast", () => {
   });
 });
 
-describe("Header unified refresh stamp", () => {
-  const base = {
-    repoNwo: "acme/api",
-    health: UP_BARE,
-    reviewCount: 0,
-    now: NOW,
-    queueRunning: 0,
-    queueWaiting: 0,
-    watchlistError: null,
-    outboxDepth: 0,
-    prAttention: 0,
-    prFailing: false,
-  };
-
-  it("renders ↻ age from refreshedAt", () => {
-    const f = render(
-      <Header {...base} mode="wide" refreshedAt="2026-07-07T09:59:48Z" />, // 12s before NOW
-    ).lastFrame()!;
-    expect(f).toContain("↻ 12s");
-  });
-
-  it("hidden before the first cycle completes (refreshedAt null)", () => {
-    const f = render(<Header {...base} mode="wide" refreshedAt={null} />).lastFrame()!;
-    expect(f).not.toContain("↻");
-  });
-
-  it("survives narrow modes — the stamp is an essential chip", () => {
-    const f = render(
-      <Header {...base} mode="medium" refreshedAt="2026-07-07T09:59:48Z" />,
-    ).lastFrame()!;
-    expect(f).toContain("↻ 12s");
-  });
-});
-
 describe("Header (no mode tabs)", () => {
   const base = {
-    repoNwo: "acme/api",
+    crumbs: ["acme/api"],
     health: UP_BARE,
     reviewCount: 0,
     now: NOW,
@@ -357,8 +307,9 @@ describe("Header (no mode tabs)", () => {
     outboxDepth: 0,
     prAttention: 0,
     prFailing: false,
-    refreshedAt: null,
-  } as const;
+    stats: null,
+    runningIds: [],
+  };
 
   it("renders no tab segment (the mode toggle is gone)", () => {
     const f = render(<Header {...base} mode="wide" />).lastFrame()!;

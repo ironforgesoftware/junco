@@ -10,6 +10,7 @@ const ISSUE: DashIssue = {
   labels: ["junco", "junco:plan-ready"],
   updatedAt: "2026-07-07T13:00:00Z",
   url: "https://github.com/a/b/issues/52",
+  author: null,
 };
 const base = {
   issue: ISSUE,

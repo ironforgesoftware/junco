@@ -12,6 +12,7 @@ import { theme } from "../theme.js";
 import { stateMeta, type IssueLifecycle } from "../state.js";
 import { fmtAssessIndicator } from "../queueFmt.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { Rule } from "./primitives/Rule.js";
 import { sectionBadge, truncStart, SOURCE_TAG } from "./sections.js";
 import { SYSTEM_SECTIONS, type RailRow } from "../railModel.js";
 import type { LocalCheap, LocalHeavy } from "../localSnapshot.js";
@@ -81,7 +82,7 @@ export function UnifiedRail({
       onWheel={onWheel}
     >
       <Text bold color={focused ? theme.accent : undefined}>
-        1 repos
+        repos
       </Text>
       {repoCount === 0 && <Text dimColor>none — press w to add</Text>}
       {repoRows.slice(window.start, window.end).map((row, i) => {
@@ -137,8 +138,7 @@ export function UnifiedRail({
         </Text>
       )}
       <Box flexGrow={1} />
-      <Text dimColor>{"─".repeat(Math.max(1, width - 4))}</Text>
-      <Text bold>system</Text>
+      <Rule title="system" width={Math.max(1, width - 4)} />
       {SYSTEM_SECTIONS.map((s, i) => {
         const idx = repoCount + i; // absolute index into rows
         const sel = idx === selected;

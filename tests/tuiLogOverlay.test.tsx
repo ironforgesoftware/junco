@@ -172,9 +172,9 @@ describe("LOCAL full-screen log overlay", () => {
     await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
     r.stdin.write("t"); // inside the overlay: cycles the ticket filter
     await until(() => frame(r).includes("#alpha"));
-    // Still the overlay (not the github `t` queue view, which renders RUNNING).
+    // Still the overlay (not the github `t` queue view, which renders "running").
     expect(frame(r)).toContain("following");
-    expect(frame(r)).not.toContain("RUNNING");
+    expect(frame(r)).not.toContain("running");
   });
 
   it("the overlay owns input: `m` and `,` typed in search are chars, not mode/config toggles", async () => {
@@ -227,10 +227,12 @@ describe("LOCAL full-screen log overlay", () => {
     // so a click on that rail row is the click-again case (parity with Enter).
     const r = await openToLogs(deps, "seed-rail");
     // Locate the `logs` rail row: the "logs" text inside the left rail column
-    // (x < RAIL_WIDTH), NOT the compact pane header to its right.
+    // (x < RAIL_WIDTH), NOT the compact pane header to its right — and never
+    // row 0, the chrome header, whose breadcrumb trail reads "system ▸ logs"
+    // while this very section is open (Task 7).
     const railLogs = (): { x: number; y: number } | null => {
       const lines = frame(r).split("\n");
-      for (let y = 0; y < lines.length; y++) {
+      for (let y = 1; y < lines.length; y++) {
         const x = (lines[y] ?? "").indexOf("logs");
         if (x >= 0 && x < 26) return { x, y };
       }

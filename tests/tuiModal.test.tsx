@@ -39,7 +39,6 @@ describe("HelpModal", () => {
     expect(f).toContain("`junco`"); // trigger label named in the flow line
     expect(f).toContain("mouse"); // mouse section
     expect(f).toContain("↗ line"); // link-line row documented
-    expect(f).toContain("1/2/3");
     expect(f).toContain("press any key to close");
     expect(f).toContain("unpushed"); // outbox chip documented in the system section
   });

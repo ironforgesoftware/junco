@@ -49,13 +49,13 @@ const base = {
 describe("PrPreview", () => {
   it("renders empty state when pr is null", () => {
     const f = render(<PrPreview pr={null} {...base} />).lastFrame()!;
-    expect(f).toContain("3 pr");
+    expect(f).toContain("pr");
     expect(f).toContain("select a pull request — its status renders here");
   });
 
   it("renders empty state with accent title when focused", () => {
     const f = render(<PrPreview pr={null} {...base} focused={true} />).lastFrame()!;
-    expect(f).toContain("3 pr");
+    expect(f).toContain("pr");
     expect(f).toContain("select a pull request — its status renders here");
   });
 
@@ -73,7 +73,7 @@ describe("PrPreview", () => {
     });
     const f = render(<PrPreview pr={testPr} {...base} />).lastFrame()!;
 
-    expect(f).toContain("3 pr · #42");
+    expect(f).toContain("pr · #42");
     expect(f).toContain("#42 Fix the widget");
     expect(f).toContain("checks:");
     expect(f).toContain("✓3");
@@ -238,14 +238,14 @@ describe("PrPreview", () => {
     const f = render(<PrPreview pr={testPr} {...base} width={undefined} />).lastFrame()!;
 
     // Just verify it renders without error
-    expect(f).toContain("3 pr");
+    expect(f).toContain("pr");
   });
 
   it("renders focused with accent border and title", () => {
     const testPr = pr(42, { title: "Test" });
     const f = render(<PrPreview pr={testPr} {...base} focused={true} />).lastFrame()!;
 
-    expect(f).toContain("3 pr · #42");
+    expect(f).toContain("pr · #42");
     expect(f).toContain("Test");
   });
 
@@ -286,7 +286,7 @@ describe("PrPreview", () => {
     const lines = f.split("\n");
     expect(lines.length).toBe(8);
     // Pane title and heading (most important rows) both survive.
-    expect(f).toContain("3 pr · #42");
+    expect(f).toContain("pr · #42");
     expect(f).toContain("#42 Fix the widget");
     // No bled/concatenated fragments: the branch row's head must not run into
     // the ticket row's content on a single line.

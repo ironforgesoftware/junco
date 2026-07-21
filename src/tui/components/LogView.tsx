@@ -6,6 +6,7 @@ import { ROTATED_MARKER } from "../useLogTail.js";
 import { clampScroll, maxScroll } from "../window.js";
 import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
+import { Scrollbar } from "./primitives/Scrollbar.js";
 
 // Shared placeholder wording with `junco logs` (logsCmd.ts): the file only
 // exists once the daemon has run, so both surfaces say the same thing.
@@ -23,7 +24,7 @@ function DownNote({ daemonUp }: { daemonUp?: boolean }): React.JSX.Element | nul
   return (
     <>
       {"  "}
-      <Text dimColor>daemon ○ — showing last logs</Text>
+      <Text dimColor>daemon down — showing last logs</Text>
     </>
   );
 }
@@ -35,7 +36,7 @@ interface LogViewProps {
   focused: boolean;
   hasFile: boolean; // false → the daemon-not-started placeholder
   /** Daemon liveness (cheap-poll `daemon.up`) — false marks the header with a
-   * dim `daemon ○ — showing last logs` note so old lines never read as live.
+   * dim `daemon down — showing last logs` note so old lines never read as live.
    * DISTINCT from the follow indicator (● following is follow-state, #239).
    * Absent (tests / pre-first-tick) → no marker. */
   daemonUp?: boolean;
@@ -186,7 +187,14 @@ function fullView(props: LogViewProps): React.JSX.Element {
         {hasFile ? "no lines match" : NO_FILE}
       </Text>
     ) : (
-      rows.slice(start, start + visible).map((en, i) => <LogRow key={start + i} entry={en} />)
+      <Box flexGrow={1}>
+        <Box flexDirection="column" flexGrow={1} minWidth={0}>
+          {rows.slice(start, start + visible).map((en, i) => (
+            <LogRow key={start + i} entry={en} />
+          ))}
+        </Box>
+        <Scrollbar offset={start} viewport={visible} total={rows.length} height={visible} />
+      </Box>
     );
 
   return (

@@ -101,6 +101,6 @@ describe("daemon liveness in the logs header (#239)", () => {
     });
     await until(() => (r.lastFrame() ?? "").includes("system"));
     await fireUntil(r.stdin, "G", () => (r.lastFrame() ?? "").includes("stale-l"));
-    await until(() => (r.lastFrame() ?? "").includes("daemon ○ — showing last logs"));
+    await until(() => (r.lastFrame() ?? "").includes("daemon down — showing last logs"));
   });
 });

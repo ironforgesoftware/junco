@@ -150,7 +150,10 @@ describe("section bodies", () => {
     const r = renderApp({ localCheapFn: async () => down });
     await until(() => (r.lastFrame() ?? "").includes("system"));
     await tap(r, TO_DAEMON_ROW);
-    await until(() => (r.lastFrame() ?? "").toLowerCase().includes("not running"));
+    await until(() => {
+      const f = r.lastFrame() ?? "";
+      return f.includes("state") && f.includes("down");
+    });
     await tap(r, "kk"); // daemon → worktrees → outbox
     await until(() => (r.lastFrame() ?? "").includes("unavailable"));
   });
