@@ -24,6 +24,7 @@ import { run } from "../src/cli.js";
 import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
+import { makeConfig } from "./helpers/config.js";
 
 /** Same literal as Task 2's CTX / ghAuth.test.ts's GhAuthContext fixture. */
 const FAKE_CTX = {
@@ -826,89 +827,38 @@ describe("lock path derivation", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * Full Config object satisfying all required fields for tests that touch the
- * real FS (inbox-path, submit, init). dataDir/queueRoot are overridden per
- * test in freshDispatchVault() so they track that test's own tmpdir.
+ * The shared Config fixture, for tests that touch the real FS (inbox-path,
+ * submit, init). dataDir/queueRoot are overridden per test in
+ * freshDispatchVault() so they track that test's own tmpdir.
  */
-const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = {
-  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
-  model: {
-    id: "test-model",
-    source: "auto",
-    baseUrlExplicit: false,
-    retry: { maxRetries: null, baseDelayMs: null },
-    modelsJson: null,
-    api: "openai-completions",
-    baseUrl: "http://127.0.0.1:1234/v1",
-    apiKey: "test",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 131072,
-    maxTokens: 49152,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    thinkingLevel: "medium",
-    compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = makeConfig(
+  {
+    // placeholders — freshDispatchVault() overwrites both with its own tmpdir
+    dataDir: "",
+    queueRoot: "",
+    worktreeRoot: "/tmp/worktrees",
+    tools: ["read"],
+    criticEnabled: false,
+    planLintEnabled: false,
+    verifyEnabled: false,
+    supervisorEnabled: false,
+    healthEnabled: false,
+    removeWorktreeOnSuccess: true,
   },
-  tools: ["read"],
-  defaultTimeoutMinutes: 30,
-  pollIntervalSeconds: 15,
-  startupPollSeconds: 30,
-  startupWait: true,
-  endpointProbe: "auto",
-  maxTransientRetries: 2,
-  retryBackoffSeconds: 60,
-  maxConcurrent: 1,
-  supervisorEnabled: false,
-  supervisorBudgetPerKind: 1,
-  supervisorEscalationWindow: 3,
-  supervisorOutputBudgetPerTurn: 12000,
-  supervisorOutputBudgetPostCommit: 24000,
-  gitBin: "git",
-  ghBin: "gh",
-  defaultBaseBranch: "main",
-  branchPrefix: "junco/",
-  worktreeRoot: "/tmp/worktrees",
-  removeWorktreeOnSuccess: true,
-  allowedRepoRoots: [],
-  draftByDefault: true,
-  defaultLabels: [],
-  verifyEnabled: false,
-  verifyCommandTimeout: 60,
-  verifyBlockOnFail: false,
-  planLintEnabled: false,
-  planLintBlockOnError: false,
-  planLintCheckLabels: false,
-  commitLeftoversEnabled: false,
-  dailyBudgetUsd: 0,
-  criticEnabled: false,
-  criticMaxRetries: 1,
-  criticThinking: "minimal",
-  healthEnabled: false,
-  healthHost: "127.0.0.1",
-  healthPort: 8787,
-  logLevel: "info",
-  logToFile: false,
-  transcriptsEnabled: false,
-  github: {
-    enabled: false,
-    triggerLabel: "junco",
-    askLabel: "junco:ask",
-    pollIntervalSeconds: 60,
-    repos: [],
-    requireApproval: true,
-    plannerModelId: null,
-    externalReposRoot: "/tmp/junco-test-external",
+  {
+    github: {
+      enabled: false,
+      triggerLabel: "junco",
+      askLabel: "junco:ask",
+      pollIntervalSeconds: 60,
+      repos: [],
+      requireApproval: true,
+      plannerModelId: null,
+      externalReposRoot: "/tmp/junco-test-external",
+    },
+    botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
   },
-  assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
-  sandbox: {
-    enabled: false,
-    backend: "auto",
-    network: "deny",
-    extraDenyRead: [],
-    extraAllowWrite: [],
-  },
-  botAccount: { enabled: false, configDir: "/tmp/junco-gh" },
-};
+);
 
 let dispatchTmpDirs: string[] = [];
 
