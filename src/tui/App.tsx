@@ -1575,6 +1575,25 @@ export function App(props: AppProps): React.JSX.Element {
     () => buildContextBindings(bindingContext, pane, layout.mode),
     [bindingContext, pane, layout.mode],
   );
+  // Help opens over the MAIN view only; the modal lists the bindings of the
+  // surface underneath it (the help context itself derives nothing).
+  const helpBindings = useMemo(
+    () =>
+      buildContextBindings(
+        {
+          kind: "main",
+          body:
+            body?.kind === "issues"
+              ? "issues"
+              : body?.kind === "section"
+                ? body.section
+                : "repoDetail",
+        },
+        pane,
+        layout.mode,
+      ),
+    [body, pane, layout.mode],
+  );
 
   // ── THE action table: id-keyed handlers shared by the keyboard dispatch
   // tail AND the footer chips — one implementation per verb, guards included.
@@ -2663,10 +2682,10 @@ export function App(props: AppProps): React.JSX.Element {
     </Modal>
   ) : view === "help" ? (
     <HelpModal
-      view="main"
       pane={pane}
       mode={layout.mode}
       trigger={trigger}
+      bindings={helpBindings}
       updateLatest={updateLatest}
     />
   ) : view === "palette" ? (

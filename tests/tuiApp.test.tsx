@@ -696,7 +696,7 @@ describe("App", () => {
     // The HelpModal is taller than a 30-row terminal; the Workspace top-aligns
     // it so the title survives even though the bottom clips.
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
-    expect(r.lastFrame()).toContain("act on issue");
+    expect(r.lastFrame()).toContain("this view"); // the derived-mnemonics section
   });
 
   // Ctrl-C quits the dashboard. In production the host renders with

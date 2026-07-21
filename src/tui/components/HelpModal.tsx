@@ -2,15 +2,15 @@ import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { Modal } from "./Modal.js";
-import { hintsFor, type HintView } from "./Chrome.js";
 import type { LayoutMode } from "../layout.js";
+import type { ContextBindings } from "../viewActions.js";
 
 function Section({ title, rows }: { title: string; rows: [string, string][] }): React.JSX.Element {
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text bold>{title}</Text>
       {rows.map(([k, d]) => (
-        <Box key={k} gap={2}>
+        <Box key={`${k}-${d}`} gap={2}>
           <Box minWidth={12}>
             <Text color={theme.accent}>{k}</Text>
           </Box>
@@ -21,29 +21,51 @@ function Section({ title, rows }: { title: string; rows: [string, string][] }): 
   );
 }
 
-/** Categorized help, k9s-style: what applies to the CURRENT view first. One
- * unified reference — the rail is the single navigation spine (repos + the
- * pinned system rows), so there is no per-mode variant anymore. */
+/** Categorized help, k9s-style: the CURRENT context's derived mnemonics first
+ * (mnemonic spec §3) — every named verb with its derived key, hidden shift
+ * variants included (they never render in the footer) — then the structural
+ * reference. An uppercase key = shift-guarded (destructive verbs + variants). */
 export function HelpModal({
-  view,
   pane,
   mode,
   trigger,
+  bindings,
   updateLatest,
 }: {
-  view: HintView;
   pane: 1 | 2 | 3;
   mode: LayoutMode;
   trigger: string;
+  /** The bindings of the surface UNDER the modal (App passes the main-body
+   * context — help opens from the main view only). */
+  bindings: ContextBindings;
   /** Latest npm version when newer than the running one; null/absent → no line. */
   updateLatest?: string | null;
 }): React.JSX.Element {
+  void pane;
+  void mode;
+  // Structural chips (key-first) then every derived mnemonic — visible verbs
+  // first, hidden shift variants after, annotated.
+  const structural = bindings.chips.flatMap((c) =>
+    c.kind === "structural" ? [[c.key, c.label] as [string, string]] : [],
+  );
+  const visible = bindings.all.filter((d) => !d.hidden);
+  const hidden = bindings.all.filter((d) => d.hidden && d.id !== "close");
+  const thisView: [string, string][] = [
+    ...structural,
+    ...visible.map((d): [string, string] => [d.key, d.label]),
+    ...hidden.map((d): [string, string] => [d.key, `${d.label} (shift variant)`]),
+  ];
   return (
     <Modal title="junco dashboard — keys" minWidth={64}>
       <Text dimColor>
-        flow: d dispatch → junco posts a plan → read it in the preview → a approve → PR opens
+        flow: dispatch → junco posts a plan → read it in the preview → approve → PR opens (the
+        trigger label is `{trigger}`)
       </Text>
-      <Section title="this view" rows={hintsFor(view, pane, mode, false)} />
+      <Text dimColor>
+        keys are mnemonics: the highlighted letter in each footer chip IS the key; an uppercase
+        letter means shift (guarded/destructive).
+      </Text>
+      <Section title="this view" rows={thisView} />
       <Section
         title="navigate"
         rows={[
@@ -53,45 +75,19 @@ export function HelpModal({
           ["g/G", "first / last"],
           ["1/2/3", "jump pane directly (3 = PRs for the selected repo, wide)"],
           ["enter", "open detail — repo (pane 1), issue (pane 2), PR (pane 3 / PRs view)"],
-        ]}
-      />
-      <Section
-        title="act on issue"
-        rows={[
-          ["d", `dispatch (adds \`${trigger}\`)`],
-          ["D", "dispatch as ask (read-only Q&A)"],
-          ["a", "approve the posted plan"],
-          ["R", "re-plan / re-cycle (by state)"],
-          ["c", "draft an analysis comment (review with v)"],
-          ["s", "assess scoped to this issue (findings reference it)"],
-          ["o", "open in browser (repo from pane 1, PR from PR views)"],
-        ]}
-      />
-      <Section
-        title="panes & views"
-        rows={[
           ["/", "filter issues (esc clears)"],
-          ["w", "add repo to watchlist"],
-          ["x", "unwatch repo"],
-          ["r", "refresh now"],
-          ["s", "assess the selected repo (audit for vulnerabilities, file issues)"],
-          ["S", "assess with --auto-plan (findings carry the trigger label)"],
-          ["v", "assess review queue"],
-          ["t", "jump to the queue row"],
-          ["p", "PR tracking — junco-authored PRs across watched repos"],
-          [",", "config editor — edit live settings, per-lever descriptions"],
-          [":", "command palette"],
+          [",", "config editor"],
+          [":", "command palette (alias of the commands chip)"],
         ]}
       />
       <Section
         title="system rows"
         rows={[
           ["queue…logs", "pinned below the repos — enter/→ opens the body"],
-          ["R", "requeue a failed ticket (queue row)"],
-          ["x", "delete queued ticket / prune worktree (confirmed)"],
-          ["f", "flush the GitHub outbox backlog"],
-          ["X", "restart the daemon (confirmed; work salvaged)"],
-          ["enter on logs", "full-screen live log (f follow · l level · t ticket · / search)"],
+          ["retry", "requeue a failed ticket (queue row)"],
+          ["Delete / Prune", "remove a queued ticket / stale worktree (shift, confirmed)"],
+          ["Restart", "restart the daemon (shift, confirmed; work salvaged)"],
+          ["enter on logs", "full-screen live log (follow · level · ticket · / search)"],
         ]}
       />
       <Section

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** dashboard shortcuts are now derived mnemonics. Every named option's hotkey is the highlighted letter inside its own footer chip (first letter when free, cascading otherwise; uppercase = shift-guarded destructive verbs, which keep their confirm modals; `q` quit and `?` help reserved everywhere). Notable changes: browser `o`→`b`, approve `a`→`o`, analyze `c`→`n`, add-repo `w`→`a`, unwatch `x`→`u`, queue-jump `t`→`e`, requeue `R`→`t` (retry), delete `x`→`D`, prune `x`→`P`, restart `X`→`R`, review discard `x`→`D`, assess auto-plan `S`→`A`. One derived table per view drives the chips, the help modal, and key dispatch, so they can never disagree.
+
 - **Breaking:** the dashboard's GITHUB/LOCAL two-mode split is gone — one unified view. The rail lists every repo junco knows about (watched GitHub repos _and_ local checkouts discovered on disk) with a pinned `system` group (queue, outbox, worktrees, daemon, logs) below; the body follows the cursor. The `m`/Shift+Tab mode toggle and the header tab pair are removed; `t` now jumps to the queue system row instead of opening a separate queue view; `enter` on a rail repo row opens a new repo detail panel (path, origin, branch@sha, dirty flag, worktrees, recent queue activity — also the body for local-only checkouts, and for every repo when `github.enabled = false`). Queue snapshot rows now carry the ticket's `repo:` path so the panel can scope queue activity per repo.
 
 ### Added
