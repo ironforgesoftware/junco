@@ -73,6 +73,7 @@ import { useScroll } from "./useScroll.js";
 import { useLogTail } from "./useLogTail.js";
 import type { LogReaderDeps } from "../logReader.js";
 import { useToast } from "./hooks/useToast.js";
+import { useConfirm } from "./hooks/useConfirm.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -151,14 +152,6 @@ type View =
   | "prDetail"
   | "review";
 
-/** LOCAL destructive-action gate: a `y/n` modal that owns input while open.
- * `onConfirm` fires the (already-composed) spawn on `y`/enter; `n`/esc drops it. */
-interface ConfirmState {
-  title: string;
-  body: string;
-  danger: boolean;
-  onConfirm: () => void;
-}
 interface CmdState {
   title: string;
   running: boolean;
@@ -358,7 +351,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [repoDetailTarget, setRepoDetailTarget] = useState<UnifiedRepo | null>(null);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  const { confirm, askConfirm, clearConfirm } = useConfirm();
   // The full-screen log overlay's open flag. Task 6 wires the setter (opened by
   // the compact section's expand handler); Task 7 renders the overlay + its
   // keys. Keeping the poll active while it's open lives in `logActive` below.
@@ -1215,8 +1208,6 @@ export function App(props: AppProps): React.JSX.Element {
     },
     [currentNwo, runCliFn, showToast],
   );
-
-  const askConfirm = useCallback((state: ConfirmState) => setConfirm(state), []);
 
   // Fire-and-toast, mirroring runAssess: spawn the real CLI, dedupe by a key,
   // toast the first output line, then force an immediate cheap re-poll so the
@@ -2283,12 +2274,12 @@ export function App(props: AppProps): React.JSX.Element {
     dismissToast();
     if (confirm) {
       if (key.escape || input === "n") {
-        setConfirm(null);
+        clearConfirm();
         return;
       }
       if (key.return || input === "y") {
         const fn = confirm.onConfirm;
-        setConfirm(null);
+        clearConfirm();
         fn();
         return;
       }
@@ -2699,11 +2690,11 @@ export function App(props: AppProps): React.JSX.Element {
             tone={confirm.danger ? "danger" : "primary"}
             onPress={() => {
               const fn = confirm.onConfirm;
-              setConfirm(null);
+              clearConfirm();
               fn();
             }}
           />
-          <Button keyHint="esc" label="cancel" tone="neutral" onPress={() => setConfirm(null)} />
+          <Button keyHint="esc" label="cancel" tone="neutral" onPress={clearConfirm} />
         </Box>
       </Box>
     </Modal>
