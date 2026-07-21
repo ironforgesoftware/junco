@@ -155,12 +155,6 @@ describe("runDoctor", () => {
     expect(lines.join("")).not.toMatch(/catalog-eligible/i);
   });
 
-  it("does not report sandbox when disabled (default)", async () => {
-    const lines: string[] = [];
-    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(lines.join("")).not.toMatch(/sandbox/i);
-  });
-
   it("reports ✓ when the enabled sandbox backend is available", async () => {
     const lines: string[] = [];
     const cfg = {
@@ -772,26 +766,34 @@ describe("runDoctor hosted-aware preflight", () => {
     expect(lines.join("")).toMatch(/⚠ planner model — no catalog match for openai\/does-not-exist/);
   });
 
-  it("local config: byte-identical output — no hosted-preflight lines leak in (regression)", async () => {
+  it("default config: a clean report — no optional-feature lines leak in (regression)", async () => {
+    // One doctor run over the default okConfig. Every default-OFF feature must
+    // stay silent; asserting all absences here against a single output is
+    // exactly equivalent to (and replaces) the seven scattered one-absence
+    // tests that each re-ran the whole doctor. Each feature's PRESENCE behavior
+    // is still tested in its own describe.
     const lines: string[] = [];
     const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
     expect(code).toBe(0);
     const out = lines.join("");
+    // hosted-preflight lines
     expect(out).not.toMatch(/resolves via/);
     expect(out).not.toMatch(/key source/);
     expect(out).not.toMatch(/planner model/);
     expect(out).not.toMatch(/✓ auth —|✗ auth —|⚠ auth —/);
+    // default-off features (formerly one full doctor run each)
+    expect(out).not.toMatch(/sandbox/i);
+    expect(out).not.toMatch(/github/);
+    expect(out).not.toMatch(/bot account/i);
+    expect(out).not.toMatch(/outbox/);
+    expect(out).not.toMatch(/assess review/);
+    expect(out).not.toMatch(/analyze drafts/);
+    expect(out).not.toMatch(/assess history/);
     expect(out).toMatch(/ready — 0 failure\(s\), 0 warning\(s\)/);
   });
 });
 
 describe("runDoctor github checks", () => {
-  it("disabled bridge → no github lines at all", async () => {
-    const lines: string[] = [];
-    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(lines.join("")).not.toMatch(/github/);
-  });
-
   it("warns when enabled with no repos", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
@@ -904,12 +906,6 @@ describe("runDoctor github checks", () => {
 });
 
 describe("runDoctor bot account checks", () => {
-  it("does not report bot account when disabled (default)", async () => {
-    const lines: string[] = [];
-    await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(lines.join("")).not.toMatch(/bot account/i);
-  });
-
   it("bot mode: reports identity when the bot login differs from the ambient login", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
@@ -1216,13 +1212,6 @@ describe("runDoctor bot account checks", () => {
 });
 
 describe("runDoctor outbox checks", () => {
-  it("no backlog, no dead-letters → no outbox lines, still ready", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/outbox/);
-  });
-
   it("warns on a queued backlog (does not fail doctor)", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-obx-"));
     const { dir } = outboxPaths({ dataDir: stateDir } as unknown as Config);
@@ -1261,13 +1250,6 @@ describe("runDoctor outbox checks", () => {
 });
 
 describe("runDoctor assess review checks", () => {
-  it("no pending reviews → no assess review line", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/assess review/);
-  });
-
   it("reports pending reviews as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-review-"));
     writePending({ dataDir: stateDir } as unknown as Config, {
@@ -1295,13 +1277,6 @@ describe("runDoctor assess review checks", () => {
 });
 
 describe("runDoctor analyze review checks", () => {
-  it("no pending drafts → no analyze drafts line", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/analyze drafts/);
-  });
-
   it("reports pending drafts as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-draft-"));
     writeDraft({ dataDir: stateDir } as unknown as Config, {
@@ -1331,13 +1306,6 @@ describe("runDoctor analyze review checks", () => {
 });
 
 describe("runDoctor assess history checks", () => {
-  it("no repo has assess history → no assess history line", async () => {
-    const lines: string[] = [];
-    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
-    expect(code).toBe(0);
-    expect(lines.join("")).not.toMatch(/assess history/);
-  });
-
   it("reports per-repo assess history informationally — never as a warning", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-"));
     recordRun({ dataDir } as unknown as Config, "o/r", {
