@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from "react";
+import { useState, useCallback } from "react";
+import type { MutableRefObject, Dispatch, SetStateAction } from "react";
 import type { DashboardClient } from "../ghClient.js";
 import type { ReviewState } from "../components/ReviewView.js";
 
@@ -24,10 +25,10 @@ export function useReview({
   aliveRef,
 }: {
   client: DashboardClient;
-  aliveRef: React.MutableRefObject<boolean>;
+  aliveRef: MutableRefObject<boolean>;
 }): {
   reviewState: ReviewState;
-  setReviewState: React.Dispatch<React.SetStateAction<ReviewState>>;
+  setReviewState: Dispatch<SetStateAction<ReviewState>>;
   loadReview: () => Promise<void>;
 } {
   const [reviewState, setReviewState] = useState<ReviewState>(INITIAL_REVIEW_STATE);

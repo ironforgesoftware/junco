@@ -355,4 +355,45 @@ describe("useGithubData", () => {
     expect(api.selectedPane3Pr?.number).toBe(11);
     r.unmount();
   });
+
+  // The crux invariant of the whole extraction, otherwise only verified by
+  // inspection: `loadPrs` closes over `repoMappings` (deps [client, repoMappings]),
+  // so `refreshAll` re-identifies when the watchlist changes, and the
+  // watchlist-sweep effect (deps [refreshAll]) re-fires a monitor sweep. If a
+  // future change stabilizes `refreshAll` (a ref wrapper) or drops `repoMappings`
+  // from `loadPrs`'s deps, adding a repo would silently never load its PRs — and
+  // this test goes red. `alx/coral`'s PR can only appear via that re-fired sweep,
+  // since the test never calls refreshAll/loadPrs itself.
+  it("dep-identity chain: adding a repo re-fires the sweep with no explicit refresh", async () => {
+    const client = makeClient({
+      prsByRepo: {
+        "acme/api": [makeDashPr({ number: 1, nwo: "acme/api" })],
+        "alx/coral": [makeDashPr({ number: 2, nwo: "alx/coral" })],
+      },
+    });
+    let api!: UseGithubDataResult;
+    const r = render(
+      <Probe
+        client={client}
+        repoMappings={[mapping("acme/api")]}
+        currentNwo="acme/api"
+        onReady={(a) => (api = a)}
+      />,
+    );
+    // The mount sweep loads only the one watched repo.
+    await until(() => api.prs.some((p) => p.nwo === "acme/api"));
+    expect(api.prs.some((p) => p.nwo === "alx/coral")).toBe(false);
+    // Add a repo to the watchlist — NO explicit refresh. The identity chain
+    // alone must re-fire the sweep and pull in the new repo's PRs.
+    r.rerender(
+      <Probe
+        client={client}
+        repoMappings={[mapping("acme/api"), mapping("alx/coral")]}
+        currentNwo="acme/api"
+        onReady={(a) => (api = a)}
+      />,
+    );
+    await until(() => api.prs.some((p) => p.nwo === "alx/coral"));
+    r.unmount();
+  });
 });
