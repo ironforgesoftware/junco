@@ -8,6 +8,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import { stateMeta, type IssueLifecycle } from "../state.js";
 import { fmtAssessIndicator } from "../queueFmt.js";
@@ -52,7 +53,10 @@ const COUNT_ORDER: IssueLifecycle[] = ["plan-ready", "working", "failed"];
  * and shrinks the nwo instead of overflowing the pane. */
 const ASSESS_COL = 8;
 
-export function UnifiedRail({
+/** Memoized (perf pass, spec 2026-07-21-tui-app-decomposition task 16) — this
+ * pane is mounted for every view App renders (main/prs/repoDetail/…), so it is
+ * on screen for essentially every poll tick. */
+export const UnifiedRail = React.memo(function UnifiedRail({
   rows,
   selected,
   focused,
@@ -68,6 +72,7 @@ export function UnifiedRail({
   onPanePress,
   onWheel,
 }: UnifiedRailProps): React.JSX.Element {
+  bumpRender("UnifiedRail"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   const repoRows = rows.filter((r) => r.kind === "repo");
   const repoCount = repoRows.length;
   return (
@@ -168,4 +173,4 @@ export function UnifiedRail({
       })}
     </ClickableBox>
   );
-}
+});

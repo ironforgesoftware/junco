@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text, Transform } from "ink";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, ticketSlugFromBranch, type DashPr } from "../prState.js";
 import { hyperlink } from "../links.js";
@@ -54,7 +55,8 @@ function checksColor(checks: {
   return theme.success;
 }
 
-export function PrPreview({
+/** Memoized (perf pass, spec 2026-07-21-tui-app-decomposition task 16). */
+export const PrPreview = React.memo(function PrPreview({
   pr,
   branchPrefix,
   now,
@@ -64,6 +66,7 @@ export function PrPreview({
   titleLabel = "pr",
   onLinkPress,
 }: PrPreviewProps): React.JSX.Element {
+  bumpRender("PrPreview"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   // Height budget (mirrors Preview.tsx): borders ×2 + pane title. Content rows
   // are built most-important-first so that slicing drops the least important
   // rows at small heights — rendering more rows than fit corrupts the frame
@@ -164,4 +167,4 @@ export function PrPreview({
       {rows.slice(0, maxRows)}
     </Box>
   );
-}
+});

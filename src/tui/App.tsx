@@ -8,14 +8,12 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, type Key } from "ink";
-import type { DashboardClient, HealthInfo } from "./ghClient.js";
+import { bumpRender } from "./renderCount.js";
+import type { DashboardClient } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
-import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
-import { lifecycleLabels, parseRepoInput } from "../githubInbox.js";
-import type { WatchlistEntry } from "../watchlist.js";
-import { readWatchlist, writeWatchlist } from "../watchlist.js";
-import { expandHome } from "../config.js";
-import { join, resolve } from "node:path";
+import { allowedActions, deriveState } from "./state.js";
+import { lifecycleLabels } from "../githubInbox.js";
+import { resolve } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
@@ -25,7 +23,7 @@ import { listRowsHeight, railListHeight, sectionRowsHeight } from "./geometry.js
 import { Workspace } from "./components/Workspace.js";
 import { Header } from "./components/Chrome.js";
 import { LogView } from "./components/LogView.js";
-import { cycleLevel, distinctTickets, type LogFilters } from "./logFilter.js";
+import { cycleLevel, distinctTickets } from "./logFilter.js";
 import type { LocalCheap, LocalHeavy, LocalSection } from "./localSnapshot.js";
 import {
   buildRailRows,
@@ -52,25 +50,38 @@ import { Preview } from "./components/Preview.js";
 import { PrList, NWO_MAX_WIDTH } from "./components/PrList.js";
 import { PrPreview } from "./components/PrPreview.js";
 import { ActivityCard, ReservedNote } from "./components/ActivityCard.js";
-import { derivePrState, sortPrs, type DashPr } from "./prState.js";
+import { derivePrState, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
 import { HelpModal } from "./components/HelpModal.js";
 import { AddRepoForm } from "./components/AddRepoForm.js";
 import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
-import { ReviewView, type ReviewState } from "./components/ReviewView.js";
+import { ReviewView } from "./components/ReviewView.js";
 import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
-import { theme, type ToastKind } from "./theme.js";
+import { theme } from "./theme.js";
 import { useOnAnyMousePress, useOnMouseMiss } from "./MouseProvider.js";
 import { ClickableBox } from "./ClickableBox.js";
 import { Button } from "./components/primitives/Button.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
-import { useLogTail } from "./useLogTail.js";
 import type { LogReaderDeps } from "../logReader.js";
+import { useToast } from "./hooks/useToast.js";
+import { useConfirm } from "./hooks/useConfirm.js";
+import { useHealth } from "./hooks/useHealth.js";
+import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
+import { useAssessHistory } from "./hooks/useAssessHistory.js";
+import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
+import { useBotLogin } from "./hooks/useBotLogin.js";
+import { useReview } from "./hooks/useReview.js";
+import { useCmdOutput } from "./hooks/useCmdOutput.js";
+import { usePalette } from "./hooks/usePalette.js";
+import { useLogOverlay } from "./hooks/useLogOverlay.js";
+import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
+import { useWatchlist } from "./hooks/useWatchlist.js";
+import { useGithubData } from "./hooks/useGithubData.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -133,10 +144,7 @@ export interface AppProps {
 // terminals only).
 type Pane = 1 | 2 | 3;
 
-/** What a loader actually delivered — the unified cycle aggregates these to
- * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
-type Delivery = { delivered: boolean; staleAt: string | null };
-type View =
+export type View =
   | "main"
   | "detail"
   | "help"
@@ -149,27 +157,6 @@ type View =
   | "prDetail"
   | "review";
 
-/** LOCAL destructive-action gate: a `y/n` modal that owns input while open.
- * `onConfirm` fires the (already-composed) spawn on `y`/enter; `n`/esc drops it. */
-interface ConfirmState {
-  title: string;
-  body: string;
-  danger: boolean;
-  onConfirm: () => void;
-}
-interface CmdState {
-  title: string;
-  running: boolean;
-  output: string;
-  exitCode: number | null;
-  timedOut: boolean;
-  /** The invocation, kept for `r` re-run. */
-  name: string;
-  extraArgs: string[];
-  /** Monotonic run token — a stale resolution (same command re-run while the
-   * first subprocess was still going) must not clobber the newer run. */
-  token: number;
-}
 interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
   nwo: string; // frozen with the issue snapshot — the open target never depends on live rail state
@@ -266,82 +253,72 @@ export function App(props: AppProps): React.JSX.Element {
     props.runCliFn ??
     ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
   const { exit } = useApp();
+  bumpRender("App"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
 
   const size = useTerminalSize(props.sizeOverride);
   const layout = useMemo(() => computeLayout(size.columns, size.rows), [size]);
 
-  const initialWatchlist = readWatchlist(watchlistFile);
-  const [watchlistEntries, setWatchlistEntries] = useState<WatchlistEntry[]>(
-    initialWatchlist.entries,
+  const { repoMappings, watchlistError, addEntry, removeEntry } = useWatchlist(
+    watchlistFile,
+    configRepos,
   );
-  const [watchlistError, setWatchlistError] = useState<string | null>(initialWatchlist.error);
   // Rail selection: KEY-anchored (rowKey — nwo / path / "sys:section"), never a
   // bare index, so a heavy-poll clone discovery can't slide the cursor onto a
   // different row. null = top row (first repo, or queue when no repos).
   const [railSel, setRailSel] = useState<string | null>(null);
-  const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
-  // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
-  const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
-  // When the last unified refresh cycle completed. Cache-served (offline)
-  // sources pull it back to the oldest cache staleAt, so data that arrived
-  // stale never reads as fresh. Surfaced in the daemon panel's "refreshed"
-  // stat row (no header UI reads this — the ↻ chip was dropped in the
-  // declutter sweep).
-  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
-  // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
-  // so a poll that re-sorts the list keeps the cursor on the same issue.
-  const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
-  // Cross-repo PR aggregate — one flat, already-sorted list (attention-first).
-  const [prs, setPrs] = useState<DashPr[]>([]);
-  // Per-repo listPrs staleAt so a SCOPED refresh clears only its own repo's
-  // marker; the list-level prStaleAt derives as the oldest non-null entry
-  // among watched repos (any offline repo → a stale marker).
-  const [prStaleByRepo, setPrStaleByRepo] = useState<Record<string, string | null>>({});
-  // PR selection anchor: {nwo, number} because PR numbers collide across repos —
-  // a bare-number anchor would jump on re-sort.
-  const [prSel, setPrSel] = useState<{ nwo: string; number: number } | null>(null);
-  // Pane-3 selection anchor: a bare PR NUMBER, because every candidate here is
-  // already scoped to ONE repo (no {nwo, number} collision risk). Unlike the
-  // anchors above, a repo swap resets this explicitly — see the effect below.
-  const [pane3SelNum, setPane3SelNum] = useState<number | null>(null);
   const [pane, setPane] = useState<Pane>(1);
   const [view, setView] = useState<View>("main");
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [prDetail, setPrDetail] = useState<PrDetailState | null>(null);
-  const [reviewState, setReviewState] = useState<ReviewState>({
-    loading: false,
-    error: null,
-    batches: [],
-    drafts: [],
-    cursor: 0,
-    open: null,
-  });
+  // Flips false on unmount so every async `.then`/`await` continuation below can
+  // bail before touching state after the dashboard has exited. `assess` and the
+  // other spawned CLIs can resolve up to cliRunner's 120s timeout past unmount;
+  // the optimistic/browser/detail handlers resolve fast but carry the same guard
+  // for consistency (post-unmount setState is a silent no-op under React 19, so
+  // this is a uniformity guard, not a live-bug fix). Declared here (ahead of its
+  // original spot) so useReview below — and the scrollKey memo further down that
+  // reads reviewState — can both see it.
+  const aliveRef = useRef(true);
+  useEffect(
+    () => () => {
+      aliveRef.current = false;
+    },
+    [],
+  );
+  const { reviewState, setReviewState, loadReview } = useReview({ client, aliveRef });
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
-  const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
-  const [queueNow, setQueueNow] = useState<Date>(() => new Date());
-  const [assessHistory, setAssessHistory] = useState<Map<string, AssessHistory>>(new Map());
-  const [addRepoError, setAddRepoError] = useState<string | null>(null);
-  const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
-  const [paletteFilter, setPaletteFilter] = useState("");
-  const [paletteSel, setPaletteSel] = useState(0);
-  const [paletteArgsMode, setPaletteArgsMode] = useState(false);
-  const [paletteArgs, setPaletteArgs] = useState("");
-  const [cmd, setCmd] = useState<CmdState | null>(null);
-  const [cmdElapsed, setCmdElapsed] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
-  // Last resolved positional index — the fallback when the selected issue number
-  // vanishes from the list (closed/filtered), so the cursor stays near its slot.
-  const lastIdxRef = useRef(0);
-  // Same fallback, for the PR list: the slot the cursor returns to when the
-  // anchored {nwo, number} vanishes (merged/closed and rolled off the limit).
-  const lastPrIdxRef = useRef(0);
-  // Same fallback, for pane 3's repo-scoped PR list.
-  const lastPane3IdxRef = useRef(0);
-
+  const { toast, showToast, dismissToast } = useToast();
+  const health = useHealth(client, healthPollMs);
+  const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
+  const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
+  const { addRepoError, addRepoBusy, handleAddRepo, setAddRepoError } = useAddRepoForm({
+    client,
+    clonesDir,
+    addEntry,
+    showToast,
+    setView,
+    aliveRef,
+    watchlistError,
+  });
+  const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
+  const {
+    paletteFilter,
+    paletteSel,
+    paletteArgsMode,
+    paletteArgs,
+    setPaletteFilter,
+    setPaletteSel,
+    setPaletteArgsMode,
+    setPaletteArgs,
+    resetPalette,
+    paletteEnter,
+  } = usePalette({
+    runPaletteCommand,
+    showToast,
+    onRequestWizard: props.onRequestWizard,
+    setView,
+  });
   // ── Local runtime state: system-section cursors + the cheap/heavy snapshots
   // feeding the rail's system rows and section bodies. ──
   const [sectionCursor, setSectionCursor] = useState<Record<SystemSection, number>>({
@@ -356,50 +333,16 @@ export function App(props: AppProps): React.JSX.Element {
   const [repoDetailTarget, setRepoDetailTarget] = useState<UnifiedRepo | null>(null);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
-  // The full-screen log overlay's open flag. Task 6 wires the setter (opened by
-  // the compact section's expand handler); Task 7 renders the overlay + its
-  // keys. Keeping the poll active while it's open lives in `logActive` below.
-  const [logOverlay, setLogOverlay] = useState(false);
-  // Overlay filter/follow state, live only while the overlay is open. `follow`
-  // pins the tail (● following); a scrollback key pauses it (⏸ paused). The
-  // filters cycle via keys and render as display-only chips. `searchMode` routes
-  // printable keys into the search term instead of the overlay's key recipes.
-  const [logFollow, setLogFollow] = useState(true);
-  const [logFilters, setLogFilters] = useState<LogFilters>({
-    minLevel: "info",
-    ticket: null,
-    search: "",
-  });
-  const [logSearchMode, setLogSearchMode] = useState(false);
+  const { confirm, askConfirm, clearConfirm } = useConfirm();
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
-  const [updateLatest, setUpdateLatest] = useState<string | null>(null);
+  const updateLatest = useUpdateCheck(props.checkUpdateFn);
   // The junco bot account's gh login (resolved once via botLoginFn); null when
   // the feature is inert (disabled, unresolvable, or botLoginFn absent) — rows
   // opened by this login render their number cell in accent (IssueList/PrList).
-  const [botLogin, setBotLogin] = useState<string | null>(null);
+  const botLogin = useBotLogin(props.botLoginFn);
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
-
-  // Config repos ∪ watchlist, deduped by nwo (config wins) — recomputed after
-  // every watchlist write since setWatchlistEntries drives this memo.
-  const repoMappings = useMemo(() => {
-    const out = configRepos.map((r) => ({
-      nwo: r.nwo,
-      path: r.path,
-      fromConfig: true,
-      external: false,
-    }));
-    const seen = new Set(out.map((r) => r.nwo.toLowerCase()));
-    for (const e of watchlistEntries) {
-      if (seen.has(e.nwo.toLowerCase())) continue;
-      seen.add(e.nwo.toLowerCase());
-      // external === true → fork-PR mode: dispatch queues a ticket (no labels).
-      out.push({ nwo: e.nwo, path: e.path, fromConfig: false, external: e.external === true });
-    }
-    return out;
-  }, [configRepos, watchlistEntries]);
 
   // ── The unified rail: watched repos ∪ discovered local checkouts, then the
   // five pinned system rows. Selection resolves the key anchor to a live index
@@ -416,18 +359,43 @@ export function App(props: AppProps): React.JSX.Element {
   // What pane 2 shows for the selected row (issues / repoDetail / a section).
   const body = bodyKindFor(selectedRow, props.githubEnabled);
   const sysSection = body?.kind === "section" ? body.section : null;
-  // Live body kind for the poll callbacks: a background issues poll must not
-  // flash a github error toast while a section/RepoDetail body owns the
-  // screen. Read via a ref so loadIssues' identity — and the intervals keyed
-  // on it — don't churn on every rail move.
-  const bodyKindRef = useRef<string | null>(body?.kind ?? null);
-  bodyKindRef.current = body?.kind ?? null;
+  const {
+    logOverlay,
+    logFollow,
+    logFilters,
+    logSearchMode,
+    logEntries,
+    setLogOverlay,
+    setLogFollow,
+    setLogFilters,
+    setLogSearchMode,
+    onLogExpand,
+  } = useLogOverlay({
+    logPath: props.logPath,
+    logsPollMs: props.logsPollMs,
+    logReaderDeps: props.logReaderDeps,
+    sysSection,
+    view,
+  });
   const currentNwo = body?.kind === "issues" ? body.nwo : undefined;
   // The watched mapping behind the selected issues row — external gate, unwatch
   // and the pane-1 `o` read it exactly as they always did.
   const currentRepo = currentNwo
     ? repoMappings.find((r) => r.nwo.toLowerCase() === currentNwo.toLowerCase())
     : undefined;
+
+  // The fused GitHub-data core: issues + PRs + the unified refresh cycle.
+  // `nav` is read-only nav-spine state App owns — the hook never writes it.
+  const github = useGithubData({
+    client,
+    trigger,
+    githubEnabled: props.githubEnabled,
+    repoMappings,
+    showToast,
+    refreshPollMs,
+    filter,
+    nav: { currentNwo, view, bodyKind: body?.kind ?? null },
+  });
 
   // One scroll mechanic for every offset-driven surface. Exactly one is mounted
   // at a time (the render tree is config | local | review | rail+one-of), so one
@@ -451,27 +419,9 @@ export function App(props: AppProps): React.JSX.Element {
   }, [logOverlay, view, reviewState.open, cmd, detail, repoDetailTarget, body, sysSection]);
   const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(scrollKey);
 
-  // LOCAL logs tail — the hook reads disk ONLY while the logs surface is on
-  // screen (the section is selected, or the overlay is open). `props.logReaderDeps`
-  // is passed by IDENTITY (undefined in production, a stable fake in tests) so
-  // the hook's effect never teardown/re-seeds per render; the resolved `pollMs`
-  // primitive and that identity are what its dep array reads, not this literal.
-  const logActive = (view === "main" && sysSection === "logs") || logOverlay;
-  const logEntries = useLogTail(props.logPath, logActive, {
-    pollMs: props.logsPollMs,
-    readerDeps: props.logReaderDeps,
-  });
   // No render-time fs call: an empty/absent file both show the placeholder until
   // the first line arrives (a running daemon fills within one poll).
   const logHasFile = logEntries.length > 0;
-  // Both open paths (click on the compact pane, and the logs rail Enter) route
-  // here so opening ALWAYS starts tailing live (tail -f / less +F convention) —
-  // a follow state left paused from a prior session would otherwise reopen at
-  // the top. Filters intentionally persist across reopen; only follow resets.
-  const onLogExpand = (): void => {
-    setLogFollow(true);
-    setLogOverlay(true);
-  };
 
   // Selectable rows for the current section. INVARIANT: this list is the EXACT
   // rendered list each section component highlights, in the same order and
@@ -554,71 +504,14 @@ export function App(props: AppProps): React.JSX.Element {
       : { start: 0, end: 0 };
   if (sysSection !== null) sectionPrev.current[sysSection] = sectionWin.start;
 
-  const showToast = useCallback((kind: ToastKind, text: string) => {
-    setToast({ kind, text });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 4000);
-  }, []);
-  useEffect(
-    () => () => {
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-    },
-    [],
-  );
-
-  const currentIssues = currentNwo ? (issues[currentNwo] ?? []) : [];
-  // The live `/` filter is applied before selection resolves; the number anchor
-  // survives re-filtering and the issueIdxSafe clamp handles a shrinking list.
-  const filteredIssues = useMemo(
-    () => filterIssues(currentIssues, filter, trigger),
-    [currentIssues, filter, trigger],
-  );
-  // Resolve the anchored number to a live index; fall back to the clamped last
-  // index only when that issue is gone (closed, or filtered out).
-  const selNum = currentNwo ? selectedNum[currentNwo] : undefined;
-  const byNum = selNum !== undefined ? filteredIssues.findIndex((i) => i.number === selNum) : -1;
-  const issueIdxSafe =
-    filteredIssues.length === 0
-      ? 0
-      : byNum >= 0
-        ? byNum
-        : Math.min(lastIdxRef.current, filteredIssues.length - 1);
-  lastIdxRef.current = issueIdxSafe;
-  const currentIssue = filteredIssues[issueIdxSafe];
-
-  // Resolve the anchored PR to a live index in the sorted aggregate; fall back
-  // to the clamped last slot only when that PR is gone (mirrors the issue
-  // anchor above — the anchor survives a re-sorting poll).
-  const prByAnchor = prSel
-    ? prs.findIndex((p) => p.nwo === prSel.nwo && p.number === prSel.number)
-    : -1;
-  const prIdxSafe =
-    prs.length === 0
-      ? 0
-      : prByAnchor >= 0
-        ? prByAnchor
-        : Math.min(lastPrIdxRef.current, prs.length - 1);
-  lastPrIdxRef.current = prIdxSafe;
-  const selectedPr = prs[prIdxSafe] ?? null;
-
-  // Pane-3 data: the cross-repo PR aggregate, scoped to the rail's selected
-  // repo and re-sorted the same way the aggregate itself is (attention-first).
-  const repoPrs = useMemo(
-    () => sortPrs(prs.filter((p) => p.nwo === currentNwo)),
-    [prs, currentNwo],
-  );
-  // Resolve the anchored PR number to a live index in `repoPrs`; fall back to
-  // the clamped last slot only when the anchor is gone (mirrors the prSel
-  // resolution above, scoped to one repo).
-  const pane3ByNum = pane3SelNum !== null ? repoPrs.findIndex((p) => p.number === pane3SelNum) : -1;
-  const pane3IdxSafe =
-    repoPrs.length === 0
-      ? 0
-      : pane3ByNum >= 0
-        ? pane3ByNum
-        : Math.min(lastPane3IdxRef.current, repoPrs.length - 1);
-  lastPane3IdxRef.current = pane3IdxSafe;
-  const selectedPane3Pr = repoPrs[pane3IdxSafe] ?? null;
+  // Issue/PR selection resolution (anchored number/{nwo,number} → a safe live
+  // index) now lives inside useGithubData — it owns the fallback refs the
+  // anchor-validation effects also read/write. `filteredIssues` — the live
+  // `/`-filtered view of `issues[currentNwo]` — is computed there too (the
+  // hook takes `filter` as a read-only input; the `filter` STATE itself stays
+  // App-owned, same as any other nav-adjacent value the hook consumes).
+  const { filteredIssues, issueIdxSafe, currentIssue, prIdxSafe, selectedPr, repoPrs } = github;
+  const { pane3IdxSafe, selectedPane3Pr } = github;
   // Pane 3's title identifies the scoped repo (mockup: "PRs · acme/reef");
   // no repo selected (empty rail) falls back to the bare pane label.
   const pane3Title = currentNwo ? `PRs · ${truncateNwoStart(currentNwo)}` : "PRs";
@@ -660,7 +553,7 @@ export function App(props: AppProps): React.JSX.Element {
   issuePrev.current = issueWindow.start;
   const prPrev = useRef(0);
   const prWindow = windowSlice(
-    prs.length,
+    github.prs.length,
     listRowsHeight(layout.bodyRows),
     prIdxSafe,
     prPrev.current,
@@ -681,13 +574,13 @@ export function App(props: AppProps): React.JSX.Element {
   const issueCounts = useCallback(
     (nwo: string): Partial<Record<IssueLifecycle, number>> => {
       const counts: Partial<Record<IssueLifecycle, number>> = {};
-      for (const iss of issues[nwo] ?? []) {
+      for (const iss of github.issues[nwo] ?? []) {
         const st = deriveState(iss.labels, trigger);
         counts[st] = (counts[st] ?? 0) + 1;
       }
       return counts;
     },
-    [issues, trigger],
+    [github.issues, trigger],
   );
 
   // Header pulse: issues needing operator review (plan-ready or approved)
@@ -700,13 +593,13 @@ export function App(props: AppProps): React.JSX.Element {
       repoMappings.reduce(
         (sum, r) =>
           sum +
-          (issues[r.nwo] ?? []).reduce((n, iss) => {
+          (github.issues[r.nwo] ?? []).reduce((n, iss) => {
             const st = deriveState(iss.labels, trigger);
             return st === "plan-ready" || st === "approved" ? n + 1 : n;
           }, 0),
         0,
       ),
-    [repoMappings, issues, trigger],
+    [repoMappings, github.issues, trigger],
   );
 
   // Header pulse: junco-authored PRs needing attention — checks-failing or
@@ -718,323 +611,36 @@ export function App(props: AppProps): React.JSX.Element {
   // prunes `prs` synchronously, so this scoping is the belt to that suspender.
   const prAttention = useMemo(() => {
     const watched = new Set(repoMappings.map((r) => r.nwo));
-    return prs.filter((p) => {
+    return github.prs.filter((p) => {
       if (!watched.has(p.nwo)) return false;
       const s = derivePrState(p);
       return s === "checks-failing" || s === "changes-requested";
     }).length;
-  }, [prs, repoMappings]);
+  }, [github.prs, repoMappings]);
   const prFailing = useMemo(() => {
     const watched = new Set(repoMappings.map((r) => r.nwo));
-    return prs.some((p) => watched.has(p.nwo) && derivePrState(p) === "checks-failing");
-  }, [prs, repoMappings]);
-
-  const loadIssues = useCallback(
-    (nwo: string): Promise<Delivery> => {
-      return client.listIssues(nwo).then((res) => {
-        if (res.ok) {
-          setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
-          setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
-          return { delivered: true, staleAt: res.value.staleAt };
-        }
-        // Only surface the error toast when an issues body is on screen — this
-        // same loader fires on the background poll regardless of the selected
-        // row, and a failing github probe must never flash a red toast over a
-        // section or RepoDetail body.
-        if (bodyKindRef.current === "issues" && props.githubEnabled) showToast("error", res.error);
-        return { delivered: false, staleAt: null };
-      });
-    },
-    [client, trigger, showToast, props.githubEnabled],
-  );
+    return github.prs.some((p) => watched.has(p.nwo) && derivePrState(p) === "checks-failing");
+  }, [github.prs, repoMappings]);
 
   // Derived list-level stale marker (see prStaleByRepo above).
   const prStaleAt = useMemo(() => {
     const watched = new Set(repoMappings.map((r) => r.nwo));
     let oldest: string | null = null;
-    for (const [nwo, s] of Object.entries(prStaleByRepo)) {
+    for (const [nwo, s] of Object.entries(github.prStaleByRepo)) {
       if (!watched.has(nwo) || s === null) continue;
       if (oldest === null || Date.parse(s) < Date.parse(oldest)) oldest = s;
     }
     return oldest;
-  }, [prStaleByRepo, repoMappings]);
-
-  // Cross-repo PR aggregate sweep: fetch every watched repo independently (a
-  // failed repo contributes nothing and never blocks the others — and is NOT
-  // toasted on the poll path), flatten, sort attention-first.
-  const loadPrs = useCallback(
-    (isAlive: () => boolean = () => true): Promise<Delivery> => {
-      const targets = repoMappings.map((r) => r.nwo);
-      return Promise.all(targets.map((nwo) => client.listPrs(nwo))).then((results) => {
-        if (!isAlive()) return { delivered: false, staleAt: null };
-        const all: DashPr[] = [];
-        const staleMap: Record<string, string | null> = {};
-        let oldest: string | null = null;
-        let delivered = false;
-        results.forEach((res, i) => {
-          if (!res.ok) return; // one repo down: skip it, never block the rest
-          delivered = true;
-          all.push(...res.value.prs);
-          staleMap[targets[i]] = res.value.staleAt;
-          const s = res.value.staleAt;
-          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
-        });
-        setPrs(sortPrs(all));
-        setPrStaleByRepo(staleMap);
-        return { delivered, staleAt: oldest };
-      });
-    },
-    [client, repoMappings],
-  );
-
-  // Scoped sibling of loadPrs: refresh ONE repo's slice of the cross-repo
-  // aggregate — main-view cycles poll only the selected repo.
-  const loadPrsFor = useCallback(
-    (nwo: string, isAlive: () => boolean = () => true): Promise<Delivery> => {
-      return client.listPrs(nwo).then((res) => {
-        if (!isAlive() || !res.ok) return { delivered: false, staleAt: null };
-        setPrs((prev) => sortPrs([...prev.filter((p) => p.nwo !== nwo), ...res.value.prs]));
-        setPrStaleByRepo((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
-        return { delivered: true, staleAt: res.value.staleAt };
-      });
-    },
-    [client],
-  );
-
-  // Live refs so the unified cycle and its interval never go stale as the
-  // operator navigates repos or switches views.
-  const nwoRef = useRef<string | undefined>(currentNwo);
-  nwoRef.current = currentNwo;
-  const viewRef = useRef(view);
-  viewRef.current = view;
-
-  // The ONE refresh cycle. Scope follows the view unless overridden (the `p`
-  // handler must sweep before the "prs" view state has committed): main →
-  // selected repo's issues + PRs; monitor → every watched repo's PRs. Stamps
-  // refreshedAt on completion — oldest cache staleAt wins, and a cycle where
-  // nothing delivered never advances the stamp.
-  const refreshAll = useCallback(
-    (opts: { isAlive?: () => boolean; scope?: "main" | "monitor" } = {}): Promise<void> => {
-      // github off → NO gh cycle ever fires (spec §6): issues are unreachable
-      // (nwo rows render RepoDetail) and the monitor sweep must stay silent.
-      if (!props.githubEnabled) return Promise.resolve();
-      const isAlive = opts.isAlive ?? ((): boolean => true);
-      const inMonitor =
-        opts.scope !== undefined
-          ? opts.scope === "monitor"
-          : viewRef.current === "prs" || viewRef.current === "prDetail";
-      const nwo = nwoRef.current;
-      const jobs: Promise<Delivery>[] = inMonitor
-        ? [loadPrs(isAlive)]
-        : nwo
-          ? [loadIssues(nwo), loadPrsFor(nwo, isAlive)]
-          : [];
-      if (jobs.length === 0) return Promise.resolve();
-      return Promise.all(jobs).then((outcomes) => {
-        if (!isAlive()) return;
-        const delivered = outcomes.filter((o) => o.delivered);
-        if (delivered.length === 0) return; // nothing arrived: never advance
-        let oldest: string | null = null;
-        for (const o of delivered) {
-          const s = o.staleAt;
-          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
-        }
-        setRefreshedAt(oldest ?? new Date().toISOString());
-      });
-    },
-    [loadIssues, loadPrs, loadPrsFor, props.githubEnabled],
-  );
-
-  // Scoped cycle for the selected repo (initial mount + every selection
-  // change): the data under the operator's eyes refreshes immediately.
-  useEffect(() => {
-    if (!currentNwo) return;
-    void refreshAll();
-  }, [currentNwo, refreshAll]);
+  }, [github.prStaleByRepo, repoMappings]);
 
   // Clear the live filter when the selected repo changes — a stale query would
   // hide the newly-selected repo's issues (also fires harmlessly on mount).
+  // Domain P (not github) — stays in App even though useGithubData now reads
+  // `filter`'s current value for its own issue-side selection resolution.
   useEffect(() => {
     setFilter("");
     setFiltering(false);
   }, [currentNwo]);
-
-  // Keep the per-repo anchored selection valid: pick the top row on first load,
-  // and when the selected issue disappears fall back to the same slot. A number
-  // that is still present is left untouched so re-sorts don't move the cursor.
-  useEffect(() => {
-    if (!currentNwo) return;
-    const arr = issues[currentNwo];
-    if (!arr || arr.length === 0) return;
-    setSelectedNum((m) => {
-      const cur = m[currentNwo];
-      if (cur !== undefined && arr.some((i) => i.number === cur)) return m;
-      const idx = Math.max(0, Math.min(lastIdxRef.current, arr.length - 1));
-      return { ...m, [currentNwo]: arr[idx].number };
-    });
-  }, [currentNwo, issues]);
-
-  // Keep the PR anchor valid: top row on first load, and the same slot when the
-  // anchored PR disappears. A still-present anchor is left untouched so a
-  // re-sorting poll never slides a different PR under the cursor.
-  useEffect(() => {
-    if (prs.length === 0) return;
-    setPrSel((cur) => {
-      if (cur && prs.some((p) => p.nwo === cur.nwo && p.number === cur.number)) return cur;
-      const idx = Math.max(0, Math.min(lastPrIdxRef.current, prs.length - 1));
-      return { nwo: prs[idx].nwo, number: prs[idx].number };
-    });
-  }, [prs]);
-
-  // Keep pane 3's anchor valid: same rules as the PR anchor above EXCEPT a
-  // repo swap (detected via the ref) resets it to the top explicitly — pane 3
-  // has no reason to remember a slot from a different repo's list, so it must
-  // not fall through to the lastPane3IdxRef clamp on a repo change.
-  const pane3RepoRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const repoChanged = pane3RepoRef.current !== currentNwo;
-    pane3RepoRef.current = currentNwo;
-    if (repoChanged) lastPane3IdxRef.current = 0;
-    if (repoPrs.length === 0) {
-      if (repoChanged) setPane3SelNum(null);
-      return;
-    }
-    setPane3SelNum((cur) => {
-      if (!repoChanged && cur !== null && repoPrs.some((p) => p.number === cur)) return cur;
-      const idx = Math.max(0, Math.min(lastPane3IdxRef.current, repoPrs.length - 1));
-      return repoPrs[idx].number;
-    });
-  }, [currentNwo, repoPrs]);
-
-  // The unified poll — one interval, view-scoped via the refs. Immediate
-  // cycles fire from the selection effect, the `p` handler, and `r`.
-  useEffect(() => {
-    let alive = true;
-    const id = setInterval(() => void refreshAll({ isAlive: () => alive }), refreshPollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [refreshAll, refreshPollMs]);
-
-  // Health polling (also fires once on mount).
-  useEffect(() => {
-    let alive = true;
-    const run = async (): Promise<void> => {
-      const h = await client.health();
-      if (alive) setHealth(h);
-    };
-    void run();
-    const id = setInterval(() => void run(), healthPollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [client, healthPollMs]);
-
-  // Queue polling (also fires once on mount).
-  useEffect(() => {
-    let alive = true;
-    const run = async (): Promise<void> => {
-      const s = await queueFn();
-      if (!alive) return;
-      setQueueSnap(s);
-      setQueueNow(new Date());
-    };
-    void run();
-    const id = setInterval(() => void run(), queuePollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [queueFn, queuePollMs]);
-
-  // Assess-history polling (also fires once on mount). Slower than the queue
-  // cadence: a record only changes when an assess run finalizes (#193).
-  useEffect(() => {
-    let alive = true;
-    const run = async (): Promise<void> => {
-      const rows = await assessHistoryFn();
-      if (!alive) return;
-      setAssessHistory(new Map(rows.map((h) => [h.id, h])));
-    };
-    void run();
-    const id = setInterval(() => void run(), assessHistoryPollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [assessHistoryFn, assessHistoryPollMs]);
-
-  // Update-check polling: fires once on mount (never blocks first paint —
-  // async post-mount) and every 24h thereafter. Absent checkUpdateFn (tests,
-  // or a config with updateCheck disabled upstream) → chip/help line stay off.
-  useEffect(() => {
-    const fn = props.checkUpdateFn;
-    if (!fn) return;
-    let cancelled = false;
-    const tick = (): void => {
-      void fn()
-        .then((info) => {
-          if (!cancelled) setUpdateLatest(info !== null && info.available ? info.latest : null);
-        })
-        .catch(() => {}); // checkForUpdate never throws; belt for injected fakes
-    };
-    tick();
-    const t = setInterval(tick, 24 * 60 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [props.checkUpdateFn]);
-
-  // Bot-account identity probe: fires once on mount (absent botLoginFn → the
-  // feature stays inert, botLogin stays null). `on` guards a late resolution
-  // against a post-unmount setState.
-  useEffect(() => {
-    if (!props.botLoginFn) return;
-    let on = true;
-    void props.botLoginFn().then((l) => {
-      if (on) setBotLogin(l);
-    });
-    return () => {
-      on = false;
-    };
-  }, [props.botLoginFn]);
-
-  // Full sweep on mount and whenever the watchlist changes (refreshAll's
-  // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
-  // and the monitor aggregate, so a newly-watched repo's PRs appear without
-  // waiting for a monitor visit. Scoped cycles take over in between.
-  useEffect(() => {
-    let alive = true;
-    void refreshAll({ isAlive: () => alive, scope: "monitor" });
-    return () => {
-      alive = false;
-    };
-  }, [refreshAll]);
-
-  const setIssueLabels = useCallback((nwo: string, num: number, labels: string[]) => {
-    setIssues((prev) => {
-      const arr = prev[nwo];
-      if (!arr) return prev;
-      return { ...prev, [nwo]: arr.map((i) => (i.number === num ? { ...i, labels } : i)) };
-    });
-  }, []);
-
-  // Flips false on unmount so every async `.then`/`await` continuation below can
-  // bail before touching state after the dashboard has exited. `assess` and the
-  // other spawned CLIs can resolve up to cliRunner's 120s timeout past unmount;
-  // the optimistic/browser/detail handlers resolve fast but carry the same guard
-  // for consistency (post-unmount setState is a silent no-op under React 19, so
-  // this is a uniformity guard, not a live-bug fix).
-  const aliveRef = useRef(true);
-  useEffect(
-    () => () => {
-      aliveRef.current = false;
-    },
-    [],
-  );
 
   // Optimistic action: apply the label delta locally, call gh with the ORIGINAL
   // labels, restore + toast on failure.
@@ -1049,11 +655,11 @@ export function App(props: AppProps): React.JSX.Element {
       const nwo = currentNwo;
       const num = currentIssue.number;
       const prevLabels = currentIssue.labels;
-      setIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
+      github.setIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
       void client.applyAction(nwo, num, action, prevLabels).then((res) => {
         if (!aliveRef.current) return;
         if (!res.ok) {
-          setIssueLabels(nwo, num, prevLabels);
+          github.setIssueLabels(nwo, num, prevLabels);
           showToast("error", res.error);
         } else if (res.value.queued) {
           // GitHub was unreachable — the edit landed durably in the outbox
@@ -1065,7 +671,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
       });
     },
-    [client, currentNwo, currentIssue, trigger, setIssueLabels, showToast, queueSnap],
+    [client, currentNwo, currentIssue, trigger, github.setIssueLabels, showToast, queueSnap],
   );
 
   const openDetail = useCallback(() => {
@@ -1226,8 +832,6 @@ export function App(props: AppProps): React.JSX.Element {
     [currentNwo, runCliFn, showToast],
   );
 
-  const askConfirm = useCallback((state: ConfirmState) => setConfirm(state), []);
-
   // Fire-and-toast, mirroring runAssess: spawn the real CLI, dedupe by a key,
   // toast the first output line, then force an immediate cheap re-poll so the
   // mutated state (deleted ticket / drained outbox / gone worktree) shows at once.
@@ -1257,74 +861,6 @@ export function App(props: AppProps): React.JSX.Element {
     [runCliFn, showToast, props.localCheapFn, sysSection],
   );
 
-  // Elapsed ticker for a running palette command (1s resolution).
-  useEffect(() => {
-    if (!cmd?.running) return;
-    setCmdElapsed(0);
-    const id = setInterval(() => setCmdElapsed((s) => s + 1), 1000);
-    return () => clearInterval(id);
-  }, [cmd?.running, cmd?.token]);
-
-  const cmdTokenRef = useRef(0);
-  const runPaletteCommand = useCallback(
-    (name: string, extraArgs: string[]) => {
-      const title = ["junco", name, ...extraArgs].join(" ");
-      const token = ++cmdTokenRef.current;
-      setCmd({
-        title,
-        running: true,
-        output: "",
-        exitCode: null,
-        timedOut: false,
-        name,
-        extraArgs,
-        token,
-      });
-      setView("cmdOutput");
-      void runCliFn(name, extraArgs).then((r) => {
-        setCmd((prev) =>
-          prev && prev.token === token
-            ? { ...prev, running: false, output: r.output, exitCode: r.code, timedOut: r.timedOut }
-            : prev,
-        );
-      });
-    },
-    [runCliFn],
-  );
-
-  const paletteEnter = useCallback(() => {
-    const visible = filterCommands(PALETTE_COMMANDS, paletteFilter);
-    const current = visible[Math.min(paletteSel, Math.max(0, visible.length - 1))];
-    if (!current) return;
-    if (current.name === "setup") {
-      // In-process: swap the Root host to the wizard instead of spawning a
-      // subprocess (there's no `junco setup` subcommand — the wizard can't
-      // nest a second Ink render inside this one).
-      setView("main");
-      props.onRequestWizard?.();
-      return;
-    }
-    if (current.excluded !== null) {
-      showToast("info", `${current.name}: ${current.excluded}`);
-      return;
-    }
-    if (current.argsHint && !paletteArgsMode) {
-      setPaletteArgsMode(true);
-      return;
-    }
-    const typed = paletteArgs.split(/\s+/).filter(Boolean);
-    const extraArgs = typed.length > 0 ? typed : current.defaultArgs;
-    runPaletteCommand(current.name, extraArgs);
-  }, [
-    paletteFilter,
-    paletteSel,
-    paletteArgsMode,
-    paletteArgs,
-    runPaletteCommand,
-    showToast,
-    props,
-  ]);
-
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
   // cursor's LocalRepo.nwo). The config-vs-watchlist decision comes from the
   // matched repoMappings entry; an nwo absent from the union → not in watchlist.
@@ -1343,142 +879,17 @@ export function App(props: AppProps): React.JSX.Element {
         showToast("error", "watchlist unreadable — fix it before writing");
         return;
       }
-      // Re-read at write time: never clobber a file that went corrupt since mount.
-      const { entries: cur, error } = readWatchlist(watchlistFile);
-      if (error) {
-        setWatchlistError(error);
+      if (!removeEntry(mapping.nwo)) {
         showToast("error", "watchlist unreadable — not written");
         return;
       }
-      const next = cur.filter((e) => e.nwo.toLowerCase() !== mapping.nwo.toLowerCase());
-      writeWatchlist(watchlistFile, next);
-      setWatchlistEntries(next);
-      // Drop the repo's cached issue state too — the rail badges and the header
-      // pulse must never read ghost data for a repo that is no longer watched.
-      const gone = mapping.nwo;
-      setIssues((prev) => {
-        if (!(gone in prev)) return prev;
-        const rest = { ...prev };
-        delete rest[gone];
-        return rest;
-      });
-      setStaleAt((prev) => {
-        if (!(gone in prev)) return prev;
-        const rest = { ...prev };
-        delete rest[gone];
-        return rest;
-      });
-      setPrStaleByRepo((prev) => {
-        if (!(gone in prev)) return prev;
-        const rest = { ...prev };
-        delete rest[gone];
-        return rest;
-      });
-      // ...and its PRs from the cross-repo aggregate — the ⚑ attention chip and
-      // the PRs view must drop the repo immediately, not on the next poll.
-      setPrs((prev) => prev.filter((p) => p.nwo !== gone));
+      // Drop the repo's cached issue/PR state too — the rail badges and the
+      // header pulse must never read ghost data for a repo that is no longer
+      // watched. Synchronous, not a poll round-trip.
+      github.evictRepo(mapping.nwo);
       showToast("success", `unwatched ${mapping.nwo}`);
     },
-    [repoMappings, watchlistFile, watchlistError, showToast],
-  );
-
-  const handleAddRepo = useCallback(
-    async (rawNwo: string, path: string): Promise<void> => {
-      let nwo = rawNwo;
-      if (watchlistError) {
-        showToast("error", "watchlist unreadable — fix it before writing");
-        return;
-      }
-      // Accept bare owner/repo or a pasted github.com URL.
-      const parsed = parseRepoInput(nwo);
-      if (parsed === null) {
-        setAddRepoError("enter owner/repo or a github.com URL (e.g. https://github.com/acme/api)");
-        return;
-      }
-      nwo = parsed;
-      // No push access → fork-PR mode: junco manages the fork + clone; the
-      // bridge never polls this entry (external: true). A failed/unknown probe
-      // (offline) falls through to the owned-repo flow unchanged.
-      setAddRepoBusy("checking permissions…");
-      const perm = await client.repoPermission(nwo);
-      if (!aliveRef.current) return;
-      if (perm.ok && !perm.value.canPush) {
-        if (path.trim() !== "") {
-          setAddRepoBusy(null);
-          setAddRepoError("no push access to this repo — leave path empty (managed fork mode)");
-          return;
-        }
-        setAddRepoBusy("forking & cloning…");
-        const prep = await client.prepareExternalRepo(nwo);
-        if (!aliveRef.current) return;
-        setAddRepoBusy(null);
-        if (!prep.ok) {
-          setAddRepoError(prep.error);
-          return;
-        }
-        const { entries: cur, error } = readWatchlist(watchlistFile);
-        if (error) {
-          setWatchlistError(error);
-          setView("main");
-          showToast("error", "watchlist unreadable — not written");
-          return;
-        }
-        const next = [...cur, { nwo, path: prep.value.path, external: true }];
-        writeWatchlist(watchlistFile, next);
-        setWatchlistEntries(next);
-        setView("main");
-        showToast("success", `watching ${nwo} (fork-PR mode via ${prep.value.forkNwo})`);
-        return;
-      }
-      // Empty path = clone into the managed directory for the operator.
-      let expanded: string;
-      setAddRepoError(null);
-      if (path.trim() === "") {
-        const [owner, repo] = nwo.split("/");
-        expanded = join(clonesDir, owner ?? nwo, repo ?? "repo");
-        setAddRepoBusy("cloning repository…");
-        const cloned = await client.cloneRepo(nwo, expanded);
-        if (!aliveRef.current) return;
-        if (!cloned.ok) {
-          setAddRepoBusy(null);
-          setAddRepoError(cloned.error);
-          return;
-        }
-      } else {
-        expanded = expandHome(path); // ONE expansion point: validate + store agree
-      }
-      setAddRepoBusy("validating…");
-      const res = await client.validateAndPrepareRepo(nwo, expanded);
-      if (!aliveRef.current) return;
-      setAddRepoBusy(null);
-      if (!res.ok) {
-        setAddRepoError(res.error);
-        return;
-      }
-      const { entries: cur, error } = readWatchlist(watchlistFile);
-      if (error) {
-        setWatchlistError(error);
-        setView("main");
-        showToast("error", "watchlist unreadable — not written");
-        return;
-      }
-      const next = [...cur, { nwo, path: expanded }];
-      writeWatchlist(watchlistFile, next);
-      setWatchlistEntries(next);
-      setView("main");
-      showToast("success", `watching ${nwo}`);
-      // Bot mode: make sure the DAEMON's identity can push here too — the
-      // operator's own permission (checked above) says nothing about the
-      // bot's. Failure warns with the fix but never un-adds the repo.
-      const grant = await client.ensureBotAccess(nwo);
-      if (!aliveRef.current) return;
-      if (!grant.ok) {
-        showToast("error", `bot access: ${grant.error.split("\n")[0]}`);
-      } else if (!grant.value.skipped) {
-        showToast("success", `bot ${grant.value.login} granted write on ${nwo}`);
-      }
-    },
-    [client, watchlistFile, watchlistError, clonesDir, showToast],
+    [repoMappings, watchlistError, showToast, removeEntry, github.evictRepo],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row
@@ -1489,32 +900,11 @@ export function App(props: AppProps): React.JSX.Element {
     if ((layout.mode !== "wide" || body?.kind !== "issues") && pane === 3) setPane(2);
   }, [layout.mode, body?.kind, pane]);
 
-  // Move the anchored NUMBER, not a bare index — a re-sorting poll must keep
-  // the cursor on the same issue. Hoisted (was inline in useInput) so both
-  // keyboard and mouse (wheel/click) drive the same selection logic.
-  const moveIssue = (delta: number): void => {
-    if (!currentNwo || filteredIssues.length === 0) return;
-    const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
-    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
-  };
-  const moveIssueTo = (idx: number): void => {
-    if (!currentNwo || filteredIssues.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
-    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
-  };
-
-  // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
-  // must keep the cursor on the same PR. Hoisted for the same reason as above.
-  const movePr = (delta: number): void => {
-    if (prs.length === 0) return;
-    const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
-    setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
-  };
-  const movePrTo = (idx: number): void => {
-    if (prs.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, prs.length - 1));
-    setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
-  };
+  // Issue/PR/pane-3 movers now live in useGithubData (they close over its
+  // internal filteredIssues/issueIdxSafe/prIdxSafe/pane3IdxSafe) — aliased
+  // here so the keyboard cascade, mouse handlers, and JSX below (unchanged
+  // call sites) keep working without a `github.` prefix at every use.
+  const { moveIssue, moveIssueTo, movePr, movePrTo, movePane3, movePane3To } = github;
 
   const openSelectedPr = useCallback(() => {
     if (!selectedPr) return;
@@ -1531,31 +921,6 @@ export function App(props: AppProps): React.JSX.Element {
     if (!pr) return;
     setPrDetail({ pr, from });
     setView("prDetail");
-  };
-
-  // Pane-3 movers, hoisted (like moveIssue/movePr) so the mouse handler and
-  // the keyboard branch share one anchored-NUMBER implementation.
-  const movePane3 = (delta: number): void => {
-    if (repoPrs.length === 0) return;
-    const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
-    setPane3SelNum(repoPrs[next].number);
-  };
-  const movePane3To = (idx: number): void => {
-    if (repoPrs.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
-    setPane3SelNum(repoPrs[clamped].number);
-  };
-
-  // Dismiss an active toast on the next input (keyboard keystroke or mouse
-  // press) — shared so both useGuardedInput and the mouse press-observer
-  // (useOnAnyMousePress below) apply the same rule.
-  const dismissToast = (): void => {
-    if (!toast) return;
-    setToast(null);
-    if (toastTimer.current) {
-      clearTimeout(toastTimer.current);
-      toastTimer.current = null;
-    }
   };
 
   // Rail movement: anchor the KEY of the landed row (never a bare index) so a
@@ -1852,35 +1217,15 @@ export function App(props: AppProps): React.JSX.Element {
           },
           prs: () => {
             setView("prs");
-            void refreshAll({ scope: "monitor" });
+            void github.refreshAll({ scope: "monitor" });
           },
           review: () => {
             setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
             setView("review");
-            void Promise.all([client.listReview(), client.listCommentDrafts()]).then(
-              ([rev, drafts]) => {
-                if (!aliveRef.current) return;
-                if (rev.ok && drafts.ok) {
-                  setReviewState((s) => ({
-                    ...s,
-                    loading: false,
-                    error: null,
-                    batches: rev.value,
-                    drafts: drafts.value,
-                    cursor: 0,
-                  }));
-                } else {
-                  const error = !rev.ok ? rev.error : !drafts.ok ? drafts.error : "unknown error";
-                  setReviewState((s) => ({ ...s, loading: false, error }));
-                }
-              },
-            );
+            void loadReview();
           },
           commands: () => {
-            setPaletteFilter("");
-            setPaletteSel(0);
-            setPaletteArgsMode(false);
-            setPaletteArgs("");
+            resetPalette();
             setView("palette");
           },
           addRepo: () => {
@@ -1894,8 +1239,8 @@ export function App(props: AppProps): React.JSX.Element {
           refresh: () => {
             void forceLocalRefresh();
             if (currentNwo) {
-              setRefreshing(true);
-              void refreshAll().finally(() => setRefreshing(false));
+              github.setRefreshing(true);
+              void github.refreshAll().finally(() => github.setRefreshing(false));
             }
           },
           unwatch: () => {
@@ -2055,6 +1400,7 @@ export function App(props: AppProps): React.JSX.Element {
     prDetail,
     selectedPr,
     reviewState,
+    loadReview,
     watchlistError,
     pane,
     currentRepo,
@@ -2079,7 +1425,8 @@ export function App(props: AppProps): React.JSX.Element {
     openPrDetailInBrowser,
     openSelectedPr,
     runPaletteCommand,
-    refreshAll,
+    github.refreshAll,
+    github.setRefreshing,
     showToast,
     runAction,
     runAssess,
@@ -2305,12 +1652,12 @@ export function App(props: AppProps): React.JSX.Element {
     dismissToast();
     if (confirm) {
       if (key.escape || input === "n") {
-        setConfirm(null);
+        clearConfirm();
         return;
       }
       if (key.return || input === "y") {
         const fn = confirm.onConfirm;
-        setConfirm(null);
+        clearConfirm();
         fn();
         return;
       }
@@ -2382,7 +1729,7 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "j" || key.downArrow) return void movePr(1);
       if (input === "k" || key.upArrow) return void movePr(-1);
       if (input === "g") return void movePrTo(0);
-      if (input === "G") return void movePrTo(prs.length - 1);
+      if (input === "G") return void movePrTo(github.prs.length - 1);
       if (key.return) return void openPrDetail(selectedPr, "prs");
       return;
     }
@@ -2530,10 +1877,7 @@ export function App(props: AppProps): React.JSX.Element {
     // the derived keymap; `,` config at layer 3c. `:` stays a structural
     // symbol alias for the palette alongside the derived `c` commands key.
     if (input === ":") {
-      setPaletteFilter("");
-      setPaletteSel(0);
-      setPaletteArgsMode(false);
-      setPaletteArgs("");
+      resetPalette();
       setView("palette");
       return;
     }
@@ -2721,11 +2065,11 @@ export function App(props: AppProps): React.JSX.Element {
             tone={confirm.danger ? "danger" : "primary"}
             onPress={() => {
               const fn = confirm.onConfirm;
-              setConfirm(null);
+              clearConfirm();
               fn();
             }}
           />
-          <Button keyHint="esc" label="cancel" tone="neutral" onPress={() => setConfirm(null)} />
+          <Button keyHint="esc" label="cancel" tone="neutral" onPress={clearConfirm} />
         </Box>
       </Box>
     </Modal>
@@ -2890,7 +2234,7 @@ export function App(props: AppProps): React.JSX.Element {
             />
           ) : view === "prs" ? (
             <PrList
-              prs={prs}
+              prs={github.prs}
               selected={prIdxSafe}
               focused
               height={listHeight}
@@ -2968,7 +2312,7 @@ export function App(props: AppProps): React.JSX.Element {
                   return (
                     <DaemonSection
                       daemon={localCheap?.daemon ?? null}
-                      refreshedAt={refreshedAt}
+                      refreshedAt={github.refreshedAt}
                       now={queueNow}
                       scroll={scroll}
                       height={listHeight}
@@ -3001,12 +2345,12 @@ export function App(props: AppProps): React.JSX.Element {
               trigger={trigger}
               selected={issueIdxSafe}
               focused={view === "main" && pane === 2}
-              refreshing={refreshing}
+              refreshing={github.refreshing}
               filter={filter}
               filtering={filtering}
               height={listHeight}
               now={queueNow}
-              staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
+              staleAt={currentNwo ? (github.staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
               botLogin={botLogin}
               onRowPress={(i) => {

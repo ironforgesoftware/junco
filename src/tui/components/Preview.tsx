@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text, Transform } from "ink";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import { deriveState, stateMeta, type DashIssue } from "../state.js";
 import { hyperlink, shortResourceRef } from "../links.js";
@@ -28,8 +29,9 @@ export interface PreviewProps {
 
 /** The fullscreen issue-detail view's body — issue heading, body text, and any
  * posted plan comment. Renders at any layout width; not scoped to a pane.
- * Replaces IssueDetail. */
-export function Preview({
+ * Replaces IssueDetail. Memoized (perf pass, spec
+ * 2026-07-21-tui-app-decomposition task 16). */
+export const Preview = React.memo(function Preview({
   issue,
   trigger,
   body,
@@ -44,6 +46,7 @@ export function Preview({
   onWheel,
   onScrollMax,
 }: PreviewProps): React.JSX.Element {
+  bumpRender("Preview"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   // Reserved rows: borders ×2, pane title, issue heading, the ↗ link line
   // (LINK_LINE_ROW in geometry.ts), footer line.
   const viewHeight = Math.max(1, height - 6);
@@ -104,4 +107,4 @@ export function Preview({
       )}
     </ClickableBox>
   );
-}
+});

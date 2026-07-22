@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import {
   deriveState,
@@ -72,8 +73,10 @@ export interface IssueListProps {
 }
 
 /** Pane 2: windowed issue rows with full-row selection bars and aligned
- * metadata. Replaces IssueTable. */
-export function IssueList({
+ * metadata. Replaces IssueTable. Memoized (perf pass, spec
+ * 2026-07-21-tui-app-decomposition task 16) — App re-renders on every poll
+ * tick, and this is one of the largest lists it hosts. */
+export const IssueList = React.memo(function IssueList({
   issues,
   trigger,
   selected,
@@ -90,6 +93,7 @@ export function IssueList({
   onPanePress,
   onWheel,
 }: IssueListProps): React.JSX.Element {
+  bumpRender("IssueList"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   return (
     <ClickableBox
       flexDirection="column"
@@ -177,4 +181,4 @@ export function IssueList({
       )}
     </ClickableBox>
   );
-}
+});

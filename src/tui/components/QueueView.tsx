@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { bumpRender } from "../renderCount.js";
 import type { QueueSnapshot, QueueWaiting } from "../queueSnapshot.js";
 import {
   queueLabel,
@@ -39,8 +40,9 @@ function waitingNote(w: QueueWaiting): string {
  * rows render but are never selectable, and the window follows the cursor so a
  * selected row past the fold stays visible. `counts` (LOCAL only) surfaces the
  * full done/failed totals the capped RECENT list can't show. Absent props →
- * byte-identical to the GitHub `t` view. */
-export function QueueView({
+ * byte-identical to the GitHub `t` view. Memoized (perf pass, spec
+ * 2026-07-21-tui-app-decomposition task 16). */
+export const QueueView = React.memo(function QueueView({
   snap,
   scroll,
   now,
@@ -70,6 +72,7 @@ export function QueueView({
    * owning hook can clamp its offset without duplicating this row arithmetic. */
   onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
+  bumpRender("QueueView"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   if (snap === null) {
     return (
       <Box
@@ -433,4 +436,4 @@ export function QueueView({
       {rows.slice(start, start + visible)}
     </Box>
   );
-}
+});
