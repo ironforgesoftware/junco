@@ -68,7 +68,7 @@ export function useCmdOutput(
         );
       });
     },
-    [runCliFn],
+    [runCliFn, setView],
   );
 
   return { cmd, cmdElapsed, runPaletteCommand };

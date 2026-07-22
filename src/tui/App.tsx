@@ -242,6 +242,8 @@ export function App(props: AppProps): React.JSX.Element {
     queueFn,
     assessHistoryFn,
     onExit,
+    localCheapFn,
+    localHeavyFn,
   } = props;
   const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
@@ -396,6 +398,10 @@ export function App(props: AppProps): React.JSX.Element {
     filter,
     nav: { currentNwo, view, bodyKind: body?.kind ?? null },
   });
+  // Destructured (not `github.<field>`) so the actionHandlers memo below can
+  // depend on the exact stable identities it reads instead of the whole
+  // `github` object — which is a fresh value every render.
+  const { refreshAll: githubRefreshAll, setRefreshing: githubSetRefreshing } = github;
 
   // One scroll mechanic for every offset-driven surface. Exactly one is mounted
   // at a time (the render tree is config | local | review | rail+one-of), so one
@@ -747,14 +753,14 @@ export function App(props: AppProps): React.JSX.Element {
   const heavyOnScreen =
     sysSection === "worktrees" || body?.kind === "repoDetail" || view === "repoDetail";
   const forceLocalRefresh = useCallback(async (): Promise<void> => {
-    const c = await props.localCheapFn({ section: sysSection ?? undefined });
+    const c = await localCheapFn({ section: sysSection ?? undefined });
     if (!aliveRef.current) return;
     setLocalCheap(c);
     if (heavyOnScreen) {
-      const h = await props.localHeavyFn();
+      const h = await localHeavyFn();
       if (aliveRef.current) setLocalHeavy(h);
     }
-  }, [props.localCheapFn, props.localHeavyFn, sysSection, heavyOnScreen]);
+  }, [localCheapFn, localHeavyFn, sysSection, heavyOnScreen]);
 
   // Cheap poll @3s — always on: it feeds the rail's system badges, the header,
   // and whichever section body is on screen. `alive` (per-effect) + aliveRef
@@ -763,7 +769,7 @@ export function App(props: AppProps): React.JSX.Element {
   useEffect(() => {
     let alive = true;
     const run = async (): Promise<void> => {
-      const c = await props.localCheapFn({ section: sysSection ?? undefined });
+      const c = await localCheapFn({ section: sysSection ?? undefined });
       if (!alive || !aliveRef.current) return;
       setLocalCheap(c);
     };
@@ -773,7 +779,7 @@ export function App(props: AppProps): React.JSX.Element {
       alive = false;
       clearInterval(id);
     };
-  }, [sysSection, props.localCheapFn, localCheapPollMs]);
+  }, [sysSection, localCheapFn, localCheapPollMs]);
 
   // Heavy poll @15s — always on: the rail's local-only rows and the ⚑ badge
   // need candidates regardless of what the body shows (bounded git fan-out,
@@ -783,7 +789,7 @@ export function App(props: AppProps): React.JSX.Element {
     let alive = true;
     const ctrl = new AbortController();
     const run = async (): Promise<void> => {
-      const h = await props.localHeavyFn(ctrl.signal);
+      const h = await localHeavyFn(ctrl.signal);
       if (!alive || !aliveRef.current) return; // aliveRef drops late results on unmount
       setLocalHeavy(h);
     };
@@ -794,7 +800,7 @@ export function App(props: AppProps): React.JSX.Element {
       ctrl.abort();
       clearInterval(id);
     };
-  }, [props.localHeavyFn, localHeavyPollMs]);
+  }, [localHeavyFn, localHeavyPollMs]);
 
   // Fire-and-toast, mirroring `d`/`a`: no view switch, the selected repo's nwo
   // is captured at press time, and the result surfaces as a toast whenever it
@@ -851,14 +857,14 @@ export function App(props: AppProps): React.JSX.Element {
         if (rr.code === 0) showToast("success", line ?? `${name} ok`);
         else showToast("error", line ?? `${name} failed`);
         // Immediate re-poll (cheap fn is cheap; section-gated counts refresh too).
-        void props.localCheapFn({ section: sysSection ?? undefined }).then((c) => {
+        void localCheapFn({ section: sysSection ?? undefined }).then((c) => {
           if (aliveRef.current) {
             setLocalCheap(c);
           }
         });
       });
     },
-    [runCliFn, showToast, props.localCheapFn, sysSection],
+    [runCliFn, showToast, localCheapFn, sysSection],
   );
 
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
@@ -1217,7 +1223,7 @@ export function App(props: AppProps): React.JSX.Element {
           },
           prs: () => {
             setView("prs");
-            void github.refreshAll({ scope: "monitor" });
+            void githubRefreshAll({ scope: "monitor" });
           },
           review: () => {
             setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
@@ -1239,8 +1245,8 @@ export function App(props: AppProps): React.JSX.Element {
           refresh: () => {
             void forceLocalRefresh();
             if (currentNwo) {
-              github.setRefreshing(true);
-              void github.refreshAll().finally(() => github.setRefreshing(false));
+              githubSetRefreshing(true);
+              void githubRefreshAll().finally(() => githubSetRefreshing(false));
             }
           },
           unwatch: () => {
@@ -1398,7 +1404,6 @@ export function App(props: AppProps): React.JSX.Element {
     view,
     cmd,
     prDetail,
-    selectedPr,
     reviewState,
     loadReview,
     watchlistError,
@@ -1425,14 +1430,21 @@ export function App(props: AppProps): React.JSX.Element {
     openPrDetailInBrowser,
     openSelectedPr,
     runPaletteCommand,
-    github.refreshAll,
-    github.setRefreshing,
+    githubRefreshAll,
+    githubSetRefreshing,
     showToast,
     runAction,
     runAssess,
     openBrowser,
     unwatch,
     props.githubEnabled,
+    resetPalette,
+    setAddRepoError,
+    setLogFilters,
+    setLogFollow,
+    setLogOverlay,
+    setLogSearchMode,
+    setReviewState,
   ]);
 
   // Clickable STRUCTURAL chips (key-keyed): the non-derivable siblings of the
@@ -1504,6 +1516,8 @@ export function App(props: AppProps): React.JSX.Element {
     onLogExpand,
     openDetail,
     paletteEnter,
+    setLogOverlay,
+    setLogSearchMode,
   ]);
   // Chip click resolution: mnemonic chips by ID, structural chips by KEY.
   const chipActions = useMemo(
