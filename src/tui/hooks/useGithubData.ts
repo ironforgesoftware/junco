@@ -24,6 +24,11 @@ export interface GithubDataNav {
   bodyKind: "issues" | "repoDetail" | "section" | null;
 }
 
+/**
+ * Inputs to `useGithubData`. The nav spine (`nav`) and `filter` are read-only
+ * reflections of App-owned state; `repoMappings` comes from `useWatchlist` and
+ * its identity change is what re-fires the watchlist sweep (see `refreshAll`).
+ */
 export interface UseGithubDataOpts {
   client: DashboardClient;
   trigger: string;
@@ -54,9 +59,6 @@ export interface UseGithubDataResult {
   prSel: { nwo: string; number: number } | null;
   pane3SelNum: number | null;
   refreshing: boolean;
-  setSelectedNum: React.Dispatch<React.SetStateAction<Record<string, number>>>;
-  setPrSel: React.Dispatch<React.SetStateAction<{ nwo: string; number: number } | null>>;
-  setPane3SelNum: React.Dispatch<React.SetStateAction<number | null>>;
   setRefreshing: React.Dispatch<React.SetStateAction<boolean>>;
   refreshAll: (opts?: { isAlive?: () => boolean; scope?: "main" | "monitor" }) => Promise<void>;
   loadIssues: (nwo: string) => Promise<Delivery>;
@@ -480,9 +482,6 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
     prSel,
     pane3SelNum,
     refreshing,
-    setSelectedNum,
-    setPrSel,
-    setPane3SelNum,
     setRefreshing,
     refreshAll,
     loadIssues,
