@@ -80,6 +80,7 @@ import { useAssessHistory } from "./hooks/useAssessHistory.js";
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 import { useBotLogin } from "./hooks/useBotLogin.js";
 import { useReview } from "./hooks/useReview.js";
+import { useCmdOutput } from "./hooks/useCmdOutput.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -145,7 +146,7 @@ type Pane = 1 | 2 | 3;
 /** What a loader actually delivered — the unified cycle aggregates these to
  * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
 type Delivery = { delivered: boolean; staleAt: string | null };
-type View =
+export type View =
   | "main"
   | "detail"
   | "help"
@@ -158,19 +159,6 @@ type View =
   | "prDetail"
   | "review";
 
-interface CmdState {
-  title: string;
-  running: boolean;
-  output: string;
-  exitCode: number | null;
-  timedOut: boolean;
-  /** The invocation, kept for `r` re-run. */
-  name: string;
-  extraArgs: string[];
-  /** Monotonic run token — a stale resolution (same command re-run while the
-   * first subprocess was still going) must not clobber the newer run. */
-  token: number;
-}
 interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
   nwo: string; // frozen with the issue snapshot — the open target never depends on live rail state
@@ -338,8 +326,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [paletteSel, setPaletteSel] = useState(0);
   const [paletteArgsMode, setPaletteArgsMode] = useState(false);
   const [paletteArgs, setPaletteArgs] = useState("");
-  const [cmd, setCmd] = useState<CmdState | null>(null);
-  const [cmdElapsed, setCmdElapsed] = useState(0);
+  const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
   const [refreshing, setRefreshing] = useState(false);
   // Last resolved positional index — the fallback when the selected issue number
   // vanishes from the list (closed/filtered), so the cursor stays near its slot.
@@ -1150,41 +1137,6 @@ export function App(props: AppProps): React.JSX.Element {
       });
     },
     [runCliFn, showToast, props.localCheapFn, sysSection],
-  );
-
-  // Elapsed ticker for a running palette command (1s resolution).
-  useEffect(() => {
-    if (!cmd?.running) return;
-    setCmdElapsed(0);
-    const id = setInterval(() => setCmdElapsed((s) => s + 1), 1000);
-    return () => clearInterval(id);
-  }, [cmd?.running, cmd?.token]);
-
-  const cmdTokenRef = useRef(0);
-  const runPaletteCommand = useCallback(
-    (name: string, extraArgs: string[]) => {
-      const title = ["junco", name, ...extraArgs].join(" ");
-      const token = ++cmdTokenRef.current;
-      setCmd({
-        title,
-        running: true,
-        output: "",
-        exitCode: null,
-        timedOut: false,
-        name,
-        extraArgs,
-        token,
-      });
-      setView("cmdOutput");
-      void runCliFn(name, extraArgs).then((r) => {
-        setCmd((prev) =>
-          prev && prev.token === token
-            ? { ...prev, running: false, output: r.output, exitCode: r.code, timedOut: r.timedOut }
-            : prev,
-        );
-      });
-    },
-    [runCliFn],
   );
 
   const paletteEnter = useCallback(() => {
