@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { useLogTail } from "../useLogTail.js";
 import { type LogFilters } from "../logFilter.js";
 import type { LogReaderDeps } from "../../logReader.js";
@@ -40,10 +41,10 @@ export function useLogOverlay({
   logSearchMode: boolean;
   logEntries: ReturnType<typeof useLogTail>;
   logActive: boolean;
-  setLogOverlay: React.Dispatch<React.SetStateAction<boolean>>;
-  setLogFollow: React.Dispatch<React.SetStateAction<boolean>>;
-  setLogFilters: React.Dispatch<React.SetStateAction<LogFilters>>;
-  setLogSearchMode: React.Dispatch<React.SetStateAction<boolean>>;
+  setLogOverlay: Dispatch<SetStateAction<boolean>>;
+  setLogFollow: Dispatch<SetStateAction<boolean>>;
+  setLogFilters: Dispatch<SetStateAction<LogFilters>>;
+  setLogSearchMode: Dispatch<SetStateAction<boolean>>;
   onLogExpand: () => void;
 } {
   // The full-screen log overlay's open flag. Keeping the poll active while

@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import type { MutableRefObject, Dispatch, SetStateAction } from "react";
 import { join } from "node:path";
 import type { DashboardClient } from "../ghClient.js";
 import type { View } from "../App.js";
@@ -23,13 +24,13 @@ export function useAddRepoForm(opts: {
   addEntry: (entry: WatchlistEntry) => boolean;
   showToast: (kind: ToastKind, text: string) => void;
   setView: (v: View) => void;
-  aliveRef: React.MutableRefObject<boolean>;
+  aliveRef: MutableRefObject<boolean>;
   watchlistError: string | null;
 }): {
   addRepoError: string | null;
   addRepoBusy: string | null;
   handleAddRepo: (rawNwo: string, path: string) => Promise<void>;
-  setAddRepoError: React.Dispatch<React.SetStateAction<string | null>>;
+  setAddRepoError: Dispatch<SetStateAction<string | null>>;
 } {
   const { client, clonesDir, addEntry, showToast, setView, aliveRef, watchlistError } = opts;
   const [addRepoError, setAddRepoError] = useState<string | null>(null);

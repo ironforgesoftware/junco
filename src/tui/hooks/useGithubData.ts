@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type React from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { DashboardClient } from "../ghClient.js";
 import type { DashIssue } from "../state.js";
 import { filterIssues, sortIssues } from "../state.js";
@@ -59,7 +59,7 @@ export interface UseGithubDataResult {
   prSel: { nwo: string; number: number } | null;
   pane3SelNum: number | null;
   refreshing: boolean;
-  setRefreshing: React.Dispatch<React.SetStateAction<boolean>>;
+  setRefreshing: Dispatch<SetStateAction<boolean>>;
   refreshAll: (opts?: { isAlive?: () => boolean; scope?: "main" | "monitor" }) => Promise<void>;
   loadIssues: (nwo: string) => Promise<Delivery>;
   loadPrs: (isAlive?: () => boolean) => Promise<Delivery>;
