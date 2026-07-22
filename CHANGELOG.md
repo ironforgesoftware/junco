@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-22
+
 ### Changed
 
 - **Breaking:** dashboard shortcuts are now derived mnemonics. Every named option's hotkey is the highlighted letter inside its own footer chip (first letter when free, cascading otherwise; uppercase = shift-guarded destructive verbs, which keep their confirm modals; `q` quit and `?` help reserved everywhere). Notable changes: browser `o`→`b`, approve `a`→`o`, analyze `c`→`n`, add-repo `w`→`a`, unwatch `x`→`u`, queue-jump `t`→`e`, requeue `R`→`t` (retry), delete `x`→`D`, prune `x`→`P`, restart `X`→`R`, review discard `x`→`D`, assess auto-plan `S`→`A`. One derived table per view drives the chips, the help modal, and key dispatch, so they can never disagree.
@@ -16,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dashboard polish: digit-free panes (1/2/3 keys removed), grouped live-metric top bar (24h record, running ticket, ETA, gate/restart warnings; breadcrumb trail), columnar issue/PR tables with header strips and state pills, always-reserved third column (activity card), daemon panel stat grid with refresh stamp and spend gauge, scrollbars, clickable confirm buttons, bot-authored rows highlighted.
 
+- The dashboard re-renders far less: its large components — the issue and PR lists, the unified rail, and the repo/daemon detail panels — now re-paint only when their own data changes, not on every background health/queue poll. The view is memoized and its callback props are stabilized.
+
 ### Added
 
 - `junco assess discard <id>` — explicitly archive a pending review batch; filing no longer auto-archives.
@@ -23,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Queue monitoring in the dashboard's queue view (`t`, and the LOCAL queue section): a `▸ paused — <reason>` banner when the daemon's provider gate is backed off or blocked (rate limit, outage, budget, or an auth/config problem), a `↻ poll Ns ago` heartbeat on the RUNNING header, `⚠ no activity Nm` stall warnings on a wedged running task, deferred/oldest-wait context on the WAITING header plus a `queued Nm` age per row, real result status + duration on RECENT rows, and an always-on STATS section (24h ok/failed counts and success rate, avg duration, ETA, a 7-day sparkline, spend and token totals, guard/requeue counts, outbox depth, and a pending-restart notice) built from the new history ledger with a done/failed-dir-mtime fallback when the ledger is still empty.
 - The rail's queue card and `junco status` pick up the same signals: a paused line and `oldest Nm` on the waiting line in the rail, and a `stats:` line (24h ok/failed · avg duration · oldest wait) plus a `gate:` line (when not healthy) in `junco status`.
 - Live daemon-log view in the TUI: a compact `logs` section in the LOCAL rail tails the latest lines, and Enter/click expands it into a full-screen overlay with level-threshold, ticket, and text filters, a follow toggle, and scrollback. `junco logs` and the TUI now share one tail implementation.
+
+### Internal
+
+- Behaviour-preserving engineering work under the hood: the test suite's duplicated scaffolding was consolidated into one shared `Config`/harness fixture layer behind a `@vitest/coverage-v8` floor; the ~3,000-line dashboard `App` component was decomposed into per-domain hooks; and `eslint-plugin-react-hooks` (rules-of-hooks + exhaustive-deps) is now enforced across the dashboard.
 
 ## [0.8.0] - 2026-07-17
 
