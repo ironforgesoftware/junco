@@ -287,4 +287,72 @@ describe("useGithubData", () => {
     expect(api.selectedPane3Pr?.nwo).toBe("alx/coral");
     r.unmount();
   });
+
+  it("evictRepo drops a repo's issues, staleAt, and PRs from the aggregate", async () => {
+    const client = makeClient({
+      issuesByRepo: { "acme/api": [makeDashIssue({ number: 1 })] },
+      prsByRepo: {
+        "acme/api": [makeDashPr({ number: 1, nwo: "acme/api" })],
+        "alx/coral": [makeDashPr({ number: 2, nwo: "alx/coral" })],
+      },
+    });
+    let api!: UseGithubDataResult;
+    const r = render(
+      <Probe
+        client={client}
+        repoMappings={[mapping("acme/api"), mapping("alx/coral")]}
+        currentNwo="acme/api"
+        onReady={(a) => (api = a)}
+      />,
+    );
+    await api.loadIssues("acme/api");
+    await api.loadPrs();
+    await until(() => (api.issues["acme/api"]?.length ?? 0) === 1 && api.prs.length === 2);
+    api.evictRepo("acme/api");
+    await until(() => !("acme/api" in api.issues) && api.prs.length === 1);
+    expect(api.issues["acme/api"]).toBeUndefined();
+    expect(api.staleAt["acme/api"]).toBeUndefined();
+    expect(api.prs.map((p) => p.nwo)).toEqual(["alx/coral"]);
+    r.unmount();
+  });
+
+  it("moveIssue/movePr/movePane3 move the anchored selection by one slot", async () => {
+    const client = makeClient({
+      issuesByRepo: {
+        "acme/api": [makeDashIssue({ number: 1 }), makeDashIssue({ number: 2 })],
+      },
+      prsByRepo: {
+        "acme/api": [
+          makeDashPr({ number: 10, nwo: "acme/api" }),
+          makeDashPr({ number: 11, nwo: "acme/api" }),
+        ],
+      },
+    });
+    let api!: UseGithubDataResult;
+    const r = render(
+      <Probe
+        client={client}
+        repoMappings={[mapping("acme/api")]}
+        currentNwo="acme/api"
+        onReady={(a) => (api = a)}
+      />,
+    );
+    await api.loadIssues("acme/api");
+    await api.loadPrs();
+    await until(() => api.filteredIssues.length === 2 && api.repoPrs.length === 2);
+    await until(() => api.issueIdxSafe === 0 && api.pane3IdxSafe === 0);
+
+    api.moveIssue(1);
+    await until(() => api.issueIdxSafe === 1);
+    expect(api.currentIssue?.number).toBe(2);
+
+    api.movePr(1);
+    await until(() => api.prIdxSafe === 1);
+    expect(api.selectedPr?.number).toBe(11);
+
+    api.movePane3(1);
+    await until(() => api.pane3IdxSafe === 1);
+    expect(api.selectedPane3Pr?.number).toBe(11);
+    r.unmount();
+  });
 });

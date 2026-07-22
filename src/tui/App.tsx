@@ -883,42 +883,13 @@ export function App(props: AppProps): React.JSX.Element {
         showToast("error", "watchlist unreadable — not written");
         return;
       }
-      // Drop the repo's cached issue state too — the rail badges and the header
-      // pulse must never read ghost data for a repo that is no longer watched.
-      const gone = mapping.nwo;
-      github.setIssues((prev) => {
-        if (!(gone in prev)) return prev;
-        const rest = { ...prev };
-        delete rest[gone];
-        return rest;
-      });
-      github.setStaleAt((prev) => {
-        if (!(gone in prev)) return prev;
-        const rest = { ...prev };
-        delete rest[gone];
-        return rest;
-      });
-      github.setPrStaleByRepo((prev) => {
-        if (!(gone in prev)) return prev;
-        const rest = { ...prev };
-        delete rest[gone];
-        return rest;
-      });
-      // ...and its PRs from the cross-repo aggregate — the ⚑ attention chip and
-      // the PRs view must drop the repo immediately, not on the next poll.
-      github.setPrs((prev) => prev.filter((p) => p.nwo !== gone));
+      // Drop the repo's cached issue/PR state too — the rail badges and the
+      // header pulse must never read ghost data for a repo that is no longer
+      // watched. Synchronous, not a poll round-trip.
+      github.evictRepo(mapping.nwo);
       showToast("success", `unwatched ${mapping.nwo}`);
     },
-    [
-      repoMappings,
-      watchlistError,
-      showToast,
-      removeEntry,
-      github.setIssues,
-      github.setStaleAt,
-      github.setPrStaleByRepo,
-      github.setPrs,
-    ],
+    [repoMappings, watchlistError, showToast, removeEntry, github.evictRepo],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row
@@ -929,32 +900,11 @@ export function App(props: AppProps): React.JSX.Element {
     if ((layout.mode !== "wide" || body?.kind !== "issues") && pane === 3) setPane(2);
   }, [layout.mode, body?.kind, pane]);
 
-  // Move the anchored NUMBER, not a bare index — a re-sorting poll must keep
-  // the cursor on the same issue. Hoisted (was inline in useInput) so both
-  // keyboard and mouse (wheel/click) drive the same selection logic.
-  const moveIssue = (delta: number): void => {
-    if (!currentNwo || filteredIssues.length === 0) return;
-    const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
-    github.setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
-  };
-  const moveIssueTo = (idx: number): void => {
-    if (!currentNwo || filteredIssues.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
-    github.setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
-  };
-
-  // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
-  // must keep the cursor on the same PR. Hoisted for the same reason as above.
-  const movePr = (delta: number): void => {
-    if (github.prs.length === 0) return;
-    const next = Math.max(0, Math.min(prIdxSafe + delta, github.prs.length - 1));
-    github.setPrSel({ nwo: github.prs[next].nwo, number: github.prs[next].number });
-  };
-  const movePrTo = (idx: number): void => {
-    if (github.prs.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, github.prs.length - 1));
-    github.setPrSel({ nwo: github.prs[clamped].nwo, number: github.prs[clamped].number });
-  };
+  // Issue/PR/pane-3 movers now live in useGithubData (they close over its
+  // internal filteredIssues/issueIdxSafe/prIdxSafe/pane3IdxSafe) — aliased
+  // here so the keyboard cascade, mouse handlers, and JSX below (unchanged
+  // call sites) keep working without a `github.` prefix at every use.
+  const { moveIssue, moveIssueTo, movePr, movePrTo, movePane3, movePane3To } = github;
 
   const openSelectedPr = useCallback(() => {
     if (!selectedPr) return;
@@ -971,19 +921,6 @@ export function App(props: AppProps): React.JSX.Element {
     if (!pr) return;
     setPrDetail({ pr, from });
     setView("prDetail");
-  };
-
-  // Pane-3 movers, hoisted (like moveIssue/movePr) so the mouse handler and
-  // the keyboard branch share one anchored-NUMBER implementation.
-  const movePane3 = (delta: number): void => {
-    if (repoPrs.length === 0) return;
-    const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
-    github.setPane3SelNum(repoPrs[next].number);
-  };
-  const movePane3To = (idx: number): void => {
-    if (repoPrs.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
-    github.setPane3SelNum(repoPrs[clamped].number);
   };
 
   // Rail movement: anchor the KEY of the landed row (never a bare index) so a

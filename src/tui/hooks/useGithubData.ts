@@ -54,11 +54,7 @@ export interface UseGithubDataResult {
   prSel: { nwo: string; number: number } | null;
   pane3SelNum: number | null;
   refreshing: boolean;
-  setIssues: React.Dispatch<React.SetStateAction<Record<string, DashIssue[]>>>;
-  setStaleAt: React.Dispatch<React.SetStateAction<Record<string, string | null>>>;
   setSelectedNum: React.Dispatch<React.SetStateAction<Record<string, number>>>;
-  setPrs: React.Dispatch<React.SetStateAction<DashPr[]>>;
-  setPrStaleByRepo: React.Dispatch<React.SetStateAction<Record<string, string | null>>>;
   setPrSel: React.Dispatch<React.SetStateAction<{ nwo: string; number: number } | null>>;
   setPane3SelNum: React.Dispatch<React.SetStateAction<number | null>>;
   setRefreshing: React.Dispatch<React.SetStateAction<boolean>>;
@@ -67,6 +63,11 @@ export interface UseGithubDataResult {
   loadPrs: (isAlive?: () => boolean) => Promise<Delivery>;
   loadPrsFor: (nwo: string, isAlive?: () => boolean) => Promise<Delivery>;
   setIssueLabels: (nwo: string, num: number, labels: string[]) => void;
+  /** Drops `nwo`'s issues/staleAt/prStaleByRepo entries and its PRs from the
+   * cross-repo aggregate — the github half of unwatch's cleanup. Synchronous
+   * (no poll round-trip): the rail badges and header pulse must never read
+   * ghost data for a repo that just left the watchlist. */
+  evictRepo: (nwo: string) => void;
   // Selection-resolution (anchored-number/anchored-{nwo,number} → a safe live
   // index) — kept beside the state+refs it resolves against so the fallback
   // refs (below) have exactly one owner shared by both the anchor-validation
@@ -83,6 +84,12 @@ export interface UseGithubDataResult {
   repoPrs: DashPr[];
   pane3IdxSafe: number;
   selectedPane3Pr: DashPr | null;
+  moveIssue: (delta: number) => void;
+  moveIssueTo: (idx: number) => void;
+  movePr: (delta: number) => void;
+  movePrTo: (idx: number) => void;
+  movePane3: (delta: number) => void;
+  movePane3To: (idx: number) => void;
 }
 
 /**
@@ -248,6 +255,34 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
     });
   }, []);
 
+  // Drop a repo's cached issue/PR state — the rail badges and the header
+  // pulse must never read ghost data for a repo that is no longer watched.
+  // Called synchronously from `unwatch` (never re-derived from a poll), so
+  // the eviction is visible in the SAME render pass the watchlist write lands.
+  const evictRepo = useCallback((nwo: string) => {
+    setIssues((prev) => {
+      if (!(nwo in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[nwo];
+      return rest;
+    });
+    setStaleAt((prev) => {
+      if (!(nwo in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[nwo];
+      return rest;
+    });
+    setPrStaleByRepo((prev) => {
+      if (!(nwo in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[nwo];
+      return rest;
+    });
+    // ...and its PRs from the cross-repo aggregate — the ⚑ attention chip and
+    // the PRs view must drop the repo immediately, not on the next poll.
+    setPrs((prev) => prev.filter((p) => p.nwo !== nwo));
+  }, []);
+
   // Scoped cycle for the selected repo (initial mount + every selection
   // change): the data under the operator's eyes refreshes immediately.
   useEffect(() => {
@@ -396,6 +431,45 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
   lastPane3IdxRef.current = pane3IdxSafe;
   const selectedPane3Pr = repoPrs[pane3IdxSafe] ?? null;
 
+  // Move the anchored NUMBER, not a bare index — a re-sorting poll must keep
+  // the cursor on the same issue. Shared by keyboard and mouse (wheel/click).
+  const moveIssue = (delta: number): void => {
+    if (!currentNwo || filteredIssues.length === 0) return;
+    const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
+    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
+  };
+  const moveIssueTo = (idx: number): void => {
+    if (!currentNwo || filteredIssues.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
+    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
+  };
+
+  // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
+  // must keep the cursor on the same PR. Hoisted for the same reason as above.
+  const movePr = (delta: number): void => {
+    if (prs.length === 0) return;
+    const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
+    setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
+  };
+  const movePrTo = (idx: number): void => {
+    if (prs.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, prs.length - 1));
+    setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
+  };
+
+  // Pane-3 movers, hoisted (like moveIssue/movePr) so the mouse handler and
+  // the keyboard branch share one anchored-NUMBER implementation.
+  const movePane3 = (delta: number): void => {
+    if (repoPrs.length === 0) return;
+    const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
+    setPane3SelNum(repoPrs[next].number);
+  };
+  const movePane3To = (idx: number): void => {
+    if (repoPrs.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
+    setPane3SelNum(repoPrs[clamped].number);
+  };
+
   return {
     issues,
     staleAt,
@@ -406,11 +480,7 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
     prSel,
     pane3SelNum,
     refreshing,
-    setIssues,
-    setStaleAt,
     setSelectedNum,
-    setPrs,
-    setPrStaleByRepo,
     setPrSel,
     setPane3SelNum,
     setRefreshing,
@@ -419,6 +489,7 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
     loadPrs,
     loadPrsFor,
     setIssueLabels,
+    evictRepo,
     filteredIssues,
     issueIdxSafe,
     currentIssue,
@@ -427,5 +498,11 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
     repoPrs,
     pane3IdxSafe,
     selectedPane3Pr,
+    moveIssue,
+    moveIssueTo,
+    movePr,
+    movePrTo,
+    movePane3,
+    movePane3To,
   };
 }
