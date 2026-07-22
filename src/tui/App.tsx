@@ -81,6 +81,7 @@ import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 import { useBotLogin } from "./hooks/useBotLogin.js";
 import { useReview } from "./hooks/useReview.js";
 import { useCmdOutput } from "./hooks/useCmdOutput.js";
+import { usePalette } from "./hooks/usePalette.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -322,11 +323,24 @@ export function App(props: AppProps): React.JSX.Element {
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
-  const [paletteFilter, setPaletteFilter] = useState("");
-  const [paletteSel, setPaletteSel] = useState(0);
-  const [paletteArgsMode, setPaletteArgsMode] = useState(false);
-  const [paletteArgs, setPaletteArgs] = useState("");
   const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
+  const {
+    paletteFilter,
+    paletteSel,
+    paletteArgsMode,
+    paletteArgs,
+    setPaletteFilter,
+    setPaletteSel,
+    setPaletteArgsMode,
+    setPaletteArgs,
+    resetPalette,
+    paletteEnter,
+  } = usePalette({
+    runPaletteCommand,
+    showToast,
+    onRequestWizard: props.onRequestWizard,
+    setView,
+  });
   const [refreshing, setRefreshing] = useState(false);
   // Last resolved positional index — the fallback when the selected issue number
   // vanishes from the list (closed/filtered), so the cursor stays near its slot.
@@ -1139,39 +1153,6 @@ export function App(props: AppProps): React.JSX.Element {
     [runCliFn, showToast, props.localCheapFn, sysSection],
   );
 
-  const paletteEnter = useCallback(() => {
-    const visible = filterCommands(PALETTE_COMMANDS, paletteFilter);
-    const current = visible[Math.min(paletteSel, Math.max(0, visible.length - 1))];
-    if (!current) return;
-    if (current.name === "setup") {
-      // In-process: swap the Root host to the wizard instead of spawning a
-      // subprocess (there's no `junco setup` subcommand — the wizard can't
-      // nest a second Ink render inside this one).
-      setView("main");
-      props.onRequestWizard?.();
-      return;
-    }
-    if (current.excluded !== null) {
-      showToast("info", `${current.name}: ${current.excluded}`);
-      return;
-    }
-    if (current.argsHint && !paletteArgsMode) {
-      setPaletteArgsMode(true);
-      return;
-    }
-    const typed = paletteArgs.split(/\s+/).filter(Boolean);
-    const extraArgs = typed.length > 0 ? typed : current.defaultArgs;
-    runPaletteCommand(current.name, extraArgs);
-  }, [
-    paletteFilter,
-    paletteSel,
-    paletteArgsMode,
-    paletteArgs,
-    runPaletteCommand,
-    showToast,
-    props,
-  ]);
-
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
   // cursor's LocalRepo.nwo). The config-vs-watchlist decision comes from the
   // matched repoMappings entry; an nwo absent from the union → not in watchlist.
@@ -1695,10 +1676,7 @@ export function App(props: AppProps): React.JSX.Element {
             void loadReview();
           },
           commands: () => {
-            setPaletteFilter("");
-            setPaletteSel(0);
-            setPaletteArgsMode(false);
-            setPaletteArgs("");
+            resetPalette();
             setView("palette");
           },
           addRepo: () => {
@@ -2349,10 +2327,7 @@ export function App(props: AppProps): React.JSX.Element {
     // the derived keymap; `,` config at layer 3c. `:` stays a structural
     // symbol alias for the palette alongside the derived `c` commands key.
     if (input === ":") {
-      setPaletteFilter("");
-      setPaletteSel(0);
-      setPaletteArgsMode(false);
-      setPaletteArgs("");
+      resetPalette();
       setView("palette");
       return;
     }
