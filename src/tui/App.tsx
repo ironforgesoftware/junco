@@ -11,7 +11,7 @@ import { Box, Text, useApp, type Key } from "ink";
 import { bumpRender } from "./renderCount.js";
 import type { DashboardClient } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
-import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
+import { allowedActions, deriveState, filterIssues } from "./state.js";
 import { lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
@@ -81,6 +81,7 @@ import { usePalette } from "./hooks/usePalette.js";
 import { useLogOverlay } from "./hooks/useLogOverlay.js";
 import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
+import { useGithubData } from "./hooks/useGithubData.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -143,9 +144,6 @@ export interface AppProps {
 // terminals only).
 type Pane = 1 | 2 | 3;
 
-/** What a loader actually delivered — the unified cycle aggregates these to
- * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
-type Delivery = { delivered: boolean; staleAt: string | null };
 export type View =
   | "main"
   | "detail"
@@ -268,31 +266,6 @@ export function App(props: AppProps): React.JSX.Element {
   // bare index, so a heavy-poll clone discovery can't slide the cursor onto a
   // different row. null = top row (first repo, or queue when no repos).
   const [railSel, setRailSel] = useState<string | null>(null);
-  const [issues, setIssues] = useState<Record<string, DashIssue[]>>({});
-  // Per-repo listIssues staleAt (cache-served while offline); null = fresh.
-  const [staleAt, setStaleAt] = useState<Record<string, string | null>>({});
-  // When the last unified refresh cycle completed. Cache-served (offline)
-  // sources pull it back to the oldest cache staleAt, so data that arrived
-  // stale never reads as fresh. Surfaced in the daemon panel's "refreshed"
-  // stat row (no header UI reads this — the ↻ chip was dropped in the
-  // declutter sweep).
-  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
-  // Selection is anchored to the issue NUMBER (per repo), NOT a positional index,
-  // so a poll that re-sorts the list keeps the cursor on the same issue.
-  const [selectedNum, setSelectedNum] = useState<Record<string, number>>({});
-  // Cross-repo PR aggregate — one flat, already-sorted list (attention-first).
-  const [prs, setPrs] = useState<DashPr[]>([]);
-  // Per-repo listPrs staleAt so a SCOPED refresh clears only its own repo's
-  // marker; the list-level prStaleAt derives as the oldest non-null entry
-  // among watched repos (any offline repo → a stale marker).
-  const [prStaleByRepo, setPrStaleByRepo] = useState<Record<string, string | null>>({});
-  // PR selection anchor: {nwo, number} because PR numbers collide across repos —
-  // a bare-number anchor would jump on re-sort.
-  const [prSel, setPrSel] = useState<{ nwo: string; number: number } | null>(null);
-  // Pane-3 selection anchor: a bare PR NUMBER, because every candidate here is
-  // already scoped to ONE repo (no {nwo, number} collision risk). Unlike the
-  // anchors above, a repo swap resets this explicitly — see the effect below.
-  const [pane3SelNum, setPane3SelNum] = useState<number | null>(null);
   const [pane, setPane] = useState<Pane>(1);
   const [view, setView] = useState<View>("main");
   const [detail, setDetail] = useState<DetailState | null>(null);
@@ -346,7 +319,6 @@ export function App(props: AppProps): React.JSX.Element {
     onRequestWizard: props.onRequestWizard,
     setView,
   });
-  const [refreshing, setRefreshing] = useState(false);
   // Last resolved positional index — the fallback when the selected issue number
   // vanishes from the list (closed/filtered), so the cursor stays near its slot.
   const lastIdxRef = useRef(0);
@@ -414,18 +386,23 @@ export function App(props: AppProps): React.JSX.Element {
     sysSection,
     view,
   });
-  // Live body kind for the poll callbacks: a background issues poll must not
-  // flash a github error toast while a section/RepoDetail body owns the
-  // screen. Read via a ref so loadIssues' identity — and the intervals keyed
-  // on it — don't churn on every rail move.
-  const bodyKindRef = useRef<string | null>(body?.kind ?? null);
-  bodyKindRef.current = body?.kind ?? null;
   const currentNwo = body?.kind === "issues" ? body.nwo : undefined;
   // The watched mapping behind the selected issues row — external gate, unwatch
   // and the pane-1 `o` read it exactly as they always did.
   const currentRepo = currentNwo
     ? repoMappings.find((r) => r.nwo.toLowerCase() === currentNwo.toLowerCase())
     : undefined;
+
+  // The fused GitHub-data core: issues + PRs + the unified refresh cycle.
+  // `nav` is read-only nav-spine state App owns — the hook never writes it.
+  const github = useGithubData({
+    client,
+    trigger,
+    githubEnabled: props.githubEnabled,
+    repoMappings,
+    showToast,
+    nav: { currentNwo, view, bodyKind: body?.kind ?? null },
+  });
 
   // One scroll mechanic for every offset-driven surface. Exactly one is mounted
   // at a time (the render tree is config | local | review | rail+one-of), so one
@@ -534,7 +511,7 @@ export function App(props: AppProps): React.JSX.Element {
       : { start: 0, end: 0 };
   if (sysSection !== null) sectionPrev.current[sysSection] = sectionWin.start;
 
-  const currentIssues = currentNwo ? (issues[currentNwo] ?? []) : [];
+  const currentIssues = currentNwo ? (github.issues[currentNwo] ?? []) : [];
   // The live `/` filter is applied before selection resolves; the number anchor
   // survives re-filtering and the issueIdxSafe clamp handles a shrinking list.
   const filteredIssues = useMemo(
@@ -543,7 +520,7 @@ export function App(props: AppProps): React.JSX.Element {
   );
   // Resolve the anchored number to a live index; fall back to the clamped last
   // index only when that issue is gone (closed, or filtered out).
-  const selNum = currentNwo ? selectedNum[currentNwo] : undefined;
+  const selNum = currentNwo ? github.selectedNum[currentNwo] : undefined;
   const byNum = selNum !== undefined ? filteredIssues.findIndex((i) => i.number === selNum) : -1;
   const issueIdxSafe =
     filteredIssues.length === 0
@@ -557,28 +534,29 @@ export function App(props: AppProps): React.JSX.Element {
   // Resolve the anchored PR to a live index in the sorted aggregate; fall back
   // to the clamped last slot only when that PR is gone (mirrors the issue
   // anchor above — the anchor survives a re-sorting poll).
-  const prByAnchor = prSel
-    ? prs.findIndex((p) => p.nwo === prSel.nwo && p.number === prSel.number)
+  const prByAnchor = github.prSel
+    ? github.prs.findIndex((p) => p.nwo === github.prSel!.nwo && p.number === github.prSel!.number)
     : -1;
   const prIdxSafe =
-    prs.length === 0
+    github.prs.length === 0
       ? 0
       : prByAnchor >= 0
         ? prByAnchor
-        : Math.min(lastPrIdxRef.current, prs.length - 1);
+        : Math.min(lastPrIdxRef.current, github.prs.length - 1);
   lastPrIdxRef.current = prIdxSafe;
-  const selectedPr = prs[prIdxSafe] ?? null;
+  const selectedPr = github.prs[prIdxSafe] ?? null;
 
   // Pane-3 data: the cross-repo PR aggregate, scoped to the rail's selected
   // repo and re-sorted the same way the aggregate itself is (attention-first).
   const repoPrs = useMemo(
-    () => sortPrs(prs.filter((p) => p.nwo === currentNwo)),
-    [prs, currentNwo],
+    () => sortPrs(github.prs.filter((p) => p.nwo === currentNwo)),
+    [github.prs, currentNwo],
   );
   // Resolve the anchored PR number to a live index in `repoPrs`; fall back to
   // the clamped last slot only when the anchor is gone (mirrors the prSel
   // resolution above, scoped to one repo).
-  const pane3ByNum = pane3SelNum !== null ? repoPrs.findIndex((p) => p.number === pane3SelNum) : -1;
+  const pane3ByNum =
+    github.pane3SelNum !== null ? repoPrs.findIndex((p) => p.number === github.pane3SelNum) : -1;
   const pane3IdxSafe =
     repoPrs.length === 0
       ? 0
@@ -628,7 +606,7 @@ export function App(props: AppProps): React.JSX.Element {
   issuePrev.current = issueWindow.start;
   const prPrev = useRef(0);
   const prWindow = windowSlice(
-    prs.length,
+    github.prs.length,
     listRowsHeight(layout.bodyRows),
     prIdxSafe,
     prPrev.current,
@@ -649,13 +627,13 @@ export function App(props: AppProps): React.JSX.Element {
   const issueCounts = useCallback(
     (nwo: string): Partial<Record<IssueLifecycle, number>> => {
       const counts: Partial<Record<IssueLifecycle, number>> = {};
-      for (const iss of issues[nwo] ?? []) {
+      for (const iss of github.issues[nwo] ?? []) {
         const st = deriveState(iss.labels, trigger);
         counts[st] = (counts[st] ?? 0) + 1;
       }
       return counts;
     },
-    [issues, trigger],
+    [github.issues, trigger],
   );
 
   // Header pulse: issues needing operator review (plan-ready or approved)
@@ -668,13 +646,13 @@ export function App(props: AppProps): React.JSX.Element {
       repoMappings.reduce(
         (sum, r) =>
           sum +
-          (issues[r.nwo] ?? []).reduce((n, iss) => {
+          (github.issues[r.nwo] ?? []).reduce((n, iss) => {
             const st = deriveState(iss.labels, trigger);
             return st === "plan-ready" || st === "approved" ? n + 1 : n;
           }, 0),
         0,
       ),
-    [repoMappings, issues, trigger],
+    [repoMappings, github.issues, trigger],
   );
 
   // Header pulse: junco-authored PRs needing attention — checks-failing or
@@ -686,139 +664,34 @@ export function App(props: AppProps): React.JSX.Element {
   // prunes `prs` synchronously, so this scoping is the belt to that suspender.
   const prAttention = useMemo(() => {
     const watched = new Set(repoMappings.map((r) => r.nwo));
-    return prs.filter((p) => {
+    return github.prs.filter((p) => {
       if (!watched.has(p.nwo)) return false;
       const s = derivePrState(p);
       return s === "checks-failing" || s === "changes-requested";
     }).length;
-  }, [prs, repoMappings]);
+  }, [github.prs, repoMappings]);
   const prFailing = useMemo(() => {
     const watched = new Set(repoMappings.map((r) => r.nwo));
-    return prs.some((p) => watched.has(p.nwo) && derivePrState(p) === "checks-failing");
-  }, [prs, repoMappings]);
-
-  const loadIssues = useCallback(
-    (nwo: string): Promise<Delivery> => {
-      return client.listIssues(nwo).then((res) => {
-        if (res.ok) {
-          setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
-          setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
-          return { delivered: true, staleAt: res.value.staleAt };
-        }
-        // Only surface the error toast when an issues body is on screen — this
-        // same loader fires on the background poll regardless of the selected
-        // row, and a failing github probe must never flash a red toast over a
-        // section or RepoDetail body.
-        if (bodyKindRef.current === "issues" && props.githubEnabled) showToast("error", res.error);
-        return { delivered: false, staleAt: null };
-      });
-    },
-    [client, trigger, showToast, props.githubEnabled],
-  );
+    return github.prs.some((p) => watched.has(p.nwo) && derivePrState(p) === "checks-failing");
+  }, [github.prs, repoMappings]);
 
   // Derived list-level stale marker (see prStaleByRepo above).
   const prStaleAt = useMemo(() => {
     const watched = new Set(repoMappings.map((r) => r.nwo));
     let oldest: string | null = null;
-    for (const [nwo, s] of Object.entries(prStaleByRepo)) {
+    for (const [nwo, s] of Object.entries(github.prStaleByRepo)) {
       if (!watched.has(nwo) || s === null) continue;
       if (oldest === null || Date.parse(s) < Date.parse(oldest)) oldest = s;
     }
     return oldest;
-  }, [prStaleByRepo, repoMappings]);
-
-  // Cross-repo PR aggregate sweep: fetch every watched repo independently (a
-  // failed repo contributes nothing and never blocks the others — and is NOT
-  // toasted on the poll path), flatten, sort attention-first.
-  const loadPrs = useCallback(
-    (isAlive: () => boolean = () => true): Promise<Delivery> => {
-      const targets = repoMappings.map((r) => r.nwo);
-      return Promise.all(targets.map((nwo) => client.listPrs(nwo))).then((results) => {
-        if (!isAlive()) return { delivered: false, staleAt: null };
-        const all: DashPr[] = [];
-        const staleMap: Record<string, string | null> = {};
-        let oldest: string | null = null;
-        let delivered = false;
-        results.forEach((res, i) => {
-          if (!res.ok) return; // one repo down: skip it, never block the rest
-          delivered = true;
-          all.push(...res.value.prs);
-          staleMap[targets[i]] = res.value.staleAt;
-          const s = res.value.staleAt;
-          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
-        });
-        setPrs(sortPrs(all));
-        setPrStaleByRepo(staleMap);
-        return { delivered, staleAt: oldest };
-      });
-    },
-    [client, repoMappings],
-  );
-
-  // Scoped sibling of loadPrs: refresh ONE repo's slice of the cross-repo
-  // aggregate — main-view cycles poll only the selected repo.
-  const loadPrsFor = useCallback(
-    (nwo: string, isAlive: () => boolean = () => true): Promise<Delivery> => {
-      return client.listPrs(nwo).then((res) => {
-        if (!isAlive() || !res.ok) return { delivered: false, staleAt: null };
-        setPrs((prev) => sortPrs([...prev.filter((p) => p.nwo !== nwo), ...res.value.prs]));
-        setPrStaleByRepo((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
-        return { delivered: true, staleAt: res.value.staleAt };
-      });
-    },
-    [client],
-  );
-
-  // Live refs so the unified cycle and its interval never go stale as the
-  // operator navigates repos or switches views.
-  const nwoRef = useRef<string | undefined>(currentNwo);
-  nwoRef.current = currentNwo;
-  const viewRef = useRef(view);
-  viewRef.current = view;
-
-  // The ONE refresh cycle. Scope follows the view unless overridden (the `p`
-  // handler must sweep before the "prs" view state has committed): main →
-  // selected repo's issues + PRs; monitor → every watched repo's PRs. Stamps
-  // refreshedAt on completion — oldest cache staleAt wins, and a cycle where
-  // nothing delivered never advances the stamp.
-  const refreshAll = useCallback(
-    (opts: { isAlive?: () => boolean; scope?: "main" | "monitor" } = {}): Promise<void> => {
-      // github off → NO gh cycle ever fires (spec §6): issues are unreachable
-      // (nwo rows render RepoDetail) and the monitor sweep must stay silent.
-      if (!props.githubEnabled) return Promise.resolve();
-      const isAlive = opts.isAlive ?? ((): boolean => true);
-      const inMonitor =
-        opts.scope !== undefined
-          ? opts.scope === "monitor"
-          : viewRef.current === "prs" || viewRef.current === "prDetail";
-      const nwo = nwoRef.current;
-      const jobs: Promise<Delivery>[] = inMonitor
-        ? [loadPrs(isAlive)]
-        : nwo
-          ? [loadIssues(nwo), loadPrsFor(nwo, isAlive)]
-          : [];
-      if (jobs.length === 0) return Promise.resolve();
-      return Promise.all(jobs).then((outcomes) => {
-        if (!isAlive()) return;
-        const delivered = outcomes.filter((o) => o.delivered);
-        if (delivered.length === 0) return; // nothing arrived: never advance
-        let oldest: string | null = null;
-        for (const o of delivered) {
-          const s = o.staleAt;
-          if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
-        }
-        setRefreshedAt(oldest ?? new Date().toISOString());
-      });
-    },
-    [loadIssues, loadPrs, loadPrsFor, props.githubEnabled],
-  );
+  }, [github.prStaleByRepo, repoMappings]);
 
   // Scoped cycle for the selected repo (initial mount + every selection
   // change): the data under the operator's eyes refreshes immediately.
   useEffect(() => {
     if (!currentNwo) return;
-    void refreshAll();
-  }, [currentNwo, refreshAll]);
+    void github.refreshAll();
+  }, [currentNwo, github.refreshAll]);
 
   // Clear the live filter when the selected repo changes — a stale query would
   // hide the newly-selected repo's issues (also fires harmlessly on mount).
@@ -832,27 +705,27 @@ export function App(props: AppProps): React.JSX.Element {
   // that is still present is left untouched so re-sorts don't move the cursor.
   useEffect(() => {
     if (!currentNwo) return;
-    const arr = issues[currentNwo];
+    const arr = github.issues[currentNwo];
     if (!arr || arr.length === 0) return;
-    setSelectedNum((m) => {
+    github.setSelectedNum((m) => {
       const cur = m[currentNwo];
       if (cur !== undefined && arr.some((i) => i.number === cur)) return m;
       const idx = Math.max(0, Math.min(lastIdxRef.current, arr.length - 1));
       return { ...m, [currentNwo]: arr[idx].number };
     });
-  }, [currentNwo, issues]);
+  }, [currentNwo, github.issues, github.setSelectedNum]);
 
   // Keep the PR anchor valid: top row on first load, and the same slot when the
   // anchored PR disappears. A still-present anchor is left untouched so a
   // re-sorting poll never slides a different PR under the cursor.
   useEffect(() => {
-    if (prs.length === 0) return;
-    setPrSel((cur) => {
-      if (cur && prs.some((p) => p.nwo === cur.nwo && p.number === cur.number)) return cur;
-      const idx = Math.max(0, Math.min(lastPrIdxRef.current, prs.length - 1));
-      return { nwo: prs[idx].nwo, number: prs[idx].number };
+    if (github.prs.length === 0) return;
+    github.setPrSel((cur) => {
+      if (cur && github.prs.some((p) => p.nwo === cur.nwo && p.number === cur.number)) return cur;
+      const idx = Math.max(0, Math.min(lastPrIdxRef.current, github.prs.length - 1));
+      return { nwo: github.prs[idx].nwo, number: github.prs[idx].number };
     });
-  }, [prs]);
+  }, [github.prs, github.setPrSel]);
 
   // Keep pane 3's anchor valid: same rules as the PR anchor above EXCEPT a
   // repo swap (detected via the ref) resets it to the top explicitly — pane 3
@@ -864,26 +737,26 @@ export function App(props: AppProps): React.JSX.Element {
     pane3RepoRef.current = currentNwo;
     if (repoChanged) lastPane3IdxRef.current = 0;
     if (repoPrs.length === 0) {
-      if (repoChanged) setPane3SelNum(null);
+      if (repoChanged) github.setPane3SelNum(null);
       return;
     }
-    setPane3SelNum((cur) => {
+    github.setPane3SelNum((cur) => {
       if (!repoChanged && cur !== null && repoPrs.some((p) => p.number === cur)) return cur;
       const idx = Math.max(0, Math.min(lastPane3IdxRef.current, repoPrs.length - 1));
       return repoPrs[idx].number;
     });
-  }, [currentNwo, repoPrs]);
+  }, [currentNwo, repoPrs, github.setPane3SelNum]);
 
   // The unified poll — one interval, view-scoped via the refs. Immediate
   // cycles fire from the selection effect, the `p` handler, and `r`.
   useEffect(() => {
     let alive = true;
-    const id = setInterval(() => void refreshAll({ isAlive: () => alive }), refreshPollMs);
+    const id = setInterval(() => void github.refreshAll({ isAlive: () => alive }), refreshPollMs);
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, [refreshAll, refreshPollMs]);
+  }, [github.refreshAll, refreshPollMs]);
 
   // Full sweep on mount and whenever the watchlist changes (refreshAll's
   // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
@@ -891,19 +764,11 @@ export function App(props: AppProps): React.JSX.Element {
   // waiting for a monitor visit. Scoped cycles take over in between.
   useEffect(() => {
     let alive = true;
-    void refreshAll({ isAlive: () => alive, scope: "monitor" });
+    void github.refreshAll({ isAlive: () => alive, scope: "monitor" });
     return () => {
       alive = false;
     };
-  }, [refreshAll]);
-
-  const setIssueLabels = useCallback((nwo: string, num: number, labels: string[]) => {
-    setIssues((prev) => {
-      const arr = prev[nwo];
-      if (!arr) return prev;
-      return { ...prev, [nwo]: arr.map((i) => (i.number === num ? { ...i, labels } : i)) };
-    });
-  }, []);
+  }, [github.refreshAll]);
 
   // Optimistic action: apply the label delta locally, call gh with the ORIGINAL
   // labels, restore + toast on failure.
@@ -918,11 +783,11 @@ export function App(props: AppProps): React.JSX.Element {
       const nwo = currentNwo;
       const num = currentIssue.number;
       const prevLabels = currentIssue.labels;
-      setIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
+      github.setIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
       void client.applyAction(nwo, num, action, prevLabels).then((res) => {
         if (!aliveRef.current) return;
         if (!res.ok) {
-          setIssueLabels(nwo, num, prevLabels);
+          github.setIssueLabels(nwo, num, prevLabels);
           showToast("error", res.error);
         } else if (res.value.queued) {
           // GitHub was unreachable — the edit landed durably in the outbox
@@ -934,7 +799,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
       });
     },
-    [client, currentNwo, currentIssue, trigger, setIssueLabels, showToast, queueSnap],
+    [client, currentNwo, currentIssue, trigger, github.setIssueLabels, showToast, queueSnap],
   );
 
   const openDetail = useCallback(() => {
@@ -1149,19 +1014,19 @@ export function App(props: AppProps): React.JSX.Element {
       // Drop the repo's cached issue state too — the rail badges and the header
       // pulse must never read ghost data for a repo that is no longer watched.
       const gone = mapping.nwo;
-      setIssues((prev) => {
+      github.setIssues((prev) => {
         if (!(gone in prev)) return prev;
         const rest = { ...prev };
         delete rest[gone];
         return rest;
       });
-      setStaleAt((prev) => {
+      github.setStaleAt((prev) => {
         if (!(gone in prev)) return prev;
         const rest = { ...prev };
         delete rest[gone];
         return rest;
       });
-      setPrStaleByRepo((prev) => {
+      github.setPrStaleByRepo((prev) => {
         if (!(gone in prev)) return prev;
         const rest = { ...prev };
         delete rest[gone];
@@ -1169,10 +1034,19 @@ export function App(props: AppProps): React.JSX.Element {
       });
       // ...and its PRs from the cross-repo aggregate — the ⚑ attention chip and
       // the PRs view must drop the repo immediately, not on the next poll.
-      setPrs((prev) => prev.filter((p) => p.nwo !== gone));
+      github.setPrs((prev) => prev.filter((p) => p.nwo !== gone));
       showToast("success", `unwatched ${mapping.nwo}`);
     },
-    [repoMappings, watchlistError, showToast, removeEntry],
+    [
+      repoMappings,
+      watchlistError,
+      showToast,
+      removeEntry,
+      github.setIssues,
+      github.setStaleAt,
+      github.setPrStaleByRepo,
+      github.setPrs,
+    ],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row
@@ -1189,25 +1063,25 @@ export function App(props: AppProps): React.JSX.Element {
   const moveIssue = (delta: number): void => {
     if (!currentNwo || filteredIssues.length === 0) return;
     const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
-    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
+    github.setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
   };
   const moveIssueTo = (idx: number): void => {
     if (!currentNwo || filteredIssues.length === 0) return;
     const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
-    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
+    github.setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
   };
 
   // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
   // must keep the cursor on the same PR. Hoisted for the same reason as above.
   const movePr = (delta: number): void => {
-    if (prs.length === 0) return;
-    const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
-    setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
+    if (github.prs.length === 0) return;
+    const next = Math.max(0, Math.min(prIdxSafe + delta, github.prs.length - 1));
+    github.setPrSel({ nwo: github.prs[next].nwo, number: github.prs[next].number });
   };
   const movePrTo = (idx: number): void => {
-    if (prs.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, prs.length - 1));
-    setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
+    if (github.prs.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, github.prs.length - 1));
+    github.setPrSel({ nwo: github.prs[clamped].nwo, number: github.prs[clamped].number });
   };
 
   const openSelectedPr = useCallback(() => {
@@ -1232,12 +1106,12 @@ export function App(props: AppProps): React.JSX.Element {
   const movePane3 = (delta: number): void => {
     if (repoPrs.length === 0) return;
     const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
-    setPane3SelNum(repoPrs[next].number);
+    github.setPane3SelNum(repoPrs[next].number);
   };
   const movePane3To = (idx: number): void => {
     if (repoPrs.length === 0) return;
     const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
-    setPane3SelNum(repoPrs[clamped].number);
+    github.setPane3SelNum(repoPrs[clamped].number);
   };
 
   // Rail movement: anchor the KEY of the landed row (never a bare index) so a
@@ -1534,7 +1408,7 @@ export function App(props: AppProps): React.JSX.Element {
           },
           prs: () => {
             setView("prs");
-            void refreshAll({ scope: "monitor" });
+            void github.refreshAll({ scope: "monitor" });
           },
           review: () => {
             setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
@@ -1556,8 +1430,8 @@ export function App(props: AppProps): React.JSX.Element {
           refresh: () => {
             void forceLocalRefresh();
             if (currentNwo) {
-              setRefreshing(true);
-              void refreshAll().finally(() => setRefreshing(false));
+              github.setRefreshing(true);
+              void github.refreshAll().finally(() => github.setRefreshing(false));
             }
           },
           unwatch: () => {
@@ -1742,7 +1616,8 @@ export function App(props: AppProps): React.JSX.Element {
     openPrDetailInBrowser,
     openSelectedPr,
     runPaletteCommand,
-    refreshAll,
+    github.refreshAll,
+    github.setRefreshing,
     showToast,
     runAction,
     runAssess,
@@ -2045,7 +1920,7 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "j" || key.downArrow) return void movePr(1);
       if (input === "k" || key.upArrow) return void movePr(-1);
       if (input === "g") return void movePrTo(0);
-      if (input === "G") return void movePrTo(prs.length - 1);
+      if (input === "G") return void movePrTo(github.prs.length - 1);
       if (key.return) return void openPrDetail(selectedPr, "prs");
       return;
     }
@@ -2550,7 +2425,7 @@ export function App(props: AppProps): React.JSX.Element {
             />
           ) : view === "prs" ? (
             <PrList
-              prs={prs}
+              prs={github.prs}
               selected={prIdxSafe}
               focused
               height={listHeight}
@@ -2628,7 +2503,7 @@ export function App(props: AppProps): React.JSX.Element {
                   return (
                     <DaemonSection
                       daemon={localCheap?.daemon ?? null}
-                      refreshedAt={refreshedAt}
+                      refreshedAt={github.refreshedAt}
                       now={queueNow}
                       scroll={scroll}
                       height={listHeight}
@@ -2661,12 +2536,12 @@ export function App(props: AppProps): React.JSX.Element {
               trigger={trigger}
               selected={issueIdxSafe}
               focused={view === "main" && pane === 2}
-              refreshing={refreshing}
+              refreshing={github.refreshing}
               filter={filter}
               filtering={filtering}
               height={listHeight}
               now={queueNow}
-              staleAt={currentNwo ? (staleAt[currentNwo] ?? null) : null}
+              staleAt={currentNwo ? (github.staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
               botLogin={botLogin}
               onRowPress={(i) => {
