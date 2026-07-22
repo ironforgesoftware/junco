@@ -2,6 +2,7 @@
  * Pure render over QueueStats — no fetches (spec §3). */
 import React from "react";
 import { Box, Text } from "ink";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import { fmtCompact, fmtDurShort } from "../queueFmt.js";
 import { Sparkline } from "./primitives/Sparkline.js";
@@ -11,7 +12,8 @@ import type { QueueStats } from "../queueStats.js";
 
 const LW = 6;
 
-export function ActivityCard({
+/** Memoized (perf pass, spec 2026-07-21-tui-app-decomposition task 16). */
+export const ActivityCard = React.memo(function ActivityCard({
   stats,
   width,
   height,
@@ -20,6 +22,7 @@ export function ActivityCard({
   width: number;
   height: number;
 }): React.JSX.Element {
+  bumpRender("ActivityCard"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   return (
     <Box
       flexDirection="column"
@@ -86,7 +89,7 @@ export function ActivityCard({
       )}
     </Box>
   );
-}
+});
 
 /** Reserved-slot filler: keeps pane geometry frozen when the selection has no
  * third-column content (local repos). */

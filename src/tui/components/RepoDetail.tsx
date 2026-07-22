@@ -9,6 +9,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { resolve } from "node:path";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { clampScroll, maxScroll } from "../window.js";
@@ -36,7 +37,8 @@ export function repoQueueRows(
   };
 }
 
-export function RepoDetail({
+/** Memoized (perf pass, spec 2026-07-21-tui-app-decomposition task 16). */
+export const RepoDetail = React.memo(function RepoDetail({
   repo,
   worktrees,
   queue,
@@ -59,6 +61,7 @@ export function RepoDetail({
   /** Reports `maxScroll(lines, visible)` DURING render (DaemonSection rule). */
   onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
+  bumpRender("RepoDetail"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   const LW = 8;
   const lines: React.JSX.Element[] = [];
   lines.push(
@@ -175,4 +178,4 @@ export function RepoDetail({
       </Box>
     </ClickableBox>
   );
-}
+});

@@ -8,6 +8,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { fmtAge, queueLabel } from "../queueFmt.js";
@@ -88,8 +89,9 @@ const GATE_RED = new Set(["auth_error", "quota_exhausted", "misconfig"]);
 const GATE_YELLOW = new Set(["rate_limited", "outage_backoff", "budget_exhausted"]);
 
 /** GitHub outbox op-log: live ops (selectable) with the cursor op's lastError
- * expanded, plus a read-only dead tail. Mirrors outboxCmd's opLine format. */
-export function OutboxSection({
+ * expanded, plus a read-only dead tail. Mirrors outboxCmd's opLine format.
+ * Memoized (perf pass, spec 2026-07-21-tui-app-decomposition task 16). */
+export const OutboxSection = React.memo(function OutboxSection({
   outbox,
   cursor,
   window,
@@ -106,6 +108,7 @@ export function OutboxSection({
   now: Date;
   onRowPress?: (index: number) => void;
 }): React.JSX.Element {
+  bumpRender("OutboxSection"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   const border = (
     <Box
       flexDirection="column"
@@ -197,11 +200,12 @@ export function OutboxSection({
   // optional trailing position line is the other row sectionRowsHeight
   // reserves — so the pane's full interior, not one row less, is the clip.
   return React.cloneElement(border, {}, rows.slice(0, Math.max(1, height - 2)));
-}
+});
 
 /** Per-ticket worktrees. The FS class (live/stale/backup) is display-only —
- * NOT the prune safety signal (that lives under worktrees.lock, Stage A/B). */
-export function WorktreesSection({
+ * NOT the prune safety signal (that lives under worktrees.lock, Stage A/B).
+ * Memoized (perf pass, spec 2026-07-21-tui-app-decomposition task 16). */
+export const WorktreesSection = React.memo(function WorktreesSection({
   worktrees,
   error,
   cursor,
@@ -218,6 +222,7 @@ export function WorktreesSection({
   focused: boolean;
   onRowPress?: (index: number) => void;
 }): React.JSX.Element {
+  bumpRender("WorktreesSection"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   return (
     <Box
       flexDirection="column"
@@ -266,15 +271,16 @@ export function WorktreesSection({
       )}
     </Box>
   );
-}
+});
 
 /** Daemon & health detail — a scrollable non-list panel (`scroll` is clamped
  * into `[0, maxScroll(rows, visible)]` before it slices the built rows,
  * mirroring QueueView, so a past-the-end offset lands on the bottom row
  * instead of blanking the pane). Stack-agnostic wording: the endpoint row
  * reads "reachable"/"unreachable" (or a gate-state badge), never a specific
- * server name. */
-export function DaemonSection({
+ * server name. Memoized (perf pass, spec 2026-07-21-tui-app-decomposition
+ * task 16). */
+export const DaemonSection = React.memo(function DaemonSection({
   daemon,
   refreshedAt,
   now,
@@ -297,6 +303,7 @@ export function DaemonSection({
    * owning hook can clamp its offset without duplicating this row arithmetic. */
   onScrollMax?: (max: number) => void;
 }): React.JSX.Element {
+  bumpRender("DaemonSection"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   const border = (
     <ClickableBox
       flexDirection="column"
@@ -465,4 +472,4 @@ export function DaemonSection({
       <Scrollbar offset={start} viewport={visible} total={lines.length} height={visible} />
     </Box>,
   );
-}
+});

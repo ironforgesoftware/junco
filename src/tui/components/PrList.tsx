@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, type DashPr } from "../prState.js";
 import { isBotAuthored } from "../state.js";
@@ -124,8 +125,9 @@ export interface PrListProps {
 }
 
 /** Pane 2: windowed PR rows with full-row selection bars and aligned
- * metadata. Selection list for PRs across watched repos. */
-export function PrList({
+ * metadata. Selection list for PRs across watched repos. Memoized (perf
+ * pass, spec 2026-07-21-tui-app-decomposition task 16). */
+export const PrList = React.memo(function PrList({
   prs,
   selected,
   focused,
@@ -142,6 +144,7 @@ export function PrList({
   onWheel,
   paneWidth,
 }: PrListProps): React.JSX.Element {
+  bumpRender("PrList"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
   const { columns, pillInner, repoW, checksW, showChecks } = prListColumns({
     prs,
     showNwo,
@@ -247,4 +250,4 @@ export function PrList({
       )}
     </ClickableBox>
   );
-}
+});
