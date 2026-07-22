@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { useLogTail } from "../useLogTail.js";
 import { type LogFilters } from "../logFilter.js";
@@ -77,10 +77,14 @@ export function useLogOverlay({
   // here so opening ALWAYS starts tailing live (tail -f / less +F convention) —
   // a follow state left paused from a prior session would otherwise reopen at
   // the top. Filters intentionally persist across reopen; only follow resets.
-  const onLogExpand = (): void => {
+  // `useCallback`'d with empty deps (perf pass #259): it only calls the two
+  // setState setters below, both of which are themselves stable, so this never
+  // re-identifies — callers (App's `railRowPress`, the section's `onExpand`)
+  // depend on it without churning their own memoized identity every render.
+  const onLogExpand = useCallback((): void => {
     setLogFollow(true);
     setLogOverlay(true);
-  };
+  }, []);
 
   return {
     logOverlay,
