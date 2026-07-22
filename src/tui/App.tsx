@@ -26,7 +26,7 @@ import { listRowsHeight, railListHeight, sectionRowsHeight } from "./geometry.js
 import { Workspace } from "./components/Workspace.js";
 import { Header } from "./components/Chrome.js";
 import { LogView } from "./components/LogView.js";
-import { cycleLevel, distinctTickets, type LogFilters } from "./logFilter.js";
+import { cycleLevel, distinctTickets } from "./logFilter.js";
 import type { LocalCheap, LocalHeavy, LocalSection } from "./localSnapshot.js";
 import {
   buildRailRows,
@@ -70,7 +70,6 @@ import { ClickableBox } from "./ClickableBox.js";
 import { Button } from "./components/primitives/Button.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
-import { useLogTail } from "./useLogTail.js";
 import type { LogReaderDeps } from "../logReader.js";
 import { useToast } from "./hooks/useToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
@@ -82,6 +81,7 @@ import { useBotLogin } from "./hooks/useBotLogin.js";
 import { useReview } from "./hooks/useReview.js";
 import { useCmdOutput } from "./hooks/useCmdOutput.js";
 import { usePalette } from "./hooks/usePalette.js";
+import { useLogOverlay } from "./hooks/useLogOverlay.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -366,21 +366,6 @@ export function App(props: AppProps): React.JSX.Element {
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
   const { confirm, askConfirm, clearConfirm } = useConfirm();
-  // The full-screen log overlay's open flag. Task 6 wires the setter (opened by
-  // the compact section's expand handler); Task 7 renders the overlay + its
-  // keys. Keeping the poll active while it's open lives in `logActive` below.
-  const [logOverlay, setLogOverlay] = useState(false);
-  // Overlay filter/follow state, live only while the overlay is open. `follow`
-  // pins the tail (● following); a scrollback key pauses it (⏸ paused). The
-  // filters cycle via keys and render as display-only chips. `searchMode` routes
-  // printable keys into the search term instead of the overlay's key recipes.
-  const [logFollow, setLogFollow] = useState(true);
-  const [logFilters, setLogFilters] = useState<LogFilters>({
-    minLevel: "info",
-    ticket: null,
-    search: "",
-  });
-  const [logSearchMode, setLogSearchMode] = useState(false);
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const updateLatest = useUpdateCheck(props.checkUpdateFn);
@@ -425,6 +410,24 @@ export function App(props: AppProps): React.JSX.Element {
   // What pane 2 shows for the selected row (issues / repoDetail / a section).
   const body = bodyKindFor(selectedRow, props.githubEnabled);
   const sysSection = body?.kind === "section" ? body.section : null;
+  const {
+    logOverlay,
+    logFollow,
+    logFilters,
+    logSearchMode,
+    logEntries,
+    setLogOverlay,
+    setLogFollow,
+    setLogFilters,
+    setLogSearchMode,
+    onLogExpand,
+  } = useLogOverlay({
+    logPath: props.logPath,
+    logsPollMs: props.logsPollMs,
+    logReaderDeps: props.logReaderDeps,
+    sysSection,
+    view,
+  });
   // Live body kind for the poll callbacks: a background issues poll must not
   // flash a github error toast while a section/RepoDetail body owns the
   // screen. Read via a ref so loadIssues' identity — and the intervals keyed
@@ -460,27 +463,9 @@ export function App(props: AppProps): React.JSX.Element {
   }, [logOverlay, view, reviewState.open, cmd, detail, repoDetailTarget, body, sysSection]);
   const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(scrollKey);
 
-  // LOCAL logs tail — the hook reads disk ONLY while the logs surface is on
-  // screen (the section is selected, or the overlay is open). `props.logReaderDeps`
-  // is passed by IDENTITY (undefined in production, a stable fake in tests) so
-  // the hook's effect never teardown/re-seeds per render; the resolved `pollMs`
-  // primitive and that identity are what its dep array reads, not this literal.
-  const logActive = (view === "main" && sysSection === "logs") || logOverlay;
-  const logEntries = useLogTail(props.logPath, logActive, {
-    pollMs: props.logsPollMs,
-    readerDeps: props.logReaderDeps,
-  });
   // No render-time fs call: an empty/absent file both show the placeholder until
   // the first line arrives (a running daemon fills within one poll).
   const logHasFile = logEntries.length > 0;
-  // Both open paths (click on the compact pane, and the logs rail Enter) route
-  // here so opening ALWAYS starts tailing live (tail -f / less +F convention) —
-  // a follow state left paused from a prior session would otherwise reopen at
-  // the top. Filters intentionally persist across reopen; only follow resets.
-  const onLogExpand = (): void => {
-    setLogFollow(true);
-    setLogOverlay(true);
-  };
 
   // Selectable rows for the current section. INVARIANT: this list is the EXACT
   // rendered list each section component highlights, in the same order and
