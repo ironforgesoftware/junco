@@ -1,6 +1,6 @@
 // tests/useGithubData.test.tsx
 import { describe, it, expect } from "vitest";
-import React from "react";
+import React, { useCallback, useRef } from "react";
 import { render } from "ink-testing-library";
 import { Text } from "ink";
 import { useGithubData } from "../src/tui/hooks/useGithubData.js";
@@ -8,10 +8,14 @@ import type { UseGithubDataResult } from "../src/tui/hooks/useGithubData.js";
 import type { DashboardClient, Result } from "../src/tui/ghClient.js";
 import type { WatchedMapping } from "../src/tui/railModel.js";
 import type { View } from "../src/tui/App.js";
+import type { ToastKind } from "../src/tui/theme.js";
 import { makeDashIssue, makeDashPr } from "./helpers/dashFixtures.js";
 import { until } from "./helpers/until.js";
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
+// Module-scope, so its identity is stable across renders without a useCallback
+// wrapper — same requirement as the Probe's own memoized showToast below.
+const noopToast = (): void => {};
 
 function mapping(nwo: string): WatchedMapping {
   return { nwo, path: `/c/${nwo}`, fromConfig: false, external: false };
@@ -44,6 +48,7 @@ function Probe({
   currentNwo,
   view = "main",
   bodyKind = "issues",
+  filter = "",
   onReady,
 }: {
   client: DashboardClient;
@@ -51,15 +56,30 @@ function Probe({
   currentNwo: string | undefined;
   view?: View;
   bodyKind?: "issues" | "repoDetail" | "section" | null;
+  filter?: string;
   onReady: (api: UseGithubDataResult) => void;
 }) {
-  const toasts: [string, string][] = [];
+  // A STABLE showToast, matching real usage (App's own useToast wraps it in
+  // useCallback([])). An inline arrow here would re-identify every render,
+  // which cascades: loadIssues -> refreshAll -> the mount-refresh/poll/sweep
+  // effects would all see a "changed" dependency on every render and refire
+  // forever — exactly the dep-identity hazard useGithubData's own contract
+  // warns callers about.
+  const toastsRef = useRef<[ToastKind, string][]>([]);
+  const showToast = useCallback((kind: ToastKind, text: string) => {
+    toastsRef.current.push([kind, text]);
+  }, []);
   const api = useGithubData({
     client,
     trigger: "junco",
     githubEnabled: true,
     repoMappings,
-    showToast: (kind, text) => toasts.push([kind, text]),
+    showToast,
+    // Large enough that the unified poll interval never fires mid-test — the
+    // mount-refresh + watchlist-sweep effects still fire once on mount/change,
+    // exactly like App's own render-count-independent behavior.
+    refreshPollMs: 999_999,
+    filter,
     nav: { currentNwo, view, bodyKind },
   });
   onReady(api);
@@ -174,7 +194,9 @@ describe("useGithubData", () => {
         trigger: "junco",
         githubEnabled: false,
         repoMappings: [mapping("acme/api")],
-        showToast: () => {},
+        showToast: noopToast,
+        refreshPollMs: 999_999,
+        filter: "",
         nav: { currentNwo: "acme/api", view: "main", bodyKind: "issues" },
       });
       onReady(api);
@@ -204,6 +226,65 @@ describe("useGithubData", () => {
     await until(() => (api.issues["acme/api"]?.length ?? 0) === 1);
     api.setIssueLabels("acme/api", 5, ["junco", "junco:plan-ready"]);
     await until(() => (api.issues["acme/api"]?.[0]?.labels ?? []).includes("junco:plan-ready"));
+    r.unmount();
+  });
+
+  it("the issue-anchor effect assigns the top issue as the selection once issues load", async () => {
+    const client = makeClient({ issuesByRepo: { "acme/api": [makeDashIssue({ number: 42 })] } });
+    let api!: UseGithubDataResult;
+    const r = render(
+      <Probe
+        client={client}
+        repoMappings={[mapping("acme/api")]}
+        currentNwo="acme/api"
+        onReady={(a) => (api = a)}
+      />,
+    );
+    await api.loadIssues("acme/api");
+    await until(() => api.selectedNum["acme/api"] === 42);
+    expect(api.issueIdxSafe).toBe(0);
+    expect(api.currentIssue?.number).toBe(42);
+    r.unmount();
+  });
+
+  it("the pane-3 anchor resets to the top PR on a repo change, never carrying over the old repo's slot", async () => {
+    const client = makeClient({
+      prsByRepo: {
+        "acme/api": [makeDashPr({ number: 1, nwo: "acme/api" })],
+        "alx/coral": [
+          makeDashPr({ number: 2, nwo: "alx/coral" }),
+          makeDashPr({ number: 3, nwo: "alx/coral" }),
+        ],
+      },
+    });
+    let api!: UseGithubDataResult;
+    const repoMappings = [mapping("acme/api"), mapping("alx/coral")];
+    const r = render(
+      <Probe
+        client={client}
+        repoMappings={repoMappings}
+        currentNwo="acme/api"
+        onReady={(a) => (api = a)}
+      />,
+    );
+    await api.loadPrs();
+    await until(() => api.pane3SelNum === 1); // scoped to acme/api, the only PR there
+    expect(api.repoPrs.map((p) => p.number)).toEqual([1]);
+
+    r.rerender(
+      <Probe
+        client={client}
+        repoMappings={repoMappings}
+        currentNwo="alx/coral"
+        onReady={(a) => (api = a)}
+      />,
+    );
+    await until(() => api.repoPrs.length === 2);
+    // The repo swap must reset pane3SelNum to alx/coral's own top row, not
+    // leave the stale acme/api anchor (number 1, absent from this repo) in
+    // place waiting for a coincidental number match.
+    await until(() => api.pane3SelNum !== null && api.pane3SelNum !== 1);
+    expect(api.selectedPane3Pr?.nwo).toBe("alx/coral");
     r.unmount();
   });
 });

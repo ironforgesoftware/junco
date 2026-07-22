@@ -11,7 +11,7 @@ import { Box, Text, useApp, type Key } from "ink";
 import { bumpRender } from "./renderCount.js";
 import type { DashboardClient } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
-import { allowedActions, deriveState, filterIssues } from "./state.js";
+import { allowedActions, deriveState } from "./state.js";
 import { lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
@@ -50,7 +50,7 @@ import { Preview } from "./components/Preview.js";
 import { PrList, NWO_MAX_WIDTH } from "./components/PrList.js";
 import { PrPreview } from "./components/PrPreview.js";
 import { ActivityCard, ReservedNote } from "./components/ActivityCard.js";
-import { derivePrState, sortPrs, type DashPr } from "./prState.js";
+import { derivePrState, type DashPr } from "./prState.js";
 import { Modal } from "./components/Modal.js";
 import { HelpModal } from "./components/HelpModal.js";
 import { AddRepoForm } from "./components/AddRepoForm.js";
@@ -319,15 +319,6 @@ export function App(props: AppProps): React.JSX.Element {
     onRequestWizard: props.onRequestWizard,
     setView,
   });
-  // Last resolved positional index — the fallback when the selected issue number
-  // vanishes from the list (closed/filtered), so the cursor stays near its slot.
-  const lastIdxRef = useRef(0);
-  // Same fallback, for the PR list: the slot the cursor returns to when the
-  // anchored {nwo, number} vanishes (merged/closed and rolled off the limit).
-  const lastPrIdxRef = useRef(0);
-  // Same fallback, for pane 3's repo-scoped PR list.
-  const lastPane3IdxRef = useRef(0);
-
   // ── Local runtime state: system-section cursors + the cheap/heavy snapshots
   // feeding the rail's system rows and section bodies. ──
   const [sectionCursor, setSectionCursor] = useState<Record<SystemSection, number>>({
@@ -401,6 +392,8 @@ export function App(props: AppProps): React.JSX.Element {
     githubEnabled: props.githubEnabled,
     repoMappings,
     showToast,
+    refreshPollMs,
+    filter,
     nav: { currentNwo, view, bodyKind: body?.kind ?? null },
   });
 
@@ -511,60 +504,14 @@ export function App(props: AppProps): React.JSX.Element {
       : { start: 0, end: 0 };
   if (sysSection !== null) sectionPrev.current[sysSection] = sectionWin.start;
 
-  const currentIssues = currentNwo ? (github.issues[currentNwo] ?? []) : [];
-  // The live `/` filter is applied before selection resolves; the number anchor
-  // survives re-filtering and the issueIdxSafe clamp handles a shrinking list.
-  const filteredIssues = useMemo(
-    () => filterIssues(currentIssues, filter, trigger),
-    [currentIssues, filter, trigger],
-  );
-  // Resolve the anchored number to a live index; fall back to the clamped last
-  // index only when that issue is gone (closed, or filtered out).
-  const selNum = currentNwo ? github.selectedNum[currentNwo] : undefined;
-  const byNum = selNum !== undefined ? filteredIssues.findIndex((i) => i.number === selNum) : -1;
-  const issueIdxSafe =
-    filteredIssues.length === 0
-      ? 0
-      : byNum >= 0
-        ? byNum
-        : Math.min(lastIdxRef.current, filteredIssues.length - 1);
-  lastIdxRef.current = issueIdxSafe;
-  const currentIssue = filteredIssues[issueIdxSafe];
-
-  // Resolve the anchored PR to a live index in the sorted aggregate; fall back
-  // to the clamped last slot only when that PR is gone (mirrors the issue
-  // anchor above — the anchor survives a re-sorting poll).
-  const prByAnchor = github.prSel
-    ? github.prs.findIndex((p) => p.nwo === github.prSel!.nwo && p.number === github.prSel!.number)
-    : -1;
-  const prIdxSafe =
-    github.prs.length === 0
-      ? 0
-      : prByAnchor >= 0
-        ? prByAnchor
-        : Math.min(lastPrIdxRef.current, github.prs.length - 1);
-  lastPrIdxRef.current = prIdxSafe;
-  const selectedPr = github.prs[prIdxSafe] ?? null;
-
-  // Pane-3 data: the cross-repo PR aggregate, scoped to the rail's selected
-  // repo and re-sorted the same way the aggregate itself is (attention-first).
-  const repoPrs = useMemo(
-    () => sortPrs(github.prs.filter((p) => p.nwo === currentNwo)),
-    [github.prs, currentNwo],
-  );
-  // Resolve the anchored PR number to a live index in `repoPrs`; fall back to
-  // the clamped last slot only when the anchor is gone (mirrors the prSel
-  // resolution above, scoped to one repo).
-  const pane3ByNum =
-    github.pane3SelNum !== null ? repoPrs.findIndex((p) => p.number === github.pane3SelNum) : -1;
-  const pane3IdxSafe =
-    repoPrs.length === 0
-      ? 0
-      : pane3ByNum >= 0
-        ? pane3ByNum
-        : Math.min(lastPane3IdxRef.current, repoPrs.length - 1);
-  lastPane3IdxRef.current = pane3IdxSafe;
-  const selectedPane3Pr = repoPrs[pane3IdxSafe] ?? null;
+  // Issue/PR selection resolution (anchored number/{nwo,number} → a safe live
+  // index) now lives inside useGithubData — it owns the fallback refs the
+  // anchor-validation effects also read/write. `filteredIssues` — the live
+  // `/`-filtered view of `issues[currentNwo]` — is computed there too (the
+  // hook takes `filter` as a read-only input; the `filter` STATE itself stays
+  // App-owned, same as any other nav-adjacent value the hook consumes).
+  const { filteredIssues, issueIdxSafe, currentIssue, prIdxSafe, selectedPr, repoPrs } = github;
+  const { pane3IdxSafe, selectedPane3Pr } = github;
   // Pane 3's title identifies the scoped repo (mockup: "PRs · acme/reef");
   // no repo selected (empty rail) falls back to the bare pane label.
   const pane3Title = currentNwo ? `PRs · ${truncateNwoStart(currentNwo)}` : "PRs";
@@ -686,89 +633,14 @@ export function App(props: AppProps): React.JSX.Element {
     return oldest;
   }, [github.prStaleByRepo, repoMappings]);
 
-  // Scoped cycle for the selected repo (initial mount + every selection
-  // change): the data under the operator's eyes refreshes immediately.
-  useEffect(() => {
-    if (!currentNwo) return;
-    void github.refreshAll();
-  }, [currentNwo, github.refreshAll]);
-
   // Clear the live filter when the selected repo changes — a stale query would
   // hide the newly-selected repo's issues (also fires harmlessly on mount).
+  // Domain P (not github) — stays in App even though useGithubData now reads
+  // `filter`'s current value for its own issue-side selection resolution.
   useEffect(() => {
     setFilter("");
     setFiltering(false);
   }, [currentNwo]);
-
-  // Keep the per-repo anchored selection valid: pick the top row on first load,
-  // and when the selected issue disappears fall back to the same slot. A number
-  // that is still present is left untouched so re-sorts don't move the cursor.
-  useEffect(() => {
-    if (!currentNwo) return;
-    const arr = github.issues[currentNwo];
-    if (!arr || arr.length === 0) return;
-    github.setSelectedNum((m) => {
-      const cur = m[currentNwo];
-      if (cur !== undefined && arr.some((i) => i.number === cur)) return m;
-      const idx = Math.max(0, Math.min(lastIdxRef.current, arr.length - 1));
-      return { ...m, [currentNwo]: arr[idx].number };
-    });
-  }, [currentNwo, github.issues, github.setSelectedNum]);
-
-  // Keep the PR anchor valid: top row on first load, and the same slot when the
-  // anchored PR disappears. A still-present anchor is left untouched so a
-  // re-sorting poll never slides a different PR under the cursor.
-  useEffect(() => {
-    if (github.prs.length === 0) return;
-    github.setPrSel((cur) => {
-      if (cur && github.prs.some((p) => p.nwo === cur.nwo && p.number === cur.number)) return cur;
-      const idx = Math.max(0, Math.min(lastPrIdxRef.current, github.prs.length - 1));
-      return { nwo: github.prs[idx].nwo, number: github.prs[idx].number };
-    });
-  }, [github.prs, github.setPrSel]);
-
-  // Keep pane 3's anchor valid: same rules as the PR anchor above EXCEPT a
-  // repo swap (detected via the ref) resets it to the top explicitly — pane 3
-  // has no reason to remember a slot from a different repo's list, so it must
-  // not fall through to the lastPane3IdxRef clamp on a repo change.
-  const pane3RepoRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const repoChanged = pane3RepoRef.current !== currentNwo;
-    pane3RepoRef.current = currentNwo;
-    if (repoChanged) lastPane3IdxRef.current = 0;
-    if (repoPrs.length === 0) {
-      if (repoChanged) github.setPane3SelNum(null);
-      return;
-    }
-    github.setPane3SelNum((cur) => {
-      if (!repoChanged && cur !== null && repoPrs.some((p) => p.number === cur)) return cur;
-      const idx = Math.max(0, Math.min(lastPane3IdxRef.current, repoPrs.length - 1));
-      return repoPrs[idx].number;
-    });
-  }, [currentNwo, repoPrs, github.setPane3SelNum]);
-
-  // The unified poll — one interval, view-scoped via the refs. Immediate
-  // cycles fire from the selection effect, the `p` handler, and `r`.
-  useEffect(() => {
-    let alive = true;
-    const id = setInterval(() => void github.refreshAll({ isAlive: () => alive }), refreshPollMs);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [github.refreshAll, refreshPollMs]);
-
-  // Full sweep on mount and whenever the watchlist changes (refreshAll's
-  // identity tracks loadPrs → repoMappings): populates the ⚑ attention chip
-  // and the monitor aggregate, so a newly-watched repo's PRs appear without
-  // waiting for a monitor visit. Scoped cycles take over in between.
-  useEffect(() => {
-    let alive = true;
-    void github.refreshAll({ isAlive: () => alive, scope: "monitor" });
-    return () => {
-      alive = false;
-    };
-  }, [github.refreshAll]);
 
   // Optimistic action: apply the label delta locally, call gh with the ORIGINAL
   // labels, restore + toast on failure.
