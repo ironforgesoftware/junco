@@ -30,6 +30,10 @@ type Step =
   | "hostedProvider"
   | "hostedModel";
 const MANUAL = " manual"; // select sentinel (leading space — not a real id)
+// Module scope (not render-local): a stable reference so the mount-editing
+// effect below can depend on it without recreating it — and re-firing —
+// every render.
+const TEXT_STEPS: Step[] = ["url", "key", "manual", "mjPath"];
 
 export function Model({
   answers,
@@ -55,11 +59,10 @@ export function Model({
   const [keyDraft, setKeyDraft] = useState<string>(() =>
     io.mode === "rerun" ? "" : (answers.apiKey ?? ""),
   );
-  const textSteps: Step[] = ["url", "key", "manual", "mjPath"];
   useEffect(() => {
-    setTextEditing(textSteps.includes(step));
+    setTextEditing(TEXT_STEPS.includes(step));
     return () => setTextEditing(false);
-  }, [step]);
+  }, [step, setTextEditing]);
   useEffect(() => {
     if (step !== "probe") return;
     let alive = true;
@@ -71,7 +74,7 @@ export function Model({
     return () => {
       alive = false;
     };
-  }, [step]);
+  }, [step, answers.baseUrl, answers.apiKey, io]);
   useEffect(() => {
     if (step !== "hostedProvider") return;
     let alive = true;
@@ -93,7 +96,7 @@ export function Model({
     return () => {
       alive = false;
     };
-  }, [step]);
+  }, [step, io]);
 
   const finish = (picked: string): void => {
     const full =
