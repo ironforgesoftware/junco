@@ -13,8 +13,6 @@ import type { DashboardClient } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
 import { lifecycleLabels, parseRepoInput } from "../githubInbox.js";
-import type { WatchlistEntry } from "../watchlist.js";
-import { readWatchlist, writeWatchlist } from "../watchlist.js";
 import { expandHome } from "../config.js";
 import { join, resolve } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
@@ -82,6 +80,7 @@ import { useReview } from "./hooks/useReview.js";
 import { useCmdOutput } from "./hooks/useCmdOutput.js";
 import { usePalette } from "./hooks/usePalette.js";
 import { useLogOverlay } from "./hooks/useLogOverlay.js";
+import { useWatchlist } from "./hooks/useWatchlist.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -261,11 +260,10 @@ export function App(props: AppProps): React.JSX.Element {
   const size = useTerminalSize(props.sizeOverride);
   const layout = useMemo(() => computeLayout(size.columns, size.rows), [size]);
 
-  const initialWatchlist = readWatchlist(watchlistFile);
-  const [watchlistEntries, setWatchlistEntries] = useState<WatchlistEntry[]>(
-    initialWatchlist.entries,
+  const { repoMappings, watchlistError, addEntry, removeEntry } = useWatchlist(
+    watchlistFile,
+    configRepos,
   );
-  const [watchlistError, setWatchlistError] = useState<string | null>(initialWatchlist.error);
   // Rail selection: KEY-anchored (rowKey — nwo / path / "sys:section"), never a
   // bare index, so a heavy-poll clone discovery can't slide the cursor onto a
   // different row. null = top row (first repo, or queue when no repos).
@@ -375,25 +373,6 @@ export function App(props: AppProps): React.JSX.Element {
   const botLogin = useBotLogin(props.botLoginFn);
   // Dedupe key set for in-flight spawned actions (mirrors assessInFlightRef).
   const localActionInFlightRef = useRef<Set<string>>(new Set());
-
-  // Config repos ∪ watchlist, deduped by nwo (config wins) — recomputed after
-  // every watchlist write since setWatchlistEntries drives this memo.
-  const repoMappings = useMemo(() => {
-    const out = configRepos.map((r) => ({
-      nwo: r.nwo,
-      path: r.path,
-      fromConfig: true,
-      external: false,
-    }));
-    const seen = new Set(out.map((r) => r.nwo.toLowerCase()));
-    for (const e of watchlistEntries) {
-      if (seen.has(e.nwo.toLowerCase())) continue;
-      seen.add(e.nwo.toLowerCase());
-      // external === true → fork-PR mode: dispatch queues a ticket (no labels).
-      out.push({ nwo: e.nwo, path: e.path, fromConfig: false, external: e.external === true });
-    }
-    return out;
-  }, [configRepos, watchlistEntries]);
 
   // ── The unified rail: watched repos ∪ discovered local checkouts, then the
   // five pinned system rows. Selection resolves the key anchor to a live index
@@ -1156,16 +1135,10 @@ export function App(props: AppProps): React.JSX.Element {
         showToast("error", "watchlist unreadable — fix it before writing");
         return;
       }
-      // Re-read at write time: never clobber a file that went corrupt since mount.
-      const { entries: cur, error } = readWatchlist(watchlistFile);
-      if (error) {
-        setWatchlistError(error);
+      if (!removeEntry(mapping.nwo)) {
         showToast("error", "watchlist unreadable — not written");
         return;
       }
-      const next = cur.filter((e) => e.nwo.toLowerCase() !== mapping.nwo.toLowerCase());
-      writeWatchlist(watchlistFile, next);
-      setWatchlistEntries(next);
       // Drop the repo's cached issue state too — the rail badges and the header
       // pulse must never read ghost data for a repo that is no longer watched.
       const gone = mapping.nwo;
@@ -1192,7 +1165,7 @@ export function App(props: AppProps): React.JSX.Element {
       setPrs((prev) => prev.filter((p) => p.nwo !== gone));
       showToast("success", `unwatched ${mapping.nwo}`);
     },
-    [repoMappings, watchlistFile, watchlistError, showToast],
+    [repoMappings, watchlistError, showToast, removeEntry],
   );
 
   const handleAddRepo = useCallback(
@@ -1229,16 +1202,11 @@ export function App(props: AppProps): React.JSX.Element {
           setAddRepoError(prep.error);
           return;
         }
-        const { entries: cur, error } = readWatchlist(watchlistFile);
-        if (error) {
-          setWatchlistError(error);
+        if (!addEntry({ nwo, path: prep.value.path, external: true })) {
           setView("main");
           showToast("error", "watchlist unreadable — not written");
           return;
         }
-        const next = [...cur, { nwo, path: prep.value.path, external: true }];
-        writeWatchlist(watchlistFile, next);
-        setWatchlistEntries(next);
         setView("main");
         showToast("success", `watching ${nwo} (fork-PR mode via ${prep.value.forkNwo})`);
         return;
@@ -1268,16 +1236,11 @@ export function App(props: AppProps): React.JSX.Element {
         setAddRepoError(res.error);
         return;
       }
-      const { entries: cur, error } = readWatchlist(watchlistFile);
-      if (error) {
-        setWatchlistError(error);
+      if (!addEntry({ nwo, path: expanded })) {
         setView("main");
         showToast("error", "watchlist unreadable — not written");
         return;
       }
-      const next = [...cur, { nwo, path: expanded }];
-      writeWatchlist(watchlistFile, next);
-      setWatchlistEntries(next);
       setView("main");
       showToast("success", `watching ${nwo}`);
       // Bot mode: make sure the DAEMON's identity can push here too — the
@@ -1291,7 +1254,7 @@ export function App(props: AppProps): React.JSX.Element {
         showToast("success", `bot ${grant.value.login} granted write on ${nwo}`);
       }
     },
-    [client, watchlistFile, watchlistError, clonesDir, showToast],
+    [client, watchlistError, clonesDir, showToast, addEntry],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row
