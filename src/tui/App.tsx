@@ -12,9 +12,8 @@ import { bumpRender } from "./renderCount.js";
 import type { DashboardClient } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState, filterIssues, sortIssues } from "./state.js";
-import { lifecycleLabels, parseRepoInput } from "../githubInbox.js";
-import { expandHome } from "../config.js";
-import { join, resolve } from "node:path";
+import { lifecycleLabels } from "../githubInbox.js";
+import { resolve } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
@@ -80,6 +79,7 @@ import { useReview } from "./hooks/useReview.js";
 import { useCmdOutput } from "./hooks/useCmdOutput.js";
 import { usePalette } from "./hooks/usePalette.js";
 import { useLogOverlay } from "./hooks/useLogOverlay.js";
+import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 
 export interface AppProps {
@@ -319,8 +319,15 @@ export function App(props: AppProps): React.JSX.Element {
   const health = useHealth(client, healthPollMs);
   const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
-  const [addRepoError, setAddRepoError] = useState<string | null>(null);
-  const [addRepoBusy, setAddRepoBusy] = useState<string | null>(null);
+  const { addRepoError, addRepoBusy, handleAddRepo, setAddRepoError } = useAddRepoForm({
+    client,
+    clonesDir,
+    addEntry,
+    showToast,
+    setView,
+    aliveRef,
+    watchlistError,
+  });
   const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
   const {
     paletteFilter,
@@ -1166,95 +1173,6 @@ export function App(props: AppProps): React.JSX.Element {
       showToast("success", `unwatched ${mapping.nwo}`);
     },
     [repoMappings, watchlistError, showToast, removeEntry],
-  );
-
-  const handleAddRepo = useCallback(
-    async (rawNwo: string, path: string): Promise<void> => {
-      let nwo = rawNwo;
-      if (watchlistError) {
-        showToast("error", "watchlist unreadable — fix it before writing");
-        return;
-      }
-      // Accept bare owner/repo or a pasted github.com URL.
-      const parsed = parseRepoInput(nwo);
-      if (parsed === null) {
-        setAddRepoError("enter owner/repo or a github.com URL (e.g. https://github.com/acme/api)");
-        return;
-      }
-      nwo = parsed;
-      // No push access → fork-PR mode: junco manages the fork + clone; the
-      // bridge never polls this entry (external: true). A failed/unknown probe
-      // (offline) falls through to the owned-repo flow unchanged.
-      setAddRepoBusy("checking permissions…");
-      const perm = await client.repoPermission(nwo);
-      if (!aliveRef.current) return;
-      if (perm.ok && !perm.value.canPush) {
-        if (path.trim() !== "") {
-          setAddRepoBusy(null);
-          setAddRepoError("no push access to this repo — leave path empty (managed fork mode)");
-          return;
-        }
-        setAddRepoBusy("forking & cloning…");
-        const prep = await client.prepareExternalRepo(nwo);
-        if (!aliveRef.current) return;
-        setAddRepoBusy(null);
-        if (!prep.ok) {
-          setAddRepoError(prep.error);
-          return;
-        }
-        if (!addEntry({ nwo, path: prep.value.path, external: true })) {
-          setView("main");
-          showToast("error", "watchlist unreadable — not written");
-          return;
-        }
-        setView("main");
-        showToast("success", `watching ${nwo} (fork-PR mode via ${prep.value.forkNwo})`);
-        return;
-      }
-      // Empty path = clone into the managed directory for the operator.
-      let expanded: string;
-      setAddRepoError(null);
-      if (path.trim() === "") {
-        const [owner, repo] = nwo.split("/");
-        expanded = join(clonesDir, owner ?? nwo, repo ?? "repo");
-        setAddRepoBusy("cloning repository…");
-        const cloned = await client.cloneRepo(nwo, expanded);
-        if (!aliveRef.current) return;
-        if (!cloned.ok) {
-          setAddRepoBusy(null);
-          setAddRepoError(cloned.error);
-          return;
-        }
-      } else {
-        expanded = expandHome(path); // ONE expansion point: validate + store agree
-      }
-      setAddRepoBusy("validating…");
-      const res = await client.validateAndPrepareRepo(nwo, expanded);
-      if (!aliveRef.current) return;
-      setAddRepoBusy(null);
-      if (!res.ok) {
-        setAddRepoError(res.error);
-        return;
-      }
-      if (!addEntry({ nwo, path: expanded })) {
-        setView("main");
-        showToast("error", "watchlist unreadable — not written");
-        return;
-      }
-      setView("main");
-      showToast("success", `watching ${nwo}`);
-      // Bot mode: make sure the DAEMON's identity can push here too — the
-      // operator's own permission (checked above) says nothing about the
-      // bot's. Failure warns with the fix but never un-adds the repo.
-      const grant = await client.ensureBotAccess(nwo);
-      if (!aliveRef.current) return;
-      if (!grant.ok) {
-        showToast("error", `bot access: ${grant.error.split("\n")[0]}`);
-      } else if (!grant.value.skipped) {
-        showToast("success", `bot ${grant.value.login} granted write on ${nwo}`);
-      }
-    },
-    [client, watchlistError, clonesDir, showToast, addEntry],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row
