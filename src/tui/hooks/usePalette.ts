@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { filterCommands } from "../components/CommandPalette.js";
 import { PALETTE_COMMANDS } from "../cliRunner.js";
 import type { View } from "../App.js";
@@ -28,10 +29,10 @@ export function usePalette({
   paletteSel: number;
   paletteArgsMode: boolean;
   paletteArgs: string;
-  setPaletteFilter: React.Dispatch<React.SetStateAction<string>>;
-  setPaletteSel: React.Dispatch<React.SetStateAction<number>>;
-  setPaletteArgsMode: React.Dispatch<React.SetStateAction<boolean>>;
-  setPaletteArgs: React.Dispatch<React.SetStateAction<string>>;
+  setPaletteFilter: Dispatch<SetStateAction<string>>;
+  setPaletteSel: Dispatch<SetStateAction<number>>;
+  setPaletteArgsMode: Dispatch<SetStateAction<boolean>>;
+  setPaletteArgs: Dispatch<SetStateAction<string>>;
   resetPalette: () => void;
   paletteEnter: () => void;
 } {

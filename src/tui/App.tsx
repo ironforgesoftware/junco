@@ -242,6 +242,8 @@ export function App(props: AppProps): React.JSX.Element {
     queueFn,
     assessHistoryFn,
     onExit,
+    localCheapFn,
+    localHeavyFn,
   } = props;
   const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
@@ -249,9 +251,16 @@ export function App(props: AppProps): React.JSX.Element {
   const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
-  const runCliFn =
-    props.runCliFn ??
-    ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs));
+  // useMemo'd (perf pass #259): the `??` fallback arrow was rebuilt every
+  // render, churning the identity of everything that depends on `runCliFn`
+  // (runPaletteCommand, paletteEnter, runAssess, runLocalAction) even when
+  // neither `props.runCliFn` nor `configPath` changed.
+  const runCliFn = useMemo(
+    () =>
+      props.runCliFn ??
+      ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs)),
+    [props.runCliFn, configPath],
+  );
   const { exit } = useApp();
   bumpRender("App"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
 
@@ -396,6 +405,15 @@ export function App(props: AppProps): React.JSX.Element {
     filter,
     nav: { currentNwo, view, bodyKind: body?.kind ?? null },
   });
+  // Destructured (not `github.<field>`) so the actionHandlers memo below can
+  // depend on the exact stable identities it reads instead of the whole
+  // `github` object — which is a fresh value every render.
+  const {
+    refreshAll: githubRefreshAll,
+    setRefreshing: githubSetRefreshing,
+    setIssueLabels: githubSetIssueLabels,
+    evictRepo: githubEvictRepo,
+  } = github;
 
   // One scroll mechanic for every offset-driven surface. Exactly one is mounted
   // at a time (the render tree is config | local | review | rail+one-of), so one
@@ -493,15 +511,29 @@ export function App(props: AppProps): React.JSX.Element {
     daemon: 0,
     logs: 0,
   });
-  const sectionWin =
-    sysSection !== null
-      ? windowSlice(
-          localRows.length,
-          sectionRowsHeight(layout.bodyRows),
-          localCursorSafe,
-          sectionPrev.current[sysSection],
-        )
-      : { start: 0, end: 0 };
+  // `useMemo`'d (perf #259): `windowSlice` returns a fresh `{start,end}`
+  // object literal every call, and this used to run unconditionally every
+  // render — a brand-new reference for a memo'd section component's `window`
+  // prop even when nothing it depends on had changed. The dep list is the
+  // exact set `windowSlice` reads (`localRows.length` as the "total" input —
+  // `localRows` itself is rebuilt fresh every render by `sectionRowsFor`
+  // above, so depending on the array would defeat this same memo; only its
+  // length feeds the computation). `sectionPrev.current` is a ref: reading it
+  // inside the memo is safe without listing it as a dep — it only changes as
+  // this same computation's own side effect below, so it's already current
+  // whenever the memo actually reruns.
+  const sectionWin = useMemo(
+    () =>
+      sysSection !== null
+        ? windowSlice(
+            localRows.length,
+            sectionRowsHeight(layout.bodyRows),
+            localCursorSafe,
+            sectionPrev.current[sysSection],
+          )
+        : { start: 0, end: 0 },
+    [sysSection, localRows.length, layout.bodyRows, localCursorSafe],
+  );
   if (sysSection !== null) sectionPrev.current[sysSection] = sectionWin.start;
 
   // Issue/PR selection resolution (anchored number/{nwo,number} → a safe live
@@ -532,40 +564,49 @@ export function App(props: AppProps): React.JSX.Element {
   // Window slices live HERE (not inside the list components) so that rendering
   // and mouse hit-testing share one offset — the sticky prevStart refs move up
   // with them. Geometry helpers keep the budgets in lockstep with the panes.
+  // Each is `useMemo`'d (perf #259, same reasoning as `sectionWin` above): a
+  // fresh `{start,end}` literal every render was defeating IssueList/PrList/
+  // UnifiedRail's memo regardless of their callback props' own stability.
   const railPrev = useRef(0);
   // The rail windows its REPO prefix only (system rows are pinned); the cursor
   // clamps into the prefix so a system-row selection keeps the window parked.
   const repoCount = unifiedRepos.length;
-  const railWindow = windowSlice(
-    repoCount,
-    railListHeight(layout.bodyRows),
-    Math.min(railIdx, Math.max(0, repoCount - 1)),
-    railPrev.current,
+  const railWindow = useMemo(
+    () =>
+      windowSlice(
+        repoCount,
+        railListHeight(layout.bodyRows),
+        Math.min(railIdx, Math.max(0, repoCount - 1)),
+        railPrev.current,
+      ),
+    [repoCount, layout.bodyRows, railIdx],
   );
   railPrev.current = railWindow.start;
   const issuePrev = useRef(0);
-  const issueWindow = windowSlice(
-    filteredIssues.length,
-    listRowsHeight(layout.bodyRows),
-    issueIdxSafe,
-    issuePrev.current,
+  const issueWindow = useMemo(
+    () =>
+      windowSlice(
+        filteredIssues.length,
+        listRowsHeight(layout.bodyRows),
+        issueIdxSafe,
+        issuePrev.current,
+      ),
+    [filteredIssues.length, layout.bodyRows, issueIdxSafe],
   );
   issuePrev.current = issueWindow.start;
   const prPrev = useRef(0);
-  const prWindow = windowSlice(
-    github.prs.length,
-    listRowsHeight(layout.bodyRows),
-    prIdxSafe,
-    prPrev.current,
+  const prWindow = useMemo(
+    () =>
+      windowSlice(github.prs.length, listRowsHeight(layout.bodyRows), prIdxSafe, prPrev.current),
+    [github.prs.length, layout.bodyRows, prIdxSafe],
   );
   prPrev.current = prWindow.start;
   // Pane 3's repo-scoped monitor is a windowed PrList too — same lifted-offset rule.
   const pane3Prev = useRef(0);
-  const pane3Window = windowSlice(
-    repoPrs.length,
-    listRowsHeight(layout.bodyRows),
-    pane3IdxSafe,
-    pane3Prev.current,
+  const pane3Window = useMemo(
+    () =>
+      windowSlice(repoPrs.length, listRowsHeight(layout.bodyRows), pane3IdxSafe, pane3Prev.current),
+    [repoPrs.length, layout.bodyRows, pane3IdxSafe],
   );
   pane3Prev.current = pane3Window.start;
 
@@ -655,11 +696,11 @@ export function App(props: AppProps): React.JSX.Element {
       const nwo = currentNwo;
       const num = currentIssue.number;
       const prevLabels = currentIssue.labels;
-      github.setIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
+      githubSetIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
       void client.applyAction(nwo, num, action, prevLabels).then((res) => {
         if (!aliveRef.current) return;
         if (!res.ok) {
-          github.setIssueLabels(nwo, num, prevLabels);
+          githubSetIssueLabels(nwo, num, prevLabels);
           showToast("error", res.error);
         } else if (res.value.queued) {
           // GitHub was unreachable — the edit landed durably in the outbox
@@ -671,7 +712,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
       });
     },
-    [client, currentNwo, currentIssue, trigger, github.setIssueLabels, showToast, queueSnap],
+    [client, currentNwo, currentIssue, trigger, githubSetIssueLabels, showToast, queueSnap],
   );
 
   const openDetail = useCallback(() => {
@@ -747,14 +788,14 @@ export function App(props: AppProps): React.JSX.Element {
   const heavyOnScreen =
     sysSection === "worktrees" || body?.kind === "repoDetail" || view === "repoDetail";
   const forceLocalRefresh = useCallback(async (): Promise<void> => {
-    const c = await props.localCheapFn({ section: sysSection ?? undefined });
+    const c = await localCheapFn({ section: sysSection ?? undefined });
     if (!aliveRef.current) return;
     setLocalCheap(c);
     if (heavyOnScreen) {
-      const h = await props.localHeavyFn();
+      const h = await localHeavyFn();
       if (aliveRef.current) setLocalHeavy(h);
     }
-  }, [props.localCheapFn, props.localHeavyFn, sysSection, heavyOnScreen]);
+  }, [localCheapFn, localHeavyFn, sysSection, heavyOnScreen]);
 
   // Cheap poll @3s — always on: it feeds the rail's system badges, the header,
   // and whichever section body is on screen. `alive` (per-effect) + aliveRef
@@ -763,7 +804,7 @@ export function App(props: AppProps): React.JSX.Element {
   useEffect(() => {
     let alive = true;
     const run = async (): Promise<void> => {
-      const c = await props.localCheapFn({ section: sysSection ?? undefined });
+      const c = await localCheapFn({ section: sysSection ?? undefined });
       if (!alive || !aliveRef.current) return;
       setLocalCheap(c);
     };
@@ -773,7 +814,7 @@ export function App(props: AppProps): React.JSX.Element {
       alive = false;
       clearInterval(id);
     };
-  }, [sysSection, props.localCheapFn, localCheapPollMs]);
+  }, [sysSection, localCheapFn, localCheapPollMs]);
 
   // Heavy poll @15s — always on: the rail's local-only rows and the ⚑ badge
   // need candidates regardless of what the body shows (bounded git fan-out,
@@ -783,7 +824,7 @@ export function App(props: AppProps): React.JSX.Element {
     let alive = true;
     const ctrl = new AbortController();
     const run = async (): Promise<void> => {
-      const h = await props.localHeavyFn(ctrl.signal);
+      const h = await localHeavyFn(ctrl.signal);
       if (!alive || !aliveRef.current) return; // aliveRef drops late results on unmount
       setLocalHeavy(h);
     };
@@ -794,7 +835,7 @@ export function App(props: AppProps): React.JSX.Element {
       ctrl.abort();
       clearInterval(id);
     };
-  }, [props.localHeavyFn, localHeavyPollMs]);
+  }, [localHeavyFn, localHeavyPollMs]);
 
   // Fire-and-toast, mirroring `d`/`a`: no view switch, the selected repo's nwo
   // is captured at press time, and the result surfaces as a toast whenever it
@@ -851,14 +892,14 @@ export function App(props: AppProps): React.JSX.Element {
         if (rr.code === 0) showToast("success", line ?? `${name} ok`);
         else showToast("error", line ?? `${name} failed`);
         // Immediate re-poll (cheap fn is cheap; section-gated counts refresh too).
-        void props.localCheapFn({ section: sysSection ?? undefined }).then((c) => {
+        void localCheapFn({ section: sysSection ?? undefined }).then((c) => {
           if (aliveRef.current) {
             setLocalCheap(c);
           }
         });
       });
     },
-    [runCliFn, showToast, props.localCheapFn, sysSection],
+    [runCliFn, showToast, localCheapFn, sysSection],
   );
 
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
@@ -886,10 +927,10 @@ export function App(props: AppProps): React.JSX.Element {
       // Drop the repo's cached issue/PR state too — the rail badges and the
       // header pulse must never read ghost data for a repo that is no longer
       // watched. Synchronous, not a poll round-trip.
-      github.evictRepo(mapping.nwo);
+      githubEvictRepo(mapping.nwo);
       showToast("success", `unwatched ${mapping.nwo}`);
     },
-    [repoMappings, watchlistError, showToast, removeEntry, github.evictRepo],
+    [repoMappings, watchlistError, showToast, removeEntry, githubEvictRepo],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row
@@ -917,36 +958,65 @@ export function App(props: AppProps): React.JSX.Element {
 
   // Fullscreen PR overlay opener — shared by keyboard enter (pane 3, prs view)
   // and the mouse's click-on-selected-row path; `from` is where esc/q returns.
-  const openPrDetail = (pr: DashPr | null, from: "main" | "prs"): void => {
+  // `useCallback`'d (empty deps: only the two setState setters, both stable)
+  // so the `structuralChipActions` memo below doesn't re-identify every render.
+  const openPrDetail = useCallback((pr: DashPr | null, from: "main" | "prs"): void => {
     if (!pr) return;
     setPrDetail({ pr, from });
     setView("prDetail");
-  };
+  }, []);
 
   // Rail movement: anchor the KEY of the landed row (never a bare index) so a
   // re-deriving poll keeps the cursor on the same row. Shared by keyboard and
-  // mouse (wheel/click), mirroring moveIssue/movePr above.
-  const moveRail = (delta: number): void => {
-    if (railRows.length === 0) return;
-    // Functional update so rapid batched presses compose (two `j`s in one
-    // stdin flush share this render's closure — resolving from the PENDING
-    // key keeps each step relative to the last, like setRepoIdx((i) => …) did).
-    setRailSel((cur) => {
-      const idx = resolveRailIndex(railRows, cur, lastRailIdxRef.current);
-      const next = Math.max(0, Math.min(idx + delta, railRows.length - 1));
-      return rowKey(railRows[next]);
-    });
-  };
-  const moveRailTo = (idx: number): void => {
-    if (railRows.length === 0) return;
-    setRailSel(rowKey(railRows[Math.max(0, Math.min(idx, railRows.length - 1))]));
-  };
+  // mouse (wheel/click), mirroring moveIssue/movePr above. `useCallback`'d
+  // (perf #259) so the `onWheel` wrapper passed to `UnifiedRail` below only
+  // re-identifies when `railRows` itself changes, not on every App render.
+  const moveRail = useCallback(
+    (delta: number): void => {
+      if (railRows.length === 0) return;
+      // Functional update so rapid batched presses compose (two `j`s in one
+      // stdin flush share this render's closure — resolving from the PENDING
+      // key keeps each step relative to the last, like setRepoIdx((i) => …) did).
+      setRailSel((cur) => {
+        const idx = resolveRailIndex(railRows, cur, lastRailIdxRef.current);
+        const next = Math.max(0, Math.min(idx + delta, railRows.length - 1));
+        return rowKey(railRows[next]);
+      });
+    },
+    [railRows],
+  );
+  const moveRailTo = useCallback(
+    (idx: number): void => {
+      if (railRows.length === 0) return;
+      setRailSel(rowKey(railRows[Math.max(0, Math.min(idx, railRows.length - 1))]));
+    },
+    [railRows],
+  );
+  // `UnifiedRail`'s onWheel is gated on `view` (rail wheel only moves the
+  // cursor while the main view is focused there) — hoisted so the gate check
+  // doesn't itself require a fresh arrow every render (perf #259).
+  const railWheel = useCallback(
+    (d: 1 | -1): void => {
+      if (view === "main") moveRail(d);
+    },
+    [view, moveRail],
+  );
+  // Same treatment as railWheel: the `onPanePress` arrow only differs from a
+  // bare `() => setPane(1)` in the ternary that decides whether it's mounted
+  // at all — hoisting the function itself keeps IT stable across renders.
+  const railPanePress = useCallback(() => setPane(1), []);
+  // `assessHistory` is a stable `useState` Map (only its OWN poll replaces
+  // it), but the inline `(nwo) => assessHistory.get(nwo) ?? null` arrow at the
+  // JSX call site was rebuilt every render regardless — hoisted here so its
+  // identity tracks `assessHistory` only.
+  const railAssess = useCallback((nwo: string) => assessHistory.get(nwo) ?? null, [assessHistory]);
   // Full-width RepoDetail view opener — enter / click-again on a rail repo
   // row; the target is frozen at open (the `detail` snapshot pattern).
-  const openRepoDetailView = (repo: UnifiedRepo): void => {
+  // `useCallback`'d for the same reason as `openPrDetail` above.
+  const openRepoDetailView = useCallback((repo: UnifiedRepo): void => {
     setRepoDetailTarget(repo);
     setView("repoDetail");
-  };
+  }, []);
 
   // ── Derived-mnemonic bindings (mnemonic spec §2/§4): ONE context table
   // drives the footer chips, the help modal, and the keyboard dispatch tail —
@@ -1217,7 +1287,7 @@ export function App(props: AppProps): React.JSX.Element {
           },
           prs: () => {
             setView("prs");
-            void github.refreshAll({ scope: "monitor" });
+            void githubRefreshAll({ scope: "monitor" });
           },
           review: () => {
             setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
@@ -1239,8 +1309,8 @@ export function App(props: AppProps): React.JSX.Element {
           refresh: () => {
             void forceLocalRefresh();
             if (currentNwo) {
-              github.setRefreshing(true);
-              void github.refreshAll().finally(() => github.setRefreshing(false));
+              githubSetRefreshing(true);
+              void githubRefreshAll().finally(() => githubSetRefreshing(false));
             }
           },
           unwatch: () => {
@@ -1398,7 +1468,6 @@ export function App(props: AppProps): React.JSX.Element {
     view,
     cmd,
     prDetail,
-    selectedPr,
     reviewState,
     loadReview,
     watchlistError,
@@ -1425,14 +1494,21 @@ export function App(props: AppProps): React.JSX.Element {
     openPrDetailInBrowser,
     openSelectedPr,
     runPaletteCommand,
-    github.refreshAll,
-    github.setRefreshing,
+    githubRefreshAll,
+    githubSetRefreshing,
     showToast,
     runAction,
     runAssess,
     openBrowser,
     unwatch,
     props.githubEnabled,
+    resetPalette,
+    setAddRepoError,
+    setLogFilters,
+    setLogFollow,
+    setLogOverlay,
+    setLogSearchMode,
+    setReviewState,
   ]);
 
   // Clickable STRUCTURAL chips (key-keyed): the non-derivable siblings of the
@@ -1504,6 +1580,8 @@ export function App(props: AppProps): React.JSX.Element {
     onLogExpand,
     openDetail,
     paletteEnter,
+    setLogOverlay,
+    setLogSearchMode,
   ]);
   // Chip click resolution: mnemonic chips by ID, structural chips by KEY.
   const chipActions = useMemo(
@@ -2006,28 +2084,101 @@ export function App(props: AppProps): React.JSX.Element {
 
   // Unified-rail mouse handlers — mirror the rail/body key recipes above
   // (click selects; click-again = the enter key for that row kind).
-  const railRowPress = (i: number): void => {
-    if (confirm !== null || view !== "main") return;
-    const row = railRows[i];
-    if (!row) return;
-    if (i === railIdx) {
-      // Click-again = enter: repo rows open the full-width RepoDetail; the
-      // logs row opens the overlay; other system rows focus the body.
-      if (row.kind === "repo") return void openRepoDetailView(row.repo);
-      if (row.section === "logs") return void onLogExpand();
-      setPane(2);
-      return;
-    }
-    setPane(1);
-    setRailSel(rowKey(row));
-  };
+  // `useCallback`'d (perf #259) so this identity only churns with its real
+  // deps — `openRepoDetailView`/`onLogExpand` are themselves stable — instead
+  // of every App render, which is what let it defeat `UnifiedRail`'s memo.
+  const railRowPress = useCallback(
+    (i: number): void => {
+      if (confirm !== null || view !== "main") return;
+      const row = railRows[i];
+      if (!row) return;
+      if (i === railIdx) {
+        // Click-again = enter: repo rows open the full-width RepoDetail; the
+        // logs row opens the overlay; other system rows focus the body.
+        if (row.kind === "repo") return void openRepoDetailView(row.repo);
+        if (row.section === "logs") return void onLogExpand();
+        setPane(2);
+        return;
+      }
+      setPane(1);
+      setRailSel(rowKey(row));
+    },
+    [confirm, view, railRows, railIdx, openRepoDetailView, onLogExpand],
+  );
   // Section-body row click: focus the body and move the cursor (a click-again
   // on the already-selected row is a no-op — destructive verbs stay on keys).
-  const sectionRowPress = (idx: number): void => {
-    if (confirm !== null || sysSection === null) return;
-    setPane(2);
-    setSectionCursor((m) => ({ ...m, [sysSection]: idx }));
-  };
+  const sectionRowPress = useCallback(
+    (idx: number): void => {
+      if (confirm !== null || sysSection === null) return;
+      setPane(2);
+      setSectionCursor((m) => ({ ...m, [sysSection]: idx }));
+    },
+    [confirm, sysSection],
+  );
+
+  // The remaining list-view row/pane press handlers (issues pane, prs view,
+  // pane 3's repo-scoped PR list) — same story as railRowPress/sectionRowPress
+  // above: these were inline arrows at the JSX call site (below), rebuilt
+  // every App render regardless of whether their own deps changed, which
+  // defeated IssueList/PrList's memo on every unrelated re-render (perf #259).
+  const issueRowPress = useCallback(
+    (i: number): void => {
+      if (confirm !== null) return;
+      if (pane === 2 && i === issueIdxSafe) return void openDetail();
+      setPane(2);
+      moveIssueTo(i);
+    },
+    [confirm, pane, issueIdxSafe, openDetail, moveIssueTo],
+  );
+  const issuePanePress = useCallback(() => setPane(2), []);
+  const prsRowPress = useCallback(
+    (i: number): void => {
+      if (confirm !== null) return;
+      if (i === prIdxSafe) return void openPrDetail(selectedPr, "prs");
+      movePrTo(i);
+    },
+    [confirm, prIdxSafe, openPrDetail, selectedPr, movePrTo],
+  );
+  const pane3RowPress = useCallback(
+    (i: number): void => {
+      if (confirm !== null) return;
+      if (pane === 3 && i === pane3IdxSafe) {
+        return void openPrDetail(selectedPane3Pr, "main");
+      }
+      setPane(3);
+      movePane3To(i);
+    },
+    [confirm, pane, pane3IdxSafe, openPrDetail, selectedPane3Pr, movePane3To],
+  );
+  const pane3PanePress = useCallback(() => setPane(3), []);
+
+  // `RepoDetail`'s `worktrees` prop was filtered inline at both JSX call
+  // sites below (`.filter(...)` always returns a fresh array, every render,
+  // defeating the component's memo regardless of its callback props) —
+  // hoisted into their own memos (perf #259) so the array reference only
+  // changes when `localHeavy` or the target repo actually does. `body.repo`
+  // (unlike `body` itself, a fresh `{kind, repo}` wrapper every render) is the
+  // SAME reference across renders where `selectedRow` hasn't changed — it
+  // traces back through `railRows`/`unifiedRepos`, both `useMemo`'d above.
+  const bodyRepoDetailRepo = body?.kind === "repoDetail" ? body.repo : null;
+  const bodyRepoWorktrees = useMemo(
+    () =>
+      bodyRepoDetailRepo
+        ? (localHeavy?.worktrees ?? []).filter(
+            (w) => w.repoPath !== null && resolve(w.repoPath) === resolve(bodyRepoDetailRepo.path),
+          )
+        : [],
+    [localHeavy, bodyRepoDetailRepo],
+  );
+  const repoDetailWorktrees = useMemo(
+    () =>
+      repoDetailTarget
+        ? (localHeavy?.worktrees ?? []).filter(
+            (w) => w.repoPath !== null && resolve(w.repoPath) === resolve(repoDetailTarget.path),
+          )
+        : [],
+    [localHeavy, repoDetailTarget],
+  );
 
   const listHeight = layout.bodyRows;
   const paletteProps = {
@@ -2169,28 +2320,25 @@ export function App(props: AppProps): React.JSX.Element {
             cheap={localCheap}
             heavy={localHeavy}
             issueCounts={issueCounts}
-            assess={(nwo) => assessHistory.get(nwo) ?? null}
+            assess={railAssess}
             width={layout.railWidth}
             height={listHeight}
             now={queueNow}
             window={railWindow}
             onRowPress={railRowPress}
-            onPanePress={view === "main" && confirm === null ? () => setPane(1) : undefined}
-            onWheel={(d) => (view === "main" ? moveRail(d) : undefined)}
+            onPanePress={view === "main" && confirm === null ? railPanePress : undefined}
+            onWheel={railWheel}
           />
           {view === "repoDetail" && repoDetailTarget ? (
             <RepoDetail
               repo={repoDetailTarget}
-              worktrees={(localHeavy?.worktrees ?? []).filter(
-                (w) =>
-                  w.repoPath !== null && resolve(w.repoPath) === resolve(repoDetailTarget.path),
-              )}
+              worktrees={repoDetailWorktrees}
               queue={localCheap?.queue ?? queueSnap}
               scroll={scroll}
               height={listHeight}
               focused
               now={queueNow}
-              onWheel={(d) => scrollBy(d)}
+              onWheel={scrollBy}
               onScrollMax={onScrollMax}
             />
           ) : view === "cmdOutput" && cmd ? (
@@ -2219,7 +2367,7 @@ export function App(props: AppProps): React.JSX.Element {
               focused
               height={listHeight}
               onLinkPress={openDetailIssueInBrowser}
-              onWheel={(d) => scrollBy(d)}
+              onWheel={scrollBy}
               onScrollMax={onScrollMax}
             />
           ) : view === "prDetail" && prDetail ? (
@@ -2242,25 +2390,19 @@ export function App(props: AppProps): React.JSX.Element {
               staleAt={prStaleAt}
               window={prWindow}
               botLogin={botLogin}
-              onRowPress={(i) => {
-                if (confirm !== null) return;
-                if (i === prIdxSafe) return void openPrDetail(selectedPr, "prs");
-                movePrTo(i);
-              }}
-              onWheel={(d) => movePr(d)}
+              onRowPress={prsRowPress}
+              onWheel={movePr}
             />
           ) : body?.kind === "repoDetail" ? (
             <RepoDetail
               repo={body.repo}
-              worktrees={(localHeavy?.worktrees ?? []).filter(
-                (w) => w.repoPath !== null && resolve(w.repoPath) === resolve(body.repo.path),
-              )}
+              worktrees={bodyRepoWorktrees}
               queue={localCheap?.queue ?? queueSnap}
               scroll={scroll}
               height={listHeight}
               focused={pane === 2}
               now={queueNow}
-              onWheel={(d) => scrollBy(d)}
+              onWheel={scrollBy}
               onScrollMax={onScrollMax}
             />
           ) : body?.kind === "section" ? (
@@ -2317,7 +2459,7 @@ export function App(props: AppProps): React.JSX.Element {
                       scroll={scroll}
                       height={listHeight}
                       focused={pane === 2}
-                      onWheel={(d) => scrollBy(d)}
+                      onWheel={scrollBy}
                       onScrollMax={onScrollMax}
                     />
                   );
@@ -2353,14 +2495,9 @@ export function App(props: AppProps): React.JSX.Element {
               staleAt={currentNwo ? (github.staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
               botLogin={botLogin}
-              onRowPress={(i) => {
-                if (confirm !== null) return;
-                if (pane === 2 && i === issueIdxSafe) return void openDetail();
-                setPane(2);
-                moveIssueTo(i);
-              }}
-              onPanePress={confirm === null ? () => setPane(2) : undefined}
-              onWheel={(d) => moveIssue(d)}
+              onRowPress={issueRowPress}
+              onPanePress={confirm === null ? issuePanePress : undefined}
+              onWheel={moveIssue}
             />
           )}
           {layout.mode === "wide" &&
@@ -2389,16 +2526,9 @@ export function App(props: AppProps): React.JSX.Element {
                   emptyText="no junco PRs for this repo"
                   botLogin={botLogin}
                   paneWidth={layout.previewWidth}
-                  onRowPress={(i) => {
-                    if (confirm !== null) return;
-                    if (pane === 3 && i === pane3IdxSafe) {
-                      return void openPrDetail(selectedPane3Pr, "main");
-                    }
-                    setPane(3);
-                    movePane3To(i);
-                  }}
-                  onPanePress={confirm === null ? () => setPane(3) : undefined}
-                  onWheel={(d) => movePane3(d)}
+                  onRowPress={pane3RowPress}
+                  onPanePress={confirm === null ? pane3PanePress : undefined}
+                  onWheel={movePane3}
                 />
               </Box>
             ) : view === "main" && body?.kind === "section" ? (

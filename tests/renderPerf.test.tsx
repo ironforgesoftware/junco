@@ -5,22 +5,26 @@
 // health is never passed to any of these components) and records, per
 // mounted view, whether the target component's render count stays flat.
 //
-// MEASURED RESULT (see the task-16 commit body for the full before/after
-// table): memo only achieves a bail-out for ActivityCard and PrPreview.
-// Every other target (IssueList, PrList, UnifiedRail, RepoDetail, Preview,
-// QueueView, OutboxSection, WorktreesSection, DaemonSection) still
-// re-renders on every unrelated App render, because App hands it at least
-// one prop that is a fresh reference every render — an inline arrow at the
-// JSX call site (`onWheel={(d) => scrollBy(d)}`, `onRowPress={(i) =>
-// onRowPress(idx)}`-style closures inside the row map) or a plain function
-// declared in App's body instead of behind useCallback (`railRowPress`,
-// `sectionRowPress`). ActivityCard and PrPreview happen to be the two call
-// sites where every prop traces back to either a primitive, a useCallback'd
-// handler (`openSelectedPr`), or App state untouched by the health poll —
-// so they are the only two where React.memo's shallow prop comparison can
-// actually bail out. This is documented, not "fixed": the task brief is
-// explicit that forcing prop-stability refactors (wrapping every inline
-// handler in useCallback) is out of scope for this pass.
+// MEASURED RESULT, task 16 (see its commit body for the full before/after
+// table): memo only achieved a bail-out for ActivityCard and PrPreview. Every
+// other target (IssueList, PrList, UnifiedRail, RepoDetail, Preview,
+// QueueView, OutboxSection, WorktreesSection, DaemonSection) re-rendered on
+// every unrelated App render, because App handed it at least one prop that
+// was a fresh reference every render: an inline arrow at the JSX call site
+// (`onWheel={(d) => scrollBy(d)}`, `onRowPress={(i) => {...}}`), a plain
+// function re-declared in App's body instead of behind useCallback
+// (`railRowPress`, `sectionRowPress`, the github-hook movers), a `windowSlice`
+// window object recomputed unconditionally every render, or (RepoDetail) an
+// inline `.filter()` on `localHeavy.worktrees` run fresh every render. That
+// was documented, not fixed — task 16's brief was explicit that the
+// prop-stability refactor was out of scope for that pass.
+//
+// MEASURED RESULT, perf pass #259 (this file's current state): the follow-up
+// pass stabilized every one of those props — see App.tsx/useGithubData.ts for
+// the sites (useMemo'd window/worktrees values, useCallback'd movers and row-
+// press handlers, hoisted JSX arrows) — and ALL ELEVEN targets now stay FLAT
+// across an unrelated (health-only) App re-render. Every assertion below was
+// flipped from `toBeGreaterThan(0)` to `toBe(0)` to match.
 //
 // The measurement seam (src/tui/renderCount.ts) is a no-op unless
 // JUNCO_RENDER_COUNT=1, so it costs nothing in prod or the other ~3000
@@ -116,6 +120,14 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
         (renderCounts().PrList ?? 0) >= 1 &&
         (renderCounts().UnifiedRail ?? 0) >= 1,
     );
+    // Let mount-time effects settle before the measurement window starts: the
+    // initial github fetch (client.listIssues/listPrs, kicked off by the
+    // "scoped cycle on mount" effect) resolves on its own microtask shortly
+    // after mount, which is a GENUINE data-arrival re-render, not an
+    // unrelated one. Without this, that render can land inside the very
+    // first `waitForNextAppRender` window below and read as a false bump —
+    // every target still shows a clean, permanent 0 on every render after it.
+    await new Promise((res) => setTimeout(res, 20));
     resetRenderCounts();
     const appBefore = renderCounts().App ?? 0; // 0, just reset
     await waitForNextAppRender(appBefore);
@@ -124,20 +136,23 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     // App itself MUST have re-rendered (that's the whole premise) — if this
     // fails the test isn't measuring what it claims to.
     expect((renderCounts().App ?? 0) > appBefore).toBe(true);
-    // MEASURED: memo does NOT bail out here. IssueList/PrList both take an
-    // inline `onRowPress={(i) => {...}}` / `onWheel={(d) => moveIssue(d)}`
-    // closure built fresh at the JSX call site every App render; UnifiedRail
-    // additionally gets `assess={(nwo) => assessHistory.get(nwo) ?? null}`
-    // and `onRowPress={railRowPress}` (a plain function re-declared in App's
-    // body, not useCallback). All three re-render on every App render,
-    // memoized or not.
-    expect(renderCounts().IssueList ?? 0).toBeGreaterThan(0);
-    expect(renderCounts().PrList ?? 0).toBeGreaterThan(0);
-    expect(renderCounts().UnifiedRail ?? 0).toBeGreaterThan(0);
+    // MEASURED (perf #259): all three now stay FLAT. IssueList/PrList's
+    // onRowPress/onWheel are useCallback'd (issueRowPress/moveIssue,
+    // pane3RowPress/movePane3); UnifiedRail's assess/onPanePress/onWheel are
+    // hoisted (railAssess/railPanePress/railWheel) and its onRowPress
+    // (railRowPress) is useCallback'd over stable deps (openRepoDetailView,
+    // onLogExpand — both now useCallback'd at their own source). The
+    // `window`/`issueCounts` props were already memo-safe; `railWindow`/
+    // `issueWindow`/`pane3Window` are now useMemo'd too (a fresh
+    // `windowSlice()` object every render was defeating every one of these
+    // regardless of their callback props).
+    expect(renderCounts().IssueList ?? 0).toBe(0);
+    expect(renderCounts().PrList ?? 0).toBe(0);
+    expect(renderCounts().UnifiedRail ?? 0).toBe(0);
     void r;
   });
 
-  it("prs view (PrList + PrPreview mounted) — PrPreview is a genuine bail-out", async () => {
+  it("prs view (PrList + PrPreview mounted) — both are now bail-outs", async () => {
     const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     r.stdin.write("p");
@@ -146,14 +161,17 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     const appBefore = renderCounts().App ?? 0;
     await waitForNextAppRender(appBefore);
     record("prs");
-    expect(renderCounts().PrList ?? 0).toBeGreaterThan(0); // same story as "main"
+    // MEASURED (perf #259): PrList's onRowPress/onWheel are hoisted
+    // (prsRowPress/movePr, the latter useCallback'd in useGithubData.ts) —
+    // stays FLAT, same story as "main".
+    expect(renderCounts().PrList ?? 0).toBe(0);
     // MEASURED: PrPreview stays FLAT. Its props at this call site
     // (pr/branchPrefix/now/height/width/focused/onLinkPress) are either
     // primitives unaffected by the health poll, or `onLinkPress =
     // selectedPr ? openSelectedPr : undefined` — `openSelectedPr` is itself
     // useCallback'd on [client, selectedPr, showToast], none of which the
-    // health poll touches. This is the one target with NO unstable prop at
-    // its call site, so memo actually earns its keep here.
+    // health poll touches. This is the one target that was ALREADY flat
+    // before #259 — no unstable prop at its call site to begin with.
     expect(renderCounts().PrPreview ?? 0).toBe(0);
   });
 
@@ -170,10 +188,10 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     const appBefore = renderCounts().App ?? 0;
     await waitForNextAppRender(appBefore);
     record("detail");
-    // MEASURED: Preview's onWheel (`(d) => scrollBy(d)`) is an inline
-    // closure rebuilt at the call site every render, even though scrollBy
-    // itself is useCallback-stable — memo cannot see past the wrapper.
-    expect(renderCounts().Preview ?? 0).toBeGreaterThan(0);
+    // MEASURED (perf #259): `onWheel={scrollBy}` now passes the already-
+    // useCallback'd scrollBy straight through instead of wrapping it in a
+    // fresh `(d) => scrollBy(d)` arrow every render — stays FLAT.
+    expect(renderCounts().Preview ?? 0).toBe(0);
   });
 
   it("repoDetail view (RepoDetail mounted)", async () => {
@@ -185,11 +203,15 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     const appBefore = renderCounts().App ?? 0;
     await waitForNextAppRender(appBefore);
     record("repoDetail");
-    // MEASURED: same inline-onWheel story as Preview.
-    expect(renderCounts().RepoDetail ?? 0).toBeGreaterThan(0);
+    // MEASURED (perf #259): same onWheel fix as Preview, PLUS `worktrees` —
+    // an inline `.filter()` over `localHeavy.worktrees` that allocated a
+    // fresh array every render regardless of onWheel — is now `useMemo`'d
+    // (`repoDetailWorktrees`, keyed on `[localHeavy, repoDetailTarget]`).
+    // Stays FLAT.
+    expect(renderCounts().RepoDetail ?? 0).toBe(0);
   });
 
-  it("queue section (QueueView + ActivityCard mounted) — ActivityCard is a genuine bail-out", async () => {
+  it("queue section (QueueView + ActivityCard mounted) — both are now bail-outs", async () => {
     const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     await tap(r, TO_QUEUE_ROW); // acme/api -> beta/two -> queue
@@ -200,15 +222,14 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     const appBefore = renderCounts().App ?? 0;
     await waitForNextAppRender(appBefore);
     record("queue");
-    // MEASURED: QueueView still bumps — its `onRowPress={sectionRowPress}`
-    // closes over a plain function re-declared in App's body every render
-    // (not useCallback), so memo cannot bail out despite `onScrollMax` and
-    // every other prop being stable.
-    expect(renderCounts().QueueView ?? 0).toBeGreaterThan(0);
+    // MEASURED (perf #259): `onRowPress={sectionRowPress}`, now useCallback'd
+    // over `[confirm, sysSection]` instead of a plain function re-declared in
+    // App's body every render — stays FLAT.
+    expect(renderCounts().QueueView ?? 0).toBe(0);
     // MEASURED: ActivityCard stays FLAT — its only props (stats/width/
     // height) are all App-state/layout values the health poll never
     // touches, and it takes NO callback props at all. The cleanest possible
-    // case for memo, and it delivers.
+    // case for memo, and it delivered even before #259.
     expect(renderCounts().ActivityCard ?? 0).toBe(0);
   });
 
@@ -221,8 +242,9 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     const appBefore = renderCounts().App ?? 0;
     await waitForNextAppRender(appBefore);
     record("outbox");
-    // MEASURED: same `sectionRowPress` story as QueueView.
-    expect(renderCounts().OutboxSection ?? 0).toBeGreaterThan(0);
+    // MEASURED (perf #259): same `sectionRowPress` fix as QueueView, plus
+    // `window={sectionWin}` — now `useMemo`'d — stays FLAT.
+    expect(renderCounts().OutboxSection ?? 0).toBe(0);
     expect(renderCounts().ActivityCard ?? 0).toBe(0); // still mounted (wide pane 3), still flat
   });
 
@@ -235,7 +257,8 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     const appBefore = renderCounts().App ?? 0;
     await waitForNextAppRender(appBefore);
     record("worktrees");
-    expect(renderCounts().WorktreesSection ?? 0).toBeGreaterThan(0);
+    // MEASURED (perf #259): same fix as OutboxSection — stays FLAT.
+    expect(renderCounts().WorktreesSection ?? 0).toBe(0);
     expect(renderCounts().ActivityCard ?? 0).toBe(0);
   });
 
@@ -248,9 +271,9 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
     const appBefore = renderCounts().App ?? 0;
     await waitForNextAppRender(appBefore);
     record("daemon");
-    // MEASURED: DaemonSection's onWheel is a fresh closure per App render,
-    // same as RepoDetail/Preview above.
-    expect(renderCounts().DaemonSection ?? 0).toBeGreaterThan(0);
+    // MEASURED (perf #259): `onWheel={scrollBy}`, same fix as Preview/
+    // RepoDetail — stays FLAT.
+    expect(renderCounts().DaemonSection ?? 0).toBe(0);
     expect(renderCounts().ActivityCard ?? 0).toBe(0);
   });
 });

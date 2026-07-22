@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type React from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { DashboardClient } from "../ghClient.js";
 import type { DashIssue } from "../state.js";
 import { filterIssues, sortIssues } from "../state.js";
@@ -59,7 +59,7 @@ export interface UseGithubDataResult {
   prSel: { nwo: string; number: number } | null;
   pane3SelNum: number | null;
   refreshing: boolean;
-  setRefreshing: React.Dispatch<React.SetStateAction<boolean>>;
+  setRefreshing: Dispatch<SetStateAction<boolean>>;
   refreshAll: (opts?: { isAlive?: () => boolean; scope?: "main" | "monitor" }) => Promise<void>;
   loadIssues: (nwo: string) => Promise<Delivery>;
   loadPrs: (isAlive?: () => boolean) => Promise<Delivery>;
@@ -385,12 +385,16 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
 
   // The live `/` filter is applied before selection resolves; the number
   // anchor survives re-filtering and the issueIdxSafe clamp handles a
-  // shrinking list.
-  const currentIssues = currentNwo ? (issues[currentNwo] ?? []) : [];
-  const filteredIssues = useMemo(
-    () => filterIssues(currentIssues, filter, trigger),
-    [currentIssues, filter, trigger],
-  );
+  // shrinking list. `currentIssues` is computed INSIDE the memo (rather than
+  // as its own variable) because the `?? []` fallback allocates a fresh array
+  // literal on every render whenever the repo's issues haven't loaded yet —
+  // as an external variable that would make the memo's dependency itself
+  // unstable; folded in here, the memo's own deps (`currentNwo`, `issues`)
+  // are the primitives/state that actually gate recomputation.
+  const filteredIssues = useMemo(() => {
+    const currentIssues = currentNwo ? (issues[currentNwo] ?? []) : [];
+    return filterIssues(currentIssues, filter, trigger);
+  }, [currentNwo, issues, filter, trigger]);
 
   // Resolve the anchored number to a live index; fall back to the clamped
   // last index only when that issue is gone (closed, or filtered out).
@@ -435,42 +439,64 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
 
   // Move the anchored NUMBER, not a bare index — a re-sorting poll must keep
   // the cursor on the same issue. Shared by keyboard and mouse (wheel/click).
-  const moveIssue = (delta: number): void => {
-    if (!currentNwo || filteredIssues.length === 0) return;
-    const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
-    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
-  };
-  const moveIssueTo = (idx: number): void => {
-    if (!currentNwo || filteredIssues.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
-    setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
-  };
+  // `useCallback`'d (perf pass #259) so App can pass these straight through as
+  // memo'd components' `onWheel`/`onRowPress` props instead of wrapping them in
+  // a fresh arrow every render — the identity is only as stable as its deps,
+  // which is exactly what lets it stay flat across an unrelated App re-render.
+  const moveIssue = useCallback(
+    (delta: number): void => {
+      if (!currentNwo || filteredIssues.length === 0) return;
+      const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
+      setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
+    },
+    [currentNwo, filteredIssues, issueIdxSafe],
+  );
+  const moveIssueTo = useCallback(
+    (idx: number): void => {
+      if (!currentNwo || filteredIssues.length === 0) return;
+      const clamped = Math.max(0, Math.min(idx, filteredIssues.length - 1));
+      setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[clamped].number }));
+    },
+    [currentNwo, filteredIssues],
+  );
 
   // Move the anchored {nwo, number}, never a bare index — a re-sorting poll
   // must keep the cursor on the same PR. Hoisted for the same reason as above.
-  const movePr = (delta: number): void => {
-    if (prs.length === 0) return;
-    const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
-    setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
-  };
-  const movePrTo = (idx: number): void => {
-    if (prs.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, prs.length - 1));
-    setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
-  };
+  const movePr = useCallback(
+    (delta: number): void => {
+      if (prs.length === 0) return;
+      const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
+      setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
+    },
+    [prs, prIdxSafe],
+  );
+  const movePrTo = useCallback(
+    (idx: number): void => {
+      if (prs.length === 0) return;
+      const clamped = Math.max(0, Math.min(idx, prs.length - 1));
+      setPrSel({ nwo: prs[clamped].nwo, number: prs[clamped].number });
+    },
+    [prs],
+  );
 
   // Pane-3 movers, hoisted (like moveIssue/movePr) so the mouse handler and
   // the keyboard branch share one anchored-NUMBER implementation.
-  const movePane3 = (delta: number): void => {
-    if (repoPrs.length === 0) return;
-    const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
-    setPane3SelNum(repoPrs[next].number);
-  };
-  const movePane3To = (idx: number): void => {
-    if (repoPrs.length === 0) return;
-    const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
-    setPane3SelNum(repoPrs[clamped].number);
-  };
+  const movePane3 = useCallback(
+    (delta: number): void => {
+      if (repoPrs.length === 0) return;
+      const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
+      setPane3SelNum(repoPrs[next].number);
+    },
+    [repoPrs, pane3IdxSafe],
+  );
+  const movePane3To = useCallback(
+    (idx: number): void => {
+      if (repoPrs.length === 0) return;
+      const clamped = Math.max(0, Math.min(idx, repoPrs.length - 1));
+      setPane3SelNum(repoPrs[clamped].number);
+    },
+    [repoPrs],
+  );
 
   return {
     issues,
