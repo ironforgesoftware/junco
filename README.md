@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/junco.svg" alt="a dark-eyed junco, the junco mascot" width="230">
+  <img src="https://raw.githubusercontent.com/ironforgesoftware/junco/main/docs/assets/junco.png" alt="a dark-eyed junco, the junco mascot" width="230">
 </p>
 
 # junco

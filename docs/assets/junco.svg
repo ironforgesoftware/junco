@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 660">
 <!-- dark-eyed junco mascot on the site panel; renders identically on light and dark themes -->
-<rect width="700" height="660" rx="24" fill="#14171d"/>
+
 <g transform="translate(59,30)">
 
 <path fill="#8f4560" fill-rule="evenodd" d="M389,544 L386,546 L386,549 L391,554 L396,565 L398,565 L396,552 L393,546 Z"/>
