@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-26
+
+### Changed
+
+- README now leads with the junco mascot on a transparent background, rendered for both GitHub and npm; the package description reads "coding-agent worker" rather than "task-queue worker". No runtime changes.
+
 ## [0.9.0] - 2026-07-22
 
 ### Changed
