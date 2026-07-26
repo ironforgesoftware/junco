@@ -1,7 +1,7 @@
 {
   "name": "@ironforgesoftware/junco",
   "version": "0.9.0",
-  "description": "A harness-agnostic task-queue worker that turns Markdown tickets into git pull requests by driving a coding agent.",
+  "description": "A harness-agnostic coding-agent worker that turns Markdown tickets into git pull requests.",
   "type": "module",
   "license": "MIT",
   "author": "Alexander Edelweiss <alex@ironforgesoftware.com>",
