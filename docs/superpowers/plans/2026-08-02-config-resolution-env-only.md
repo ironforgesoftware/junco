@@ -582,12 +582,16 @@ Replace the clause `Config resolution prefers './config.json', so running the CL
 
 (The existing sandbox recipe already overrides `HOME`/`XDG_CONFIG_HOME`, so it keeps working verbatim.)
 
-- [ ] **Step 5: Verify and commit**
+- [ ] **Step 5: `scripts/package-smoke.sh:28` (CI-blocking)**
 
-`grep -rn -- '--config' docs/*.md README.md CLAUDE.md ARCHITECTURE.md` must return nothing outside `docs/superpowers/plans/` (historical, untouched). Run `npm run format:check`.
+The packaged-CLI smoke test (CI job) sets `CONFIG="$SB/.config/junco/config.json"` — with resolution now HOME-anchored, the scaffolded config lands at `$SB/.junco/config.json` and the smoke test fails. Update line 28 to `CONFIG="$SB/.junco/config.json"` and re-run the script sandboxed to verify.
+
+- [ ] **Step 6: Verify and commit**
+
+`grep -rn -- '--config' docs/*.md README.md CLAUDE.md ARCHITECTURE.md scripts/` must return nothing outside `docs/superpowers/plans/` (historical, untouched). Run `npm run format:check`.
 
 ```bash
-git add docs CLAUDE.md ARCHITECTURE.md
+git add docs CLAUDE.md ARCHITECTURE.md scripts/package-smoke.sh
 git commit -m "docs: canonical config location ~/.junco/config.json; retire --config"
 ```
 
@@ -616,7 +620,7 @@ PR body must contain: the incident summary (one paragraph), the breaking note (*
 
 - [ ] **Step 4: File follow-up issues** (labels per repo habit; reference the PR)
 
-1. **Single-root `~/.junco/` consolidation** (umbrella): move the data tree — `queue/`, `review/`, `watchlist.json`, `data/` (assess-history, history, transcripts), `cache/` (clones, github-cache, update-check, worktrees), `logs/` (consolidating `worker.log` + launchd.out/err) — under `~/.junco/`; extend `dataMigrate.ts`; enables root-level sandbox deny except `cache/` (resolves the `dataTree.ts:69-75` compromise); then remove the legacy XDG config fallback.
+1. **Single-root `~/.junco/` consolidation** — NOT an issue to file: it is the companion plan `docs/superpowers/plans/2026-08-03-single-root-junco-home.md`, executed immediately after this one on the same branch/release. Do not file; do not ship 0.10.0 without it (a fresh install would otherwise still produce two roots).
 2. **FTUE liveness gate**: the setup walkthrough must refuse to run when a daemon is up (health endpoint answers) or the data tree is non-empty — it ran against a 4-day-uptime daemon in the incident.
 3. **Queue-divergence startup warning**: warn when the resolved `queueRoot` is empty but another known queue root contains tickets — the incident was invisible because both sides reported healthy.
 4. **`JUNCO_CONFIG` env override** for scripted/non-interactive contexts (precedence: above canonical or below? decide there).
