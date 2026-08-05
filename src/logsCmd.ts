@@ -6,10 +6,10 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { Config } from "./types.js";
 import { formatHumanLine } from "./logging.js";
 import { readTail, makeLogTailer } from "./logReader.js";
+import { dataTreePaths } from "./dataTree.js";
 
 export interface LogsOpts {
   follow?: boolean;
@@ -40,7 +40,7 @@ export async function runLogsCommand(
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const json = opts.json ?? !process.stdout.isTTY;
-  const path = join(cfg.dataDir, "worker.log");
+  const path = dataTreePaths(cfg).logFile;
   if (!existsSync(path)) {
     print(
       `junco logs: no log file at ${path} (the daemon writes it once started; see dataDir in docs/configuration.md)\n`,

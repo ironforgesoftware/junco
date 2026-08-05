@@ -21,6 +21,19 @@ export const HISTORY_SUBDIR = "history";
 export const WATCHLIST_FILENAME = "watchlist.json";
 export const UPDATE_CHECK_FILENAME = "update-check.json";
 
+/**
+ * Poison roots for `queue`/`clonesExternal` when cfg.queueRoot/cfg.github are
+ * absent (the repo's own `ghBin: "/nonexistent/gh"` idiom — see config.ts).
+ * NOT dead code: see the long comment on `queue` in dataTreePaths() for why
+ * that fallback exists at all. `""` was rejected as the sentinel — `join("",
+ * x)` silently resolves to a CWD-relative path, so a future consumer
+ * exercised only by one of those narrow fixtures could end up writing into
+ * the process CWD and stay green. These paths fail loudly at the fs layer
+ * (ENOENT/EACCES) instead, the instant anything real ever touches them.
+ */
+const POISON_QUEUE_ROOT = "/nonexistent/junco-queue";
+const POISON_CLONES_EXTERNAL = "/nonexistent/junco-clones-external";
+
 export interface DataTreePaths {
   root: string;
   queue: Paths; // from queuePaths(cfg)
@@ -40,19 +53,66 @@ export interface DataTreePaths {
   metricsFile: string; // PR 3 writes it; listed now
   logFile: string;
   migratedFile: string; // dataMigrate journal (Task 4)
+  migrateLockFile: string; // startup-migration mutex (#197.2) — daemon.ts + dataMigrateCmd.ts both hold it
+  githubCache: string; // legacy TUI issue/PR cache (tui/ghClient.ts)
+  logsDir: string; // dirname(logFile); root today, a subdir post-layout-flip
 }
 
 export function dataTreePaths(cfg: Config): DataTreePaths {
   const r = cfg.dataDir;
   return {
     root: r,
-    queue: queuePaths(cfg),
+    // `queue`/`clonesExternal` degrade to an inert placeholder instead of
+    // throwing when cfg.queueRoot/cfg.github are absent. This is NOT a
+    // defensive habit — it is load-bearing for >12 existing unit-test call
+    // sites across tests/watchlist.test.ts, tests/taskHistory.test.ts,
+    // tests/githubOutbox.test.ts, tests/updateCheck.test.ts,
+    // tests/logsCmd.test.ts, tests/tuiGhClient.test.ts,
+    // tests/localSnapshotRepos.test.ts, tests/assessReview.test.ts,
+    // tests/commentReview.test.ts, tests/assessHistory.test.ts, and
+    // tests/assessFiling.test.ts, all of which unit-test a SINGLE narrow
+    // field's module (e.g. historyDir, watchlistPath, cachePathFor,
+    // assessReviewPaths) against a minimal `{ dataDir } as unknown as Config`
+    // fixture that deliberately never sets queueRoot/github — those modules
+    // used to read cfg.dataDir directly and never needed those fields. Now
+    // that they call dataTreePaths(cfg) for the one field they DO need
+    // (.history, .watchlistFile, .githubCache, .reviewAssess, ...), a strict
+    // dataTreePaths would crash every one of those call sites at
+    // queuePaths(cfg) (join(undefined, ...) when cfg.queueRoot is unset) or
+    // at cfg.github.externalReposRoot (reading a property of an absent
+    // cfg.github). Upgrading all of those fixtures to a full Config via
+    // tests/helpers/config.ts's makeConfig was tried and rejected: it is
+    // >12 call sites, and it would force every single-field module's test to
+    // additionally state 10 unrelated ConfigSeams fields it doesn't exercise
+    // — exactly what those fixtures are deliberately narrow to avoid. A
+    // fully-resolved Config (the only kind that ever reaches this function in
+    // production — config.ts always sets both queueRoot and github) always
+    // takes the real branch, so this changes nothing observable for any real
+    // caller, and nothing in tests/dataTree.test.ts, tests/daemon.test.ts, or
+    // tests/cli.test.ts (all full-Config fixtures) exercises the fallback.
+    // The fallback values themselves are POISON paths (see POISON_QUEUE_ROOT/
+    // POISON_CLONES_EXTERNAL above), not "" — an empty string would let
+    // join("", x) silently resolve relative to the process CWD.
+    queue: cfg.queueRoot
+      ? queuePaths(cfg)
+      : {
+          inbox: join(POISON_QUEUE_ROOT, "inbox"),
+          processing: join(POISON_QUEUE_ROOT, "processing"),
+          done: join(POISON_QUEUE_ROOT, "done"),
+          failed: join(POISON_QUEUE_ROOT, "failed"),
+        },
     reviewAssess: join(r, REVIEW_ASSESS_SUBDIR),
     reviewComments: join(r, REVIEW_COMMENTS_SUBDIR),
     outbox: join(r, OUTBOX_SUBDIR),
     mirror: join(r, MIRROR_SUBDIR),
     clonesWatched: join(r, CLONES_WATCHED_SUBDIR),
-    clonesExternal: cfg.github.externalReposRoot,
+    // cfg.github is typed as GithubConfig — non-optional, never undefined —
+    // so `cfg.github?.` would misstate the type (optional chaining implies a
+    // legitimately-absent field). Several unit tests build a Config via
+    // `{ dataDir } as unknown as Config`, which lies about that type at
+    // runtime; this explicit truthiness check (not `?.`) exists ONLY to
+    // survive that lie, same rationale as the `cfg.queueRoot` check above.
+    clonesExternal: cfg.github ? cfg.github.externalReposRoot : POISON_CLONES_EXTERNAL,
     worktrees: cfg.worktreeRoot,
     assessHistory: join(r, ASSESS_HISTORY_SUBDIR),
     history: join(r, HISTORY_SUBDIR),
@@ -63,6 +123,9 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     metricsFile: join(r, "metrics.json"),
     logFile: join(r, "worker.log"),
     migratedFile: join(r, "migrated.json"),
+    migrateLockFile: join(r, "migrate.lock"),
+    githubCache: join(r, "github-cache"),
+    logsDir: r,
   };
 }
 
@@ -90,8 +153,8 @@ export function sandboxDenyPaths(cfg: Config): { dirs: string[]; files: string[]
       p.mirror,
       p.transcripts,
       // Legacy TUI cache (tui/ghClient.ts still owns it; mirror/ replaces it
-      // in PR 2) — not in dataTreePaths, but present under real data roots.
-      join(p.root, "github-cache"),
+      // in PR 2).
+      p.githubCache,
     ],
     files: [
       p.watchlistFile,

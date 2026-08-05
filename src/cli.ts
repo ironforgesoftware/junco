@@ -68,6 +68,7 @@ import { runRetryCommand } from "./retryCmd.js";
 import { runRmCommand } from "./rmCmd.js";
 import { runDoctor } from "./doctor.js";
 import { runLogsCommand } from "./logsCmd.js";
+import { dataTreePaths } from "./dataTree.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -282,8 +283,8 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
   if (process.stdout.isTTY && process.env.JUNCO_LOG_JSON !== "1") setLogFormat("human");
   if (!cfg.logToFile) return () => {};
   try {
-    const logPath = join(cfg.dataDir, "worker.log");
-    mkdirSync(cfg.dataDir, { recursive: true });
+    const logPath = dataTreePaths(cfg).logFile;
+    mkdirSync(dirname(logPath), { recursive: true });
     const sink = opts.rotate ? openRotatingLogSink(logPath) : openAppendLogSink(logPath);
     setLogSink((l) => sink.write(l));
     return () => {

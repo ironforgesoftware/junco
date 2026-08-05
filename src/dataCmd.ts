@@ -218,14 +218,13 @@ function fileInfo(
  * this command's own readFileFn seam (the utf8-string overload is the only
  * one the ledger uses). */
 function readSpendUsd(
-  dataDir: string,
   path: string,
   existsFn: (p: string) => boolean,
   readFileFn: (p: string) => string,
   nowFn: () => number,
 ): number | null {
   if (!existsFn(path)) return null;
-  const ledger = makeSpendLedger(dataDir, {
+  const ledger = makeSpendLedger(path, {
     now: nowFn,
     readFileFn: ((p: string) => readFileFn(p)) as unknown as typeof readFileSync,
   });
@@ -290,7 +289,7 @@ function computeCounts(
     updateCheckFile: fileInfo(p.updateCheckFile, existsFn, statFn),
     spendFile: {
       ...fileInfo(p.spendFile, existsFn, statFn),
-      usd: readSpendUsd(cfg.dataDir, p.spendFile, existsFn, readFileFn, nowFn),
+      usd: readSpendUsd(p.spendFile, existsFn, readFileFn, nowFn),
     },
     metricsFile: fileInfo(p.metricsFile, existsFn, statFn),
     logFile: fileInfo(p.logFile, existsFn, statFn),

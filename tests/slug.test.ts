@@ -26,14 +26,21 @@ describe("slugifyId", () => {
 });
 
 describe("transcriptPathFor", () => {
-  it("builds <stateDir>/transcripts/<id>.jsonl for a clean id", () => {
-    expect(transcriptPathFor("/state", "gh-owner-repo-12")).toBe(
+  // transcriptPathFor now takes the transcripts DIR itself (a caller passes
+  // dataTreePaths(cfg).transcripts — dataTree.ts is the only place that joins
+  // "transcripts" onto the data root), not the data root. Call shape only:
+  // every asserted path value below is unchanged from before this signature
+  // change.
+  const transcriptsDir = join("/state", "transcripts");
+
+  it("builds <transcriptsDir>/<id>.jsonl for a clean id", () => {
+    expect(transcriptPathFor(transcriptsDir, "gh-owner-repo-12")).toBe(
       join("/state", "transcripts", "gh-owner-repo-12.jsonl"),
     );
   });
 
   it("slugifies a traversal id so the path stays inside the transcripts dir", () => {
-    const p = transcriptPathFor("/state", "../../../../tmp/evil/x");
+    const p = transcriptPathFor(transcriptsDir, "../../../../tmp/evil/x");
     expect(p).toBe(join("/state", "transcripts", "..-..-..-..-tmp-evil-x.jsonl"));
     // No unresolved parent-dir segment survives to escape the transcripts dir.
     expect(p.startsWith(join("/state", "transcripts") + "/")).toBe(true);

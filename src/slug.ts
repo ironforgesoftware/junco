@@ -26,11 +26,15 @@ export function slugifyId(id: string): string {
  * Every agent flow (PR: prFlow.ts, Q&A: runOnce.ts, assess: assessFlow.ts,
  * analyze: analyzeFlow.ts) routes through this helper so the id can only ever
  * reach the filesystem as a single `slugifyId`-collapsed path component — a raw
- * `../..`-shaped id can never escape `<stateDir>/transcripts/`. Centralizing it
+ * `../..`-shaped id can never escape the transcripts dir. Centralizing it
  * is deliberate: the traversal hole (issue #32) regressed once (issue #94)
  * precisely because the slugify step was duplicated per call site and one site
  * was missed.
+ *
+ * Takes the transcripts DIR itself (callers pass `dataTreePaths(cfg).transcripts`
+ * — dataTree.ts is the only place that joins "transcripts" onto the data root),
+ * not the data root — this function never joins a data-tree subdir.
  */
-export function transcriptPathFor(stateDir: string, id: string): string {
-  return join(stateDir, "transcripts", `${slugifyId(id)}.jsonl`);
+export function transcriptPathFor(transcriptsDir: string, id: string): string {
+  return join(transcriptsDir, `${slugifyId(id)}.jsonl`);
 }

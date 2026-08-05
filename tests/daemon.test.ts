@@ -17,6 +17,7 @@ import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.j
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import { makeConfigHolder } from "../src/configWatcher.js";
+import { dataTreePaths } from "../src/dataTree.js";
 import { ProviderGate, type GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { makeSpendLedger } from "../src/spendLedger.js";
@@ -625,7 +626,10 @@ describe("mainLoop", () => {
 
     await mainLoop(cfg, stop, {}, deps);
 
-    expect(migrateLockFn).toHaveBeenCalledWith(cfg.dataDir);
+    // migrateLockFn now takes the lock FILE path itself (dataTreePaths(cfg)
+    // .migrateLockFile), not the bare data dir — call shape only; the value
+    // is identical to the old join(cfg.dataDir, "migrate.lock") today.
+    expect(migrateLockFn).toHaveBeenCalledWith(dataTreePaths(cfg).migrateLockFile);
     expect(deps.migrateFn).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });

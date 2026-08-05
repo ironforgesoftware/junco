@@ -29,7 +29,7 @@ import { acquirePidfileLock } from "./pidfileLock.js";
 import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
 import { upgradeQueuedFiledRecord } from "./assessReview.js";
-import { OUTBOX_SUBDIR } from "./dataTree.js";
+import { dataTreePaths } from "./dataTree.js";
 
 export type OutboxOp =
   | { kind: "labels"; nwo: string; issue: number; add: string[]; remove: string[] }
@@ -94,7 +94,7 @@ export interface OutboxDeps {
 let seq = 0; // same-ms tiebreaker; module-lifetime monotonic
 
 export function outboxPaths(cfg: Config): { dir: string; dead: string } {
-  const dir = join(cfg.dataDir, OUTBOX_SUBDIR);
+  const dir = dataTreePaths(cfg).outbox;
   return { dir, dead: join(dir, "dead") };
 }
 

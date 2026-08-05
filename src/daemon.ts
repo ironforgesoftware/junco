@@ -13,10 +13,9 @@
  * cadence (sleepInterruptible) and the loop guard.
  */
 
-import { join } from "node:path";
 import type { Config } from "./types.js";
 import type { ConfigHolder } from "./configWatcher.js";
-import { ensureDataTree } from "./dataTree.js";
+import { ensureDataTree, dataTreePaths } from "./dataTree.js";
 import { migrateStateTree, type MigrateResult } from "./dataMigrate.js";
 import { acquirePidfileLock } from "./pidfileLock.js";
 import { runOnce, claimNextTask, executeClaimed, type ClaimedWork } from "./runOnce.js";
@@ -235,8 +234,13 @@ export interface MainLoopDeps {
   /** #197.2: non-blocking lock around the startup migration so a concurrent
    * `junco data migrate` (which can't see a mid-startup daemon via /health —
    * the health server starts after migration) doesn't double-run the pass.
-   * Returns null when another migrate holds the lock. Default: migrate.lock. */
-  migrateLockFn?: (dataDir: string) => { release: () => void } | null;
+   * Returns null when another migrate holds the lock. Takes the lock FILE
+   * path itself (dataTreePaths(cfg).migrateLockFile) — the caller joins
+   * "migrate.lock" onto the data root exactly once, in dataTree.ts, so this
+   * and dataMigrateCmd.ts's own lock acquisition (src/dataMigrateCmd.ts)
+   * can never drift apart on where the mutex file lives. Default: the real
+   * acquirePidfileLock. */
+  migrateLockFn?: (lockFile: string) => { release: () => void } | null;
   mkdirs?: (cfg: Config) => void;
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
@@ -271,7 +275,7 @@ export interface MainLoopDeps {
     | "reportBudgetExhausted"
   >;
   /** Per-day spend ledger (Phase-3 Task 4), constructed next to the gate:
-   * absent → mainLoop builds its own via `makeSpendLedger(cfg.dataDir)`.
+   * absent → mainLoop builds its own via `makeSpendLedger(dataTreePaths(cfg).spendFile)`.
    * `cfg` here is always the FROZEN startup config (dataDir is
    * restart-kind — see overlayFrozenRestartFields), exactly like the gate and
    * the health server bind. Threaded into both the serial default runOnceFn
@@ -517,7 +521,7 @@ export async function mainLoop(
   // runs records its costUsd here. `cfg` is the frozen startup config, not
   // activeCfg() — dataDir is restart-kind (same freeze as the gate above and
   // the health server's host/port bind; see overlayFrozenRestartFields).
-  const spend = deps.spend ?? makeSpendLedger(cfg.dataDir);
+  const spend = deps.spend ?? makeSpendLedger(dataTreePaths(cfg).spendFile);
   // Single TTL-cached probe shared by the claim gate and the health server so
   // neither multiplies upstream endpoint-probe traffic. Wraps the *call* —
   // activeCfg() is read fresh on every uncached probe — so a hot-reloaded
@@ -584,8 +588,7 @@ export async function mainLoop(
     deps.waitForEndpointFn ?? ((c: Config, s: StopFlagLike) => waitForEndpoint(c, s));
   const sleep = deps.sleep ?? sleepInterruptible;
   const migrateFn = deps.migrateFn ?? migrateStateTree;
-  const migrateLockFn =
-    deps.migrateLockFn ?? ((d: string) => acquirePidfileLock(join(d, "migrate.lock")));
+  const migrateLockFn = deps.migrateLockFn ?? ((f: string) => acquirePidfileLock(f));
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
@@ -604,7 +607,7 @@ export async function mainLoop(
   // errors-then-converges — so this is tidiness, not corruption: skip if held.
   // acquirePidfileLock mkdirs only dirname(lockPath) = cfg.dataDir, not the
   // nested tree, so the migrate-before-mkdirs invariant above is preserved.
-  const migLock = migrateLockFn(cfg.dataDir);
+  const migLock = migrateLockFn(dataTreePaths(cfg).migrateLockFile);
   if (migLock === null) {
     log.warn("state-tree migration skipped — another migrate holds migrate.lock");
   } else {

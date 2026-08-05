@@ -4,10 +4,9 @@
  * (or a garbage registry response) degrades to "no badge".
  */
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
-import { UPDATE_CHECK_FILENAME } from "./dataTree.js";
+import { dataTreePaths } from "./dataTree.js";
 
 export interface SelfPackage {
   name: string;
@@ -94,7 +93,7 @@ export async function checkForUpdate(
   const readFileFn = opts.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const writeFileFn = opts.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
   const renameFn = opts.renameFn ?? renameSync;
-  const cachePath = join(cfg.dataDir, UPDATE_CHECK_FILENAME);
+  const cachePath = dataTreePaths(cfg).updateCheckFile;
 
   let cache: UpdateCache = {};
   try {

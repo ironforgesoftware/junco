@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { dataTreePaths, ensureDataTree, sandboxDenyPaths } from "../src/dataTree.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
@@ -68,6 +69,7 @@ describe("dataTreePaths", () => {
     expect(p.transcripts).toBe("/sbxroot/data/transcripts");
     expect(p.watchlistFile).toBe("/sbxroot/data/watchlist.json");
     expect(p.migratedFile).toBe("/sbxroot/data/migrated.json");
+    expect(p.migrateLockFile).toBe("/sbxroot/data/migrate.lock");
   });
 
   it("registers update-check.json at the root and denies it to the sandbox", () => {
@@ -75,6 +77,14 @@ describe("dataTreePaths", () => {
     const p = dataTreePaths(cfg);
     expect(p.updateCheckFile).toBe("/sbxroot/data/update-check.json");
     expect(sandboxDenyPaths(cfg).files).toContain(p.updateCheckFile);
+  });
+
+  it("exposes githubCache and logsDir (flat: logs at the root)", () => {
+    const cfg = makeConfig({ dataDir: "/sbxroot/state" });
+    const p = dataTreePaths(cfg);
+    expect(p.githubCache).toBe("/sbxroot/state/github-cache");
+    expect(p.logsDir).toBe("/sbxroot/state");
+    expect(p.logFile).toBe(join(p.logsDir, "worker.log"));
   });
 });
 

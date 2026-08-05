@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../types.js";
+import { dataTreePaths } from "../dataTree.js";
 import { gh, git } from "../git.js";
 import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
 import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
@@ -40,7 +41,7 @@ interface PrCache {
 /** `<dataDir>/github-cache/issues-<owner>__<repo>.json` — `/` in the nwo
  * would otherwise collide with the path separator. */
 export function cachePathFor(cfg: Config, nwo: string): string {
-  return join(cfg.dataDir, "github-cache", `issues-${nwo.replace(/\//g, "__")}.json`);
+  return join(dataTreePaths(cfg).githubCache, `issues-${nwo.replace(/\//g, "__")}.json`);
 }
 
 /** `<dataDir>/github-cache/prs-<owner>__<repo>.json` — a sibling path to
@@ -48,7 +49,7 @@ export function cachePathFor(cfg: Config, nwo: string): string {
  * collide in the same file. Not exported: nothing outside this module needs
  * to address the PR cache directly. */
 function prCachePathFor(cfg: Config, nwo: string): string {
-  return join(cfg.dataDir, "github-cache", `prs-${nwo.replace(/\//g, "__")}.json`);
+  return join(dataTreePaths(cfg).githubCache, `prs-${nwo.replace(/\//g, "__")}.json`);
 }
 
 /** Mirrors the applyAction switch's add/remove lists EXACTLY — including the

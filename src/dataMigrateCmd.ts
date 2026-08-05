@@ -346,7 +346,7 @@ export async function runDataMigrate(
   }
 
   // 1b. Migration lock — held for the whole acting run, released in `finally`.
-  const lockPath = join(cfg.dataDir, "migrate.lock");
+  const lockPath = dataTreePaths(cfg).migrateLockFile;
   const lock = acquirePidfileLock(lockPath);
   if (lock === null) {
     print("junco data migrate: another migrate is running\n");
