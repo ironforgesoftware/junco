@@ -415,7 +415,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       /* fall back to renderer defaults */
     }
 
-    const rendered = renderService(platform, { cliEntry, configPath, stopTimeoutSeconds, logDir });
+    const rendered = renderService(platform, { cliEntry, stopTimeoutSeconds, logDir });
     printFn(rendered + "\n");
 
     // Print install hint to stderr
