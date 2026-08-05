@@ -202,7 +202,11 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
 
     // 2b. pending state-tree migrations (spec §7) — old-name dirs still
     // present under dataDir; `junco data migrate` renames them in place.
-    const pending = pendingMigrations(cfg, existsFn);
+    // Also folds in the pending single-root layout/root pairs (2026-08-03
+    // plan) when `cfg.legacy.dataRoot` — `env` threads through so the
+    // computed target root is hermetically testable, same seam as every
+    // other env-driven check in this file.
+    const pending = pendingMigrations(cfg, existsFn, env);
     if (pending.length > 0) {
       const list = pending.map((m) => `${m.from} -> ${m.to}`).join(", ");
       report("warn", "unmigrated data dirs", `${list} — run 'junco data migrate' to unify`);

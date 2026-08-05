@@ -399,6 +399,58 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
     expect(lines.join("")).not.toMatch(/unmigrated data dirs/);
   });
 
+  it("a legacy dataRoot config's 'unmigrated data dirs' warning also lists the pending single-root layout move (2026-08-03 plan)", async () => {
+    const lines: string[] = [];
+    const legacyRoot = "/sbxroot/legacy-data-root";
+    const cfg = {
+      ...okConfig,
+      dataDir: legacyRoot,
+      legacy: { ...okConfig.legacy, dataRoot: true },
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        existsFn: (p: string) => p === join(legacyRoot, "outbox"),
+        env: { HOME: "/sbxroot/home" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    const text = lines.join("");
+    expect(text).toMatch(/⚠ unmigrated data dirs/);
+    expect(text).toContain(join(legacyRoot, "outbox"));
+    expect(text).toContain(join("/sbxroot/home", ".junco", "data", "outbox"));
+    expect(text).toContain("junco data migrate");
+  });
+
+  // Reopened case (a) — task-6 review: an explicit, NON-legacy dataDir with
+  // real flat-shaped content on disk has a genuinely pending in-place v2
+  // restructure too — pendingMigrations' layout-pair reporting has no
+  // legacy.dataRoot gate, so doctor must surface this WITHOUT the legacy
+  // fallback ever being in play.
+  it("an explicit non-legacy flat dataDir also surfaces its own pending in-place restructure (no legacy.dataRoot needed)", async () => {
+    const lines: string[] = [];
+    const root = "/sbxroot/explicit-flat-root";
+    const cfg = { ...okConfig, dataDir: root } as unknown as Config; // legacy.dataRoot stays false
+    expect(cfg.legacy.dataRoot).toBe(false);
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        existsFn: (p: string) => p === join(root, "outbox"),
+        env: { HOME: "/sbxroot/home" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    const text = lines.join("");
+    expect(text).toMatch(/⚠ unmigrated data dirs/);
+    expect(text).toContain(join(root, "outbox"));
+    expect(text).toContain(join(root, "data", "outbox"));
+    expect(text).toContain("junco data migrate");
+  });
+
   it("legacy worktreeRoot dir with leftovers → info-level (✓) hint, itself not a warning", async () => {
     const lines: string[] = [];
     // legacy.worktreeRoot:true also trips the "deprecated config keys" WARN
@@ -1321,9 +1373,20 @@ describe("runDoctor assess history checks", () => {
       parked: 3,
     });
     const lines: string[] = [];
+    // existsFn: false — hermetic against pendingMigrations' now-truthful
+    // real-fs probing (task-6 review): this fixture's real dataDir genuinely
+    // has assess-history/ on disk (recordRun wrote it), which is correct
+    // input for THAT check but irrelevant noise for this one (#199.3 pattern
+    // — see "clean cfg reports neither..." above). listHistory itself reads
+    // the real fs directly (no existsFn seam), so the assertion below is
+    // unaffected.
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir }),
+        existsFn: () => false,
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/✓ assess history — o\/r: assessed 2026-07-16/);
@@ -1338,9 +1401,14 @@ describe("runDoctor assess history checks", () => {
       reason: "boom",
     });
     const lines: string[] = [];
+    // existsFn: false — see the hermeticity note in the previous test.
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir }),
+        existsFn: () => false,
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(
@@ -1365,9 +1433,14 @@ describe("runDoctor assess history checks", () => {
       reason: "boom",
     });
     const lines: string[] = [];
+    // existsFn: false — see the hermeticity note above.
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => ({ ...okConfig, dataDir }), printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => ({ ...okConfig, dataDir }),
+        existsFn: () => false,
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(

@@ -100,17 +100,19 @@ import {
   validateConfigObject,
   expandHome,
   juncoHome,
-  homeOf,
 } from "./config.js";
 import {
   migrateStateTree,
-  pendingMigrations,
-  flatToV2Pairs,
+  pendingStateTreeMigrations,
+  migrationTargetRoot,
+  fixedLegacyRoot,
+  dataRootPairs,
   isRecursivelyEmptyDir,
   appendJournal,
   readJournal,
   type MigrateResult,
   type MigrationStep,
+  type DataRootPair,
 } from "./dataMigrate.js";
 import { acquirePidfileLock, readPidfileHolder, type PidfileLock } from "./pidfileLock.js";
 
@@ -156,12 +158,6 @@ interface QueueStep {
   to: string;
 }
 
-interface PendingPair {
-  from: string;
-  to: string;
-  pending: boolean;
-}
-
 /** Single AbortController-timed /health probe — same shape as
  * worktreePruneCmd.ts's fetchCurrentTickets, but the verdict differs: ANY
  * settled response (even non-200) means "up" here, since this probe's only
@@ -194,50 +190,6 @@ function queueSteps(cfg: Config, targetRoot: string): QueueStep[] {
   return QUEUE_DIR_KEYS.map((key) => ({ key, from: legacy[key], to: join(queueRoot, key) }));
 }
 
-/** The fixed pre-0.10 fallback path (config.ts's `resolveDataRoot` probes the
- * exact same literal) — only relevant to THIS run when its target is the
- * canonical `~/.junco` (an operator with a genuinely custom, unrelated
- * `dataDir` must never have an unrelated `~/.local/state/junco` swept in).
- * Not existence-gated here: `dataRootPairs`/the lock-root set only act on it
- * per-pair/via `existsFn` themselves, so a nonexistent candidate is simply
- * inert rather than needing a second check everywhere it's threaded through. */
-function fixedLegacyRoot(
-  targetRoot: string,
-  env: Record<string, string | undefined>,
-): string | null {
-  return targetRoot === juncoHome(env) ? join(homeOf(env), ".local", "state", "junco") : null;
-}
-
-/** The flat→v2 data-root pairs whose source currently exists, probed from
- * EVERY root that could hold one (Critical 1 — see the module doc comment):
- * `cfg.dataDir` (this run's current resolution) and, whenever relevant, the
- * FIXED legacy path — independently of what `cfg.legacy.dataRoot` says,
- * since that flag can no longer see stragglers once resolution has flipped
- * away from the legacy root. Pairs from different source roots that land on
- * the SAME target are deduped, preferring whichever source actually has
- * something pending (the rare case where both somehow do is left for
- * `moveDataRootPair`'s own `existsFn(to)` conflict check to catch safely). */
-function dataRootPairs(
-  cfg: Config,
-  targetRoot: string,
-  legacyRoot: string | null,
-  existsFn: (p: string) => boolean,
-): PendingPair[] {
-  const sourceRoots =
-    legacyRoot !== null && legacyRoot !== cfg.dataDir ? [cfg.dataDir, legacyRoot] : [cfg.dataDir];
-  const byTarget = new Map<string, PendingPair>();
-  for (const sourceRoot of sourceRoots) {
-    for (const pair of flatToV2Pairs(sourceRoot, targetRoot)) {
-      const pending = existsFn(pair.from);
-      const existing = byTarget.get(pair.to);
-      if (!existing || (pending && !existing.pending)) {
-        byTarget.set(pair.to, { ...pair, pending });
-      }
-    }
-  }
-  return [...byTarget.values()];
-}
-
 /** The bot gh-creds move: only when the resolved `botAccount.configDir` is
  * itself the legacy `~/.config/junco/gh` fallback (config.ts's
  * `resolveBotGhConfigDir` — `cfg.legacy.ghConfigDir`). The target is always
@@ -247,7 +199,7 @@ function ghPair(
   cfg: Config,
   env: Record<string, string | undefined>,
   existsFn: (p: string) => boolean,
-): PendingPair | null {
+): DataRootPair | null {
   if (!cfg.legacy.ghConfigDir) return null;
   const from = cfg.botAccount.configDir; // resolved to the legacy dir on this machine
   const to = join(juncoHome(env), "gh");
@@ -536,7 +488,7 @@ export async function runDataMigrate(
   // this run should ALSO probe/lock/clean up (Critical 1 / Important 3) —
   // null when targetRoot isn't the canonical root at all (an explicit,
   // unrelated dataDir never has `~/.local/state/junco` swept in).
-  const targetRoot = cfg.legacy.dataRoot ? juncoHome(env) : cfg.dataDir;
+  const targetRoot = migrationTargetRoot(cfg, env);
   const legacyRoot = fixedLegacyRoot(targetRoot, env);
 
   // 1a. Daemon-up refusal — both signals skipped entirely by --force.
@@ -569,7 +521,13 @@ export async function runDataMigrate(
   // side effect, which would fabricate targetRoot on a machine that has
   // never had one — exactly the command's primary audience.
   const qSteps = queueSteps(cfg, targetRoot).map((s) => ({ ...s, pending: existsFn(s.from) }));
-  const pending = pendingMigrations(cfg, existsFn);
+  // The state-tree-only pending list (NOT the broader `pendingMigrations`,
+  // which also folds in the layout/root pairs below — those already get
+  // their own "data root:" section via `dataRootAll`; reusing the broader
+  // helper here would print them twice). Shared with `pendingMigrations`'s
+  // own state-tree half via `pendingStateTreeMigrations` (dataMigrate.ts) —
+  // one filter, not two copies.
+  const pending = pendingStateTreeMigrations(cfg, existsFn);
   const dataRootAll = dataRootPairs(cfg, targetRoot, legacyRoot, existsFn);
   const gh = ghPair(cfg, env, existsFn);
   const defaultDataDir = expandHome(DEFAULT_DATA_DIR);

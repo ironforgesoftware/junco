@@ -85,7 +85,17 @@ function localDateFrom(ms: number): string {
 
 /** Builds the brief's Step-1 fixture tree: 2 inbox tickets, 1 pending assess
  * JSON + 1 filed, 1 dead outbox op, absent mirror, plus a legacy
- * `assess-review/` leftover so `pendingMigrations` reports it. */
+ * `assess-review/` leftover so `pendingMigrations` reports it.
+ *
+ * This is ALSO, incidentally, an explicit-non-legacy-but-still-flat-shaped
+ * dataDir (`dataLayout: "flat"`, `legacy.dataRoot: false` — see `makeConfig`
+ * below): its real, on-disk `outbox/` and `assess-history/` dirs are
+ * genuinely pending an in-place v2 restructure too (task-6 review, reopened
+ * case (a) — `pendingMigrations` is purely existence-driven via
+ * `dataRootPairs`, with no `legacy.dataRoot` gate), so `pendingMigrations`
+ * truthfully reports THREE pairs off this fixture, not just the one
+ * state-tree pair the original comment described. See the `--json` test
+ * below for the exact list. */
 function buildFixtureTree(root: string): void {
   mkdirSync(join(root, "queue", "inbox"), { recursive: true });
   mkdirSync(join(root, "queue", "processing"), { recursive: true });
@@ -217,6 +227,59 @@ describe("runData — text mode", () => {
     runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain(" ← legacy override: vaultRoot  [deprecated]");
+  });
+
+  it("suffixes the root line with the single-root migration hint when legacy.dataRoot", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({
+      dataDir: root,
+      queueRoot: join(root, "queue"),
+      legacy: {
+        vaultRoot: false,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: true,
+        ghConfigDir: false,
+      },
+    });
+    const captured: string[] = [];
+    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const out = captured.join("");
+    expect(out).toMatch(/^junco data — root: .*\(legacy — run 'junco data migrate'\)/m);
+  });
+
+  it("omits the single-root migration hint when dataDir did not resolve via the legacy fallback", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const out = captured.join("");
+    expect(out).not.toContain("legacy — run");
+  });
+
+  // Reopened case (a) — task-6 review: an explicit, non-legacy dataDir
+  // (legacy.dataRoot: false, no "(legacy — run ...)" root suffix at all) can
+  // still have a genuinely pending in-place v2 restructure when it's still
+  // flat-shaped on disk — buildFixtureTree's real outbox/ and
+  // assess-history/ dirs are exactly that case. `junco data`'s "unmigrated"
+  // section must show them even without the legacy-root hint firing.
+  it("shows the pending in-place v2 restructure pairs for an explicit, non-legacy, still-flat-shaped dataDir", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    expect(cfg.legacy.dataRoot).toBe(false);
+    const captured: string[] = [];
+    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const out = captured.join("");
+    expect(out).toContain(
+      `⚠ unmigrated: ${join(root, "outbox")} → ${join(root, "data", "outbox")} (run 'junco data migrate')`,
+    );
+    expect(out).toContain(
+      `⚠ unmigrated: ${join(root, "assess-history")} → ${join(root, "data", "assess-history")} (run 'junco data migrate')`,
+    );
   });
 
   it("omits the legacy suffix entirely when no root is legacy-overridden", () => {
@@ -382,9 +445,28 @@ describe("runData — --json mode", () => {
     expect(parsed.counts.assessHistory).toEqual({ repos: 1 });
     expect(parsed.counts.outbox).toEqual({ ops: 0, dead: 1 });
     expect(parsed.counts.mirror).toEqual({ repos: 0, files: 0 });
+    // Truthful full picture (task-6 review): the state-tree pair PLUS the two
+    // in-place v2-restructure layout pairs this fixture's real on-disk
+    // outbox/ and assess-history/ dirs are genuinely pending — see the
+    // buildFixtureTree doc comment above. Order: state-tree pairs first,
+    // then layout pairs in flatToV2Pairs' own list order (outbox before
+    // assess-history).
     expect(parsed.pendingMigrations).toEqual([
       { from: join(root, "assess-review"), to: join(root, "review", "assess") },
+      { from: join(root, "outbox"), to: join(root, "data", "outbox") },
+      { from: join(root, "assess-history"), to: join(root, "data", "assess-history") },
     ]);
+  });
+
+  it("--json includes the resolved layout ('v2' or 'flat')", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue"), dataLayout: "v2" });
+    const captured: string[] = [];
+    const code = runData(cfg, { json: true }, { printFn: (s) => captured.push(s) });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(captured.join("")) as { layout: string };
+    expect(parsed.layout).toBe("v2");
   });
 
   it("spend.json USD parity with text mode: today's value, 0 when stale", () => {

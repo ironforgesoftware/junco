@@ -22,6 +22,7 @@ import {
   pendingMigrations,
   stateTreeMigrations,
   flatToV2Pairs,
+  migrationTargetRoot,
 } from "../src/dataMigrate.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
@@ -375,5 +376,132 @@ describe("pendingMigrations", () => {
     const pending = pendingMigrations(cfg);
     expect(pending).toHaveLength(1);
     expect(pending[0].from).toBe(join(root, "github-outbox"));
+  });
+});
+
+describe("migrationTargetRoot", () => {
+  it("resolves to juncoHome(env) when legacy.dataRoot, else stays at cfg.dataDir", () => {
+    const legacyCfg = makeConfig({
+      dataDir: "/sbxroot/legacy-data-root",
+      queueRoot: "/sbxroot/legacy-data-root/queue",
+      legacy: {
+        vaultRoot: false,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: true,
+        ghConfigDir: false,
+      },
+    });
+    expect(migrationTargetRoot(legacyCfg, { HOME: "/sbxroot/home" })).toBe(
+      join("/sbxroot/home", ".junco"),
+    );
+
+    const v2Cfg = makeConfig({
+      dataDir: "/sbxroot/v2-root",
+      queueRoot: "/sbxroot/v2-root/queue",
+    });
+    expect(migrationTargetRoot(v2Cfg, { HOME: "/sbxroot/home" })).toBe("/sbxroot/v2-root");
+  });
+});
+
+describe("pendingMigrations — single-root layout pairs (2026-08-03 plan)", () => {
+  it("a legacy/flat dataRoot config's pending list includes the flat outbox -> canonical data/outbox pair", () => {
+    const legacyRoot = "/sbxroot/legacy-data-root";
+    const cfg = makeConfig({
+      dataDir: legacyRoot,
+      queueRoot: join(legacyRoot, "queue"),
+      legacy: {
+        vaultRoot: false,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: true,
+        ghConfigDir: false,
+      },
+    });
+    const env = { HOME: "/sbxroot/home" };
+    const canonicalRoot = join("/sbxroot/home", ".junco");
+    const pending = pendingMigrations(cfg, (p) => p === join(legacyRoot, "outbox"), env);
+    expect(pending).toContainEqual({
+      from: join(legacyRoot, "outbox"),
+      to: join(canonicalRoot, "data", "outbox"),
+    });
+  });
+
+  it("a genuinely-v2 dataDir (nothing flat-shaped left on disk) reports no layout pairs", () => {
+    const root = "/sbxroot/v2-root";
+    const cfg = makeConfig({
+      dataDir: root,
+      queueRoot: join(root, "queue"),
+      dataLayout: "v2",
+    });
+    expect(cfg.legacy.dataRoot).toBe(false);
+    // existsFn reports the V2 shape as present (data/outbox) — exactly what a
+    // real fully-migrated v2 tree looks like on disk — never the flat names
+    // dataRootPairs actually probes (outbox, assess-history, ...).
+    const pending = pendingMigrations(cfg, (p) => p === join(root, "data", "outbox"), {
+      HOME: "/sbxroot/home",
+    });
+    expect(pending).toEqual([]);
+  });
+
+  it("backward-compatible: the 2-arg call (no env) still works, defaulting env to process.env", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "github-outbox"), { recursive: true });
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    // Same assertion as the very first pendingMigrations test above — proves
+    // the new 3rd (env) param doesn't disturb the existing 2-arg call shape.
+    const pending = pendingMigrations(cfg, (p) => p === join(root, "github-outbox"));
+    expect(pending).toHaveLength(1);
+  });
+
+  // Reopened case (a) — task-6 review: an explicit, NON-legacy dataDir that's
+  // still flat-shaped on disk has a genuinely pending in-place v2 restructure
+  // too — dataRootPairs (shared with dataMigrateCmd.ts's actual mover) is
+  // purely existence-driven, with no cfg.legacy.dataRoot/cfg.dataLayout gate.
+  it("an explicit, non-legacy flat dataDir with real flat content on disk reports its own pending in-place v2 restructure", () => {
+    const root = "/sbxroot/explicit-flat-root";
+    const cfg = makeConfig({
+      dataDir: root,
+      queueRoot: join(root, "queue"),
+      dataLayout: "flat",
+    });
+    expect(cfg.legacy.dataRoot).toBe(false); // NOT a legacy-root fallback
+    const pending = pendingMigrations(cfg, (p) => p === join(root, "outbox"), {
+      HOME: "/sbxroot/home",
+    });
+    expect(pending).toContainEqual({
+      from: join(root, "outbox"),
+      to: join(root, "data", "outbox"),
+    });
+  });
+
+  // Reopened case (b) — task-6 review: the resumed-migration scenario the
+  // migration task itself was built to survive. legacy.dataRoot has ALREADY
+  // flipped false (loadConfig's resolveDataRoot sees the target root has a
+  // marker and resolves cfg.dataDir straight to it), but a straggler pair is
+  // still sitting in the FIXED legacy root — dataRootPairs probes that fixed
+  // path independently of the flag (fixedLegacyRoot only keys off targetRoot
+  // === juncoHome(env)), so the straggler must still surface here.
+  it("a resumed migration (legacy.dataRoot already false, target root resolved) still reports a straggler left in the fixed legacy root", () => {
+    const env = { HOME: "/sbxroot/home" };
+    const targetRoot = join("/sbxroot/home", ".junco"); // == juncoHome(env)
+    const fixedLegacy = join("/sbxroot/home", ".local", "state", "junco");
+    const cfg = makeConfig({
+      dataDir: targetRoot, // resolution already flipped to the canonical root
+      queueRoot: join(targetRoot, "queue"),
+      dataLayout: "v2",
+    });
+    expect(cfg.legacy.dataRoot).toBe(false);
+    const pending = pendingMigrations(
+      cfg,
+      (p) => p === join(fixedLegacy, "outbox"), // only the straggler exists
+      env,
+    );
+    expect(pending).toContainEqual({
+      from: join(fixedLegacy, "outbox"),
+      to: join(targetRoot, "data", "outbox"),
+    });
   });
 });

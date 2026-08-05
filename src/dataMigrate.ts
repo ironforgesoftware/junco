@@ -30,6 +30,7 @@ import {
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
+import { juncoHome, homeOf } from "./config.js";
 import { log } from "./logging.js";
 
 export interface MigrationStep {
@@ -119,13 +120,125 @@ export function flatToV2Pairs(
     .filter((p) => p.from !== p.to);
 }
 
-/** Pairs whose source currently exists — used by `junco data`/doctor to
- * report pending migrations without touching the filesystem. */
-export function pendingMigrations(
+/** The single-root move target (2026-08-03 plan — see `dataMigrateCmd.ts`'s
+ * module doc comment for the full rationale): `juncoHome(env)` when
+ * `cfg.legacy.dataRoot` (a pre-0.10 `~/.local/state/junco` tree adopted via
+ * config.ts's probe-based fallback — see resolveDataRoot), else `cfg.dataDir`
+ * (an explicit dataDir keeps its own location; only its SHAPE may change).
+ * Factored out here so `dataMigrateCmd.ts` (the actual mover) and
+ * `pendingMigrations` below (read-only reporting) can never disagree on
+ * where a pending move would land. */
+export function migrationTargetRoot(
+  cfg: Config,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return cfg.legacy.dataRoot ? juncoHome(env) : cfg.dataDir;
+}
+
+/** The fixed pre-0.10 fallback path (config.ts's `resolveDataRoot` probes the
+ * exact same literal) — only relevant to a run whose target is the canonical
+ * `~/.junco` (an operator with a genuinely custom, unrelated `dataDir` must
+ * never have an unrelated `~/.local/state/junco` swept in). Not
+ * existence-gated here: `dataRootPairs`/`dataMigrateCmd.ts`'s lock-root set
+ * only act on it per-pair/via `existsFn` themselves, so a nonexistent
+ * candidate is simply inert rather than needing a second check everywhere
+ * it's threaded through. Exported (moved from `dataMigrateCmd.ts`, 2026-08-05
+ * task-6 review) so `pendingMigrations` below reuses the EXACT SAME
+ * source-existence logic the actual `junco data migrate` mover uses via
+ * `dataRootPairs` — the two can never drift apart on what's pending. */
+export function fixedLegacyRoot(
+  targetRoot: string,
+  env: Record<string, string | undefined>,
+): string | null {
+  return targetRoot === juncoHome(env) ? join(homeOf(env), ".local", "state", "junco") : null;
+}
+
+export interface DataRootPair {
+  from: string;
+  to: string;
+  pending: boolean;
+}
+
+/** The flat→v2 data-root pairs whose source currently exists, probed from
+ * EVERY root that could hold one (Critical 1 — see `dataMigrateCmd.ts`'s
+ * module doc comment): `cfg.dataDir` (this run's current resolution) and,
+ * whenever relevant, the FIXED legacy path — independently of what
+ * `cfg.legacy.dataRoot` says, since that flag can no longer see stragglers
+ * once resolution has flipped away from the legacy root (the resumed-
+ * migration case). Pairs from different source roots that land on the SAME
+ * target are deduped, preferring whichever source actually has something
+ * pending (the rare case where both somehow do is left for
+ * `moveDataRootPair`'s own `existsFn(to)` conflict check to catch safely, in
+ * `dataMigrateCmd.ts`). Exported (moved from `dataMigrateCmd.ts`, 2026-08-05
+ * task-6 review — see `pendingMigrations` below) so the actual mover and the
+ * read-only reporter share one source-existence implementation instead of
+ * two that can silently drift: this is purely existence-driven, with NO
+ * `cfg.legacy.dataRoot`/`cfg.dataLayout` gate — a real flat-named path on
+ * disk under `cfg.dataDir` is pending regardless of what the config's OWN
+ * fields currently claim about it (an explicit, non-legacy dataDir that
+ * simply hasn't been restructured to v2 yet is exactly as pending as a
+ * legacy-root cross-root move). */
+export function dataRootPairs(
+  cfg: Config,
+  targetRoot: string,
+  legacyRoot: string | null,
+  existsFn: (p: string) => boolean,
+): DataRootPair[] {
+  const sourceRoots =
+    legacyRoot !== null && legacyRoot !== cfg.dataDir ? [cfg.dataDir, legacyRoot] : [cfg.dataDir];
+  const byTarget = new Map<string, DataRootPair>();
+  for (const sourceRoot of sourceRoots) {
+    for (const pair of flatToV2Pairs(sourceRoot, targetRoot)) {
+      const pending = existsFn(pair.from);
+      const existing = byTarget.get(pair.to);
+      if (!existing || (pending && !existing.pending)) {
+        byTarget.set(pair.to, { ...pair, pending });
+      }
+    }
+  }
+  return [...byTarget.values()];
+}
+
+/** Just the state-tree portion of `pendingMigrations` — old-name dirs whose
+ * source currently exists. Exported so `dataMigrateCmd.ts`'s dry-run "state
+ * tree:" section (which reports it in its own dedicated block, separate from
+ * "data root:") shares this exact filter rather than reimplementing it
+ * inline (they'd drift otherwise, same reasoning as `dataRootPairs` above). */
+export function pendingStateTreeMigrations(
   cfg: Config,
   existsFn: (p: string) => boolean = existsSync,
 ): Array<{ from: string; to: string }> {
   return stateTreeMigrations(cfg).filter((m) => existsFn(m.from));
+}
+
+/** Pairs whose source currently exists — used by `junco data`/doctor to
+ * report pending migrations without touching the filesystem (beyond
+ * `existsFn` probes). Two independent migrations, concatenated:
+ *   - state-tree pairs (`pendingStateTreeMigrations`): old-name dirs still
+ *     present under `cfg.dataDir`, waiting on the same-directory rename
+ *     `junco data migrate`'s state-tree phase performs.
+ *   - single-root layout/root pairs (`dataRootPairs`, filtered to
+ *     `.pending`): UNCONDITIONAL — no `cfg.legacy.dataRoot` gate. Reusing
+ *     `dataRootPairs` (the exact function `junco data migrate` itself plans
+ *     against) means `junco data`/doctor can never report a truncated
+ *     picture of what a migrate run would actually act on: it covers both
+ *     an explicit, non-legacy, still-flat-shaped `dataDir` (an in-place
+ *     restructure is genuinely pending) AND a resumed cross-root migration
+ *     (`cfg.legacy.dataRoot` already flipped false because the target root
+ *     gained its first marker, while a straggler is still sitting in the
+ *     FIXED legacy root — `dataRootPairs` probes that fixed path
+ *     independently of the flag for exactly this reason). */
+export function pendingMigrations(
+  cfg: Config,
+  existsFn: (p: string) => boolean = existsSync,
+  env: Record<string, string | undefined> = process.env,
+): Array<{ from: string; to: string }> {
+  const targetRoot = migrationTargetRoot(cfg, env);
+  const legacyRoot = fixedLegacyRoot(targetRoot, env);
+  const layoutPending = dataRootPairs(cfg, targetRoot, legacyRoot, existsFn)
+    .filter((p) => p.pending)
+    .map(({ from, to }) => ({ from, to }));
+  return [...pendingStateTreeMigrations(cfg, existsFn), ...layoutPending];
 }
 
 /** RECURSIVE emptiness check: true when the subtree holds directories only —

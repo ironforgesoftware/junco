@@ -323,8 +323,13 @@ function renderText(
 ): void {
   const legacy = cfg.legacy;
   const suf = (key: keyof LegacyPathFlags): string => legacySuffix(legacy, key);
+  // Single-root move hint (2026-08-03 plan): distinct from the per-subtree
+  // `suf(...)` overrides above — this fires when the WHOLE root resolved via
+  // the pre-0.10 `~/.local/state/junco` fallback (config.ts's
+  // resolveDataRoot), not because any individual key was overridden.
+  const legacyRootHint = legacy.dataRoot ? ` (legacy — run 'junco data migrate')` : "";
 
-  print(`junco data — root: ${p.root}${suf("stateDir")}\n`);
+  print(`junco data — root: ${p.root}${suf("stateDir")}${legacyRootHint}\n`);
 
   print(`\nqueue      ${cfg.queueRoot}${suf("vaultRoot")}\n`);
   print(
@@ -460,6 +465,7 @@ export function runData(cfg: Config, opts: { json: boolean }, deps: DataCmdDeps 
       JSON.stringify(
         {
           root: p.root,
+          layout: cfg.dataLayout,
           paths: p,
           counts,
           legacy: cfg.legacy,
