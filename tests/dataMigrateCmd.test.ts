@@ -107,6 +107,7 @@ describe("runDataMigrate — dry-run", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
 
@@ -511,6 +512,7 @@ describe("runDataMigrate — EXDEV fallback", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
 
@@ -560,6 +562,7 @@ describe("runDataMigrate — EXDEV fallback", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
     const renameFn = (from: string, to: string): void => {

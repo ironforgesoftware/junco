@@ -90,6 +90,10 @@ export interface LegacyPathFlags {
    * via probe-based fallback (not an explicit dataDir/stateDir override) —
    * drives the `junco data migrate` deprecation hint. */
   dataRoot: boolean;
+  /** True when botAccount.configDir resolved to the pre-0.10
+   * `~/.config/junco/gh` root via hosts.yml liveness fallback (not an
+   * explicit override) — drives the `junco data migrate` deprecation hint. */
+  ghConfigDir: boolean;
 }
 export interface SandboxConfig {
   // Master switch. false = current behavior (no sandbox, full env, no jail).

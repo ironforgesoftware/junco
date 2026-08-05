@@ -15,7 +15,13 @@ import {
 } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import type { Config } from "./types.js";
-import { loadConfig, queuePaths, expandHome, validateConfigObject } from "./config.js";
+import {
+  loadConfig,
+  queuePaths,
+  expandHome,
+  validateConfigObject,
+  resolveBotGhConfigDir,
+} from "./config.js";
 import {
   defaultAnswers,
   renderConfigJson,
@@ -32,7 +38,7 @@ import { fetchModels, parseModelsJson } from "./wizard/models.js";
 import { listCatalogProviders, type CatalogEntry } from "./agent/session.js";
 import { NEXT_STEPS } from "./wizard/tips.js";
 import { getAtPath } from "./configLevers.js";
-import { detectBotLogin, runGhLogin, DEFAULT_GH_CONFIG_DIR } from "./ghAuth.js";
+import { detectBotLogin, runGhLogin } from "./ghAuth.js";
 
 export interface WizardDeps {
   detectDeps?: DetectDeps;
@@ -50,6 +56,9 @@ export interface WizardDeps {
   mkdirFn?: (path: string) => void;
   detectBotLoginFn?: typeof detectBotLogin;
   runGhLoginFn?: typeof runGhLogin;
+  /** Injected for the botGhConfigDir legacy-liveness probe (resolveBotGhConfigDir);
+   * defaults to process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 export type WizardIoResult =
@@ -103,7 +112,10 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
   const rawBotDir =
     raw !== null ? (getAtPath(raw, "botAccount.configDir") as string | undefined) : undefined;
   const rawGhBin = raw !== null ? (getAtPath(raw, "git.ghBin") as string | undefined) : undefined;
-  const botGhConfigDir = expandHome(rawBotDir ?? DEFAULT_GH_CONFIG_DIR);
+  // Same resolution assembleConfig uses (never re-derive the default here) —
+  // the dashboard-hosted Account chapter must target the SAME dir the daemon
+  // reads, or this plants a second hosts.yml (split-brain).
+  const { dir: botGhConfigDir } = resolveBotGhConfigDir(rawBotDir, deps.env, existsFn);
   const wizGhBin = rawGhBin ?? "gh";
 
   const io: WizardIO = {

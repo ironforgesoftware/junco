@@ -52,6 +52,54 @@ export function juncoHome(env: Record<string, string | undefined> = process.env)
   return join(homeOf(env), ".junco");
 }
 
+/** Schema default for `botAccount.configDir` — the one spelling every other
+ * reference (the zod default below, `resolveBotGhConfigDir`'s own default)
+ * derives from, so they can't drift apart. */
+export const DEFAULT_BOT_GH_CONFIG_DIR = "~/.junco/gh";
+
+/**
+ * Resolve the bot account's isolated gh config dir from the raw (possibly
+ * unset) `botAccount.configDir` config value. The SINGLE source of truth for
+ * this resolution — `assembleConfig`, `junco auth login` (authCmd.ts), and
+ * the setup wizard (wizard.ts) all call this instead of re-deriving the
+ * default themselves, so the three entrypoints can never disagree about
+ * where a live legacy login lives and plant a second `hosts.yml` at
+ * `~/.junco/gh` while the daemon keeps reading `~/.config/junco/gh` (or vice
+ * versa) — the split-brain this resolution exists to prevent.
+ *
+ * An explicit non-default `raw` passes through (tilde-expanded) verbatim —
+ * NEVER probed. A defaulted/unset value resolves to `~/.junco/gh`, EXCEPT
+ * when `~/.junco/gh/hosts.yml` is absent and the legacy
+ * `~/.config/junco/gh/hosts.yml` exists — then the legacy dir is used and
+ * `legacy: true` is returned (an upgrade must never orphan a working bot
+ * login until `junco data migrate` moves it).
+ */
+export function resolveBotGhConfigDir(
+  raw: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+  existsFn: (p: string) => boolean = existsSync,
+): { dir: string; legacy: boolean } {
+  const ghDefault = join(juncoHome(env), "gh");
+  const ghLegacy = join(homeOf(env), ".config", "junco", "gh");
+  const ghConfigured = expandHome(raw ?? DEFAULT_BOT_GH_CONFIG_DIR);
+  // NOTE: expandHome is homedir()-based while ghDefault is env-based
+  // (homeOf(env)). Under an injected test env (env.HOME !== os.homedir())
+  // these can disagree, making an explicitly-set "~/.junco/gh" indistinguishable
+  // from the default here — acceptable, they resolve to the same place in
+  // real use (see Task 3 brief).
+  let dir = ghConfigured === expandHome(DEFAULT_BOT_GH_CONFIG_DIR) ? ghDefault : ghConfigured;
+  let legacy = false;
+  if (
+    dir === ghDefault &&
+    !existsFn(join(ghDefault, "hosts.yml")) &&
+    existsFn(join(ghLegacy, "hosts.yml"))
+  ) {
+    dir = ghLegacy;
+    legacy = true;
+  }
+  return { dir, legacy };
+}
+
 /** True when `root` holds a junco data tree (either layout). config.json/gh
  * alone do NOT count — the config plan puts those at ~/.junco before any
  * data lives there. */
@@ -349,7 +397,7 @@ export const ConfigSchema = z.object({
   botAccount: z
     .object({
       enabled: z.boolean().default(false),
-      configDir: z.string().min(1).default("~/.config/junco/gh"),
+      configDir: z.string().min(1).default(DEFAULT_BOT_GH_CONFIG_DIR),
     })
     .default({}),
 });
@@ -448,12 +496,21 @@ export function assembleConfig(
   // and canonical (~/.junco) resolutions are unaffected — they still probe.
   const dataLayout = legacyDataRoot ? "flat" : layoutOf(dataDir, existsFn);
   const queueRoot = nVault ? join(expandHome(nVault), d.juncoSubdir) : join(dataDir, "queue");
+  // Bot gh config dir: same single-root move as dataDir above, but resolved
+  // through the shared resolveBotGhConfigDir (authCmd.ts/wizard.ts call the
+  // same function so all three entrypoints agree — see its doc comment).
+  const { dir: ghConfigDir, legacy: legacyGhDir } = resolveBotGhConfigDir(
+    d.botAccount.configDir,
+    env,
+    existsFn,
+  );
   const legacy = {
     vaultRoot: nVault !== undefined,
     stateDir: nStateDir !== undefined,
     worktreeRoot: nWorktree !== undefined,
     externalReposRoot: nExternal !== undefined,
     dataRoot: legacyDataRoot,
+    ghConfigDir: legacyGhDir,
   };
   return {
     dataDir,
@@ -559,7 +616,7 @@ export function assembleConfig(
     },
     botAccount: {
       enabled: d.botAccount.enabled,
-      configDir: expandHome(d.botAccount.configDir),
+      configDir: ghConfigDir,
     },
   };
 }
@@ -621,6 +678,11 @@ export function configDeprecations(cfg: Config): string[] {
     out.push(
       "config: data lives at the legacy ~/.local/state/junco root — " +
         "run 'junco data migrate' to move it under ~/.junco (docs/configuration.md)",
+    );
+  if (cfg.legacy.ghConfigDir)
+    out.push(
+      "config: bot gh credentials live at the legacy ~/.config/junco/gh — " +
+        "run 'junco data migrate' to move them to ~/.junco/gh",
     );
   return out;
 }

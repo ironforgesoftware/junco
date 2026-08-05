@@ -8,9 +8,9 @@
 
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { expandHome, validateConfigObject, loadConfig } from "./config.js";
+import { validateConfigObject, loadConfig, resolveBotGhConfigDir } from "./config.js";
 import { getAtPath, setAtPath } from "./configLevers.js";
-import { DEFAULT_GH_CONFIG_DIR, detectBotLogin, runGhLogin } from "./ghAuth.js";
+import { detectBotLogin, runGhLogin } from "./ghAuth.js";
 import { grantBotAccess } from "./botAccess.js";
 import type { Config } from "./types.js";
 
@@ -26,6 +26,9 @@ export interface AuthCmdDeps {
   writeFileFn?: (p: string, c: string) => void;
   renameFn?: (from: string, to: string) => void;
   unlinkFn?: (p: string) => void;
+  /** Injected for the botGhConfigDir legacy-liveness probe (resolveBotGhConfigDir);
+   * defaults to process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 const USAGE =
@@ -89,8 +92,13 @@ export async function runAuthCommand(
     printErr(`config unreadable: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
-  const configDir = expandHome(
-    (getAtPath(raw, "botAccount.configDir") as string | undefined) ?? DEFAULT_GH_CONFIG_DIR,
+  // Same resolution assembleConfig uses (never re-derive the default here) —
+  // an upgrader with a live legacy login must see `junco auth login` target
+  // the SAME dir the daemon reads, or this plants a second hosts.yml.
+  const { dir: configDir } = resolveBotGhConfigDir(
+    getAtPath(raw, "botAccount.configDir") as string | undefined,
+    deps.env,
+    existsFn,
   );
   const ghBin = (getAtPath(raw, "git.ghBin") as string | undefined) ?? "gh";
 

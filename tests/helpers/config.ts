@@ -66,6 +66,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
       worktreeRoot: false,
       externalReposRoot: false,
       dataRoot: false,
+      ghConfigDir: false,
     },
     model: {
       id: "test/model",

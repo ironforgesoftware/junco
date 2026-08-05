@@ -37,6 +37,7 @@ describe("makeConfig", () => {
       worktreeRoot: false,
       externalReposRoot: false,
       dataRoot: false,
+      ghConfigDir: false,
     });
   });
 

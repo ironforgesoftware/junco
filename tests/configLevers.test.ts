@@ -131,7 +131,7 @@ describe("botAccount levers", () => {
     const byPath = new Map(LEVERS.map((l) => [l.path, l]));
     expect(byPath.get("botAccount.configDir")).toMatchObject({
       type: "string",
-      default: "~/.config/junco/gh",
+      default: "~/.junco/gh",
       reload: "restart",
       editable: true,
     });

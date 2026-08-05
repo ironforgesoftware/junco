@@ -197,6 +197,7 @@ describe("migrateStateTree", () => {
         worktreeRoot: false,
         externalReposRoot: true,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
     expect(pendingMigrations(cfg).some((m) => m.from.endsWith("/external"))).toBe(false);

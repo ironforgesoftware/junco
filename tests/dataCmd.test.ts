@@ -210,6 +210,7 @@ describe("runData — text mode", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
     const captured: string[] = [];
@@ -264,6 +265,7 @@ describe("runData — text mode", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
     const captured: string[] = [];
@@ -435,6 +437,7 @@ describe("runData — --json mode", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
     const captured: string[] = [];

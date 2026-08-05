@@ -159,6 +159,7 @@ describe("sandboxDenyPaths", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
     expect(sandboxDenyPaths(cfg).dirs).toContain("/sbxroot/vault/Junco");
@@ -225,6 +226,7 @@ describe("ensureDataTree", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
     ensureDataTree(cfg, { mkdirFn: (d) => made.push(d), existsFn: () => false, writeFn: () => {} });

@@ -153,14 +153,62 @@ describe("buildWizardIO", () => {
     expect((thrown as Error).message).toMatch(/EPERM/);
   });
 
-  it("fresh mode: botGhConfigDir is the expanded DEFAULT_GH_CONFIG_DIR default", () => {
+  it("fresh mode: botGhConfigDir is the expanded ~/.junco/gh default", () => {
     const dir = tmp();
     const cp = join(dir, "config.json");
     const r = buildWizardIO(cp, { existsFn: () => false });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
     expect(r.io.botGhConfigDir).not.toContain("~");
-    expect(r.io.botGhConfigDir.endsWith(".config/junco/gh")).toBe(true);
+    expect(r.io.botGhConfigDir.endsWith(".junco/gh")).toBe(true);
+  });
+
+  // Critical fix (Task 3 review): the dashboard-hosted Account chapter must
+  // resolve botGhConfigDir through the SAME probe assembleConfig uses, or an
+  // upgrader with a live legacy login gets the wizard targeting ~/.junco/gh
+  // while the daemon keeps reading ~/.config/junco/gh — planting a second
+  // hosts.yml that silently reroutes later resolutions (split-brain).
+  it("fresh mode: targets the legacy gh config dir when a legacy login is live (env-injected, hermetic existsFn)", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyHosts = "/h/.config/junco/gh/hosts.yml";
+    const r = buildWizardIO(cp, {
+      env: { HOME: "/h" },
+      // Hermetic: config file itself is absent (→ fresh mode); only the
+      // injected legacy hosts.yml "exists" — the canonical one does not.
+      existsFn: (p) => p === legacyHosts,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.mode).toBe("fresh");
+    expect(r.io.botGhConfigDir).toBe("/h/.config/junco/gh");
+  });
+
+  it("never probes an explicitly non-default configDir, even with a legacy login live", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyHosts = "/h/.config/junco/gh/hosts.yml";
+    writeFileSync(
+      cp,
+      JSON.stringify({
+        vaultRoot: join(dir, "vault"),
+        juncoSubdir: "",
+        model: { id: "p/m" },
+        // An absolute, non-tilde explicit override — sidesteps expandHome's
+        // homedir()-vs-env(HOME) ambiguity entirely.
+        botAccount: { configDir: "/explicit/custom/gh" },
+      }),
+      "utf8",
+    );
+    const r = buildWizardIO(cp, {
+      env: { HOME: "/h" },
+      // Even though the legacy hosts.yml "exists", an explicit configDir
+      // must never be probed against it.
+      existsFn: (p) => p === cp || p === legacyHosts,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.botGhConfigDir).toBe("/explicit/custom/gh");
   });
 
   it("rerun mode: botGhConfigDir reads botAccount.configDir / git.ghBin from the raw config", () => {

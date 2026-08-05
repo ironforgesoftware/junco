@@ -720,7 +720,7 @@ export const LEVERS: Lever[] = [
   {
     path: "botAccount.configDir",
     type: "string",
-    default: "~/.config/junco/gh",
+    default: "~/.junco/gh",
     editable: true,
     reload: "restart",
     description: "Isolated gh config dir holding the bot login (GH_CONFIG_DIR for daemon gh/git).",

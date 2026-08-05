@@ -664,9 +664,14 @@ describe("[assess] config section", () => {
 
 describe("botAccount config", () => {
   it("defaults to disabled with the standard config dir", () => {
-    const cfg = assembleConfig(ConfigSchema.parse({ vaultRoot: "/tmp/v" }));
+    // existsFn: () => false — deterministic regardless of what the machine
+    // running the suite actually has on disk (see the legacy-gh-login test
+    // below, which deliberately exercises the opposite).
+    const cfg = assembleConfig(ConfigSchema.parse({ vaultRoot: "/tmp/v" }), process.env, {
+      existsFn: () => false,
+    });
     expect(cfg.botAccount.enabled).toBe(false);
-    expect(cfg.botAccount.configDir).toBe(expandHome("~/.config/junco/gh"));
+    expect(cfg.botAccount.configDir).toBe(expandHome("~/.junco/gh"));
     expect(cfg.ghAuth).toBeUndefined();
   });
 
@@ -679,6 +684,19 @@ describe("botAccount config", () => {
     );
     expect(cfg.botAccount.enabled).toBe(true);
     expect(cfg.botAccount.configDir).toBe(expandHome("~/custom/gh"));
+  });
+
+  it("bot gh configDir defaults to ~/.junco/gh on a fresh machine", () => {
+    const cfg = assembleConfig(ConfigSchema.parse({}), { HOME: "/h" }, { existsFn: () => false });
+    expect(cfg.botAccount.configDir).toBe("/h/.junco/gh");
+    expect(cfg.legacy.ghConfigDir).toBe(false);
+  });
+
+  it("keeps a live legacy gh login until migrated", () => {
+    const existsFn = (p: string) => p === "/h/.config/junco/gh/hosts.yml";
+    const cfg = assembleConfig(ConfigSchema.parse({}), { HOME: "/h" }, { existsFn });
+    expect(cfg.botAccount.configDir).toBe("/h/.config/junco/gh");
+    expect(cfg.legacy.ghConfigDir).toBe(true);
   });
 });
 
@@ -878,6 +896,7 @@ describe("dataDir resolution (unified data root)", () => {
       worktreeRoot: false,
       externalReposRoot: false,
       dataRoot: false,
+      ghConfigDir: false,
     });
   });
 
@@ -927,6 +946,7 @@ describe("dataDir resolution (unified data root)", () => {
       worktreeRoot: false,
       externalReposRoot: false,
       dataRoot: false,
+      ghConfigDir: false,
     });
     expect(cfg.dataDir).toBe(FRESH_DEFAULT);
     expect(cfg.queueRoot).toBe(join(FRESH_DEFAULT, "queue"));
@@ -945,6 +965,7 @@ describe("dataDir resolution (unified data root)", () => {
       worktreeRoot: false,
       externalReposRoot: false,
       dataRoot: false,
+      ghConfigDir: false,
     });
     expect(cfg.worktreeRoot).toBe(join(FRESH_DEFAULT, "cache/worktrees"));
     expect(cfg.github.externalReposRoot).toBe(join(FRESH_DEFAULT, "cache/clones/external"));

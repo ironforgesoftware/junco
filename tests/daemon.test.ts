@@ -411,6 +411,7 @@ describe("overlayFrozenRestartFields", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
       maxConcurrent: 1,
       healthEnabled: false,
@@ -435,6 +436,7 @@ describe("overlayFrozenRestartFields", () => {
         worktreeRoot: false,
         externalReposRoot: false,
         dataRoot: false,
+        ghConfigDir: false,
       },
       maxConcurrent: 10,
       healthEnabled: true,
@@ -558,6 +560,7 @@ describe("overlayFrozenRestartFields", () => {
         worktreeRoot: true,
         externalReposRoot: true,
         dataRoot: false,
+        ghConfigDir: false,
       },
     });
 
