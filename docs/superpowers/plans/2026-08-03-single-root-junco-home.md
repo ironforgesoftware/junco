@@ -462,7 +462,9 @@ if (cfg.legacy.ghConfigDir)
 
 - [ ] **Step 5: Commit** — `feat(auth): bot gh config home moves to ~/.junco/gh (legacy login kept until migrated)`.
 
----### Task 4: Wizard + service render + sandbox follow the new home
+---
+
+### Task 4: Wizard + service render + sandbox follow the new home
 
 **Files:**
 - Modify: `src/wizard/flow.ts:15-17,51` (`DEFAULT_DATA_DIR = "~/.junco"`), `src/tui/wizard/chapters/Workspace.tsx:30` (placeholder `~/.junco`)
