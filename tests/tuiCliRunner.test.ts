@@ -88,37 +88,32 @@ describe("per-command timeouts", () => {
   it("an injected deps.timeoutMs still wins over the roster value", async () => {
     const child = fakeChild();
     const { d } = deps(child, 30); // run-once's roster budget is 60 min — injection must win
-    const r = await runCliCommand("/cfg/config.json", "run-once", [], d);
+    const r = await runCliCommand("run-once", [], d);
     expect(r.timedOut).toBe(true);
     expect(child.killed).toBe(true);
   });
 });
 
 describe("runCliCommand", () => {
-  it("spawns node + cliPath + subcommand + args + --config, merges output in order", async () => {
+  it("spawns node + cliPath + subcommand + args (no --config), merges output in order", async () => {
     const child = fakeChild();
     const { d, spawned } = deps(child);
-    const p = runCliCommand("/cfg/config.json", "list", ["failed"], d);
+    const p = runCliCommand("list", ["failed"], d);
     child.stdout.emit("data", Buffer.from("one\n"));
     child.stderr.emit("data", Buffer.from("warn!\n"));
     child.stdout.emit("data", Buffer.from("two\n"));
     child.emit("close", 0);
     const r = await p;
     expect(spawned[0].cmd).toBe(process.execPath);
-    expect(spawned[0].args).toEqual([
-      "/fake/dist/cli.js",
-      "list",
-      "failed",
-      "--config",
-      "/cfg/config.json",
-    ]);
+    expect(spawned[0].args).toEqual(["/fake/dist/cli.js", "list", "failed"]);
+    expect(spawned[0].args).not.toContain("--config");
     expect(r).toEqual({ code: 0, output: "one\nwarn!\ntwo\n", timedOut: false });
   });
 
   it("non-zero exit surfaces the code", async () => {
     const child = fakeChild();
     const { d } = deps(child);
-    const p = runCliCommand("/cfg/config.json", "doctor", [], d);
+    const p = runCliCommand("doctor", [], d);
     child.stderr.emit("data", Buffer.from("NOT ready\n"));
     child.emit("close", 1);
     expect(await p).toEqual({ code: 1, output: "NOT ready\n", timedOut: false });
@@ -127,7 +122,7 @@ describe("runCliCommand", () => {
   it("kills at the timeout and reports timedOut", async () => {
     const child = fakeChild();
     const { d } = deps(child, 30); // never closes on its own
-    const r = await runCliCommand("/cfg/config.json", "run-once", [], d);
+    const r = await runCliCommand("run-once", [], d);
     expect(child.killed).toBe(true);
     expect(r.timedOut).toBe(true);
     expect(r.code).toBeNull();
@@ -136,7 +131,7 @@ describe("runCliCommand", () => {
   it("spawn error (ENOENT) resolves with the message, never throws", async () => {
     const child = fakeChild();
     const { d } = deps(child);
-    const p = runCliCommand("/cfg/config.json", "status", [], d);
+    const p = runCliCommand("status", [], d);
     child.emit("error", new Error("spawn node ENOENT"));
     const r = await p;
     expect(r.code).toBeNull();
@@ -169,7 +164,7 @@ describe("roster ↔ CLI USAGE consistency", () => {
   });
 
   it("a synchronous spawn throw still resolves", async () => {
-    const r = await runCliCommand("/cfg/config.json", "status", [], {
+    const r = await runCliCommand("status", [], {
       cliPath: "/fake/cli.js",
       spawnFn: (() => {
         throw new Error("sync spawn boom");

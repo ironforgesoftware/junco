@@ -254,12 +254,10 @@ export function App(props: AppProps): React.JSX.Element {
   // useMemo'd (perf pass #259): the `??` fallback arrow was rebuilt every
   // render, churning the identity of everything that depends on `runCliFn`
   // (runPaletteCommand, paletteEnter, runAssess, runLocalAction) even when
-  // neither `props.runCliFn` nor `configPath` changed.
+  // `props.runCliFn` didn't change.
   const runCliFn = useMemo(
-    () =>
-      props.runCliFn ??
-      ((name: string, extraArgs: string[]) => runCliCommand(configPath, name, extraArgs)),
-    [props.runCliFn, configPath],
+    () => props.runCliFn ?? ((name: string, extraArgs: string[]) => runCliCommand(name, extraArgs)),
+    [props.runCliFn],
   );
   const { exit } = useApp();
   bumpRender("App"); // no-op unless JUNCO_RENDER_COUNT=1 (perf-pass measurement seam)
