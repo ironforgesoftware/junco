@@ -30,7 +30,9 @@ function freshRoot(): string {
  * suite's migrations only make sense relative to a single tmp-root dataDir,
  * so "external" must default to "<dataDir>/clones/external" rather than an
  * unrelated fixed path. Callers still override either field wholesale via
- * `overrides`. */
+ * `overrides`. Defaults to the flat layout: migrateStateTree's whole purpose
+ * is moving a pre-existing (pre-flip) old-name tree into dataTree.ts's
+ * current names — every fixture below builds that flat old-name tree. */
 function makeConfig(overrides: Partial<Config> = {}): Config {
   const dataDir = overrides.dataDir ?? "/tmp/vault/state";
   return baseConfig(
@@ -47,6 +49,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       removeWorktreeOnSuccess: true,
     },
     {
+      dataLayout: "flat",
       healthPort: 0, // never binds (healthEnabled: false), so claim no real port
       planLintBlockOnError: true,
       planLintCheckLabels: true,
@@ -188,7 +191,13 @@ describe("migrateStateTree", () => {
       dataDir: root,
       queueRoot: join(root, "queue"),
       github: { ...base.github, externalReposRoot: "/sbxroot/custom-ext" },
-      legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: true },
+      legacy: {
+        vaultRoot: false,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: true,
+        dataRoot: false,
+      },
     });
     expect(pendingMigrations(cfg).some((m) => m.from.endsWith("/external"))).toBe(false);
     expect(stateTreeMigrations(cfg).some((m) => m.from.endsWith("/external"))).toBe(false);

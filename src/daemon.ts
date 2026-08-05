@@ -171,6 +171,17 @@ export function overlayFrozenRestartFields(frozen: Config, live: Config): Config
   return {
     ...live,
     dataDir: frozen.dataDir,
+    // dataLayout is dataDir-derived (single-root ~/.junco consolidation) —
+    // pin it alongside dataDir. Without this, a live config edit that
+    // resolves to a differently-laid-out root (e.g. an operator's dataDir
+    // edit probing a fresh v2 tree while the frozen root is a pre-existing
+    // flat one) would pair the FROZEN dataDir with the LIVE dataLayout via
+    // the `...live` spread above, and every dataTreePaths()-derived path
+    // (outbox/transcripts/history/logFile/...) would silently move to
+    // data/cache/logs subpaths inside a live flat tree — a tree split, plus
+    // sandboxDenyPaths (also layout-derived) would stop denying the real
+    // (flat) state paths since it'd deny the nonexistent v2 ones instead.
+    dataLayout: frozen.dataLayout,
     queueRoot: frozen.queueRoot,
     legacy: frozen.legacy,
     // worktreeRoot derives from dataDir (restart-kind) whenever the legacy

@@ -98,6 +98,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       removeWorktreeOnSuccess: false, // preserve so we can assert on commits
     },
     {
+      dataLayout: "flat", // transcripts/outbox/etc. assertions below are root-relative
       ghBin: h.ghBin, // the harness's fake gh, not the poisoned default
       planLintBlockOnError: true,
       github: {

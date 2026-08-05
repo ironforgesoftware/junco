@@ -33,7 +33,9 @@ afterEach(() => {
 
 /** Full-Config fixture — same shape as tests/dataMigrateCmd.test.ts's makeConfig:
  * queueRoot/worktreeRoot/github.externalReposRoot derive from dataDir, matching
- * real resolveConfig's non-legacy behavior. */
+ * real resolveConfig's non-legacy behavior. Defaults to the flat layout: every
+ * fixture tree below (buildFixtureTree et al.) is built in the pre-flip
+ * (flat) shape. */
 function makeConfig(overrides: Partial<Config> = {}): Config {
   const dataDir = overrides.dataDir ?? "/tmp/vault/state";
   return baseConfig(
@@ -50,6 +52,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       removeWorktreeOnSuccess: true,
     },
     {
+      dataLayout: "flat",
       planLintBlockOnError: true,
       planLintCheckLabels: true,
       github: {
@@ -201,7 +204,13 @@ describe("runData — text mode", () => {
     const cfg = makeConfig({
       dataDir: root,
       queueRoot: join(root, "queue"),
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
     });
     const captured: string[] = [];
     runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
@@ -249,7 +258,13 @@ describe("runData — text mode", () => {
     const cfg = makeConfig({
       dataDir: root,
       queueRoot: join(root, "queue"),
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
     });
     const captured: string[] = [];
     runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
@@ -414,7 +429,13 @@ describe("runData — --json mode", () => {
     const cfg = makeConfig({
       dataDir: root,
       queueRoot: join(root, "queue"),
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
     });
     const captured: string[] = [];
     runData(cfg, { json: true }, { printFn: (s) => captured.push(s) });

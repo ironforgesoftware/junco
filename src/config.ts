@@ -39,12 +39,47 @@ export function isLoopbackHost(host: string): boolean {
   return false;
 }
 
+/** env.HOME (tests/sandboxes) wins over os.homedir(). */
+export function homeOf(env: Record<string, string | undefined> = process.env): string {
+  return env.HOME && env.HOME.trim() !== "" ? env.HOME : homedir();
+}
+
 /** Junco's single home directory: ~/.junco. env.HOME wins over os.homedir()
  * so tests and sandboxes can relocate it. Config lives here today; the data
- * tree follows in the single-root consolidation (follow-up issue). */
+ * tree follows suit by default in the single-root consolidation (probe-based
+ * fallback keeps a pre-existing legacy root working — see assembleConfig). */
 export function juncoHome(env: Record<string, string | undefined> = process.env): string {
-  const home = env.HOME && env.HOME.trim() !== "" ? env.HOME : homedir();
-  return join(home, ".junco");
+  return join(homeOf(env), ".junco");
+}
+
+/** True when `root` holds a junco data tree (either layout). config.json/gh
+ * alone do NOT count — the config plan puts those at ~/.junco before any
+ * data lives there. */
+export function dataRootHasTree(
+  root: string,
+  existsFn: (p: string) => boolean = existsSync,
+): boolean {
+  return ["queue", "data", "cache", "transcripts", "history"].some((m) => existsFn(join(root, m)));
+}
+
+/** Which internal shape an existing tree uses. Fresh (marker-less) roots get
+ * the final shape. queue/review/watchlist sit at the root in BOTH layouts and
+ * are deliberately not markers. */
+export function layoutOf(
+  root: string,
+  existsFn: (p: string) => boolean = existsSync,
+): "flat" | "v2" {
+  if (existsFn(join(root, "data")) || existsFn(join(root, "cache"))) return "v2";
+  const flatMarkers = [
+    "transcripts",
+    "history",
+    "clones",
+    "worktrees",
+    "assess-history",
+    "github-cache",
+  ];
+  if (flatMarkers.some((m) => existsFn(join(root, m)))) return "flat";
+  return "v2";
 }
 
 /** The canonical config location: ~/.junco/config.json. */
@@ -358,6 +393,7 @@ export function parseConfigFile(path: string): ConfigParsed {
 export function assembleConfig(
   d: ConfigParsed,
   env: Record<string, string | undefined> = process.env,
+  deps: { existsFn?: (p: string) => boolean } = {},
 ): Config {
   const baseUrlExplicit = d.model.baseUrl !== undefined;
   const eligible = catalogEligible({ source: d.model.source, id: d.model.id, baseUrlExplicit });
@@ -377,16 +413,51 @@ export function assembleConfig(
   const nVault = norm(d.vaultRoot);
   const nWorktree = norm(d.git.worktreeRoot);
   const nExternal = norm(d.github.externalReposRoot);
-  const dataDir = expandHome(nStateDir ?? d.dataDir ?? "~/.local/state/junco");
+  const existsFn = deps.existsFn ?? existsSync;
+  // Single-root ~/.junco: explicit dataDir/stateDir always wins, probe-free.
+  // A defaulted root prefers ~/.junco, but while ~/.junco holds no data tree
+  // and the pre-0.10 root exists, keep using the legacy root UNTOUCHED —
+  // `junco data migrate` is the only thing that relocates live data.
+  const explicitRoot = nStateDir ?? d.dataDir;
+  let dataDir: string;
+  let legacyDataRoot = false;
+  if (explicitRoot !== undefined) {
+    dataDir = expandHome(explicitRoot);
+  } else {
+    const canonical = juncoHome(env);
+    const legacyRoot = join(homeOf(env), ".local", "state", "junco");
+    if (!dataRootHasTree(canonical, existsFn) && existsFn(legacyRoot)) {
+      dataDir = legacyRoot;
+      legacyDataRoot = true;
+    } else {
+      dataDir = canonical;
+    }
+  }
+  // Ruling: a root adopted via the legacy fallback is BY DEFINITION a
+  // pre-0.10 tree (the fallback only fires while `~/.junco` holds no tree
+  // AND the legacy root exists — a v2 tree can't live at the legacy path
+  // before `junco data migrate` ships in P2.T5). Force "flat" rather than
+  // trusting layoutOf's marker probe here: a legacy root that predates
+  // #194 (transcripts disabled, TUI never run, no worktrees/clones under
+  // dataDir) or that exists but was never populated can hold none of
+  // layoutOf's six markers, and layoutOf's marker-less default is "v2" —
+  // which would then have startup's migrateStateTree (daemon.ts) relocate
+  // this root's pre-unification dirs into data/-shaped destinations before
+  // any operator ever ran `junco data migrate`, violating this branch's
+  // safety property that nothing else relocates live data. Explicit-dataDir
+  // and canonical (~/.junco) resolutions are unaffected — they still probe.
+  const dataLayout = legacyDataRoot ? "flat" : layoutOf(dataDir, existsFn);
   const queueRoot = nVault ? join(expandHome(nVault), d.juncoSubdir) : join(dataDir, "queue");
   const legacy = {
     vaultRoot: nVault !== undefined,
     stateDir: nStateDir !== undefined,
     worktreeRoot: nWorktree !== undefined,
     externalReposRoot: nExternal !== undefined,
+    dataRoot: legacyDataRoot,
   };
   return {
     dataDir,
+    dataLayout,
     queueRoot,
     legacy,
     updateCheck: d.updateCheck,
@@ -439,7 +510,9 @@ export function assembleConfig(
     ghBin: d.git.ghBin,
     defaultBaseBranch: d.git.defaultBaseBranch,
     branchPrefix: d.git.branchPrefix,
-    worktreeRoot: nWorktree ? expandHome(nWorktree) : join(dataDir, "worktrees"),
+    worktreeRoot: nWorktree
+      ? expandHome(nWorktree)
+      : join(dataDir, dataLayout === "v2" ? "cache/worktrees" : "worktrees"),
     removeWorktreeOnSuccess: d.git.removeWorktreeOnSuccess,
     allowedRepoRoots: d.git.allowedRepoRoots.map(expandHome),
     draftByDefault: d.pr.draftByDefault,
@@ -466,7 +539,9 @@ export function assembleConfig(
       pollIntervalSeconds: d.github.pollIntervalSeconds,
       requireApproval: d.github.requireApproval,
       plannerModelId: d.github.plannerModelId ?? null,
-      externalReposRoot: nExternal ? expandHome(nExternal) : join(dataDir, "clones", "external"),
+      externalReposRoot: nExternal
+        ? expandHome(nExternal)
+        : join(dataDir, dataLayout === "v2" ? "cache/clones/external" : "clones/external"),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
     },
     assess: {
@@ -541,6 +616,11 @@ export function configDeprecations(cfg: Config): string[] {
       "config: github.externalReposRoot is deprecated — remove the key; external clones " +
         "re-clone under <dataDir>/clones/external on next use (or move them there first) " +
         "(docs/configuration.md)",
+    );
+  if (cfg.legacy.dataRoot)
+    out.push(
+      "config: data lives at the legacy ~/.local/state/junco root — " +
+        "run 'junco data migrate' to move it under ~/.junco (docs/configuration.md)",
     );
   return out;
 }

@@ -21,7 +21,12 @@ function loadRendered(a: WizardAnswers) {
   const dir = mkdtempSync(join(tmpdir(), "wizflow-"));
   const p = join(dir, "config.json");
   writeFileSync(p, renderConfigJson(a), "utf8");
-  return loadConfig(p);
+  // Isolate HOME to this fresh tmp dir: the default dataDir resolution
+  // (config.ts's assembleConfig) probes ~/.junco and the legacy
+  // ~/.local/state/junco root via the real filesystem, and the machine
+  // running this suite may itself have a real (pre-existing) legacy data
+  // tree — deterministic tests must not depend on that ambient state.
+  return loadConfig(p, { HOME: dir });
 }
 
 describe("chapters", () => {
@@ -66,7 +71,8 @@ describe("buildConfigObject / renderConfigJson", () => {
     expect("dataDir" in obj).toBe(false);
     const cfg = loadRendered(defaultAnswers());
     expect(cfg.model.id).toBe("local/my-model");
-    expect(queuePaths(cfg).inbox.endsWith("/junco/queue/inbox")).toBe(true);
+    // Single-root default: the queue lives under the hidden ~/.junco root.
+    expect(queuePaths(cfg).inbox.endsWith("/.junco/queue/inbox")).toBe(true);
     expect(configDeprecations(cfg)).toEqual([]);
   });
 

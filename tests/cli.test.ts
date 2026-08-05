@@ -37,7 +37,13 @@ import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
  * `start` arm doesn't throw on a bare `{}` stub. */
 function stubConfig(): Config {
   return {
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    legacy: {
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+      dataRoot: false,
+    },
   } as Config;
 }
 
@@ -223,6 +229,7 @@ describe("run(['start']) — deprecated config keys warning", () => {
               stateDir: false,
               worktreeRoot: false,
               externalReposRoot: false,
+              dataRoot: false,
             },
           }) as Config,
       ),

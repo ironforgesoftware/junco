@@ -22,7 +22,13 @@ const okConfig = {
   dataDir: "/sbxroot/junco-doc-state",
   queueRoot: "/sbxroot/junco-doc-vault",
   worktreeRoot: "/sbxroot/junco-doc-wt",
-  legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+  legacy: {
+    vaultRoot: false,
+    stateDir: false,
+    worktreeRoot: false,
+    externalReposRoot: false,
+    dataRoot: false,
+  },
   gitBin: "git",
   ghBin: "gh",
   github: {

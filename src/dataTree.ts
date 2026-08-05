@@ -34,6 +34,44 @@ export const UPDATE_CHECK_FILENAME = "update-check.json";
 const POISON_QUEUE_ROOT = "/nonexistent/junco-queue";
 const POISON_CLONES_EXTERNAL = "/nonexistent/junco-clones-external";
 
+/** Per-layout subpaths. "flat" is the 0.9 shape, byte-identical forever —
+ * an unmigrated tree must never see a moved path. "v2" is the single-root
+ * shape: data/ (unrecoverable), cache/ (rm -rf-safe), logs/. `cfg.dataLayout`
+ * defaults to "flat" here (not "v2") when absent: several unit tests build a
+ * narrow `{ dataDir } as unknown as Config` fixture (see the long comment on
+ * `queue` below) that never sets it, and those fixtures predate the layout
+ * flip — they must keep resolving the pre-flip (flat) shape byte-for-byte. A
+ * fully-assembled Config (the only kind config.ts ever produces) always sets
+ * dataLayout explicitly, so this default is never observed in production. */
+const LAYOUTS = {
+  flat: {
+    outbox: OUTBOX_SUBDIR,
+    mirror: MIRROR_SUBDIR,
+    clonesWatched: CLONES_WATCHED_SUBDIR,
+    assessHistory: ASSESS_HISTORY_SUBDIR,
+    history: HISTORY_SUBDIR,
+    transcripts: "transcripts",
+    githubCache: "github-cache",
+    updateCheck: UPDATE_CHECK_FILENAME,
+    spend: "spend.json",
+    metrics: "metrics.json",
+    logs: ".",
+  },
+  v2: {
+    outbox: "data/outbox",
+    mirror: "cache/mirror",
+    clonesWatched: "cache/clones/watched",
+    assessHistory: "data/assess-history",
+    history: "data/history",
+    transcripts: "data/transcripts",
+    githubCache: "cache/github-cache",
+    updateCheck: "cache/update-check.json",
+    spend: "data/spend.json",
+    metrics: "data/metrics.json",
+    logs: "logs",
+  },
+} as const;
+
 export interface DataTreePaths {
   root: string;
   queue: Paths; // from queuePaths(cfg)
@@ -55,11 +93,13 @@ export interface DataTreePaths {
   migratedFile: string; // dataMigrate journal (Task 4)
   migrateLockFile: string; // startup-migration mutex (#197.2) — daemon.ts + dataMigrateCmd.ts both hold it
   githubCache: string; // legacy TUI issue/PR cache (tui/ghClient.ts)
-  logsDir: string; // dirname(logFile); root today, a subdir post-layout-flip
+  logsDir: string; // dirname(logFile): root in the flat layout, <root>/logs in v2
 }
 
 export function dataTreePaths(cfg: Config): DataTreePaths {
   const r = cfg.dataDir;
+  // See the LAYOUTS comment above for why the fallback is "flat", not "v2".
+  const L = LAYOUTS[cfg.dataLayout ?? "flat"];
   return {
     root: r,
     // `queue`/`clonesExternal` degrade to an inert placeholder instead of
@@ -103,9 +143,9 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
         },
     reviewAssess: join(r, REVIEW_ASSESS_SUBDIR),
     reviewComments: join(r, REVIEW_COMMENTS_SUBDIR),
-    outbox: join(r, OUTBOX_SUBDIR),
-    mirror: join(r, MIRROR_SUBDIR),
-    clonesWatched: join(r, CLONES_WATCHED_SUBDIR),
+    outbox: join(r, L.outbox),
+    mirror: join(r, L.mirror),
+    clonesWatched: join(r, L.clonesWatched),
     // cfg.github is typed as GithubConfig — non-optional, never undefined —
     // so `cfg.github?.` would misstate the type (optional chaining implies a
     // legitimately-absent field). Several unit tests build a Config via
@@ -114,18 +154,18 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     // survive that lie, same rationale as the `cfg.queueRoot` check above.
     clonesExternal: cfg.github ? cfg.github.externalReposRoot : POISON_CLONES_EXTERNAL,
     worktrees: cfg.worktreeRoot,
-    assessHistory: join(r, ASSESS_HISTORY_SUBDIR),
-    history: join(r, HISTORY_SUBDIR),
-    transcripts: join(r, "transcripts"),
+    assessHistory: join(r, L.assessHistory),
+    history: join(r, L.history),
+    transcripts: join(r, L.transcripts),
     watchlistFile: join(r, WATCHLIST_FILENAME),
-    updateCheckFile: join(r, UPDATE_CHECK_FILENAME),
-    spendFile: join(r, "spend.json"),
-    metricsFile: join(r, "metrics.json"),
-    logFile: join(r, "worker.log"),
+    updateCheckFile: join(r, L.updateCheck),
+    spendFile: join(r, L.spend),
+    metricsFile: join(r, L.metrics),
+    logFile: join(r, L.logs, "worker.log"),
     migratedFile: join(r, "migrated.json"),
     migrateLockFile: join(r, "migrate.lock"),
-    githubCache: join(r, "github-cache"),
-    logsDir: r,
+    githubCache: join(r, L.githubCache),
+    logsDir: join(r, L.logs),
   };
 }
 
@@ -203,6 +243,7 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
     p.assessHistory,
     p.history,
     p.transcripts,
+    p.logsDir, // v2: <root>/logs — flat: join(root, ".") normalizes to root, a mkdir no-op
   ];
   for (const d of dirs) mkdirFn(d);
   const gi = join(p.root, ".gitignore");

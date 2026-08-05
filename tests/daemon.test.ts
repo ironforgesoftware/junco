@@ -17,7 +17,7 @@ import type { HealthServerHandle, HealthServerOpts } from "../src/healthServer.j
 import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import { makeConfigHolder } from "../src/configWatcher.js";
-import { dataTreePaths } from "../src/dataTree.js";
+import { dataTreePaths, sandboxDenyPaths } from "../src/dataTree.js";
 import { ProviderGate, type GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { makeSpendLedger } from "../src/spendLedger.js";
@@ -134,6 +134,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       removeWorktreeOnSuccess: true,
     },
     {
+      dataLayout: "flat", // every dataTreePaths-derived path assertion below is flat-shaped
       planLintBlockOnError: true,
       planLintCheckLabels: true,
       healthPort: 0, // ephemeral; the health server is faked, never binds
@@ -404,7 +405,13 @@ describe("overlayFrozenRestartFields", () => {
     const frozen = makeConfig({
       dataDir: "/frozen/state",
       queueRoot: "/frozen/vault/FrozenJunco",
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
       maxConcurrent: 1,
       healthEnabled: false,
       healthHost: "127.0.0.1",
@@ -422,7 +429,13 @@ describe("overlayFrozenRestartFields", () => {
     const live = makeConfig({
       dataDir: "/live/state",
       queueRoot: "/live/vault/LiveJunco",
-      legacy: { vaultRoot: false, stateDir: true, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: false,
+        stateDir: true,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
       maxConcurrent: 10,
       healthEnabled: true,
       healthHost: "0.0.0.0",
@@ -484,6 +497,48 @@ describe("overlayFrozenRestartFields", () => {
     expect(result.github.externalReposRoot).toBe("/frozen/state/clones/external");
   });
 
+  it("pins dataLayout to frozen — a live edit that probes a differently-shaped root must not pair the frozen dataDir with a mismatched layout (C1)", () => {
+    // dataLayout is dataDir-derived, exactly like worktreeRoot/externalReposRoot
+    // above: a frozen FLAT root (a live 0.9 tree) must never see its
+    // dataTreePaths()-derived paths (outbox/transcripts/history/logFile/...)
+    // move to data/cache/logs subpaths just because a live config reload
+    // happens to resolve a DIFFERENT root as v2. makeConfig's ballast gives
+    // frozen/live the same dataLayout by default, so this test states both
+    // explicitly and DIFFERENTLY — the one regression test daemon.test.ts's
+    // existing overlay coverage cannot catch by accident.
+    const frozen = makeConfig({
+      dataDir: "/frozen/legacy-junco",
+      dataLayout: "flat",
+    });
+    const live = makeConfig({
+      dataDir: "/frozen/legacy-junco", // same root — only the resolved layout differs
+      dataLayout: "v2",
+    });
+
+    const result = overlayFrozenRestartFields(frozen, live);
+
+    expect(result.dataLayout).toBe("flat");
+    expect(result.dataLayout).toBe(frozen.dataLayout);
+
+    // The effective on-disk shape stays flat: no path acquires a data/cache/
+    // logs prefix inside the live 0.9 tree.
+    const paths = dataTreePaths(result);
+    expect(paths.outbox).toBe("/frozen/legacy-junco/outbox");
+    expect(paths.transcripts).toBe("/frozen/legacy-junco/transcripts");
+    expect(paths.history).toBe("/frozen/legacy-junco/history");
+    expect(paths.logFile).toBe("/frozen/legacy-junco/worker.log");
+    expect(paths.outbox).not.toContain("/data/");
+    expect(paths.logFile).not.toContain("/logs/");
+
+    // The sandbox deny list (also layout-derived, read per-run off this same
+    // overlaid config — src/agent/session.ts) still denies the REAL flat
+    // paths rather than nonexistent v2 ones, so containment doesn't silently
+    // widen.
+    const deny = sandboxDenyPaths(result);
+    expect(deny.dirs).toContain("/frozen/legacy-junco/transcripts");
+    expect(deny.files).toContain("/frozen/legacy-junco/worker.log");
+  });
+
   it("an explicitly-set legacy override keeps its own live-reload semantics", () => {
     // git.worktreeRoot / github.externalReposRoot are reload:"live" levers —
     // when the LIVE parse sets them explicitly, the edit hot-applies; only the
@@ -497,7 +552,13 @@ describe("overlayFrozenRestartFields", () => {
       dataDir: "/frozen/state",
       worktreeRoot: "/custom/wt",
       github: { ...makeConfig().github, externalReposRoot: "/custom/ext" },
-      legacy: { vaultRoot: false, stateDir: false, worktreeRoot: true, externalReposRoot: true },
+      legacy: {
+        vaultRoot: false,
+        stateDir: false,
+        worktreeRoot: true,
+        externalReposRoot: true,
+        dataRoot: false,
+      },
     });
 
     const result = overlayFrozenRestartFields(frozen, live);

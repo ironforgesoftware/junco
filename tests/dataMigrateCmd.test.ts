@@ -44,6 +44,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       removeWorktreeOnSuccess: true,
     },
     {
+      dataLayout: "flat", // every fixture below is a pre-existing (pre-flip) tree
       planLintBlockOnError: true,
       planLintCheckLabels: true,
       github: {
@@ -100,7 +101,13 @@ describe("runDataMigrate — dry-run", () => {
     const cfg = makeConfig({
       dataDir,
       queueRoot: join(vaultRoot, "Junco"),
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
     });
 
     let renameCalls = 0;
@@ -323,6 +330,11 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     mkdirSync(join(vaultRoot, "Junco", "inbox"), { recursive: true });
     writeFileSync(join(vaultRoot, "Junco", "inbox", "t1.md"), "---\nid: t1\n---\nbody\n", "utf8");
     // A state-tree subdir to exercise migrateStateTree/pendingMigrations too.
+    // No flat-layout marker needed here (contrast an earlier revision of this
+    // fixture, which added a `transcripts` dir for exactly that reason):
+    // assembleConfig now forces dataLayout to "flat" for ANY root adopted via
+    // the legacy fallback, marker-less or not (config.ts's legacyDataRoot
+    // ruling) — a marker-less legacy root can no longer be misclassified v2.
     mkdirSync(join(tmpHome, ".local", "state", "junco", "github-outbox"), { recursive: true });
 
     const configPath = join(root, "config.json");
@@ -493,7 +505,13 @@ describe("runDataMigrate — EXDEV fallback", () => {
     const cfg = makeConfig({
       dataDir,
       queueRoot: join(vaultRoot, "Junco"),
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
     });
 
     // Only the queue-directory rename hits EXDEV; the config atomic
@@ -536,7 +554,13 @@ describe("runDataMigrate — EXDEV fallback", () => {
     const cfg = makeConfig({
       dataDir,
       queueRoot: join(vaultRoot, "Junco"),
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+      },
     });
     const renameFn = (from: string, to: string): void => {
       if (to.includes(join("data", "queue"))) {
