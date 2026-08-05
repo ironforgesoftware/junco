@@ -1345,3 +1345,22 @@ describe("run(['auth']) — routing", () => {
     expect(err).toMatch(/usage: junco auth login/i);
   });
 });
+
+describe("--config deprecation", () => {
+  it("--config is parsed, ignored, and warns on stderr", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-cli-"));
+    const configPath = join(dir, ".junco", "config.json");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ vaultRoot: dir, juncoSubdir: "tickets" }));
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let out = "";
+    const code = await run(["inbox-path", "--config", "/somewhere/else/config.json"], {
+      printFn: (s) => (out += s),
+      env: { HOME: dir },
+    });
+    expect(code).toBe(0);
+    expect(out.trim()).toBe(join(dir, "tickets", "inbox")); // canonical config won, not the flag
+    expect(errSpy.mock.calls.map((c) => String(c[0])).join("")).toContain("--config is deprecated");
+    errSpy.mockRestore();
+  });
+});
