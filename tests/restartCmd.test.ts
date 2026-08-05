@@ -75,6 +75,10 @@ const decoyPlist = {
   Label: "com.example.other",
   ProgramArguments: ["/usr/bin/true"],
 };
+const flaglessPlist = {
+  Label: "com.junco.worker",
+  ProgramArguments: ["/usr/local/bin/node", "/opt/junco/dist/cli.js", "start"],
+};
 
 describe("discoverService (launchd)", () => {
   it("finds the plist whose ProgramArguments contain the config path among decoys", async () => {
@@ -96,6 +100,28 @@ describe("discoverService (launchd)", () => {
 
   it("returns null when nothing references the config", async () => {
     const f = makeFakes({ plists: { "a.plist": decoyPlist } });
+    expect(await discoverService(CONFIG, f.deps)).toBeNull();
+  });
+
+  it("falls back to a flagless junco unit when no plist references the config path", async () => {
+    const f = makeFakes({ plists: { "a-decoy.plist": decoyPlist, "j.plist": flaglessPlist } });
+    expect(await discoverService(CONFIG, f.deps)).toEqual({
+      platform: "launchd",
+      id: "com.junco.worker",
+    });
+  });
+
+  it("an exact config-path match beats a flagless junco unit", async () => {
+    const f = makeFakes({
+      plists: { "flagless.plist": flaglessPlist, "legacy.plist": juncoPlist },
+    });
+    expect((await discoverService(CONFIG, f.deps))?.id).toBe(juncoPlist.Label);
+  });
+
+  it("a flagless unit that is not junco-ish does not match", async () => {
+    const f = makeFakes({
+      plists: { "x.plist": { Label: "com.x.thing", ProgramArguments: ["/usr/bin/foo", "start"] } },
+    });
     expect(await discoverService(CONFIG, f.deps)).toBeNull();
   });
 });
