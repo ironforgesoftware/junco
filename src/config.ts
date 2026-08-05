@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
 import type { Config, Paths } from "./types.js";
 import { catalogEligible } from "./agent/modelSetup.js";
@@ -39,38 +39,53 @@ export function isLoopbackHost(host: string): boolean {
   return false;
 }
 
-/** The user-level default config location (XDG_CONFIG_HOME or ~/.config). */
+/** Junco's single home directory: ~/.junco. env.HOME wins over os.homedir()
+ * so tests and sandboxes can relocate it. Config lives here today; the data
+ * tree follows in the single-root consolidation (follow-up issue). */
+export function juncoHome(env: Record<string, string | undefined> = process.env): string {
+  const home = env.HOME && env.HOME.trim() !== "" ? env.HOME : homedir();
+  return join(home, ".junco");
+}
+
+/** The canonical config location: ~/.junco/config.json. */
 export function defaultUserConfigPath(
   env: Record<string, string | undefined> = process.env,
 ): string {
+  return join(juncoHome(env), "config.json");
+}
+
+/** Pre-0.10 config location (XDG_CONFIG_HOME or ~/.config). Read-only
+ * fallback: an existing install keeps loading its config instead of being
+ * routed to the setup walkthrough — which would write a competing config,
+ * the exact failure mode this module was rewritten to prevent. */
+export function legacyConfigPath(env: Record<string, string | undefined> = process.env): string {
   const base =
     env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== ""
       ? env.XDG_CONFIG_HOME
-      : join(homedir(), ".config");
+      : join(env.HOME && env.HOME.trim() !== "" ? env.HOME : homedir(), ".config");
   return join(base, "junco", "config.json");
 }
 
 export interface ResolveConfigDeps {
   existsFn?: (p: string) => boolean;
   env?: Record<string, string | undefined>;
-  cwd?: () => string;
 }
 
 /**
- * Where the config lives. Order: explicit --config → ./config.json when present
- * (repo-local setups keep working) → the user-level default. The returned path
- * may not exist yet — first-run detection checks that separately.
+ * Where the config lives — a pure function of the environment, never of the
+ * working directory or argv (split-queue incident, 2026-08-01): the canonical
+ * ~/.junco/config.json, falling back to the legacy XDG path only while the
+ * canonical file does not exist. The returned path may not exist — first-run
+ * detection checks that separately.
  */
-export function resolveConfigPath(
-  explicit: string | undefined,
-  deps: ResolveConfigDeps = {},
-): string {
+export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
   const existsFn = deps.existsFn ?? existsSync;
-  const cwd = deps.cwd ?? ((): string => process.cwd());
-  if (explicit) return resolve(cwd(), explicit);
-  const local = resolve(cwd(), "config.json");
-  if (existsFn(local)) return local;
-  return defaultUserConfigPath(deps.env ?? process.env);
+  const env = deps.env ?? process.env;
+  const canonical = defaultUserConfigPath(env);
+  if (existsFn(canonical)) return canonical;
+  const legacy = legacyConfigPath(env);
+  if (existsFn(legacy)) return legacy;
+  return canonical;
 }
 
 // junco's previously-hardcoded compat block (src/agent/session.ts), now the

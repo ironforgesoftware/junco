@@ -113,6 +113,9 @@ export interface CliDeps {
   readStdinFn?: () => Promise<string>;
   /** Existence check for first-run detection (tests control routing). Default: fs.existsSync. */
   existsFn?: (path: string) => boolean;
+  /** Process environment for config-path resolution (tests inject HOME /
+   * XDG_CONFIG_HOME to relocate ~/.junco). Default: process.env. */
+  env?: Record<string, string | undefined>;
   /** The dashboard command (tests inject a spy; default lazily imports
    * dashboardCmd.js). `cfg` is null on the FTUE path (no config on disk yet —
    * the dashboard hosts the setup walkthrough). */
@@ -351,9 +354,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   const existsFn = deps.existsFn ?? ((p: string) => existsSync(p));
-  // Resolve the config path ONCE: explicit --config → ./config.json when
-  // present → the user-level default (~/.config/junco/config.json).
-  const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
+  const env = deps.env ?? process.env;
+  // Resolve the config path ONCE — a pure function of the environment (HOME /
+  // XDG_CONFIG_HOME), never of cwd or argv (split-queue incident, 2026-08-01).
+  const configPath = resolveConfigPath({ existsFn, env });
   // Bare `junco` (no explicit subcommand) always heads to the dashboard; the
   // dashboard branch adds a daemon pre-flight on the interactive bare path (no
   // config yet → the dashboard hosts the setup walkthrough instead).

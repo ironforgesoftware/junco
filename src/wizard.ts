@@ -15,13 +15,7 @@ import {
 } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import type { Config } from "./types.js";
-import {
-  loadConfig,
-  queuePaths,
-  expandHome,
-  resolveConfigPath,
-  validateConfigObject,
-} from "./config.js";
+import { loadConfig, queuePaths, expandHome, validateConfigObject } from "./config.js";
 import {
   defaultAnswers,
   renderConfigJson,
@@ -177,12 +171,11 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
 }
 
 export function summary(configPath: string, queueRoot: string, wrote: boolean): string {
-  const flag = configPath === resolveConfigPath(undefined) ? "" : ` (--config ${configPath})`;
   const head = wrote ? `✓ Wrote config:  ${configPath}\n` : `✓ Config untouched: ${configPath}\n`;
   return (
     `\n${head}` +
     `✓ Queue ready:   ${queueRoot}/{inbox,processing,done,failed}\n\n` +
-    `Next steps${flag}:\n` +
+    `Next steps:\n` +
     NEXT_STEPS.map((s) => `  • ${s.cmd} — ${s.blurb}\n`).join("")
   );
 }

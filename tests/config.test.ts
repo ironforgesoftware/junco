@@ -7,6 +7,8 @@ import {
   queuePaths,
   resolveConfigPath,
   defaultUserConfigPath,
+  juncoHome,
+  legacyConfigPath,
   isLoopbackHost,
   resolveApiKey,
   assembleConfig,
@@ -537,39 +539,38 @@ describe("isLoopbackHost (#44)", () => {
   });
 });
 
-describe("resolveConfigPath / defaultUserConfigPath", () => {
-  it("defaults to config.json under XDG", () => {
-    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
+describe("resolveConfigPath / juncoHome / legacyConfigPath", () => {
+  it("juncoHome anchors to env.HOME and falls back to os.homedir()", () => {
+    expect(juncoHome({ HOME: "/h" })).toBe("/h/.junco");
+    expect(juncoHome({})).toBe(join(homedir(), ".junco"));
+    expect(juncoHome({ HOME: "  " })).toBe(join(homedir(), ".junco"));
   });
 
-  it("prefers ./config.json when present", () => {
-    expect(
-      resolveConfigPath(undefined, {
-        existsFn: (p) => p.endsWith("config.json"),
-        cwd: () => "/w",
-      }),
-    ).toBe("/w/config.json");
+  it("canonical config path is ~/.junco/config.json", () => {
+    expect(defaultUserConfigPath({ HOME: "/h" })).toBe("/h/.junco/config.json");
   });
 
-  it("explicit path wins, resolved against cwd", () => {
-    expect(resolveConfigPath("rel/c.json", { cwd: () => "/base" })).toBe("/base/rel/c.json");
-    expect(resolveConfigPath("/abs/c.json", { cwd: () => "/base" })).toBe("/abs/c.json");
+  it("resolution is cwd-independent — a cwd config.json can never win", () => {
+    // existsFn claiming EVERY path exists: the canonical still wins. There is
+    // no cwd seam left in ResolveConfigDeps for a cwd lookup to use.
+    expect(resolveConfigPath({ existsFn: () => true, env: { HOME: "/h" } })).toBe(
+      "/h/.junco/config.json",
+    );
   });
 
-  it("otherwise resolves the XDG user path", () => {
-    const p = resolveConfigPath(undefined, {
-      cwd: () => "/base",
-      existsFn: () => false,
-      env: { XDG_CONFIG_HOME: "/xdg" },
-    });
-    expect(p).toBe("/xdg/junco/config.json");
+  it("falls back to the legacy XDG path only while the canonical file is absent", () => {
+    const env = { HOME: "/h", XDG_CONFIG_HOME: "/xdg" };
+    expect(resolveConfigPath({ existsFn: (p) => p === "/xdg/junco/config.json", env })).toBe(
+      "/xdg/junco/config.json",
+    );
+    expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
   });
 
-  it("defaultUserConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {
-    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
-    expect(defaultUserConfigPath({})).toBe(join(homedir(), ".config/junco/config.json"));
-    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "  " })).toBe(
-      join(homedir(), ".config/junco/config.json"),
+  it("legacyConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {
+    expect(legacyConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
+    expect(legacyConfigPath({})).toBe(join(homedir(), ".config/junco/config.json"));
+    expect(legacyConfigPath({ XDG_CONFIG_HOME: "  ", HOME: "/h" })).toBe(
+      "/h/.config/junco/config.json",
     );
   });
 });
