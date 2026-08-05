@@ -30,6 +30,8 @@ function fakeIo(overrides: Partial<WizardIO> = {}): WizardIO {
       changes: [],
     })),
     flightCheck: async () => [],
+    effectiveDataDir: "/sbx/home/.junco",
+    dataDirLegacyFallback: false,
     botGhConfigDir: "/sbx/junco-gh",
     detectBotLogin: async () => null,
     runGhLogin: async () => 0,

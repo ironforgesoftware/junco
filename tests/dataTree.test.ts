@@ -164,6 +164,34 @@ describe("sandboxDenyPaths", () => {
     });
     expect(sandboxDenyPaths(cfg).dirs).toContain("/sbxroot/vault/Junco");
   });
+
+  it("denies the daemon-private subtrees, the config file, and logs — never cache/ or the root", () => {
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/home/.junco",
+      queueRoot: "/sbxroot/home/.junco/queue",
+      dataLayout: "v2",
+    });
+    const deny = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
+    expect(deny.dirs).toEqual(
+      expect.arrayContaining([
+        "/sbxroot/home/.junco/queue",
+        "/sbxroot/home/.junco/review",
+        "/sbxroot/home/.junco/data/outbox",
+        "/sbxroot/home/.junco/data/transcripts",
+        "/sbxroot/home/.junco/cache/github-cache",
+        "/sbxroot/home/.junco/cache/mirror",
+        "/sbxroot/home/.junco/logs",
+      ]),
+    );
+    expect(deny.files).toContain("/sbxroot/home/.junco/config.json");
+    // never an ancestor of the agent's writable roots (backend.ts:42-53 invariant):
+    for (const d of deny.dirs) {
+      expect("/sbxroot/home/.junco/cache/worktrees".startsWith(d + "/")).toBe(false);
+      expect("/sbxroot/home/.junco/cache/clones".startsWith(d + "/")).toBe(false);
+    }
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco");
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/cache");
+  });
 });
 
 describe("ensureDataTree", () => {

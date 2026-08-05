@@ -21,6 +21,7 @@ import {
   expandHome,
   validateConfigObject,
   resolveBotGhConfigDir,
+  resolveDataRoot,
 } from "./config.js";
 import {
   defaultAnswers,
@@ -118,6 +119,28 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
   const { dir: botGhConfigDir } = resolveBotGhConfigDir(rawBotDir, deps.env, existsFn);
   const wizGhBin = rawGhBin ?? "gh";
 
+  // Same legacy-aware pattern as botGhConfigDir just above, for the data
+  // root: WizardAnswers.dataDir (answersFromConfig) stays the pure write-side
+  // sentinel ("~/.junco" when unset — see flow.ts's doc comment on that
+  // field), but the Workspace chapter needs the EFFECTIVE root assembleConfig
+  // will actually resolve to, which requires the same filesystem probe
+  // assembleConfig itself runs (resolveDataRoot) — this module is the IO-
+  // aware layer, so it's the only place that can do that probe. Presence
+  // check mirrors assembleConfig's own `nStateDir ?? d.dataDir` precedence;
+  // trim-empty is normalized the same way assembleConfig's local `norm`
+  // does (an explicitly-set-but-empty key counts as unset).
+  const normPath = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() !== "" ? v : undefined;
+  const explicitDataRoot =
+    raw !== null
+      ? (normPath(getAtPath(raw, "observability.stateDir")) ?? normPath(getAtPath(raw, "dataDir")))
+      : undefined;
+  const { dataDir: effectiveDataDir, legacyDataRoot: dataDirLegacyFallback } = resolveDataRoot(
+    explicitDataRoot,
+    deps.env,
+    existsFn,
+  );
+
   const io: WizardIO = {
     mode,
     configPath: resolved,
@@ -174,6 +197,8 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
       return { written, configPath: resolved, queueRoot, changes };
     },
     flightCheck: () => flightChecks(loadConfigFn(resolved), deps.detectDeps),
+    effectiveDataDir,
+    dataDirLegacyFallback,
     botGhConfigDir,
     detectBotLogin: () => (deps.detectBotLoginFn ?? detectBotLogin)(wizGhBin, botGhConfigDir),
     runGhLogin: () => (deps.runGhLoginFn ?? runGhLogin)(wizGhBin, botGhConfigDir),

@@ -15,6 +15,7 @@ import {
   isLoopbackHost,
   resolveApiKey,
   assembleConfig,
+  resolveDataRoot,
   ConfigSchema,
   expandHome,
   configDeprecations,
@@ -462,6 +463,31 @@ describe("dataDir default + legacy-root fallback (single-root ~/.junco)", () => 
     expect(warns.some((w) => w.includes("junco data migrate") && w.includes("~/.junco"))).toBe(
       true,
     );
+  });
+});
+
+describe("resolveDataRoot (the standalone probe assembleConfig and the wizard both call)", () => {
+  const env = { HOME: "/h" };
+
+  it("mirrors assembleConfig's own resolution for a fresh machine", () => {
+    const r = resolveDataRoot(undefined, env, () => false);
+    expect(r).toEqual({ dataDir: "/h/.junco", dataLayout: "v2", legacyDataRoot: false });
+  });
+
+  it("mirrors assembleConfig's legacy-fallback branch", () => {
+    const existsFn = (p: string) => p === "/h/.local/state/junco";
+    const r = resolveDataRoot(undefined, env, existsFn);
+    expect(r).toEqual({
+      dataDir: "/h/.local/state/junco",
+      dataLayout: "flat",
+      legacyDataRoot: true,
+    });
+  });
+
+  it("an explicit root is honored verbatim, probe-free (no legacyDataRoot flag)", () => {
+    const existsFn = (p: string) => p === "/custom/history"; // flat marker
+    const r = resolveDataRoot("/custom", env, existsFn);
+    expect(r).toEqual({ dataDir: "/custom", dataLayout: "flat", legacyDataRoot: false });
   });
 });
 

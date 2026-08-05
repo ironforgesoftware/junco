@@ -11,6 +11,7 @@ export function Workspace({
   patch,
   onNext,
   setTextEditing,
+  io,
 }: ChapterProps): React.JSX.Element {
   useEffect(() => {
     setTextEditing(true);
@@ -27,9 +28,17 @@ export function Workspace({
             if (answers.dataDir.trim() !== "") onNext();
           }}
           focus
-          placeholder="~/.local/state/junco"
+          placeholder="~/.junco"
         />
       </Box>
+      {io.dataDirLegacyFallback && (
+        // Informational only — mirrors io.effectiveDataDir, never patches
+        // `answers`, so leaving this field untouched still writes no
+        // explicit dataDir key (see WizardIO.effectiveDataDir's doc comment).
+        <Text dimColor>
+          found existing data at {io.effectiveDataDir} — junco will keep using it
+        </Text>
+      )}
       <Tip>{TIPS.workspace}</Tip>
     </Box>
   );

@@ -108,9 +108,9 @@ describe("renderLaunchdPlist", () => {
   it("derives logDir from home when logDir omitted", () => {
     const { logDir: _l, ...noLogDir } = BASE_OPTS;
     const out = renderLaunchdPlist({ ...noLogDir, home: "/x" });
-    // home is /x → logs go to /x/.junco/launchd.out
-    expect(out).toContain("<string>/x/.junco/launchd.out</string>");
-    expect(out).toContain("/x/.junco/launchd.err");
+    // home is /x → logs go to /x/.junco/logs/launchd.out
+    expect(out).toContain("<string>/x/.junco/logs/launchd.out</string>");
+    expect(out).toContain("/x/.junco/logs/launchd.err");
   });
 
   describe("XML escaping", () => {

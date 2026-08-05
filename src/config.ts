@@ -435,6 +435,66 @@ export function parseConfigFile(path: string): ConfigParsed {
   return ConfigSchema.parse(raw);
 }
 
+/** Result of the single-root ~/.junco probe (see `resolveDataRoot`). */
+export interface DataRootResolution {
+  dataDir: string;
+  dataLayout: "flat" | "v2";
+  legacyDataRoot: boolean;
+}
+
+/**
+ * The single-root ~/.junco probe (spec 2026-07-16 / 2026-08-03): given an
+ * already-normalized explicit override (or `undefined` when the config sets
+ * neither `dataDir` nor `observability.stateDir`), resolve the EFFECTIVE data
+ * root exactly as `assembleConfig` does. Extracted so callers that need to
+ * PREVIEW the resolution without a full `ConfigParsed` — the setup wizard
+ * must display the root the daemon will actually use even before it has
+ * written a config — reuse this probe instead of re-deriving it (the trap
+ * that would otherwise repeat resolveBotGhConfigDir's own split-brain
+ * warning: two entry points quietly disagreeing about where something
+ * lives).
+ *
+ * `explicitRoot === undefined`: a defaulted root prefers the canonical
+ * `~/.junco`, but while `~/.junco` holds no data tree and the pre-0.10
+ * `~/.local/state/junco` root exists, keep resolving to the legacy root
+ * UNTOUCHED — `junco data migrate` is the only thing that relocates live
+ * data. A root adopted via that fallback is BY DEFINITION a pre-0.10 tree
+ * (the fallback only fires while `~/.junco` holds no tree AND the legacy
+ * root exists — a v2 tree can't live at the legacy path before `junco data
+ * migrate` ships in P2.T5), so its layout is forced "flat" rather than
+ * trusting `layoutOf`'s marker probe: a legacy root that predates #194
+ * (transcripts disabled, TUI never run, no worktrees/clones under dataDir)
+ * or that exists but was never populated can hold none of `layoutOf`'s six
+ * markers, and `layoutOf`'s marker-less default is "v2" — which would then
+ * have startup's migrateStateTree (daemon.ts) relocate this root's
+ * pre-unification dirs into data/-shaped destinations before any operator
+ * ever ran `junco data migrate`, violating this branch's safety property
+ * that nothing else relocates live data. Explicit-dataDir and canonical
+ * (~/.junco) resolutions are unaffected — they still probe.
+ */
+export function resolveDataRoot(
+  explicitRoot: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+  existsFn: (p: string) => boolean = existsSync,
+): DataRootResolution {
+  let dataDir: string;
+  let legacyDataRoot = false;
+  if (explicitRoot !== undefined) {
+    dataDir = expandHome(explicitRoot);
+  } else {
+    const canonical = juncoHome(env);
+    const legacyRoot = join(homeOf(env), ".local", "state", "junco");
+    if (!dataRootHasTree(canonical, existsFn) && existsFn(legacyRoot)) {
+      dataDir = legacyRoot;
+      legacyDataRoot = true;
+    } else {
+      dataDir = canonical;
+    }
+  }
+  const dataLayout = legacyDataRoot ? "flat" : layoutOf(dataDir, existsFn);
+  return { dataDir, dataLayout, legacyDataRoot };
+}
+
 /** Assemble the flat runtime `Config` from the parsed (nested, camelCase,
  * defaulted) schema output — expanding `~` in path fields and deriving the
  * github cross-field defaults (askLabel, externalReposRoot). */
@@ -462,39 +522,10 @@ export function assembleConfig(
   const nWorktree = norm(d.git.worktreeRoot);
   const nExternal = norm(d.github.externalReposRoot);
   const existsFn = deps.existsFn ?? existsSync;
-  // Single-root ~/.junco: explicit dataDir/stateDir always wins, probe-free.
-  // A defaulted root prefers ~/.junco, but while ~/.junco holds no data tree
-  // and the pre-0.10 root exists, keep using the legacy root UNTOUCHED —
-  // `junco data migrate` is the only thing that relocates live data.
+  // Single-root ~/.junco: see resolveDataRoot's doc comment for the full
+  // fallback rationale.
   const explicitRoot = nStateDir ?? d.dataDir;
-  let dataDir: string;
-  let legacyDataRoot = false;
-  if (explicitRoot !== undefined) {
-    dataDir = expandHome(explicitRoot);
-  } else {
-    const canonical = juncoHome(env);
-    const legacyRoot = join(homeOf(env), ".local", "state", "junco");
-    if (!dataRootHasTree(canonical, existsFn) && existsFn(legacyRoot)) {
-      dataDir = legacyRoot;
-      legacyDataRoot = true;
-    } else {
-      dataDir = canonical;
-    }
-  }
-  // Ruling: a root adopted via the legacy fallback is BY DEFINITION a
-  // pre-0.10 tree (the fallback only fires while `~/.junco` holds no tree
-  // AND the legacy root exists — a v2 tree can't live at the legacy path
-  // before `junco data migrate` ships in P2.T5). Force "flat" rather than
-  // trusting layoutOf's marker probe here: a legacy root that predates
-  // #194 (transcripts disabled, TUI never run, no worktrees/clones under
-  // dataDir) or that exists but was never populated can hold none of
-  // layoutOf's six markers, and layoutOf's marker-less default is "v2" —
-  // which would then have startup's migrateStateTree (daemon.ts) relocate
-  // this root's pre-unification dirs into data/-shaped destinations before
-  // any operator ever ran `junco data migrate`, violating this branch's
-  // safety property that nothing else relocates live data. Explicit-dataDir
-  // and canonical (~/.junco) resolutions are unaffected — they still probe.
-  const dataLayout = legacyDataRoot ? "flat" : layoutOf(dataDir, existsFn);
+  const { dataDir, dataLayout, legacyDataRoot } = resolveDataRoot(explicitRoot, env, existsFn);
   const queueRoot = nVault ? join(expandHome(nVault), d.juncoSubdir) : join(dataDir, "queue");
   // Bot gh config dir: same single-root move as dataDir above, but resolved
   // through the shared resolveBotGhConfigDir (authCmd.ts/wizard.ts call the

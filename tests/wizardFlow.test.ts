@@ -15,7 +15,7 @@ import {
 } from "../src/wizard/flow.js";
 import { loadConfig, queuePaths, configDeprecations } from "../src/config.js";
 
-const DEFAULT_DATA_DIR = "~/.local/state/junco";
+const DEFAULT_DATA_DIR = "~/.junco";
 
 function loadRendered(a: WizardAnswers) {
   const dir = mkdtempSync(join(tmpdir(), "wizflow-"));

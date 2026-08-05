@@ -249,6 +249,8 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
       changes: [],
     }),
     flightCheck: async () => [],
+    effectiveDataDir: "/sbx/home/.junco",
+    dataDirLegacyFallback: false,
     botGhConfigDir: "/sbx/junco-gh",
     detectBotLogin: async () => null,
     runGhLogin: async () => 0,
@@ -351,6 +353,35 @@ describe("Workspace", () => {
     await press(stdin, ENTER);
     await until(() => advanced);
     expect(answers.dataDir).toBe("/tmp/nest");
+  });
+
+  it("fresh machine (no legacy fallback): shows no 'found existing data' annotation", async () => {
+    const { lastFrame } = render(
+      <Workspace
+        {...noopChapter}
+        answers={defaultAnswers()}
+        io={fakeIo({ effectiveDataDir: "/sbx/home/.junco", dataDirLegacyFallback: false })}
+        onNext={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Where should junco"));
+    expect(lastFrame()).not.toContain("found existing data");
+  });
+
+  it("legacy-fallback machine: displays the EFFECTIVE (legacy) root, not the bare ~/.junco default", async () => {
+    const { lastFrame } = render(
+      <Workspace
+        {...noopChapter}
+        answers={defaultAnswers()}
+        io={fakeIo({
+          effectiveDataDir: "/sbx/home/.local/state/junco",
+          dataDirLegacyFallback: true,
+        })}
+        onNext={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("found existing data"));
+    expect(lastFrame()).toContain("/sbx/home/.local/state/junco");
   });
 });
 

@@ -30,7 +30,7 @@ export interface ServiceOpts {
   nodeBin?: string;
   /** Absolute path to the junco CLI entry (dist/cli.js). Required. */
   cliEntry: string;
-  /** Dir for stdout/stderr log files (launchd). Default: join(home, ".junco"). */
+  /** Dir for stdout/stderr log files (launchd). Default: join(home, ".junco", "logs"). */
   logDir?: string;
   /** HOME env value. Default: process.env.HOME ?? "". */
   home?: string;
@@ -62,9 +62,9 @@ function xmlEscape(s: string): string {
 function resolveOpts(opts: ServiceOpts): Required<ServiceOpts> {
   const nodeBin = opts.nodeBin ?? process.execPath;
   const home = opts.home ?? process.env.HOME ?? "";
-  // launchd.out/err land under the junco home by default — next to the
-  // canonical config, ahead of the single-root logs/ consolidation.
-  const logDir = opts.logDir ?? join(home !== "" ? home : homedir(), ".junco");
+  // launchd.out/err land under the junco home's logs/ subtree by default —
+  // the single-root v2 layout (dataTree.ts's LAYOUTS.v2.logs).
+  const logDir = opts.logDir ?? join(home !== "" ? home : homedir(), ".junco", "logs");
   const nodeBinDir = dirname(nodeBin);
   const pathEnv = opts.pathEnv ?? `${nodeBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
   const label = opts.label ?? "com.junco.worker";

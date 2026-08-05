@@ -11,10 +11,12 @@ import { getAtPath, setAtPath } from "../configLevers.js";
 /** Repeated across buildConfigObject/coveredPaths for models_json mode. */
 const DEFAULT_MODELS_JSON = "~/.pi/agent/models.json";
 
-/** Matches config.ts's assembleConfig fallback
- * (`d.observability.stateDir ?? d.dataDir ?? "~/.local/state/junco"`) and
- * dataMigrateCmd.ts's own DEFAULT_DATA_DIR pin. */
-const DEFAULT_DATA_DIR = "~/.local/state/junco";
+/** Matches config.ts's assembleConfig default (an unset dataDir resolves to
+ * the canonical `juncoHome` — `~/.junco`, single-root spec 2026-07-16 §4).
+ * NOT the same constant as dataMigrateCmd.ts's own DEFAULT_DATA_DIR — that
+ * one pins the pre-0.10 legacy root it migrates FROM, deliberately unchanged
+ * by the single-root flip. */
+const DEFAULT_DATA_DIR = "~/.junco";
 
 export interface WatchedRepoAnswer {
   nwo: string;
@@ -48,7 +50,7 @@ export const CHAPTERS = [
 ] as const;
 
 /** Defaults used by `--yes` and as the Enter-through path. The pins
- * (~/.local/state/junco, local/my-model, :1234) are asserted by tests and the
+ * (~/.junco, local/my-model, :1234) are asserted by tests and the
  * packaged smoke test — change them only with the spec. */
 export function defaultAnswers(): WizardAnswers {
   return {
@@ -199,6 +201,19 @@ export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {
       ? "inline"
       : "hosted";
   return {
+    // The write-side sentinel only — literally the raw key or the schema
+    // default ("~/.junco"), NEVER filesystem-probed. This module is pure/
+    // no-IO by design (see the module comment), so it cannot know whether an
+    // unset key will actually resolve to the legacy ~/.local/state/junco
+    // root on THIS machine (assembleConfig's single-root probe,
+    // config.ts's resolveDataRoot) — showing that requires IO. The
+    // IO-aware layer (wizard.ts's buildWizardIO) computes the EFFECTIVE
+    // root separately via resolveDataRoot and exposes it as
+    // WizardIO.effectiveDataDir for the Workspace chapter to display
+    // alongside this field; this field itself must stay untouched or a
+    // wizard save on a legacy-fallback machine would start writing an
+    // explicit dataDir key (pinning the legacy root and fighting `junco
+    // data migrate`) even when the user never typed one.
     dataDir: (g("dataDir") as string) ?? d.dataDir,
     mode,
     modelId: (g("model.id") as string) ?? d.modelId,

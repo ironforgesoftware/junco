@@ -33,6 +33,19 @@ export interface WizardIO {
   listCatalogProviders(): Promise<CatalogEntry[]>;
   write(a: WizardAnswers): WriteResult;
   flightCheck(): Promise<CheckResult[]>;
+  /** The data root junco will ACTUALLY use while `WizardAnswers.dataDir`
+   * stays at its schema-default sentinel ("~/.junco") — i.e. the config
+   * carries no explicit `dataDir`/`observability.stateDir` key. Mirrors
+   * assembleConfig's own single-root probe (config.ts's `resolveDataRoot`)
+   * so the Workspace chapter can show the legacy ~/.local/state/junco root
+   * during the migration window instead of the misleading bare "~/.junco"
+   * placeholder. Purely informational, same pattern as `botGhConfigDir`
+   * below — never fed back into `WizardAnswers`, so it cannot change what a
+   * save writes. */
+  effectiveDataDir: string;
+  /** True when `effectiveDataDir` came from the legacy-root fallback branch
+   * (pre-0.10 ~/.local/state/junco), not the canonical ~/.junco. */
+  dataDirLegacyFallback: boolean;
   /** Isolated gh config dir the Account chapter logs the bot into. */
   botGhConfigDir: string;
   /** Bot login under botGhConfigDir, or null. Never throws. */

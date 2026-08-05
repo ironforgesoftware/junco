@@ -411,7 +411,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         maxQueuedTimeoutSecondsFn(cfg),
       );
       stopTimeoutSeconds = timeoutSeconds + 10 * 60;
-      logDir = cfg.dataDir;
+      logDir = dataTreePaths(cfg).logsDir;
     } catch {
       /* fall back to renderer defaults */
     }
