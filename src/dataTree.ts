@@ -91,7 +91,10 @@ export interface DataTreePaths {
   metricsFile: string; // PR 3 writes it; listed now
   logFile: string;
   migratedFile: string; // dataMigrate journal (Task 4)
-  migrateLockFile: string; // startup-migration mutex (#197.2) — daemon.ts + dataMigrateCmd.ts both hold it
+  // startup-migration mutex (#197.2) — daemon.ts holds THIS field; dataMigrateCmd.ts computes the
+  // equivalent join(targetRoot, "migrate.lock") itself (P2.T5), not read from here, since its lock
+  // must follow a cross-root `junco data migrate` to targetRoot rather than the frozen cfg.dataDir.
+  migrateLockFile: string;
   githubCache: string; // legacy TUI issue/PR cache (tui/ghClient.ts)
   logsDir: string; // dirname(logFile): root in the flat layout, <root>/logs in v2
 }

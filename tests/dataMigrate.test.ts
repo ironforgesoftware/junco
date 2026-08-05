@@ -17,7 +17,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
-import { migrateStateTree, pendingMigrations, stateTreeMigrations } from "../src/dataMigrate.js";
+import {
+  migrateStateTree,
+  pendingMigrations,
+  stateTreeMigrations,
+  flatToV2Pairs,
+} from "../src/dataMigrate.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
 function freshRoot(): string {
@@ -335,6 +340,30 @@ describe("stateTreeMigrations", () => {
   it("lists all 6 pairs when nothing is legacy-overridden", () => {
     const cfg = makeConfig({ dataDir: "/sbxroot/data", queueRoot: "/sbxroot/data/queue" });
     expect(stateTreeMigrations(cfg)).toHaveLength(6);
+  });
+});
+
+describe("flatToV2Pairs", () => {
+  it("maps the whole flat tree; in-place skips identity pairs", () => {
+    const cross = flatToV2Pairs("/old", "/new");
+    expect(cross).toContainEqual({ from: "/old/queue", to: "/new/queue" });
+    expect(cross).toContainEqual({ from: "/old/outbox", to: "/new/data/outbox" });
+    expect(cross).toContainEqual({ from: "/old/clones", to: "/new/cache/clones" });
+    expect(cross).toContainEqual({ from: "/old/worker.log", to: "/new/logs/worker.log" });
+    expect(cross).toContainEqual({
+      from: "/old/update-check.json",
+      to: "/new/cache/update-check.json",
+    });
+    const inPlace = flatToV2Pairs("/r", "/r");
+    expect(inPlace.map((p) => p.from)).not.toContain("/r/queue"); // identity — already home
+    expect(inPlace).toContainEqual({ from: "/r/outbox", to: "/r/data/outbox" });
+  });
+
+  it("review/watchlist.json/migrated.json are identity-named in both layouts — only the root changes", () => {
+    const cross = flatToV2Pairs("/old", "/new");
+    expect(cross).toContainEqual({ from: "/old/review", to: "/new/review" });
+    expect(cross).toContainEqual({ from: "/old/watchlist.json", to: "/new/watchlist.json" });
+    expect(cross).toContainEqual({ from: "/old/migrated.json", to: "/new/migrated.json" });
   });
 });
 

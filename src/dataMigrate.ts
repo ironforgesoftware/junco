@@ -25,6 +25,7 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
+  unlinkSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
@@ -59,7 +60,7 @@ export interface MigrateDeps {
   logFn?: (msg: string, fields?: Record<string, unknown>) => void;
 }
 
-interface Journal {
+export interface Journal {
   version: 1;
   steps: MigrationStep[];
 }
@@ -86,6 +87,38 @@ export function stateTreeMigrations(cfg: Config): Array<{ from: string; to: stri
   return list;
 }
 
+/** Flat→v2 mapping for the single-root move (2026-08-03 plan). Serves both
+ * the cross-root move (fromRoot ≠ toRoot: legacy ~/.local/state/junco →
+ * ~/.junco) and the in-place restructure (fromRoot === toRoot: an explicit
+ * dataDir keeping its location but adopting the v2 shape). `clones` moves as
+ * ONE rename (covers watched/ + external/); identity pairs are skipped. */
+export function flatToV2Pairs(
+  fromRoot: string,
+  toRoot: string,
+): Array<{ from: string; to: string }> {
+  const pairs: Array<[string, string]> = [
+    ["queue", "queue"],
+    ["review", "review"],
+    ["watchlist.json", "watchlist.json"],
+    ["migrated.json", "migrated.json"],
+    ["outbox", "data/outbox"],
+    ["assess-history", "data/assess-history"],
+    ["history", "data/history"],
+    ["transcripts", "data/transcripts"],
+    ["spend.json", "data/spend.json"],
+    ["metrics.json", "data/metrics.json"],
+    ["clones", "cache/clones"],
+    ["worktrees", "cache/worktrees"],
+    ["github-cache", "cache/github-cache"],
+    ["mirror", "cache/mirror"],
+    ["update-check.json", "cache/update-check.json"],
+    ["worker.log", "logs/worker.log"],
+  ];
+  return pairs
+    .map(([f, t]) => ({ from: join(fromRoot, f), to: join(toRoot, t) }))
+    .filter((p) => p.from !== p.to);
+}
+
 /** Pairs whose source currently exists — used by `junco data`/doctor to
  * report pending migrations without touching the filesystem. */
 export function pendingMigrations(
@@ -102,8 +135,10 @@ export function pendingMigrations(
  * real data. Non-directory entries (files, symlinks — never followed) count
  * as content. An ENOTDIR at the top (dst is a file — the watchlist pair) is
  * never "empty"; any other error (EACCES etc.) is a genuine fs error and
- * propagates rather than being swallowed. */
-function isRecursivelyEmptyDir(
+ * propagates rather than being swallowed. Exported for `dataMigrateCmd.ts`'s
+ * flat→v2 data-root move (2026-08-03 plan): the same conflict semantics
+ * apply there — reused, not reimplemented. */
+export function isRecursivelyEmptyDir(
   dst: string,
   readdirTypedFn: (d: string) => Array<{ name: string; isDirectory(): boolean }>,
 ): boolean {
@@ -121,7 +156,12 @@ function isRecursivelyEmptyDir(
   return true;
 }
 
-function readJournal(path: string, readFileFn: (p: string) => string): Journal {
+/** Exported for `dataMigrateCmd.ts`'s migrated.json self-reference merge
+ * (task review round 2, Important — see `dataMigrateCmd.ts`'s module doc
+ * comment on the `migrated.json` pair): reading the legacy journal's steps
+ * before merging them into the target reuses this exact tolerant parse
+ * (missing/corrupt → empty) instead of a second implementation. */
+export function readJournal(path: string, readFileFn: (p: string) => string): Journal {
   try {
     const parsed: unknown = JSON.parse(readFileFn(path));
     if (parsed && typeof parsed === "object" && Array.isArray((parsed as Journal).steps)) {
@@ -134,7 +174,13 @@ function readJournal(path: string, readFileFn: (p: string) => string): Journal {
   }
 }
 
-function appendJournal(
+/** Append `newSteps` (already-filtered to non-noop outcomes by the caller) to
+ * the journal at `path`, read-modify-write with the same dedupe-repeated-
+ * conflicts semantics `migrateStateTree` uses for its own journal. Exported
+ * for `dataMigrateCmd.ts`'s data-root/gh-creds move (2026-08-03 plan,
+ * Critical 1 fix): reused verbatim rather than reimplemented, so both
+ * journals share one format and one de-dup rule. */
+export function appendJournal(
   path: string,
   newSteps: MigrationStep[],
   readFileFn: (p: string) => string,
@@ -158,7 +204,25 @@ function appendJournal(
   const journal: Journal = { version: 1, steps: [...existing.steps, ...fresh] };
   const tmp = `${path}.tmp`;
   writeFileFn(tmp, JSON.stringify(journal, null, 2) + "\n");
-  renameFn(tmp, path); // atomic tmp+rename — same pattern as reviewStore/watchlist writes
+  try {
+    renameFn(tmp, path); // atomic tmp+rename — same pattern as reviewStore/watchlist writes
+  } catch (renameErr) {
+    // The rename is the ONLY step that can fail after `tmp` is already a real
+    // file on disk (writeFileFn either fully succeeds or throws before
+    // creating anything) — best-effort unlink it so a genuine fs error here
+    // doesn't leave an unmapped `<name>.tmp` sitting next to the journal
+    // forever (nothing in flatToV2Pairs/stateTreeMigrations accounts for a
+    // `.tmp` suffix, so it would permanently block an empty-dir rmdir at
+    // whichever root `path` lives under). Never masks the real error: a
+    // failed unlink (ENOENT if the rename partially completed despite
+    // throwing, EACCES, ...) is swallowed, and `renameErr` always propagates.
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* best-effort — the original renameErr below is what matters */
+    }
+    throw renameErr;
+  }
 }
 
 /**

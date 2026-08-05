@@ -8,7 +8,15 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "../src/types.js";
@@ -18,6 +26,7 @@ import { metrics } from "../src/metrics.js";
 import { enqueueOp, outboxDepth } from "../src/githubOutbox.js";
 import { makeConfigHolder } from "../src/configWatcher.js";
 import { dataTreePaths, sandboxDenyPaths } from "../src/dataTree.js";
+import { migrateStateTree } from "../src/dataMigrate.js";
 import { ProviderGate, type GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { makeSpendLedger } from "../src/spendLedger.js";
@@ -771,6 +780,61 @@ describe("mainLoop", () => {
       expect(renameLogs[0]?.[1]).toEqual({ from: "/d/github-outbox", to: "/d/outbox" });
     } finally {
       infoSpy.mockRestore();
+    }
+  });
+
+  it("startup migration never relocates a legacy-fallback root — only migrateStateTree's same-directory pairs run, `junco data migrate`'s cross-root move never fires (P2.T5)", async () => {
+    // WHY this is safe by construction, not just by convention: config.ts's
+    // resolveDataRoot FORCES dataLayout to "flat" for ANY root adopted via
+    // the legacy fallback (its "IMPORTANT RULING" — a marker-less legacy root
+    // can never be misread as v2 and routed through v2-shaped paths). Every
+    // path migrateStateTree's pair list (stateTreeMigrations) touches is
+    // dataTreePaths(cfg)-derived, i.e. rooted at cfg.dataDir — it never
+    // computes a path under a DIFFERENT root. The actual root-mover,
+    // flatToV2Pairs (src/dataMigrate.ts, driven only from
+    // src/dataMigrateCmd.ts's `junco data migrate`), is a separate exported
+    // function daemon.ts never imports or calls — deps.migrateFn's default is
+    // migrateStateTree, full stop. So even at startup against a real
+    // legacy-fallback root, the old-name pairs can only rename IN PLACE,
+    // never relocate to juncoHome(env).
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-startup-safety-"));
+    try {
+      mkdirSync(join(root, "github-outbox"), { recursive: true });
+      const cfg = makeConfig({
+        dataDir: root,
+        queueRoot: join(root, "queue"),
+        legacy: {
+          vaultRoot: false,
+          stateDir: false,
+          worktreeRoot: false,
+          externalReposRoot: false,
+          dataRoot: true, // the legacy-fallback shape P2.T5 adds
+          ghConfigDir: false,
+        },
+      });
+      expect(cfg.dataLayout).toBe("flat"); // the ruling that keeps this safe
+
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        migrateFn: migrateStateTree, // the REAL function — same one daemon.ts wires by default
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      // The old-name pair really did rename — but stayed under the SAME root.
+      expect(existsSync(join(root, "outbox"))).toBe(true);
+      expect(existsSync(join(root, "github-outbox"))).toBe(false);
+
+      // Nothing was ever created at a DIFFERENT root — the v2-shaped
+      // destinations flatToV2Pairs would compute (data/, cache/, logs/, or a
+      // sibling ~/.junco entirely) never materialize from a startup pass.
+      expect(existsSync(join(root, "data"))).toBe(false);
+      expect(existsSync(join(root, "cache"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

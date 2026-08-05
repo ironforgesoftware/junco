@@ -1,25 +1,80 @@
 /**
  * `junco data migrate` — explicit, opt-in full unification of the legacy
  * vaultRoot queue + state-tree subdirs + config.json legacy keys into the
- * unified data root (spec 2026-07-16 §7 "Explicit"). Refuses while the
- * daemon appears to be running, judged two ways: ANY /health response (even
- * non-200) means something is listening on that port, and a live-held
- * `<config dir>/worker.lock` pidfile (the daemon's single-instance lock, see
- * cli.ts) catches healthEnabled:false daemons the probe can never observe.
- * Either signal → back off rather than race the daemon's own in-flight fs
- * mutations. `--force` skips both checks (documented escape hatch). A
- * pidfile lock (`<dataDir>/migrate.lock`), held for the whole run and
- * released in a `finally`, keeps two concurrent migrates from racing each
- * other.
+ * unified data root (spec 2026-07-16 §7 "Explicit"), extended (2026-08-03
+ * single-root plan) to relocate the whole tree to `~/.junco` and restructure
+ * it into the v2 shape. Refuses while the daemon appears to be running,
+ * judged two ways: ANY /health response (even non-200) means something is
+ * listening on that port, and a live-held `<config dir>/worker.lock` pidfile
+ * (the daemon's single-instance lock, see cli.ts) catches healthEnabled:false
+ * daemons the probe can never observe. Either signal → back off rather than
+ * race the daemon's own in-flight fs mutations. `--force` skips both checks
+ * (documented escape hatch). A pidfile lock is held at EVERY root this run
+ * might read or write (see `lockRoots`, task review Important 3) — for a
+ * cross-root run that includes both the legacy root and the target root,
+ * since a daemon starting up concurrently derives its OWN migrate.lock from
+ * whatever ITS resolved `cfg.dataDir` happens to be at that moment (legacy or
+ * target, depending on whether it has reloaded config yet).
+ *
+ * `targetRoot` is `juncoHome(env)` when `cfg.legacy.dataRoot` (a pre-0.10
+ * `~/.local/state/junco` tree adopted via config.ts's probe-based fallback —
+ * see resolveDataRoot), else `cfg.dataDir` (an explicit dataDir keeps its own
+ * location; only its SHAPE may change, via the same flatToV2Pairs mapping
+ * with fromRoot === toRoot, which drops the resulting identity pairs).
+ *
+ * Resume is FILESYSTEM-driven, not resolution-driven (task review Critical 1):
+ * `dataRootHasTree` flips `loadConfig`'s resolution to the target root the
+ * moment the FIRST pair of a cross-root move lands (its marker probe only
+ * needs one hit), so a naive "only plan pairs when `cfg.legacy.dataRoot`"
+ * would see a half-migrated machine as already-done on every re-run and
+ * silently orphan the rest forever — exactly the failure mode a `--dry-run`
+ * or a crash mid-loop must be recoverable from. `dataRootPairs` therefore
+ * probes BOTH `cfg.dataDir` (this run's current resolution — covers a fresh
+ * first run and the in-place-restructure case) AND the fixed legacy path
+ * (covers a resume once resolution has already flipped away from it),
+ * whenever `targetRoot` is the canonical `~/.junco` — see `legacyRoot` below.
+ * Every completed data-root/gh pair is journaled to the TARGET root's
+ * `migrated.json` in a `finally` (same durable-receipt pattern
+ * `migrateStateTree` already uses for its own journal — see
+ * `dataMigrate.ts`'s `appendJournal`), so the record of what moved survives a
+ * crash or a conflict, and the NEXT run's filesystem probe picks up exactly
+ * the stragglers.
  *
  * Order of operations: probe → plan (read-only) → (`--dry-run`: print + stop,
- * exit 0 — BEFORE the lock, whose acquisition mkdirs cfg.dataDir as a side
- * effect) → lock → queue move → state-tree migrate (`migrateStateTree`) →
- * config.json rewrite → receipt. State-tree conflicts and a failed config
- * rewrite are reported via a non-zero exit code AFTER every non-conflicted
- * step has completed — nothing already moved/renamed is ever rolled back,
- * and the receipt stays honest about phases that never ran or were
- * interrupted (see printReceipt).
+ * exit 0 — BEFORE the lock, whose acquisition mkdirs each lock root as a side
+ * effect) → lock (all roots) → queue move → state-tree name-normalize
+ * (`migrateStateTree`, still same-directory, still against `cfg.dataDir`) →
+ * data-root move/restructure (`flatToV2Pairs`, journaled — see the
+ * `migrated.json` self-reference note below) → gh creds move (journaled) →
+ * legacy root removal (filesystem-driven — attempted whenever the fixed
+ * legacy path still exists, not gated on `cfg.legacy.dataRoot`) →
+ * config.json rewrite → receipt. Conflicts (state-tree or data-root) and a
+ * failed config rewrite are reported via a non-zero exit code AFTER every
+ * non-conflicted step has completed — nothing already moved/renamed is ever
+ * rolled back, and the receipt stays honest about phases that never ran or
+ * were interrupted (see printReceipt).
+ *
+ * A destination a PRIOR PHASE OF THIS SAME RUN already wrote to is never
+ * replaceable (task review Critical 2): for a machine that is both
+ * `legacy.vaultRoot` and `legacy.dataRoot`, the queue-move phase and
+ * `flatToV2Pairs`' identity-named `queue` pair would otherwise both target
+ * `<targetRoot>/queue` — the data-root loop tracks `claimedByEarlierPhase`
+ * and turns any pair landing on an already-claimed destination into a
+ * reported `skipped-conflict` instead of letting `isRecursivelyEmptyDir`'s
+ * repair path silently delete what the queue move just did, or a non-empty
+ * stray legacy queue silently merge into it.
+ *
+ * `flatToV2Pairs`' `migrated.json` pair is SELF-REFERENTIAL — its
+ * destination (`join(targetRoot, "migrated.json")`) is the exact file this
+ * command's OWN journal write (above) lands at, and that write can easily
+ * happen BEFORE this pair is reached (a different pair earlier in iteration
+ * order, or an entirely earlier interrupted run) — a plain rename-with-
+ * conflict would then permanently deadlock every subsequent run against its
+ * own receipt (task review round 2, Important). The data-root loop special-
+ * cases it: MERGE the legacy journal's steps into the target instead of
+ * renaming, then remove the redundant legacy file — order-independent, and
+ * correct whether the target journal is fresh or already holds entries from
+ * an earlier run.
  */
 import {
   existsSync,
@@ -29,6 +84,7 @@ import {
   mkdirSync,
   cpSync,
   rmSync,
+  rmdirSync,
   statSync,
   readdirSync,
   openSync,
@@ -43,29 +99,42 @@ import {
   configDeprecations,
   validateConfigObject,
   expandHome,
+  juncoHome,
+  homeOf,
 } from "./config.js";
-import { migrateStateTree, pendingMigrations, type MigrateResult } from "./dataMigrate.js";
-import { dataTreePaths } from "./dataTree.js";
-import { acquirePidfileLock, readPidfileHolder } from "./pidfileLock.js";
+import {
+  migrateStateTree,
+  pendingMigrations,
+  flatToV2Pairs,
+  isRecursivelyEmptyDir,
+  appendJournal,
+  readJournal,
+  type MigrateResult,
+  type MigrationStep,
+} from "./dataMigrate.js";
+import { acquirePidfileLock, readPidfileHolder, type PidfileLock } from "./pidfileLock.js";
 
 const QUEUE_DIR_KEYS: (keyof Paths)[] = ["inbox", "processing", "done", "failed"];
 
-/** The default (pre-unification) dataDir — matches config.ts's assembleConfig
- * fallback (`d.observability.stateDir ?? d.dataDir ?? "~/.local/state/junco"`). */
-const DEFAULT_DATA_DIR = "~/.local/state/junco";
+/** The default (post-unification) dataDir — matches config.ts's
+ * resolveDataRoot/juncoHome default. The config rewrite (`rewriteConfig`)
+ * only writes an explicit top-level `dataDir` when the resolved root differs
+ * from this — an operator who never customized it gets no new key. */
+const DEFAULT_DATA_DIR = "~/.junco";
 
 export interface DataMigrateDeps {
   /** /health probe fetch. Default: global fetch. */
   fetchFn?: typeof fetch;
   /** Existence probe (plan computation + pendingMigrations). Default: fs.existsSync. */
   existsFn?: (p: string) => boolean;
-  /** Rename primitive — used for BOTH the queue-dir moves and the config.json
-   * atomic tmp+rename write. Default: fs.renameSync. */
+  /** Rename primitive — used for the queue-dir moves, the data-root/gh-creds
+   * moves, and the config.json atomic tmp+rename write. Default: fs.renameSync. */
   renameFn?: (from: string, to: string) => void;
   readFileFn?: (p: string) => string;
   writeFileFn?: (p: string, s: string) => void;
   printFn?: (s: string) => void;
-  /** State-tree migration. Default: the real migrateStateTree (real fs). */
+  /** State-tree (same-directory, old-name → new-name) migration. Default: the
+   * real migrateStateTree (real fs). */
   migrateFn?: (cfg: Config) => MigrateResult;
   /** Recursive directory copy for the EXDEV fallback. Default: fs.cpSync. */
   copyDirFn?: (from: string, to: string) => void;
@@ -75,12 +144,22 @@ export interface DataMigrateDeps {
   /** Daemon-pidfile liveness probe (the /health-independent "is the daemon
    * up" signal). Default: the real readPidfileHolder. */
   pidfileHolderFn?: (lockPath: string) => number | null;
+  /** Env driving `juncoHome(env)`/`homeOf(env)` (the single-root move target
+   * and the fixed legacy-path probe). Default: process.env — same DI seam as
+   * resolveBotGhConfigDir's callers. */
+  env?: Record<string, string | undefined>;
 }
 
 interface QueueStep {
   key: keyof Paths;
   from: string;
   to: string;
+}
+
+interface PendingPair {
+  from: string;
+  to: string;
+  pending: boolean;
 }
 
 /** Single AbortController-timed /health probe — same shape as
@@ -102,14 +181,77 @@ async function daemonIsUp(cfg: Config, fetchFn: typeof fetch): Promise<boolean> 
 }
 
 /** The queue-move plan: empty when `legacy.vaultRoot` is unset — the queue
- * already lives at `<dataDir>/queue`, nothing to move. When set,
- * `cfg.queueRoot` IS the legacy root (`<vaultRoot>/<juncoSubdir>`), so
- * `queuePaths(cfg)` hands back the four legacy source paths directly. */
-function queueSteps(cfg: Config): QueueStep[] {
+ * already lives at `<targetRoot>/queue` (or will, via `flatToV2Pairs`'
+ * identity-named `queue` pair — see `dataRootPairs`). When `vaultRoot` IS
+ * set, `cfg.queueRoot` IS the legacy root (`<vaultRoot>/<juncoSubdir>`), so
+ * `queuePaths(cfg)` hands back the four legacy source paths directly, and
+ * they land at `<targetRoot>/queue` regardless of whether the rest of the
+ * tree is also relocating this run. */
+function queueSteps(cfg: Config, targetRoot: string): QueueStep[] {
   if (!cfg.legacy.vaultRoot) return [];
   const legacy = queuePaths(cfg);
-  const targetRoot = join(cfg.dataDir, "queue");
-  return QUEUE_DIR_KEYS.map((key) => ({ key, from: legacy[key], to: join(targetRoot, key) }));
+  const queueRoot = join(targetRoot, "queue");
+  return QUEUE_DIR_KEYS.map((key) => ({ key, from: legacy[key], to: join(queueRoot, key) }));
+}
+
+/** The fixed pre-0.10 fallback path (config.ts's `resolveDataRoot` probes the
+ * exact same literal) — only relevant to THIS run when its target is the
+ * canonical `~/.junco` (an operator with a genuinely custom, unrelated
+ * `dataDir` must never have an unrelated `~/.local/state/junco` swept in).
+ * Not existence-gated here: `dataRootPairs`/the lock-root set only act on it
+ * per-pair/via `existsFn` themselves, so a nonexistent candidate is simply
+ * inert rather than needing a second check everywhere it's threaded through. */
+function fixedLegacyRoot(
+  targetRoot: string,
+  env: Record<string, string | undefined>,
+): string | null {
+  return targetRoot === juncoHome(env) ? join(homeOf(env), ".local", "state", "junco") : null;
+}
+
+/** The flat→v2 data-root pairs whose source currently exists, probed from
+ * EVERY root that could hold one (Critical 1 — see the module doc comment):
+ * `cfg.dataDir` (this run's current resolution) and, whenever relevant, the
+ * FIXED legacy path — independently of what `cfg.legacy.dataRoot` says,
+ * since that flag can no longer see stragglers once resolution has flipped
+ * away from the legacy root. Pairs from different source roots that land on
+ * the SAME target are deduped, preferring whichever source actually has
+ * something pending (the rare case where both somehow do is left for
+ * `moveDataRootPair`'s own `existsFn(to)` conflict check to catch safely). */
+function dataRootPairs(
+  cfg: Config,
+  targetRoot: string,
+  legacyRoot: string | null,
+  existsFn: (p: string) => boolean,
+): PendingPair[] {
+  const sourceRoots =
+    legacyRoot !== null && legacyRoot !== cfg.dataDir ? [cfg.dataDir, legacyRoot] : [cfg.dataDir];
+  const byTarget = new Map<string, PendingPair>();
+  for (const sourceRoot of sourceRoots) {
+    for (const pair of flatToV2Pairs(sourceRoot, targetRoot)) {
+      const pending = existsFn(pair.from);
+      const existing = byTarget.get(pair.to);
+      if (!existing || (pending && !existing.pending)) {
+        byTarget.set(pair.to, { ...pair, pending });
+      }
+    }
+  }
+  return [...byTarget.values()];
+}
+
+/** The bot gh-creds move: only when the resolved `botAccount.configDir` is
+ * itself the legacy `~/.config/junco/gh` fallback (config.ts's
+ * `resolveBotGhConfigDir` — `cfg.legacy.ghConfigDir`). The target is always
+ * `juncoHome(env)/gh` regardless of whether the DATA root is also moving —
+ * gh creds have their own independent legacy path, unrelated to dataDir. */
+function ghPair(
+  cfg: Config,
+  env: Record<string, string | undefined>,
+  existsFn: (p: string) => boolean,
+): PendingPair | null {
+  if (!cfg.legacy.ghConfigDir) return null;
+  const from = cfg.botAccount.configDir; // resolved to the legacy dir on this machine
+  const to = join(juncoHome(env), "gh");
+  return { from, to, pending: existsFn(from) };
 }
 
 function listFilesRecursive(root: string): string[] {
@@ -126,7 +268,7 @@ function listFilesRecursive(root: string): string[] {
  * source is only deleted once every file lands on the other side with a
  * matching byte count. Throws (never swallows) so the caller's generic
  * error handling reports it and the untouched source stays exactly where
- * it was. */
+ * it was. Directory-only (queue's four dirs are always directories). */
 function verifyCopy(from: string, to: string): void {
   for (const rel of listFilesRecursive(from)) {
     const srcSize = statSync(join(from, rel)).size;
@@ -147,7 +289,8 @@ function verifyCopy(from: string, to: string): void {
  * in the window between the size verify and the page-cache flush can leave
  * truncated copies after the source is already gone — the one command whose
  * job is moving ticket files. The design spec (§11) calls for
- * copy+fsync+verify+delete; the size verify still runs first (above). */
+ * copy+fsync+verify+delete; the size verify still runs first (above).
+ * Directory-only. */
 function fsyncCopied(to: string, syncPathFn: (p: string) => void): void {
   const dirs = new Set<string>([to]);
   for (const rel of listFilesRecursive(to)) {
@@ -158,18 +301,99 @@ function fsyncCopied(to: string, syncPathFn: (p: string) => void): void {
   for (const d of dirs) syncPathFn(d);
 }
 
+/** `verifyCopy`/`fsyncCopied` assume a directory pair (queue's four dirs are
+ * always directories). `flatToV2Pairs`' pairs are a mix — most are
+ * directories (outbox, clones, ...) but several are single files
+ * (watchlist.json, spend.json, worker.log, ...). These wrappers dispatch on
+ * `from`'s type so the same EXDEV fallback machinery (copy → verify → fsync →
+ * delete-source, #196) covers both shapes without duplicating it. */
+function verifyCopyPath(from: string, to: string): void {
+  if (statSync(from).isDirectory()) {
+    verifyCopy(from, to);
+    return;
+  }
+  const srcSize = statSync(from).size;
+  let dstSize: number;
+  try {
+    dstSize = statSync(to).size;
+  } catch {
+    throw new Error(`EXDEV copy verification failed — missing ${to}`);
+  }
+  if (dstSize !== srcSize) {
+    throw new Error(`EXDEV copy verification failed — size mismatch for ${to}`);
+  }
+}
+
+function fsyncCopiedPath(to: string, syncPathFn: (p: string) => void): void {
+  if (statSync(to).isDirectory()) {
+    fsyncCopied(to, syncPathFn);
+    return;
+  }
+  syncPathFn(to);
+  syncPathFn(dirname(to));
+}
+
+/** Move one flat→v2 (or gh-creds) pair, reusing the queue move's EXDEV
+ * copy+verify+fsync fallback and `migrateStateTree`'s `isRecursivelyEmptyDir`
+ * conflict semantics: a destination that doesn't exist is taken outright; one
+ * that exists and holds directories only (dataTree.ts scaffolding —
+ * `ensureDataTree` may have already materialized empty v2 dirs) is repaired
+ * (removed, then taken); one holding any file anywhere (or that is itself a
+ * file — the watchlist/spend/etc. pairs) is a conflict, reported and left
+ * untouched on both sides. mkdirs `dirname(to)` per pair since, unlike the
+ * queue's four same-parent keys, `flatToV2Pairs`' targets scatter across
+ * data/, cache/, logs/. Callers must check `claimedByEarlierPhase` BEFORE
+ * calling this (Critical 2) — this function has no way to know a destination
+ * was legitimately populated by an earlier phase of the SAME run rather than
+ * being inert scaffolding, so it would otherwise repair-and-delete it. */
+function moveDataRootPair(
+  from: string,
+  to: string,
+  existsFn: (p: string) => boolean,
+  renameFn: (from: string, to: string) => void,
+  copyDirFn: (from: string, to: string) => void,
+  syncPathFn: (p: string) => void,
+): "moved" | "copied" | "skipped-conflict" {
+  if (existsFn(to)) {
+    if (isRecursivelyEmptyDir(to, (d) => readdirSync(d, { withFileTypes: true }))) {
+      rmSync(to, { recursive: true });
+    } else {
+      return "skipped-conflict";
+    }
+  }
+  mkdirSync(dirname(to), { recursive: true });
+  try {
+    renameFn(from, to);
+    return "moved";
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
+      copyDirFn(from, to);
+      verifyCopyPath(from, to);
+      fsyncCopiedPath(to, syncPathFn); // #196: durable before deleting source
+      rmSync(from, { recursive: true, force: true });
+      return "copied";
+    }
+    throw e;
+  }
+}
+
 /** Read → mutate → validate → atomic tmp+rename write of the RAW config.json
  * (same read/validate/atomic-write shape as `junco config set` in
  * src/configCmd.ts). Deleting `juncoSubdir` always accompanies `vaultRoot` —
  * the pair is meaningless without each other. Deleting
  * `observability.stateDir` deletes an emptied `observability` object too,
  * rather than leaving a stray `"observability": {}` behind. `dataDir` is
- * only written when it differs from the expanded default, so an operator
- * who never customized it gets no new top-level key. Returns the list of
- * human-readable changes made (empty when nothing needed changing). */
+ * compared/written against `targetRoot` (NOT `cfg.dataDir`, which is the
+ * PRE-migration location) — a legacy-fallback machine's data no longer lives
+ * at `cfg.dataDir` once this command returns (it was just relocated, and the
+ * now-empty legacy root removed), so writing the old path back would point
+ * the next `loadConfig` at nothing. Only written when it differs from the
+ * expanded default, so an operator who never customized it gets no new
+ * top-level key. Returns the list of human-readable changes made (empty when
+ * nothing needed changing). */
 function rewriteConfig(
   configPath: string,
-  cfg: Config,
+  targetRoot: string,
   readFileFn: (p: string) => string,
   writeFileFn: (p: string, s: string) => void,
   renameFn: (from: string, to: string) => void,
@@ -192,9 +416,9 @@ function rewriteConfig(
   }
 
   const defaultDataDir = expandHome(DEFAULT_DATA_DIR);
-  if (cfg.dataDir !== defaultDataDir) {
-    raw.dataDir = cfg.dataDir;
-    receipt.push(`set dataDir = ${cfg.dataDir}`);
+  if (targetRoot !== defaultDataDir) {
+    raw.dataDir = targetRoot;
+    receipt.push(`set dataDir = ${targetRoot}`);
   }
 
   validateConfigObject(raw);
@@ -207,16 +431,26 @@ function rewriteConfig(
 
 /** Receipt sections stay honest on the catch path: a state-tree phase that
  * never ran prints "not attempted"; one whose `migrateFn` threw MID-RUN prints
- * "interrupted" and points at the durable journal (migrateStateTree journals
- * completed pairs in a `finally`, so their receipts survive the throw — see
- * src/dataMigrate.ts); a config rewrite that never completed prints "not
- * rewritten (error)" rather than the false "no changes needed". */
+ * "interrupted" and points at `stateTreeJournalFile` — `join(cfg.dataDir,
+ * "migrated.json")`, where `migrateStateTree` ACTUALLY writes (task review
+ * Important 4: NOT the target root's journal — phase 4 runs before the
+ * data-root move ever gets a chance to relocate it, so on a cross-root
+ * machine the target's migrated.json may not exist yet at this point); a
+ * config rewrite that never completed prints "not rewritten (error)" rather
+ * than the false "no changes needed". The `data root:`/`gh config:` sections
+ * are built incrementally by the caller (pushed as each pair completes), so a
+ * throw mid-loop leaves them holding exactly the pairs that landed — no
+ * separate "interrupted" sentinel needed (their OWN durable receipt is the
+ * journal at the target root, appended in a `finally` — see runDataMigrate). */
 function printReceipt(
   print: (s: string) => void,
   queueReceipt: string[],
   state: MigrateResult | "not-run" | "interrupted",
+  dataRootReceipt: string[],
+  dataRootConflicts: string[],
+  ghReceipt: string[],
   configReceipt: string[] | null,
-  migratedFile: string,
+  stateTreeJournalFile: string,
 ): void {
   print("junco data migrate: receipt\n");
   print(
@@ -229,7 +463,9 @@ function printReceipt(
   } else if (state === "interrupted") {
     // "any completed steps": accurate even when the throw came before the
     // first pair completed and the journal holds nothing from this run.
-    print(`\nstate tree: interrupted — any completed steps are journaled in ${migratedFile}\n`);
+    print(
+      `\nstate tree: interrupted — any completed steps are journaled in ${stateTreeJournalFile}\n`,
+    );
   } else {
     const acted = state.steps.filter((s) => s.action !== "noop");
     print(
@@ -238,9 +474,22 @@ function printReceipt(
         : "\nstate tree: nothing pending\n",
     );
     if (state.conflicts.length > 0) {
-      print(`\nconflicts:\n${state.conflicts.map((c) => `  ${c}`).join("\n")}\n`);
+      print(`\nstate-tree conflicts:\n${state.conflicts.map((c) => `  ${c}`).join("\n")}\n`);
     }
   }
+  print(
+    dataRootReceipt.length > 0
+      ? `\ndata root:\n${dataRootReceipt.map((l) => `  ${l}`).join("\n")}\n`
+      : "\ndata root: nothing to move\n",
+  );
+  if (dataRootConflicts.length > 0) {
+    print(`\ndata-root conflicts:\n${dataRootConflicts.map((c) => `  ${c}`).join("\n")}\n`);
+  }
+  print(
+    ghReceipt.length > 0
+      ? `\ngh config:\n${ghReceipt.map((l) => `  ${l}`).join("\n")}\n`
+      : "\ngh config: nothing to move\n",
+  );
   if (configReceipt === null) {
     print("\nconfig.json: not rewritten (error)\n");
   } else {
@@ -280,6 +529,15 @@ export async function runDataMigrate(
       }
     });
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
+  const env = deps.env ?? process.env;
+
+  // The single-root move target (see the module doc comment). Computed once
+  // and threaded through every phase below, along with the fixed legacy path
+  // this run should ALSO probe/lock/clean up (Critical 1 / Important 3) —
+  // null when targetRoot isn't the canonical root at all (an explicit,
+  // unrelated dataDir never has `~/.local/state/junco` swept in).
+  const targetRoot = cfg.legacy.dataRoot ? juncoHome(env) : cfg.dataDir;
+  const legacyRoot = fixedLegacyRoot(targetRoot, env);
 
   // 1a. Daemon-up refusal — both signals skipped entirely by --force.
   if (!opts.force) {
@@ -307,15 +565,23 @@ export async function runDataMigrate(
   }
 
   // 2. Plan — read-only (existsFn probes only), so it runs BEFORE the lock:
-  // a dry-run is not a run, and acquirePidfileLock mkdirs the lock file's
-  // parent as a side effect, which would fabricate cfg.dataDir on a machine
-  // that has never had one — exactly the command's primary audience.
-  const qSteps = queueSteps(cfg).map((s) => ({ ...s, pending: existsFn(s.from) }));
+  // a dry-run is not a run, and acquirePidfileLock mkdirs each lock root as a
+  // side effect, which would fabricate targetRoot on a machine that has
+  // never had one — exactly the command's primary audience.
+  const qSteps = queueSteps(cfg, targetRoot).map((s) => ({ ...s, pending: existsFn(s.from) }));
   const pending = pendingMigrations(cfg, existsFn);
+  const dataRootAll = dataRootPairs(cfg, targetRoot, legacyRoot, existsFn);
+  const gh = ghPair(cfg, env, existsFn);
   const defaultDataDir = expandHome(DEFAULT_DATA_DIR);
-  const willSetDataDir = cfg.dataDir !== defaultDataDir;
+  const willSetDataDir = targetRoot !== defaultDataDir;
   const deprecations = configDeprecations(cfg);
-  const migratedFile = dataTreePaths(cfg).migratedFile;
+  // Where the data-root/gh journal lands (Critical 1) — used by dry-run's
+  // informational line. `stateTreeJournalFile` (Important 4) is separate and
+  // computed further down, once we're past the dry-run early return.
+  const migratedFile = join(targetRoot, "migrated.json");
+  // The vaultRoot queue move's eventual destination — used both for the
+  // dry-run hint and (in the acting run) to detect the Critical 2 collision.
+  const vaultQueueTarget = join(targetRoot, "queue");
 
   if (opts.dryRun) {
     print("junco data migrate: plan (dry-run — no changes made)\n");
@@ -334,38 +600,91 @@ export async function runDataMigrate(
       print("\nstate tree:\n");
       for (const p of pending) print(`  ${p.from} -> ${p.to}\n`);
     }
+    if (!dataRootAll.some((p) => p.pending)) {
+      print("\ndata root: already unified — no legacy root or flat layout to move\n");
+    } else {
+      print(`\ndata root: ${cfg.dataDir} -> ${targetRoot}\n`);
+      for (const p of dataRootAll) {
+        const isVaultQueueCollision =
+          qSteps.some((s) => s.pending) && p.to === vaultQueueTarget && p.pending;
+        const suffix = isVaultQueueCollision
+          ? " (stray — the vaultRoot queue move owns this destination; will be reported as a conflict, never merged)"
+          : p.pending
+            ? ""
+            : " (nothing to move)";
+        print(`  ${p.from} -> ${p.to}${suffix}\n`);
+      }
+      if (legacyRoot !== null) {
+        print(`  (legacy root ${legacyRoot} would be removed once empty)\n`);
+      }
+    }
+    if (gh === null) {
+      print("\ngh config: already unified — no legacy gh config dir\n");
+    } else {
+      print(`\ngh config:\n  ${gh.from} -> ${gh.to}${gh.pending ? "" : " (nothing to move)"}\n`);
+    }
     print("\nconfig.json:\n");
     print("  would remove: vaultRoot, juncoSubdir, observability.stateDir (if present)\n");
     print(
       willSetDataDir
-        ? `  would set: dataDir = ${cfg.dataDir}\n`
+        ? `  would set: dataDir = ${targetRoot}\n`
         : "  dataDir left unset (matches the default)\n",
     );
     print(`\nstate tree journal: ${migratedFile}\n`);
     return 0;
   }
 
-  // 1b. Migration lock — held for the whole acting run, released in `finally`.
-  const lockPath = dataTreePaths(cfg).migrateLockFile;
-  const lock = acquirePidfileLock(lockPath);
-  if (lock === null) {
-    print("junco data migrate: another migrate is running\n");
-    return 1;
+  // 1b. Migration lock — held at EVERY root this run might touch (Important
+  // 3), released in `finally`. `targetRoot` and `cfg.dataDir` cover a fresh
+  // cross-root run (they differ); `legacyRoot` additionally covers a RESUME
+  // once resolution has already flipped away from it — a daemon starting up
+  // concurrently derives its own lock from whichever of these ITS OWN config
+  // resolves to. Only locks a candidate that actually exists (or is the
+  // target itself, whose acquisition legitimately mkdirs it) — never
+  // fabricates an unrelated `~/.local/state/junco` out of thin air.
+  const lockRoots = new Set<string>([targetRoot]);
+  if (cfg.dataDir !== targetRoot && existsFn(cfg.dataDir)) lockRoots.add(cfg.dataDir);
+  if (legacyRoot !== null && existsFn(legacyRoot)) lockRoots.add(legacyRoot);
+  // Keyed by root (not a flat array) so the legacy root's OWN lock can be
+  // released early, right before phase 7 tries to rmdir it — see there for
+  // why: the lock is a real file living INSIDE that directory, so holding it
+  // through the rmdir attempt would be self-defeating.
+  const locksByRoot = new Map<string, PidfileLock>();
+  for (const root of [...lockRoots].sort()) {
+    const l = acquirePidfileLock(join(root, "migrate.lock"));
+    if (l === null) {
+      for (const held of locksByRoot.values()) held.release();
+      print("junco data migrate: another migrate is running\n");
+      return 1;
+    }
+    locksByRoot.set(root, l);
   }
 
   const queueReceipt: string[] = [];
+  const dataRootReceipt: string[] = [];
+  const dataRootConflicts: string[] = [];
+  const ghReceipt: string[] = [];
   // Phase trackers for an honest catch-path receipt: "not-run" = the phase
   // was never reached; "interrupted" = migrateFn threw mid-run (its completed
   // pairs are journaled durably); null configReceipt = rewrite never completed.
   let stateOutcome: MigrateResult | "not-run" | "interrupted" = "not-run";
+  // Important 4: the ACTUAL location migrateStateTree writes to, independent
+  // of targetRoot — phase 4 runs before the data-root move could ever
+  // relocate it, so "interrupted" must point here, not at the target.
+  const stateTreeJournalFile = join(cfg.dataDir, "migrated.json");
   let configReceipt: string[] | null = null;
 
   try {
-    // 3. Queue move. Re-probe existence under the lock — the pre-lock plan
-    // flags could be stale if a concurrent migrate completed in between.
+    // 3. Queue move (legacy vaultRoot only). Re-probe existence under the
+    // lock — the pre-lock plan flags could be stale if a concurrent migrate
+    // completed in between. `claimedByEarlierPhase` records what THIS phase
+    // actually wrote to, so phase 5 below can never repair-delete or silently
+    // merge onto it (Critical 2).
+    const claimedByEarlierPhase = new Set<string>();
     const toMove = qSteps.filter((s) => existsFn(s.from));
     if (toMove.length > 0) {
-      mkdirSync(join(cfg.dataDir, "queue"), { recursive: true });
+      mkdirSync(vaultQueueTarget, { recursive: true });
+      claimedByEarlierPhase.add(vaultQueueTarget);
       for (const s of toMove) {
         try {
           renameFn(s.from, s.to);
@@ -384,30 +703,190 @@ export async function runDataMigrate(
       }
     }
 
-    // 4. State tree. "interrupted" is set first and only overwritten on a
-    // clean return — if migrateFn throws mid-run, the catch-path receipt
-    // points at the journal instead of claiming "nothing pending".
+    // 4. State-tree name-normalization — BEFORE the data-root move so a very
+    // old tree's pre-unification names land on their v2-mapped counterparts
+    // first (flatToV2Pairs keys off the CURRENT dataTree.ts names). Still
+    // same-directory, still against cfg.dataDir (not targetRoot) — its own
+    // journal write (migrated.json under cfg.dataDir) rides along as one of
+    // the data-root pairs below when the root is actually moving.
+    // "interrupted" is set first and only overwritten on a clean return — if
+    // migrateFn throws mid-run, the catch-path receipt points at the journal
+    // instead of claiming "nothing pending".
     stateOutcome = "interrupted";
     stateOutcome = migrateFn(cfg);
 
-    // 5. Config rewrite.
-    configReceipt = rewriteConfig(configPath, cfg, readFileFn, writeFileFn, renameFn);
+    // 5+6. Data-root move / v2 restructure + gh creds move — journaled
+    // together (Critical 1): each completed pair (moved, copied, OR
+    // skipped-conflict) is appended to the TARGET root's migrated.json in a
+    // `finally`, exactly like migrateStateTree's own journal — so a crash or
+    // conflict mid-loop still leaves a durable receipt, and combined with
+    // `dataRootPairs` probing the filesystem directly (not `cfg.legacy.
+    // dataRoot`), a re-run picks up precisely the stragglers rather than
+    // silently reporting "nothing to move".
+    const dataRootJournalSteps: MigrationStep[] = [];
+    let dataRootLoopCompleted = false;
+    try {
+      for (const pair of dataRootAll.filter((p) => existsFn(p.from))) {
+        if (pair.to === migratedFile) {
+          // Important (task review round 2): this pair's destination IS the
+          // exact file THIS run's own journal write (below, and any EARLIER
+          // run's) lands at — a plain rename-with-conflict would permanently
+          // deadlock the instant any pair has ever been journaled to
+          // `migratedFile` (which happens in THIS SAME loop's `finally`, or
+          // on a prior interrupted run): every subsequent run would see the
+          // destination as a non-empty file and report `skipped-conflict`
+          // forever, with no path to resolution. MERGE instead — read the
+          // legacy journal's own steps and append them into the target
+          // journal (same `appendJournal` read-modify-write + dedup every
+          // other pair gets), then remove the now-redundant legacy file.
+          // Order-independent within this loop, and correctly handles a
+          // target journal that ALREADY exists from an earlier interrupted
+          // run too — merge, never conflict, either way.
+          const legacySteps = readJournal(pair.from, readFileFn).steps;
+          if (legacySteps.length > 0) {
+            appendJournal(migratedFile, legacySteps, readFileFn, writeFileFn, renameFn);
+          }
+          rmSync(pair.from, { force: true });
+          dataRootReceipt.push(`${pair.from} -> ${pair.to}: merged`);
+          continue;
+        }
+        if (claimedByEarlierPhase.has(pair.to)) {
+          // Critical 2: never merge or delete onto a destination this run's
+          // queue-move phase already wrote to — report and move on.
+          dataRootConflicts.push(
+            `${pair.from} -> ${pair.to}: destination already relocated by this run's vaultRoot queue move`,
+          );
+          dataRootReceipt.push(`${pair.from} -> ${pair.to}: skipped-conflict`);
+          dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
+          continue;
+        }
+        const action = moveDataRootPair(
+          pair.from,
+          pair.to,
+          existsFn,
+          renameFn,
+          copyDirFn,
+          syncPathFn,
+        );
+        if (action === "skipped-conflict") {
+          dataRootConflicts.push(
+            `${pair.from} -> ${pair.to}: destination already exists and is not empty`,
+          );
+          dataRootReceipt.push(`${pair.from} -> ${pair.to}: skipped-conflict`);
+          dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
+        } else {
+          dataRootReceipt.push(
+            `${pair.from} -> ${pair.to}: ${action === "copied" ? "copied (cross-device)" : "moved"}`,
+          );
+          dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "renamed" });
+        }
+      }
 
-    // 6. Receipt.
-    printReceipt(print, queueReceipt, stateOutcome, configReceipt, migratedFile);
+      if (gh !== null && existsFn(gh.from)) {
+        const action = moveDataRootPair(gh.from, gh.to, existsFn, renameFn, copyDirFn, syncPathFn);
+        if (action === "skipped-conflict") {
+          dataRootConflicts.push(
+            `${gh.from} -> ${gh.to}: destination already exists and is not empty`,
+          );
+          ghReceipt.push(`${gh.from} -> ${gh.to}: skipped-conflict`);
+          dataRootJournalSteps.push({ from: gh.from, to: gh.to, action: "skipped-conflict" });
+        } else {
+          ghReceipt.push(
+            `${gh.from} -> ${gh.to}: ${action === "copied" ? "copied (cross-device)" : "moved"}`,
+          );
+          dataRootJournalSteps.push({ from: gh.from, to: gh.to, action: "renamed" });
+        }
+      }
+      dataRootLoopCompleted = true;
+    } finally {
+      if (dataRootJournalSteps.length > 0) {
+        try {
+          appendJournal(migratedFile, dataRootJournalSteps, readFileFn, writeFileFn, renameFn);
+        } catch (journalErr) {
+          // Same #197.1-style guard migrateStateTree uses: don't let a
+          // journal-write failure REPLACE an in-flight migration error.
+          if (dataRootLoopCompleted) throw journalErr;
+          print(
+            `\njunco data migrate: journal write failed after a data-root migration error: ` +
+              `${journalErr instanceof Error ? journalErr.message : String(journalErr)}\n`,
+          );
+        }
+      }
+    }
 
-    if (stateOutcome.conflicts.length > 0) {
-      print(
-        `\njunco data migrate: ${stateOutcome.conflicts.length} state-tree conflict(s) — resolve manually and re-run\n`,
-      );
+    // 7. Legacy root removal — filesystem-driven (Critical 1), attempted
+    // whenever the fixed legacy path still exists, not gated on
+    // `cfg.legacy.dataRoot` (which flips to false the moment ANY marker
+    // lands at the target, well before every pair has necessarily moved).
+    // Plain, non-recursive rmdirSync: refuses silently (ENOTEMPTY) when a
+    // conflicted pair (or anything else) is still inside, and the receipt
+    // lists what stayed rather than ever forcing it.
+    if (legacyRoot !== null && existsFn(legacyRoot)) {
+      // Release the legacy root's OWN migrate.lock first — it is a real file
+      // living inside the very directory this rmdir needs empty, so holding
+      // it through the attempt would make it the one thing always left
+      // behind. This narrows the daemon-mutex window by one rmdir's worth of
+      // time (no I/O in between); every phase that actually touches
+      // legacyRoot's contents already ran under the lock above it.
+      const legacyLock = locksByRoot.get(legacyRoot);
+      if (legacyLock) {
+        legacyLock.release();
+        locksByRoot.delete(legacyRoot);
+      }
+      try {
+        rmdirSync(legacyRoot);
+        dataRootReceipt.push(`removed legacy root ${legacyRoot}`);
+      } catch {
+        let remaining: string[] = [];
+        try {
+          remaining = readdirSync(legacyRoot);
+        } catch {
+          /* already gone (or never existed) — nothing to report */
+        }
+        if (remaining.length > 0) {
+          dataRootReceipt.push(
+            `legacy root ${legacyRoot} not removed — still contains: ${remaining.join(", ")}`,
+          );
+        }
+      }
+    }
+
+    // 8. Config rewrite.
+    configReceipt = rewriteConfig(configPath, targetRoot, readFileFn, writeFileFn, renameFn);
+
+    // 9. Receipt.
+    printReceipt(
+      print,
+      queueReceipt,
+      stateOutcome,
+      dataRootReceipt,
+      dataRootConflicts,
+      ghReceipt,
+      configReceipt,
+      stateTreeJournalFile,
+    );
+
+    const stateConflicts = typeof stateOutcome === "string" ? 0 : stateOutcome.conflicts.length;
+    const totalConflicts = stateConflicts + dataRootConflicts.length;
+    if (totalConflicts > 0) {
+      print(`\njunco data migrate: ${totalConflicts} conflict(s) — resolve manually and re-run\n`);
       return 1;
     }
     return 0;
   } catch (e) {
-    printReceipt(print, queueReceipt, stateOutcome, configReceipt, migratedFile);
+    printReceipt(
+      print,
+      queueReceipt,
+      stateOutcome,
+      dataRootReceipt,
+      dataRootConflicts,
+      ghReceipt,
+      configReceipt,
+      stateTreeJournalFile,
+    );
     print(`\njunco data migrate: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   } finally {
-    lock.release();
+    for (const l of locksByRoot.values()) l.release();
   }
 }
