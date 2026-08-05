@@ -6,27 +6,27 @@ Running junco day to day — the full CLI reference, health checks, service supe
 
 ## CLI reference
 
-All commands accept `--config <path>` to point at a non-default `config.json`. When omitted, junco uses `./config.json` if present, else the user-level default `~/.config/junco/config.json` (respects `XDG_CONFIG_HOME`) — so junco works from any directory after first-run setup. No global install needed either: `npx @ironforgesoftware/junco <command>` works the same as the installed `junco` binary.
+Junco reads its configuration from a single canonical location: `~/.junco/config.json` — the same from any working directory, with or without flags. Installs that predate this (0.10) are still read from the legacy `~/.config/junco/config.json` (respects `XDG_CONFIG_HOME`) until the canonical file exists; the `--config` flag is deprecated and ignored (junco prints a notice when it is passed). No global install needed: `npx @ironforgesoftware/junco <command>` works the same as the installed `junco` binary.
 
-| Command                                                         | Description                                                                                                                                                                                                                                             |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `junco start [--config <path>] [--once]`                        | Run the daemon. Polls forever; `--once` processes one task then exits. Acquires a single-instance lock (`worker.lock` next to `config.json`); exits 0 if another instance holds the lock.                                                               |
-| `junco run-once [--config <path>]`                              | One-shot: process a single available task and exit. No lock — convenient for dev or cron.                                                                                                                                                               |
-| `junco submit <file\|-> [--config <path>]`                      | Atomically place a ticket into the configured inbox. Use `-` to read from stdin. The inbox filename is derived from the ticket's `id` frontmatter field.                                                                                                |
-| `junco inbox-path [--config <path>]`                            | Print the resolved inbox directory path.                                                                                                                                                                                                                |
-| `junco schema`                                                  | Print the ticket-frontmatter JSON Schema (the typed contract for all frontmatter fields).                                                                                                                                                               |
-| `junco config init [--config <path>]`                           | Headless default-config scaffold: **writes `config.json`** with safe defaults and creates the queue directories. With a config already present, just ensures the dirs (never overwrites). The interactive equivalent lives in `junco dashboard`, below. |
-| `junco` (no subcommand)                                         | First run (no config yet) → the dashboard's guided setup walkthrough; otherwise → `start`.                                                                                                                                                              |
-| `junco service [--platform launchd\|systemd] [--config <path>]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere.                                                                                                                                                                   |
-| `junco status [--config <path>]`                                | One-glance view: daemon (pid/uptime), endpoint readiness, in-flight tickets, processed counts, queue sizes.                                                                                                                                             |
-| `junco list [box] [--config <path>]`                            | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses.                                                                                                                                                  |
-| `junco retry <name…\|--all> [--config <path>]`                  | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped.                                                                                                                            |
-| `junco outbox [flush] [--config <path>]`                        | List the offline GitHub backlog (operation type, target issue/branch, age, attempt count, dead-letter count), or `flush` to push it now instead of waiting for the next daemon sweep.                                                                   |
-| `junco doctor [--config <path>]`                                | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/data dirs writable.                                                                                                             |
-| `junco dashboard [--config <path>]`                             | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. With no config yet, opens the guided setup walkthrough first (re-run anytime from the command palette's "setup"). Needs a real TTY.     |
-| `junco restart [--config <path>]`                               | Restart the supervised daemon so it picks up config and code changes: finds the launchd/systemd user unit referencing your config, kicks it with the platform-correct verb, verifies the pid changed.                                                   |
-| `junco logs [-f] [-n N] [--json\|--human] [--config <path>]`    | Tail (or follow with `-f`) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`; `--human` forces the readable format even when piped (used by the dashboard's command palette).                                              |
-| `junco --help` / `-h`                                           | Print usage.                                                                                                                                                                                                                                            |
+| Command                                       | Description                                                                                                                                                                                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `junco start [--once]`                        | Run the daemon. Polls forever; `--once` processes one task then exits. Acquires a single-instance lock (`worker.lock` next to `config.json`); exits 0 if another instance holds the lock.                                                               |
+| `junco run-once`                              | One-shot: process a single available task and exit. No lock — convenient for dev or cron.                                                                                                                                                               |
+| `junco submit <file\|->`                      | Atomically place a ticket into the configured inbox. Use `-` to read from stdin. The inbox filename is derived from the ticket's `id` frontmatter field.                                                                                                |
+| `junco inbox-path`                            | Print the resolved inbox directory path.                                                                                                                                                                                                                |
+| `junco schema`                                | Print the ticket-frontmatter JSON Schema (the typed contract for all frontmatter fields).                                                                                                                                                               |
+| `junco config init`                           | Headless default-config scaffold: **writes `config.json`** with safe defaults and creates the queue directories. With a config already present, just ensures the dirs (never overwrites). The interactive equivalent lives in `junco dashboard`, below. |
+| `junco` (no subcommand)                       | First run (no config yet) → the dashboard's guided setup walkthrough; otherwise → `start`.                                                                                                                                                              |
+| `junco service [--platform launchd\|systemd]` | Render a service file to stdout. Defaults to `launchd` on macOS, `systemd` elsewhere.                                                                                                                                                                   |
+| `junco status`                                | One-glance view: daemon (pid/uptime), endpoint readiness, in-flight tickets, processed counts, queue sizes.                                                                                                                                             |
+| `junco list [box]`                            | Newest-first ticket listing per queue box (`inbox\|processing\|done\|failed`), with terminal statuses.                                                                                                                                                  |
+| `junco retry <name…\|--all>`                  | Move failed tickets back to the inbox for a fresh run — claim stamp, appended result blocks, and retry bookkeeping stripped.                                                                                                                            |
+| `junco outbox [flush]`                        | List the offline GitHub backlog (operation type, target issue/branch, age, attempt count, dead-letter count), or `flush` to push it now instead of waiting for the next daemon sweep.                                                                   |
+| `junco doctor`                                | Preflight: config parses, node/git/gh present, `gh` authenticated, endpoint reachable, model advertised, queue/worktree/data dirs writable.                                                                                                             |
+| `junco dashboard`                             | Interactive terminal UI for GitHub-integrated mode: watch repos, review plans, dispatch/approve/re-plan issues. With no config yet, opens the guided setup walkthrough first (re-run anytime from the command palette's "setup"). Needs a real TTY.     |
+| `junco restart`                               | Restart the supervised daemon so it picks up config and code changes: finds the launchd/systemd user unit, kicks it with the platform-correct verb, verifies the pid changed.                                                                           |
+| `junco logs [-f] [-n N] [--json\|--human]`    | Tail (or follow with `-f`) the worker log — human-readable on a TTY, raw JSON when piped or with `--json`; `--human` forces the readable format even when piped (used by the dashboard's command palette).                                              |
+| `junco --help` / `-h`                         | Print usage.                                                                                                                                                                                                                                            |
 
 ## Health & observability
 
@@ -84,7 +84,7 @@ The interactive dashboard (`junco dashboard`) shows the gate as a colored dot on
 ### macOS (launchd)
 
 ```bash
-junco service --platform launchd --config ~/junco/config.json \
+junco service --platform launchd \
   > ~/Library/LaunchAgents/com.junco.worker.plist
 
 launchctl load ~/Library/LaunchAgents/com.junco.worker.plist
@@ -94,7 +94,7 @@ launchctl start com.junco.worker
 ### Linux (systemd)
 
 ```bash
-junco service --platform systemd --config ~/junco/config.json \
+junco service --platform systemd \
   > ~/.config/systemd/user/junco.service
 
 systemctl --user daemon-reload
@@ -109,7 +109,7 @@ systemctl --user enable --now junco
 
 ### Restarting after config or code changes
 
-The daemon reads its config and code once at startup. `junco restart` bounces the supervised daemon correctly: it discovers the launchd plist / systemd user unit that references your config path and uses `launchctl kickstart -k` / `systemctl --user restart` — the verbs that relaunch unconditionally. (A plain SIGTERM is _not_ a restart: with launchd's `SuccessfulExit=false` keep-alive, a graceful exit stays down.) It validates the config first — refusing to bounce the daemon onto a config it can't parse — and confirms the new pid before reporting success.
+The daemon reads its config and code once at startup. `junco restart` bounces the supervised daemon correctly: it finds the junco launchd/systemd user unit (legacy units are matched by the config path they reference, 0.10+ units are flagless), kicks it with the platform-correct verb (`launchctl kickstart -k` / `systemctl --user restart` — the verbs that relaunch unconditionally), and verifies the pid changed. (A plain SIGTERM is _not_ a restart: with launchd's `SuccessfulExit=false` keep-alive, a graceful exit stays down.) It validates the config first — refusing to bounce the daemon onto a config it can't parse — and confirms the new pid before reporting success.
 
 ## Security model
 
@@ -174,7 +174,7 @@ If a ticket lands in `failed/` immediately (before any agent run), plan-lint rej
 Fix the frontmatter and resubmit:
 
 ```bash
-junco submit ./fixed-ticket.md --config ~/junco/config.json
+junco submit ./fixed-ticket.md
 ```
 
 ### Verification failure blocks the PR

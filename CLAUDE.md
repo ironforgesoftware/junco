@@ -47,7 +47,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 
 ## The repo doubles as the maintainer's live runtime — do not disturb
 
-`config.json` (repo root), `tickets/`, `worktrees/`, `launchd.out/err` are **live, gitignored runtime state**, and a launchd daemon may be running from this checkout. Never delete, modify, or `git clean` them; never run `junco start` here; never submit test tickets to the real inbox. Config resolution prefers `./config.json`, so running the CLI from the repo root picks up the **live** config — sandbox every smoke test:
+`config.json` (repo root), `tickets/`, `worktrees/`, `launchd.out/err` are **live, gitignored runtime state**, and a launchd daemon may be running from this checkout. Never delete, modify, or `git clean` them; never run `junco start` here; never submit test tickets to the real inbox. Config resolution is HOME-anchored (`~/.junco/config.json`, legacy XDG fallback) — cwd never matters, but running the CLI with your real `HOME` still picks up the **live** config, so sandbox every smoke test:
 
 ```bash
 SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \

@@ -25,7 +25,7 @@ export XDG_CONFIG_HOME="$SB/.config"
 "$JUNCO" --help >/dev/null
 
 "$JUNCO" config init
-CONFIG="$SB/.config/junco/config.json"
+CONFIG="$SB/.junco/config.json"
 [ -f "$CONFIG" ] || { echo "FAIL: config init did not write $CONFIG"; exit 1; }
 
 "$JUNCO" schema | node -e "JSON.parse(require('node:fs').readFileSync(0, 'utf8'))" \

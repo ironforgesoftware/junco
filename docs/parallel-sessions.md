@@ -56,9 +56,10 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
   lockfile moved) → `npm run build` → `junco restart` — and check the queue is idle first
   (`currentTickets` in the health JSON) so the restart never interrupts a running ticket.
   Test live behavior only after this, or the missing feature reads as a bug.
-- **Sandbox smoke tests exactly as CLAUDE.md prescribes.** A worktree has no `./config.json`, so
-  config resolution falls back to the user-level default — which is the maintainer's _live_
-  config. Never run `junco start` or submit test tickets from a worktree either.
+- **Sandbox smoke tests exactly as CLAUDE.md prescribes.** Config is HOME-anchored at
+  `~/.junco/config.json` (cwd never matters), so even a worktree picks up the maintainer's _live_
+  config — never run `junco start` or submit test tickets from a worktree. Always sandbox with an
+  isolated HOME / XDG_CONFIG_HOME as CLAUDE.md shows.
 - **Full gate per branch** before PR: `npm run lint && npm run format:check && npm run typecheck
 && npm run build && npm test`.
 - **Keep sessions off each other's subsystems.** Two sessions editing the same module trade the

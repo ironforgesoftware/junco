@@ -89,13 +89,13 @@ npx tsc --noEmit
 
 ```bash
 # From a file:
-junco submit ./my-ticket.md --config ~/junco/config.json
+junco submit ./my-ticket.md
 
 # From stdin:
-cat my-ticket.md | junco submit - --config ~/junco/config.json
+cat my-ticket.md | junco submit -
 
 # Print the inbox path:
-junco inbox-path --config ~/junco/config.json
+junco inbox-path
 ```
 
 The bundled `junco-dispatch` skill (for Claude Code) scaffolds well-structured tickets from any Claude session and submits them automatically.

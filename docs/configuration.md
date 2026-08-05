@@ -1,6 +1,6 @@
 # Configuration
 
-Junco is configured via a JSON file — `./config.json` if present, else `~/.config/junco/config.json` (the wizard writes the latter unless you pass `--config`; respects `XDG_CONFIG_HOME`). Every field is optional; anything you omit falls back to its default. The guided way to produce (or tune) this file is `junco dashboard` (or bare `junco` on a first run) — a walkthrough of the settings that matter, with safe defaults for the rest, re-runnable anytime from the command palette ("setup"). For a headless, non-interactive scaffold (scripting, CI), use `junco config init`.
+Junco is configured via a single JSON file: `~/.junco/config.json` (pre-0.10 installs are still read from the legacy `~/.config/junco/config.json`, which respects `XDG_CONFIG_HOME`, until the canonical file exists). Every field is optional; anything you omit falls back to its default. The guided way to produce (or tune) this file is `junco dashboard` (or bare `junco` on a first run) — a walkthrough of the settings that matter, with safe defaults for the rest, re-runnable anytime from the command palette ("setup"). For a headless, non-interactive scaffold (scripting, CI), use `junco config init`.
 
 [← back to the README](../README.md)
 
