@@ -9,11 +9,11 @@
  * exit that returns non-zero (130).
  */
 
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import type { Config } from "./types.js";
 import type { AppProps } from "./tui/App.js";
-import { CLONES_WATCHED_SUBDIR } from "./dataTree.js";
+import { dataTreePaths } from "./dataTree.js";
 import { checkForUpdate } from "./updateCheck.js";
 import { resolveBotLogin } from "./botIdentity.js";
 import type React from "react";
@@ -107,9 +107,9 @@ export async function runDashboard(
     // The palette spawns CLI subcommands against this same config.
     configPath,
     // Managed clones for the add-repo "empty path = clone for me" flow.
-    clonesDir: join(c.dataDir, CLONES_WATCHED_SUBDIR),
+    clonesDir: dataTreePaths(c).clonesWatched,
     // The daemon's log file — the LOCAL logs section tails it (useLogTail).
-    logPath: join(c.dataDir, "worker.log"),
+    logPath: dataTreePaths(c).logFile,
     queueFn: makeQueueSnapshotFn(c),
     // Per-repo assess history for the rail's audit-age indicator (#193).
     assessHistoryFn: () => Promise.resolve(listHistory(c)),

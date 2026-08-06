@@ -218,14 +218,13 @@ function fileInfo(
  * this command's own readFileFn seam (the utf8-string overload is the only
  * one the ledger uses). */
 function readSpendUsd(
-  dataDir: string,
   path: string,
   existsFn: (p: string) => boolean,
   readFileFn: (p: string) => string,
   nowFn: () => number,
 ): number | null {
   if (!existsFn(path)) return null;
-  const ledger = makeSpendLedger(dataDir, {
+  const ledger = makeSpendLedger(path, {
     now: nowFn,
     readFileFn: ((p: string) => readFileFn(p)) as unknown as typeof readFileSync,
   });
@@ -290,7 +289,7 @@ function computeCounts(
     updateCheckFile: fileInfo(p.updateCheckFile, existsFn, statFn),
     spendFile: {
       ...fileInfo(p.spendFile, existsFn, statFn),
-      usd: readSpendUsd(cfg.dataDir, p.spendFile, existsFn, readFileFn, nowFn),
+      usd: readSpendUsd(p.spendFile, existsFn, readFileFn, nowFn),
     },
     metricsFile: fileInfo(p.metricsFile, existsFn, statFn),
     logFile: fileInfo(p.logFile, existsFn, statFn),
@@ -324,8 +323,13 @@ function renderText(
 ): void {
   const legacy = cfg.legacy;
   const suf = (key: keyof LegacyPathFlags): string => legacySuffix(legacy, key);
+  // Single-root move hint (2026-08-03 plan): distinct from the per-subtree
+  // `suf(...)` overrides above — this fires when the WHOLE root resolved via
+  // the pre-0.10 `~/.local/state/junco` fallback (config.ts's
+  // resolveDataRoot), not because any individual key was overridden.
+  const legacyRootHint = legacy.dataRoot ? ` (legacy — run 'junco data migrate')` : "";
 
-  print(`junco data — root: ${p.root}${suf("stateDir")}\n`);
+  print(`junco data — root: ${p.root}${suf("stateDir")}${legacyRootHint}\n`);
 
   print(`\nqueue      ${cfg.queueRoot}${suf("vaultRoot")}\n`);
   print(
@@ -461,6 +465,7 @@ export function runData(cfg: Config, opts: { json: boolean }, deps: DataCmdDeps 
       JSON.stringify(
         {
           root: p.root,
+          layout: cfg.dataLayout,
           paths: p,
           counts,
           legacy: cfg.legacy,

@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
 import type { Config, Paths } from "./types.js";
 import { catalogEligible } from "./agent/modelSetup.js";
@@ -39,38 +39,136 @@ export function isLoopbackHost(host: string): boolean {
   return false;
 }
 
-/** The user-level default config location (XDG_CONFIG_HOME or ~/.config). */
+/** env.HOME (tests/sandboxes) wins over os.homedir(). */
+export function homeOf(env: Record<string, string | undefined> = process.env): string {
+  return env.HOME && env.HOME.trim() !== "" ? env.HOME : homedir();
+}
+
+/** Junco's single home directory: ~/.junco. env.HOME wins over os.homedir()
+ * so tests and sandboxes can relocate it. Config lives here today; the data
+ * tree follows suit by default in the single-root consolidation (probe-based
+ * fallback keeps a pre-existing legacy root working — see assembleConfig). */
+export function juncoHome(env: Record<string, string | undefined> = process.env): string {
+  return join(homeOf(env), ".junco");
+}
+
+/** Schema default for `botAccount.configDir` — the one spelling every other
+ * reference (the zod default below, `resolveBotGhConfigDir`'s own default)
+ * derives from, so they can't drift apart. */
+export const DEFAULT_BOT_GH_CONFIG_DIR = "~/.junco/gh";
+
+/**
+ * Resolve the bot account's isolated gh config dir from the raw (possibly
+ * unset) `botAccount.configDir` config value. The SINGLE source of truth for
+ * this resolution — `assembleConfig`, `junco auth login` (authCmd.ts), and
+ * the setup wizard (wizard.ts) all call this instead of re-deriving the
+ * default themselves, so the three entrypoints can never disagree about
+ * where a live legacy login lives and plant a second `hosts.yml` at
+ * `~/.junco/gh` while the daemon keeps reading `~/.config/junco/gh` (or vice
+ * versa) — the split-brain this resolution exists to prevent.
+ *
+ * An explicit non-default `raw` passes through (tilde-expanded) verbatim —
+ * NEVER probed. A defaulted/unset value resolves to `~/.junco/gh`, EXCEPT
+ * when `~/.junco/gh/hosts.yml` is absent and the legacy
+ * `~/.config/junco/gh/hosts.yml` exists — then the legacy dir is used and
+ * `legacy: true` is returned (an upgrade must never orphan a working bot
+ * login until `junco data migrate` moves it).
+ */
+export function resolveBotGhConfigDir(
+  raw: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+  existsFn: (p: string) => boolean = existsSync,
+): { dir: string; legacy: boolean } {
+  const ghDefault = join(juncoHome(env), "gh");
+  const ghLegacy = join(homeOf(env), ".config", "junco", "gh");
+  const ghConfigured = expandHome(raw ?? DEFAULT_BOT_GH_CONFIG_DIR);
+  // NOTE: expandHome is homedir()-based while ghDefault is env-based
+  // (homeOf(env)). Under an injected test env (env.HOME !== os.homedir())
+  // these can disagree, making an explicitly-set "~/.junco/gh" indistinguishable
+  // from the default here — acceptable, they resolve to the same place in
+  // real use (see Task 3 brief).
+  let dir = ghConfigured === expandHome(DEFAULT_BOT_GH_CONFIG_DIR) ? ghDefault : ghConfigured;
+  let legacy = false;
+  if (
+    dir === ghDefault &&
+    !existsFn(join(ghDefault, "hosts.yml")) &&
+    existsFn(join(ghLegacy, "hosts.yml"))
+  ) {
+    dir = ghLegacy;
+    legacy = true;
+  }
+  return { dir, legacy };
+}
+
+/** True when `root` holds a junco data tree (either layout). config.json/gh
+ * alone do NOT count — the config plan puts those at ~/.junco before any
+ * data lives there. */
+export function dataRootHasTree(
+  root: string,
+  existsFn: (p: string) => boolean = existsSync,
+): boolean {
+  return ["queue", "data", "cache", "transcripts", "history"].some((m) => existsFn(join(root, m)));
+}
+
+/** Which internal shape an existing tree uses. Fresh (marker-less) roots get
+ * the final shape. queue/review/watchlist sit at the root in BOTH layouts and
+ * are deliberately not markers. */
+export function layoutOf(
+  root: string,
+  existsFn: (p: string) => boolean = existsSync,
+): "flat" | "v2" {
+  if (existsFn(join(root, "data")) || existsFn(join(root, "cache"))) return "v2";
+  const flatMarkers = [
+    "transcripts",
+    "history",
+    "clones",
+    "worktrees",
+    "assess-history",
+    "github-cache",
+  ];
+  if (flatMarkers.some((m) => existsFn(join(root, m)))) return "flat";
+  return "v2";
+}
+
+/** The canonical config location: ~/.junco/config.json. */
 export function defaultUserConfigPath(
   env: Record<string, string | undefined> = process.env,
 ): string {
+  return join(juncoHome(env), "config.json");
+}
+
+/** Pre-0.10 config location (XDG_CONFIG_HOME or ~/.config). Read-only
+ * fallback: an existing install keeps loading its config instead of being
+ * routed to the setup walkthrough — which would write a competing config,
+ * the exact failure mode this module was rewritten to prevent. */
+export function legacyConfigPath(env: Record<string, string | undefined> = process.env): string {
   const base =
     env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== ""
       ? env.XDG_CONFIG_HOME
-      : join(homedir(), ".config");
+      : join(env.HOME && env.HOME.trim() !== "" ? env.HOME : homedir(), ".config");
   return join(base, "junco", "config.json");
 }
 
 export interface ResolveConfigDeps {
   existsFn?: (p: string) => boolean;
   env?: Record<string, string | undefined>;
-  cwd?: () => string;
 }
 
 /**
- * Where the config lives. Order: explicit --config → ./config.json when present
- * (repo-local setups keep working) → the user-level default. The returned path
- * may not exist yet — first-run detection checks that separately.
+ * Where the config lives — a pure function of the environment, never of the
+ * working directory or argv (split-queue incident, 2026-08-01): the canonical
+ * ~/.junco/config.json, falling back to the legacy XDG path only while the
+ * canonical file does not exist. The returned path may not exist — first-run
+ * detection checks that separately.
  */
-export function resolveConfigPath(
-  explicit: string | undefined,
-  deps: ResolveConfigDeps = {},
-): string {
+export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
   const existsFn = deps.existsFn ?? existsSync;
-  const cwd = deps.cwd ?? ((): string => process.cwd());
-  if (explicit) return resolve(cwd(), explicit);
-  const local = resolve(cwd(), "config.json");
-  if (existsFn(local)) return local;
-  return defaultUserConfigPath(deps.env ?? process.env);
+  const env = deps.env ?? process.env;
+  const canonical = defaultUserConfigPath(env);
+  if (existsFn(canonical)) return canonical;
+  const legacy = legacyConfigPath(env);
+  if (existsFn(legacy)) return legacy;
+  return canonical;
 }
 
 // junco's previously-hardcoded compat block (src/agent/session.ts), now the
@@ -299,7 +397,7 @@ export const ConfigSchema = z.object({
   botAccount: z
     .object({
       enabled: z.boolean().default(false),
-      configDir: z.string().min(1).default("~/.config/junco/gh"),
+      configDir: z.string().min(1).default(DEFAULT_BOT_GH_CONFIG_DIR),
     })
     .default({}),
 });
@@ -337,12 +435,73 @@ export function parseConfigFile(path: string): ConfigParsed {
   return ConfigSchema.parse(raw);
 }
 
+/** Result of the single-root ~/.junco probe (see `resolveDataRoot`). */
+export interface DataRootResolution {
+  dataDir: string;
+  dataLayout: "flat" | "v2";
+  legacyDataRoot: boolean;
+}
+
+/**
+ * The single-root ~/.junco probe (spec 2026-07-16 / 2026-08-03): given an
+ * already-normalized explicit override (or `undefined` when the config sets
+ * neither `dataDir` nor `observability.stateDir`), resolve the EFFECTIVE data
+ * root exactly as `assembleConfig` does. Extracted so callers that need to
+ * PREVIEW the resolution without a full `ConfigParsed` — the setup wizard
+ * must display the root the daemon will actually use even before it has
+ * written a config — reuse this probe instead of re-deriving it (the trap
+ * that would otherwise repeat resolveBotGhConfigDir's own split-brain
+ * warning: two entry points quietly disagreeing about where something
+ * lives).
+ *
+ * `explicitRoot === undefined`: a defaulted root prefers the canonical
+ * `~/.junco`, but while `~/.junco` holds no data tree and the pre-0.10
+ * `~/.local/state/junco` root exists, keep resolving to the legacy root
+ * UNTOUCHED — `junco data migrate` is the only thing that relocates live
+ * data. A root adopted via that fallback is BY DEFINITION a pre-0.10 tree
+ * (the fallback only fires while `~/.junco` holds no tree AND the legacy
+ * root exists — a v2 tree can't live at the legacy path before `junco data
+ * migrate` ships in P2.T5), so its layout is forced "flat" rather than
+ * trusting `layoutOf`'s marker probe: a legacy root that predates #194
+ * (transcripts disabled, TUI never run, no worktrees/clones under dataDir)
+ * or that exists but was never populated can hold none of `layoutOf`'s six
+ * markers, and `layoutOf`'s marker-less default is "v2" — which would then
+ * have startup's migrateStateTree (daemon.ts) relocate this root's
+ * pre-unification dirs into data/-shaped destinations before any operator
+ * ever ran `junco data migrate`, violating this branch's safety property
+ * that nothing else relocates live data. Explicit-dataDir and canonical
+ * (~/.junco) resolutions are unaffected — they still probe.
+ */
+export function resolveDataRoot(
+  explicitRoot: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+  existsFn: (p: string) => boolean = existsSync,
+): DataRootResolution {
+  let dataDir: string;
+  let legacyDataRoot = false;
+  if (explicitRoot !== undefined) {
+    dataDir = expandHome(explicitRoot);
+  } else {
+    const canonical = juncoHome(env);
+    const legacyRoot = join(homeOf(env), ".local", "state", "junco");
+    if (!dataRootHasTree(canonical, existsFn) && existsFn(legacyRoot)) {
+      dataDir = legacyRoot;
+      legacyDataRoot = true;
+    } else {
+      dataDir = canonical;
+    }
+  }
+  const dataLayout = legacyDataRoot ? "flat" : layoutOf(dataDir, existsFn);
+  return { dataDir, dataLayout, legacyDataRoot };
+}
+
 /** Assemble the flat runtime `Config` from the parsed (nested, camelCase,
  * defaulted) schema output — expanding `~` in path fields and deriving the
  * github cross-field defaults (askLabel, externalReposRoot). */
 export function assembleConfig(
   d: ConfigParsed,
   env: Record<string, string | undefined> = process.env,
+  deps: { existsFn?: (p: string) => boolean } = {},
 ): Config {
   const baseUrlExplicit = d.model.baseUrl !== undefined;
   const eligible = catalogEligible({ source: d.model.source, id: d.model.id, baseUrlExplicit });
@@ -362,16 +521,31 @@ export function assembleConfig(
   const nVault = norm(d.vaultRoot);
   const nWorktree = norm(d.git.worktreeRoot);
   const nExternal = norm(d.github.externalReposRoot);
-  const dataDir = expandHome(nStateDir ?? d.dataDir ?? "~/.local/state/junco");
+  const existsFn = deps.existsFn ?? existsSync;
+  // Single-root ~/.junco: see resolveDataRoot's doc comment for the full
+  // fallback rationale.
+  const explicitRoot = nStateDir ?? d.dataDir;
+  const { dataDir, dataLayout, legacyDataRoot } = resolveDataRoot(explicitRoot, env, existsFn);
   const queueRoot = nVault ? join(expandHome(nVault), d.juncoSubdir) : join(dataDir, "queue");
+  // Bot gh config dir: same single-root move as dataDir above, but resolved
+  // through the shared resolveBotGhConfigDir (authCmd.ts/wizard.ts call the
+  // same function so all three entrypoints agree — see its doc comment).
+  const { dir: ghConfigDir, legacy: legacyGhDir } = resolveBotGhConfigDir(
+    d.botAccount.configDir,
+    env,
+    existsFn,
+  );
   const legacy = {
     vaultRoot: nVault !== undefined,
     stateDir: nStateDir !== undefined,
     worktreeRoot: nWorktree !== undefined,
     externalReposRoot: nExternal !== undefined,
+    dataRoot: legacyDataRoot,
+    ghConfigDir: legacyGhDir,
   };
   return {
     dataDir,
+    dataLayout,
     queueRoot,
     legacy,
     updateCheck: d.updateCheck,
@@ -424,7 +598,9 @@ export function assembleConfig(
     ghBin: d.git.ghBin,
     defaultBaseBranch: d.git.defaultBaseBranch,
     branchPrefix: d.git.branchPrefix,
-    worktreeRoot: nWorktree ? expandHome(nWorktree) : join(dataDir, "worktrees"),
+    worktreeRoot: nWorktree
+      ? expandHome(nWorktree)
+      : join(dataDir, dataLayout === "v2" ? "cache/worktrees" : "worktrees"),
     removeWorktreeOnSuccess: d.git.removeWorktreeOnSuccess,
     allowedRepoRoots: d.git.allowedRepoRoots.map(expandHome),
     draftByDefault: d.pr.draftByDefault,
@@ -451,7 +627,9 @@ export function assembleConfig(
       pollIntervalSeconds: d.github.pollIntervalSeconds,
       requireApproval: d.github.requireApproval,
       plannerModelId: d.github.plannerModelId ?? null,
-      externalReposRoot: nExternal ? expandHome(nExternal) : join(dataDir, "clones", "external"),
+      externalReposRoot: nExternal
+        ? expandHome(nExternal)
+        : join(dataDir, dataLayout === "v2" ? "cache/clones/external" : "clones/external"),
       repos: d.github.repos.map((r) => ({ nwo: r.nwo, path: expandHome(r.path) })),
     },
     assess: {
@@ -469,7 +647,7 @@ export function assembleConfig(
     },
     botAccount: {
       enabled: d.botAccount.enabled,
-      configDir: expandHome(d.botAccount.configDir),
+      configDir: ghConfigDir,
     },
   };
 }
@@ -526,6 +704,16 @@ export function configDeprecations(cfg: Config): string[] {
       "config: github.externalReposRoot is deprecated — remove the key; external clones " +
         "re-clone under <dataDir>/clones/external on next use (or move them there first) " +
         "(docs/configuration.md)",
+    );
+  if (cfg.legacy.dataRoot)
+    out.push(
+      "config: data lives at the legacy ~/.local/state/junco root — " +
+        "run 'junco data migrate' to move it under ~/.junco (docs/configuration.md)",
+    );
+  if (cfg.legacy.ghConfigDir)
+    out.push(
+      "config: bot gh credentials live at the legacy ~/.config/junco/gh — " +
+        "run 'junco data migrate' to move them to ~/.junco/gh",
     );
   return out;
 }

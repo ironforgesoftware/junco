@@ -21,7 +21,7 @@ import { endpointReachable, makeCachedProbe } from "../health.js";
 import { queuePaths } from "../config.js";
 import { makeQueueSnapshotFn, type QueueSnapshot } from "./queueSnapshot.js";
 import { listOpsFrom, outboxPaths, type StoredOp } from "../githubOutbox.js";
-import { CLONES_WATCHED_SUBDIR } from "../dataTree.js";
+import { dataTreePaths } from "../dataTree.js";
 import { fetchHealthBody, type HealthBody } from "./healthBody.js";
 
 export { fetchHealthBody, type HealthBody } from "./healthBody.js";
@@ -140,8 +140,7 @@ export function collectRepoCandidates(cfg: Config, deps: LocalSnapshotDeps = {})
     add({ path: e.path, source: "watchlist", nwoHint: e.nwo });
   }
   for (const c of walkOwnerName(cfg.github.externalReposRoot, "external", readdirFn)) add(c);
-  for (const c of walkOwnerName(join(cfg.dataDir, CLONES_WATCHED_SUBDIR), "clone", readdirFn))
-    add(c);
+  for (const c of walkOwnerName(dataTreePaths(cfg).clonesWatched, "clone", readdirFn)) add(c);
   return out;
 }
 

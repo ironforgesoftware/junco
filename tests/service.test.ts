@@ -13,7 +13,6 @@ import { renderLaunchdPlist, renderSystemdUnit, renderService } from "../src/ser
 
 const BASE_OPTS = {
   cliEntry: "/x/dist/cli.js",
-  configPath: "/x/config.json",
   nodeBin: "/usr/bin/node",
   label: "com.junco.test",
   logDir: "/x/logs",
@@ -41,14 +40,9 @@ describe("renderLaunchdPlist", () => {
     expect(out).toContain("<string>start</string>");
   });
 
-  it("includes '--config' in ProgramArguments", () => {
+  it("does not render --config (config resolves from the environment)", () => {
     const out = renderLaunchdPlist(BASE_OPTS);
-    expect(out).toContain("<string>--config</string>");
-  });
-
-  it("includes configPath in ProgramArguments", () => {
-    const out = renderLaunchdPlist(BASE_OPTS);
-    expect(out).toContain("<string>/x/config.json</string>");
+    expect(out).not.toContain("--config");
   });
 
   it("includes the Label", () => {
@@ -111,12 +105,12 @@ describe("renderLaunchdPlist", () => {
     expect(out).toContain(`<string>${process.execPath}</string>`);
   });
 
-  it("derives logDir from configPath dir when logDir omitted", () => {
+  it("derives logDir from home when logDir omitted", () => {
     const { logDir: _l, ...noLogDir } = BASE_OPTS;
-    const out = renderLaunchdPlist(noLogDir);
-    // configPath is /x/config.json → dir is /x → logs go to /x/launchd.out
-    expect(out).toContain("/x/launchd.out");
-    expect(out).toContain("/x/launchd.err");
+    const out = renderLaunchdPlist({ ...noLogDir, home: "/x" });
+    // home is /x → logs go to /x/.junco/logs/launchd.out
+    expect(out).toContain("<string>/x/.junco/logs/launchd.out</string>");
+    expect(out).toContain("/x/.junco/logs/launchd.err");
   });
 
   describe("XML escaping", () => {
@@ -143,11 +137,10 @@ describe("renderLaunchdPlist", () => {
 // ---------------------------------------------------------------------------
 
 describe("renderSystemdUnit", () => {
-  it("contains ExecStart with nodeBin cliEntry start --config configPath", () => {
+  it("contains ExecStart with nodeBin cliEntry start (no --config)", () => {
     const out = renderSystemdUnit(BASE_OPTS);
-    expect(out).toContain(
-      'ExecStart="/usr/bin/node" "/x/dist/cli.js" start --config "/x/config.json"',
-    );
+    expect(out).toContain('ExecStart="/usr/bin/node" "/x/dist/cli.js" start');
+    expect(out).not.toContain("--config");
   });
 
   it("contains Restart=on-failure", () => {
@@ -205,10 +198,9 @@ describe("renderSystemdUnit", () => {
       ...BASE_OPTS,
       nodeBin: "/opt/node runtime/bin/node",
       cliEntry: "/opt/junco app/dist/cli.js",
-      configPath: "/home/john doe/config.json",
     });
     expect(out).toContain(
-      'ExecStart="/opt/node runtime/bin/node" "/opt/junco app/dist/cli.js" start --config "/home/john doe/config.json"',
+      'ExecStart="/opt/node runtime/bin/node" "/opt/junco app/dist/cli.js" start',
     );
   });
 
@@ -230,11 +222,8 @@ describe("renderSystemdUnit", () => {
       ...BASE_OPTS,
       nodeBin: "/opt/$REL/bin/node",
       cliEntry: "/opt/app%2f/dist/cli.js",
-      configPath: "/home/u/cfg$1%.json",
     });
-    expect(out).toContain(
-      'ExecStart="/opt/$$REL/bin/node" "/opt/app%%2f/dist/cli.js" start --config "/home/u/cfg$$1%%.json"',
-    );
+    expect(out).toContain('ExecStart="/opt/$$REL/bin/node" "/opt/app%%2f/dist/cli.js" start');
   });
 
   it("escapes % but NOT $ in Environment values (systemd: $ literal, % is a specifier) (#79)", () => {

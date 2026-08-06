@@ -20,6 +20,17 @@ function tmp(): string {
   return mkdtempSync(join(tmpdir(), "junco-spend-"));
 }
 
+// makeSpendLedger now takes the spend FILE path itself (a caller passes
+// dataTreePaths(cfg).spendFile — dataTree.ts is the only place that joins
+// "spend.json" onto the data root), not the containing dir. Call shape only:
+// every asserted path/value below is unchanged from before this signature
+// change — `file` is exactly what `dir` used to have "spend.json" joined onto
+// internally.
+function tmpFile(): { dir: string; file: string } {
+  const dir = tmp();
+  return { dir, file: join(dir, "spend.json") };
+}
+
 // Local timestamps (NOT UTC) — mirrors the source's local-date discipline.
 const DAY1_NOON = new Date(2026, 6, 11, 12, 0, 0, 0).getTime(); // 2026-07-11 noon
 const DAY1_LATE = new Date(2026, 6, 11, 23, 59, 0, 0).getTime(); // 2026-07-11 23:59
@@ -27,23 +38,23 @@ const DAY2_EARLY = new Date(2026, 6, 12, 0, 0, 30, 0).getTime(); // 2026-07-12 0
 
 describe("makeSpendLedger", () => {
   it("todayUsd() is 0 when no file exists yet", () => {
-    const dir = tmp();
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const { file } = tmpFile();
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     expect(ledger.todayUsd()).toBe(0);
   });
 
   it("recordUsd accumulates across calls on the same local day", () => {
-    const dir = tmp();
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const { file } = tmpFile();
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     ledger.recordUsd(1.5);
     ledger.recordUsd(2.25);
     expect(ledger.todayUsd()).toBeCloseTo(3.75);
   });
 
   it("recordUsd(0) is a no-op — skips the write entirely, no warn", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     ledger.recordUsd(0);
     expect(existsSync(join(dir, "spend.json"))).toBe(false);
     expect(ledger.todayUsd()).toBe(0);
@@ -51,9 +62,9 @@ describe("makeSpendLedger", () => {
   });
 
   it("recordUsd(NaN) must NOT zero the day: prior total survives, file stays valid, warn fires", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     ledger.recordUsd(47);
 
     ledger.recordUsd(NaN); // one bad SDK float
@@ -68,9 +79,9 @@ describe("makeSpendLedger", () => {
   });
 
   it("recordUsd(Infinity) is rejected the same way: total survives, warn fires", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     ledger.recordUsd(47);
 
     ledger.recordUsd(Infinity);
@@ -83,9 +94,9 @@ describe("makeSpendLedger", () => {
   });
 
   it("recordUsd(-5) is silently skipped — no refund semantics, no write, no warn", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     ledger.recordUsd(3);
     const before = readFileSync(join(dir, "spend.json"), "utf8");
 
@@ -97,8 +108,8 @@ describe("makeSpendLedger", () => {
   });
 
   it("persists to spend.json under the state dir in the documented shape", () => {
-    const dir = tmp();
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const { dir, file } = tmpFile();
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     ledger.recordUsd(4.2);
     const raw = JSON.parse(readFileSync(join(dir, "spend.json"), "utf8")) as {
       date: string;
@@ -109,9 +120,9 @@ describe("makeSpendLedger", () => {
   });
 
   it("a read after the clock crosses midnight reports 0 WITHOUT writing", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     let now = DAY1_LATE;
-    const ledger = makeSpendLedger(dir, { now: () => now });
+    const ledger = makeSpendLedger(file, { now: () => now });
     ledger.recordUsd(5);
     const before = readFileSync(join(dir, "spend.json"), "utf8");
 
@@ -123,9 +134,9 @@ describe("makeSpendLedger", () => {
   });
 
   it("recordUsd after midnight rolls over instead of accumulating onto the old day", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     let now = DAY1_LATE;
-    const ledger = makeSpendLedger(dir, { now: () => now });
+    const ledger = makeSpendLedger(file, { now: () => now });
     ledger.recordUsd(5);
 
     now = DAY2_EARLY;
@@ -141,25 +152,25 @@ describe("makeSpendLedger", () => {
   });
 
   it("corrupt JSON file → 0, never throws", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "spend.json"), "{ not json", "utf8");
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     expect(() => ledger.todayUsd()).not.toThrow();
     expect(ledger.todayUsd()).toBe(0);
   });
 
   it("missing/malformed shape (wrong types) → 0, never throws", () => {
-    const dir = tmp();
+    const { dir, file } = tmpFile();
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "spend.json"), JSON.stringify({ date: 42, usd: "nope" }), "utf8");
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     expect(ledger.todayUsd()).toBe(0);
   });
 
   it("unreadable file (fs throws) → 0, never throws", () => {
-    const dir = tmp();
-    const ledger = makeSpendLedger(dir, {
+    const { file } = tmpFile();
+    const ledger = makeSpendLedger(file, {
       now: () => DAY1_NOON,
       readFileFn: () => {
         throw new Error("boom: permission denied");
@@ -170,12 +181,11 @@ describe("makeSpendLedger", () => {
   });
 
   it("uses the watchlist.ts atomic discipline: writeFileFn gets the .tmp path, renameFn moves it into place", () => {
-    const dir = tmp();
-    const file = join(dir, "spend.json");
+    const { file } = tmpFile();
     const writeFileFn = vi.fn(writeFileSync);
     const renameFn = vi.fn(renameSync);
     const mkdirFn = vi.fn(mkdirSync);
-    const ledger = makeSpendLedger(dir, {
+    const ledger = makeSpendLedger(file, {
       now: () => DAY1_NOON,
       writeFileFn,
       renameFn,
@@ -195,20 +205,20 @@ describe("makeSpendLedger", () => {
   });
 
   it("nextMidnightMs() is the start of the next LOCAL day per the injected clock", () => {
-    const dir = tmp();
-    const ledger = makeSpendLedger(dir, { now: () => DAY1_NOON });
+    const { file } = tmpFile();
+    const ledger = makeSpendLedger(file, { now: () => DAY1_NOON });
     expect(ledger.nextMidnightMs()).toBe(new Date(2026, 6, 12, 0, 0, 0, 0).getTime());
   });
 
   it("nextMidnightMs() just after midnight is the FOLLOWING midnight, not the one just passed", () => {
-    const dir = tmp();
-    const ledger = makeSpendLedger(dir, { now: () => DAY2_EARLY });
+    const { file } = tmpFile();
+    const ledger = makeSpendLedger(file, { now: () => DAY2_EARLY });
     expect(ledger.nextMidnightMs()).toBe(new Date(2026, 6, 13, 0, 0, 0, 0).getTime());
   });
 
   it("defaults now() to Date.now when no clock is injected", () => {
-    const dir = tmp();
-    const ledger = makeSpendLedger(dir);
+    const { file } = tmpFile();
+    const ledger = makeSpendLedger(file);
     expect(ledger.todayUsd()).toBe(0);
     expect(ledger.nextMidnightMs()).toBeGreaterThan(Date.now());
   });

@@ -10,7 +10,7 @@
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./types.js";
-import { HISTORY_SUBDIR } from "./dataTree.js";
+import { dataTreePaths } from "./dataTree.js";
 import { log } from "./logging.js";
 
 export interface TaskRecord {
@@ -38,7 +38,7 @@ export interface TaskHistoryDeps {
 }
 
 export function historyDir(cfg: Config): string {
-  return join(cfg.dataDir, HISTORY_SUBDIR);
+  return dataTreePaths(cfg).history;
 }
 
 /** Shard basename for a record stamp: UTC month straight off the ISO string. */

@@ -7,9 +7,15 @@ import {
   queuePaths,
   resolveConfigPath,
   defaultUserConfigPath,
+  juncoHome,
+  homeOf,
+  layoutOf,
+  dataRootHasTree,
+  legacyConfigPath,
   isLoopbackHost,
   resolveApiKey,
   assembleConfig,
+  resolveDataRoot,
   ConfigSchema,
   expandHome,
   configDeprecations,
@@ -80,16 +86,26 @@ describe("loadConfig (JSON)", () => {
   });
 
   it("expands ~ in path fields and derives github cross-field defaults", () => {
-    const cfg = loadConfig(
-      writeJson({
+    // existsFn: () => false — hermetic. "/state" is an explicit-but-fresh
+    // root; without this the test runs against real existsSync, and the
+    // expected value depends on whether the machine running the suite
+    // happens to have a "/state" directory (same class of hazard
+    // tests/doctor.test.ts's synthetic-path convention (#199.3) exists to
+    // avoid — a real /tmp/junco-state hit this exact assertion in review).
+    const cfg = assembleConfig(
+      ConfigSchema.parse({
         vaultRoot: "~/LegacyVault",
         observability: { stateDir: "/state" },
         github: { enabled: true, triggerLabel: "bot" },
       }),
+      {},
+      { existsFn: () => false },
     );
     expect(cfg.queueRoot).not.toContain("~");
     expect(cfg.github.askLabel).toBe("bot:ask");
-    expect(cfg.github.externalReposRoot).toBe("/state/clones/external");
+    // "/state" is a fresh (never-created) root — the layout flip defaults it
+    // to v2 (cache/clones/external), same as any never-before-seen dataDir.
+    expect(cfg.github.externalReposRoot).toBe("/state/cache/clones/external");
     expect(cfg.github.plannerModelId).toBeNull();
   });
 
@@ -280,11 +296,17 @@ describe("loadConfig (JSON)", () => {
   });
 
   it("resilience + observability + concurrency defaults", () => {
-    const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
+    // existsFn: () => false — a fresh machine with neither ~/.junco nor the
+    // legacy ~/.local/state/junco root, so dataDir defaults to ~/.junco.
+    const cfg = assembleConfig(
+      ConfigSchema.parse({ vaultRoot: "/v" }),
+      {},
+      { existsFn: () => false },
+    );
     expect(cfg.maxTransientRetries).toBe(2);
     expect(cfg.retryBackoffSeconds).toBe(60);
     expect(cfg.maxConcurrent).toBe(1);
-    expect(cfg.dataDir).toBe(join(homedir(), ".local/state/junco"));
+    expect(cfg.dataDir).toBe(join(homedir(), ".junco"));
     expect(cfg.logToFile).toBe(true);
     expect(cfg.transcriptsEnabled).toBe(true);
     expect(cfg.allowedRepoRoots).toEqual([]);
@@ -371,9 +393,166 @@ describe("loadConfig (JSON)", () => {
   });
 });
 
+describe("dataDir default + legacy-root fallback (single-root ~/.junco)", () => {
+  const env = { HOME: "/h" };
+
+  it("defaults dataDir to ~/.junco with a v2 layout on a fresh machine", () => {
+    const cfg = assembleConfig(ConfigSchema.parse({}), env, { existsFn: () => false });
+    expect(cfg.dataDir).toBe("/h/.junco");
+    expect(cfg.dataLayout).toBe("v2");
+    expect(cfg.legacy.dataRoot).toBe(false);
+    expect(cfg.queueRoot).toBe("/h/.junco/queue");
+    expect(cfg.worktreeRoot).toBe("/h/.junco/cache/worktrees");
+  });
+
+  it("falls back to ~/.local/state/junco while it exists and ~/.junco has no tree", () => {
+    // Scoped to the LEGACY root's own transcripts subdir (a flat marker) —
+    // NOT a loose endsWith, which would also match "/h/.junco/transcripts"
+    // while probing the canonical root and spuriously mark it as holding a
+    // tree.
+    const existsFn = (p: string) =>
+      p === "/h/.local/state/junco" || p === "/h/.local/state/junco/transcripts";
+    const cfg = assembleConfig(ConfigSchema.parse({}), env, { existsFn });
+    expect(cfg.dataDir).toBe("/h/.local/state/junco");
+    expect(cfg.dataLayout).toBe("flat");
+    expect(cfg.legacy.dataRoot).toBe(true);
+    expect(cfg.worktreeRoot).toBe("/h/.local/state/junco/worktrees");
+  });
+
+  it("a legacy-fallback root with NO recognized flat marker still resolves flat (I1 ruling)", () => {
+    // Only the legacy root ITSELF exists — none of layoutOf's six markers
+    // (queue/data/cache/transcripts/history for hasTree; the flat-marker set
+    // for layoutOf) are present. This is the pre-#194 / never-populated-root
+    // case: layoutOf alone would call this "v2" (marker-less default), and
+    // startup's migrateStateTree would then relocate this root's
+    // pre-unification dirs into data/-shaped destinations before any
+    // operator ever ran `junco data migrate` — the exact hole this ruling
+    // closes. legacyDataRoot === true is definitional: a v2 tree cannot live
+    // at the legacy path (P2.T5 hasn't shipped the migrate-to-v2 move yet),
+    // so the fallback forces "flat" outright rather than trusting the probe.
+    const existsFn = (p: string) => p === "/h/.local/state/junco";
+    const cfg = assembleConfig(ConfigSchema.parse({}), env, { existsFn });
+    expect(cfg.dataDir).toBe("/h/.local/state/junco");
+    expect(cfg.legacy.dataRoot).toBe(true);
+    expect(cfg.dataLayout).toBe("flat");
+    // And the derived paths follow: no data/cache/logs prefix.
+    expect(cfg.worktreeRoot).toBe("/h/.local/state/junco/worktrees");
+  });
+
+  it("prefers ~/.junco once it holds a tree, even while the legacy root lingers", () => {
+    const existsFn = (p: string) =>
+      p === "/h/.junco/queue" || p === "/h/.junco/data" || p === "/h/.local/state/junco";
+    const cfg = assembleConfig(ConfigSchema.parse({}), env, { existsFn });
+    expect(cfg.dataDir).toBe("/h/.junco");
+    expect(cfg.dataLayout).toBe("v2");
+    expect(cfg.legacy.dataRoot).toBe(false);
+  });
+
+  it("an explicit dataDir is honored with its detected layout, no fallback probing", () => {
+    const existsFn = (p: string) => p === "/custom/history"; // flat marker
+    const cfg = assembleConfig(ConfigSchema.parse({ dataDir: "/custom" }), env, { existsFn });
+    expect(cfg.dataDir).toBe("/custom");
+    expect(cfg.dataLayout).toBe("flat");
+    expect(cfg.legacy.dataRoot).toBe(false);
+  });
+
+  it("legacy.dataRoot triggers a 'junco data migrate' deprecation hint", () => {
+    const existsFn = (p: string) => p === "/h/.local/state/junco";
+    const cfg = assembleConfig(ConfigSchema.parse({}), env, { existsFn });
+    const warns = configDeprecations(cfg);
+    expect(warns.some((w) => w.includes("junco data migrate") && w.includes("~/.junco"))).toBe(
+      true,
+    );
+  });
+});
+
+describe("resolveDataRoot (the standalone probe assembleConfig and the wizard both call)", () => {
+  const env = { HOME: "/h" };
+
+  it("mirrors assembleConfig's own resolution for a fresh machine", () => {
+    const r = resolveDataRoot(undefined, env, () => false);
+    expect(r).toEqual({ dataDir: "/h/.junco", dataLayout: "v2", legacyDataRoot: false });
+  });
+
+  it("mirrors assembleConfig's legacy-fallback branch", () => {
+    const existsFn = (p: string) => p === "/h/.local/state/junco";
+    const r = resolveDataRoot(undefined, env, existsFn);
+    expect(r).toEqual({
+      dataDir: "/h/.local/state/junco",
+      dataLayout: "flat",
+      legacyDataRoot: true,
+    });
+  });
+
+  it("an explicit root is honored verbatim, probe-free (no legacyDataRoot flag)", () => {
+    const existsFn = (p: string) => p === "/custom/history"; // flat marker
+    const r = resolveDataRoot("/custom", env, existsFn);
+    expect(r).toEqual({ dataDir: "/custom", dataLayout: "flat", legacyDataRoot: false });
+  });
+});
+
+describe("homeOf", () => {
+  it("env.HOME (trimmed, non-empty) wins over os.homedir()", () => {
+    expect(homeOf({ HOME: "/h" })).toBe("/h");
+    expect(homeOf({})).toBe(homedir());
+    expect(homeOf({ HOME: "  " })).toBe(homedir());
+  });
+});
+
+describe("dataRootHasTree", () => {
+  it("true when queue/data/cache/transcripts/history is present, false otherwise", () => {
+    expect(dataRootHasTree("/r", () => false)).toBe(false);
+    expect(dataRootHasTree("/r", (p) => p === "/r/queue")).toBe(true);
+    expect(dataRootHasTree("/r", (p) => p === "/r/data")).toBe(true);
+    expect(dataRootHasTree("/r", (p) => p === "/r/cache")).toBe(true);
+    expect(dataRootHasTree("/r", (p) => p === "/r/transcripts")).toBe(true);
+    expect(dataRootHasTree("/r", (p) => p === "/r/history")).toBe(true);
+    // config.json/gh alone do NOT count.
+    expect(dataRootHasTree("/r", (p) => p === "/r/config.json" || p === "/r/gh")).toBe(false);
+  });
+});
+
+describe("layoutOf", () => {
+  it("data/ or cache/ present → v2", () => {
+    expect(layoutOf("/r", (p) => p === "/r/data")).toBe("v2");
+    expect(layoutOf("/r", (p) => p === "/r/cache")).toBe("v2");
+  });
+
+  it("a flat marker (transcripts|history|clones|worktrees|assess-history|github-cache) → flat", () => {
+    for (const marker of [
+      "transcripts",
+      "history",
+      "clones",
+      "worktrees",
+      "assess-history",
+      "github-cache",
+    ]) {
+      expect(layoutOf("/r", (p) => p === `/r/${marker}`)).toBe("flat");
+    }
+  });
+
+  it("nothing present → v2 (fresh roots get the final shape)", () => {
+    expect(layoutOf("/r", () => false)).toBe("v2");
+  });
+
+  it("queue/review/watchlist.json are NOT markers — identical in both layouts", () => {
+    expect(
+      layoutOf("/r", (p) => p === "/r/queue" || p === "/r/review" || p === "/r/watchlist.json"),
+    ).toBe("v2");
+  });
+});
+
 describe("[github] config section", () => {
   it("defaults: disabled, junco labels, 60s poll, no repos", () => {
-    const cfg = loadConfig(writeJson({ vaultRoot: "/tmp/v" }));
+    // Fresh machine (existsFn: () => false): dataDir defaults to ~/.junco
+    // (v2 layout), so externalReposRoot picks up the cache/ prefix.
+    const cfg = assembleConfig(
+      ConfigSchema.parse({ vaultRoot: "/tmp/v" }),
+      {},
+      {
+        existsFn: () => false,
+      },
+    );
     expect(cfg.github).toEqual({
       enabled: false,
       triggerLabel: "junco",
@@ -382,7 +561,7 @@ describe("[github] config section", () => {
       repos: [],
       requireApproval: true,
       plannerModelId: null,
-      externalReposRoot: join(homedir(), ".local/state/junco/clones/external"),
+      externalReposRoot: join(homedir(), ".junco/cache/clones/external"),
     });
   });
 
@@ -437,10 +616,23 @@ describe("[github] config section", () => {
 
 describe("github.externalReposRoot", () => {
   it("defaults to <dataDir>/clones/external", () => {
-    const cfg = loadConfig(
-      writeJson({ vaultRoot: "/tmp/vault", observability: { stateDir: "/tmp/junco-state" } }),
+    // existsFn: () => false — hermetic (see the identical rationale on
+    // "expands ~ in path fields..." above; proven against the committed code
+    // in review: `mkdir -p /tmp/junco-state/transcripts` flips this
+    // assertion under real existsSync).
+    const cfg = assembleConfig(
+      ConfigSchema.parse({
+        vaultRoot: "/tmp/vault",
+        observability: { stateDir: "/tmp/junco-state" },
+      }),
+      {},
+      { existsFn: () => false },
     );
-    expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/clones/external");
+    // "/tmp/junco-state" is a fresh (never-created) explicit root — the
+    // layout flip defaults it to v2 (cache/clones/external) too: an explicit
+    // dataDir/stateDir is honored with its DETECTED layout, and a marker-less
+    // root detects as v2.
+    expect(cfg.github.externalReposRoot).toBe("/tmp/junco-state/cache/clones/external");
   });
 
   it("expands ~ in an explicit value", () => {
@@ -498,9 +690,14 @@ describe("[assess] config section", () => {
 
 describe("botAccount config", () => {
   it("defaults to disabled with the standard config dir", () => {
-    const cfg = assembleConfig(ConfigSchema.parse({ vaultRoot: "/tmp/v" }));
+    // existsFn: () => false — deterministic regardless of what the machine
+    // running the suite actually has on disk (see the legacy-gh-login test
+    // below, which deliberately exercises the opposite).
+    const cfg = assembleConfig(ConfigSchema.parse({ vaultRoot: "/tmp/v" }), process.env, {
+      existsFn: () => false,
+    });
     expect(cfg.botAccount.enabled).toBe(false);
-    expect(cfg.botAccount.configDir).toBe(expandHome("~/.config/junco/gh"));
+    expect(cfg.botAccount.configDir).toBe(expandHome("~/.junco/gh"));
     expect(cfg.ghAuth).toBeUndefined();
   });
 
@@ -513,6 +710,19 @@ describe("botAccount config", () => {
     );
     expect(cfg.botAccount.enabled).toBe(true);
     expect(cfg.botAccount.configDir).toBe(expandHome("~/custom/gh"));
+  });
+
+  it("bot gh configDir defaults to ~/.junco/gh on a fresh machine", () => {
+    const cfg = assembleConfig(ConfigSchema.parse({}), { HOME: "/h" }, { existsFn: () => false });
+    expect(cfg.botAccount.configDir).toBe("/h/.junco/gh");
+    expect(cfg.legacy.ghConfigDir).toBe(false);
+  });
+
+  it("keeps a live legacy gh login until migrated", () => {
+    const existsFn = (p: string) => p === "/h/.config/junco/gh/hosts.yml";
+    const cfg = assembleConfig(ConfigSchema.parse({}), { HOME: "/h" }, { existsFn });
+    expect(cfg.botAccount.configDir).toBe("/h/.config/junco/gh");
+    expect(cfg.legacy.ghConfigDir).toBe(true);
   });
 });
 
@@ -537,39 +747,38 @@ describe("isLoopbackHost (#44)", () => {
   });
 });
 
-describe("resolveConfigPath / defaultUserConfigPath", () => {
-  it("defaults to config.json under XDG", () => {
-    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
+describe("resolveConfigPath / juncoHome / legacyConfigPath", () => {
+  it("juncoHome anchors to env.HOME and falls back to os.homedir()", () => {
+    expect(juncoHome({ HOME: "/h" })).toBe("/h/.junco");
+    expect(juncoHome({})).toBe(join(homedir(), ".junco"));
+    expect(juncoHome({ HOME: "  " })).toBe(join(homedir(), ".junco"));
   });
 
-  it("prefers ./config.json when present", () => {
-    expect(
-      resolveConfigPath(undefined, {
-        existsFn: (p) => p.endsWith("config.json"),
-        cwd: () => "/w",
-      }),
-    ).toBe("/w/config.json");
+  it("canonical config path is ~/.junco/config.json", () => {
+    expect(defaultUserConfigPath({ HOME: "/h" })).toBe("/h/.junco/config.json");
   });
 
-  it("explicit path wins, resolved against cwd", () => {
-    expect(resolveConfigPath("rel/c.json", { cwd: () => "/base" })).toBe("/base/rel/c.json");
-    expect(resolveConfigPath("/abs/c.json", { cwd: () => "/base" })).toBe("/abs/c.json");
+  it("resolution is cwd-independent — a cwd config.json can never win", () => {
+    // existsFn claiming EVERY path exists: the canonical still wins. There is
+    // no cwd seam left in ResolveConfigDeps for a cwd lookup to use.
+    expect(resolveConfigPath({ existsFn: () => true, env: { HOME: "/h" } })).toBe(
+      "/h/.junco/config.json",
+    );
   });
 
-  it("otherwise resolves the XDG user path", () => {
-    const p = resolveConfigPath(undefined, {
-      cwd: () => "/base",
-      existsFn: () => false,
-      env: { XDG_CONFIG_HOME: "/xdg" },
-    });
-    expect(p).toBe("/xdg/junco/config.json");
+  it("falls back to the legacy XDG path only while the canonical file is absent", () => {
+    const env = { HOME: "/h", XDG_CONFIG_HOME: "/xdg" };
+    expect(resolveConfigPath({ existsFn: (p) => p === "/xdg/junco/config.json", env })).toBe(
+      "/xdg/junco/config.json",
+    );
+    expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
   });
 
-  it("defaultUserConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {
-    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
-    expect(defaultUserConfigPath({})).toBe(join(homedir(), ".config/junco/config.json"));
-    expect(defaultUserConfigPath({ XDG_CONFIG_HOME: "  " })).toBe(
-      join(homedir(), ".config/junco/config.json"),
+  it("legacyConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {
+    expect(legacyConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
+    expect(legacyConfigPath({})).toBe(join(homedir(), ".config/junco/config.json"));
+    expect(legacyConfigPath({ XDG_CONFIG_HOME: "  ", HOME: "/h" })).toBe(
+      "/h/.config/junco/config.json",
     );
   });
 });
@@ -694,20 +903,26 @@ describe("worker.endpointProbe", () => {
 });
 
 describe("dataDir resolution (unified data root)", () => {
-  const XDG_DEFAULT = join(homedir(), ".local/state/junco");
-  const parse = (raw: object) => assembleConfig(ConfigSchema.parse(raw), {});
+  const FRESH_DEFAULT = join(homedir(), ".junco");
+  // existsFn: () => false — a fresh machine, deterministic regardless of
+  // what the machine running the suite actually has on disk (see homeOf).
+  const parse = (raw: object) =>
+    assembleConfig(ConfigSchema.parse(raw), {}, { existsFn: () => false });
 
-  it("defaults dataDir to ~/.local/state/junco and derives every root", () => {
+  it("defaults dataDir to ~/.junco with a v2 layout and derives every root", () => {
     const cfg = parse({});
-    expect(cfg.dataDir).toBe(XDG_DEFAULT);
-    expect(cfg.queueRoot).toBe(join(XDG_DEFAULT, "queue"));
-    expect(cfg.worktreeRoot).toBe(join(XDG_DEFAULT, "worktrees"));
-    expect(cfg.github.externalReposRoot).toBe(join(XDG_DEFAULT, "clones", "external"));
+    expect(cfg.dataDir).toBe(FRESH_DEFAULT);
+    expect(cfg.dataLayout).toBe("v2");
+    expect(cfg.queueRoot).toBe(join(FRESH_DEFAULT, "queue"));
+    expect(cfg.worktreeRoot).toBe(join(FRESH_DEFAULT, "cache/worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(FRESH_DEFAULT, "cache/clones/external"));
     expect(cfg.legacy).toEqual({
       vaultRoot: false,
       stateDir: false,
       worktreeRoot: false,
       externalReposRoot: false,
+      dataRoot: false,
+      ghConfigDir: false,
     });
   });
 
@@ -715,9 +930,10 @@ describe("dataDir resolution (unified data root)", () => {
     const cfg = parse({ dataDir: "~/jdata" });
     const root = join(homedir(), "jdata");
     expect(cfg.dataDir).toBe(root);
+    expect(cfg.dataLayout).toBe("v2"); // fresh (marker-less) explicit root
     expect(cfg.queueRoot).toBe(join(root, "queue"));
-    expect(cfg.worktreeRoot).toBe(join(root, "worktrees"));
-    expect(cfg.github.externalReposRoot).toBe(join(root, "clones", "external"));
+    expect(cfg.worktreeRoot).toBe(join(root, "cache/worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(root, "cache/clones/external"));
   });
 
   it("legacy vaultRoot/juncoSubdir wins the queue root only", () => {
@@ -755,10 +971,12 @@ describe("dataDir resolution (unified data root)", () => {
       stateDir: false,
       worktreeRoot: false,
       externalReposRoot: false,
+      dataRoot: false,
+      ghConfigDir: false,
     });
-    expect(cfg.dataDir).toBe(XDG_DEFAULT);
-    expect(cfg.queueRoot).toBe(join(XDG_DEFAULT, "queue"));
-    expect(cfg.worktreeRoot).toBe(join(XDG_DEFAULT, "worktrees"));
+    expect(cfg.dataDir).toBe(FRESH_DEFAULT);
+    expect(cfg.queueRoot).toBe(join(FRESH_DEFAULT, "queue"));
+    expect(cfg.worktreeRoot).toBe(join(FRESH_DEFAULT, "cache/worktrees"));
   });
 
   it("whitespace-only legacy path keys are unset too, including externalReposRoot (min(1) admits it) (#198)", () => {
@@ -772,9 +990,11 @@ describe("dataDir resolution (unified data root)", () => {
       stateDir: false,
       worktreeRoot: false,
       externalReposRoot: false,
+      dataRoot: false,
+      ghConfigDir: false,
     });
-    expect(cfg.worktreeRoot).toBe(join(XDG_DEFAULT, "worktrees"));
-    expect(cfg.github.externalReposRoot).toBe(join(XDG_DEFAULT, "clones", "external"));
+    expect(cfg.worktreeRoot).toBe(join(FRESH_DEFAULT, "cache/worktrees"));
+    expect(cfg.github.externalReposRoot).toBe(join(FRESH_DEFAULT, "cache/clones/external"));
   });
 
   it("configDeprecations names each set legacy key and is empty when clean", () => {

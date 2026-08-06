@@ -1,10 +1,12 @@
 /**
  * Per-day spend ledger — tracks USD spent "today" (LOCAL calendar day, per an
  * injected clock) for the budget gate's `until`. Backed by a single JSON file
- * under the state dir; same atomic-write discipline as the watchlist
- * (`src/watchlist.ts:22-77`): mkdir -p, sibling `.tmp`, rename. Read discipline
- * mirrors `readWatchlist` (`src/watchlist.ts:28-77`): missing/corrupt/stale
- * file never throws — it degrades to a fresh `{today, 0}` instead.
+ * (the FULL path is the caller's — a caller passes `dataTreePaths(cfg).spendFile`;
+ * dataTree.ts is the only place that joins "spend.json" onto the data root);
+ * same atomic-write discipline as the watchlist (`src/watchlist.ts:22-77`):
+ * mkdir -p, sibling `.tmp`, rename. Read discipline mirrors `readWatchlist`
+ * (`src/watchlist.ts:28-77`): missing/corrupt/stale file never throws — it
+ * degrades to a fresh `{today, 0}` instead.
  *
  * Input discipline: `recordUsd` accepts only finite, positive amounts.
  * Non-finite input (a bad upstream SDK float) is dropped with a warn —
@@ -13,7 +15,7 @@
  */
 
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname } from "node:path";
 import { log } from "./logging.js";
 
 export interface SpendLedgerDeps {
@@ -46,13 +48,12 @@ function localDateString(ms: number): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-export function makeSpendLedger(stateDir: string, deps: SpendLedgerDeps = {}): SpendLedger {
+export function makeSpendLedger(file: string, deps: SpendLedgerDeps = {}): SpendLedger {
   const now = deps.now ?? (() => Date.now());
   const readFileFn = deps.readFileFn ?? readFileSync;
   const writeFileFn = deps.writeFileFn ?? writeFileSync;
   const renameFn = deps.renameFn ?? renameSync;
   const mkdirFn = deps.mkdirFn ?? mkdirSync;
-  const file = join(stateDir, "spend.json");
 
   /** Never throws: missing → {today, 0}; corrupt/invalid shape → {today, 0};
    * stale day (rollover) → {today, 0} (watchlist read discipline,

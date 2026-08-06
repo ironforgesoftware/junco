@@ -1,18 +1,18 @@
 /**
  * Bot-account auth resolution (spec 2026-07-15-gh-bot-account-design.md).
  * The bot's credential is a normal `gh auth login` living in an ISOLATED
- * GH_CONFIG_DIR (default ~/.config/junco/gh) — gh owns token refresh; junco
- * only ever handles the dir path, never the token. Entrypoints call
- * withBotAuth() to attach the resolved GhAuthContext to Config; git.ts injects
- * it into child env (see ghAuthEnv).
+ * GH_CONFIG_DIR (default ~/.junco/gh, resolved by config.ts's
+ * resolveBotGhConfigDir — the single source of truth every entrypoint calls,
+ * so none of them can drift and plant a second hosts.yml) — gh owns token
+ * refresh; junco only ever handles the dir path, never the token.
+ * Entrypoints call withBotAuth() to attach the resolved GhAuthContext to
+ * Config; git.ts injects it into child env (see ghAuthEnv).
  */
 
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { defaultExec } from "./execProbe.js";
 import type { Config, GhAuthContext } from "./types.js";
-
-export const DEFAULT_GH_CONFIG_DIR = "~/.config/junco/gh";
 
 export interface GhAuthDeps {
   execFn?: (

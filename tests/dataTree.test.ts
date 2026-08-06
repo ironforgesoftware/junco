@@ -6,13 +6,17 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { dataTreePaths, ensureDataTree, sandboxDenyPaths } from "../src/dataTree.js";
+import { legacyConfigPath } from "../src/config.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
 /** Full-Config fixture (same shape as tests/daemon.test.ts's makeConfig) —
  * only dataDir/queueRoot/worktreeRoot/github.externalReposRoot/legacy matter
- * for these tests. */
+ * for these tests. Defaults to the flat layout: every existing test below
+ * predates the layout flip and asserts the pre-flip (flat) shape verbatim;
+ * pass `{ dataLayout: "v2" }` in overrides to exercise the v2 shape. */
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return baseConfig(
     {
@@ -28,6 +32,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       removeWorktreeOnSuccess: true,
     },
     {
+      dataLayout: "flat",
       healthPort: 0, // never binds (healthEnabled: false), so claim no real port
       planLintBlockOnError: true,
       planLintCheckLabels: true,
@@ -68,6 +73,7 @@ describe("dataTreePaths", () => {
     expect(p.transcripts).toBe("/sbxroot/data/transcripts");
     expect(p.watchlistFile).toBe("/sbxroot/data/watchlist.json");
     expect(p.migratedFile).toBe("/sbxroot/data/migrated.json");
+    expect(p.migrateLockFile).toBe("/sbxroot/data/migrate.lock");
   });
 
   it("registers update-check.json at the root and denies it to the sandbox", () => {
@@ -75,6 +81,42 @@ describe("dataTreePaths", () => {
     const p = dataTreePaths(cfg);
     expect(p.updateCheckFile).toBe("/sbxroot/data/update-check.json");
     expect(sandboxDenyPaths(cfg).files).toContain(p.updateCheckFile);
+  });
+
+  it("exposes githubCache and logsDir (flat: logs at the root)", () => {
+    const cfg = makeConfig({ dataDir: "/sbxroot/state" });
+    const p = dataTreePaths(cfg);
+    expect(p.githubCache).toBe("/sbxroot/state/github-cache");
+    expect(p.logsDir).toBe("/sbxroot/state");
+    expect(p.logFile).toBe(join(p.logsDir, "worker.log"));
+  });
+
+  it("v2 layout: data/cache/logs subtrees", () => {
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/home/.junco",
+      queueRoot: "/sbxroot/home/.junco/queue",
+      dataLayout: "v2",
+    });
+    const p = dataTreePaths(cfg);
+    expect(p.outbox).toBe("/sbxroot/home/.junco/data/outbox");
+    expect(p.transcripts).toBe("/sbxroot/home/.junco/data/transcripts");
+    expect(p.spendFile).toBe("/sbxroot/home/.junco/data/spend.json");
+    expect(p.clonesWatched).toBe("/sbxroot/home/.junco/cache/clones/watched");
+    expect(p.githubCache).toBe("/sbxroot/home/.junco/cache/github-cache");
+    expect(p.updateCheckFile).toBe("/sbxroot/home/.junco/cache/update-check.json");
+    expect(p.mirror).toBe("/sbxroot/home/.junco/cache/mirror");
+    expect(p.logFile).toBe("/sbxroot/home/.junco/logs/worker.log");
+    expect(p.logsDir).toBe("/sbxroot/home/.junco/logs");
+    expect(p.queue.inbox).toBe("/sbxroot/home/.junco/queue/inbox"); // unchanged at root
+    expect(p.watchlistFile).toBe("/sbxroot/home/.junco/watchlist.json");
+  });
+
+  it("flat layout keeps every 0.9 path byte-identical", () => {
+    const cfg = makeConfig({ dataDir: "/sbxroot/state", dataLayout: "flat" });
+    const p = dataTreePaths(cfg);
+    expect(p.outbox).toBe("/sbxroot/state/outbox");
+    expect(p.logFile).toBe("/sbxroot/state/worker.log");
+    expect(p.updateCheckFile).toBe("/sbxroot/state/update-check.json");
   });
 });
 
@@ -112,9 +154,48 @@ describe("sandboxDenyPaths", () => {
     const cfg = makeConfig({
       dataDir: "/sbxroot/data",
       queueRoot: "/sbxroot/vault/Junco",
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+        ghConfigDir: false,
+      },
     });
     expect(sandboxDenyPaths(cfg).dirs).toContain("/sbxroot/vault/Junco");
+  });
+
+  it("denies the daemon-private subtrees, the config file, and logs — never cache/ or the root", () => {
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/home/.junco",
+      queueRoot: "/sbxroot/home/.junco/queue",
+      dataLayout: "v2",
+    });
+    const deny = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
+    expect(deny.dirs).toEqual(
+      expect.arrayContaining([
+        "/sbxroot/home/.junco/queue",
+        "/sbxroot/home/.junco/review",
+        "/sbxroot/home/.junco/data/outbox",
+        "/sbxroot/home/.junco/data/transcripts",
+        "/sbxroot/home/.junco/cache/github-cache",
+        "/sbxroot/home/.junco/cache/mirror",
+        "/sbxroot/home/.junco/logs",
+      ]),
+    );
+    expect(deny.files).toContain("/sbxroot/home/.junco/config.json");
+    // I-3 (final review 2026-08-05): the legacy XDG config path is denied
+    // too, since an un-migrated machine's daemon actually reads it — the
+    // ACTIVE config, not the canonical one, may hold model.apiKey.
+    expect(deny.files).toContain(legacyConfigPath({ HOME: "/sbxroot/home" }));
+    // never an ancestor of the agent's writable roots (backend.ts:42-53 invariant):
+    for (const d of deny.dirs) {
+      expect("/sbxroot/home/.junco/cache/worktrees".startsWith(d + "/")).toBe(false);
+      expect("/sbxroot/home/.junco/cache/clones".startsWith(d + "/")).toBe(false);
+    }
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco");
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/cache");
   });
 });
 
@@ -156,12 +237,30 @@ describe("ensureDataTree", () => {
     expect(Object.keys(writes).length).toBe(before);
   });
 
+  it("mkdirs logs/ under a v2 layout so the first log write never races the directory", () => {
+    const made: string[] = [];
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/home/.junco",
+      queueRoot: "/sbxroot/home/.junco/queue",
+      dataLayout: "v2",
+    });
+    ensureDataTree(cfg, { mkdirFn: (d) => made.push(d), existsFn: () => false, writeFn: () => {} });
+    expect(made).toContain("/sbxroot/home/.junco/logs");
+  });
+
   it("does NOT create legacy-overridden roots outside dataDir", () => {
     const made: string[] = [];
     const cfg = makeConfig({
       dataDir: "/sbxroot/data",
       queueRoot: "/sbxroot/elsewhere/Junco",
-      legacy: { vaultRoot: true, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+        ghConfigDir: false,
+      },
     });
     ensureDataTree(cfg, { mkdirFn: (d) => made.push(d), existsFn: () => false, writeFn: () => {} });
     expect(made).toContain("/sbxroot/elsewhere/Junco/inbox"); // queue is still ensured (daemon needs it)

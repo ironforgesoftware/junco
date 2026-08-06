@@ -1,9 +1,13 @@
 /**
  * `junco restart` — restart the service unit supervising the daemon.
  *
- * Discovery is BY CONFIG PATH, not by name: the launchd plist (or systemd user
- * unit) whose invocation references the resolved config.json. This finds
- * custom labels and `junco service`-rendered defaults alike, with zero config.
+ * Discovery is BY CONFIG PATH for legacy units, not by name: the launchd
+ * plist (or systemd user unit) whose invocation references the resolved
+ * config.json. This finds custom labels and pre-0.10 `junco service`-rendered
+ * units alike, with zero config. 0.10+ units are flagless (no `--config`), so
+ * when no plist references the path, launchd falls back to a junco-ish
+ * invocation (a `start` verb plus some argument mentioning "junco"); systemd's
+ * existing single-unit fallback already covers the flagless case there.
  *
  * The restart verb matters: a launchd job with KeepAlive.SuccessfulExit=false
  * is NOT respawned after a graceful SIGTERM, so plain kill leaves the daemon
@@ -69,7 +73,7 @@ export async function discoverService(
 
   if (platform === "darwin") {
     const dir = join(home, "Library", "LaunchAgents");
-    const matches: string[] = [];
+    const parsed: Array<{ label: string; args: string[] }> = [];
     for (const name of (deps.readdirFn ?? defaultReaddir)(dir).filter((n) =>
       n.endsWith(".plist"),
     )) {
@@ -77,12 +81,24 @@ export async function discoverService(
       if (r.code !== 0) continue; // unreadable/binary-corrupt plist — keep scanning
       try {
         const j = JSON.parse(r.stdout) as { Label?: string; ProgramArguments?: string[] };
-        if (j.Label && Array.isArray(j.ProgramArguments) && j.ProgramArguments.includes(cfg)) {
-          matches.push(j.Label);
+        if (j.Label && Array.isArray(j.ProgramArguments)) {
+          parsed.push({ label: j.Label, args: j.ProgramArguments });
         }
       } catch {
         continue;
       }
+    }
+    // Exact config-path match first: pre-0.10 units carry `--config <path>`,
+    // and on a legacy multi-config machine it picks the right unit.
+    let matches = parsed.filter((p) => p.args.includes(cfg)).map((p) => p.label);
+    // 0.10+ units are flagless — fall back to a junco-ish invocation: a `start`
+    // verb plus some argument mentioning "junco" (the binary, an npm binstub,
+    // or a dist/cli.js path under the package dir always does; the Label can be
+    // customized, so it cannot be relied on).
+    if (matches.length === 0) {
+      matches = parsed
+        .filter((p) => p.args.includes("start") && p.args.some((a) => a.includes("junco")))
+        .map((p) => p.label);
     }
     if (matches.length === 0) return null;
     if (matches.length > 1 && deps.printFn) {
@@ -93,7 +109,9 @@ export async function discoverService(
     return { platform: "launchd", id: matches[0] };
   }
 
-  // systemd (linux + anything else with a user manager)
+  // systemd (linux + anything else with a user manager). The single-junco-unit
+  // fallback below (no path match, but exactly one `junco*` unit) already
+  // covers flagless units here — no separate heuristic needed.
   const list = await execFn("systemctl", [
     "--user",
     "list-unit-files",

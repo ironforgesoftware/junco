@@ -86,6 +86,14 @@ export interface LegacyPathFlags {
   stateDir: boolean;
   worktreeRoot: boolean;
   externalReposRoot: boolean;
+  /** True when dataDir resolved to the pre-0.10 `~/.local/state/junco` root
+   * via probe-based fallback (not an explicit dataDir/stateDir override) —
+   * drives the `junco data migrate` deprecation hint. */
+  dataRoot: boolean;
+  /** True when botAccount.configDir resolved to the pre-0.10
+   * `~/.config/junco/gh` root via hosts.yml liveness fallback (not an
+   * explicit override) — drives the `junco data migrate` deprecation hint. */
+  ghConfigDir: boolean;
 }
 export interface SandboxConfig {
   // Master switch. false = current behavior (no sandbox, full env, no jail).
@@ -106,6 +114,12 @@ export interface Config {
   /** Unified data root (spec 2026-07-16). Every junco path resolves under here
    * unless a legacy key overrides its subtree. */
   dataDir: string;
+  /** Which internal shape `dataDir` uses (single-root ~/.junco consolidation).
+   * "v2": data/, cache/, logs/ substructure (queue/review/watchlist stay at
+   * the root). "flat": the pre-0.10 shape, byte-identical forever — a
+   * pre-existing tree keeps it until `junco data migrate` relocates it. See
+   * `layoutOf`/`LAYOUTS` (dataTree.ts). */
+  dataLayout: "flat" | "v2";
   /** Resolved queue root: <vaultRoot>/<juncoSubdir> when legacy, else <dataDir>/queue. */
   queueRoot: string;
   /** npm update-check opt-out (default true). Optional so test fixtures that

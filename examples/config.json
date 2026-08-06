@@ -74,7 +74,6 @@
     "healthHost": "127.0.0.1",
     "healthPort": 8787,
     "logLevel": "info",
-    "stateDir": "~/.local/state/junco",
     "logToFile": true,
     "transcripts": true
   },

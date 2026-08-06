@@ -19,8 +19,9 @@ import {
   loadConfig,
   queuePaths,
   expandHome,
-  resolveConfigPath,
   validateConfigObject,
+  resolveBotGhConfigDir,
+  resolveDataRoot,
 } from "./config.js";
 import {
   defaultAnswers,
@@ -38,7 +39,7 @@ import { fetchModels, parseModelsJson } from "./wizard/models.js";
 import { listCatalogProviders, type CatalogEntry } from "./agent/session.js";
 import { NEXT_STEPS } from "./wizard/tips.js";
 import { getAtPath } from "./configLevers.js";
-import { detectBotLogin, runGhLogin, DEFAULT_GH_CONFIG_DIR } from "./ghAuth.js";
+import { detectBotLogin, runGhLogin } from "./ghAuth.js";
 
 export interface WizardDeps {
   detectDeps?: DetectDeps;
@@ -56,6 +57,9 @@ export interface WizardDeps {
   mkdirFn?: (path: string) => void;
   detectBotLoginFn?: typeof detectBotLogin;
   runGhLoginFn?: typeof runGhLogin;
+  /** Injected for the botGhConfigDir legacy-liveness probe (resolveBotGhConfigDir);
+   * defaults to process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 export type WizardIoResult =
@@ -109,8 +113,33 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
   const rawBotDir =
     raw !== null ? (getAtPath(raw, "botAccount.configDir") as string | undefined) : undefined;
   const rawGhBin = raw !== null ? (getAtPath(raw, "git.ghBin") as string | undefined) : undefined;
-  const botGhConfigDir = expandHome(rawBotDir ?? DEFAULT_GH_CONFIG_DIR);
+  // Same resolution assembleConfig uses (never re-derive the default here) —
+  // the dashboard-hosted Account chapter must target the SAME dir the daemon
+  // reads, or this plants a second hosts.yml (split-brain).
+  const { dir: botGhConfigDir } = resolveBotGhConfigDir(rawBotDir, deps.env, existsFn);
   const wizGhBin = rawGhBin ?? "gh";
+
+  // Same legacy-aware pattern as botGhConfigDir just above, for the data
+  // root: WizardAnswers.dataDir (answersFromConfig) stays the pure write-side
+  // sentinel ("~/.junco" when unset — see flow.ts's doc comment on that
+  // field), but the Workspace chapter needs the EFFECTIVE root assembleConfig
+  // will actually resolve to, which requires the same filesystem probe
+  // assembleConfig itself runs (resolveDataRoot) — this module is the IO-
+  // aware layer, so it's the only place that can do that probe. Presence
+  // check mirrors assembleConfig's own `nStateDir ?? d.dataDir` precedence;
+  // trim-empty is normalized the same way assembleConfig's local `norm`
+  // does (an explicitly-set-but-empty key counts as unset).
+  const normPath = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() !== "" ? v : undefined;
+  const explicitDataRoot =
+    raw !== null
+      ? (normPath(getAtPath(raw, "observability.stateDir")) ?? normPath(getAtPath(raw, "dataDir")))
+      : undefined;
+  const { dataDir: effectiveDataDir, legacyDataRoot: dataDirLegacyFallback } = resolveDataRoot(
+    explicitDataRoot,
+    deps.env,
+    existsFn,
+  );
 
   const io: WizardIO = {
     mode,
@@ -168,6 +197,8 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
       return { written, configPath: resolved, queueRoot, changes };
     },
     flightCheck: () => flightChecks(loadConfigFn(resolved), deps.detectDeps),
+    effectiveDataDir,
+    dataDirLegacyFallback,
     botGhConfigDir,
     detectBotLogin: () => (deps.detectBotLoginFn ?? detectBotLogin)(wizGhBin, botGhConfigDir),
     runGhLogin: () => (deps.runGhLoginFn ?? runGhLogin)(wizGhBin, botGhConfigDir),
@@ -177,12 +208,11 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
 }
 
 export function summary(configPath: string, queueRoot: string, wrote: boolean): string {
-  const flag = configPath === resolveConfigPath(undefined) ? "" : ` (--config ${configPath})`;
   const head = wrote ? `✓ Wrote config:  ${configPath}\n` : `✓ Config untouched: ${configPath}\n`;
   return (
     `\n${head}` +
     `✓ Queue ready:   ${queueRoot}/{inbox,processing,done,failed}\n\n` +
-    `Next steps${flag}:\n` +
+    `Next steps:\n` +
     NEXT_STEPS.map((s) => `  • ${s.cmd} — ${s.blurb}\n`).join("")
   );
 }

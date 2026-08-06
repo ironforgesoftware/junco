@@ -42,6 +42,7 @@ function cfg(root: string): Config {
       removeWorktreeOnSuccess: true,
     },
     {
+      dataLayout: "flat", // transcripts-dir assertions below are root-relative
       defaultTimeoutMinutes: 1, // short so timeout paths are reachable in-test
       planLintBlockOnError: true,
       planLintCheckLabels: true,

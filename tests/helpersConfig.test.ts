@@ -30,11 +30,14 @@ describe("makeConfig", () => {
     expect(c.branchPrefix).toBe("junco/");
     expect(c.defaultBaseBranch).toBe("main");
     expect(c.maxTransientRetries).toBe(2);
+    expect(c.dataLayout).toBe("v2");
     expect(c.legacy).toEqual({
       vaultRoot: false,
       stateDir: false,
       worktreeRoot: false,
       externalReposRoot: false,
+      dataRoot: false,
+      ghConfigDir: false,
     });
   });
 

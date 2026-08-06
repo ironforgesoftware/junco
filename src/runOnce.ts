@@ -27,6 +27,7 @@ import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
 import { transcriptPathFor } from "./slug.js";
+import { dataTreePaths } from "./dataTree.js";
 import {
   NOOP_REPORTER,
   outcomeFromPrFlow,
@@ -420,7 +421,7 @@ export async function executeClaimed(
         onProgress: (p) => metrics.setTaskProgress(next.id, p),
         onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
         transcriptPath: cfg.transcriptsEnabled
-          ? transcriptPathFor(cfg.dataDir, next.id)
+          ? transcriptPathFor(dataTreePaths(cfg).transcripts, next.id)
           : undefined,
       });
       // Record spend immediately, BEFORE any classification/requeue logic

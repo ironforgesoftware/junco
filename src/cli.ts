@@ -3,15 +3,15 @@
  * Junco CLI — M4 restructure.
  *
  * Subcommands:
- *   junco start [--config <path>] [--once]   — daemon (acquire lock, run mainLoop)
- *   junco run-once [--config <path>]         — dev/cron one-shot (no lock)
+ *   junco start [--once]                     — daemon (acquire lock, run mainLoop)
+ *   junco run-once                           — dev/cron one-shot (no lock)
  *   junco                                    — bare → ensure the supervised daemon
  *                                              is up (interactive TTY), then open
  *                                              the dashboard; first run (no config)
  *                                              opens the setup walkthrough
- *   junco dashboard [--config <path>]        — interactive dashboard; first run
+ *   junco dashboard                          — interactive dashboard; first run
  *                                              opens the guided setup walkthrough
- *   junco config init [--config <path>]      — headless: scaffold a default
+ *   junco config init                        — headless: scaffold a default
  *                                              config.json + queue dirs, no prompts
  *   junco --help | -h                        — usage
  *
@@ -68,6 +68,7 @@ import { runRetryCommand } from "./retryCmd.js";
 import { runRmCommand } from "./rmCmd.js";
 import { runDoctor } from "./doctor.js";
 import { runLogsCommand } from "./logsCmd.js";
+import { dataTreePaths } from "./dataTree.js";
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -113,6 +114,9 @@ export interface CliDeps {
   readStdinFn?: () => Promise<string>;
   /** Existence check for first-run detection (tests control routing). Default: fs.existsSync. */
   existsFn?: (path: string) => boolean;
+  /** Process environment for config-path resolution (tests inject HOME /
+   * XDG_CONFIG_HOME to relocate ~/.junco). Default: process.env. */
+  env?: Record<string, string | undefined>;
   /** The dashboard command (tests inject a spy; default lazily imports
    * dashboardCmd.js). `cfg` is null on the FTUE path (no config on disk yet —
    * the dashboard hosts the setup walkthrough). */
@@ -217,8 +221,6 @@ Subcommands:
                     without starting anything.
 
 Options:
-  --config <path>       Path to config.json
-                        [default: ./config.json if present, else ~/.config/junco/config.json]
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
@@ -237,6 +239,9 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
   return parseArgs({
     args: argv,
     options: {
+      // Deprecated + inert: kept PARSED so installed service units that still pass
+      // `--config <path>` don't crash-loop under strict:true (see run()'s notice).
+      // Actual removal is a separate breaking change once rendered units are flagless.
       config: { type: "string" },
       once: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -278,8 +283,8 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
   if (process.stdout.isTTY && process.env.JUNCO_LOG_JSON !== "1") setLogFormat("human");
   if (!cfg.logToFile) return () => {};
   try {
-    const logPath = join(cfg.dataDir, "worker.log");
-    mkdirSync(cfg.dataDir, { recursive: true });
+    const logPath = dataTreePaths(cfg).logFile;
+    mkdirSync(dirname(logPath), { recursive: true });
     const sink = opts.rotate ? openRotatingLogSink(logPath) : openAppendLogSink(logPath);
     setLogSink((l) => sink.write(l));
     return () => {
@@ -351,9 +356,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   const existsFn = deps.existsFn ?? ((p: string) => existsSync(p));
-  // Resolve the config path ONCE: explicit --config → ./config.json when
-  // present → the user-level default (~/.config/junco/config.json).
-  const configPath = resolveConfigPath(values.config as string | undefined, { existsFn });
+  const env = deps.env ?? process.env;
+  // Resolve the config path ONCE — a pure function of the environment (HOME /
+  // XDG_CONFIG_HOME), never of cwd or argv (split-queue incident, 2026-08-01).
+  const configPath = resolveConfigPath({ existsFn, env });
+
+  if (values.config !== undefined) {
+    process.stderr.write(
+      "junco: --config is deprecated and ignored — the config always lives at " +
+        `~/.junco/config.json (resolved: ${configPath}). See docs/configuration.md.\n`,
+    );
+  }
+
   // Bare `junco` (no explicit subcommand) always heads to the dashboard; the
   // dashboard branch adds a daemon pre-flight on the interactive bare path (no
   // config yet → the dashboard hosts the setup walkthrough instead).
@@ -397,12 +411,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         maxQueuedTimeoutSecondsFn(cfg),
       );
       stopTimeoutSeconds = timeoutSeconds + 10 * 60;
-      logDir = cfg.dataDir;
+      logDir = dataTreePaths(cfg).logsDir;
     } catch {
       /* fall back to renderer defaults */
     }
 
-    const rendered = renderService(platform, { cliEntry, configPath, stopTimeoutSeconds, logDir });
+    const rendered = renderService(platform, { cliEntry, stopTimeoutSeconds, logDir });
     printFn(rendered + "\n");
 
     // Print install hint to stderr
@@ -875,12 +889,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // submit <file|-|--config ...>: place a ticket into the inbox
+  // submit: place a ticket into the inbox
   // ------------------------------------------------------------
   if (subcommand === "submit") {
     const fileArg = positionals[1];
     if (!fileArg) {
-      process.stderr.write(`Usage: junco submit <file|-> [--config <path>]\n`);
+      process.stderr.write(`Usage: junco submit <file|->\n`);
       return 2;
     }
 
@@ -933,7 +947,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "dispatch") {
     const ref = positionals[1];
     if (!ref) {
-      process.stderr.write(`Usage: junco dispatch <owner/repo#N | issue-url> [--config <path>]\n`);
+      process.stderr.write(`Usage: junco dispatch <owner/repo#N | issue-url>\n`);
       return 2;
     }
     const cfg = loadConfigFn(configPath);

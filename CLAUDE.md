@@ -47,7 +47,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 
 ## The repo doubles as the maintainer's live runtime — do not disturb
 
-`config.json` (repo root), `tickets/`, `worktrees/`, `launchd.out/err` are **live, gitignored runtime state**, and a launchd daemon may be running from this checkout. Never delete, modify, or `git clean` them; never run `junco start` here; never submit test tickets to the real inbox. Config resolution prefers `./config.json`, so running the CLI from the repo root picks up the **live** config — sandbox every smoke test:
+`config.json` (repo root), `tickets/`, `worktrees/`, `launchd.out/err` are **live, gitignored runtime state**, and a launchd daemon may be running from this checkout. Never delete, modify, or `git clean` them; never run `junco start` here; never submit test tickets to the real inbox. Config resolution is HOME-anchored (`~/.junco/config.json`, legacy XDG fallback) — cwd never matters, but running the CLI with your real `HOME` still picks up the **live** config, so sandbox every smoke test:
 
 ```bash
 SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
@@ -65,7 +65,7 @@ a semantic merge. Details: `docs/parallel-sessions.md`.
 
 - `node dist/cli.js doctor` — preflight config, git/gh auth, endpoint, model, dirs.
 - `node dist/cli.js status` / `list` / `logs -f` — daemon, queue, and log visibility; health JSON at `http://127.0.0.1:8787/health` (default).
-- Per-ticket event transcripts (the debugging record for failed runs): `<state_dir>/transcripts/<ticket-id>.jsonl`, default `~/.local/state/junco/`.
+- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`).
 
 ## Git & release
 

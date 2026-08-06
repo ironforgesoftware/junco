@@ -17,10 +17,11 @@ import {
   readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
 import { run } from "../src/cli.js";
+import type { CliDeps } from "../src/cli.js";
 import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
@@ -36,7 +37,13 @@ import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
  * `start` arm doesn't throw on a bare `{}` stub. */
 function stubConfig(): Config {
   return {
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    legacy: {
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+      dataRoot: false,
+    },
   } as Config;
 }
 
@@ -222,6 +229,7 @@ describe("run(['start']) — deprecated config keys warning", () => {
               stateDir: false,
               worktreeRoot: false,
               externalReposRoot: false,
+              dataRoot: false,
             },
           }) as Config,
       ),
@@ -696,32 +704,29 @@ describe("run(['--version'])", () => {
 describe("run(['service','--platform','systemd'])", () => {
   it("returns 0", async () => {
     const captured: string[] = [];
-    const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    const code = await run(
-      ["service", "--platform", "systemd", "--config", "/tmp/config.json"],
-      deps,
-    );
+    const deps = makeDeps({ printFn: (s) => captured.push(s), env: { HOME: "/tmp" } });
+    const code = await run(["service", "--platform", "systemd"], deps);
     expect(code).toBe(0);
   });
 
   it("captured output contains [Unit]", async () => {
     const captured: string[] = [];
-    const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "systemd", "--config", "/tmp/config.json"], deps);
+    const deps = makeDeps({ printFn: (s) => captured.push(s), env: { HOME: "/tmp" } });
+    await run(["service", "--platform", "systemd"], deps);
     expect(captured.join("")).toContain("[Unit]");
   });
 
   it("captured output contains ExecStart=", async () => {
     const captured: string[] = [];
-    const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "systemd", "--config", "/tmp/config.json"], deps);
+    const deps = makeDeps({ printFn: (s) => captured.push(s), env: { HOME: "/tmp" } });
+    await run(["service", "--platform", "systemd"], deps);
     expect(captured.join("")).toContain("ExecStart=");
   });
 
   it("does NOT call mainLoopFn", async () => {
     const captured: string[] = [];
-    const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "systemd", "--config", "/tmp/config.json"], deps);
+    const deps = makeDeps({ printFn: (s) => captured.push(s), env: { HOME: "/tmp" } });
+    await run(["service", "--platform", "systemd"], deps);
     expect(deps.mainLoopFn).not.toHaveBeenCalled();
   });
 });
@@ -729,18 +734,15 @@ describe("run(['service','--platform','systemd'])", () => {
 describe("run(['service','--platform','launchd'])", () => {
   it("returns 0", async () => {
     const captured: string[] = [];
-    const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    const code = await run(
-      ["service", "--platform", "launchd", "--config", "/tmp/config.json"],
-      deps,
-    );
+    const deps = makeDeps({ printFn: (s) => captured.push(s), env: { HOME: "/tmp" } });
+    const code = await run(["service", "--platform", "launchd"], deps);
     expect(code).toBe(0);
   });
 
   it("captured output contains <plist", async () => {
     const captured: string[] = [];
-    const deps = makeDeps({ printFn: (s) => captured.push(s) });
-    await run(["service", "--platform", "launchd", "--config", "/tmp/config.json"], deps);
+    const deps = makeDeps({ printFn: (s) => captured.push(s), env: { HOME: "/tmp" } });
+    await run(["service", "--platform", "launchd"], deps);
     expect(captured.join("")).toContain("<plist");
   });
 });
@@ -757,9 +759,13 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
       queueRoot: dir,
       defaultTimeoutMinutes: 30,
     } as unknown as Config;
-    const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
+    const deps = makeDeps({
+      printFn: (s) => captured.push(s),
+      loadConfigFn: () => cfg,
+      env: { HOME: dir },
+    });
     try {
-      await run(["service", "--platform", "systemd", "--config", join(dir, "config.json")], deps);
+      await run(["service", "--platform", "systemd"], deps);
       // 180-min ticket + 10-min drain margin = 190 min = 11400 s. The old
       // default-only sizing (30+10 = 40 min → 2400 s) would SIGKILL it mid-drain.
       expect(captured.join("")).toContain("TimeoutStopSec=11400");
@@ -778,9 +784,13 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
       queueRoot: dir,
       defaultTimeoutMinutes: 30,
     } as unknown as Config;
-    const deps = makeDeps({ printFn: (s) => captured.push(s), loadConfigFn: () => cfg });
+    const deps = makeDeps({
+      printFn: (s) => captured.push(s),
+      loadConfigFn: () => cfg,
+      env: { HOME: dir },
+    });
     try {
-      await run(["service", "--platform", "systemd", "--config", join(dir, "config.json")], deps);
+      await run(["service", "--platform", "systemd"], deps);
       // max(30, 10) + 10 = 40 min → 2400 s.
       expect(captured.join("")).toContain("TimeoutStopSec=2400");
     } finally {
@@ -794,24 +804,26 @@ describe("run(['service']) — #118 stop-timeout sizing", () => {
 // ---------------------------------------------------------------------------
 
 describe("lock path derivation", () => {
-  it("derives lock path as worker.lock in the config file's directory", async () => {
+  it("derives lock path as worker.lock in the resolved config directory (env-driven, not --config)", async () => {
     const acquireLockFn = vi.fn(() => makeFakeLock());
     const deps = makeDeps({
       acquireLockFn,
       loadConfigFn: vi.fn(() => stubConfig()),
+      env: { HOME: "/tmp/foo" },
     });
-    await run(["start", "--config", "/tmp/foo/config.json"], deps);
-    expect(acquireLockFn).toHaveBeenCalledWith("/tmp/foo/worker.lock");
+    await run(["start"], deps);
+    expect(acquireLockFn).toHaveBeenCalledWith(join("/tmp/foo", ".junco", "worker.lock"));
   });
 
-  it("uses config file directory (default config.json → cwd/worker.lock)", async () => {
-    // With the default "config.json" relative path, the resolved directory
-    // must contain worker.lock at the end.
+  it("uses the resolved config directory (env-only default, no cwd probe)", async () => {
+    // No cwd probe left: with no config on disk, resolution lands on the
+    // canonical ~/.junco/config.json for the injected HOME.
     const acquireLockFn = vi.fn(() => makeFakeLock());
-    const deps = makeDeps({ acquireLockFn });
+    const deps = makeDeps({ acquireLockFn, env: { HOME: "/tmp/junco-default-home" } });
     await run(["start"], deps);
-    const [lockArg] = (acquireLockFn as MockedFunction<any>).mock.calls[0];
-    expect(lockArg).toMatch(/worker\.lock$/);
+    expect(acquireLockFn).toHaveBeenCalledWith(
+      join("/tmp/junco-default-home", ".junco", "worker.lock"),
+    );
   });
 });
 
@@ -863,8 +875,10 @@ function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: str
     dataDir: vaultRoot,
     queueRoot: join(vaultRoot, "Junco"),
   };
-  // write a real config.json so loadConfig can load it
-  const configPath = join(vaultRoot, "config.json");
+  // write a real config.json at the canonical ~/.junco/config.json location
+  // (HOME=vaultRoot for these tests) so loadConfig can load it.
+  const configPath = join(vaultRoot, ".junco", "config.json");
+  mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
   return { cfg, vaultRoot, configPath };
 }
@@ -882,21 +896,23 @@ afterEach(() => {
 
 // --- inbox-path ---
 
-describe("run(['inbox-path', '--config', p])", () => {
+describe("run(['inbox-path'])", () => {
   it("returns 0", async () => {
-    const { configPath } = freshDispatchVault();
+    const { vaultRoot } = freshDispatchVault();
     const captured: string[] = [];
-    const code = await run(["inbox-path", "--config", configPath], {
+    const code = await run(["inbox-path"], {
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(0);
   });
 
   it("prints output ending with /inbox\\n", async () => {
-    const { configPath } = freshDispatchVault();
+    const { vaultRoot } = freshDispatchVault();
     const captured: string[] = [];
-    await run(["inbox-path", "--config", configPath], {
+    await run(["inbox-path"], {
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     const out = captured.join("");
     expect(out.trimEnd()).toMatch(/\/inbox$/);
@@ -938,35 +954,38 @@ describe("run(['schema'])", () => {
 
 // --- submit (stdin) ---
 
-describe("run(['submit', '-', '--config', p]) — stdin", () => {
+describe("run(['submit', '-']) — stdin", () => {
   const TICKET_CONTENT = `---\nid: cli-stdin-test\npriority: normal\n---\n\n# Test ticket\n`;
 
   it("returns 0", async () => {
-    const { configPath } = freshDispatchVault();
+    const { vaultRoot } = freshDispatchVault();
     const captured: string[] = [];
-    const code = await run(["submit", "-", "--config", configPath], {
+    const code = await run(["submit", "-"], {
       printFn: (s) => captured.push(s),
       readStdinFn: async () => TICKET_CONTENT,
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(0);
   });
 
   it("prints 'submitted: ...'", async () => {
-    const { configPath } = freshDispatchVault();
+    const { vaultRoot } = freshDispatchVault();
     const captured: string[] = [];
-    await run(["submit", "-", "--config", configPath], {
+    await run(["submit", "-"], {
       printFn: (s) => captured.push(s),
       readStdinFn: async () => TICKET_CONTENT,
+      env: { HOME: vaultRoot },
     });
     expect(captured.join("")).toMatch(/submitted:/);
   });
 
   it("the ticket lands in the inbox", async () => {
-    const { configPath, vaultRoot } = freshDispatchVault();
+    const { vaultRoot } = freshDispatchVault();
     const captured: string[] = [];
-    await run(["submit", "-", "--config", configPath], {
+    await run(["submit", "-"], {
       printFn: (s) => captured.push(s),
       readStdinFn: async () => TICKET_CONTENT,
+      env: { HOME: vaultRoot },
     });
     const expected = join(vaultRoot, "Junco", "inbox", "cli-stdin-test.md");
     expect(existsSync(expected)).toBe(true);
@@ -977,10 +996,11 @@ describe("run(['submit', '-', '--config', p]) — stdin", () => {
 
 describe("run(['submit']) — missing file argument", () => {
   it("returns 2", async () => {
-    const { configPath } = freshDispatchVault();
+    const { vaultRoot } = freshDispatchVault();
     const captured: string[] = [];
-    const code = await run(["submit", "--config", configPath], {
+    const code = await run(["submit"], {
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(2);
   });
@@ -991,8 +1011,8 @@ describe("run(['submit']) — missing file argument", () => {
 
 describe("run(['init'])", () => {
   it("init is gone: unknown subcommand, exit 2", async () => {
-    const { configPath } = freshDispatchVault(); // config present — routing must not matter
-    const code = await run(["init", "--config", configPath], { printFn: () => {} });
+    const { vaultRoot } = freshDispatchVault(); // config present — routing must not matter
+    const code = await run(["init"], { printFn: () => {}, env: { HOME: vaultRoot } });
     expect(code).toBe(2);
   });
 });
@@ -1042,7 +1062,8 @@ describe("run(['dashboard']) — routing", () => {
   it("routes `dashboard` to runDashboardFn with the loaded config when one exists", async () => {
     const { cfg } = freshDispatchVault(); // the file's existing full-Config helper
     let got: Config | null = null;
-    const code = await run(["dashboard", "--config", "/x/config.json"], {
+    const code = await run(["dashboard"], {
+      env: { HOME: "/x" },
       existsFn: () => true, // config present → config-loaded path
       loadConfigFn: () => cfg,
       runDashboardFn: async (c) => {
@@ -1056,7 +1077,8 @@ describe("run(['dashboard']) — routing", () => {
 
   it("routes `dashboard` with NO config to the FTUE path (null cfg, config never loaded)", async () => {
     let got: Config | null | undefined = undefined;
-    const code = await run(["dashboard", "--config", "/x/config.json"], {
+    const code = await run(["dashboard"], {
+      env: { HOME: "/x" },
       existsFn: () => false, // no config → dashboard hosts the wizard
       loadConfigFn: () => {
         throw new Error("config must not be loaded on the FTUE path");
@@ -1073,24 +1095,26 @@ describe("run(['dashboard']) — routing", () => {
 
 describe("run(['outbox'])", () => {
   it("returns 0 and prints 'outbox empty' when nothing is queued", async () => {
-    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const { cfg, vaultRoot } = freshDispatchVault();
     const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
-    const code = await run(["outbox", "--config", configPath], {
+    const code = await run(["outbox"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(0);
     expect(captured.join("")).toBe("outbox empty\n");
   });
 
   it("routes `outbox flush` to the flush path (exit 0 on a clean flush of nothing)", async () => {
-    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const { cfg, vaultRoot } = freshDispatchVault();
     const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
-    const code = await run(["outbox", "flush", "--config", configPath], {
+    const code = await run(["outbox", "flush"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(0);
     expect(captured.join("")).toMatch(/sent 0 · dead 0 · remaining 0/);
@@ -1136,12 +1160,13 @@ describe("run(['outbox'])", () => {
 
 describe("run(['prs'])", () => {
   it("returns 0 and prints the no-watched-repos guidance when none are configured", async () => {
-    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const { cfg, vaultRoot } = freshDispatchVault();
     const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
-    const code = await run(["prs", "--config", configPath], {
+    const code = await run(["prs"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(0);
     expect(captured.join("")).toBe(
@@ -1152,13 +1177,14 @@ describe("run(['prs'])", () => {
 
 describe("run(['assess']) — routing", () => {
   it("routes `assess <path> --auto-plan` to runAssessCommand, threading the flag into the queued ticket", async () => {
-    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const { cfg, vaultRoot } = freshDispatchVault();
     const repoDir = mkdtempSync(join(tmpdir(), "junco-cli-assess-repo-"));
     const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
-    const code = await run(["assess", repoDir, "--auto-plan", "--config", configPath], {
+    const code = await run(["assess", repoDir, "--auto-plan"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(0);
 
@@ -1172,12 +1198,13 @@ describe("run(['assess']) — routing", () => {
   });
 
   it("no target -> exit 2, usage line", async () => {
-    const { cfg, configPath, vaultRoot } = freshDispatchVault();
+    const { cfg, vaultRoot } = freshDispatchVault();
     const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
-    const code = await run(["assess", "--config", configPath], {
+    const code = await run(["assess"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
     });
     expect(code).toBe(2);
     expect(captured.join("")).toMatch(/usage/i);
@@ -1189,7 +1216,8 @@ describe("run(['restart']) — routing", () => {
     const { cfg } = freshDispatchVault();
     let gotPath: string | null = null;
     let loaded = false;
-    const code = await run(["restart", "--config", "/x/config.json"], {
+    const code = await run(["restart"], {
+      env: { HOME: "/x" },
       loadConfigFn: () => {
         loaded = true;
         return cfg;
@@ -1201,12 +1229,13 @@ describe("run(['restart']) — routing", () => {
     });
     expect(code).toBe(0);
     expect(loaded).toBe(true); // broken config fails fast before any kick
-    expect(gotPath).toBe("/x/config.json");
+    expect(gotPath).toBe(join("/x", ".junco", "config.json"));
   });
 
   it("a broken config aborts before the restart fn runs", async () => {
     let ran = false;
-    const code = await run(["restart", "--config", "/x/config.json"], {
+    const code = await run(["restart"], {
+      env: { HOME: "/x" },
       loadConfigFn: () => {
         throw new Error("bad config");
       },
@@ -1290,14 +1319,17 @@ describe("run(['dispatch', ref])", () => {
 // ---------------------------------------------------------------------------
 
 describe("run(['auth']) — routing", () => {
-  async function runCapturingStderr(argv: string[]): Promise<{ code: number; err: string }> {
+  async function runCapturingStderr(
+    argv: string[],
+    deps: CliDeps = {},
+  ): Promise<{ code: number; err: string }> {
     const lines: string[] = [];
     const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
       lines.push(String(s));
       return true;
     });
     try {
-      const code = await run(argv, {});
+      const code = await run(argv, deps);
       return { code, err: lines.join("") };
     } finally {
       spy.mockRestore();
@@ -1305,23 +1337,37 @@ describe("run(['auth']) — routing", () => {
   }
 
   it("`auth login` with no config on disk routes into runAuthCommand: exit 1 + dashboard hint", async () => {
-    const { code, err } = await runCapturingStderr([
-      "auth",
-      "login",
-      "--config",
-      "/nonexistent/junco-cli-auth/config.json",
-    ]);
+    const { code, err } = await runCapturingStderr(["auth", "login"], {
+      env: { HOME: "/nonexistent/junco-cli-auth" },
+    });
     expect(code).toBe(1);
     expect(err).toContain("junco dashboard");
   });
 
   it("verb-free `auth` is a usage error: exit 2 + the auth usage line", async () => {
-    const { code, err } = await runCapturingStderr([
-      "auth",
-      "--config",
-      "/nonexistent/junco-cli-auth/config.json",
-    ]);
+    const { code, err } = await runCapturingStderr(["auth"], {
+      env: { HOME: "/nonexistent/junco-cli-auth" },
+    });
     expect(code).toBe(2);
     expect(err).toMatch(/usage: junco auth login/i);
+  });
+});
+
+describe("--config deprecation", () => {
+  it("--config is parsed, ignored, and warns on stderr", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-cli-"));
+    const configPath = join(dir, ".junco", "config.json");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ vaultRoot: dir, juncoSubdir: "tickets" }));
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let out = "";
+    const code = await run(["inbox-path", "--config", "/somewhere/else/config.json"], {
+      printFn: (s) => (out += s),
+      env: { HOME: dir },
+    });
+    expect(code).toBe(0);
+    expect(out.trim()).toBe(join(dir, "tickets", "inbox")); // canonical config won, not the flag
+    expect(errSpy.mock.calls.map((c) => String(c[0])).join("")).toContain("--config is deprecated");
+    errSpy.mockRestore();
   });
 });

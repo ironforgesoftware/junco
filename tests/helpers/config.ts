@@ -59,7 +59,15 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     ghBin: "/nonexistent/gh",
 
     // ---- ballast: identical across all 19 former helpers ----
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    dataLayout: "v2",
+    legacy: {
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+      dataRoot: false,
+      ghConfigDir: false,
+    },
     model: {
       id: "test/model",
       source: "auto",

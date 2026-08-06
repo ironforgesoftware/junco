@@ -2,9 +2,11 @@
  * Command-palette roster + subprocess runner.
  *
  * The dashboard runs CLI subcommands by SPAWNING the real junco CLI (argv
- * arrays only — no shell, no injection surface) with the dashboard's own
- * --config, capturing merged stdout+stderr for the output view. Thin shell:
- * a future subcommand needs only a roster row here.
+ * arrays only — no shell, no injection surface), capturing merged
+ * stdout+stderr for the output view. No --config flag is threaded through:
+ * the spawned child inherits the parent's environment and resolves the same
+ * canonical ~/.junco/config.json itself. Thin shell: a future subcommand
+ * needs only a roster row here.
  */
 
 import { spawn } from "node:child_process";
@@ -91,7 +93,6 @@ const DEFAULT_CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
 
 /** Run one subcommand; resolves ALWAYS (errors land in `output`). */
 export function runCliCommand(
-  configPath: string,
   name: string,
   extraArgs: string[],
   deps: CliRunnerDeps = {},
@@ -106,7 +107,7 @@ export function runCliCommand(
     let timedOut = false;
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawnFn(process.execPath, [cliPath, name, ...extraArgs, "--config", configPath], {
+      child = spawnFn(process.execPath, [cliPath, name, ...extraArgs], {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (e) {

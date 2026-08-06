@@ -6,7 +6,7 @@
  *  - Linux systemd user unit          (renderSystemdUnit)
  *
  * Both targets encode the same semantics:
- *  - run `<nodeBin> <cliEntry> start --config <configPath>`
+ *  - run `<nodeBin> <cliEntry> start` (config resolves from the environment: ~/.junco/config.json)
  *  - respawn on crash (non-zero exit), but NOT on a clean exit 0
  *    (important: the lock-held path exits 0, so the supervisor must not
  *     endlessly loop when another instance is already running)
@@ -15,7 +15,8 @@
  * Port / extension of the Python scripts/install.sh LaunchAgent stanza.
  */
 
-import { dirname, resolve, join } from "node:path";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -29,9 +30,7 @@ export interface ServiceOpts {
   nodeBin?: string;
   /** Absolute path to the junco CLI entry (dist/cli.js). Required. */
   cliEntry: string;
-  /** Absolute path to config.json. Required. */
-  configPath: string;
-  /** Dir for stdout/stderr log files (launchd). Default: dirname(resolve(configPath)). */
+  /** Dir for stdout/stderr log files (launchd). Default: join(home, ".junco", "logs"). */
   logDir?: string;
   /** HOME env value. Default: process.env.HOME ?? "". */
   home?: string;
@@ -62,23 +61,15 @@ function xmlEscape(s: string): string {
 
 function resolveOpts(opts: ServiceOpts): Required<ServiceOpts> {
   const nodeBin = opts.nodeBin ?? process.execPath;
-  const logDir = opts.logDir ?? dirname(resolve(opts.configPath));
   const home = opts.home ?? process.env.HOME ?? "";
-  // Build a sensible PATH that includes the node binary's dir first
+  // launchd.out/err land under the junco home's logs/ subtree by default —
+  // the single-root v2 layout (dataTree.ts's LAYOUTS.v2.logs).
+  const logDir = opts.logDir ?? join(home !== "" ? home : homedir(), ".junco", "logs");
   const nodeBinDir = dirname(nodeBin);
   const pathEnv = opts.pathEnv ?? `${nodeBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
   const label = opts.label ?? "com.junco.worker";
   const stopTimeoutSeconds = opts.stopTimeoutSeconds ?? 2400;
-  return {
-    label,
-    nodeBin,
-    cliEntry: opts.cliEntry,
-    configPath: opts.configPath,
-    logDir,
-    home,
-    pathEnv,
-    stopTimeoutSeconds,
-  };
+  return { label, nodeBin, cliEntry: opts.cliEntry, logDir, home, pathEnv, stopTimeoutSeconds };
 }
 
 // ---------------------------------------------------------------------------
@@ -103,8 +94,6 @@ export function renderLaunchdPlist(opts: ServiceOpts): string {
         <string>${x(o.nodeBin)}</string>
         <string>${x(o.cliEntry)}</string>
         <string>start</string>
-        <string>--config</string>
-        <string>${x(o.configPath)}</string>
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -131,11 +120,11 @@ export function renderSystemdUnit(opts: ServiceOpts): string {
 
   // systemd unit lines are INI-style, not XML — no XML escaping. systemd splits
   // ExecStart on unquoted whitespace, so every interpolated value (the node
-  // binary, the CLI entry, and the config path — all user-controlled) is
-  // double-quoted; a path like "/home/john doe/config.json" then survives as a
-  // single argument instead of two. systemd also honors "..." quoting in
-  // Environment= values. Backslashes and embedded double-quotes are escaped so
-  // the quoting can't be broken out of. (#43)
+  // binary and the CLI entry — both user-controlled) is double-quoted; a path
+  // like "/opt/junco app/dist/cli.js" then survives as a single argument
+  // instead of two. systemd also honors "..." quoting in Environment= values.
+  // Backslashes and embedded double-quotes are escaped so the quoting can't
+  // be broken out of. (#43)
   //
   // Escaping $ and % differs by field because systemd's expansion rules do (#79):
   //  - ExecStart words undergo BOTH environment-variable ($VAR/${VAR}) AND
@@ -157,7 +146,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${qExec(o.nodeBin)} ${qExec(o.cliEntry)} start --config ${qExec(o.configPath)}
+ExecStart=${qExec(o.nodeBin)} ${qExec(o.cliEntry)} start
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=${o.stopTimeoutSeconds}

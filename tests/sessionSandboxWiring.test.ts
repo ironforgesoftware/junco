@@ -11,7 +11,13 @@ function cfgWith(sandbox: Partial<Config["sandbox"]>): Config {
     dataDir: "/sbxroot/state",
     queueRoot: "/sbxroot/state/queue",
     worktreeRoot: "/sbxroot/state/worktrees",
-    legacy: { vaultRoot: false, stateDir: false, worktreeRoot: false, externalReposRoot: false },
+    legacy: {
+      vaultRoot: false,
+      stateDir: false,
+      worktreeRoot: false,
+      externalReposRoot: false,
+      dataRoot: false,
+    },
     github: { externalReposRoot: "/sbxroot/state/clones/external" },
     botAccount: {
       enabled: false,

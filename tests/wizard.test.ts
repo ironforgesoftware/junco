@@ -153,14 +153,62 @@ describe("buildWizardIO", () => {
     expect((thrown as Error).message).toMatch(/EPERM/);
   });
 
-  it("fresh mode: botGhConfigDir is the expanded DEFAULT_GH_CONFIG_DIR default", () => {
+  it("fresh mode: botGhConfigDir is the expanded ~/.junco/gh default", () => {
     const dir = tmp();
     const cp = join(dir, "config.json");
     const r = buildWizardIO(cp, { existsFn: () => false });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
     expect(r.io.botGhConfigDir).not.toContain("~");
-    expect(r.io.botGhConfigDir.endsWith(".config/junco/gh")).toBe(true);
+    expect(r.io.botGhConfigDir.endsWith(".junco/gh")).toBe(true);
+  });
+
+  // Critical fix (Task 3 review): the dashboard-hosted Account chapter must
+  // resolve botGhConfigDir through the SAME probe assembleConfig uses, or an
+  // upgrader with a live legacy login gets the wizard targeting ~/.junco/gh
+  // while the daemon keeps reading ~/.config/junco/gh — planting a second
+  // hosts.yml that silently reroutes later resolutions (split-brain).
+  it("fresh mode: targets the legacy gh config dir when a legacy login is live (env-injected, hermetic existsFn)", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyHosts = "/h/.config/junco/gh/hosts.yml";
+    const r = buildWizardIO(cp, {
+      env: { HOME: "/h" },
+      // Hermetic: config file itself is absent (→ fresh mode); only the
+      // injected legacy hosts.yml "exists" — the canonical one does not.
+      existsFn: (p) => p === legacyHosts,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.mode).toBe("fresh");
+    expect(r.io.botGhConfigDir).toBe("/h/.config/junco/gh");
+  });
+
+  it("never probes an explicitly non-default configDir, even with a legacy login live", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyHosts = "/h/.config/junco/gh/hosts.yml";
+    writeFileSync(
+      cp,
+      JSON.stringify({
+        vaultRoot: join(dir, "vault"),
+        juncoSubdir: "",
+        model: { id: "p/m" },
+        // An absolute, non-tilde explicit override — sidesteps expandHome's
+        // homedir()-vs-env(HOME) ambiguity entirely.
+        botAccount: { configDir: "/explicit/custom/gh" },
+      }),
+      "utf8",
+    );
+    const r = buildWizardIO(cp, {
+      env: { HOME: "/h" },
+      // Even though the legacy hosts.yml "exists", an explicit configDir
+      // must never be probed against it.
+      existsFn: (p) => p === cp || p === legacyHosts,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.botGhConfigDir).toBe("/explicit/custom/gh");
   });
 
   it("rerun mode: botGhConfigDir reads botAccount.configDir / git.ghBin from the raw config", () => {
@@ -212,5 +260,102 @@ describe("buildWizardIO", () => {
     const code = await r.io.runGhLogin();
     expect(code).toBe(0);
     expect(seenArgs).toEqual(["gh", r.io.botGhConfigDir]);
+  });
+});
+
+// Regression (task review): the wizard must display the data root the
+// daemon will ACTUALLY resolve to, even during the legacy-fallback window
+// (assembleConfig's single-root probe, config.ts's resolveDataRoot) — not
+// the bare "~/.junco" default. Same legacy-aware pattern as botGhConfigDir
+// above, but the write-side field (WizardAnswers.dataDir / initialAnswers)
+// must stay the pure sentinel regardless, so a save on defaults never plants
+// an explicit dataDir key pinning the legacy root.
+describe("effectiveDataDir (legacy-fallback display, never fed back into a write)", () => {
+  it("fresh mode, fresh machine: effectiveDataDir is the expanded ~/.junco default", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const r = buildWizardIO(cp, { env: { HOME: "/h" }, existsFn: () => false });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.mode).toBe("fresh");
+    expect(r.io.effectiveDataDir).toBe("/h/.junco");
+    expect(r.io.dataDirLegacyFallback).toBe(false);
+  });
+
+  it("fresh mode, legacy-fallback machine: effectiveDataDir surfaces the legacy root (hermetic existsFn)", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyRoot = "/h/.local/state/junco";
+    const r = buildWizardIO(cp, {
+      env: { HOME: "/h" },
+      // Canonical ~/.junco holds no tree; only the legacy root "exists".
+      existsFn: (p) => p === legacyRoot,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.mode).toBe("fresh");
+    expect(r.io.effectiveDataDir).toBe(legacyRoot);
+    expect(r.io.dataDirLegacyFallback).toBe(true);
+    // The write-side sentinel is UNAFFECTED by the probe above.
+    expect(r.io.initialAnswers.dataDir).toBe("~/.junco");
+  });
+
+  it("legacy-fallback machine: accepting every default still writes NO dataDir key", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyRoot = "/h/.local/state/junco";
+    const r = buildWizardIO(cp, {
+      env: { HOME: "/h" },
+      existsFn: (p) => p === legacyRoot,
+      // The post-write ensureDirs step re-loads the config with the REAL
+      // env/fs (loadConfigFn isn't overridden here) — neutralize mkdir so
+      // this test can never touch this machine's actual resolved root.
+      mkdirFn: () => {},
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.effectiveDataDir).toBe(legacyRoot); // displayed to the user
+    const result = r.io.write(r.io.initialAnswers); // user touched nothing
+    expect(result.written).toBe(true); // fresh mode always scaffolds the file
+    const saved = read(cp);
+    expect("dataDir" in saved).toBe(false);
+  });
+
+  it("rerun mode, legacy-fallback machine: same display, same no-op write", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyRoot = "/h/.local/state/junco";
+    // No dataDir/observability.stateDir key at all — the exact shape this
+    // regression is about.
+    writeFileSync(cp, JSON.stringify({ model: { id: "p/m" } }), "utf8");
+    const r = buildWizardIO(cp, {
+      env: { HOME: "/h" },
+      existsFn: (p) => p === cp || p === legacyRoot,
+      mkdirFn: () => {},
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.mode).toBe("rerun");
+    expect(r.io.effectiveDataDir).toBe(legacyRoot);
+    expect(r.io.dataDirLegacyFallback).toBe(true);
+    const before = readFileSync(cp, "utf8");
+    const result = r.io.write(r.io.initialAnswers); // zero-diff rerun
+    expect(result.written).toBe(false);
+    expect(readFileSync(cp, "utf8")).toBe(before); // byte-identical: still no dataDir key
+  });
+
+  it("an explicit dataDir key is honored verbatim — no legacy probe, no fallback flag", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const legacyRoot = "/h/.local/state/junco";
+    writeFileSync(cp, JSON.stringify({ dataDir: "/custom/root", model: { id: "p/m" } }), "utf8");
+    // Even though the legacy root "exists", an explicit dataDir must win
+    // outright — resolveDataRoot never probes when explicitRoot is set.
+    const existsFn = (p: string) => p === cp || p === legacyRoot;
+    const r = buildWizardIO(cp, { env: { HOME: "/h" }, existsFn });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.io.effectiveDataDir).toBe("/custom/root");
+    expect(r.io.dataDirLegacyFallback).toBe(false);
   });
 });

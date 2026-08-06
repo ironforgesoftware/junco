@@ -49,14 +49,17 @@ The config surface is additive and off by default:
 
 ```jsonc
 "botAccount": {
-  "enabled": false,                   // absent/false = today's ambient behavior
-  "configDir": "~/.config/junco/gh"   // isolated gh config dir; overridable
+  "enabled": false,           // absent/false = today's ambient behavior
+  "configDir": "~/.junco/gh"  // isolated gh config dir; overridable
 }
 ```
 
 - **Isolated credential storage.** The bot's login lives in its own `GH_CONFIG_DIR` (default
-  `~/.config/junco/gh`), completely separate from your own `gh` config. `gh` itself owns token
-  refresh — nothing secret ever lands in `config.json` or the daemon's own `process.env`; child
+  `~/.junco/gh`; a pre-0.10 install that already has a live login at the legacy
+  `~/.config/junco/gh` keeps using it, untouched, until `junco data migrate` moves it — see
+  [Configuration § Unified data root](configuration.md#unified-data-root)), completely separate
+  from your own `gh` config. `gh` itself owns token refresh — nothing secret ever lands in
+  `config.json` or the daemon's own `process.env`; child
   processes only ever receive the config-dir _path_. When the execution sandbox is on, the
   bot's config dir joins the agent's read-deny list (alongside `~/.config/gh` and the other
   built-in secret paths), so sandboxed agent tools can't read the bot's token either.

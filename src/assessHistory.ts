@@ -19,10 +19,15 @@
  * nwo (runOnce.ts), so two distinct local checkouts of the same upstream nwo
  * can still interleave this file's read-modify-write — last-write-wins, and
  * the next clean assess of either checkout self-heals it.
+ *
+ * dataTreePaths(cfg).assessHistory is the only join of the "assess-history"
+ * subdir onto the data root — every function below resolves it fresh per
+ * call (reviewStore.ts takes the absolute dir at call time, not a subdir at
+ * construction).
  */
 import { createHash } from "node:crypto";
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
-import { ASSESS_HISTORY_SUBDIR } from "./dataTree.js";
+import { dataTreePaths } from "./dataTree.js";
 import { slugifyId } from "./slug.js";
 import type { Config } from "./types.js";
 
@@ -50,14 +55,14 @@ function historyKey(nwo: string): string {
 // Only `id` is required: every other field is nullable BY DESIGN (a repo whose
 // only run failed has no lastSuccessAt), so a truncated or hand-edited file
 // still reads rather than being skipped wholesale.
-const store = makeReviewStore<AssessHistory>(ASSESS_HISTORY_SUBDIR, ["id"], historyKey);
+const store = makeReviewStore<AssessHistory>(["id"], historyKey);
 
 export function assessHistoryDir(cfg: Config): string {
-  return store.dir(cfg);
+  return dataTreePaths(cfg).assessHistory;
 }
 
 export function listHistory(cfg: Config, deps: AssessHistoryDeps = {}): AssessHistory[] {
-  return store.list(cfg, deps);
+  return store.list(dataTreePaths(cfg).assessHistory, deps);
 }
 
 export function readHistory(
@@ -65,7 +70,7 @@ export function readHistory(
   nwo: string,
   deps: AssessHistoryDeps = {},
 ): AssessHistory | null {
-  return store.read(cfg, nwo, deps).entry;
+  return store.read(dataTreePaths(cfg).assessHistory, nwo, deps).entry;
 }
 
 /** Record ONE terminal whole-repo assess run.
@@ -102,5 +107,5 @@ export function recordRun(
         lastFailureAt: run.at,
         lastFailureReason: run.reason,
       };
-  store.write(cfg, next, deps);
+  store.write(dataTreePaths(cfg).assessHistory, next, deps);
 }

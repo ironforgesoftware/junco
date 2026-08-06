@@ -90,6 +90,65 @@ describe("junco auth login", () => {
     expect(raw.vaultRoot).toBe(123);
   });
 
+  // Critical fix (Task 3 review): `junco auth login` must resolve the bot gh
+  // config dir through the SAME probe assembleConfig uses, or an upgrader
+  // with a live legacy login gets this command targeting ~/.junco/gh while
+  // the daemon keeps reading ~/.config/junco/gh — planting a second
+  // hosts.yml that silently reroutes later resolutions (split-brain).
+  it("targets the legacy gh config dir when configDir is unset and a legacy login is live (env-injected, hermetic existsFn)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-auth-"));
+    const configPath = writeConfig(dir, BASE); // no botAccount.configDir set — defaulted
+    const legacyHosts = "/h/.config/junco/gh/hosts.yml";
+    const seenConfigDirs: string[] = [];
+    const code = await runAuthCommand(["login"], configPath, {
+      env: { HOME: "/h" },
+      // Hermetic: only the real config file and the injected legacy hosts.yml
+      // exist — the canonical ~/.junco/gh/hosts.yml does not.
+      existsFn: (p) => p === configPath || p === legacyHosts,
+      runGhLoginFn: async (_ghBin, configDir) => {
+        seenConfigDirs.push(configDir);
+        return 0;
+      },
+      detectBotLoginFn: async (_ghBin, configDir) => {
+        seenConfigDirs.push(configDir);
+        return "junco-agent";
+      },
+      printFn: () => {},
+    });
+    expect(code).toBe(0);
+    expect(seenConfigDirs).toEqual(["/h/.config/junco/gh", "/h/.config/junco/gh"]);
+  });
+
+  it("never probes an explicitly non-default configDir, even with a legacy login live", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-auth-"));
+    // An absolute, non-tilde explicit override — sidesteps expandHome's
+    // homedir()-vs-env(HOME) ambiguity (see resolveBotGhConfigDir's NOTE)
+    // entirely, so this test asserts passthrough unambiguously.
+    const configPath = writeConfig(dir, {
+      ...BASE,
+      botAccount: { configDir: "/explicit/custom/gh" },
+    });
+    const legacyHosts = "/h/.config/junco/gh/hosts.yml";
+    const seenConfigDirs: string[] = [];
+    const code = await runAuthCommand(["login"], configPath, {
+      env: { HOME: "/h" },
+      // Even though the legacy hosts.yml "exists", an explicit configDir must
+      // never be probed against it.
+      existsFn: (p) => p === configPath || p === legacyHosts,
+      runGhLoginFn: async (_ghBin, configDir) => {
+        seenConfigDirs.push(configDir);
+        return 0;
+      },
+      detectBotLoginFn: async (_ghBin, configDir) => {
+        seenConfigDirs.push(configDir);
+        return "junco-agent";
+      },
+      printFn: () => {},
+    });
+    expect(code).toBe(0);
+    expect(seenConfigDirs).toEqual(["/explicit/custom/gh", "/explicit/custom/gh"]);
+  });
+
   // #188.2: exercise the rename-failure / temp-cleanup branch.
   it("on a write/rename failure, cleans up the temp file and reports without modifying the config", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-auth-"));

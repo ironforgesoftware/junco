@@ -7,9 +7,13 @@
  *
  * Public API unchanged; storage generalized into reviewStore.ts so a second
  * review kind (pending comment drafts, SP-2) can reuse the same pattern.
+ * dataTreePaths(cfg).reviewAssess is the only join of the "review/assess"
+ * subdir onto the data root — every function below resolves it fresh per
+ * call rather than baking it into a module-level store, since reviewStore.ts
+ * now expects the absolute dir at call time, not a subdir at construction.
  */
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
-import { REVIEW_ASSESS_SUBDIR } from "./dataTree.js";
+import { dataTreePaths } from "./dataTree.js";
 import type { Config } from "./types.js";
 import type { Finding } from "./findings.js";
 
@@ -38,7 +42,7 @@ export type AssessReviewDeps = ReviewStoreDeps;
 // `issue` and `filed` are the two optional PendingAssess fields — every other
 // field is required for a batch to be usable downstream (e.g.
 // runAssessReviewCommand's `batch.findings.length`).
-const store = makeReviewStore<PendingAssess>(REVIEW_ASSESS_SUBDIR, [
+const store = makeReviewStore<PendingAssess>([
   "id",
   "nwo",
   "external",
@@ -49,7 +53,8 @@ const store = makeReviewStore<PendingAssess>(REVIEW_ASSESS_SUBDIR, [
 ]);
 
 export function assessReviewPaths(cfg: Config): { dir: string; filed: string } {
-  return { dir: store.dir(cfg), filed: store.archiveDir(cfg, "filed") };
+  const dir = dataTreePaths(cfg).reviewAssess;
+  return { dir, filed: store.archiveDir(dir, "filed") };
 }
 
 export function writePending(
@@ -57,11 +62,11 @@ export function writePending(
   batch: PendingAssess,
   deps: AssessReviewDeps = {},
 ): string {
-  return store.write(cfg, batch, deps);
+  return store.write(dataTreePaths(cfg).reviewAssess, batch, deps);
 }
 
 export function listPending(cfg: Config, deps: AssessReviewDeps = {}): PendingAssess[] {
-  return store.list(cfg, deps);
+  return store.list(dataTreePaths(cfg).reviewAssess, deps);
 }
 
 export function readPending(
@@ -69,7 +74,7 @@ export function readPending(
   id: string,
   deps: AssessReviewDeps = {},
 ): { batch: PendingAssess | null; error: string | null } {
-  const { entry, error } = store.read(cfg, id, deps);
+  const { entry, error } = store.read(dataTreePaths(cfg).reviewAssess, id, deps);
   return { batch: entry, error }; // preserve the existing {batch,error} shape
 }
 
@@ -78,11 +83,11 @@ export function readPending(
  * not a throw). Filing does NOT archive (assessFiling.ts stamps `filed`
  * records instead) — this is the only way a batch leaves the review list. */
 export function discardPending(cfg: Config, id: string, deps: AssessReviewDeps = {}): boolean {
-  return store.remove(cfg, id, "filed", deps);
+  return store.remove(dataTreePaths(cfg).reviewAssess, id, "filed", deps);
 }
 
 export function pendingCount(cfg: Config, deps: AssessReviewDeps = {}): number {
-  return store.count(cfg, deps);
+  return store.count(dataTreePaths(cfg).reviewAssess, deps);
 }
 
 /** Upgrade a `queued` filed record once the outbox flush learns the op's real

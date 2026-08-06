@@ -1,6 +1,6 @@
 # Configuration
 
-Junco is configured via a JSON file — `./config.json` if present, else `~/.config/junco/config.json` (the wizard writes the latter unless you pass `--config`; respects `XDG_CONFIG_HOME`). Every field is optional; anything you omit falls back to its default. The guided way to produce (or tune) this file is `junco dashboard` (or bare `junco` on a first run) — a walkthrough of the settings that matter, with safe defaults for the rest, re-runnable anytime from the command palette ("setup"). For a headless, non-interactive scaffold (scripting, CI), use `junco config init`.
+Junco is configured via a single JSON file: `~/.junco/config.json` (pre-0.10 installs are still read from the legacy `~/.config/junco/config.json`, which respects `XDG_CONFIG_HOME`, until the canonical file exists). Every field is optional; anything you omit falls back to its default. The guided way to produce (or tune) this file is `junco dashboard` (or bare `junco` on a first run) — a walkthrough of the settings that matter, with safe defaults for the rest, re-runnable anytime from the command palette ("setup"). For a headless, non-interactive scaffold (scripting, CI), use `junco config init`.
 
 [← back to the README](../README.md)
 
@@ -30,58 +30,66 @@ Junco is configured via a JSON file — `./config.json` if present, else `~/.con
 Every path Junco reads or writes — the ticket queue, parked `assess`/`analyze` review items, the GitHub write-outbox, cloned repos, PR-flow worktrees, transcripts, and a handful of top-level state files — resolves under one root, `dataDir`:
 
 ```json
-{ "dataDir": "~/.local/state/junco" }
+{ "dataDir": "~/.junco" }
 ```
 
-That's also the default, so most setups never need to set it at all. The shape underneath is fixed:
+That's also the default — the very directory `config.json` itself lives in, so a fresh install really is one folder — and most setups never need to set it at all. An install from before 0.10 keeps resolving to its old root, `~/.local/state/junco`, completely untouched, for as long as that root exists and `~/.junco` holds no data tree of its own yet; `junco data migrate` (below) is the only thing that ever relocates it. The shape underneath depends on which of two layouts the root uses — `flat` (every pre-0.10 install, byte-identical forever) or `v2` (below; every fresh `~/.junco` install, and anything `junco data migrate` has restructured):
 
 ```
-<dataDir>/                                   default: ~/.local/state/junco
+<dataDir>/                                   default: ~/.junco (same directory as config.json)
   .gitignore                                 contains "*" — self-ignoring (cargo target/ trick)
   queue/
     inbox/          processing/          done/          failed/
   review/
     assess/         (+ filed/)                          parked assess findings, one JSON per ticket
     comments/       (+ posted/ discarded/)              parked analyze drafts, one JSON per ticket
-  outbox/           (+ dead/)                           GitHub write ops, one JSON per op; created eagerly
-  mirror/
-    <owner>__<repo>/
-      meta.json                                         fetchedAt stamps per kind
-      issues/<n>.json                                   one file per issue, last-known GitHub state
-      prs/<n>.json                                      one file per junco PR
-  clones/
-    watched/<owner>/<repo>/                             dashboard-cloned watched repos
-    external/<owner>/<repo>/                             managed clones of unowned repos (fork/assess flow)
-  worktrees/                                            ephemeral PR-flow build worktrees
-  assess-history/                                       per-repo `junco assess` history, one JSON file per repo
-  history/                                              per-task finalize ledger, tasks-YYYY-MM.jsonl shards
-  transcripts/<ticket-id>.jsonl                         per-run event stream
-  watchlist.json    spend.json    metrics.json    worker.log    migrated.json
+  watchlist.json    migrated.json
+  migrate.lock                                          held only while `junco data migrate` is actively running
+  data/                                                 unrecoverable
+    outbox/         (+ dead/)                           GitHub write ops, one JSON per op; created eagerly
+    assess-history/                                       per-repo `junco assess` history, one JSON file per repo
+    history/                                              per-task finalize ledger, tasks-YYYY-MM.jsonl shards
+    transcripts/<ticket-id>.jsonl                         per-run event stream
+    spend.json       metrics.json
+  cache/                                                rm -rf-safe — rebuilds from GitHub/git on demand
+    mirror/
+      <owner>__<repo>/
+        meta.json                                         fetchedAt stamps per kind
+        issues/<n>.json                                   one file per issue, last-known GitHub state
+        prs/<n>.json                                      one file per junco PR
+    clones/
+      watched/<owner>/<repo>/                             dashboard-cloned watched repos
+      external/<owner>/<repo>/                             managed clones of unowned repos (fork/assess flow)
+    worktrees/                                            ephemeral PR-flow build worktrees
+    github-cache/                                         legacy TUI issue/PR cache, unrelated to `mirror/`
+    update-check.json                                     npm update-check cache
+  logs/
+    worker.log
 ```
 
-Every directory above except `clones/external/` and `worktrees/` is created eagerly at daemon startup, so nothing is invisible-until-first-use; those two are the exception because a legacy override (see below) can point them outside `dataDir` entirely, so a mkdir here could fabricate a stray empty directory nobody asked for. `mirror/` is reserved for a follow-up release (a read-only local mirror of GitHub issues/PRs behind the dashboard) and stays empty until then. The root also gets a self-`.gitignore` (contents `*`, written only when no file is already there), so pointing `dataDir` at a path inside a git checkout — including Junco's own — can never dirty a commit.
+Every directory above except `clones/external/`, `worktrees/`, and `github-cache/` is created eagerly at daemon startup, so nothing is invisible-until-first-use. The first two are the exception because a legacy override (see below) can point them outside `dataDir` entirely, so a mkdir here could fabricate a stray empty directory nobody asked for; `github-cache/` is the exception because it's the legacy TUI issue/PR cache (`tui/ghClient.ts` still owns it), created lazily on first fetch and excluded from `junco data`'s report below — it's slated for replacement by `mirror/` in a follow-up release, which is why `mirror/` itself stays empty until then. The root also gets a self-`.gitignore` (contents `*`, written only when no file is already there), so pointing `dataDir` at a path inside a git checkout — including Junco's own — can never dirty a commit.
 
-The dashboard's issue/PR cache (`github-cache/`) still lives directly under `dataDir/` today; it isn't part of this tree because it's slated for replacement by `mirror/` in that same follow-up release.
+`config.json`, the single-instance `worker.lock` next to it, and the bot account's isolated gh config dir (`gh/`, default `~/.junco/gh` — see [bot-account.md](bot-account.md)) all resolve independently of `dataDir`, off `config.json`'s own home — but by default that home is this same `~/.junco` directory, so they sit right alongside the tree above. None of the three are part of it, or of `junco data`'s report.
 
 ### Legacy per-subtree overrides
 
 Four older, narrower keys still work — each is a **deprecated override for one subtree only**, and setting one always wins for that subtree (over `dataDir`) with a one-line warning logged once at daemon startup and surfaced by `junco doctor` / `junco data`:
 
-| Legacy key                  | Overrides                                                                                     | Default when unset          |
-| --------------------------- | --------------------------------------------------------------------------------------------- | --------------------------- |
-| `vaultRoot` + `juncoSubdir` | the queue root (`<vaultRoot>/<juncoSubdir>`, same flat `inbox/processing/done/failed` layout) | `<dataDir>/queue`           |
-| `observability.stateDir`    | `dataDir` itself, for every subtree that doesn't have its own override                        | `~/.local/state/junco`      |
-| `git.worktreeRoot`          | the worktrees root                                                                            | `<dataDir>/worktrees`       |
-| `github.externalReposRoot`  | the external (unowned-repo) clones root                                                       | `<dataDir>/clones/external` |
+| Legacy key                  | Overrides                                                                                     | Default when unset                                                          |
+| --------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `vaultRoot` + `juncoSubdir` | the queue root (`<vaultRoot>/<juncoSubdir>`, same flat `inbox/processing/done/failed` layout) | `<dataDir>/queue`                                                           |
+| `observability.stateDir`    | `dataDir` itself, for every subtree that doesn't have its own override                        | `~/.junco`                                                                  |
+| `git.worktreeRoot`          | the worktrees root                                                                            | `<dataDir>/worktrees` (flat) / `<dataDir>/cache/worktrees` (v2)             |
+| `github.externalReposRoot`  | the external (unowned-repo) clones root                                                       | `<dataDir>/clones/external` (flat) / `<dataDir>/cache/clones/external` (v2) |
 
 Resolution order:
 
 ```
-dataDir      = observability.stateDir ?? dataDir ?? "~/.local/state/junco"
+dataDir      = observability.stateDir ?? dataDir ?? "~/.junco"      # or the legacy ~/.local/state/junco root, untouched, while it exists and ~/.junco holds no tree yet
 queueRoot    = vaultRoot ? <vaultRoot>/<juncoSubdir> : <dataDir>/queue
-worktreeRoot = git.worktreeRoot ?? <dataDir>/worktrees
-externalRoot = github.externalReposRoot ?? <dataDir>/clones/external
-watchedRoot  = <dataDir>/clones/watched              # no legacy override — always here
+worktreeRoot = git.worktreeRoot ?? <dataDir>/worktrees              # v2: <dataDir>/cache/worktrees
+externalRoot = github.externalReposRoot ?? <dataDir>/clones/external # v2: <dataDir>/cache/clones/external
+watchedRoot  = <dataDir>/clones/watched              # v2: <dataDir>/cache/clones/watched — no legacy override, always here
 ```
 
 Setting both `dataDir` and a legacy key is not an error: the legacy key wins for its own subtree, and the deprecation warning says so — every other subtree still resolves under `dataDir` normally. A fresh `junco config init` or wizard-written config never writes any of the four legacy keys, and writes `dataDir` itself only when it differs from the default — a fully-default fresh config carries no path keys at all.
@@ -92,40 +100,43 @@ Setting both `dataDir` and a legacy key is not an error: the legacy key wins for
 
 ```
 $ junco data
-junco data — root: /Users/you/.local/state/junco
+junco data — root: /Users/you/.junco
 
-queue      /Users/you/.local/state/junco/queue
-  inbox 2 · processing 1 · done 148 · failed 9
+queue      /Users/you/.junco/queue
+  inbox 2 · processing 1 · done 8 · failed 1
 
 review
-  assess    1 pending · 6 filed   /Users/you/.local/state/junco/review/assess
-  comments  0 pending · 4 posted · 1 discarded   /Users/you/.local/state/junco/review/comments
+  assess    1 pending · 6 filed   /Users/you/.junco/review/assess
+  comments  0 pending · 4 posted · 1 discarded   /Users/you/.junco/review/comments
 
-outbox     ops 0 · dead 0   /Users/you/.local/state/junco/outbox
+outbox     ops 0 · dead 0   /Users/you/.junco/data/outbox
 
-mirror     0 repos · 0 files   /Users/you/.local/state/junco/mirror
+mirror     0 repos · 0 files   /Users/you/.junco/cache/mirror
 
 clones
-  watched   1 repos   /Users/you/.local/state/junco/clones/watched
-  external  1 repos   /Users/you/.local/state/junco/clones/external
+  watched   1 repos   /Users/you/.junco/cache/clones/watched
+  external  1 repos   /Users/you/.junco/cache/clones/external
 
-worktrees  1 dirs   /Users/you/.local/state/junco/worktrees
+worktrees  1 dirs   /Users/you/.junco/cache/worktrees
 
-assess-history 3 repos   /Users/you/.local/state/junco/assess-history
+assess-history 3 repos   /Users/you/.junco/data/assess-history
 
-history 2 shards   /Users/you/.local/state/junco/history
+history 2 shards   /Users/you/.junco/data/history
 
-transcripts 158 files · 3.20 MB   /Users/you/.local/state/junco/transcripts
+transcripts 5 files · 9.77 KB   /Users/you/.junco/data/transcripts
 
 files
-  watchlist.json  1.20 KB   /Users/you/.local/state/junco/watchlist.json
-  spend.json      340 B · $12.41 today   /Users/you/.local/state/junco/spend.json
-  metrics.json    (absent)   /Users/you/.local/state/junco/metrics.json
-  worker.log      3.20 MB   /Users/you/.local/state/junco/worker.log
-  migrated.json   180 B   /Users/you/.local/state/junco/migrated.json
+  watchlist.json  13 B   /Users/you/.junco/watchlist.json
+  update-check.json41 B   /Users/you/.junco/cache/update-check.json
+  spend.json      34 B · $12.41 today   /Users/you/.junco/data/spend.json
+  metrics.json    3 B   /Users/you/.junco/data/metrics.json
+  worker.log      1.17 KB   /Users/you/.junco/logs/worker.log
+  migrated.json   25 B   /Users/you/.junco/migrated.json
 ```
 
-Every node is listed even when its directory doesn't exist yet (`(absent)` — normal before the first daemon start, or for an override nobody has populated); a legacy-overridden root prints a trailing ` ← legacy override: <key>  [deprecated]`, and any old-name directory still waiting on the automatic migration below prints a trailing `⚠ unmigrated: <from> → <to> (run 'junco data migrate')` line. `junco data --json` emits the same information as `{ root, paths, counts, legacy, pendingMigrations, deprecations }`.
+(`update-check.json`'s label is longer than the fixed-width column every other row pads to, so its size butts up against it with no space — that's the real formatter output, not a typo.)
+
+Every node is listed even when its directory doesn't exist yet (`(absent)` — normal before the first daemon start, or for an override nobody has populated); a legacy-overridden root prints a trailing ` ← legacy override: <key>  [deprecated]`, and any old-name directory still waiting on the automatic migration below prints a trailing `⚠ unmigrated: <from> → <to> (run 'junco data migrate')` line. `junco data --json` emits the same information as `{ root, layout, paths, counts, legacy, pendingMigrations, deprecations }`.
 
 ### Automatic migration (in place, at every daemon startup)
 
@@ -137,13 +148,21 @@ comment-review         → review/comments         repos         → clones/watc
 external                → clones/external         github-watchlist.json → watchlist.json
 ```
 
-(`external → clones/external` is skipped when `github.externalReposRoot` is legacy-set — there's nothing under `dataDir` to move in that case.) Renames are same-directory and atomic; each completed step is journaled to `<dataDir>/migrated.json` so re-running is a no-op. A destination that already exists but contains no files anywhere (only empty directories — e.g. scaffolding an earlier startup materialized) is replaced by the rename; a name collision (the destination holds at least one real file) is left untouched and reported by `junco doctor` / `junco data` instead of being guessed at — file-holding data is never deleted. This step never touches the ticket queue (see below), and it does not touch `github-cache/` (replaced by `mirror/` in a follow-up release, not renamed here).
+(`external → clones/external` is skipped when `github.externalReposRoot` is legacy-set — there's nothing under `dataDir` to move in that case.) Renames are same-directory and atomic; each completed step is journaled to `<dataDir>/migrated.json` so re-running is a no-op. A destination that already exists but contains no files anywhere (only empty directories — e.g. scaffolding an earlier startup materialized) is replaced by the rename; a name collision (the destination holds at least one real file) is left untouched and reported by `junco doctor` / `junco data` instead of being guessed at — file-holding data is never deleted. This step never touches the ticket queue (see below), and it does not touch `github-cache/` (replaced by `mirror/` in a follow-up release, not renamed here). It is also unrelated to the root move / v2 restructure below — this rename is same-directory and automatic; moving to a different root, or from `flat` to `v2`, only ever happens via the explicit, opt-in `junco data migrate`.
 
 ### `junco data migrate` — the opt-in full unification
 
-The ticket queue itself never moves automatically: `vaultRoot` is required by every config that predates this release, so leaving it set is always safe, and nothing silently relocates a live queue. `junco data migrate` is the explicit, opt-in command that finishes the job for a config still carrying legacy keys — it moves the queue directories into `<dataDir>/queue` (rename, falling back to copy+verify+delete across filesystems), runs the same in-place state-tree normalization described above, then rewrites `config.json` to drop `vaultRoot` / `juncoSubdir` / `observability.stateDir` (only the ones present) and set a customized `dataDir` (only if it isn't already the default) — through the same validated read/mutate/write path as `junco config set`.
+Two things never move on their own: a `vaultRoot` queue, and the root itself while it's still the legacy `~/.local/state/junco` (or an explicit `dataDir` that predates the `v2` shape) — leaving either alone is always safe, and nothing silently relocates live data. `junco data migrate` is the explicit, opt-in command that unifies all of it in one run, in order:
 
-It refuses to run while the daemon appears to be up — any `/health` response at all (even non-200) counts as "up", and so does a live-held `worker.lock` next to `config.json` (which catches daemons running with health disabled). Pass `--force` to skip both checks. It also holds a `<dataDir>/migrate.lock` for the whole run so two migrations can't race:
+1. Moves the `vaultRoot` queue (if set) into `<targetRoot>/queue` (rename, falling back to copy+verify+fsync+delete across filesystems).
+2. Runs the same in-place state-tree name-normalization described above.
+3. Restructures the rest of the tree into the `v2` shape (`outbox/` → `data/outbox`, `clones/` → `cache/clones`, `worktrees/` → `cache/worktrees`, `worker.log` → `logs/worker.log`, …), relocating it from the legacy root to `~/.junco` too if that's where it still lives.
+4. Moves the bot's gh creds, if they're still at the legacy `~/.config/junco/gh` (see [bot-account.md](bot-account.md)).
+5. Removes the legacy root once it's empty (including junco's own scaffolded `.gitignore`, if that's the only thing left — an operator-customized one is left in place and reported).
+6. Rewrites `config.json` to drop `vaultRoot` / `juncoSubdir` / `observability.stateDir` (only the ones present) and set a customized `dataDir` (only if the target isn't already the default) — through the same validated read/mutate/write path as `junco config set`.
+7. Relocates `config.json` itself from the legacy `~/.config/junco/config.json` (or `$XDG_CONFIG_HOME/junco/config.json`) to the canonical `~/.junco/config.json`, if that's still where this run loaded it from (rename, falling back to copy+verify+fsync+delete across filesystems). Never overwrites an existing canonical file — that's reported as a conflict instead. Once moved, config resolution finds it there on every subsequent run, so this step is a no-op after the first.
+
+It refuses to run while the daemon appears to be up — any `/health` response at all (even non-200) counts as "up", and so does a live-held `worker.lock` next to `config.json` (which catches daemons running with health disabled). Pass `--force` to skip both checks. It holds a `migrate.lock` at every root the run might touch — the target, and, for a cross-root move, the legacy root and (if different) the config's currently-resolved `dataDir` — so two migrations, or a migration racing a starting daemon, can't collide:
 
 ```bash
 junco data migrate --dry-run   # print the plan; change nothing
@@ -151,27 +170,55 @@ junco data migrate             # do it
 junco data migrate --force     # skip the daemon-up checks (health probe + pidfile)
 ```
 
+A machine still on the legacy root, with a legacy `vaultRoot` queue and a legacy bot gh login, plans like this:
+
 ```
 $ junco data migrate --dry-run
 junco data migrate: plan (dry-run — no changes made)
   config: vaultRoot/juncoSubdir are deprecated — the queue lives at <dataDir>/queue; run 'junco data migrate' to unify (docs/configuration.md)
+  config: data lives at the legacy ~/.local/state/junco root — run 'junco data migrate' to move it under ~/.junco (docs/configuration.md)
+  config: bot gh credentials live at the legacy ~/.config/junco/gh — run 'junco data migrate' to move them to ~/.junco/gh
 
 queue:
-  inbox: /Users/you/junco-vault/Junco/inbox -> /Users/you/.local/state/junco/queue/inbox
-  processing: /Users/you/junco-vault/Junco/processing -> /Users/you/.local/state/junco/queue/processing
-  done: /Users/you/junco-vault/Junco/done -> /Users/you/.local/state/junco/queue/done
-  failed: /Users/you/junco-vault/Junco/failed -> /Users/you/.local/state/junco/queue/failed
+  inbox: /Users/you/junco-vault/Junco/inbox -> /Users/you/.junco/queue/inbox
+  processing: /Users/you/junco-vault/Junco/processing -> /Users/you/.junco/queue/processing
+  done: /Users/you/junco-vault/Junco/done -> /Users/you/.junco/queue/done
+  failed: /Users/you/junco-vault/Junco/failed -> /Users/you/.junco/queue/failed
 
 state tree: nothing pending
+
+data root: /Users/you/.local/state/junco -> /Users/you/.junco
+  /Users/you/.local/state/junco/queue -> /Users/you/.junco/queue (nothing to move)
+  /Users/you/.local/state/junco/review -> /Users/you/.junco/review (nothing to move)
+  /Users/you/.local/state/junco/watchlist.json -> /Users/you/.junco/watchlist.json
+  /Users/you/.local/state/junco/migrated.json -> /Users/you/.junco/migrated.json (nothing to move)
+  /Users/you/.local/state/junco/outbox -> /Users/you/.junco/data/outbox (nothing to move)
+  /Users/you/.local/state/junco/assess-history -> /Users/you/.junco/data/assess-history
+  /Users/you/.local/state/junco/history -> /Users/you/.junco/data/history
+  /Users/you/.local/state/junco/transcripts -> /Users/you/.junco/data/transcripts
+  /Users/you/.local/state/junco/spend.json -> /Users/you/.junco/data/spend.json (nothing to move)
+  /Users/you/.local/state/junco/metrics.json -> /Users/you/.junco/data/metrics.json (nothing to move)
+  /Users/you/.local/state/junco/clones -> /Users/you/.junco/cache/clones
+  /Users/you/.local/state/junco/worktrees -> /Users/you/.junco/cache/worktrees
+  /Users/you/.local/state/junco/github-cache -> /Users/you/.junco/cache/github-cache
+  /Users/you/.local/state/junco/mirror -> /Users/you/.junco/cache/mirror (nothing to move)
+  /Users/you/.local/state/junco/update-check.json -> /Users/you/.junco/cache/update-check.json (nothing to move)
+  /Users/you/.local/state/junco/worker.log -> /Users/you/.junco/logs/worker.log (nothing to move)
+  (legacy root /Users/you/.local/state/junco would be removed once empty)
+
+gh config:
+  /Users/you/.config/junco/gh -> /Users/you/.junco/gh
 
 config.json:
   would remove: vaultRoot, juncoSubdir, observability.stateDir (if present)
   dataDir left unset (matches the default)
 
-state tree journal: /Users/you/.local/state/junco/migrated.json
+config: /Users/you/.config/junco/config.json -> /Users/you/.junco/config.json
+
+state tree journal: /Users/you/.junco/migrated.json
 ```
 
-A real (non-dry-run) run prints a matching receipt in place of the plan — what moved, what the state tree did, and what changed in `config.json` — and exits non-zero if any state-tree pair conflicted (both old and new names existed and the destination held real files; a destination containing only empty directories is repaired automatically). Nothing already moved is ever rolled back, so fixing a conflict by hand and re-running picks up exactly where it left off.
+A real (non-dry-run) run prints a matching receipt in place of the plan — what moved, what the state tree did, what the data-root and gh-config moves did, and what changed in `config.json` — and exits non-zero if any state-tree or data-root pair conflicted (both old and new names existed and the destination held real files; a destination containing only empty directories is repaired automatically and taken). Nothing already moved is ever rolled back, so fixing a conflict by hand and re-running picks up exactly where it left off — the plan is filesystem-driven (it re-probes what still exists under each old name on every run), not "have I run once before", so it converges no matter how many times you run it or where an earlier run was interrupted.
 
 ## Model resolution
 

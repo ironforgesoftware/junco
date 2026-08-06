@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeLocalCheapFn, type HealthBody } from "../src/tui/localSnapshot.js";
-import { OUTBOX_SUBDIR } from "../src/dataTree.js";
+import { dataTreePaths } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
 
 function makeCfg(root: string): Config {
@@ -85,7 +85,7 @@ describe("makeLocalCheapFn", () => {
   it("outbox: live + dead split via listOpsFrom", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-cheap3-"));
     const cfg = makeCfg(root);
-    const obx = join(cfg.dataDir, OUTBOX_SUBDIR);
+    const obx = dataTreePaths(cfg).outbox;
     const dead = join(obx, "dead");
     mkdirSync(dead, { recursive: true });
     writeFileSync(

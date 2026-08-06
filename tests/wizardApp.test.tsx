@@ -144,6 +144,8 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
       return { written: true, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };
     },
     flightCheck: async () => [{ verdict: "ok", label: "inference endpoint", detail: "up" }],
+    effectiveDataDir: "/sbx/home/.junco",
+    dataDirLegacyFallback: false,
     botGhConfigDir: "/sbx/junco-gh",
     detectBotLogin: async () => null,
     runGhLogin: async () => 0,
@@ -264,7 +266,7 @@ describe("WizardApp", () => {
     await until(() => (lastFrame() ?? "").includes("Where should junco"));
     await press(stdin, "q");
     expect(outcome).toBe("none");
-    await until(() => (lastFrame() ?? "").includes("~/.local/state/juncoq"));
+    await until(() => (lastFrame() ?? "").includes("~/.juncoq"));
   });
 
   it("clicking the q quit legend chip immediately on a text-editing chapter does NOT cancel", async () => {
