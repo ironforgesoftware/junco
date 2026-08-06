@@ -34,4 +34,11 @@ CONFIG="$SB/.junco/config.json"
 INBOX="$("$JUNCO" inbox-path)"
 [ -d "$INBOX" ] || { echo "FAIL: inbox dir missing: $INBOX"; exit 1; }
 
+# Single-root containment: nothing may sprawl outside ~/.junco (plan 2026-08-03)
+if [ -e "$SB/.local/state/junco" ] || [ -e "$SB/.config/junco" ]; then
+  echo "FAIL: junco wrote outside \$HOME/.junco" >&2
+  ls -la "$SB/.local/state" "$SB/.config" 2>/dev/null >&2 || true
+  exit 1
+fi
+
 echo "package smoke OK (config: $CONFIG, inbox: $INBOX)"

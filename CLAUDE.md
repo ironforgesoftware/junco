@@ -65,7 +65,7 @@ a semantic merge. Details: `docs/parallel-sessions.md`.
 
 - `node dist/cli.js doctor` — preflight config, git/gh auth, endpoint, model, dirs.
 - `node dist/cli.js status` / `list` / `logs -f` — daemon, queue, and log visibility; health JSON at `http://127.0.0.1:8787/health` (default).
-- Per-ticket event transcripts (the debugging record for failed runs): `<state_dir>/transcripts/<ticket-id>.jsonl`, default `~/.local/state/junco/`.
+- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`).
 
 ## Git & release
 

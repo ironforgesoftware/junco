@@ -92,11 +92,13 @@ export interface AppProps {
   watchlistFile: string; // read/write via watchlist.ts
   /** Resolved config path — spawned palette commands target the same config. */
   configPath: string;
-  /** Managed clones root (<dataDir>/clones/watched) — auto-clone destination. */
+  /** Managed clones root (`<dataDir>/clones/watched`, or `<dataDir>/cache/clones/watched`
+   * under the v2 layout) — auto-clone destination. */
   clonesDir: string;
-  /** The daemon's log file (<dataDir>/worker.log) — the LOCAL `logs` section
-   * and its overlay tail it via useLogTail. Resolved by dashboardCmd where cfg
-   * is in scope; read only while the logs surface is on screen. */
+  /** The daemon's log file (`<dataDir>/worker.log`, or `<dataDir>/logs/worker.log`
+   * under the v2 layout) — the LOCAL `logs` section and its overlay tail it via
+   * useLogTail. Resolved by dashboardCmd where cfg is in scope; read only while
+   * the logs surface is on screen. */
   logPath: string;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */
