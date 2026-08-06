@@ -407,6 +407,12 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     mkdirSync(join(legacyRoot, "queue", "inbox"), { recursive: true });
     writeFileSync(join(legacyRoot, "queue", "inbox", "t1.md"), "---\nid: t1\n---\nbody\n", "utf8");
 
+    // I-1 (final review 2026-08-05): every real legacy root also holds the
+    // self-written `.gitignore` (`ensureDataTree`'s own scaffold) — omitting
+    // it here would let the happy-path test pass without exercising the
+    // ENOTEMPTY the real rmdir hits on every actual machine.
+    writeFileSync(join(legacyRoot, ".gitignore"), "*\n", "utf8");
+
     // Old-name state-tree subdir: normalizes to clones/watched (migrateStateTree),
     // THEN relocates under cache/clones via flatToV2Pairs' single `clones` pair.
     mkdirSync(join(legacyRoot, "repos", "acme", "repo"), { recursive: true });
@@ -507,6 +513,32 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     expect(out2.join("")).toMatch(/queue: nothing to move/);
   });
 
+  it("I-1: leaves an operator-customized legacy-root .gitignore in place and reports it as a leftover, rather than removing it", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(legacyRoot, { recursive: true });
+    // NOT junco's own scaffold content — an operator customized it.
+    writeFileSync(join(legacyRoot, ".gitignore"), "*.local\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0); // an unremoved root is reported, not a conflict exit
+    expect(existsSync(join(legacyRoot, ".gitignore"))).toBe(true);
+    expect(readFileSync(join(legacyRoot, ".gitignore"), "utf8")).toBe("*.local\n");
+    expect(existsSync(legacyRoot)).toBe(true);
+    expect(out.join("")).toMatch(/not removed — still contains: \.gitignore/);
+  });
+
   it("--dry-run prints the cross-root plan and moves nothing", async () => {
     const root = trackRoot(freshRoot());
     const legacyRoot = join(tmpHome, ".local", "state", "junco");
@@ -572,6 +604,132 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     expect(text).not.toContain(join(targetRoot, "migrated.json"));
     // The throw came before the data-root move phase ever ran.
     expect(existsSync(join(targetRoot, "migrated.json"))).toBe(false);
+  });
+});
+
+describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", () => {
+  let originalHome: string | undefined;
+  let originalXdgConfigHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    tmpHome = freshRoot("junco-dmc-cfgmove-");
+    process.env.HOME = tmpHome;
+    delete process.env.XDG_CONFIG_HOME; // hermetic: pin legacyConfigPath to $HOME/.config
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it("relocates a legacy-XDG config to the canonical ~/.junco/config.json, journals it, and resolution picks it up next run", async () => {
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(canonical)).toBe(true);
+    expect(existsSync(configPath)).toBe(false);
+    expect(JSON.parse(readFileSync(canonical, "utf8")).model).toEqual({ id: "test-model" });
+    expect(out.join("")).toContain(`config:\n  moved ${configPath} -> ${canonical}`);
+
+    // Journaled at the target root, same as every other pair.
+    const journal = JSON.parse(readFileSync(join(tmpHome, ".junco", "migrated.json"), "utf8")) as {
+      steps: Array<{ from: string; to: string; action: string }>;
+    };
+    expect(
+      journal.steps.some(
+        (s) => s.from === configPath && s.to === canonical && s.action === "renamed",
+      ),
+    ).toBe(true);
+
+    // Resolution finds the relocated file next run — the split-brain the
+    // whole plan exists to prevent never opens back up.
+    const { resolveConfigPath } = await import("../src/config.js");
+    expect(resolveConfigPath({ env: { HOME: tmpHome } })).toBe(canonical);
+
+    // Re-run is a no-op: configPath now resolves canonically, so
+    // configPathIsLegacy is false and the phase never re-fires.
+    const reloaded = loadConfig(canonical);
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      reloaded,
+      canonical,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(0);
+    expect(out2.join("")).toContain("config: nothing to relocate");
+  });
+
+  it("never overwrites an existing canonical config — receipted as a conflict, both files left untouched, exit 1", async () => {
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "legacy-model" } }), "utf8");
+
+    const canonicalDir = join(tmpHome, ".junco");
+    mkdirSync(canonicalDir, { recursive: true });
+    const canonical = join(canonicalDir, "config.json");
+    writeFileSync(canonical, JSON.stringify({ model: { id: "canonical-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(1);
+    expect(existsSync(configPath)).toBe(true);
+    expect(existsSync(canonical)).toBe(true);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).model).toEqual({ id: "legacy-model" });
+    expect(JSON.parse(readFileSync(canonical, "utf8")).model).toEqual({ id: "canonical-model" });
+    expect(out.join("")).toMatch(/config:\n {2}.*skipped-conflict/);
+    expect(out.join("")).toMatch(/canonical config already exists — not overwritten/);
+  });
+
+  it("--dry-run prints the pending config move and touches nothing", async () => {
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toContain(`config: ${configPath} -> ${canonical}`);
+    expect(existsSync(canonical)).toBe(false);
+    expect(existsSync(configPath)).toBe(true);
+    expect(existsSync(join(tmpHome, ".junco"))).toBe(false); // dry-run never mkdirs
   });
 });
 

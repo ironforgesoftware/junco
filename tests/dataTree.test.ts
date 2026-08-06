@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { dataTreePaths, ensureDataTree, sandboxDenyPaths } from "../src/dataTree.js";
+import { legacyConfigPath } from "../src/config.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
 /** Full-Config fixture (same shape as tests/daemon.test.ts's makeConfig) —
@@ -184,6 +185,10 @@ describe("sandboxDenyPaths", () => {
       ]),
     );
     expect(deny.files).toContain("/sbxroot/home/.junco/config.json");
+    // I-3 (final review 2026-08-05): the legacy XDG config path is denied
+    // too, since an un-migrated machine's daemon actually reads it — the
+    // ACTIVE config, not the canonical one, may hold model.apiKey.
+    expect(deny.files).toContain(legacyConfigPath({ HOME: "/sbxroot/home" }));
     // never an ancestor of the agent's writable roots (backend.ts:42-53 invariant):
     for (const d of deny.dirs) {
       expect("/sbxroot/home/.junco/cache/worktrees".startsWith(d + "/")).toBe(false);

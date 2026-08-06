@@ -48,11 +48,23 @@
  * `migrated.json` self-reference note below) → gh creds move (journaled) →
  * legacy root removal (filesystem-driven — attempted whenever the fixed
  * legacy path still exists, not gated on `cfg.legacy.dataRoot`) →
- * config.json rewrite → receipt. Conflicts (state-tree or data-root) and a
- * failed config rewrite are reported via a non-zero exit code AFTER every
- * non-conflicted step has completed — nothing already moved/renamed is ever
- * rolled back, and the receipt stays honest about phases that never ran or
- * were interrupted (see printReceipt).
+ * config.json rewrite → config relocation → receipt. Conflicts (state-tree
+ * or data-root) and a failed config rewrite are reported via a non-zero exit
+ * code AFTER every non-conflicted step has completed — nothing already
+ * moved/renamed is ever rolled back, and the receipt stays honest about
+ * phases that never ran or were interrupted (see printReceipt).
+ *
+ * Config relocation (I-2, final review 2026-08-05): the rewrite above edits
+ * config.json IN PLACE, at whatever path THIS run loaded it from — on an
+ * upgraded machine still resolving to the legacy XDG path
+ * (`legacyConfigPath`), that alone never makes the config single-root. The
+ * final phase relocates it to the canonical path (`defaultUserConfigPath`)
+ * whenever `configPath` IS the legacy path — decoupled from `targetRoot`
+ * (a config file can be legacy-located independently of where the DATA
+ * lives), and safe to re-run: the moment the canonical file exists,
+ * `resolveConfigPath` (config.ts) picks it up and this phase becomes a
+ * no-op. A pre-existing canonical file is always a conflict — this phase
+ * never overwrites it.
  *
  * A destination a PRIOR PHASE OF THIS SAME RUN already wrote to is never
  * replaceable (task review Critical 2): for a machine that is both
@@ -90,6 +102,7 @@ import {
   openSync,
   fsyncSync,
   closeSync,
+  unlinkSync,
 } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import type { Config, Paths } from "./types.js";
@@ -100,6 +113,8 @@ import {
   validateConfigObject,
   expandHome,
   juncoHome,
+  legacyConfigPath,
+  defaultUserConfigPath,
 } from "./config.js";
 import {
   migrateStateTree,
@@ -389,11 +404,15 @@ function rewriteConfig(
  * data-root move ever gets a chance to relocate it, so on a cross-root
  * machine the target's migrated.json may not exist yet at this point); a
  * config rewrite that never completed prints "not rewritten (error)" rather
- * than the false "no changes needed". The `data root:`/`gh config:` sections
- * are built incrementally by the caller (pushed as each pair completes), so a
- * throw mid-loop leaves them holding exactly the pairs that landed — no
- * separate "interrupted" sentinel needed (their OWN durable receipt is the
- * journal at the target root, appended in a `finally` — see runDataMigrate). */
+ * than the false "no changes needed". The `data root:`/`gh config:`/`config:`
+ * sections are built incrementally by the caller (pushed as each pair
+ * completes), so a throw mid-loop leaves them holding exactly the pairs that
+ * landed — no separate "interrupted" sentinel needed (their OWN durable
+ * receipt is the journal at the target root, appended in a `finally` — see
+ * runDataMigrate). `configMoveReceipt` (I-2) is separate from `configReceipt`
+ * — the former is the config FILE's relocation (legacy XDG -> canonical
+ * ~/.junco/config.json), the latter is the content rewrite at whatever path
+ * it currently lives. */
 function printReceipt(
   print: (s: string) => void,
   queueReceipt: string[],
@@ -402,6 +421,7 @@ function printReceipt(
   dataRootConflicts: string[],
   ghReceipt: string[],
   configReceipt: string[] | null,
+  configMoveReceipt: string[],
   stateTreeJournalFile: string,
 ): void {
   print("junco data migrate: receipt\n");
@@ -451,6 +471,11 @@ function printReceipt(
         : "\nconfig.json: no changes needed\n",
     );
   }
+  print(
+    configMoveReceipt.length > 0
+      ? `\nconfig:\n${configMoveReceipt.map((l) => `  ${l}`).join("\n")}\n`
+      : "\nconfig: nothing to relocate\n",
+  );
 }
 
 export async function runDataMigrate(
@@ -490,6 +515,10 @@ export async function runDataMigrate(
   // unrelated dataDir never has `~/.local/state/junco` swept in).
   const targetRoot = migrationTargetRoot(cfg, env);
   const legacyRoot = fixedLegacyRoot(targetRoot, env);
+  // I-2: whether THIS run's config lives at the legacy XDG path — decoupled
+  // from targetRoot/legacyRoot (data-root state), see the module doc comment.
+  const canonicalConfigPath = defaultUserConfigPath(env);
+  const configPathIsLegacy = configPath === legacyConfigPath(env);
 
   // 1a. Daemon-up refusal — both signals skipped entirely by --force.
   if (!opts.force) {
@@ -588,6 +617,16 @@ export async function runDataMigrate(
         ? `  would set: dataDir = ${targetRoot}\n`
         : "  dataDir left unset (matches the default)\n",
     );
+    if (configPathIsLegacy) {
+      print(
+        existsFn(canonicalConfigPath)
+          ? `\nconfig: ${configPath} -> ${canonicalConfigPath} ` +
+              `(canonical path already exists — would be a skipped-conflict, never overwritten)\n`
+          : `\nconfig: ${configPath} -> ${canonicalConfigPath}\n`,
+      );
+    } else {
+      print(`\nconfig: no relocation needed (already at ${configPath})\n`);
+    }
     print(`\nstate tree journal: ${migratedFile}\n`);
     return 0;
   }
@@ -631,6 +670,10 @@ export async function runDataMigrate(
   // relocate it, so "interrupted" must point here, not at the target.
   const stateTreeJournalFile = join(cfg.dataDir, "migrated.json");
   let configReceipt: string[] | null = null;
+  // I-2: the config-relocation phase's own receipt/conflict tracking —
+  // separate from configReceipt (the content-rewrite phase above it).
+  const configMoveReceipt: string[] = [];
+  let configMoveConflict = false;
 
   try {
     // 3. Queue move (legacy vaultRoot only). Re-probe existence under the
@@ -791,6 +834,30 @@ export async function runDataMigrate(
         legacyLock.release();
         locksByRoot.delete(legacyRoot);
       }
+      // I-1 (final review 2026-08-05, empirically confirmed): every root
+      // ensureDataTree has ever materialized carries a self-written
+      // `.gitignore` (content exactly `*\n`) that flatToV2Pairs has no pair
+      // for, so the rmdir below would ALWAYS fail ENOTEMPTY on a real
+      // machine — the advertised legacy-root removal never fired. Only
+      // junco's own scaffold (exact byte match) is removed here; anything
+      // else (an operator-customized `.gitignore`) is left in place and
+      // reported below like any other leftover.
+      const legacyGitignore = join(legacyRoot, ".gitignore");
+      if (existsFn(legacyGitignore)) {
+        let content: string | null = null;
+        try {
+          content = readFileFn(legacyGitignore);
+        } catch {
+          content = null; // unreadable — leave it, let rmdir report it as usual
+        }
+        if (content === "*\n") {
+          try {
+            unlinkSync(legacyGitignore);
+          } catch {
+            /* best-effort — rmdir below just reports it as a leftover */
+          }
+        }
+      }
       try {
         rmdirSync(legacyRoot);
         dataRootReceipt.push(`removed legacy root ${legacyRoot}`);
@@ -812,7 +879,45 @@ export async function runDataMigrate(
     // 8. Config rewrite.
     configReceipt = rewriteConfig(configPath, targetRoot, readFileFn, writeFileFn, renameFn);
 
-    // 9. Receipt.
+    // 9. Config relocation (I-2 — see the module doc comment). Only when
+    // THIS run's config actually lives at the legacy XDG path; a canonical-
+    // already machine (the common case) never reaches moveDataRootPair.
+    // Reuses moveDataRootPair verbatim (file-aware since #196's
+    // verifyCopyPath/fsyncCopiedPath dispatch on statSync) — its own
+    // existsFn(to) check is what makes a pre-existing canonical file an
+    // unconditional skipped-conflict, never overwritten. Journaled at the
+    // target root exactly like every other pair above, so a re-run (config
+    // already relocated, resolveConfigPath now finds it) sees nothing left
+    // to do here.
+    if (configPathIsLegacy) {
+      const action = moveDataRootPair(
+        configPath,
+        canonicalConfigPath,
+        existsFn,
+        renameFn,
+        copyDirFn,
+        syncPathFn,
+      );
+      const step: MigrationStep = {
+        from: configPath,
+        to: canonicalConfigPath,
+        action: action === "skipped-conflict" ? "skipped-conflict" : "renamed",
+      };
+      appendJournal(migratedFile, [step], readFileFn, writeFileFn, renameFn);
+      if (action === "skipped-conflict") {
+        configMoveConflict = true;
+        configMoveReceipt.push(
+          `${configPath} -> ${canonicalConfigPath}: skipped-conflict ` +
+            `(canonical config already exists — not overwritten; resolve manually)`,
+        );
+      } else {
+        configMoveReceipt.push(
+          `moved ${configPath} -> ${canonicalConfigPath}${action === "copied" ? " (cross-device)" : ""}`,
+        );
+      }
+    }
+
+    // 10. Receipt.
     printReceipt(
       print,
       queueReceipt,
@@ -821,11 +926,12 @@ export async function runDataMigrate(
       dataRootConflicts,
       ghReceipt,
       configReceipt,
+      configMoveReceipt,
       stateTreeJournalFile,
     );
 
     const stateConflicts = typeof stateOutcome === "string" ? 0 : stateOutcome.conflicts.length;
-    const totalConflicts = stateConflicts + dataRootConflicts.length;
+    const totalConflicts = stateConflicts + dataRootConflicts.length + (configMoveConflict ? 1 : 0);
     if (totalConflicts > 0) {
       print(`\njunco data migrate: ${totalConflicts} conflict(s) — resolve manually and re-run\n`);
       return 1;
@@ -840,6 +946,7 @@ export async function runDataMigrate(
       dataRootConflicts,
       ghReceipt,
       configReceipt,
+      configMoveReceipt,
       stateTreeJournalFile,
     );
     print(`\njunco data migrate: ${e instanceof Error ? e.message : String(e)}\n`);

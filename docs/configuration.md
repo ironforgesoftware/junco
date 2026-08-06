@@ -158,8 +158,9 @@ Two things never move on their own: a `vaultRoot` queue, and the root itself whi
 2. Runs the same in-place state-tree name-normalization described above.
 3. Restructures the rest of the tree into the `v2` shape (`outbox/` → `data/outbox`, `clones/` → `cache/clones`, `worktrees/` → `cache/worktrees`, `worker.log` → `logs/worker.log`, …), relocating it from the legacy root to `~/.junco` too if that's where it still lives.
 4. Moves the bot's gh creds, if they're still at the legacy `~/.config/junco/gh` (see [bot-account.md](bot-account.md)).
-5. Removes the legacy root once it's empty.
+5. Removes the legacy root once it's empty (including junco's own scaffolded `.gitignore`, if that's the only thing left — an operator-customized one is left in place and reported).
 6. Rewrites `config.json` to drop `vaultRoot` / `juncoSubdir` / `observability.stateDir` (only the ones present) and set a customized `dataDir` (only if the target isn't already the default) — through the same validated read/mutate/write path as `junco config set`.
+7. Relocates `config.json` itself from the legacy `~/.config/junco/config.json` (or `$XDG_CONFIG_HOME/junco/config.json`) to the canonical `~/.junco/config.json`, if that's still where this run loaded it from (rename, falling back to copy+verify+fsync+delete across filesystems). Never overwrites an existing canonical file — that's reported as a conflict instead. Once moved, config resolution finds it there on every subsequent run, so this step is a no-op after the first.
 
 It refuses to run while the daemon appears to be up — any `/health` response at all (even non-200) counts as "up", and so does a live-held `worker.lock` next to `config.json` (which catches daemons running with health disabled). Pass `--force` to skip both checks. It holds a `migrate.lock` at every root the run might touch — the target, and, for a cross-root move, the legacy root and (if different) the config's currently-resolved `dataDir` — so two migrations, or a migration racing a starting daemon, can't collide:
 
@@ -211,6 +212,8 @@ gh config:
 config.json:
   would remove: vaultRoot, juncoSubdir, observability.stateDir (if present)
   dataDir left unset (matches the default)
+
+config: /Users/you/.config/junco/config.json -> /Users/you/.junco/config.json
 
 state tree journal: /Users/you/.junco/migrated.json
 ```

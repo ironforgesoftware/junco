@@ -8,7 +8,7 @@
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config, Paths } from "./types.js";
-import { queuePaths, defaultUserConfigPath } from "./config.js";
+import { queuePaths, defaultUserConfigPath, legacyConfigPath } from "./config.js";
 
 export const REVIEW_ASSESS_SUBDIR = "review/assess";
 export const REVIEW_COMMENTS_SUBDIR = "review/comments";
@@ -192,7 +192,13 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * `env` resolves the canonical config file location (`defaultUserConfigPath`)
  * — it may hold `model.apiKey`; before the single-root move the config lived
  * outside the data root and escaped this deny list entirely, so folding it
- * in here closes that gap.
+ * in here closes that gap. `legacyConfigPath(env)` is denied too (I-3, final
+ * review 2026-08-05): on an un-migrated machine the daemon actually reads
+ * the legacy XDG path, not the canonical one — denying only the canonical
+ * path would leave the ACTIVE config (and its possible `model.apiKey`)
+ * agent-readable until `junco data migrate` runs. A nonexistent deny file is
+ * already the norm in this list (`metricsFile` is writer-less today), so
+ * both sandbox backends tolerate a legacy path that doesn't exist.
  */
 export function sandboxDenyPaths(
   cfg: Config,
@@ -225,6 +231,7 @@ export function sandboxDenyPaths(
       p.logFile,
       p.migratedFile,
       defaultUserConfigPath(env), // may hold model.apiKey — see doc comment above
+      legacyConfigPath(env), // I-3: the ACTIVE config on an un-migrated machine
     ],
   };
 }

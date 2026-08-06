@@ -14,8 +14,10 @@ npm pack --pack-destination "$TMP" >/dev/null
 npm install -g --prefix "$TMP/prefix" "$TMP"/ironforgesoftware-junco-*.tgz >/dev/null
 JUNCO="$TMP/prefix/bin/junco"
 
-# Sandbox: config resolution prefers ./config.json then XDG — point both at TMP
-# so the smoke run can never touch a real setup.
+# Sandbox: config resolution is env-pure — canonical ~/.junco/config.json,
+# falling back to the legacy XDG path only while the canonical file doesn't
+# exist (never argv/cwd) — point both HOME and XDG_CONFIG_HOME at TMP so the
+# smoke run can never touch a real setup.
 SB="$TMP/sandbox"
 mkdir -p "$SB"
 cd "$SB"
