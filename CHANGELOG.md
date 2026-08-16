@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-16
+
+### Changed
+
+- **Breaking:** junco now lives under a single root: `~/.junco`. The config's canonical location is `~/.junco/config.json`, and the default data root is `~/.junco` with a reorganized v2 layout — durable state under `data/` (outbox, history, assess-history, transcripts, spend.json, metrics.json), regenerable state under `cache/` (mirror, clones, worktrees, github-cache, update-check.json — `rm -rf ~/.junco/cache` is always safe), logs under `logs/`, and `queue/`, `review/`, `watchlist.json` at the root. Existing installs keep working untouched: while `~/.junco` holds no data tree and the legacy `~/.local/state/junco` root exists, junco keeps using the legacy root in its flat layout and surfaces a deprecation pointing at `junco data migrate`. An explicit `dataDir` is honored verbatim and never triggers the fallback.
+- **Breaking:** config resolution is environment-only. The config is found at `~/.junco/config.json` (the legacy `~/.config/junco/config.json` is honored until migrated); `./config.json` in the current working directory is no longer consulted, so the directory a command runs from can never select a different config — the root cause of a split-queue incident where the dashboard and the worker disagreed about the inbox. The `--config` flag is deprecated and inert: still parsed so installed pre-0.10 service units don't crash, ignored for resolution, with a one-line stderr notice.
+- Service units are rendered flagless — launchd/systemd invocations end at `start` with no `--config`; `junco restart` still discovers pre-0.10 flagged units. `worker.lock` now sits next to the canonical config at `~/.junco/worker.lock`.
+- The bot account's gh config home default moves from `~/.config/junco/gh` to `~/.junco/gh`. An existing legacy login keeps working until `junco data migrate` moves it; an explicitly configured `botAccount.configDir` is honored as-is.
+- The setup wizard follows the single root: the workspace default and placeholder are `~/.junco`, and when existing legacy data is detected the Workspace chapter says so ("found existing data at … — junco will keep using it") instead of silently defaulting elsewhere. Saving with defaults still writes no explicit `dataDir` key.
+- The agent sandbox now denies the config file itself (it can hold `model.apiKey`) — at the canonical location, and on a not-yet-migrated machine at the legacy location too, since that is the active config there.
+
+### Added
+
+- `junco data migrate` now unifies everything under `~/.junco`: it moves the data tree (including the flat→v2 restructure), the bot gh credentials, and the config file itself into the single root, journaling every step to `migrated.json`. It refuses to run while the daemon is up (`--force` overrides), takes a `migrate.lock` at every root it may touch, resumes cleanly after an interruption, and never overwrites: conflicts are reported, exit non-zero, and nothing is rolled back. `--dry-run` prints the full plan without touching anything. The emptied legacy root is removed afterwards.
+- Pending single-root migration is reported everywhere it matters: `junco data` marks a legacy root with `legacy — run 'junco data migrate'` (and gains `layout` + `legacy` fields in `--json`), `junco doctor` folds the pending moves into its `unmigrated data dirs` warning, and daemon startup prints the config deprecations.
+
+### Fixed
+
+- `junco data migrate` could never actually remove the emptied legacy root: the root's own scaffolded `.gitignore` made the removal fail every time. It is now removed when its content is exactly the scaffolded `*` line; a customized one is left in place and reported.
+- On a not-yet-migrated machine the active (legacy-path) config file was readable from inside the agent sandbox; both config locations are now on the deny list.
+- A live config edit while a daemon restart was pending could pair the frozen `dataDir` with a live `dataLayout` and split the data tree; `dataLayout` is now pinned alongside `dataDir` across restarts.
+
+### Internal
+
+- All data-tree path construction routes through one `dataTreePaths(cfg)` table (~15 modules previously joined paths ad hoc); the packaged smoke test now asserts containment — a fresh `config init` writes nothing outside `$HOME/.junco`.
+- Dependency bumps via dependabot: eslint 9 → 10 (dev), plus brace-expansion and postcss security patches (transitive). Runtime dependencies unchanged.
+- Docs: `configuration.md` and `operations.md` rewritten for the single root (v2 tree diagram, migrate walkthrough, flagless service snippets); new watercolor junco mascot artwork.
+
 ## [0.9.1] - 2026-07-26
 
 ### Changed
