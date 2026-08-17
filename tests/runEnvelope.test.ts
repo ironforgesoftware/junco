@@ -63,6 +63,19 @@ function memorySink(lines: string[]) {
   };
 }
 
+/** A sink whose write() and end() both throw — exercises the #78 best-effort
+ *  discipline: observability failures must never change the run's outcome. */
+function throwingSink() {
+  return () => ({
+    write: () => {
+      throw new Error("sink write boom");
+    },
+    end: () => {
+      throw new Error("sink end boom");
+    },
+  });
+}
+
 describe("runEnveloped", () => {
   // makeConfig(seams, overrides) — cfg() adapts the brief's `{ ...makeConfig() }`
   // spread to the real two-arg signature: seams above (supervisorEnabled: true is
@@ -142,5 +155,37 @@ describe("runEnveloped", () => {
     expect(r.finalText).toBe("a");
     expect(lines).toEqual([]);
     expect(spent).toEqual([0.1]);
+  });
+
+  it("degrades a throwing transcript sink to a warning — a successful run still resolves with its result and records spend", async () => {
+    const spent: number[] = [];
+    const result = await runEnveloped(
+      cfg(),
+      { ticketId: "t-1", flow: "qa", body: "answer me", cwd: "/w", timeoutMs: 5000 },
+      {
+        createSession: fakeSession("hi", 0.25),
+        spend: { recordUsd: (n) => spent.push(n) },
+        transcriptSink: throwingSink(),
+        fileExists: () => false,
+      },
+    );
+    expect(result.finalText).toBe("hi");
+    expect(spent).toEqual([0.25]);
+  });
+
+  it("rethrows the ORIGINAL error unchanged even when the transcript sink also throws", async () => {
+    await expect(
+      runEnveloped(
+        cfg(),
+        { ticketId: "t-1", flow: "qa", body: "q", cwd: "/w", timeoutMs: 5000 },
+        {
+          createSession: async () => {
+            throw new Error("boom");
+          },
+          transcriptSink: throwingSink(),
+          fileExists: () => false,
+        },
+      ),
+    ).rejects.toThrow("boom");
   });
 });

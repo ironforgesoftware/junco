@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import type { Config, RunResult } from "../types.js";
 import { transcriptPathFor } from "../slug.js";
 import { dataTreePaths } from "../dataTree.js";
+import { log } from "../logging.js";
 import { GuardManager, type GuardManagerOptions, type GuardDecision } from "./guardManager.js";
 import {
   defaultTranscriptSink,
@@ -78,6 +79,48 @@ export function openTicketTranscript(
 }
 
 /**
+ * Best-effort transcript write (#78 discipline, mirroring session.ts:271-283):
+ * a broken sink (a full disk, a closed stream) must NOT throw up through
+ * `runEnveloped` and turn a completed/failed run into a rejection the caller
+ * never asked for — degrade to a warning instead. Observability must never
+ * change the run's outcome.
+ */
+function writeRecord(sink: TranscriptSink | null, line: string): void {
+  if (!sink) return;
+  try {
+    sink.write(line);
+  } catch (err) {
+    log.warn("transcript record write failed; ignoring", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Same best-effort discipline for closing the sink (mirrors session.ts:369-376). */
+function endSink(sink: TranscriptSink | null): void {
+  if (!sink) return;
+  try {
+    sink.end();
+  } catch (err) {
+    log.warn("transcript sink end() failed; ignoring", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Shared by both run_end write sites (success + catch) — one field list. */
+function writeRunEnd(sink: TranscriptSink | null, fields: Omit<RunEndRecord, "type" | "ts">): void {
+  writeRecord(
+    sink,
+    JSON.stringify({
+      type: "junco_run_end",
+      ts: new Date().toISOString(),
+      ...fields,
+    } satisfies RunEndRecord) + "\n",
+  );
+}
+
+/**
  * The single wrapper every junco agent run goes through: opens/frames the
  * per-ticket transcript (junco_meta on first write, junco_run_start/end
  * bracketing the run), builds the guard manager, calls `runAgent`, and
@@ -99,7 +142,8 @@ export async function runEnveloped(
     );
     sink = opened.sink;
     if (sink && opened.created) {
-      sink.write(
+      writeRecord(
+        sink,
         JSON.stringify({
           type: "junco_meta",
           version: TRANSCRIPT_VERSION,
@@ -110,7 +154,8 @@ export async function runEnveloped(
     }
     // Reconstructability (spec 1b): modelId is a STRING on purpose — never
     // serialize cfg.model (it can carry apiKey).
-    sink?.write(
+    writeRecord(
+      sink,
       JSON.stringify({
         type: "junco_run_start",
         flow: spec.flow,
@@ -140,37 +185,30 @@ export async function runEnveloped(
     // Spend BEFORE any caller branching — parity with every migrated site
     // ("the dollars were spent regardless of what the ticket does next").
     deps.spend?.recordUsd(result.usage.costUsd);
-    sink?.write(
-      JSON.stringify({
-        type: "junco_run_end",
-        errorMessage: result.errorMessage,
-        stopReason: result.stopReason,
-        timedOut: result.timedOut,
-        abortedByGuard: result.abortedByGuard,
-        usage: result.usage,
-        durationMs: result.durationMs,
-        ts: new Date().toISOString(),
-      } satisfies RunEndRecord) + "\n",
-    );
+    writeRunEnd(sink, {
+      errorMessage: result.errorMessage,
+      stopReason: result.stopReason,
+      timedOut: result.timedOut,
+      abortedByGuard: result.abortedByGuard,
+      usage: result.usage,
+      durationMs: result.durationMs,
+    });
     return result;
   } catch (e) {
     // A rejecting session factory throws before/inside runAgent; the frame
-    // still gets a run_end so replay sees the boundary. Rethrow unchanged —
-    // crash containment stays the callers' business (runOnce.ts top-level).
-    sink?.write(
-      JSON.stringify({
-        type: "junco_run_end",
-        errorMessage: e instanceof Error ? e.message : String(e),
-        stopReason: null,
-        timedOut: false,
-        abortedByGuard: false,
-        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
-        durationMs: Date.now() - start,
-        ts: new Date().toISOString(),
-      } satisfies RunEndRecord) + "\n",
-    );
+    // still gets a run_end so replay sees the boundary. Rethrow the ORIGINAL
+    // error unchanged (writeRunEnd is best-effort and never throws) — crash
+    // containment stays the callers' business (runOnce.ts top-level).
+    writeRunEnd(sink, {
+      errorMessage: e instanceof Error ? e.message : String(e),
+      stopReason: null,
+      timedOut: false,
+      abortedByGuard: false,
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+      durationMs: Date.now() - start,
+    });
     throw e;
   } finally {
-    sink?.end();
+    endSink(sink);
   }
 }
