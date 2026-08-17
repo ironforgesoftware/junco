@@ -5,8 +5,8 @@ import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
-import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
-import { buildGuardManager } from "./agent/runEnvelope.js";
+import { makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
@@ -26,8 +26,6 @@ import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./re
 import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
-import { transcriptPathFor } from "./slug.js";
-import { dataTreePaths } from "./dataTree.js";
 import {
   NOOP_REPORTER,
   outcomeFromPrFlow,
@@ -399,28 +397,29 @@ export async function executeClaimed(
           : cfg.model;
       const qaCfg: Config = { ...cfg, tools: qaTools, model: qaModel };
       const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
-      // Construct the loop-guard supervisor when enabled (M2). It feeds off the
-      // agent event stream inside runAgent: nudge → mid-run steer, kill → abort.
-      const guardManager = buildGuardManager(cfg);
-      const result = await runAgent({
-        body: next.body,
-        cwd,
-        timeoutMs: next.timeoutSeconds * 1000,
-        createSession: factory,
-        guardManager,
-        abortSignal: deps.abortSignal,
-        onProgress: (p) => metrics.setTaskProgress(next.id, p),
-        onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
-        transcriptPath: cfg.transcriptsEnabled
-          ? transcriptPathFor(dataTreePaths(cfg).transcripts, next.id)
-          : undefined,
-      });
-      // Record spend immediately, BEFORE any classification/requeue logic
-      // below: a session that goes on to requeue (transient failure, gate
-      // class) still spent real money, and the ledger must count it (Phase-3
-      // Task 4). No-op when deps.spend is absent or costUsd is 0/non-finite
-      // (recordUsd's own guard).
-      deps.spend?.recordUsd(result.usage.costUsd);
+      // qaCfg (not cfg) goes to the envelope so run_start records the planner
+      // model + narrowed tools. Spend is recorded immediately by the envelope,
+      // BEFORE any classification/requeue logic below: a session that goes on
+      // to requeue (transient failure, gate class) still spent real money,
+      // and the ledger must count it (Phase-3 Task 4). No-op when deps.spend
+      // is absent or costUsd is 0/non-finite (recordUsd's own guard).
+      const result = await runEnveloped(
+        qaCfg,
+        {
+          ticketId: next.id,
+          flow: next.github?.kind === "plan" ? "plan" : "qa",
+          body: next.body,
+          cwd,
+          timeoutMs: next.timeoutSeconds * 1000,
+        },
+        {
+          createSession: factory,
+          abortSignal: deps.abortSignal,
+          onProgress: (p) => metrics.setTaskProgress(next.id, p),
+          onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
+          spend: deps.spend,
+        },
+      );
       // Infrastructure failures (bad key, quota, 429, model typo) are not the
       // ticket's fault: report to the gate (pauses claiming) and requeue
       // WITHOUT consuming the retry budget. Only zero-commit runs — Q&A never
