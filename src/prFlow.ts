@@ -38,12 +38,10 @@ import { runSpecVerification, type VerificationResult } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
-import { buildGuardManager } from "./agent/runEnvelope.js";
+import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
 import { enqueueOp, isOffline } from "./githubOutbox.js";
 import { queuePaths } from "./config.js";
-import { transcriptPathFor } from "./slug.js";
-import { dataTreePaths } from "./dataTree.js";
 import { log } from "./logging.js";
 
 // ---------------------------------------------------------------------------
@@ -471,33 +469,38 @@ export async function runPrFlow(
     amendTarget,
     commitLeftoversEnabled: cfg.commitLeftoversEnabled,
   });
-  const guardManager = buildGuardManager(cfg);
-  // Per-ticket event transcript (worker + corrective append to one file).
-  const transcriptPath = cfg.transcriptsEnabled
-    ? transcriptPathFor(dataTreePaths(cfg).transcripts, task.id)
-    : undefined;
   // A ticket-level `tools:` overrides the configured allowlist for THIS
   // ticket's sessions (worker + corrective). Everything else keeps cfg.
+  // flowCfg (not cfg) also goes to runEnveloped so junco_run_start records
+  // the enforced tool subset (narrowed-cfg ruling, matching the qaCfg/
+  // assessCfg/analyzeCfg precedent). The envelope derives the per-ticket
+  // transcript path from task.id, records spend, and builds the guard
+  // manager — spend is recorded immediately, BEFORE any requeue/fail
+  // branching below: this session's dollars were spent regardless of what
+  // the ticket does next (Phase-3 Task 4 — the ledger is the honest record,
+  // unlike the ticket's own footer accounting which never sees a requeued
+  // attempt again).
   const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
   const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
     network: task.network ?? undefined,
   });
-  const result = await runAgent({
-    body: prompt,
-    cwd: wtPath,
-    timeoutMs: task.timeoutSeconds * 1000,
-    createSession: factory,
-    guardManager,
-    abortSignal: deps.abortSignal,
-    onProgress: deps.onProgress,
-    onGuardDecision: deps.onGuardDecision,
-    transcriptPath,
-  });
-  // Record spend immediately, BEFORE any requeue/fail branching below: this
-  // session's dollars were spent regardless of what the ticket does next
-  // (Phase-3 Task 4 — the ledger is the honest record, unlike the ticket's
-  // own footer accounting which never sees a requeued attempt again).
-  deps.spend?.recordUsd(result.usage.costUsd);
+  const result = await runEnveloped(
+    flowCfg,
+    {
+      ticketId: task.id,
+      flow: "pr",
+      body: prompt,
+      cwd: wtPath,
+      timeoutMs: task.timeoutSeconds * 1000,
+    },
+    {
+      createSession: factory,
+      abortSignal: deps.abortSignal,
+      onProgress: deps.onProgress,
+      onGuardDecision: deps.onGuardDecision,
+      spend: deps.spend,
+    },
+  );
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
@@ -756,19 +759,27 @@ export async function runPrFlow(
             network: task.network ?? undefined,
           },
         );
-        const corrective = await runAgent({
-          body: buildCorrectivePrompt(task, critic.findings),
-          cwd: wtPath,
-          timeoutMs: task.timeoutSeconds * 1000,
-          createSession: correctiveFactory,
-          abortSignal: deps.abortSignal,
-          onProgress: deps.onProgress,
-          onGuardDecision: deps.onGuardDecision,
-          transcriptPath, // corrective turn appends to the same chronological record
-          guardManager: buildGuardManager(cfg),
-        });
+        // Same ticketId → the envelope derives the same transcript path as
+        // the main run, so this turn appends to the same chronological
+        // record (second open finds the file exists → no second junco_meta).
+        const corrective = await runEnveloped(
+          flowCfg,
+          {
+            ticketId: task.id,
+            flow: "pr_corrective",
+            body: buildCorrectivePrompt(task, critic.findings),
+            cwd: wtPath,
+            timeoutMs: task.timeoutSeconds * 1000,
+          },
+          {
+            createSession: correctiveFactory,
+            abortSignal: deps.abortSignal,
+            onProgress: deps.onProgress,
+            onGuardDecision: deps.onGuardDecision,
+            spend: deps.spend,
+          },
+        );
         extraUsages.push(corrective.usage);
-        deps.spend?.recordUsd(corrective.usage.costUsd);
         prOutcome.criticRetriesUsed = 1;
         log.info(`critic retry: agent abortedByGuard=${corrective.abortedByGuard}`);
         // Re-evaluate commits + critic + verification after the retry.
