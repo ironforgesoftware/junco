@@ -276,7 +276,7 @@ export async function runAssessFlow(
   // (Phase-3 Task 3). No-op when deps.spend is absent or costUsd is
   // 0/non-finite.
   const agentResult = await runEnveloped(
-    cfg,
+    assessCfg,
     {
       ticketId: ticket.id,
       flow: "assess",

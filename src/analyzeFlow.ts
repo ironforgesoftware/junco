@@ -206,7 +206,7 @@ export async function runAnalyzeFlow(
   // regardless of what the ticket does next. No-op when deps.spend is absent
   // or costUsd is 0/non-finite.
   const agentResult = await runEnveloped(
-    cfg,
+    analyzeCfg,
     {
       ticketId: ticket.id,
       flow: "analyze",
