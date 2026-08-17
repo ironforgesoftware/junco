@@ -23,7 +23,7 @@ import type { SpendLedger } from "./spendLedger.js";
 import { queuePaths, expandHome } from "./config.js";
 import { gh, git, runCmd, GitOpError, isNetworkError } from "./git.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
-import { GuardManager } from "./agent/guardManager.js";
+import { buildGuardManager } from "./agent/runEnvelope.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { READ_ONLY_TOOLS } from "./runOnce.js";
@@ -272,16 +272,7 @@ export async function runAssessFlow(
   const assessTools = ticket.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
   const assessCfg: Config = { ...cfg, tools: assessTools };
   const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(assessCfg, repoPath);
-  const guardManager = cfg.supervisorEnabled
-    ? new GuardManager({
-        supervisorConfig: {
-          budgetPerKind: cfg.supervisorBudgetPerKind,
-          escalationWindowTurns: cfg.supervisorEscalationWindow,
-        },
-        outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
-        outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
-      })
-    : undefined;
+  const guardManager = buildGuardManager(cfg);
   const agentResult = await runAgent({
     body: ticket.body,
     cwd: repoPath,

@@ -6,7 +6,7 @@ import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
-import { GuardManager } from "./agent/guardManager.js";
+import { buildGuardManager } from "./agent/runEnvelope.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
@@ -401,16 +401,7 @@ export async function executeClaimed(
       const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
       // Construct the loop-guard supervisor when enabled (M2). It feeds off the
       // agent event stream inside runAgent: nudge → mid-run steer, kill → abort.
-      const guardManager = cfg.supervisorEnabled
-        ? new GuardManager({
-            supervisorConfig: {
-              budgetPerKind: cfg.supervisorBudgetPerKind,
-              escalationWindowTurns: cfg.supervisorEscalationWindow,
-            },
-            outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
-            outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
-          })
-        : undefined;
+      const guardManager = buildGuardManager(cfg);
       const result = await runAgent({
         body: next.body,
         cwd,

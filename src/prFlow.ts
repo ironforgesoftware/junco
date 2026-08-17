@@ -38,7 +38,7 @@ import { runSpecVerification, type VerificationResult } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
-import { GuardManager } from "./agent/guardManager.js";
+import { buildGuardManager } from "./agent/runEnvelope.js";
 import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
 import { enqueueOp, isOffline } from "./githubOutbox.js";
 import { queuePaths } from "./config.js";
@@ -471,16 +471,7 @@ export async function runPrFlow(
     amendTarget,
     commitLeftoversEnabled: cfg.commitLeftoversEnabled,
   });
-  const guardManager = cfg.supervisorEnabled
-    ? new GuardManager({
-        supervisorConfig: {
-          budgetPerKind: cfg.supervisorBudgetPerKind,
-          escalationWindowTurns: cfg.supervisorEscalationWindow,
-        },
-        outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
-        outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
-      })
-    : undefined;
+  const guardManager = buildGuardManager(cfg);
   // Per-ticket event transcript (worker + corrective append to one file).
   const transcriptPath = cfg.transcriptsEnabled
     ? transcriptPathFor(dataTreePaths(cfg).transcripts, task.id)
@@ -774,16 +765,7 @@ export async function runPrFlow(
           onProgress: deps.onProgress,
           onGuardDecision: deps.onGuardDecision,
           transcriptPath, // corrective turn appends to the same chronological record
-          guardManager: cfg.supervisorEnabled
-            ? new GuardManager({
-                supervisorConfig: {
-                  budgetPerKind: cfg.supervisorBudgetPerKind,
-                  escalationWindowTurns: cfg.supervisorEscalationWindow,
-                },
-                outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
-                outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
-              })
-            : undefined,
+          guardManager: buildGuardManager(cfg),
         });
         extraUsages.push(corrective.usage);
         deps.spend?.recordUsd(corrective.usage.costUsd);
