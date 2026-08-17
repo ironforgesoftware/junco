@@ -31,7 +31,7 @@ import {
 } from "./pr.js";
 import { lintTicket, LabelCache } from "./planLint.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
-import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
+import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
 import { runSpecVerification, type VerificationResult } from "./verify.js";
@@ -509,7 +509,9 @@ export async function runPrFlow(
   // --- Phase 5: Hard-exit check (non-guard error). ---
   // A guard abort is a SOFT abort, and so is a TIMEOUT: both continue through
   // post-processing so commits made before the cutoff are salvaged into a PR.
-  const hardError = result.errorMessage !== null && !result.abortedByGuard && !result.timedOut;
+  // #180.3: isRoutableFailure (providerFailure.ts) is the shared timedOut/
+  // abortedByGuard exclusion — same rule runOnce.ts's gate routing uses.
+  const hardError = result.errorMessage !== null && isRoutableFailure(result);
   if (hardError) {
     // A TRANSIENT error with zero commits is requeued (budget permitting)
     // rather than failed — the inference side hiccuped, not the ticket.

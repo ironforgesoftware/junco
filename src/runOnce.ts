@@ -23,7 +23,7 @@ import { runAssessFlow } from "./assessFlow.js";
 // function bodies, never during module evaluation).
 import { runAnalyzeFlow } from "./analyzeFlow.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
-import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
+import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
 import {
@@ -425,14 +425,10 @@ export async function executeClaimed(
       // WITHOUT consuming the retry budget. Only zero-commit runs — Q&A never
       // commits. Transient (outage/unknown) failures keep the budgeted path.
       const cls = classifyProviderFailure(result.errorMessage);
-      // Parity with prFlow's `hardError` guard (excludes abortedByGuard AND
-      // timedOut): a timeout landing mid-retry-backoff leaves the FIRST
-      // attempt's errorMessage captured (no clean auto_retry_end ever fires —
-      // the timeout aborts the run before the SDK can decide retry/recover),
-      // so that stale error must not be gate-routed as if it were the run's
-      // actual outcome. timedOut/abortedByGuard win: existing timeout/guard
-      // semantics apply below instead.
-      if (deps.gate && !result.timedOut && !result.abortedByGuard && GATE_CLASSES.has(cls)) {
+      // #180.3: isRoutableFailure (providerFailure.ts) — same rule that
+      // gates prFlow's `hardError`. timedOut/abortedByGuard win: existing
+      // timeout/guard semantics apply below instead.
+      if (deps.gate && isRoutableFailure(result) && GATE_CLASSES.has(cls)) {
         deps.gate.reportFailure(cls, result.errorMessage ?? cls);
         const rq = requeueTicketKeepBudget(
           cfg,
@@ -444,11 +440,11 @@ export async function executeClaimed(
         log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
         return;
       }
-      // #180.3: same timeout/guard exclusion as the GATE_CLASSES routing above
-      // and prFlow's hardError gate — a timed-out run carries a STALE first-
-      // attempt errorMessage, so reporting it would push the shared gate into
-      // outage_backoff and pause claiming for other tickets.
-      if (deps.gate && !result.timedOut && !result.abortedByGuard && cls === "outage")
+      // #180.3: same isRoutableFailure rule as the GATE_CLASSES routing
+      // above — a timed-out run carries a STALE first-attempt errorMessage,
+      // so reporting it would push the shared gate into outage_backoff and
+      // pause claiming for other tickets.
+      if (deps.gate && isRoutableFailure(result) && cls === "outage")
         deps.gate.reportFailure(cls, result.errorMessage ?? cls);
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
       // backoff instead of finalizing to failed/ (budget permitting).
@@ -464,7 +460,7 @@ export async function executeClaimed(
           return;
         }
       }
-      if (deps.gate && result.errorMessage === null && !result.timedOut && !result.abortedByGuard) {
+      if (deps.gate && result.errorMessage === null && isRoutableFailure(result)) {
         deps.gate.reportSuccess();
       }
       const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });
