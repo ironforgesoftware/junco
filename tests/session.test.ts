@@ -872,6 +872,55 @@ describe("runAgent (transcript sidecar)", () => {
     expect(ended).toBe(true);
   });
 
+  it("writes events to a caller-owned transcript sink and does not end it", async () => {
+    const lines: string[] = [];
+    let ended = false;
+    const sink = {
+      write: (l: string) => lines.push(l),
+      end: () => {
+        ended = true;
+      },
+    };
+    const events = [
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x" } }, // skipped
+      {
+        type: "turn_end",
+        message: { stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 } },
+      },
+    ];
+    const session = fakeSession(events);
+    await runAgent({
+      body: "go",
+      cwd: "/x",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      transcript: sink,
+    });
+    expect(lines.some((l) => l.includes('"turn_end"'))).toBe(true);
+    expect(lines.some((l) => l.includes("message_update"))).toBe(false); // deltas still skipped
+    expect(ended).toBe(false); // caller owns lifecycle
+  });
+
+  it("prefers the caller-owned sink over transcriptPath", async () => {
+    const lines: string[] = [];
+    const factoryCalls: string[] = [];
+    const session = fakeSession([{ type: "agent_end", messages: [], willRetry: false }]);
+    await runAgent({
+      body: "go",
+      cwd: "/x",
+      timeoutMs: 5000,
+      createSession: async () => session as any,
+      transcript: { write: (l: string) => lines.push(l), end: () => {} },
+      transcriptPath: "/sbxroot/never.jsonl",
+      transcriptSink: (p) => {
+        factoryCalls.push(p);
+        return null;
+      },
+    });
+    expect(lines.length).toBeGreaterThan(0);
+    expect(factoryCalls).toEqual([]); // path branch never taken
+  });
+
   it("an unwritable transcript path only warns — the run still completes", async () => {
     const session = fakeSession([{ type: "agent_end", messages: [], willRetry: false }]);
     const result = await runAgent({

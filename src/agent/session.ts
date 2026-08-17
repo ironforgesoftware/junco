@@ -151,6 +151,12 @@ export interface RunAgentOptions {
    */
   transcriptSink?: TranscriptSinkFactory;
   /**
+   * Caller-owned, already-open transcript sink (the run envelope). When set it
+   * wins over transcriptPath, and runAgent never end()s it — the caller writes
+   * its own junco_run_start/run_end frame around this run's events.
+   */
+  transcript?: TranscriptSink | null;
+  /**
    * Grace period (ms) to wait for the in-flight prompt() to actually settle
    * AFTER an abort is initiated, before treating the run as wedged and
    * returning the accumulated result anyway. Defaults to ABORT_GRACE_MS (60s).
@@ -246,10 +252,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
   // Transcript writes go through an injectable sink (#128), defaulting to the
   // real fs-backed sink. Sink-internal failures degrade to a warning and drop
-  // the transcript, so the write sites below stay best-effort.
+  // the transcript, so the write sites below stay best-effort. A caller-owned
+  // sink (opts.transcript) wins over transcriptPath and is never end()'d here —
+  // the caller opened it and frames it with its own run envelope records.
   let transcript: TranscriptSink | null = null;
-  if (opts.transcriptPath) {
+  let ownsTranscript = false;
+  if (opts.transcript !== undefined) {
+    transcript = opts.transcript;
+  } else if (opts.transcriptPath) {
     transcript = (opts.transcriptSink ?? defaultTranscriptSink)(opts.transcriptPath);
+    ownsTranscript = true;
   }
   try {
     // Subscribe immediately before prompt() (so no startup events are missed),
@@ -354,7 +366,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     if (graceTimer !== undefined) clearTimeout(graceTimer);
     opts.abortSignal?.removeEventListener("abort", onExternalAbort);
     unsubscribe?.();
-    transcript?.end();
+    if (ownsTranscript) transcript?.end();
     // Best-effort: a wedged session's dispose may throw; don't let it mask the
     // salvaged result.
     try {
