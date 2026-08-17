@@ -1,11 +1,11 @@
 /**
- * runEnvelope — the single wrapper every junco agent run goes through.
- *
- * Grows over this plan into: guard construction (Task 1), transcript
- * lifecycle + junco_run records, the runAgent call, and spend recording
- * (this task) — replacing the five hand-copied wrappers (runOnce Q&A,
- * assessFlow, analyzeFlow, prFlow main, prFlow corrective) whose parity
- * previously rested on comments (#180.3).
+ * runEnvelope — the single wrapper every junco agent run goes through:
+ * guard construction, per-ticket transcript framing (`junco_meta` once per
+ * file, `junco_run_start`/`junco_run_end` per run), the `runAgent` call, and
+ * spend recording. Observability (the transcript writes) is best-effort
+ * (#78). Replaces the five formerly hand-copied wrappers (runOnce Q&A,
+ * assessFlow, analyzeFlow, prFlow main, prFlow corrective) whose parity used
+ * to rest on comments (#180.3).
  */
 import { existsSync } from "node:fs";
 import type { Config, RunResult } from "../types.js";

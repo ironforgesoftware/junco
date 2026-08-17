@@ -23,7 +23,7 @@ describe("parseTranscriptLine", () => {
   it("tolerates a truncated line (crash mid-write) as invalid", () => {
     expect(parseTranscriptLine('{"type":"turn_en').kind).toBe("invalid");
   });
-  it("tolerates a junco-prefixed but unknown type as sdk passthrough", () => {
+  it("tolerates a junco-prefixed but unknown type as a forward-compat junco record", () => {
     // Forward compat: an older junco reading a newer transcript must not throw.
     expect(parseTranscriptLine(JSON.stringify({ type: "junco_future_thing" })).kind).toBe("junco");
   });
