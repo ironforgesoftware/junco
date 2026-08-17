@@ -79,7 +79,7 @@ export function openTicketTranscript(
 }
 
 /**
- * Best-effort transcript write (#78 discipline, mirroring session.ts:271-283):
+ * Best-effort transcript write (#78 discipline, mirroring session.ts:259-269):
  * a broken sink (a full disk, a closed stream) must NOT throw up through
  * `runEnveloped` and turn a completed/failed run into a rejection the caller
  * never asked for — degrade to a warning instead. Observability must never
@@ -96,7 +96,9 @@ function writeRecord(sink: TranscriptSink | null, line: string): void {
   }
 }
 
-/** Same best-effort discipline for closing the sink (mirrors session.ts:369-376). */
+/** Same best-effort discipline for closing the sink (#78, mirroring session.ts's
+ * write-guard discipline for transcript.write — session.ts itself never calls
+ * end() on the sink; the caller that opened it owns closing it). */
 function endSink(sink: TranscriptSink | null): void {
   if (!sink) return;
   try {

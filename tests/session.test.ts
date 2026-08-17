@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runAgent, apiBaseUrl, splitModelId } from "../src/agent/session.js";
+import { runAgent, apiBaseUrl, splitModelId, defaultTranscriptSink } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
 
 // Overridable createWriteStream so the transcript stream can be stubbed
@@ -293,8 +293,9 @@ describe("runAgent (observability hooks are best-effort — #78)", () => {
   });
 
   it("a transcript.write that throws synchronously degrades to a warning", async () => {
-    // The transcript sink is injectable (#128), so this needs no vi.mock: a
-    // sink whose write() throws must degrade to a warning, not wedge the run.
+    // The transcript sink is caller-owned and injected via `transcript`
+    // (#128): a sink whose write() throws must degrade to a warning, not
+    // wedge the run.
     const events = [
       { type: "tool_execution_start", toolName: "read", args: {} },
       { type: "agent_end", messages: [], willRetry: false },
@@ -305,13 +306,12 @@ describe("runAgent (observability hooks are best-effort — #78)", () => {
       cwd: "/tmp",
       timeoutMs: 1000,
       createSession: async () => session as any,
-      transcriptPath: join(tmpdir(), "junco-throw-tx", "t.jsonl"),
-      transcriptSink: () => ({
+      transcript: {
         write() {
           throw new Error("write boom");
         },
         end() {},
-      }),
+      },
     });
     expect(result.errorMessage).toBeNull();
   });
@@ -427,6 +427,9 @@ describe("runAgent (guard manager)", () => {
     ];
     const session = guardFakeSession(events);
     const decisions: any[] = [];
+    // Caller owns the sink (#128): open it directly via defaultTranscriptSink
+    // and end() it after the run, mirroring how runEnveloped frames a run.
+    const sink = defaultTranscriptSink(txPath);
     const result = await runAgent({
       body: "do work",
       cwd: "/tmp",
@@ -434,8 +437,9 @@ describe("runAgent (guard manager)", () => {
       createSession: async () => session as any,
       guardManager: new GuardManager(),
       onGuardDecision: (d) => decisions.push(d),
-      transcriptPath: txPath,
+      transcript: sink,
     });
+    sink?.end();
     // The hook saw exactly one self-describing nudge decision.
     expect(decisions).toHaveLength(1);
     expect(decisions[0].action).toBe("nudge");
@@ -467,6 +471,9 @@ describe("runAgent (guard manager)", () => {
     ];
     const session = guardFakeSession(events);
     const decisions: any[] = [];
+    // Caller owns the sink (#128): open it directly via defaultTranscriptSink
+    // and end() it after the run, mirroring how runEnveloped frames a run.
+    const sink = defaultTranscriptSink(txPath);
     const result = await runAgent({
       body: "do work",
       cwd: "/tmp",
@@ -474,8 +481,9 @@ describe("runAgent (guard manager)", () => {
       createSession: async () => session as any,
       guardManager: new GuardManager({ outputBudgetPerTurn: 12000 }),
       onGuardDecision: (d) => decisions.push(d),
-      transcriptPath: txPath,
+      transcript: sink,
     });
+    sink?.end();
     const kill = decisions.find((d) => d.action === "kill");
     expect(kill).toBeDefined();
     expect(kill.kind).toBe("output_budget");
@@ -810,7 +818,7 @@ describe("runAgent (onProgress)", () => {
 });
 
 describe("runAgent (transcript sidecar)", () => {
-  it("streams non-delta events to the transcript path as JSONL", async () => {
+  it("streams non-delta events to the transcript sink as JSONL", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-tx-"));
     const txPath = join(dir, "transcripts", "t-1.jsonl");
     const events = [
@@ -822,13 +830,17 @@ describe("runAgent (transcript sidecar)", () => {
       },
     ];
     const session = fakeSession(events);
+    // Caller owns the sink (#128): open it directly via defaultTranscriptSink
+    // and end() it after the run, mirroring how runEnveloped frames a run.
+    const sink = defaultTranscriptSink(txPath);
     await runAgent({
       body: "x",
       cwd: "/tmp",
       timeoutMs: 5000,
       createSession: async () => session as any,
-      transcriptPath: txPath,
+      transcript: sink,
     });
+    sink?.end();
     // The write stream flushes asynchronously after end(); give it a beat.
     await new Promise((r) => setTimeout(r, 50));
     const lines = readFileSync(txPath, "utf8").trim().split("\n");
@@ -836,40 +848,6 @@ describe("runAgent (transcript sidecar)", () => {
     expect(JSON.parse(lines[0]).type).toBe("tool_execution_start");
     expect(JSON.parse(lines[1]).type).toBe("turn_end");
     rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("routes transcript writes through an injected sink — no fs (#128)", async () => {
-    // The transcript I/O goes through an injectable seam like every other side
-    // effect (createSession/onProgress/onGuardDecision): a fake sink captures
-    // the JSONL lines and is flushed via end(), touching no filesystem.
-    const lines: string[] = [];
-    let ended = false;
-    const events = [
-      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x" } }, // skipped
-      { type: "tool_execution_start", toolName: "read", args: { path: "/a" } },
-      {
-        type: "turn_end",
-        message: { stopReason: "stop", usage: { input: 1, output: 1, totalTokens: 2 } },
-      },
-    ];
-    const session = fakeSession(events);
-    await runAgent({
-      body: "x",
-      cwd: "/tmp",
-      timeoutMs: 1000,
-      createSession: async () => session as any,
-      transcriptPath: join(tmpdir(), "junco-sink-seam", "t.jsonl"),
-      transcriptSink: () => ({
-        write: (line) => lines.push(line),
-        end: () => {
-          ended = true;
-        },
-      }),
-    });
-    const parsed = lines.map((l) => JSON.parse(l));
-    // The per-token delta is skipped; the tool start and turn end are written.
-    expect(parsed.map((p) => p.type)).toEqual(["tool_execution_start", "turn_end"]);
-    expect(ended).toBe(true);
   });
 
   it("writes events to a caller-owned transcript sink and does not end it", async () => {
@@ -901,34 +879,16 @@ describe("runAgent (transcript sidecar)", () => {
     expect(ended).toBe(false); // caller owns lifecycle
   });
 
-  it("prefers the caller-owned sink over transcriptPath", async () => {
-    const lines: string[] = [];
-    const factoryCalls: string[] = [];
+  it("defaultTranscriptSink degrades to null on an unwritable path — the run still completes", async () => {
     const session = fakeSession([{ type: "agent_end", messages: [], willRetry: false }]);
-    await runAgent({
-      body: "go",
-      cwd: "/x",
-      timeoutMs: 5000,
-      createSession: async () => session as any,
-      transcript: { write: (l: string) => lines.push(l), end: () => {} },
-      transcriptPath: "/sbxroot/never.jsonl",
-      transcriptSink: (p) => {
-        factoryCalls.push(p);
-        return null;
-      },
-    });
-    expect(lines.length).toBeGreaterThan(0);
-    expect(factoryCalls).toEqual([]); // path branch never taken
-  });
-
-  it("an unwritable transcript path only warns — the run still completes", async () => {
-    const session = fakeSession([{ type: "agent_end", messages: [], willRetry: false }]);
+    const sink = defaultTranscriptSink("/dev/null/impossible/t.jsonl");
+    expect(sink).toBeNull();
     const result = await runAgent({
       body: "x",
       cwd: "/tmp",
       timeoutMs: 5000,
       createSession: async () => session as any,
-      transcriptPath: "/dev/null/impossible/t.jsonl",
+      transcript: sink,
     });
     expect(result.errorMessage).toBeNull();
   });
@@ -966,6 +926,9 @@ describe("runAgent (transcript sidecar)", () => {
       return fake;
     };
     try {
+      // Caller owns the sink (#128): open it directly via defaultTranscriptSink
+      // (routed through the mocked createWriteStream above).
+      const sink = defaultTranscriptSink(join(tmpdir(), "junco-fake-tx", "t.jsonl"));
       // Deliver events on a macrotask so the async open failure lands first.
       const listeners: ((e: any) => void)[] = [];
       const session = {
@@ -985,7 +948,7 @@ describe("runAgent (transcript sidecar)", () => {
         cwd: "/tmp",
         timeoutMs: 5000,
         createSession: async () => session as any,
-        transcriptPath: join(tmpdir(), "junco-fake-tx", "t.jsonl"),
+        transcript: sink,
       });
       expect(result.errorMessage).toBeNull();
       // The transcript was dropped before any event was written.
@@ -999,6 +962,9 @@ describe("runAgent (transcript sidecar)", () => {
     const fake = new FakeTranscriptStream(true);
     createWriteStreamOverride.current = () => fake;
     try {
+      // Caller owns the sink (#128): open it directly via defaultTranscriptSink
+      // (routed through the mocked createWriteStream above).
+      const sink = defaultTranscriptSink(join(tmpdir(), "junco-fake-tx", "t.jsonl"));
       const events = [
         { type: "tool_execution_start", toolName: "read", args: { path: "/a" } },
         { type: "tool_execution_start", toolName: "bash", args: { command: "ls" } },
@@ -1010,7 +976,7 @@ describe("runAgent (transcript sidecar)", () => {
         cwd: "/tmp",
         timeoutMs: 5000,
         createSession: async () => session as any,
-        transcriptPath: join(tmpdir(), "junco-fake-tx", "t.jsonl"),
+        transcript: sink,
       });
       expect(result.errorMessage).toBeNull();
       // The first write errored; the transcript was nulled — later events are
