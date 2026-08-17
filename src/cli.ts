@@ -190,6 +190,10 @@ Subcommands:
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   rm <name>            Delete a queued ticket from the inbox (best-effort)
+  replay <ticket-id|path.jsonl> [--budget-per-kind N] [--escalation-window N]
+         [--output-budget-per-turn N] [--output-budget-post-commit N] [--json]
+                        Re-run a recorded event transcript through the guards
+                        under a chosen (or default) policy — a what-if report
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
   data [--json]  Print the data tree (paths, counts, provenance); 'data migrate' unifies legacy roots
@@ -257,6 +261,13 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       "no-footer": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      // replay-only (src/replayCmd.ts parses its own sub-argv slice, but
+      // these must still be declared here so the top-level strict parse of
+      // the FULL argv doesn't throw on them).
+      "budget-per-kind": { type: "string" },
+      "escalation-window": { type: "string" },
+      "output-budget-per-turn": { type: "string" },
+      "output-budget-post-commit": { type: "string" },
     },
     allowPositionals: true,
     strict: true,
@@ -636,6 +647,26 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "rm") {
     const cfg = loadConfigFn(configPath);
     return runRmCommand(cfg, positionals.slice(1), { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // replay: guard-policy what-if over a recorded event transcript
+  // (src/replayCmd.ts). It owns its own argv parsing (flag > recorded
+  // run_start > config > GuardManager defaults precedence), so it gets the
+  // raw sub-argv slice rather than the pre-parsed `values`/`positionals` —
+  // find "replay" in the ORIGINAL argv (not positionals[0]'s index, which
+  // drops any global flags parsed ahead of it) and hand it everything after.
+  // Lazy import keeps agent/replay.ts's guard graph off every other subcommand.
+  // ------------------------------------------------------------
+  if (subcommand === "replay") {
+    const { runReplayCmd } = await import("./replayCmd.js");
+    const idx = argv.indexOf("replay");
+    const subArgv = idx === -1 ? positionals.slice(1) : argv.slice(idx + 1);
+    return runReplayCmd(subArgv, {
+      loadCfg: () => loadConfigFn(configPath),
+      readFile: (p: string) => readFileSync(p, "utf8"),
+      stdout: (l: string) => printFn(l + "\n"),
+    });
   }
 
   // ------------------------------------------------------------
