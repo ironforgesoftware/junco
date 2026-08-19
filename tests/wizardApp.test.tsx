@@ -109,6 +109,8 @@ async function driveToReview(
   await press(stdin, ENTER); // ambient gh login (default)
   await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
   await press(stdin, ENTER); // keep recommended set
+  await until(() => (lastFrame() ?? "").includes("No known agent harnesses detected"), LONG_TRIES);
+  await press(stdin, ENTER); // no harnesses detected (fake io) → continue
   await until(() => (lastFrame() ?? "").includes("This is the exact config.json"), LONG_TRIES);
 }
 
@@ -147,6 +149,7 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
     effectiveDataDir: "/sbx/home/.junco",
     dataDirLegacyFallback: false,
     botGhConfigDir: "/sbx/junco-gh",
+    detectedHarnesses: [],
     detectBotLogin: async () => null,
     runGhLogin: async () => 0,
     ...over,
@@ -199,6 +202,11 @@ describe("WizardApp", () => {
     await press(stdin, ENTER); // ambient gh login (default)
     await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
     await press(stdin, ENTER); // keep recommended set
+    await until(
+      () => (lastFrame() ?? "").includes("No known agent harnesses detected"),
+      LONG_TRIES,
+    );
+    await press(stdin, ENTER); // no harnesses detected (fake io) → continue
     await until(() => (lastFrame() ?? "").includes("This is the exact config.json"), LONG_TRIES);
     await press(stdin, ENTER); // Write config
     await until(() => (lastFrame() ?? "").includes("The nest is ready"), LONG_TRIES);
@@ -311,7 +319,7 @@ describe("WizardApp", () => {
     const { lastFrame } = render(
       <WizardApp io={fakeIo()} onOutcome={() => {}} sizeOverride={{ columns: 60, rows: 32 }} />,
     );
-    await until(() => (lastFrame() ?? "").includes("1/8"));
+    await until(() => (lastFrame() ?? "").includes("1/9"));
     expect(lastFrame()).not.toContain("▶ Welcome");
   });
 
@@ -492,6 +500,11 @@ describe("WizardApp", () => {
     await press(stdin, ENTER); // ambient gh login preselected (botAccount: false, unchanged)
     await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
     await press(stdin, ENTER); // recommended set unchanged
+    await until(
+      () => (lastFrame() ?? "").includes("No known agent harnesses detected"),
+      LONG_TRIES,
+    );
+    await press(stdin, ENTER); // no harnesses detected (fake io) → continue, harnessDirs stays []
     await until(() => (lastFrame() ?? "").includes("Nothing changed"), LONG_TRIES);
     expect(lastFrame()).toContain("Nothing changed — config untouched.");
     await press(stdin, ENTER); // Finish

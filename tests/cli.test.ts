@@ -1250,6 +1250,46 @@ describe("run(['assess']) — routing", () => {
   });
 });
 
+// `skill install` follows the dispatch/outbox precedent: a CliDeps seam
+// (`runSkillInstallCommandFn`) so tests never fall through to the real lazy
+// import — the real skillCmd.js resolves `--harness <registry name>` dirs
+// against the REAL os.homedir() (not this run()'s injected env.HOME), so an
+// unmocked exercise risks touching the actual machine's ~/.claude/skills.
+describe("run(['skill']) — routing", () => {
+  it("routes `skill install --harness claude` to runSkillInstallCommandFn with { harness: ['claude'] }", async () => {
+    const runSkillInstallCommandFn = vi.fn(
+      async (_configPath: string, _opts: { harness: string[] }) => 0,
+    );
+    const code = await run(["skill", "install", "--harness", "claude"], {
+      env: { HOME: "/x" },
+      runSkillInstallCommandFn,
+    });
+    expect(code).toBe(0);
+    expect(runSkillInstallCommandFn).toHaveBeenCalledTimes(1);
+    const [configPathArg, opts] = runSkillInstallCommandFn.mock.calls[0];
+    expect(typeof configPathArg).toBe("string");
+    expect(opts).toEqual({ harness: ["claude"] });
+  });
+
+  it("bare `skill` exits 2 with the usage line, never reaching runSkillInstallCommandFn", async () => {
+    const runSkillInstallCommandFn = vi.fn(async () => 0);
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["skill"], { env: { HOME: "/x" }, runSkillInstallCommandFn });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code).toBe(2);
+    expect(lines.join("")).toContain("Usage: junco skill install");
+    expect(runSkillInstallCommandFn).not.toHaveBeenCalled();
+  });
+});
+
 describe("run(['restart']) — routing", () => {
   it("routes `restart` to runRestartFn with the RESOLVED config path (config validated first)", async () => {
     const { cfg } = freshDispatchVault();

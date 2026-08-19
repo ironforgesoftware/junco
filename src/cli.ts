@@ -129,6 +129,11 @@ export interface CliDeps {
   /** Injected by tests: the outbox list/flush core (default lazily from outboxCmd.js).
    *  A seam so the flush path's bot-auth attach is observable without real state. */
   runOutboxCommandFn?: typeof import("./outboxCmd.js").runOutboxCommand;
+  /** Injected by tests: the skill-install core (default lazily from skillCmd.js).
+   *  A seam so `--harness <registry name>` is testable without ever calling the
+   *  real ensureSkillLinks — its dirs expand against the REAL os.homedir(), not
+   *  this run()'s injected `env.HOME` (see resolveHarnessArg/expandHome). */
+  runSkillInstallCommandFn?: typeof import("./skillCmd.js").runSkillInstallCommand;
   /** Injected by tests: the unwatch plan/execute core (default lazily from unwatchCmd.js). */
   runUnwatchCommandFn?: typeof import("./unwatchCmd.js").runUnwatchCommand;
   /** Largest ticket timeout (seconds) currently reachable in the queue, used to
@@ -215,6 +220,9 @@ Subcommands:
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
+  skill install [--harness <name|path>]...  Link the junco-dispatch skill into
+                  harness skills dirs via <dataDir>/skills (names: claude,
+                  codex, pi, omp, opencode); no args re-ensures configured links
   schema       Print the ticket frontmatter JSON Schema and exit
 
   (no subcommand) → ensures the supervised daemon is running (interactive
@@ -261,6 +269,7 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       "no-footer": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      harness: { type: "string", multiple: true },
       plan: { type: "boolean", default: false },
     },
     allowPositionals: true,
@@ -760,6 +769,22 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     const { runAnalyzeCommand } = await import("./analyzeCmd.js");
     return runAnalyzeCommand(cfg, positionals[1], { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // skill: skill-link management (src/skillCmd.ts) — install creates the
+  // <dataDir>/skills mount + consented harness links; the daemon re-ensures
+  // the same set at every startup.
+  // ------------------------------------------------------------
+  if (subcommand === "skill") {
+    if (positionals[1] === "install") {
+      const runSkillInstallCommandFn =
+        deps.runSkillInstallCommandFn ?? (await import("./skillCmd.js")).runSkillInstallCommand;
+      const harness = (values.harness as string[] | undefined) ?? [];
+      return runSkillInstallCommandFn(configPath, { harness }, { printFn });
+    }
+    process.stderr.write(`Usage: junco skill install [--harness <name|path>]...\n`);
+    return 2;
   }
 
   // ------------------------------------------------------------

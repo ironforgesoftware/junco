@@ -267,6 +267,16 @@ CLI/TUI-side only — the daemon never phones home. Set it to `false` to opt out
 { "updateCheck": false }
 ```
 
+## `skills`
+
+| Key                  | Default | Effect                                                                                                                                                                     |
+| -------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skills.harnessDirs` | `[]`    | Harness skills directories that receive a `junco-dispatch` symlink (via the `<dataDir>/skills` mount). Listing a dir is standing consent; links self-heal at daemon start. |
+
+Managed by `junco skill install --harness <name|path>` (names: `claude`, `codex`, `pi`,
+`omp`, `opencode`) and the setup walkthrough's Skills step. Junco never writes into a
+harness directory not listed here.
+
 ## The full reference
 
 The full, always-current annotated reference is `junco config list` — every lever with its default, type, and one-line explanation:

@@ -98,7 +98,10 @@ cat my-ticket.md | junco submit -
 junco inbox-path
 ```
 
-The bundled `junco-dispatch` skill (for Claude Code) scaffolds well-structured tickets from any Claude session and submits them automatically.
+The bundled `junco-dispatch` skill teaches coding agents (Claude Code and other
+skills-capable harnesses) to scaffold well-structured tickets and submit them. Link it
+into your harness once with `junco skill install --harness <name|path>`; the daemon
+re-checks and self-heals the links at every start.
 
 ## Templates
 

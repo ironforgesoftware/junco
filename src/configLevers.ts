@@ -763,6 +763,17 @@ export const LEVERS: Lever[] = [
     description:
       "Identity `junco assess file` posts under: me (your gh login) or bot (the dedicated bot account; fails loud when its login is missing).",
   },
+
+  // --- skills.* ---
+  {
+    path: "skills.harnessDirs",
+    type: "structured",
+    default: [],
+    editable: false,
+    reload: "restart",
+    description:
+      "Harness skills dirs that receive a junco-dispatch symlink (standing consent; managed by 'junco skill install' and the wizard).",
+  },
 ];
 
 /** Look up a single lever by its dotted path. */

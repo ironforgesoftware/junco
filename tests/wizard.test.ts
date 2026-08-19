@@ -4,6 +4,18 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildWizardIO } from "../src/wizard.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
+import type { SkillLinksReport } from "../src/skillLinks.js";
+
+// No-op by default across this file: the real ensureSkillLinks would fall
+// through to actual fs symlink calls (harmless when cfg.dataDir resolves
+// into a test tmp dir, but for the fresh/rerun cases that leave dataDir at
+// its schema default with no env override, `write`'s `loadConfigFn(resolved)`
+// re-resolves against the REAL process.env — i.e. this machine's actual
+// ~/.junco — same trap the effectiveDataDir tests already guard against for
+// ensureDirs's mkdirFn). Tests exercising the skill-link wiring itself
+// override this.
+const NOOP_SKILL_LINKS: SkillLinksReport = { created: [], repaired: [], skipped: [], warnings: [] };
+const noopEnsureSkillLinksFn = (): SkillLinksReport => NOOP_SKILL_LINKS;
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), "wiz-"));
 const read = (p: string): Record<string, unknown> =>
@@ -13,7 +25,10 @@ describe("buildWizardIO", () => {
   it("fresh mode when no config exists; io.write scaffolds it", () => {
     const dir = tmp();
     const cp = join(dir, "config.json");
-    const r = buildWizardIO(cp, { existsFn: () => false });
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      ensureSkillLinksFn: noopEnsureSkillLinksFn,
+    });
     expect(r.ok && r.mode).toBe("fresh");
     if (!r.ok) throw new Error("expected ok:true");
     expect(r.io.mode).toBe("fresh");
@@ -24,6 +39,33 @@ describe("buildWizardIO", () => {
     expect(result.written).toBe(true);
     expect(read(cp).dataDir).toBe(join(dir, "vault"));
     expect(existsSync(join(dir, "vault", "queue", "inbox"))).toBe(true);
+  });
+
+  it("fresh mode: write with harnessDirs calls ensureSkillLinksFn once and writes the skills block", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const seen: unknown[] = [];
+    let calls = 0;
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      ensureSkillLinksFn: (cfg) => {
+        calls++;
+        seen.push(cfg.dataDir);
+        return NOOP_SKILL_LINKS;
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    const a = {
+      ...r.io.initialAnswers,
+      dataDir: join(dir, "vault"),
+      harnessDirs: ["~/.claude/skills"],
+    };
+    const result = r.io.write(a);
+    expect(result.written).toBe(true);
+    expect(calls).toBe(1);
+    expect(seen).toEqual([join(dir, "vault")]);
+    expect(read(cp).skills).toEqual({ harnessDirs: ["~/.claude/skills"] });
   });
 
   it("rerun mode reads the existing raw config into initialAnswers", () => {
@@ -95,7 +137,7 @@ describe("buildWizardIO", () => {
       }),
       "utf8",
     );
-    const r = buildWizardIO(cp);
+    const r = buildWizardIO(cp, { ensureSkillLinksFn: noopEnsureSkillLinksFn });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
     const a = { ...r.io.initialAnswers, modelId: "p/m2" };
@@ -114,7 +156,7 @@ describe("buildWizardIO", () => {
       "utf8",
     );
     const before = readFileSync(cp, "utf8");
-    const r = buildWizardIO(cp);
+    const r = buildWizardIO(cp, { ensureSkillLinksFn: noopEnsureSkillLinksFn });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
     const result = r.io.write(answersFromConfig(r.io.currentRaw ?? {}));
@@ -137,6 +179,7 @@ describe("buildWizardIO", () => {
         throw new Error("EPERM: rename blocked");
       },
       unlinkFn: (p) => unlinked.push(p),
+      ensureSkillLinksFn: noopEnsureSkillLinksFn,
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
@@ -308,9 +351,12 @@ describe("effectiveDataDir (legacy-fallback display, never fed back into a write
       env: { HOME: "/h" },
       existsFn: (p) => p === legacyRoot,
       // The post-write ensureDirs step re-loads the config with the REAL
-      // env/fs (loadConfigFn isn't overridden here) — neutralize mkdir so
-      // this test can never touch this machine's actual resolved root.
+      // env/fs (loadConfigFn isn't overridden here) — neutralize mkdir AND
+      // ensureSkillLinks so this test can never touch this machine's actual
+      // resolved root (ensureSkillLinks has its own real-fs defaults, not
+      // threaded through this deps.mkdirFn seam).
       mkdirFn: () => {},
+      ensureSkillLinksFn: noopEnsureSkillLinksFn,
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
@@ -332,6 +378,8 @@ describe("effectiveDataDir (legacy-fallback display, never fed back into a write
       env: { HOME: "/h" },
       existsFn: (p) => p === cp || p === legacyRoot,
       mkdirFn: () => {},
+      // Same rationale as the sibling fresh-mode test above.
+      ensureSkillLinksFn: noopEnsureSkillLinksFn,
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");

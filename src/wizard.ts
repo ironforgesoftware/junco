@@ -40,6 +40,7 @@ import { listCatalogProviders, type CatalogEntry } from "./agent/session.js";
 import { NEXT_STEPS } from "./wizard/tips.js";
 import { getAtPath } from "./configLevers.js";
 import { detectBotLogin, runGhLogin } from "./ghAuth.js";
+import { detectInstalledHarnesses, ensureSkillLinks, type SkillLinksReport } from "./skillLinks.js";
 
 export interface WizardDeps {
   detectDeps?: DetectDeps;
@@ -60,6 +61,7 @@ export interface WizardDeps {
   /** Injected for the botGhConfigDir legacy-liveness probe (resolveBotGhConfigDir);
    * defaults to process.env. */
   env?: Record<string, string | undefined>;
+  ensureSkillLinksFn?: (cfg: Config) => SkillLinksReport;
 }
 
 export type WizardIoResult =
@@ -194,12 +196,17 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
         }
       }
       const queueRoot = ensureDirs(loadConfigFn(resolved));
+      // Skill links ride config-init: consent was just written (or confirmed)
+      // by the Skills chapter, so materialize it now rather than at first
+      // daemon start. Warnings are non-fatal by ensureSkillLinks contract.
+      (deps.ensureSkillLinksFn ?? ensureSkillLinks)(loadConfigFn(resolved));
       return { written, configPath: resolved, queueRoot, changes };
     },
     flightCheck: () => flightChecks(loadConfigFn(resolved), deps.detectDeps),
     effectiveDataDir,
     dataDirLegacyFallback,
     botGhConfigDir,
+    detectedHarnesses: detectInstalledHarnesses(existsFn),
     detectBotLogin: () => (deps.detectBotLoginFn ?? detectBotLogin)(wizGhBin, botGhConfigDir),
     runGhLogin: () => (deps.runGhLoginFn ?? runGhLogin)(wizGhBin, botGhConfigDir),
   };
