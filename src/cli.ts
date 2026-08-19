@@ -129,6 +129,11 @@ export interface CliDeps {
   /** Injected by tests: the outbox list/flush core (default lazily from outboxCmd.js).
    *  A seam so the flush path's bot-auth attach is observable without real state. */
   runOutboxCommandFn?: typeof import("./outboxCmd.js").runOutboxCommand;
+  /** Injected by tests: the skill-install core (default lazily from skillCmd.js).
+   *  A seam so `--harness <registry name>` is testable without ever calling the
+   *  real ensureSkillLinks — its dirs expand against the REAL os.homedir(), not
+   *  this run()'s injected `env.HOME` (see resolveHarnessArg/expandHome). */
+  runSkillInstallCommandFn?: typeof import("./skillCmd.js").runSkillInstallCommand;
   /** Largest ticket timeout (seconds) currently reachable in the queue, used to
    *  size the `service` stop-timeout so a long ticket isn't SIGKILLed mid-drain
    *  (#118). Default: a best-effort scan of inbox/ + processing/. */
@@ -751,9 +756,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "skill") {
     if (positionals[1] === "install") {
-      const { runSkillInstallCommand } = await import("./skillCmd.js");
+      const runSkillInstallCommandFn =
+        deps.runSkillInstallCommandFn ?? (await import("./skillCmd.js")).runSkillInstallCommand;
       const harness = (values.harness as string[] | undefined) ?? [];
-      return runSkillInstallCommand(configPath, { harness }, { printFn });
+      return runSkillInstallCommandFn(configPath, { harness }, { printFn });
     }
     process.stderr.write(`Usage: junco skill install [--harness <name|path>]...\n`);
     return 2;

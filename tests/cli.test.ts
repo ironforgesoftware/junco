@@ -27,17 +27,6 @@ import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
 import { makeConfig } from "./helpers/config.js";
 import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
-import { runSkillInstallCommand } from "../src/skillCmd.js";
-
-// `skill install` is wired via a lazy `await import("./skillCmd.js")` in
-// cli.ts, with NO CliDeps override — so exercising it for real would run the
-// real ensureSkillLinks against the REAL machine's home directory (a `claude`
-// harness resolves to `~/.claude/skills`, which this repo's CLAUDE.md
-// explicitly forbids touching from a test). Mock the module instead: the
-// wiring test only needs to prove the parsed args reach the function.
-vi.mock("../src/skillCmd.js", () => ({
-  runSkillInstallCommand: vi.fn(async () => 0),
-}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1222,23 +1211,29 @@ describe("run(['assess']) — routing", () => {
   });
 });
 
+// `skill install` follows the dispatch/outbox precedent: a CliDeps seam
+// (`runSkillInstallCommandFn`) so tests never fall through to the real lazy
+// import — the real skillCmd.js resolves `--harness <registry name>` dirs
+// against the REAL os.homedir() (not this run()'s injected env.HOME), so an
+// unmocked exercise risks touching the actual machine's ~/.claude/skills.
 describe("run(['skill']) — routing", () => {
-  afterEach(() => {
-    vi.mocked(runSkillInstallCommand).mockClear();
-  });
-
-  it("routes `skill install --harness claude` to runSkillInstallCommand with { harness: ['claude'] }", async () => {
+  it("routes `skill install --harness claude` to runSkillInstallCommandFn with { harness: ['claude'] }", async () => {
+    const runSkillInstallCommandFn = vi.fn(
+      async (_configPath: string, _opts: { harness: string[] }) => 0,
+    );
     const code = await run(["skill", "install", "--harness", "claude"], {
       env: { HOME: "/x" },
+      runSkillInstallCommandFn,
     });
     expect(code).toBe(0);
-    expect(runSkillInstallCommand).toHaveBeenCalledTimes(1);
-    const [configPathArg, opts] = vi.mocked(runSkillInstallCommand).mock.calls[0];
+    expect(runSkillInstallCommandFn).toHaveBeenCalledTimes(1);
+    const [configPathArg, opts] = runSkillInstallCommandFn.mock.calls[0];
     expect(typeof configPathArg).toBe("string");
     expect(opts).toEqual({ harness: ["claude"] });
   });
 
-  it("bare `skill` exits 2 with the usage line, never reaching runSkillInstallCommand", async () => {
+  it("bare `skill` exits 2 with the usage line, never reaching runSkillInstallCommandFn", async () => {
+    const runSkillInstallCommandFn = vi.fn(async () => 0);
     const lines: string[] = [];
     const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
       lines.push(String(s));
@@ -1246,13 +1241,13 @@ describe("run(['skill']) — routing", () => {
     });
     let code: number;
     try {
-      code = await run(["skill"], { env: { HOME: "/x" } });
+      code = await run(["skill"], { env: { HOME: "/x" }, runSkillInstallCommandFn });
     } finally {
       spy.mockRestore();
     }
     expect(code).toBe(2);
     expect(lines.join("")).toContain("Usage: junco skill install");
-    expect(runSkillInstallCommand).not.toHaveBeenCalled();
+    expect(runSkillInstallCommandFn).not.toHaveBeenCalled();
   });
 });
 

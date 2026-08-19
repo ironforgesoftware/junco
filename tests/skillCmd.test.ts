@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { runSkillInstallCommand, resolveHarnessArg } from "../src/skillCmd.js";
 import type { SkillLinksReport } from "../src/skillLinks.js";
+import { expandHome } from "../src/config.js";
 import { makeConfig, READ_ONLY_TOOLS } from "./helpers/config.js";
 
 const seams = {
@@ -80,6 +81,41 @@ describe("runSkillInstallCommand", () => {
     );
     expect(code).toBe(0);
     expect(Object.keys(h.writes)).toEqual([]); // no-op write skipped
+  });
+
+  // The dedupe compares expandHome-NORMALIZED forms, not raw strings: a config
+  // that already stores the registry entry's *expanded* (absolute) form must
+  // still be recognized as covering a bare `--harness claude` request, even
+  // though "~/.claude/skills" !== the stored absolute path as literal text.
+  it("dedupes against an existing entry stored in already-expanded (absolute) form", async () => {
+    const already = expandHome("~/.claude/skills");
+    const h = harness({ skills: { harnessDirs: [already] } }, [already]);
+    const code = await runSkillInstallCommand(
+      "/sbxroot/config.json",
+      { harness: ["claude"] },
+      h.deps,
+    );
+    expect(code).toBe(0);
+    expect(Object.keys(h.writes)).toEqual([]); // no-op write skipped
+  });
+
+  // Within-invocation repeats must collapse too — the dedupe set built from
+  // the existing config alone would let `--harness claude --harness claude`
+  // through twice (two identical "configured:" lines, a duplicate config
+  // entry). First occurrence wins; the config gains exactly one entry.
+  it("collapses a repeated --harness flag to a single addition", async () => {
+    const h = harness({});
+    const code = await runSkillInstallCommand(
+      "/sbxroot/config.json",
+      { harness: ["claude", "claude"] },
+      h.deps,
+    );
+    expect(code).toBe(0);
+    const [, written] = Object.entries(h.writes)[0];
+    expect(JSON.parse(written).skills.harnessDirs).toEqual(["~/.claude/skills"]);
+    expect(h.out.filter((l) => l.startsWith("configured:"))).toEqual([
+      "configured: ~/.claude/skills\n",
+    ]);
   });
 
   it("unknown name: usage error, nothing written or ensured", async () => {

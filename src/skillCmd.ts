@@ -73,7 +73,16 @@ export async function runSkillInstallCommand(
     }
     const existing = (getAtPath(raw, "skills.harnessDirs") as string[] | undefined) ?? [];
     const known = new Set(existing.map((d) => expandHome(d)));
-    const additions = requested.filter((d) => !known.has(expandHome(d)));
+    // First occurrence wins on expandHome-normalized form — this also
+    // collapses within-invocation repeats (`--harness claude --harness
+    // claude`), not just dedupe against what's already in the config.
+    const additions: string[] = [];
+    for (const d of requested) {
+      const norm = expandHome(d);
+      if (known.has(norm)) continue;
+      known.add(norm);
+      additions.push(d);
+    }
     if (additions.length > 0) {
       setAtPath(raw, "skills.harnessDirs", [...existing, ...additions]);
       // Atomic tmp+rename — same pattern as configCmd/wizard writes.
