@@ -2221,6 +2221,46 @@ describe("bot access after adding an owned repo", () => {
     await until(() => (r.lastFrame() ?? "").includes("watching alx/coral"));
     expect(r.lastFrame()).not.toContain("bot ");
   });
+
+  // Private personal repo: the invite is confirm-gated through the shared
+  // modal — `y` grants, `n` skips with the escape-hatch toast (onCancel).
+  const gateClient = () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const grants: string[] = [];
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: true });
+    client.ensureBotAccess = async (nwo: string) => {
+      grants.push(nwo);
+      return okv({ skipped: false, login: "junco-agent" });
+    };
+    return { client, grants };
+  };
+
+  it("private personal repo: y on the confirm gate runs the grant", async () => {
+    const { client, grants } = gateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    expect(grants).toEqual([]); // gate open — nothing granted yet
+    r.stdin.write("y");
+    await until(() => (r.lastFrame() ?? "").includes("bot junco-agent granted write"));
+    expect(grants).toEqual(["alx/coral"]);
+  });
+
+  it("private personal repo: n on the confirm gate skips and toasts the escape hatch", async () => {
+    const { client, grants } = gateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("n");
+    await until(() => (r.lastFrame() ?? "").includes("bot access skipped"));
+    expect(grants).toEqual([]);
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
 });
 
 describe("URL paste in add-repo", () => {

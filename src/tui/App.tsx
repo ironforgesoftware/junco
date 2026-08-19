@@ -1733,7 +1733,9 @@ export function App(props: AppProps): React.JSX.Element {
     dismissToast();
     if (confirm) {
       if (key.escape || input === "n") {
+        const onCancel = confirm.onCancel;
         clearConfirm();
+        onCancel?.();
         return;
       }
       if (key.return || input === "y") {
@@ -2223,7 +2225,16 @@ export function App(props: AppProps): React.JSX.Element {
               fn();
             }}
           />
-          <Button keyHint="esc" label="cancel" tone="neutral" onPress={clearConfirm} />
+          <Button
+            keyHint="esc"
+            label="cancel"
+            tone="neutral"
+            onPress={() => {
+              const onCancel = confirm.onCancel;
+              clearConfirm();
+              onCancel?.();
+            }}
+          />
         </Box>
       </Box>
     </Modal>
