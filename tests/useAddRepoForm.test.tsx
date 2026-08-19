@@ -1,10 +1,11 @@
 // tests/useAddRepoForm.test.tsx
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { Text } from "ink";
 import { useAddRepoForm } from "../src/tui/hooks/useAddRepoForm.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
+import type { ConfirmState } from "../src/tui/hooks/useConfirm.js";
 import type { WatchlistEntry } from "../src/watchlist.js";
 import type { ToastKind } from "../src/tui/theme.js";
 import type { View } from "../src/tui/App.js";
@@ -19,6 +20,7 @@ function makeClient(overrides: Partial<DashboardClient> = {}): DashboardClient {
     cloneRepo: async () => okv(undefined),
     validateAndPrepareRepo: async () => okv(undefined),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     ...overrides,
   } as unknown as DashboardClient;
 }
@@ -31,6 +33,7 @@ function Probe({
   setView,
   aliveRef,
   watchlistError,
+  askConfirm,
   onReady,
 }: {
   client: DashboardClient;
@@ -40,6 +43,7 @@ function Probe({
   setView: (v: View) => void;
   aliveRef: React.MutableRefObject<boolean>;
   watchlistError: string | null;
+  askConfirm: (state: ConfirmState) => void;
   onReady: (api: ReturnType<typeof useAddRepoForm>) => void;
 }) {
   const api = useAddRepoForm({
@@ -50,6 +54,7 @@ function Probe({
     setView,
     aliveRef,
     watchlistError,
+    askConfirm,
   });
   onReady(api);
   return <Text>{`error:${api.addRepoError ?? "none"}:busy:${api.addRepoBusy ?? "none"}`}</Text>;
@@ -68,11 +73,13 @@ function renderProbe(opts: {
   toasts: { kind: ToastKind; text: string }[];
   views: View[];
   entries: WatchlistEntry[];
+  confirms: ConfirmState[];
   r: ReturnType<typeof render>;
 } {
   const toasts: { kind: ToastKind; text: string }[] = [];
   const views: View[] = [];
   const entries: WatchlistEntry[] = [];
+  const confirms: ConfirmState[] = [];
   let apiRef: ReturnType<typeof useAddRepoForm> | undefined;
   const showToast =
     opts.showToast ?? ((kind: ToastKind, text: string) => toasts.push({ kind, text }));
@@ -93,6 +100,7 @@ function renderProbe(opts: {
       setView={setView}
       aliveRef={aliveRef}
       watchlistError={opts.watchlistError ?? null}
+      askConfirm={(s) => confirms.push(s)}
       onReady={(a) => (apiRef = a)}
     />,
   );
@@ -101,6 +109,7 @@ function renderProbe(opts: {
     toasts,
     views,
     entries,
+    confirms,
     r,
   };
 }
@@ -173,6 +182,124 @@ describe("useAddRepoForm", () => {
     expect(toasts).toEqual([
       { kind: "success", text: "watching acme/api (fork-PR mode via me/fork)" },
     ]);
+    r.unmount();
+  });
+});
+
+describe("useAddRepoForm: bot-grant confirm gate", () => {
+  const gated = () => okv({ needed: true as const, login: "junco-agent", privatePersonal: true });
+
+  it("private personal repo: opens the confirm gate naming the bot, grant deferred", async () => {
+    const ensureBotAccess = vi.fn(async () => okv({ skipped: false, login: "junco-agent" }));
+    const client = makeClient({ botGrantPreflight: async () => gated(), ensureBotAccess });
+    const { api, confirms, toasts, r } = renderProbe({ client });
+    await api().handleAddRepo("acme/api", "/repos/api");
+    await until(() => confirms.length > 0);
+    expect(confirms).toHaveLength(1);
+    expect(confirms[0]!.title).toBe("invite bot as collaborator?");
+    expect(confirms[0]!.body).toContain("acme/api");
+    expect(confirms[0]!.body).toContain("junco-agent");
+    expect(confirms[0]!.danger).toBe(false);
+    expect(ensureBotAccess).not.toHaveBeenCalled();
+    expect(toasts).toEqual([{ kind: "success", text: "watching acme/api" }]);
+
+    confirms[0]!.onConfirm();
+    await until(() => ensureBotAccess.mock.calls.length > 0);
+    await until(() => toasts.length > 1);
+    expect(toasts[1]).toEqual({
+      kind: "success",
+      text: "bot junco-agent granted write on acme/api",
+    });
+    r.unmount();
+  });
+
+  it("cancelling the gate skips the grant and toasts the escape hatch", async () => {
+    const ensureBotAccess = vi.fn(async () => okv({ skipped: false, login: "junco-agent" }));
+    const client = makeClient({ botGrantPreflight: async () => gated(), ensureBotAccess });
+    const { api, confirms, toasts, r } = renderProbe({ client });
+    await api().handleAddRepo("acme/api", "/repos/api");
+    await until(() => confirms.length > 0);
+
+    confirms[0]!.onCancel!();
+    await until(() => toasts.length > 1);
+    expect(toasts[1]).toEqual({
+      kind: "info",
+      text: "bot access skipped — grant later with: junco auth grant acme/api",
+    });
+    expect(ensureBotAccess).not.toHaveBeenCalled();
+    r.unmount();
+  });
+
+  it("public or org repo (no gate) grants directly as before", async () => {
+    const ensureBotAccess = vi.fn(async () => okv({ skipped: false, login: "junco-agent" }));
+    const client = makeClient({
+      botGrantPreflight: async () =>
+        okv({ needed: true as const, login: "junco-agent", privatePersonal: false }),
+      ensureBotAccess,
+    });
+    const { api, confirms, toasts, r } = renderProbe({ client });
+    await api().handleAddRepo("acme/api", "/repos/api");
+    await until(() => toasts.length > 1);
+    expect(confirms).toEqual([]);
+    expect(ensureBotAccess).toHaveBeenCalledTimes(1);
+    expect(toasts[1]).toEqual({
+      kind: "success",
+      text: "bot junco-agent granted write on acme/api",
+    });
+    r.unmount();
+  });
+
+  it("preflight needed:false ends the flow without a gate or a grant call", async () => {
+    const ensureBotAccess = vi.fn(async () => okv({ skipped: true }));
+    const client = makeClient({ ensureBotAccess });
+    const { api, confirms, toasts, entries, r } = renderProbe({ client });
+    await api().handleAddRepo("acme/api", "/repos/api");
+    await until(() => entries.length > 0);
+    // The preflight resolves after the watching toast; give the chain a tick.
+    await new Promise((res) => setTimeout(res, 5));
+    expect(confirms).toEqual([]);
+    expect(ensureBotAccess).not.toHaveBeenCalled();
+    expect(toasts).toEqual([{ kind: "success", text: "watching acme/api" }]);
+    r.unmount();
+  });
+
+  it("preflight failure falls back to the legacy direct grant (its own error surfacing)", async () => {
+    const ensureBotAccess = vi.fn(async () => ({
+      ok: false as const,
+      error: "bot auth is broken — run: junco auth login",
+    }));
+    const client = makeClient({
+      botGrantPreflight: async () => ({ ok: false as const, error: "offline" }),
+      ensureBotAccess,
+    });
+    const { api, confirms, toasts, r } = renderProbe({ client });
+    await api().handleAddRepo("acme/api", "/repos/api");
+    await until(() => toasts.length > 1);
+    expect(confirms).toEqual([]);
+    expect(ensureBotAccess).toHaveBeenCalledTimes(1);
+    expect(toasts[1]).toEqual({
+      kind: "error",
+      text: "bot access: bot auth is broken — run: junco auth login",
+    });
+    r.unmount();
+  });
+
+  it("unmount between preflight and gate drops the confirm (aliveRef guard)", async () => {
+    const aliveRef = { current: true };
+    let releasePreflight: (() => void) | undefined;
+    const client = makeClient({
+      botGrantPreflight: () =>
+        new Promise((res) => {
+          releasePreflight = () => res(gated());
+        }),
+    });
+    const { api, confirms, r } = renderProbe({ client, aliveRef });
+    const promise = api().handleAddRepo("acme/api", "/repos/api");
+    await until(() => releasePreflight !== undefined);
+    aliveRef.current = false; // simulate unmount
+    releasePreflight!();
+    await promise;
+    expect(confirms).toEqual([]);
     r.unmount();
   });
 });

@@ -151,6 +151,7 @@ function makeClient(
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -213,6 +214,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -278,6 +280,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -743,6 +746,7 @@ describe("App", () => {
       repoPermission: async () => okv({ canPush: true }),
       prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
       ensureBotAccess: async () => okv({ skipped: true }),
+      botGrantPreflight: async () => okv({ needed: false as const }),
       dispatchTicket: async (nwo, num) =>
         okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
       listReview: async () => okv([]),
@@ -2178,6 +2182,9 @@ describe("bot access after adding an owned repo", () => {
 
   it("a grant success toasts the bot login, on top of the watching toast", async () => {
     const { client } = makeClient({ "acme/api": [] });
+    // Non-gated preflight (public/org repo): the legacy silent grant runs.
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: false });
     client.ensureBotAccess = async () => okv({ skipped: false, login: "junco-agent" });
     const file = wl5();
     const r = renderApp(client, file);
@@ -2191,6 +2198,8 @@ describe("bot access after adding an owned repo", () => {
 
   it("a grant failure surfaces the underlying error instead of a fixed prescription", async () => {
     const { client } = makeClient({ "acme/api": [] });
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: false });
     client.ensureBotAccess = async () => ({ ok: false, error: "needs admin — ask an org admin" });
     const file = wl5();
     const r = renderApp(client, file);
@@ -2211,6 +2220,98 @@ describe("bot access after adding an owned repo", () => {
     await until(() => readWatchlist(file).entries.length > 0);
     await until(() => (r.lastFrame() ?? "").includes("watching alx/coral"));
     expect(r.lastFrame()).not.toContain("bot ");
+  });
+
+  // Private personal repo: the invite is confirm-gated through the shared
+  // modal — `y` grants, `n` skips with the escape-hatch toast (onCancel).
+  const gateClient = () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const grants: string[] = [];
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: true });
+    client.ensureBotAccess = async (nwo: string) => {
+      grants.push(nwo);
+      return okv({ skipped: false, login: "junco-agent" });
+    };
+    return { client, grants };
+  };
+
+  it("private personal repo: y on the confirm gate runs the grant", async () => {
+    const { client, grants } = gateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    expect(grants).toEqual([]); // gate open — nothing granted yet
+    r.stdin.write("y");
+    await until(() => (r.lastFrame() ?? "").includes("bot junco-agent granted write"));
+    expect(grants).toEqual(["alx/coral"]);
+  });
+
+  it("private personal repo: n on the confirm gate skips and toasts the escape hatch", async () => {
+    const { client, grants } = gateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("n");
+    await until(() => (r.lastFrame() ?? "").includes("bot access skipped"));
+    expect(grants).toEqual([]);
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  // The gate opens ASYNCHRONOUSLY (after the preflight round-trips), so it
+  // can land while a text-owning view has taken over — the two views the
+  // input cascade returns on before the confirm layer. Both must still
+  // operate the modal, not go keyboard-dead (addRepo) or double-handle
+  // (config).
+  const deferredGateClient = () => {
+    const base = gateClient();
+    let release!: () => void;
+    const released = new Promise<void>((res) => (release = res));
+    const gate = okv({ needed: true as const, login: "junco-agent", privatePersonal: true });
+    base.client.botGrantPreflight = async () => {
+      await released;
+      return gate;
+    };
+    return { ...base, release: () => release() };
+  };
+
+  it("gate arriving while the add-repo form is reopened still takes y", async () => {
+    const { client, grants, release } = deferredGateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    r.stdin.write("a"); // reopen the form while the preflight is in flight
+    await until(() => (r.lastFrame() ?? "").includes("add repo to watchlist"));
+    release();
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("y");
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["alx/coral"]);
+  });
+
+  it("gate arriving over the config editor takes enter without leaking into it", async () => {
+    const { client, grants, release } = deferredGateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    r.stdin.write(","); // open the config editor while the preflight is in flight
+    await until(() => (r.lastFrame() ?? "").includes("edit/toggle"));
+    release();
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("\r"); // enter = confirm; must NOT start a lever edit below
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["alx/coral"]);
+    // Back on the config body, still in browse mode — the footer's enter hint
+    // reads "edit/toggle" only while no lever edit is open.
+    await until(() => (r.lastFrame() ?? "").includes("edit/toggle"));
   });
 });
 
