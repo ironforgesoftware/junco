@@ -29,10 +29,14 @@ export interface SkillCmdDeps {
 }
 
 /** Registry name -> its default dir; anything path-shaped passes through
- * verbatim (stored un-expanded so the config stays portable across HOMEs). */
+ * verbatim (stored un-expanded so the config stays portable across HOMEs).
+ * `Object.hasOwn` guards the lookup: HARNESS_REGISTRY is a plain object
+ * literal, so a bare `[arg]` index resolves inherited Object.prototype
+ * members for names like "constructor"/"toString"/"__proto__" — a real
+ * function value that downstream code (join(dir, ...) etc.) then throws a
+ * TypeError on, instead of landing on the unknown-harness error below. */
 export function resolveHarnessArg(arg: string): { dir: string } | { error: string } {
-  const fromRegistry = HARNESS_REGISTRY[arg];
-  if (fromRegistry !== undefined) return { dir: fromRegistry };
+  if (Object.hasOwn(HARNESS_REGISTRY, arg)) return { dir: HARNESS_REGISTRY[arg] };
   if (arg.includes("/") || arg.startsWith("~")) return { dir: arg };
   return {
     error:
@@ -97,7 +101,13 @@ export async function runSkillInstallCommand(
   const report = ensureFn(cfg);
   for (const c of report.created) print(`created:  ${c}\n`);
   for (const r of report.repaired) print(`repaired: ${r}\n`);
-  for (const s of report.skipped) print(`ok:       ${s}\n`);
+  // report.skipped mixes two meanings (skillLinks.ts): a genuinely valid,
+  // already-linked path ("ok") and a harness whose parent dir doesn't exist
+  // here — never linked at all, suffixed "(harness not installed)". The
+  // latter under "ok:" would misleadingly imply it was linked.
+  for (const s of report.skipped) {
+    print(s.endsWith("(harness not installed)") ? `skipped:  ${s}\n` : `ok:       ${s}\n`);
+  }
   for (const w of report.warnings) print(`warning:  ${w}\n`);
 
   // Explicitly requested links must land; config-driven warnings are daemon

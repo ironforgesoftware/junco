@@ -4,7 +4,7 @@
  * ✓ pass · ⚠ warning (degraded but workable) · ✗ failure (exit 1).
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, lstatSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import {
@@ -73,6 +73,12 @@ export interface DoctorDeps {
    * not a directory) is treated as "nothing to hint about" rather than
    * thrown. Defaults to `fs.readdirSync`. */
   readdirFn?: (d: string) => string[];
+  /** lstat (does NOT follow the link) — used only by the 2d skill-links check
+   * to tell a broken/absent symlink apart from a real file/dir squatting on
+   * the same path (the one state `ensureSkillLinks` in skillLinks.ts refuses
+   * to self-heal). Throws ENOENT when absent, same contract as
+   * `fs.lstatSync`; defaults to it. */
+  lstatFn?: (p: string) => { isSymbolicLink(): boolean };
   /** Best-effort npm update check (spec 2026-07-16). Defaults to the real
    * `checkForUpdate`; injectable so tests never hit the network or a real
    * fs cache. */
@@ -170,6 +176,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   const env = deps.env ?? process.env;
   const existsFn = deps.existsFn ?? existsSync;
   const readdirFn = deps.readdirFn ?? readdirSync;
+  const lstatFn = deps.lstatFn ?? lstatSync;
 
   const results: Array<{ v: Verdict; label: string }> = [];
   const report = (v: Verdict, label: string, detail = ""): void => {
@@ -237,26 +244,59 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     }
 
     // 2d. skill links (spec 2026-08-19): the <dataDir>/skills mount plus each
-    // configured harness link must RESOLVE (existsSync follows symlinks, so a
-    // broken link reads as absent). Harness dirs whose parent is missing are
-    // skipped — a config roams between machines, and an uninstalled harness
-    // is not a defect. warn (never fail): the daemon self-heals at startup,
-    // and 'junco skill install' does it on demand.
+    // configured harness link must RESOLVE as a live symlink. existsFn alone
+    // can't distinguish a healthy symlink from a real file/dir squatting on
+    // the same path (both "resolve") — lstatFn (does NOT follow the link) is
+    // needed to tell them apart: dead = absent, or a symlink whose target is
+    // gone (existsFn false); blocked = present and NOT a symlink — the one
+    // state ensureSkillLinks (skillLinks.ts) refuses to self-heal ("occupied
+    // by a non-symlink — not touching it"), so it needs a human to move the
+    // squatter aside, not just a re-run. Harness dirs whose parent is missing
+    // are skipped — a config roams between machines, and an uninstalled
+    // harness is not a defect. warn (never fail) either way: dead self-heals
+    // at daemon startup or via 'junco skill install'; blocked doesn't, but
+    // doctor's job is to surface it, not to fail the run over it.
     const skillLinks = [
       dataTreePaths(cfg).skills,
       ...cfg.skills.harnessDirs
         .filter((d) => existsFn(dirname(d)))
         .map((d) => join(d, SKILL_DIR_NAME)),
     ];
-    const deadLinks = skillLinks.filter((p) => !existsFn(p));
-    if (deadLinks.length === 0) {
+    const deadLinks: string[] = [];
+    const blockedLinks: string[] = [];
+    for (const p of skillLinks) {
+      let st: { isSymbolicLink(): boolean } | null;
+      try {
+        st = lstatFn(p);
+      } catch {
+        st = null;
+      }
+      if (st === null) {
+        deadLinks.push(p);
+      } else if (!st.isSymbolicLink()) {
+        blockedLinks.push(p);
+      } else if (!existsFn(p)) {
+        deadLinks.push(p);
+      }
+    }
+    if (deadLinks.length === 0 && blockedLinks.length === 0) {
       report("ok", "skill links", `${skillLinks.length} link(s) resolve`);
     } else {
-      report(
-        "warn",
-        "skill links",
-        `${deadLinks.join(", ")} — run 'junco skill install' (or start the daemon) to create/repair`,
-      );
+      if (deadLinks.length > 0) {
+        report(
+          "warn",
+          "skill links",
+          `${deadLinks.join(", ")} — run 'junco skill install' (or start the daemon) to create/repair`,
+        );
+      }
+      if (blockedLinks.length > 0) {
+        report(
+          "warn",
+          "skill links blocked",
+          `${blockedLinks.join(", ")} — occupied by a real file/directory (not a symlink); move it ` +
+            `aside manually — self-heal and 'junco skill install' will not touch it`,
+        );
+      }
     }
 
     // 3-4. git / gh

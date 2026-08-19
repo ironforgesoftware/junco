@@ -113,6 +113,19 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     // skill link overrides this explicitly (see the skill links describe
     // block below).
     existsFn: (p: string) => p.endsWith("/skills"),
+    // Default lstatFn: reports a healthy symlink for the same "/skills"-
+    // ending mount path the default existsFn resolves (2d classifies a link
+    // as ok only when lstat says symlink AND existsFn says it resolves) —
+    // anything else lstats as absent (ENOENT), matching the "dead" verdict
+    // default existsFn already implies for it. Mirrors the existsFn carve-out
+    // above; a test exercising a specific harness link or a blocked
+    // (non-symlink) path overrides this explicitly.
+    lstatFn: (p: string) =>
+      p.endsWith("/skills")
+        ? { isSymbolicLink: () => true }
+        : (() => {
+            throw new Error("ENOENT");
+          })(),
     ...over,
   };
 }
@@ -555,6 +568,10 @@ describe("runDoctor skill links check (2d, spec 2026-08-19)", () => {
         loadConfigFn: () => withHarnessDirs([harnessDir]),
         existsFn: (p: string) =>
           p === skillsMount || p === "/sbxroot/home/.claude" || p === harnessLink,
+        // Both checked link paths (mount + harness link) are healthy
+        // symlinks here — the default lstatFn fixture only vouches for the
+        // "/skills"-suffixed mount, so the harness link needs its own.
+        lstatFn: () => ({ isSymbolicLink: () => true }),
         printFn: (s) => lines.push(s),
       }),
     );
@@ -598,6 +615,62 @@ describe("runDoctor skill links check (2d, spec 2026-08-19)", () => {
     const text = lines.join("");
     expect(text).toMatch(/✓ skill links/);
     expect(text).not.toContain(harnessDir);
+  });
+
+  // A real file/directory squatting on a link path is the one state
+  // ensureSkillLinks (skillLinks.ts) refuses to self-heal ("occupied by a
+  // non-symlink — not touching it") — probing with existsFn alone can't tell
+  // this apart from a healthy symlink (both resolve), so doctor needs lstat
+  // to distinguish "blocked" from "ok".
+  it("warns 'blocked' (not ok) when a real dir squats on the skills mount path", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => okConfig,
+        existsFn: (p: string) => p === skillsMount, // resolves — it's a real dir, not dead
+        lstatFn: (p: string) =>
+          p === skillsMount
+            ? { isSymbolicLink: () => false }
+            : (() => {
+                throw new Error("ENOENT");
+              })(),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    const text = lines.join("");
+    expect(text).toMatch(/⚠ skill links blocked/);
+    expect(text).toContain(skillsMount);
+    expect(text).toMatch(/non-symlink|not a symlink/);
+  });
+
+  it("warns 'blocked' (not ok) when a real file/dir squats on a harness skill-link path", async () => {
+    const lines: string[] = [];
+    const harnessDir = "/sbxroot/home/.claude/skills";
+    const harnessLink = join(harnessDir, SKILL_DIR_NAME);
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => withHarnessDirs([harnessDir]),
+        existsFn: (p: string) =>
+          p === skillsMount || p === "/sbxroot/home/.claude" || p === harnessLink,
+        lstatFn: (p: string) =>
+          p === harnessLink
+            ? { isSymbolicLink: () => false }
+            : p === skillsMount
+              ? { isSymbolicLink: () => true }
+              : (() => {
+                  throw new Error("ENOENT");
+                })(),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    const text = lines.join("");
+    expect(text).toMatch(/⚠ skill links blocked/);
+    expect(text).toContain(harnessLink);
+    expect(text).toMatch(/non-symlink|not a symlink/);
   });
 });
 

@@ -28,6 +28,17 @@ describe("resolveHarnessArg", () => {
     const r = resolveHarnessArg("cursor");
     expect("error" in r && r.error).toMatch(/unknown harness 'cursor'.*claude.*codex.*omp/s);
   });
+
+  // HARNESS_REGISTRY is a plain object literal — a bare `[arg]` lookup falls
+  // through to Object.prototype for names like "constructor"/"toString", and
+  // downstream code (join(fromRegistry, ...) etc.) throws a TypeError on the
+  // inherited function value instead of ever reaching the unknown-harness
+  // error path. Object.hasOwn guards the lookup.
+  it("does not resolve a prototype-chain property name (e.g. 'constructor') — unknown-harness error, not a throw", () => {
+    expect(() => resolveHarnessArg("constructor")).not.toThrow();
+    const r = resolveHarnessArg("constructor");
+    expect("error" in r && r.error).toMatch(/unknown harness 'constructor'/);
+  });
 });
 
 describe("runSkillInstallCommand", () => {
@@ -132,6 +143,30 @@ describe("runSkillInstallCommand", () => {
     );
     expect(code).toBe(2);
     expect(ensured).toBe(0);
+  });
+
+  // report.skipped mixes two different meanings (skillLinks.ts): a genuine
+  // already-valid link (nothing to do, truly "ok") and a harness whose parent
+  // dir doesn't exist here — never linked at all, tagged "(harness not
+  // installed)". Printing both under "ok:" misleads for the latter.
+  it("prints a genuine valid link as 'ok:' but an uninstalled-harness skip as 'skipped:' — exit code unchanged", async () => {
+    const h = harness({});
+    h.deps.ensureFn = () => ({
+      created: [],
+      repaired: [],
+      skipped: [
+        "/sbxroot/home/.claude/skills/junco-dispatch",
+        "/sbxroot/home/.codex/skills (harness not installed)",
+      ],
+      warnings: [],
+    });
+    const code = await runSkillInstallCommand("/sbxroot/config.json", { harness: [] }, h.deps);
+    expect(code).toBe(0); // roaming consent: uninstalled harness stays exit 0 by design
+    expect(h.out).toContain("ok:       /sbxroot/home/.claude/skills/junco-dispatch\n");
+    expect(h.out).toContain("skipped:  /sbxroot/home/.codex/skills (harness not installed)\n");
+    expect(h.out.some((l) => l.startsWith("ok:") && l.includes("harness not installed"))).toBe(
+      false,
+    );
   });
 
   it("exit 1 when an explicitly requested link ends in a warning", async () => {
