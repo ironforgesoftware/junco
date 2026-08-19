@@ -301,6 +301,9 @@ export function App(props: AppProps): React.JSX.Element {
   const health = useHealth(client, healthPollMs);
   const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
+  // useConfirm sits above useAddRepoForm because the add-repo flow feeds its
+  // bot-grant confirm gate through the same modal (askConfirm is stable).
+  const { confirm, askConfirm, clearConfirm } = useConfirm();
   const { addRepoError, addRepoBusy, handleAddRepo, setAddRepoError } = useAddRepoForm({
     client,
     clonesDir,
@@ -309,6 +312,7 @@ export function App(props: AppProps): React.JSX.Element {
     setView,
     aliveRef,
     watchlistError,
+    askConfirm,
   });
   const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
   const {
@@ -342,7 +346,6 @@ export function App(props: AppProps): React.JSX.Element {
   const [repoDetailTarget, setRepoDetailTarget] = useState<UnifiedRepo | null>(null);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
-  const { confirm, askConfirm, clearConfirm } = useConfirm();
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const updateLatest = useUpdateCheck(props.checkUpdateFn);

@@ -2182,6 +2182,9 @@ describe("bot access after adding an owned repo", () => {
 
   it("a grant success toasts the bot login, on top of the watching toast", async () => {
     const { client } = makeClient({ "acme/api": [] });
+    // Non-gated preflight (public/org repo): the legacy silent grant runs.
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: false });
     client.ensureBotAccess = async () => okv({ skipped: false, login: "junco-agent" });
     const file = wl5();
     const r = renderApp(client, file);
@@ -2195,6 +2198,8 @@ describe("bot access after adding an owned repo", () => {
 
   it("a grant failure surfaces the underlying error instead of a fixed prescription", async () => {
     const { client } = makeClient({ "acme/api": [] });
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: false });
     client.ensureBotAccess = async () => ({ ok: false, error: "needs admin — ask an org admin" });
     const file = wl5();
     const r = renderApp(client, file);
