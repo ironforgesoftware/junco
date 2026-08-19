@@ -5,12 +5,12 @@ const km = (c: BindingContext): Record<string, string> =>
   Object.fromEntries(buildContextBindings(c, 2, "wide").keymap);
 const GLOBALS = {
   a: "addRepo",
-  u: "unwatch",
+  U: "unwatch",
   b: "browser",
   r: "refresh",
   s: "assess",
-  e: "queue",
-  v: "review",
+  u: "queue",
+  e: "review",
   p: "prs",
   c: "commands",
   q: "quit",

@@ -73,10 +73,10 @@ describe("unified rail", () => {
     ).toBe(true);
   });
 
-  it("the queue mnemonic (e) jumps straight to the queue system row and focuses the body", async () => {
+  it("the queue mnemonic (u) jumps straight to the queue system row and focuses the body", async () => {
     const r = renderApp();
     await until(() => (r.lastFrame() ?? "").includes("system"));
-    r.stdin.write("e"); // qu[e]ue — q reserved for quit, u taken by unwatch
+    r.stdin.write("u"); // q[u]eue — q reserved for quit, U taken by unwatch (guarded)
     await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos"));
     // The queue row carries the cursor even though we never pressed j.
     expect(

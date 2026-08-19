@@ -657,11 +657,11 @@ describe("App", () => {
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
     const r = renderApp(client, file);
     await tick();
-    r.stdin.write("u"); // selected = acme/api (config)
+    r.stdin.write("U"); // selected = acme/api (config)
     await until(() => (r.lastFrame() ?? "").includes("config.json"));
     r.stdin.write("j"); // select alx/coral
     await tick();
-    r.stdin.write("u");
+    r.stdin.write("U");
     // The unwatch write is observable on disk — bounded until-loop, never a fixed tick.
     await until(() => readWatchlist(file).entries.length === 0);
     expect(readWatchlist(file).entries).toEqual([]);
@@ -865,7 +865,7 @@ describe("App", () => {
     await tick();
     r.stdin.write("j"); // select alx/coral (pane 1) — its issues load
     await until(() => (r.lastFrame() ?? "").includes("●1 review"));
-    r.stdin.write("u"); // unwatch — the issues/staleAt entries drop with the mapping
+    r.stdin.write("U"); // unwatch — the issues/staleAt entries drop with the mapping
     await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
     expect(readWatchlist(file).entries).toEqual([]);
   });
@@ -1097,7 +1097,7 @@ describe("App", () => {
       expect(prCalls[0]).toEqual(["acme/api", 100]);
     });
 
-    // The review view (v) is keyboard-driven (cursor-based, no scroll offset);
+    // The review view (e) is keyboard-driven (cursor-based, no scroll offset);
     // a leaked click/wheel must never fall through to the main-layout hit-test
     // (which would openDetail() and eject the operator into the issue overlay).
     it("review view ignores mouse events: no eject into issue-detail, no stray scroll", async () => {
@@ -1126,7 +1126,7 @@ describe("App", () => {
         ]);
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
-      r.stdin.write("v");
+      r.stdin.write("e");
       await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
       // Same coordinates that, in the main view, focus pane 2 and (on a second
       // click) open the issue-detail overlay — see "first click focuses pane 2
@@ -1507,7 +1507,7 @@ describe("PRs view", () => {
     await until(() => (r.lastFrame() ?? "").includes("⚑1 PR"));
     r.stdin.write("j"); // select alx/coral (pane 1)
     await tick();
-    r.stdin.write("u"); // unwatch — the prs aggregate prunes with the mapping
+    r.stdin.write("U"); // unwatch — the prs aggregate prunes with the mapping
     await until(() => !(r.lastFrame() ?? "").includes("⚑1 PR"));
     expect(readWatchlist(file).entries).toEqual([]);
     r.stdin.write("p"); // the PRs view itself must not list the pruned PR either
@@ -1824,7 +1824,7 @@ describe("assess hotkey (s/S)", () => {
   });
 });
 
-describe("review view (v)", () => {
+describe("review view (e)", () => {
   const wl8 = () => join(mkdtempSync(join(tmpdir(), "junco-review-")), "wl.json");
 
   const reviewBatch = {
@@ -1859,12 +1859,12 @@ describe("review view (v)", () => {
     footer: true,
   };
 
-  it("v opens the review view and enter drills into a batch's findings", async () => {
+  it("e opens the review view and enter drills into a batch's findings", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
     r.stdin.write("\r"); // enter → checklist
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -1879,7 +1879,7 @@ describe("review view (v)", () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
     r.stdin.write(ESC);
     await until(() => !(r.lastFrame() ?? "").includes("no pending assess reviews"));
@@ -1942,7 +1942,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r"); // open batch (all unfiled → all pre-checked)
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -2013,7 +2013,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r");
     // f1 is filed → ✓ (not pre-checked); f2 unfiled → pre-checked [x].
@@ -2034,7 +2034,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -2044,14 +2044,14 @@ describe("review view (v)", () => {
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
   });
 
-  it("v lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
+  it("e lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
     (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
       okv([commentDraft]);
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     // Both rows present: the batch (o/r + finding count) and the draft (o/r#5 + comment badge).
     await until(
       () => (r.lastFrame() ?? "").includes("o/r#5") && (r.lastFrame() ?? "").includes("comment"),
@@ -2078,7 +2078,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
     r.stdin.write("\r"); // no batches → cursor 0 opens the draft preview
     await until(() => (r.lastFrame() ?? "").includes("Broken build"));
@@ -2102,7 +2102,7 @@ describe("review view (v)", () => {
       };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
     r.stdin.write("\r"); // → draft preview
     await until(() => (r.lastFrame() ?? "").includes("Broken build"));
@@ -2302,7 +2302,7 @@ describe("queue system row", () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("repos")); // mounted
-    r.stdin.write("e");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
     expect(r.lastFrame()).toContain("waiting (1)");
     // esc returns focus to the rail; the queue body stays (body follows the
@@ -2346,7 +2346,7 @@ describe("queue system row", () => {
       async () => cheapTall,
     );
     await until(() => (r.lastFrame() ?? "").includes("repos"));
-    r.stdin.write("e");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
     // G parks the section cursor on the LAST selectable row — the window
     // follows it to the bottom and the pane never blanks.
@@ -2402,12 +2402,13 @@ describe("workspace filter + pane navigation (medium)", () => {
     // footer (pane 1 → unwatch; pane 2 → dispatch) rather than color.
     const { client } = makeClient({ "acme/api": [upl] });
     const r = renderApp(client, wl5());
-    await until(() => (r.lastFrame() ?? "").includes("unwatch")); // pane 1 footer
+    // "unwatch" is guarded — the winning char (U) renders uppercased in place.
+    await until(() => (r.lastFrame() ?? "").includes("Unwatch")); // pane 1 footer
     r.stdin.write(ESC + "[C"); // →
     await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 footer
-    expect(r.lastFrame()).not.toContain("unwatch");
+    expect(r.lastFrame()).not.toContain("Unwatch");
     r.stdin.write(ESC + "[D"); // ←
-    await until(() => (r.lastFrame() ?? "").includes("unwatch"));
+    await until(() => (r.lastFrame() ?? "").includes("Unwatch"));
   });
 
   it("g / G jump to the first / last issue", async () => {
@@ -2787,7 +2788,7 @@ describe("workspace wide mode", () => {
     r.stdin.write(ESC + "[D"); // ← back to pane 2
     await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1
-    await until(() => (r.lastFrame() ?? "").includes("unwatch"));
+    await until(() => (r.lastFrame() ?? "").includes("Unwatch")); // guarded: U renders uppercase
   });
 });
 

@@ -60,7 +60,7 @@ const MAIN_EXCLUDED: ReadonlySet<string> = new Set(["j", "k", "h", "l", "g", "G"
  * shared verbs derive the same key regardless of body (spec §2). */
 const MAIN_GLOBALS: MnemonicOption[] = [
   { id: "addRepo", label: "add repo" },
-  { id: "unwatch", label: "unwatch" },
+  { id: "unwatch", label: "unwatch", guarded: true },
   { id: "browser", label: "browser" },
   { id: "refresh", label: "refresh" },
   { id: "assess", label: "assess" },
