@@ -9,6 +9,7 @@ import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import { recordRun } from "../src/assessHistory.js";
 import { WATCHLIST_FILENAME } from "../src/dataTree.js";
+import { SKILL_DIR_NAME } from "../src/skillLinks.js";
 import type { Config } from "../src/types.js";
 import type { ResolvedModelInfo } from "../src/agent/session.js";
 
@@ -42,6 +43,9 @@ const okConfig = {
     externalReposRoot: "/tmp/junco-test-external",
   },
   botAccount: { enabled: false, configDir: "/tmp/junco-doc-gh" },
+  // Empty by default — no harness dirs configured, so the 2d skill-links
+  // check only ever probes the <dataDir>/skills mount for these fixtures.
+  skills: { harnessDirs: [] },
 } as unknown as Config;
 
 /** okConfig with the bot account enabled under an isolated GH_CONFIG_DIR. */
@@ -99,6 +103,16 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     // pre-existing test that doesn't care about the update check stays
     // hermetic; the version-check describe block below overrides this.
     checkUpdateFn: async () => null,
+    // Default existsFn: false for everything except a path ending in
+    // "/skills" (the dataTreePaths(cfg).skills mount, at any dataDir a test
+    // happens to use — default cfg.skills.harnessDirs is [], so the mount is
+    // the only path the 2d skill-links check probes here). This keeps every
+    // pre-existing test's skill-links verdict "ok" (silent) by default, the
+    // same hermetic-fake-over-real-fs pattern already used for the other
+    // existsFn-driven checks in this file — a test that cares about a dead
+    // skill link overrides this explicitly (see the skill links describe
+    // block below).
+    existsFn: (p: string) => p.endsWith("/skills"),
     ...over,
   };
 }
@@ -107,8 +121,12 @@ describe("runDoctor", () => {
   it("all green → exit 0", async () => {
     // #199.3: inject existsFn/readdirFn so the clean verdict doesn't silently
     // depend on the real fs lacking the /tmp/junco-doc-* fixture paths.
+    // "/skills" carve-out keeps the 2d skill-links check silent (ok) too.
     expect(
-      await runDoctor("/x/config.json", deps({ existsFn: () => false, readdirFn: () => [] })),
+      await runDoctor(
+        "/x/config.json",
+        deps({ existsFn: (p: string) => p.endsWith("/skills"), readdirFn: () => [] }),
+      ),
     ).toBe(0);
   });
 
@@ -465,7 +483,9 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
       "/x/config.json",
       deps({
         loadConfigFn: () => cfg,
-        existsFn: (p: string) => p === okConfig.worktreeRoot,
+        // "/skills" carve-out keeps the 2d skill-links check silent (ok) so
+        // it doesn't add a second warning here — see the shared deps() default.
+        existsFn: (p: string) => p === okConfig.worktreeRoot || p.endsWith("/skills"),
         readdirFn: (d: string) => (d === okConfig.worktreeRoot ? ["some-ticket-wt"] : []),
         printFn: (s) => lines.push(s),
       }),
@@ -515,6 +535,69 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
     );
     expect(code).toBe(0);
     expect(lines.join("")).not.toMatch(/legacy worktree root/);
+  });
+});
+
+describe("runDoctor skill links check (2d, spec 2026-08-19)", () => {
+  const skillsMount = join(okConfig.dataDir, "skills");
+
+  /** okConfig with the given harness dirs consented to. */
+  const withHarnessDirs = (harnessDirs: string[]): Config =>
+    ({ ...okConfig, skills: { harnessDirs } }) as unknown as Config;
+
+  it("reports ok skill links when the mount and every configured harness link resolve", async () => {
+    const lines: string[] = [];
+    const harnessDir = "/sbxroot/home/.claude/skills";
+    const harnessLink = join(harnessDir, SKILL_DIR_NAME);
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => withHarnessDirs([harnessDir]),
+        existsFn: (p: string) =>
+          p === skillsMount || p === "/sbxroot/home/.claude" || p === harnessLink,
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ skill links/);
+  });
+
+  it("warns on a dead skill link and points at 'junco skill install'", async () => {
+    const lines: string[] = [];
+    const harnessDir = "/sbxroot/home/.claude/skills";
+    const harnessLink = join(harnessDir, SKILL_DIR_NAME);
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => withHarnessDirs([harnessDir]),
+        // Mount and harness parent both resolve — only the harness's
+        // junco-dispatch link itself is dead.
+        existsFn: (p: string) => p === skillsMount || p === "/sbxroot/home/.claude",
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    const text = lines.join("");
+    expect(text).toMatch(/⚠ skill links/);
+    expect(text).toContain(harnessLink);
+    expect(text).toMatch(/junco skill install/);
+  });
+
+  it("skips a harness dir whose parent doesn't exist (not installed here) — still ok when the mount is healthy", async () => {
+    const lines: string[] = [];
+    const harnessDir = "/sbxroot/home/.claude/skills"; // parent /sbxroot/home/.claude is absent
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => withHarnessDirs([harnessDir]),
+        existsFn: (p: string) => p === skillsMount, // only the mount resolves
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(0);
+    const text = lines.join("");
+    expect(text).toMatch(/✓ skill links/);
+    expect(text).not.toContain(harnessDir);
   });
 });
 
@@ -1373,18 +1456,20 @@ describe("runDoctor assess history checks", () => {
       parked: 3,
     });
     const lines: string[] = [];
-    // existsFn: false — hermetic against pendingMigrations' now-truthful
-    // real-fs probing (task-6 review): this fixture's real dataDir genuinely
-    // has assess-history/ on disk (recordRun wrote it), which is correct
-    // input for THAT check but irrelevant noise for this one (#199.3 pattern
-    // — see "clean cfg reports neither..." above). listHistory itself reads
+    // existsFn: false except the skills mount — hermetic against
+    // pendingMigrations' now-truthful real-fs probing (task-6 review): this
+    // fixture's real dataDir genuinely has assess-history/ on disk (recordRun
+    // wrote it), which is correct input for THAT check but irrelevant noise
+    // for this one (#199.3 pattern — see "clean cfg reports neither..."
+    // above). The "/skills" carve-out keeps the 2d skill-links check silent
+    // (ok) too, same as the shared deps() default. listHistory itself reads
     // the real fs directly (no existsFn seam), so the assertion below is
     // unaffected.
     const code = await runDoctor(
       "/x/config.json",
       deps({
         loadConfigFn: () => ({ ...okConfig, dataDir }),
-        existsFn: () => false,
+        existsFn: (p: string) => p.endsWith("/skills"),
         printFn: (s) => lines.push(s),
       }),
     );
@@ -1401,12 +1486,13 @@ describe("runDoctor assess history checks", () => {
       reason: "boom",
     });
     const lines: string[] = [];
-    // existsFn: false — see the hermeticity note in the previous test.
+    // existsFn: false except the skills mount — see the hermeticity note in
+    // the previous test.
     const code = await runDoctor(
       "/x/config.json",
       deps({
         loadConfigFn: () => ({ ...okConfig, dataDir }),
-        existsFn: () => false,
+        existsFn: (p: string) => p.endsWith("/skills"),
         printFn: (s) => lines.push(s),
       }),
     );
@@ -1433,12 +1519,12 @@ describe("runDoctor assess history checks", () => {
       reason: "boom",
     });
     const lines: string[] = [];
-    // existsFn: false — see the hermeticity note above.
+    // existsFn: false except the skills mount — see the hermeticity note above.
     const code = await runDoctor(
       "/x/config.json",
       deps({
         loadConfigFn: () => ({ ...okConfig, dataDir }),
-        existsFn: () => false,
+        existsFn: (p: string) => p.endsWith("/skills"),
         printFn: (s) => lines.push(s),
       }),
     );

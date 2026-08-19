@@ -15,6 +15,8 @@ import {
   configDeprecations,
 } from "./config.js";
 import { pendingMigrations } from "./dataMigrate.js";
+import { dataTreePaths } from "./dataTree.js";
+import { SKILL_DIR_NAME } from "./skillLinks.js";
 import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
@@ -232,6 +234,29 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           `worktrees currently live at ${cfg.worktreeRoot} via the deprecated git.worktreeRoot override — after removing the key (with the daemon idle), any leftovers there are disposable and new worktrees go under <dataDir>/worktrees`,
         );
       }
+    }
+
+    // 2d. skill links (spec 2026-08-19): the <dataDir>/skills mount plus each
+    // configured harness link must RESOLVE (existsSync follows symlinks, so a
+    // broken link reads as absent). Harness dirs whose parent is missing are
+    // skipped — a config roams between machines, and an uninstalled harness
+    // is not a defect. warn (never fail): the daemon self-heals at startup,
+    // and 'junco skill install' does it on demand.
+    const skillLinks = [
+      dataTreePaths(cfg).skills,
+      ...cfg.skills.harnessDirs
+        .filter((d) => existsFn(dirname(d)))
+        .map((d) => join(d, SKILL_DIR_NAME)),
+    ];
+    const deadLinks = skillLinks.filter((p) => !existsFn(p));
+    if (deadLinks.length === 0) {
+      report("ok", "skill links", `${skillLinks.length} link(s) resolve`);
+    } else {
+      report(
+        "warn",
+        "skill links",
+        `${deadLinks.join(", ")} — run 'junco skill install' (or start the daemon) to create/repair`,
+      );
     }
 
     // 3-4. git / gh
