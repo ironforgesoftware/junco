@@ -5,17 +5,18 @@
  * (done/failed, transcripts, history shards, outbox dead/, review archives)
  * is deliberately out of scope — see the spec's non-goals.
  */
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, unlinkSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
-import { readWatchlist, watchlistPath, type WatchlistEntry } from "./watchlist.js";
+import { readWatchlist, writeWatchlist, watchlistPath, type WatchlistEntry } from "./watchlist.js";
 import { parseTicket } from "./ticket.js";
-import { repoDiscriminator } from "./worktree.js";
-import type { PidfileLock } from "./pidfileLock.js";
+import { repoDiscriminator, worktreesLockPath } from "./worktree.js";
+import { acquirePidfileLock, type PidfileLock } from "./pidfileLock.js";
+import { git } from "./git.js";
 import { listOps } from "./githubOutbox.js";
-import { listPending } from "./assessReview.js";
-import { listDrafts } from "./commentReview.js";
+import { listPending, purgePending } from "./assessReview.js";
+import { listDrafts, removeDraft } from "./commentReview.js";
 import { historyFilePath } from "./assessHistory.js";
 import { slugifyId } from "./slug.js";
 
@@ -262,5 +263,120 @@ function residuePlan(cfg: Config, nwo: string, deps: UnwatchDeps): UnwatchPlan {
     items,
     kept: [],
     blocked,
+  };
+}
+
+/**
+ * Execute a fresh `planUnwatch` plan with per-item failure isolation: every
+ * deletion is attempted independently, a thrown error demotes that row to
+ * "failed" without aborting the rest, and `ok` is true only when every row
+ * succeeded. Re-planning here (rather than trusting a caller-supplied plan)
+ * closes the confirm→execute race — the CLI shows a plan, the user confirms,
+ * and only then does this re-read the world and act on what it actually
+ * finds. Deletion order matters: watchlist entry first (so the bridge's next
+ * poll sweep stops touching this repo) through to the managed clone last
+ * (largest, and the one thing a crash mid-run can leave for a re-run to
+ * finish — see the "clone" comment below).
+ */
+export async function runUnwatch(
+  cfg: Config,
+  nwo: string,
+  deps: UnwatchDeps = {},
+): Promise<UnwatchResult> {
+  const unlinkFn = deps.unlinkFn ?? unlinkSync;
+  const rmFn = deps.rmFn ?? ((p: string) => rmSync(p, { recursive: true, force: true }));
+  const gitFn =
+    deps.gitFn ??
+    (async (a: string[], cwd: string) => {
+      const r = await git(cfg, a, { cwd, check: false });
+      return { code: r.code, stdout: r.stdout };
+    });
+  const acquireLockFn = deps.acquireLockFn ?? (() => acquirePidfileLock(worktreesLockPath(cfg)));
+
+  const outcome = planUnwatch(cfg, nwo, deps); // fresh plan closes the confirm→execute race
+  if (!outcome.ok)
+    return {
+      ok: false,
+      refused: outcome.reason,
+      blockedTicketId: null,
+      watchlistRemoved: false,
+      summary: [],
+    };
+  const plan = outcome.plan;
+  if (plan.blocked)
+    return {
+      ok: false,
+      refused: "blocked",
+      blockedTicketId: plan.blocked.ticketId,
+      watchlistRemoved: false,
+      summary: [],
+    };
+
+  const summary: SummaryRow[] = [];
+  const attempt = (row: Omit<SummaryRow, "outcome">, fn: () => void): void => {
+    try {
+      fn();
+      summary.push({ ...row, outcome: "deleted" });
+    } catch (e) {
+      summary.push({
+        ...row,
+        outcome: "failed",
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+  const byKind = (k: PlanItemKind): PlanItem[] => plan.items.filter((i) => i.kind === k);
+
+  // 1. Watchlist entry first — the bridge's next sweep stops polling.
+  let watchlistRemoved = false;
+  if (plan.mode === "watched") {
+    const file = watchlistPath(cfg);
+    attempt({ kind: "watchlist-entry", path: file }, () => {
+      const { entries, error } = readWatchlist(file);
+      if (error) throw new Error(error); // went corrupt since the plan — leave it alone
+      writeWatchlist(
+        file,
+        entries.filter((e) => e.nwo.toLowerCase() !== plan.nwo.toLowerCase()),
+      );
+      watchlistRemoved = true;
+    });
+  }
+  // 2–4. Tickets, outbox ops, pending reviews.
+  for (const i of byKind("inbox-ticket")) attempt(i, () => unlinkFn(i.path));
+  for (const i of byKind("outbox-op")) attempt(i, () => unlinkFn(i.path));
+  for (const i of byKind("assess-review"))
+    attempt(i, () => void purgePending(cfg, i.detail as string, deps));
+  for (const i of byKind("comment-review"))
+    attempt(i, () => void removeDraft(cfg, i.detail as string, "discarded", deps));
+  // 5. Worktree namespace under the advisory lock (one-directional courtesy —
+  //    the blocker check above is the liveness guarantee, worktreePruneCmd.ts:104).
+  for (const i of byKind("worktrees"))
+    attempt(i, () => {
+      const lock = acquireLockFn();
+      if (lock === null) throw new Error("another worktree operation is in progress — try again");
+      try {
+        rmFn(i.path);
+      } finally {
+        lock.release();
+      }
+    });
+  // 6. Kept user clone: clear junco's stale .git/worktrees registrations. Best-effort.
+  if (plan.mode === "watched" && plan.clone !== null && !plan.clone.managed) {
+    summary.push({ kind: "clone", path: plan.clone.path, outcome: "kept", detail: "user-owned" });
+    await gitFn(["worktree", "prune"], plan.clone.path).catch(() => ({ code: 1, stdout: "" }));
+  }
+  // 7. History, mirror, cache.
+  for (const i of byKind("assess-history")) attempt(i, () => unlinkFn(i.path));
+  for (const i of byKind("mirror")) attempt(i, () => rmFn(i.path));
+  for (const i of byKind("github-cache")) attempt(i, () => unlinkFn(i.path));
+  // 8. Managed clone last (largest; a crash mid-run leaves the re-clonable part).
+  for (const i of byKind("clone")) attempt(i, () => rmFn(i.path));
+
+  return {
+    ok: summary.every((s) => s.outcome !== "failed"),
+    refused: null,
+    blockedTicketId: null,
+    watchlistRemoved,
+    summary,
   };
 }
