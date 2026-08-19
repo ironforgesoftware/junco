@@ -138,8 +138,8 @@ function ticketsTargeting(
     try {
       const t = parseTicket(p, readFileFn(p), cfg.defaultTimeoutMinutes);
       const repo = t.frontmatter["repo"];
-      // repo !== "": an empty string realpaths/resolves to process.cwd() (canonPath's
-      // catch branch), which must never accidentally match a real repo path.
+      // repo !== "": an empty string canonPaths to process.cwd() (realpathSync("")
+      // resolves to the cwd), which must never accidentally match a real repo path.
       if (typeof repo === "string" && repo !== "" && canonPath(repo) === target)
         out.push({ path: p, id: t.id });
     } catch {
