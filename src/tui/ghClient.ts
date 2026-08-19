@@ -46,9 +46,11 @@ export function cachePathFor(cfg: Config, nwo: string): string {
 
 /** `<dataDir>/github-cache/prs-<owner>__<repo>.json` — a sibling path to
  * `cachePathFor`, kept separate (not a param on it) so issues and PRs never
- * collide in the same file. Not exported: nothing outside this module needs
- * to address the PR cache directly. */
-function prCachePathFor(cfg: Config, nwo: string): string {
+ * collide in the same file. Exported only for the unwatchCmd.ts drift-pin
+ * test (tests/unwatchCmd.test.ts), which asserts unwatchCmd's independently
+ * duplicated naming never diverges from this one — no other caller should
+ * address the PR cache directly. */
+export function prCachePathFor(cfg: Config, nwo: string): string {
   return join(dataTreePaths(cfg).githubCache, `prs-${nwo.replace(/\//g, "__")}.json`);
 }
 

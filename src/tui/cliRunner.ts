@@ -44,6 +44,7 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("list", "[box]", "List tickets per queue box (inbox|processing|done|failed)"),
   cmd("retry", "<name…|--all>", "Move failed tickets back to the inbox"),
   cmd("rm", "<name>", "Delete a queued ticket from the inbox"),
+  cmd("unwatch", "<owner/repo> [--plan]", "Stop watching a repo and delete its junco-owned state"),
   cmd("outbox", "[flush]", "List or push the offline GitHub backlog"),
   cmd("prs", null, "List junco-authored pull requests"),
   cmd(

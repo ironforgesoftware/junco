@@ -134,6 +134,8 @@ export interface CliDeps {
    *  real ensureSkillLinks — its dirs expand against the REAL os.homedir(), not
    *  this run()'s injected `env.HOME` (see resolveHarnessArg/expandHome). */
   runSkillInstallCommandFn?: typeof import("./skillCmd.js").runSkillInstallCommand;
+  /** Injected by tests: the unwatch plan/execute core (default lazily from unwatchCmd.js). */
+  runUnwatchCommandFn?: typeof import("./unwatchCmd.js").runUnwatchCommand;
   /** Largest ticket timeout (seconds) currently reachable in the queue, used to
    *  size the `service` stop-timeout so a long ticket isn't SIGKILLed mid-drain
    *  (#118). Default: a best-effort scan of inbox/ + processing/. */
@@ -195,6 +197,7 @@ Subcommands:
   list [box]   List tickets per queue box (inbox|processing|done|failed)
   retry <name…|--all>  Move failed tickets back to the inbox for a fresh run
   rm <name>            Delete a queued ticket from the inbox (best-effort)
+  unwatch <owner/repo> [--plan]  Stop watching a repo and delete its junco-owned state (--plan previews as JSON)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
   data [--json]  Print the data tree (paths, counts, provenance); 'data migrate' unifies legacy roots
@@ -232,6 +235,7 @@ Options:
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
+  --plan                (unwatch) Print what would be deleted as JSON; delete nothing
   --help, -h            Show this help message
   --version             Print junco's version and exit
 `;
@@ -266,6 +270,7 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       "dry-run": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       harness: { type: "string", multiple: true },
+      plan: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -645,6 +650,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "rm") {
     const cfg = loadConfigFn(configPath);
     return runRmCommand(cfg, positionals.slice(1), { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // unwatch: plan/execute deletion of a repo's junco-owned operational state
+  // (src/unwatchCmd.ts). Lazy import keeps its watchlist/outbox/review-store
+  // graph off every other subcommand.
+  // ------------------------------------------------------------
+  if (subcommand === "unwatch") {
+    const cfg = loadConfigFn(configPath);
+    const runUnwatchCommandFn =
+      deps.runUnwatchCommandFn ?? (await import("./unwatchCmd.js")).runUnwatchCommand;
+    return runUnwatchCommandFn(
+      cfg,
+      positionals.slice(1),
+      { plan: values.plan as boolean },
+      { printFn },
+    );
   }
 
   // ------------------------------------------------------------
