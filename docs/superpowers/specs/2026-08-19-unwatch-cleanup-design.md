@@ -104,7 +104,12 @@ deletes in this order:
    so the bridge's next sweep stops polling. Skipped in residue mode.
 2. Inbox tickets.
 3. Outbox ops.
-4. Pending review entries (assess batches, comment drafts).
+4. Pending review entries — via the stores' existing archive verbs, not unlink:
+   comment drafts through `removeDraft(cfg, id, "discarded")`, assess batches
+   through a new `purgePending(cfg, id)` that archives into
+   `review/assess/discarded` (the existing `discardPending` archives into
+   `filed/`, which would misrepresent an unfiled batch). Archiving preserves
+   the audit non-goal while emptying the pending queue.
 5. Worktree namespace dir — under the existing `worktreesLockPath` advisory lock
    (same discipline as prune).
 6. When the clone is **kept** (user-owned; watched mode only — residue mode never
@@ -184,8 +189,14 @@ Follows the `rm`/`retry` pattern: lazy import of `unwatchCmd.js`, `loadConfigFn`
      counts, e.g. `managed clone · 3 queued tickets · worktrees · 1 outbox op ·
      assess history`) plus the `kept` lines.
   4. `y` ⇒ `runLocalAction("unwatch", [nwo])`. On success: toast the summary line,
-     `githubEvictRepo(nwo)`, and the immediate cheap re-poll `runLocalAction`
-     already performs (the rail row disappears via the watchlist re-read).
+     `githubEvictRepo(nwo)`, reload the watchlist hook state, and the immediate
+     cheap re-poll `runLocalAction` already performs. Two small seams enable
+     this: `useWatchlist` gains a `reload()` (the hook only re-reads the file at
+     mount and at its own write time, so the CLI's on-disk removal is invisible
+     without it), and `runLocalAction` gains an optional `onSuccess` callback
+     fired when the spawned command exits 0. The plan JSON is printed by the CLI
+     as a single line and the TUI parses the last non-empty output line (store
+     warnings may precede it in the merged stream).
 - The watchlist write moves entirely into the CLI command — `useWatchlist.removeEntry`
   is no longer called on this path; the destructive flow has exactly one writer.
 
