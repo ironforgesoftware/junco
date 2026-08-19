@@ -111,7 +111,7 @@ export function planUnwatch(cfg: Config, nwo: string, deps: UnwatchDeps = {}): P
   const { entries, error } = readWatchlist(watchlistPath(cfg));
   if (error) return { ok: false, reason: "watchlist-unreadable" };
   const entry = entries.find((e) => e.nwo.toLowerCase() === lower);
-  if (!entry) return { ok: true, plan: residuePlan(cfg, nwo, deps) }; // Task 4
+  if (!entry) return { ok: true, plan: residuePlan(cfg, nwo, deps) };
   return { ok: true, plan: watchedPlan(cfg, entry, deps) };
 }
 
@@ -228,7 +228,39 @@ function watchedPlan(cfg: Config, entry: WatchlistEntry, deps: UnwatchDeps): Unw
   };
 }
 
-// Task 4 replaces this stub with the real residue enumeration.
-function residuePlan(_cfg: Config, nwo: string, _deps: UnwatchDeps): UnwatchPlan {
-  return { nwo, mode: "residue", external: false, clone: null, items: [], kept: [], blocked: null };
+/** nwo not in the watchlist — idempotent re-run sweep. Probes the two
+ * managed-clone roots for a leftover `<owner>/<repo>` clone (first that
+ * exists on disk wins); when found it contributes exactly what
+ * `watchedPlan`'s managed-clone arm would, keyed off the probed path rather
+ * than a watchlist entry. Always appends `nwoKeyedItems`. */
+function residuePlan(cfg: Config, nwo: string, deps: UnwatchDeps): UnwatchPlan {
+  const existsFn = deps.existsFn ?? existsSync;
+  const p = dataTreePaths(cfg);
+  const [owner, repo] = nwo.split("/");
+  const clonePath =
+    [p.clonesWatched, p.clonesExternal]
+      .map((root) => join(root, owner ?? nwo, repo ?? "repo"))
+      .find((candidate) => existsFn(candidate)) ?? null;
+  const items: PlanItem[] = [];
+  let blocked: { ticketId: string } | null = null;
+  if (clonePath !== null) {
+    items.push({ kind: "clone", path: clonePath });
+    const q = p.queue;
+    for (const t of ticketsTargeting(cfg, q.inbox, clonePath, deps))
+      items.push({ kind: "inbox-ticket", path: t.path, detail: t.id });
+    const ns = join(cfg.worktreeRoot, repoDiscriminator(clonePath));
+    if (existsFn(ns)) items.push({ kind: "worktrees", path: ns });
+    const live = ticketsTargeting(cfg, q.processing, clonePath, deps);
+    blocked = live.length > 0 ? { ticketId: live[0].id } : null;
+  }
+  items.push(...nwoKeyedItems(cfg, nwo, clonePath, deps));
+  return {
+    nwo,
+    mode: "residue",
+    external: false,
+    clone: clonePath !== null ? { path: clonePath, managed: true } : null,
+    items,
+    kept: [],
+    blocked,
+  };
 }

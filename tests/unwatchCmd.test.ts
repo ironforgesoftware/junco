@@ -241,3 +241,39 @@ describe("planUnwatch — nwo-keyed stores", () => {
     });
   });
 });
+
+describe("planUnwatch — residue mode (nwo not in watchlist)", () => {
+  it("sweeps nwo-keyed traces and a leftover managed clone + its worktrees", () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    mkdirSync(clone, { recursive: true });
+    const ns = join(cfg.worktreeRoot, repoDiscriminator(clone));
+    mkdirSync(ns, { recursive: true });
+    enqueueOp(cfg, "dashboard", { kind: "comment", nwo: "acme/api", issue: 7, body: "hi" });
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.mode).toBe("residue");
+    expect(out.plan.clone).toEqual({ path: clone, managed: true });
+    const kinds = out.plan.items.map((i) => i.kind);
+    expect(kinds).toEqual(expect.arrayContaining(["clone", "worktrees", "outbox-op"]));
+  });
+
+  it("no clone, no traces → empty plan (nothing to clean)", () => {
+    const { cfg } = makeTree();
+    const out = planUnwatch(cfg, "ghost/repo");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.mode).toBe("residue");
+    expect(out.plan.items).toEqual([]);
+    expect(out.plan.clone).toBeNull();
+  });
+
+  it("a processing ticket targeting the residue clone blocks", () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    mkdirSync(clone, { recursive: true });
+    writeTicket(dataTreePaths(cfg).queue.processing, "live-9", clone);
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.blocked).toEqual({ ticketId: "live-9" });
+  });
+});
