@@ -127,6 +127,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
       externalReposRoot: "/sbxroot/external",
     },
     assess: { maxIssuesPerRun: 20, minSeverity: "low", npmBin: "npm", fileAs: "me" },
+    skills: { harnessDirs: [] },
     sandbox: {
       enabled: false,
       backend: "auto",
