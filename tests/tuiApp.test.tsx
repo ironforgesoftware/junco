@@ -2261,6 +2261,58 @@ describe("bot access after adding an owned repo", () => {
     expect(grants).toEqual([]);
     expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
   });
+
+  // The gate opens ASYNCHRONOUSLY (after the preflight round-trips), so it
+  // can land while a text-owning view has taken over — the two views the
+  // input cascade returns on before the confirm layer. Both must still
+  // operate the modal, not go keyboard-dead (addRepo) or double-handle
+  // (config).
+  const deferredGateClient = () => {
+    const base = gateClient();
+    let release!: () => void;
+    const released = new Promise<void>((res) => (release = res));
+    const gate = okv({ needed: true as const, login: "junco-agent", privatePersonal: true });
+    base.client.botGrantPreflight = async () => {
+      await released;
+      return gate;
+    };
+    return { ...base, release: () => release() };
+  };
+
+  it("gate arriving while the add-repo form is reopened still takes y", async () => {
+    const { client, grants, release } = deferredGateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    r.stdin.write("a"); // reopen the form while the preflight is in flight
+    await until(() => (r.lastFrame() ?? "").includes("add repo to watchlist"));
+    release();
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("y");
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["alx/coral"]);
+  });
+
+  it("gate arriving over the config editor takes enter without leaking into it", async () => {
+    const { client, grants, release } = deferredGateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    r.stdin.write(","); // open the config editor while the preflight is in flight
+    await until(() => (r.lastFrame() ?? "").includes("edit/toggle"));
+    release();
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("\r"); // enter = confirm; must NOT start a lever edit below
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["alx/coral"]);
+    // Back on the config body, still in browse mode — the footer's enter hint
+    // reads "edit/toggle" only while no lever edit is open.
+    await until(() => (r.lastFrame() ?? "").includes("edit/toggle"));
+  });
 });
 
 describe("URL paste in add-repo", () => {

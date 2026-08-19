@@ -105,6 +105,24 @@ describe("ConfigView", () => {
     expect((readCfg(p).model as { reasoning: boolean }).reasoning).toBe(false);
   });
 
+  it("inputActive={false} makes the editor inert (a confirm modal owns input over it)", async () => {
+    const p = fixture({ vaultRoot: "/v" });
+    let exited = false;
+    const { lastFrame, stdin } = render(
+      <ConfigView configPath={p} onExit={() => (exited = true)} inputActive={false} />,
+    );
+    await until(() => /model/i.test(lastFrame() ?? ""));
+    // Same sequence that toggles model.reasoning when active, plus an Esc
+    // that would call onExit. press() ticks after every key, so the writes
+    // below had every chance to land before the assertions.
+    await press(stdin, RIGHT, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN);
+    await press(stdin, ENTER, ESC);
+    expect(readCfg(p).model).toBeUndefined(); // no toggle write
+    expect(exited).toBe(false); // esc never reached onExit
+    // Focus never left the initial general/vaultRoot lever.
+    expect(lastFrame() ?? "").toMatch(/Root directory Junco keeps its ticket queue under/);
+  });
+
   it("surfaces the sandbox section and toggles sandbox.enabled from the editor", async () => {
     // Explicit false so the toggle → true regardless of the schema default.
     const p = fixture({ vaultRoot: "/v", sandbox: { enabled: false } });

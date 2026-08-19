@@ -155,7 +155,12 @@ export interface DashboardClient {
    * `ensureBotAccess` fires. The repo-meta probe runs under the OPERATOR's
    * ambient identity (pre-grant, the bot cannot see a private repo at all);
    * a failed probe reports `privatePersonal: false` so callers fall back to
-   * the legacy silent-grant path and its own error surfacing. */
+   * the legacy silent-grant path and its own error surfacing. Fail-open is
+   * DELIBERATE: failing closed would pop a gate whose body wrongly asserts
+   * "private on a personal account" for org/public repos whenever the meta
+   * probe flakes — and the window is tiny (the operator just completed
+   * several successful gh calls, and the probe itself retries on network
+   * errors). */
   botGrantPreflight(
     nwo: string,
   ): Promise<Result<{ needed: false } | { needed: true; login: string; privatePersonal: boolean }>>;
