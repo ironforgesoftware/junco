@@ -936,43 +936,65 @@ export function App(props: AppProps): React.JSX.Element {
         return void showToast("info", `${mapping.nwo} is defined in config.json`);
       if (watchlistError)
         return void showToast("error", "watchlist unreadable — fix it before writing");
-      void runCliFn("unwatch", [mapping.nwo, "--plan"]).then((rr) => {
-        if (!aliveRef.current) return;
-        if (rr.code !== 0)
-          return void showToast("error", firstNonEmptyLine(rr.output) ?? "unwatch: plan failed");
-        // Store warnings may precede the JSON in the merged stream — parse the LAST line.
-        const lines = rr.output.split("\n").filter((l) => l.trim() !== "");
-        let outcome: PlanOutcome | null = null;
-        try {
-          outcome = JSON.parse(lines[lines.length - 1] ?? "") as PlanOutcome;
-        } catch {
-          /* fall through to the error toast */
-        }
-        if (outcome === null || !outcome.ok)
-          return void showToast("error", "unwatch: unreadable plan");
-        const plan = outcome.plan;
-        if (plan.blocked)
-          return void showToast(
-            "info",
-            `${mapping.nwo}: ticket in flight (${plan.blocked.ticketId}) — wait for it to finish`,
-          );
-        askConfirm({
-          title: `unwatch ${mapping.nwo}`,
-          danger: true,
-          body: summarizeUnwatchPlan(plan),
-          onConfirm: () =>
-            runLocalAction("unwatch", [mapping.nwo], {
-              label: "unwatch",
-              onSuccess: () => {
-                // Drop the repo's cached issue/PR state too — the rail badges
-                // and the header pulse must never read ghost data for a repo
-                // that is no longer watched. Synchronous, not a poll round-trip.
-                githubEvictRepo(mapping.nwo);
-                reloadWatchlist();
-              },
-            }),
+      void runCliFn("unwatch", [mapping.nwo, "--plan"])
+        .then((rr) => {
+          if (!aliveRef.current) return;
+          // Parse BEFORE branching on the exit code: a refusal exits 1 but still
+          // prints its {ok:false, reason} JSON line, and the friendly message
+          // beats a raw JSON blob in the toast. (TOCTOU-only path — the guards
+          // above already caught both reasons against the current snapshot.)
+          // Store warnings may precede the JSON in the merged stream — parse the
+          // LAST non-empty line.
+          const lines = rr.output.split("\n").filter((l) => l.trim() !== "");
+          let outcome: PlanOutcome | null = null;
+          try {
+            const parsed: unknown = JSON.parse(lines[lines.length - 1] ?? "");
+            if (parsed !== null && typeof parsed === "object" && "ok" in parsed)
+              outcome = parsed as PlanOutcome;
+          } catch {
+            /* not JSON — the exit-code branch below owns the toast */
+          }
+          if (outcome !== null && !outcome.ok)
+            return void showToast(
+              "error",
+              outcome.reason === "config-defined"
+                ? `${mapping.nwo} is defined in config.json`
+                : "watchlist unreadable — fix it before writing",
+            );
+          if (rr.code !== 0)
+            return void showToast("error", firstNonEmptyLine(rr.output) ?? "unwatch: plan failed");
+          // Shape-check a contract-violating {ok:true} payload (no/garbled plan)
+          // into a toast — this continuation must never throw (see .catch).
+          const plan = outcome?.plan;
+          if (plan === undefined || !Array.isArray(plan.items) || !Array.isArray(plan.kept))
+            return void showToast("error", "unwatch: unreadable plan");
+          if (plan.blocked)
+            return void showToast(
+              "info",
+              `${mapping.nwo}: ticket in flight (${plan.blocked.ticketId}) — wait for it to finish`,
+            );
+          askConfirm({
+            title: `unwatch ${mapping.nwo}`,
+            danger: true,
+            body: summarizeUnwatchPlan(plan),
+            onConfirm: () =>
+              runLocalAction("unwatch", [mapping.nwo], {
+                label: "unwatch",
+                onSuccess: () => {
+                  // Drop the repo's cached issue/PR state too — the rail badges
+                  // and the header pulse must never read ghost data for a repo
+                  // that is no longer watched. Synchronous, not a poll round-trip.
+                  githubEvictRepo(mapping.nwo);
+                  reloadWatchlist();
+                },
+              }),
+          });
+        })
+        .catch(() => {
+          // Belt-and-braces for a destructive flow: a bug in the continuation
+          // must surface as a toast, never as an unhandled rejection.
+          if (aliveRef.current) showToast("error", "unwatch: plan failed");
         });
-      });
     },
     [
       repoMappings,
@@ -1786,7 +1808,11 @@ export function App(props: AppProps): React.JSX.Element {
         clearConfirm();
         return;
       }
-      if (key.return || input === "y") {
+      // Enter confirms only a NON-danger confirm. A danger confirm demands the
+      // literal `y`: the unwatch modal opens from an async continuation (after
+      // its `--plan` spawn resolves), so a stray Enter typed during that window
+      // must never land on a destructive confirm the operator hasn't read.
+      if ((key.return && !confirm.danger) || input === "y") {
         const fn = confirm.onConfirm;
         clearConfirm();
         fn();

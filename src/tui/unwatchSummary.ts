@@ -1,20 +1,8 @@
 import type { PlanItemKind, UnwatchPlan } from "../unwatchCmd.js";
 
-/** Deletion order (mirrors runUnwatch's own ordering) — the confirm body reads
- * as the sequence the CLI will actually walk, not as arrival order. */
-const KIND_ORDER: PlanItemKind[] = [
-  "clone",
-  "inbox-ticket",
-  "worktrees",
-  "outbox-op",
-  "assess-review",
-  "comment-review",
-  "assess-history",
-  "mirror",
-  "github-cache",
-];
-
-/** One chip per kind present. The count-less kinds are singular by nature
+/** One chip per kind present, in deletion order (mirrors runUnwatch's own
+ * ordering) — the confirm body reads as the sequence the CLI will actually
+ * walk, not as arrival order. The count-less kinds are singular by nature
  * (one worktree namespace, one history file, one mirror) or read better
  * collapsed (the github cache is several files of one thing), so their label
  * ignores the item count; the rest carry it. */
@@ -30,6 +18,11 @@ const KIND_LABEL: Record<PlanItemKind, (n: number) => string> = {
   "github-cache": () => "github cache",
 };
 
+/** Derived from KIND_LABEL's insertion order: the Record is total over
+ * PlanItemKind, so a future kind cannot compile without a label — or be
+ * silently dropped from the confirm body. */
+const KIND_ORDER = Object.keys(KIND_LABEL) as PlanItemKind[];
+
 /**
  * The confirm-modal body for `U` (unwatch): what the CLI will delete, what it
  * will leave alone, and the question. Itemized on purpose — this is the only
@@ -41,9 +34,11 @@ export function summarizeUnwatchPlan(plan: UnwatchPlan): string {
   const counts = new Map<PlanItemKind, number>();
   for (const item of plan.items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
 
-  const chips = KIND_ORDER.filter((k) => counts.has(k)).map((k) =>
-    KIND_LABEL[k](counts.get(k) ?? 0),
-  );
+  const chips: string[] = [];
+  for (const k of KIND_ORDER) {
+    const n = counts.get(k);
+    if (n !== undefined) chips.push(KIND_LABEL[k](n));
+  }
   const head =
     chips.length > 0
       ? `Will delete: ${chips.join(" · ")}`

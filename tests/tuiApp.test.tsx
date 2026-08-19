@@ -418,6 +418,15 @@ function unwatchCliFake(file: string, nwo: string, planOver: Partial<UnwatchPlan
   return { runCliFn, spawns };
 }
 
+/** Rail-selection marker: the ▌ cursor sits on the row bearing `nwo`. The rail
+ * band is the frame's left 26 cols (same slice as the mouse tests), so a toast
+ * or issue row mentioning the nwo can never satisfy it. */
+function railSelOn(r: { lastFrame: () => string | undefined }, nwo: string): boolean {
+  return (r.lastFrame() ?? "")
+    .split("\n")
+    .some((l) => l.slice(0, 26).includes("▌") && l.slice(0, 26).includes(nwo));
+}
+
 describe("App", () => {
   const wl = () => join(mkdtempSync(join(tmpdir(), "junco-app-")), "wl.json");
 
@@ -700,7 +709,7 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("config.json"));
     expect(spawns).toEqual([]); // the config refusal never reaches the CLI
     r.stdin.write("j"); // select alx/coral
-    await tick();
+    await until(() => railSelOn(r, "alx/coral"));
     r.stdin.write("U"); // → plan spawn → confirm modal
     await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
     expect(r.lastFrame()).toContain("Continue?");
@@ -711,6 +720,18 @@ describe("App", () => {
       ["unwatch", ["alx/coral", "--plan"]],
       ["unwatch", ["alx/coral"]],
     ]);
+    // reloadWatchlist pin: the success toast commits in the same batch as the
+    // reload's state updates, so once it shows, the stale mapping is gone …
+    await until(() => (r.lastFrame() ?? "").includes("unwatched alx/coral"));
+    // … and U now lands on whatever the clamp selected (the config repo or a
+    // system row) and is refused WITHOUT a spawn — a third spawn here would
+    // mean the mapping survived the CLI's file write (i.e. reload never ran).
+    r.stdin.write("U");
+    await until(() => {
+      const f = r.lastFrame() ?? "";
+      return f.includes("config.json") || f.includes("not in watchlist");
+    });
+    expect(spawns).toHaveLength(2);
   });
 
   // A ticket in flight for the repo blocks the whole flow at plan time: one
@@ -725,7 +746,7 @@ describe("App", () => {
     const r = renderApp(client, file, 999999, runCliFn);
     await tick();
     r.stdin.write("j"); // select alx/coral
-    await tick();
+    await until(() => railSelOn(r, "alx/coral"));
     r.stdin.write("U");
     await until(() => (r.lastFrame() ?? "").includes("in flight"));
     expect(r.lastFrame()).not.toContain("Continue?");
@@ -741,12 +762,36 @@ describe("App", () => {
     const r = renderApp(client, file, 999999, runCliFn);
     await tick();
     r.stdin.write("j"); // select alx/coral
-    await tick();
+    await until(() => railSelOn(r, "alx/coral"));
     r.stdin.write("U");
     await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
     r.stdin.write("n");
     await until(() => !(r.lastFrame() ?? "").includes("unwatch alx/coral"));
     expect(spawns).toEqual([["unwatch", ["alx/coral", "--plan"]]]); // plan only
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  // Enter must NOT confirm a danger modal: the unwatch confirm opens from an
+  // async continuation (after the --plan spawn resolves), so a stray Enter
+  // typed at the wrong moment would otherwise trigger a destructive delete the
+  // operator never read. Only the literal `y` executes (covered above); here
+  // Enter-then-n must leave everything intact — if Enter had confirmed, the
+  // execute would have spawned and emptied the watchlist file.
+  it("Enter does not confirm the unwatch danger modal", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
+    r.stdin.write("j"); // select alx/coral
+    await until(() => railSelOn(r, "alx/coral"));
+    r.stdin.write("U");
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("\r"); // Enter — swallowed by the danger confirm (no state change) …
+    r.stdin.write("n"); // … so this still finds the modal open and cancels it
+    await until(() => !(r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    expect(spawns).toEqual([["unwatch", ["alx/coral", "--plan"]]]); // no execute
     expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
   });
 
