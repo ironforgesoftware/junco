@@ -212,6 +212,9 @@ Subcommands:
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
+  skill install [--harness <name|path>]...  Link the junco-dispatch skill into
+                  harness skills dirs via <dataDir>/skills (names: claude,
+                  codex, pi, omp, opencode); no args re-ensures configured links
   schema       Print the ticket frontmatter JSON Schema and exit
 
   (no subcommand) → ensures the supervised daemon is running (interactive
@@ -257,6 +260,7 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       "no-footer": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      harness: { type: "string", multiple: true },
     },
     allowPositionals: true,
     strict: true,
@@ -738,6 +742,21 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     const { runAnalyzeCommand } = await import("./analyzeCmd.js");
     return runAnalyzeCommand(cfg, positionals[1], { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // skill: skill-link management (src/skillCmd.ts) — install creates the
+  // <dataDir>/skills mount + consented harness links; the daemon re-ensures
+  // the same set at every startup.
+  // ------------------------------------------------------------
+  if (subcommand === "skill") {
+    if (positionals[1] === "install") {
+      const { runSkillInstallCommand } = await import("./skillCmd.js");
+      const harness = (values.harness as string[] | undefined) ?? [];
+      return runSkillInstallCommand(configPath, { harness }, { printFn });
+    }
+    process.stderr.write(`Usage: junco skill install [--harness <name|path>]...\n`);
+    return 2;
   }
 
   // ------------------------------------------------------------
