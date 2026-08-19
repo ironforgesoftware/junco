@@ -301,6 +301,9 @@ export function App(props: AppProps): React.JSX.Element {
   const health = useHealth(client, healthPollMs);
   const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
+  // useConfirm sits above useAddRepoForm because the add-repo flow feeds its
+  // bot-grant confirm gate through the same modal (askConfirm is stable).
+  const { confirm, askConfirm, clearConfirm } = useConfirm();
   const { addRepoError, addRepoBusy, handleAddRepo, setAddRepoError } = useAddRepoForm({
     client,
     clonesDir,
@@ -309,6 +312,7 @@ export function App(props: AppProps): React.JSX.Element {
     setView,
     aliveRef,
     watchlistError,
+    askConfirm,
   });
   const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
   const {
@@ -342,7 +346,6 @@ export function App(props: AppProps): React.JSX.Element {
   const [repoDetailTarget, setRepoDetailTarget] = useState<UnifiedRepo | null>(null);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
-  const { confirm, askConfirm, clearConfirm } = useConfirm();
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const updateLatest = useUpdateCheck(props.checkUpdateFn);
@@ -1716,21 +1719,20 @@ export function App(props: AppProps): React.JSX.Element {
     // cascade so it can never be misread as a plain `c` (e.g. the analyze
     // binding) now that exitOnCtrlC:false lets Ctrl-C reach these handlers.
     if (key.ctrl && input === "c") return;
-    // The AddRepoForm (+ its TextFields) own all input while open.
-    if (view === "addRepo") return; // layer 2 (text field owns input)
-
-    // ConfigView owns all input while open (own useInput + onExit, mirroring
-    // addRepo above) — kept ahead of the mode toggle and LOCAL dispatch so
-    // neither `m` nor a LOCAL-mode key ever leaks past it mid-edit.
-    if (view === "config") return; // layer 2b
-
-    // layer 3 — the destructive-action confirm modal owns input while open,
-    // ahead of every view branch (it can open over any body).
+    // layer 2 — the confirm modal owns input while open, ahead of EVERY view
+    // branch including the text-owning ones below: the add-repo bot-grant
+    // gate opens asynchronously (post-preflight), so it can land while
+    // addRepo/config hold the view — and the modal ternary has already
+    // replaced (addRepo) or covered (config, its useInput detached via
+    // inputActive) that body. Handling confirm first keeps the modal
+    // keyboard-operable there instead of dead behind the early returns.
     // Toast is dismissed by the next keystroke, before it is acted on.
-    dismissToast();
     if (confirm) {
+      dismissToast();
       if (key.escape || input === "n") {
+        const onCancel = confirm.onCancel;
         clearConfirm();
+        onCancel?.();
         return;
       }
       if (key.return || input === "y") {
@@ -1741,6 +1743,17 @@ export function App(props: AppProps): React.JSX.Element {
       }
       return;
     }
+
+    // The AddRepoForm (+ its TextFields) own all input while open.
+    if (view === "addRepo") return; // layer 2a (text field owns input)
+
+    // ConfigView owns all input while open (own useInput + onExit, mirroring
+    // addRepo above) — kept ahead of the mode toggle and LOCAL dispatch so
+    // neither `m` nor a LOCAL-mode key ever leaks past it mid-edit.
+    if (view === "config") return; // layer 2b
+
+    // layer 3 — toast dismissal for every branch below the modal layers.
+    dismissToast();
 
     // layer 3b — the full-screen log overlay owns ALL input while open; its
     // filter/follow/scroll keys never leak to the view underneath.
@@ -2220,7 +2233,16 @@ export function App(props: AppProps): React.JSX.Element {
               fn();
             }}
           />
-          <Button keyHint="esc" label="cancel" tone="neutral" onPress={clearConfirm} />
+          <Button
+            keyHint="esc"
+            label="cancel"
+            tone="neutral"
+            onPress={() => {
+              const onCancel = confirm.onCancel;
+              clearConfirm();
+              onCancel?.();
+            }}
+          />
         </Box>
       </Box>
     </Modal>
@@ -2273,7 +2295,11 @@ export function App(props: AppProps): React.JSX.Element {
       {view === "config" ? (
         // `,` (layer 3c) can set view="config" over any body — checked ahead
         // of the main fragment below.
-        <ConfigView configPath={configPath} onExit={() => setView("main")} />
+        <ConfigView
+          configPath={configPath}
+          onExit={() => setView("main")}
+          inputActive={confirm === null}
+        />
       ) : logOverlay ? (
         // The full-screen log overlay replaces the whole body while open; it
         // owns input via handleLogOverlayInput in the cascade above.
