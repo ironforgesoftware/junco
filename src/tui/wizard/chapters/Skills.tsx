@@ -50,7 +50,17 @@ export function Skills({
           }))}
           onFocusChange={() => {}}
           onSubmit={(vals) => {
-            patch({ harnessDirs: vals });
+            // Union with configured-but-undetected dirs: the option list is
+            // only the DETECTED set, so a bare replace would silently drop
+            // consent for a harness that isn't installed on THIS machine —
+            // configs roam between machines (skillLinks.ts), and an
+            // uninstalled harness is a silent skip there, never a removal.
+            // Revoking a DETECTED dir still works (uncheck it); an
+            // undetected dir can only be removed by hand-editing config.
+            const undetected = answers.harnessDirs.filter(
+              (d) => !detectedHarnesses.some((h) => h.dir === d),
+            );
+            patch({ harnessDirs: [...vals, ...undetected] });
             onNext();
           }}
         />

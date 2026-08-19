@@ -1029,6 +1029,37 @@ describe("Skills chapter", () => {
     expect(claudeLine).toContain("[x]");
     expect(codexLine).toContain("[ ]");
   });
+
+  it("rerun on a machine missing a previously-consented harness: submit keeps the undetected dir (never silently drops it)", async () => {
+    // Regression: the option list is only the DETECTED set. A bare
+    // patch({ harnessDirs: vals }) would replace the whole answer with the
+    // checked subset of THAT list, silently dropping consent for a harness
+    // installed elsewhere — configs roam between machines (skillLinks.ts
+    // treats an uninstalled harness as a silent skip, never a removal).
+    const UNDETECTED_DIR = "/sbx/home/.omp/agent/skills";
+    let answers = { ...defaultAnswers(), harnessDirs: [HARNESSES[0].dir, UNDETECTED_DIR] };
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Skills
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo()}
+        detectedHarnesses={[HARNESSES[0]]} // only "claude" is installed here
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("claude"));
+    // Pre-checked (already consented) — submit with no toggle.
+    await press(stdin, ENTER);
+    await until(() => advanced);
+    // Checked vals first, then the undetected dir(s).
+    expect(answers.harnessDirs).toEqual([HARNESSES[0].dir, UNDETECTED_DIR]);
+  });
 });
 
 describe("Review chapter", () => {
