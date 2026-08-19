@@ -1096,3 +1096,109 @@ describe("ensureBotAccess", () => {
     if (!r.ok) expect(r.error).toMatch(/needs admin/);
   });
 });
+
+describe("botGrantPreflight", () => {
+  /** ghFn that answers the ambient repo-meta probe (`gh api repos/<nwo>`)
+   * and defers everything else to the shared fakes() handler. */
+  const metaFakes = (meta: { private: boolean; ownerType: string } | "fail") => {
+    const f = fakes();
+    const ghFn = async (c: unknown, args: string[]): Promise<CmdResult> => {
+      if (args[0] === "api" && args[1] === "repos/acme/api") {
+        if (meta === "fail") return { code: 1, stdout: "", stderr: "HTTP 500" };
+        return { code: 0, stdout: JSON.stringify(meta), stderr: "" };
+      }
+      return f.ghFn(c, args);
+    };
+    return { ...f, ghFn };
+  };
+  const blocked = async (): Promise<RepoAccess> => ({ mode: "blocked", reason: "no-access" });
+
+  it("botAccount disabled → needed:false without classifying", async () => {
+    const classifyFn = vi.fn(async (): Promise<RepoAccess> => ({ mode: "direct" }));
+    const r = await makeGhDashboardClient(cfg, { ...fakes(), classifyFn }).botGrantPreflight(
+      "acme/api",
+    );
+    expect(r).toEqual({ ok: true, value: { needed: false } });
+    expect(classifyFn).not.toHaveBeenCalled();
+  });
+
+  it("bot already has push → needed:false", async () => {
+    const classifyFn = vi.fn(async (): Promise<RepoAccess> => ({ mode: "direct" }));
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...fakes(),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn,
+    });
+    const r = await client.botGrantPreflight("acme/api");
+    expect(r).toEqual({ ok: true, value: { needed: false } });
+    expect(classifyFn).toHaveBeenCalledWith(
+      expect.objectContaining({ ghAuth: GH_AUTH_CTX }),
+      "acme/api",
+      expect.anything(),
+    );
+  });
+
+  it("bot lacks push on a private personal repo → confirm gate with the bot login", async () => {
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...metaFakes({ private: true, ownerType: "User" }),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn: blocked,
+    });
+    const r = await client.botGrantPreflight("acme/api");
+    expect(r).toEqual({
+      ok: true,
+      value: { needed: true, login: "junco-agent", privatePersonal: true },
+    });
+  });
+
+  it("public personal repo → needed but no confirm gate", async () => {
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...metaFakes({ private: false, ownerType: "User" }),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn: blocked,
+    });
+    const r = await client.botGrantPreflight("acme/api");
+    expect(r).toEqual({
+      ok: true,
+      value: { needed: true, login: "junco-agent", privatePersonal: false },
+    });
+  });
+
+  it("private org-owned repo → needed but no confirm gate", async () => {
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...metaFakes({ private: true, ownerType: "Organization" }),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn: blocked,
+    });
+    const r = await client.botGrantPreflight("acme/api");
+    expect(r).toEqual({
+      ok: true,
+      value: { needed: true, login: "junco-agent", privatePersonal: false },
+    });
+  });
+
+  it("meta probe failure → needed without the confirm gate (legacy grant path)", async () => {
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...metaFakes("fail"),
+      withBotAuthFn: attachFakeCtx,
+      classifyFn: blocked,
+    });
+    const r = await client.botGrantPreflight("acme/api");
+    expect(r).toEqual({
+      ok: true,
+      value: { needed: true, login: "junco-agent", privatePersonal: false },
+    });
+  });
+
+  it("withBotAuth throw → error Result (never throws)", async () => {
+    const client = makeGhDashboardClient(enabledCfg, {
+      ...fakes(),
+      withBotAuthFn: async () => {
+        throw new Error("bot auth is broken — run: junco auth login");
+      },
+    });
+    const r = await client.botGrantPreflight("acme/api");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/auth login/);
+  });
+});

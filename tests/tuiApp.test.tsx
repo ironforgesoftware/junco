@@ -151,6 +151,7 @@ function makeClient(
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -213,6 +214,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -278,6 +280,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -743,6 +746,7 @@ describe("App", () => {
       repoPermission: async () => okv({ canPush: true }),
       prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
       ensureBotAccess: async () => okv({ skipped: true }),
+      botGrantPreflight: async () => okv({ needed: false as const }),
       dispatchTicket: async (nwo, num) =>
         okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
       listReview: async () => okv([]),
