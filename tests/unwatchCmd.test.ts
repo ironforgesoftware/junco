@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdirSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, unlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { readWatchlist } from "../src/watchlist.js";
 import { dataTreePaths } from "../src/dataTree.js";
@@ -12,7 +12,7 @@ import {
   type UnwatchPlan,
 } from "../src/unwatchCmd.js";
 import { repoDiscriminator } from "../src/worktree.js";
-import { enqueueOp } from "../src/githubOutbox.js";
+import { enqueueOp, outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import { recordRun, historyFilePath } from "../src/assessHistory.js";
@@ -78,11 +78,18 @@ describe("planUnwatch — queue and worktrees", () => {
     const mine = writeTicket(inbox, "fix-1", clone);
     writeTicket(inbox, "other-1", join(root, "elsewhere"));
     writeFileSync(join(inbox, "qa-1.md"), "---\nid: qa-1\n---\n\nQ&A, no repo.\n", "utf8");
+    // repo: "" must never canonPath to process cwd and accidentally match.
+    writeFileSync(
+      join(inbox, "empty-repo.md"),
+      '---\nid: empty-repo\nrepo: ""\n---\n\nBlank repo.\n',
+      "utf8",
+    );
     const out = planUnwatch(cfg, "acme/api");
     if (!out.ok) throw new Error(out.reason);
     expect(out.plan.items.filter((i) => i.kind === "inbox-ticket")).toEqual([
       { kind: "inbox-ticket", path: mine, detail: "fix-1" },
     ]);
+    expect(out.plan.blocked).toBeNull(); // the empty-repo ticket never blocks either
   });
 
   it("includes the worktree namespace dir when present", () => {
@@ -121,16 +128,38 @@ describe("isUnder", () => {
 });
 
 describe("planUnwatch — nwo-keyed stores", () => {
-  it("enumerates outbox ops by nwo and by push repoPath; dead/ untouched", () => {
+  it("enumerates outbox ops by nwo and by push repoPath; dead/ untouched", async () => {
     const { cfg } = makeTree();
     const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
     watch(cfg, "acme/api", clone);
     enqueueOp(cfg, "dashboard", { kind: "comment", nwo: "ACME/api", issue: 7, body: "hi" });
     enqueueOp(cfg, "prflow", { kind: "push", repoPath: clone, branch: "feat/x" });
     enqueueOp(cfg, "dashboard", { kind: "comment", nwo: "other/repo", issue: 1, body: "no" });
+    const dead = outboxPaths(cfg).dead;
+    mkdirSync(dead, { recursive: true });
+    const deadOp = join(dead, "1-0000-dead-comment.json");
+    writeFileSync(
+      deadOp,
+      JSON.stringify({
+        id: "1-0000-dead-comment",
+        createdAt: "2026-08-19T00:00:00Z",
+        origin: "dashboard",
+        issueKey: "acme/api#7",
+        attempts: 3,
+        lastError: "boom",
+        op: { kind: "comment", nwo: "acme/api", issue: 7, body: "hi" },
+      }),
+      "utf8",
+    );
     const out = planUnwatch(cfg, "acme/api");
     if (!out.ok) throw new Error(out.reason);
     expect(out.plan.items.filter((i) => i.kind === "outbox-op")).toHaveLength(2);
+    expect(out.plan.items.some((i) => i.path === deadOp)).toBe(false); // dead/ untouched by planning
+    expect(existsSync(deadOp)).toBe(true);
+
+    const res = await runUnwatch(cfg, "acme/api");
+    expect(res.ok).toBe(true);
+    expect(existsSync(deadOp)).toBe(true); // dead/ untouched by execution too
   });
 
   it("enumerates pending reviews, assess history, mirror, github-cache", () => {
@@ -223,6 +252,41 @@ describe("planUnwatch — residue mode (nwo not in watchlist)", () => {
     if (!out.ok) throw new Error(out.reason);
     expect(out.plan.blocked).toEqual({ ticketId: "live-9" });
   });
+
+  it("finds an orphaned worktree namespace when the managed clone is already gone", async () => {
+    // Reachable via a prior partial run: worktrees deletion failed (advisory
+    // lock held) while the clone — later in runUnwatch's deletion order — was
+    // removed. repoDiscriminator hashes the clone PATH STRING (worktree.ts:80-84),
+    // never checking existence, so the namespace is still derivable from the
+    // candidate clone path even though nothing is on disk at that path any more.
+    const { cfg } = makeTree();
+    const clonePath = join(dataTreePaths(cfg).clonesWatched, "acme", "api"); // never created
+    const ns = join(cfg.worktreeRoot, repoDiscriminator(clonePath));
+    mkdirSync(ns, { recursive: true });
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.mode).toBe("residue");
+    expect(out.plan.clone).toBeNull();
+    expect(out.plan.items).toContainEqual({ kind: "worktrees", path: ns });
+
+    const res = await runUnwatch(cfg, "acme/api");
+    expect(res.ok).toBe(true);
+    expect(existsSync(ns)).toBe(false);
+  });
+
+  it("probes clonesExternal when clonesWatched has nothing; finds the clone and its namespace", () => {
+    const { cfg } = makeTree();
+    const clone = join(cfg.github.externalReposRoot, "acme", "api");
+    mkdirSync(clone, { recursive: true });
+    const ns = join(cfg.worktreeRoot, repoDiscriminator(clone));
+    mkdirSync(ns, { recursive: true });
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.mode).toBe("residue");
+    expect(out.plan.clone).toEqual({ path: clone, managed: true });
+    expect(out.plan.items).toContainEqual({ kind: "clone", path: clone });
+    expect(out.plan.items).toContainEqual({ kind: "worktrees", path: ns });
+  });
 });
 
 describe("runUnwatch", () => {
@@ -259,6 +323,47 @@ describe("runUnwatch", () => {
     expect(existsSync(mine)).toBe(true); // user clone survives
     expect(gitCalls).toEqual([[["worktree", "prune"], mine]]);
     expect(res.summary.find((s) => s.kind === "clone")?.outcome).toBe("kept");
+  });
+
+  it("interleaved deletion order: watchlist rewritten before the first deletion; worktrees before clone; clone last", async () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    writeTicket(dataTreePaths(cfg).queue.inbox, "fix-1", clone);
+    enqueueOp(cfg, "dashboard", { kind: "comment", nwo: "acme/api", issue: 7, body: "hi" });
+    const ns = join(cfg.worktreeRoot, repoDiscriminator(clone));
+    mkdirSync(ns, { recursive: true });
+
+    const calls: string[] = [];
+    let watchlistEmptyBeforeFirstDelete: boolean | null = null;
+    const noteFirstCall = (): void => {
+      if (watchlistEmptyBeforeFirstDelete === null) {
+        watchlistEmptyBeforeFirstDelete =
+          readWatchlist(dataTreePaths(cfg).watchlistFile).entries.length === 0;
+      }
+    };
+
+    const res = await runUnwatch(cfg, "acme/api", {
+      unlinkFn: (p) => {
+        noteFirstCall();
+        calls.push(p);
+        unlinkSync(p);
+      },
+      rmFn: (p) => {
+        noteFirstCall();
+        calls.push(p);
+        rmSync(p, { recursive: true, force: true });
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    // The watchlist entry is rewritten (step 1) before ANY unlinkFn/rmFn call fires.
+    expect(watchlistEmptyBeforeFirstDelete).toBe(true);
+    const wtIdx = calls.indexOf(ns);
+    const cloneIdx = calls.indexOf(clone);
+    expect(wtIdx).toBeGreaterThanOrEqual(0);
+    expect(cloneIdx).toBe(calls.length - 1); // the managed clone is the LAST recorded call
+    expect(wtIdx).toBeLessThan(cloneIdx); // worktrees removed before the clone
   });
 
   it("one failing deletion doesn't strand the rest; ok:false with the failure row", async () => {

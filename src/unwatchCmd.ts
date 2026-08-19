@@ -138,7 +138,10 @@ function ticketsTargeting(
     try {
       const t = parseTicket(p, readFileFn(p), cfg.defaultTimeoutMinutes);
       const repo = t.frontmatter["repo"];
-      if (typeof repo === "string" && canonPath(repo) === target) out.push({ path: p, id: t.id });
+      // repo !== "": an empty string realpaths/resolves to process.cwd() (canonPath's
+      // catch branch), which must never accidentally match a real repo path.
+      if (typeof repo === "string" && repo !== "" && canonPath(repo) === target)
+        out.push({ path: p, id: t.id });
     } catch {
       /* unparsable — cannot name this repo; skip */
     }
@@ -233,24 +236,35 @@ function watchedPlan(cfg: Config, entry: WatchlistEntry, deps: UnwatchDeps): Unw
  * managed-clone roots for a leftover `<owner>/<repo>` clone (first that
  * exists on disk wins); when found it contributes exactly what
  * `watchedPlan`'s managed-clone arm would, keyed off the probed path rather
- * than a watchlist entry. Always appends `nwoKeyedItems`. */
+ * than a watchlist entry. The worktree namespace is probed for EACH candidate
+ * clone path regardless of whether that clone exists on disk: repoDiscriminator
+ * (worktree.ts:80-84) hashes only the resolved path STRING, never checking
+ * existence, so a namespace is derivable and reachable even after its clone is
+ * already gone (e.g. a prior run whose worktrees deletion failed under a held
+ * advisory lock while the clone, later in runUnwatch's order, was removed).
+ * Always appends `nwoKeyedItems`. */
 function residuePlan(cfg: Config, nwo: string, deps: UnwatchDeps): UnwatchPlan {
   const existsFn = deps.existsFn ?? existsSync;
   const p = dataTreePaths(cfg);
   const [owner, repo] = nwo.split("/");
-  const clonePath =
-    [p.clonesWatched, p.clonesExternal]
-      .map((root) => join(root, owner ?? nwo, repo ?? "repo"))
-      .find((candidate) => existsFn(candidate)) ?? null;
+  const candidates = [p.clonesWatched, p.clonesExternal].map((root) =>
+    join(root, owner ?? nwo, repo ?? "repo"),
+  );
+  const clonePath = candidates.find((candidate) => existsFn(candidate)) ?? null;
   const items: PlanItem[] = [];
   let blocked: { ticketId: string } | null = null;
+  const seenNamespaces = new Set<string>();
+  for (const candidate of candidates) {
+    const ns = join(cfg.worktreeRoot, repoDiscriminator(candidate));
+    if (seenNamespaces.has(ns)) continue; // hashes differ per candidate path; belt-and-braces
+    seenNamespaces.add(ns);
+    if (existsFn(ns)) items.push({ kind: "worktrees", path: ns });
+  }
   if (clonePath !== null) {
     items.push({ kind: "clone", path: clonePath });
     const q = p.queue;
     for (const t of ticketsTargeting(cfg, q.inbox, clonePath, deps))
       items.push({ kind: "inbox-ticket", path: t.path, detail: t.id });
-    const ns = join(cfg.worktreeRoot, repoDiscriminator(clonePath));
-    if (existsFn(ns)) items.push({ kind: "worktrees", path: ns });
     const live = ticketsTargeting(cfg, q.processing, clonePath, deps);
     blocked = live.length > 0 ? { ticketId: live[0].id } : null;
   }

@@ -81,18 +81,18 @@ watchlist's own dedup rule; all path comparisons on `resolve()`d paths, realpath
 when the path exists so symlinked roots compare correctly — unit tests use synthetic
 nonexistent paths so canonicalization is a no-op, same idiom as the sandbox tests):
 
-| Store | Match | Included |
-| --- | --- | --- |
-| Clone | `resolve(entry.path)` under `dataTreePaths(cfg).clonesWatched` or `cfg.github.externalReposRoot` (prefix compare with a path-separator guard) | as `clone` item when managed; as `kept` line when user-supplied |
-| Inbox tickets | frontmatter `repo:` resolves to `entry.path` (raw-frontmatter read, same as `tui/queueSnapshot.ts`; Q&A tickets have no `repo:` and never match) | one item per ticket |
-| Worktrees | the single dir `join(cfg.worktreeRoot, repoDiscriminator(entry.path))` (per-repo namespace, issue #33), when it exists | one item |
-| Outbox (live only) | `op.nwo` matches, or `op.repoPath` resolves to `entry.path` (push ops carry only `repoPath`) | one item per op |
-| review/assess | pending batch `nwo` matches | one item per batch |
-| review/comments | pending draft `nwo` matches | one item per draft |
-| Assess history | the store file for the nwo (`historyKey(nwo)` under `assess-history/`) | one item when present |
-| Mirror | `mirror/<owner>/<repo>` dir when present | one item |
-| Github cache | `cachePathFor(cfg, nwo)` and its PRs sibling when present | one item per existing file |
-| Blocker | any `processing/` ticket whose `repo:` resolves to `entry.path` | `blocked: { ticketId }` |
+| Store              | Match                                                                                                                                            | Included                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| Clone              | `resolve(entry.path)` under `dataTreePaths(cfg).clonesWatched` or `cfg.github.externalReposRoot` (prefix compare with a path-separator guard)    | as `clone` item when managed; as `kept` line when user-supplied |
+| Inbox tickets      | frontmatter `repo:` resolves to `entry.path` (raw-frontmatter read, same as `tui/queueSnapshot.ts`; Q&A tickets have no `repo:` and never match) | one item per ticket                                             |
+| Worktrees          | the single dir `join(cfg.worktreeRoot, repoDiscriminator(entry.path))` (per-repo namespace, issue #33), when it exists                           | one item                                                        |
+| Outbox (live only) | `op.nwo` matches, or `op.repoPath` resolves to `entry.path` (push ops carry only `repoPath`)                                                     | one item per op                                                 |
+| review/assess      | pending batch `nwo` matches                                                                                                                      | one item per batch                                              |
+| review/comments    | pending draft `nwo` matches                                                                                                                      | one item per draft                                              |
+| Assess history     | the store file for the nwo (`historyKey(nwo)` under `assess-history/`)                                                                           | one item when present                                           |
+| Mirror             | `mirror/<owner>/<repo>` dir when present                                                                                                         | one item                                                        |
+| Github cache       | `cachePathFor(cfg, nwo)` and its PRs sibling when present                                                                                        | one item per existing file                                      |
+| Blocker            | any `processing/` ticket whose `repo:` resolves to `entry.path`                                                                                  | `blocked: { ticketId }`                                         |
 
 #### `runUnwatch(cfg, nwo, deps) → UnwatchResult`
 
@@ -150,9 +150,12 @@ switches to `mode: "residue"`:
   (`clonesWatched/<owner>/<repo>`, `<externalReposRoot>/<owner>/<repo>`); when one
   exists, its **worktree namespace** (`repoDiscriminator` of that clone path) and any
   **inbox tickets** targeting it are enumerated too, and a `processing/` ticket
-  targeting it blocks, exactly as in watched mode. Without a clone,
-  path-keyed traces are unreachable by nwo and are out of residue scope (they belong
-  to a kept user checkout anyway).
+  targeting it blocks, exactly as in watched mode. The worktree namespace is probed
+  deterministically from each candidate clone path regardless of whether the clone
+  itself still exists (`repoDiscriminator` needs only the path string — no
+  existence check), so an orphaned namespace is cleaned even when the clone is
+  already gone. Without a clone, inbox tickets targeting it remain unreachable by
+  nwo and stay out of residue scope (they belong to a kept user checkout anyway).
 - Zero items ⇒ "nothing to clean" — success, not a refusal.
 
 Residue mode makes `junco unwatch <nwo>` safely re-runnable until it reports nothing
@@ -166,7 +169,7 @@ Follows the `rm`/`retry` pattern: lazy import of `unwatchCmd.js`, `loadConfigFn`
 - `--plan`: prints the `UnwatchPlan` (or refusal) as JSON on stdout. Exit 0 even when
   blocked — planning is not a failure.
 - Execute (no flag): prints one line per summary item (`deleted: inbox ticket
-  fix-login-123` / `kept: clone (user-owned)` / `failed: worktrees — <reason>`),
+fix-login-123` / `kept: clone (user-owned)` / `failed: worktrees — <reason>`),
   refusals as the first line. Exit 0 on full success (including "nothing to clean");
   exit 1 when refused, blocked, or any item failed. The first output line is always
   the headline (`runLocalAction` toasts exactly that line).
@@ -184,10 +187,10 @@ Follows the `rm`/`retry` pattern: lazy import of `unwatchCmd.js`, `loadConfigFn`
   2. Spawn `unwatch <nwo> --plan` via the existing CLI runner (busy toast while it
      runs; dedupe by key like other local actions).
   3. Plan arrives: if `blocked`, info toast `1 ticket in flight — wait for it to
-     finish`; no modal. Otherwise open the `useConfirm` modal, danger tone, title
+finish`; no modal. Otherwise open the `useConfirm` modal, danger tone, title
      `unwatch <nwo>`, body itemizing deletions from `plan.items` (grouped with
      counts, e.g. `managed clone · 3 queued tickets · worktrees · 1 outbox op ·
-     assess history`) plus the `kept` lines.
+assess history`) plus the `kept` lines.
   4. `y` ⇒ `runLocalAction("unwatch", [nwo])`. On success: toast the summary line,
      `githubEvictRepo(nwo)`, reload the watchlist hook state, and the immediate
      cheap re-poll `runLocalAction` already performs. Two small seams enable
