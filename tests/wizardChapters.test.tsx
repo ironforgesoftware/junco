@@ -12,6 +12,7 @@ import { RepoSafety } from "../src/tui/wizard/chapters/RepoSafety.js";
 import { Github } from "../src/tui/wizard/chapters/Github.js";
 import { Account } from "../src/tui/wizard/chapters/Account.js";
 import { Extras } from "../src/tui/wizard/chapters/Extras.js";
+import { Skills } from "../src/tui/wizard/chapters/Skills.js";
 import { Review } from "../src/tui/wizard/chapters/Review.js";
 import { Finale } from "../src/tui/wizard/chapters/Finale.js";
 import { useSuspend, SuspendProvider } from "../src/tui/useSuspend.js";
@@ -252,6 +253,7 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
     effectiveDataDir: "/sbx/home/.junco",
     dataDirLegacyFallback: false,
     botGhConfigDir: "/sbx/junco-gh",
+    detectedHarnesses: [],
     detectBotLogin: async () => null,
     runGhLogin: async () => 0,
     ...over,
@@ -955,6 +957,77 @@ describe("Extras chapter", () => {
       health: true,
       transcripts: true,
     });
+  });
+});
+
+describe("Skills chapter", () => {
+  const HARNESSES = [
+    { name: "claude", dir: "/sbx/home/.claude/skills" },
+    { name: "codex", dir: "/sbx/home/.codex/skills" },
+  ];
+
+  it("no detected harnesses: shows the skip note and advances on enter", async () => {
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Skills
+        {...noopChapter}
+        answers={defaultAnswers()}
+        io={fakeIo()}
+        detectedHarnesses={[]}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("No known agent harnesses detected"));
+    await press(stdin, ENTER);
+    await until(() => advanced);
+  });
+
+  it("two detected harnesses: both render checked on fresh answers; submit patches both dirs", async () => {
+    let answers = defaultAnswers();
+    let advanced = false;
+    const { lastFrame, stdin } = render(
+      <Skills
+        {...noopChapter}
+        answers={answers}
+        patch={(p) => {
+          answers = { ...answers, ...p };
+        }}
+        io={fakeIo()}
+        detectedHarnesses={HARNESSES}
+        onNext={() => {
+          advanced = true;
+        }}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("claude"));
+    expect(lastFrame()).toContain("codex");
+    // Fresh answers (harnessDirs: []) pre-check everything detected.
+    const frame = lastFrame() ?? "";
+    expect(frame.split("\n").filter((l) => l.includes("[x]")).length).toBe(2);
+    await press(stdin, ENTER); // accept both checked
+    await until(() => advanced);
+    expect(answers.harnessDirs).toEqual(HARNESSES.map((h) => h.dir));
+  });
+
+  it("rerun: only previously-consented dirs are pre-checked", async () => {
+    const answers = { ...defaultAnswers(), harnessDirs: [HARNESSES[0].dir] };
+    const { lastFrame } = render(
+      <Skills
+        {...noopChapter}
+        answers={answers}
+        io={fakeIo()}
+        detectedHarnesses={HARNESSES}
+        onNext={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("claude"));
+    const lines = (lastFrame() ?? "").split("\n");
+    const claudeLine = lines.find((l) => l.includes("claude")) ?? "";
+    const codexLine = lines.find((l) => l.includes("codex")) ?? "";
+    expect(claudeLine).toContain("[x]");
+    expect(codexLine).toContain("[ ]");
   });
 });
 

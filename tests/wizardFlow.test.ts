@@ -39,6 +39,7 @@ describe("chapters", () => {
       "GitHub",
       "Account",
       "Extras",
+      "Skills",
       "Review",
     ]);
   });
@@ -46,6 +47,11 @@ describe("chapters", () => {
   it("CHAPTERS includes Account between GitHub and Extras", () => {
     expect(CHAPTERS.indexOf("Account")).toBe(CHAPTERS.indexOf("GitHub") + 1);
     expect(CHAPTERS.indexOf("Extras")).toBe(CHAPTERS.indexOf("Account") + 1);
+  });
+
+  it("CHAPTERS includes Skills between Extras and Review", () => {
+    expect(CHAPTERS.indexOf("Skills")).toBe(CHAPTERS.indexOf("Extras") + 1);
+    expect(CHAPTERS.indexOf("Review")).toBe(CHAPTERS.indexOf("Skills") + 1);
   });
 });
 
@@ -259,7 +265,7 @@ describe("re-run mode", () => {
   });
 
   it("COVERED_LEVER_COUNT is mode-independent and matches the covered surface", () => {
-    expect(COVERED_LEVER_COUNT).toBe(14);
+    expect(COVERED_LEVER_COUNT).toBe(15); // was 14 — +1 for skills.harnessDirs (Task 6)
     // The pin makes coverage changes conscious: it must be updated when the
     // wizard's covered-lever surface expands or contracts.
   });
@@ -314,6 +320,33 @@ describe("legacy vaultRoot rerun (dataDir migration boundary — junco data migr
     const out = applyAnswers(legacyRaw, a);
     expect(out.dataDir).toBe("~/custom");
     expect(out.vaultRoot).toBe("~/V"); // untouched — migration is `junco data migrate`'s job
+  });
+});
+
+describe("skills harnessDirs answers", () => {
+  it("defaults to [] and writes no skills key when empty", () => {
+    const a = defaultAnswers();
+    expect(a.harnessDirs).toEqual([]);
+    expect(buildConfigObject(a)).not.toHaveProperty("skills");
+  });
+
+  it("materializes skills.harnessDirs when chosen", () => {
+    const a = { ...defaultAnswers(), harnessDirs: ["~/.claude/skills"] };
+    expect(buildConfigObject(a)).toMatchObject({
+      skills: { harnessDirs: ["~/.claude/skills"] },
+    });
+  });
+
+  it("round-trips through answersFromConfig and is diffed/applied on rerun", () => {
+    const raw = { model: { id: "m" }, skills: { harnessDirs: ["~/.omp/agent/skills"] } };
+    expect(answersFromConfig(raw).harnessDirs).toEqual(["~/.omp/agent/skills"]);
+    const changed = {
+      ...answersFromConfig(raw),
+      harnessDirs: ["~/.omp/agent/skills", "~/.claude/skills"],
+    };
+    const next = applyAnswers(raw, changed);
+    expect(next.skills).toEqual({ harnessDirs: ["~/.omp/agent/skills", "~/.claude/skills"] });
+    expect(next.model).toEqual({ id: "m" }); // untouched keys preserved
   });
 });
 
