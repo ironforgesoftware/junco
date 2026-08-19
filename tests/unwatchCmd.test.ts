@@ -1,11 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { makeConfig } from "./helpers/config.js";
-import { writeWatchlist, readWatchlist, type WatchlistEntry } from "../src/watchlist.js";
+import { readWatchlist } from "../src/watchlist.js";
 import { dataTreePaths } from "../src/dataTree.js";
-import type { Config } from "../src/types.js";
 import {
   isUnder,
   planUnwatch,
@@ -20,64 +17,7 @@ import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import { recordRun, historyFilePath } from "../src/assessHistory.js";
 import { cachePathFor, prCachePathFor } from "../src/tui/ghClient.js";
-
-/** Tmpdir data tree + full Config. `configRepos` populates cfg.github.repos. */
-function makeTree(opts: { configRepos?: { nwo: string; path: string }[] } = {}): {
-  root: string;
-  cfg: Config;
-} {
-  const root = mkdtempSync(join(tmpdir(), "junco-unwatch-"));
-  const cfg = makeConfig(
-    {
-      dataDir: join(root, "data"),
-      queueRoot: join(root, "queue"),
-      worktreeRoot: join(root, "worktrees"),
-      tools: [],
-      criticEnabled: false,
-      planLintEnabled: false,
-      verifyEnabled: false,
-      supervisorEnabled: false,
-      healthEnabled: false,
-      removeWorktreeOnSuccess: false,
-    },
-    {
-      github: {
-        enabled: true,
-        triggerLabel: "junco",
-        askLabel: "junco:ask",
-        pollIntervalSeconds: 60,
-        repos: opts.configRepos ?? [],
-        requireApproval: true,
-        plannerModelId: null,
-        externalReposRoot: join(root, "data", "cache", "clones", "external"),
-      },
-    },
-  );
-  mkdirSync(dataTreePaths(cfg).queue.inbox, { recursive: true });
-  mkdirSync(dataTreePaths(cfg).queue.processing, { recursive: true });
-  mkdirSync(cfg.worktreeRoot, { recursive: true });
-  return { root, cfg };
-}
-
-/** Register `nwo` in the watchlist pointing at `path` (created on disk unless absent:true). */
-function watch(
-  cfg: Config,
-  nwo: string,
-  path: string,
-  o: { external?: boolean; absent?: boolean } = {},
-): void {
-  if (!o.absent) mkdirSync(path, { recursive: true });
-  const entry: WatchlistEntry = { nwo, path, ...(o.external ? { external: true } : {}) };
-  const file = dataTreePaths(cfg).watchlistFile;
-  writeWatchlist(file, [...readWatchlist(file).entries, entry]);
-}
-
-/** Minimal PR-flow ticket file. */
-function writeTicket(dir: string, id: string, repoPath: string): string {
-  const p = join(dir, `${id}.md`);
-  writeFileSync(p, `---\nid: ${id}\nrepo: ${repoPath}\n---\n\nDo the thing.\n`, "utf8");
-  return p;
-}
+import { makeTree, watch, writeTicket } from "./helpers/unwatchTree.js";
 
 describe("planUnwatch — refusals and clone classification", () => {
   it("refuses a config-defined repo", () => {
