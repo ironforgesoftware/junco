@@ -10,6 +10,7 @@ import {
   isUnder,
   planUnwatch,
   runUnwatch,
+  runUnwatchCommand,
   githubCacheFilesFor,
   type UnwatchPlan,
 } from "../src/unwatchCmd.js";
@@ -357,5 +358,118 @@ describe("runUnwatch", () => {
     const { cfg } = makeTree();
     const res = await runUnwatch(cfg, "ghost/repo");
     expect(res).toMatchObject({ ok: true, refused: null, watchlistRemoved: false, summary: [] });
+  });
+});
+
+describe("runUnwatchCommand", () => {
+  const capture = () => {
+    const out: string[] = [];
+    return { out, printFn: (s: string) => out.push(s) };
+  };
+
+  it("--plan prints the PlanOutcome as one JSON line, exit 0", async () => {
+    const { cfg } = makeTree();
+    watch(cfg, "acme/api", join(dataTreePaths(cfg).clonesWatched, "acme", "api"));
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["acme/api"], { plan: true }, { printFn })).toBe(0);
+    const parsed = JSON.parse(out.join("").trim());
+    expect(parsed.ok).toBe(true);
+    expect(parsed.plan.nwo).toBe("acme/api");
+  });
+
+  it("--plan on a refusal prints the refusal JSON, exit 1", async () => {
+    const { cfg } = makeTree({ configRepos: [{ nwo: "acme/api", path: "/config/api" }] });
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["acme/api"], { plan: true }, { printFn })).toBe(1);
+    expect(JSON.parse(out.join("").trim())).toEqual({ ok: false, reason: "config-defined" });
+  });
+
+  it("--plan on a blocked plan still exits 0 (planning isn't a failure)", async () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    writeTicket(dataTreePaths(cfg).queue.processing, "live-1", clone);
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["acme/api"], { plan: true }, { printFn })).toBe(0);
+    const parsed = JSON.parse(out.join("").trim());
+    expect(parsed.ok).toBe(true);
+    expect(parsed.plan.blocked).toEqual({ ticketId: "live-1" });
+  });
+
+  it("bad args → usage, exit 2", async () => {
+    const { cfg } = makeTree();
+    const { printFn } = capture();
+    expect(await runUnwatchCommand(cfg, [], { plan: false }, { printFn })).toBe(2);
+    expect(await runUnwatchCommand(cfg, ["not-an-nwo"], { plan: false }, { printFn })).toBe(2);
+  });
+
+  it("execute success headline + rows, exit 0; blocked exits 1", async () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["acme/api"], { plan: false }, { printFn })).toBe(0);
+    expect(out[0]).toMatch(/^unwatched acme\/api: deleted \d+ item\(s\)\n$/);
+    expect(out.slice(1).every((l) => /^  (deleted|kept|failed): \S/.test(l))).toBe(true);
+  });
+
+  it("refuses config-defined with the exact headline, exit 1", async () => {
+    const { cfg } = makeTree({ configRepos: [{ nwo: "acme/api", path: "/config/api" }] });
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["acme/api"], { plan: false }, { printFn })).toBe(1);
+    expect(out).toEqual(["junco unwatch: acme/api is defined in config.json — remove it there\n"]);
+  });
+
+  it("refuses an unreadable watchlist with the exact headline, exit 1", async () => {
+    const { cfg } = makeTree();
+    const file = dataTreePaths(cfg).watchlistFile;
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(file, "{ not json", "utf8");
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["acme/api"], { plan: false }, { printFn })).toBe(1);
+    expect(out).toEqual(["junco unwatch: watchlist unreadable — fix it before writing\n"]);
+  });
+
+  it("blocked prints the exact headline with the ticket id, exit 1", async () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    writeTicket(dataTreePaths(cfg).queue.processing, "live-1", clone);
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["acme/api"], { plan: false }, { printFn })).toBe(1);
+    expect(out).toEqual([
+      "junco unwatch: acme/api has a ticket in flight (live-1) — wait for it to finish\n",
+    ]);
+  });
+
+  it("empty summary prints 'nothing to clean', exit 0", async () => {
+    const { cfg } = makeTree();
+    const { out, printFn } = capture();
+    expect(await runUnwatchCommand(cfg, ["ghost/repo"], { plan: false }, { printFn })).toBe(0);
+    expect(out).toEqual(["junco unwatch: nothing to clean for ghost/repo\n"]);
+  });
+
+  it("any failed deletion headlines the failure count, exit 1", async () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    const t = writeTicket(dataTreePaths(cfg).queue.inbox, "fix-1", clone);
+    const { out, printFn } = capture();
+    expect(
+      await runUnwatchCommand(
+        cfg,
+        ["acme/api"],
+        { plan: false },
+        {
+          printFn,
+          unlinkFn: (p) => {
+            if (p === t) throw new Error("EACCES boom");
+            unlinkSync(p);
+          },
+        },
+      ),
+    ).toBe(1);
+    expect(out[0]).toBe("junco unwatch: 1 deletion(s) failed for acme/api\n");
+    expect(out).toContainEqual("  failed: inbox-ticket fix-1\n");
   });
 });

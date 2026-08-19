@@ -1158,6 +1158,45 @@ describe("run(['outbox'])", () => {
   });
 });
 
+describe("run(['unwatch'])", () => {
+  it("routes 'unwatch <nwo> --plan' to the injected command with values.plan === true", async () => {
+    let seenArgs: string[] | undefined;
+    let seenValues: { plan: boolean } | undefined;
+    const runUnwatchCommandFn = vi.fn(
+      async (_c: Config, args: string[], values: { plan: boolean }) => {
+        seenArgs = args;
+        seenValues = values;
+        return 0;
+      },
+    );
+    // Strict parseArgs must accept --plan (would throw ERR_PARSE_ARGS_UNKNOWN_OPTION,
+    // surfacing as exit 2, if the option weren't registered).
+    const code = await run(["unwatch", "acme/api", "--plan"], makeDeps({ runUnwatchCommandFn }));
+    expect(code).toBe(0);
+    expect(runUnwatchCommandFn).toHaveBeenCalledTimes(1);
+    expect(seenArgs).toEqual(["acme/api"]);
+    expect(seenValues).toEqual({ plan: true });
+  });
+
+  it("bare 'unwatch <nwo>' (no --plan) passes plan: false", async () => {
+    const runUnwatchCommandFn = vi.fn(async () => 0);
+    const code = await run(["unwatch", "acme/api"], makeDeps({ runUnwatchCommandFn }));
+    expect(code).toBe(0);
+    expect(runUnwatchCommandFn).toHaveBeenCalledWith(
+      expect.anything(),
+      ["acme/api"],
+      { plan: false },
+      expect.anything(),
+    );
+  });
+
+  it("propagates the injected command's exit code", async () => {
+    const runUnwatchCommandFn = vi.fn(async () => 1);
+    const code = await run(["unwatch", "acme/api"], makeDeps({ runUnwatchCommandFn }));
+    expect(code).toBe(1);
+  });
+});
+
 describe("run(['prs'])", () => {
   it("returns 0 and prints the no-watched-repos guidance when none are configured", async () => {
     const { cfg, vaultRoot } = freshDispatchVault();

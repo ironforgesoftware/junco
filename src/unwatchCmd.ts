@@ -380,3 +380,69 @@ export async function runUnwatch(
     summary,
   };
 }
+
+/** Same shape as watchlist.ts's private NWO_RE — duplicated rather than
+ * imported/exported since it's the CLI-layer arg-validation copy, not a
+ * watchlist-parsing concern. */
+const NWO_RE = /^[\w.-]+\/[\w.-]+$/;
+
+/**
+ * `junco unwatch <owner/repo> [--plan]` — CLI entry point. `--plan` calls the
+ * sync `planUnwatch` and prints the `PlanOutcome` verbatim as one JSON line
+ * (planning never mutates, so a blocked plan still exits 0 — only a refusal
+ * exits 1). Execute mode calls `runUnwatch` and prints the exact headline +
+ * per-row summary the spec requires. The first printed line is always the
+ * headline — the TUI's `runLocalAction` toasts exactly that line.
+ */
+export async function runUnwatchCommand(
+  cfg: Config,
+  args: string[],
+  values: { plan: boolean },
+  deps: UnwatchDeps & { printFn?: (s: string) => void } = {},
+): Promise<number> {
+  const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+  const nwo = args[0];
+  if (!nwo || !NWO_RE.test(nwo)) {
+    print(`Usage: junco unwatch <owner/repo> [--plan]\n`);
+    return 2;
+  }
+
+  if (values.plan) {
+    const outcome = planUnwatch(cfg, nwo, deps);
+    print(JSON.stringify(outcome) + "\n");
+    return outcome.ok ? 0 : 1;
+  }
+
+  const result = await runUnwatch(cfg, nwo, deps);
+
+  if (result.refused === "config-defined") {
+    print(`junco unwatch: ${nwo} is defined in config.json — remove it there\n`);
+    return 1;
+  }
+  if (result.refused === "watchlist-unreadable") {
+    print(`junco unwatch: watchlist unreadable — fix it before writing\n`);
+    return 1;
+  }
+  if (result.refused === "blocked") {
+    print(
+      `junco unwatch: ${nwo} has a ticket in flight (${result.blockedTicketId}) — wait for it to finish\n`,
+    );
+    return 1;
+  }
+
+  if (result.summary.length === 0) {
+    print(`junco unwatch: nothing to clean for ${nwo}\n`);
+    return 0;
+  }
+
+  const failed = result.summary.filter((s) => s.outcome === "failed").length;
+  if (failed > 0) {
+    print(`junco unwatch: ${failed} deletion(s) failed for ${nwo}\n`);
+  } else {
+    const deleted = result.summary.filter((s) => s.outcome === "deleted").length;
+    print(`unwatched ${nwo}: deleted ${deleted} item(s)\n`);
+  }
+  for (const row of result.summary)
+    print(`  ${row.outcome}: ${row.kind} ${row.detail ?? row.path}\n`);
+  return failed > 0 ? 1 : 0;
+}
