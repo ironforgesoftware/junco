@@ -11,14 +11,13 @@
  */
 
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { PACKAGE_ROOT } from "./packageRoot.js";
 
 export const PLAN_FENCE = "junco-ticket";
 
 // dist/ and src/ are both direct children of the package root, so one level
 // up from this module reaches skills/ in both the built and vitest layouts.
-const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE_PATH = join(PACKAGE_ROOT, "skills", "junco-dispatch", "TEMPLATE.md");
 const EXAMPLE_PATH = join(PACKAGE_ROOT, "skills", "junco-dispatch", "EXAMPLE.md");
 

@@ -31,7 +31,7 @@ Goals:
   instantiated on first run".
 - **Named harness registry + config list of paths.** Shipped code carries a registry of
   five public harnesses with their default global skills dirs; the operator's config
-  stores resolved *paths* (not names). Presence of a path in config is standing consent —
+  stores resolved _paths_ (not names). Presence of a path in config is standing consent —
   junco never writes into a harness dir not listed.
 
 ## Config surface (additive)
@@ -49,13 +49,13 @@ Goals:
 
 ## Harness registry
 
-| Name       | Default skills dir          | Verified                                  |
-| ---------- | --------------------------- | ----------------------------------------- |
-| `claude`   | `~/.claude/skills`          | yes (operator machine)                    |
-| `codex`    | `~/.codex/skills`           | yes (operator machine)                    |
-| `pi`       | `~/.pi/agent/skills`        | yes (operator machine)                    |
-| `omp`      | `~/.omp/agent/skills`       | yes (operator machine)                    |
-| `opencode` | `~/.config/opencode/skills` | **verify against opencode docs in impl.** |
+| Name       | Default skills dir          | Verified                                            |
+| ---------- | --------------------------- | --------------------------------------------------- |
+| `claude`   | `~/.claude/skills`          | yes (operator machine)                              |
+| `codex`    | `~/.codex/skills`           | yes (operator machine)                              |
+| `pi`       | `~/.pi/agent/skills`        | yes (operator machine)                              |
+| `omp`      | `~/.omp/agent/skills`       | yes (operator machine)                              |
+| `opencode` | `~/.config/opencode/skills` | yes (opencode.ai/docs/skills/, verified 2026-08-19) |
 
 Naming public harnesses is a compatibility matrix, not a personal-setup leak; the
 stack-agnostic rule continues to apply to wizard copy about inference endpoints.
