@@ -6,7 +6,8 @@ import { makeConfig } from "./helpers/config.js";
 import { writeWatchlist, readWatchlist, type WatchlistEntry } from "../src/watchlist.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
-import { isUnder, planUnwatch } from "../src/unwatchCmd.js";
+import { isUnder, planUnwatch, type UnwatchPlan } from "../src/unwatchCmd.js";
+import { repoDiscriminator } from "../src/worktree.js";
 
 /** Tmpdir data tree + full Config. `configRepos` populates cfg.github.repos. */
 function makeTree(opts: { configRepos?: { nwo: string; path: string }[] } = {}): {
@@ -59,6 +60,13 @@ function watch(
   writeWatchlist(file, [...readWatchlist(file).entries, entry]);
 }
 
+/** Minimal PR-flow ticket file. */
+function writeTicket(dir: string, id: string, repoPath: string): string {
+  const p = join(dir, `${id}.md`);
+  writeFileSync(p, `---\nid: ${id}\nrepo: ${repoPath}\n---\n\nDo the thing.\n`, "utf8");
+  return p;
+}
+
 describe("planUnwatch — refusals and clone classification", () => {
   it("refuses a config-defined repo", () => {
     const { cfg } = makeTree({ configRepos: [{ nwo: "acme/api", path: "/config/api" }] });
@@ -106,6 +114,49 @@ describe("planUnwatch — refusals and clone classification", () => {
     expect(out.plan.clone).toEqual({ path: mine, managed: false });
     expect(out.plan.items.filter((i) => i.kind === "clone")).toEqual([]);
     expect(out.plan.kept).toEqual([`clone (user-owned): ${mine}`]);
+  });
+});
+
+describe("planUnwatch — queue and worktrees", () => {
+  it("enumerates inbox tickets targeting the repo and skips others", () => {
+    const { root, cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    const inbox = dataTreePaths(cfg).queue.inbox;
+    const mine = writeTicket(inbox, "fix-1", clone);
+    writeTicket(inbox, "other-1", join(root, "elsewhere"));
+    writeFileSync(join(inbox, "qa-1.md"), "---\nid: qa-1\n---\n\nQ&A, no repo.\n", "utf8");
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.items.filter((i) => i.kind === "inbox-ticket")).toEqual([
+      { kind: "inbox-ticket", path: mine, detail: "fix-1" },
+    ]);
+  });
+
+  it("includes the worktree namespace dir when present", () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    const ns = join(cfg.worktreeRoot, repoDiscriminator(clone));
+    mkdirSync(ns, { recursive: true });
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.items).toContainEqual({ kind: "worktrees", path: ns });
+  });
+
+  it("a processing/ ticket for the repo blocks; other repos' don't", () => {
+    const { root, cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    const processing = dataTreePaths(cfg).queue.processing;
+    writeTicket(processing, "other-live", join(root, "elsewhere"));
+    expect(
+      (planUnwatch(cfg, "acme/api") as { ok: true; plan: UnwatchPlan }).plan.blocked,
+    ).toBeNull();
+    writeTicket(processing, "live-1", clone);
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.blocked).toEqual({ ticketId: "live-1" });
   });
 });
 

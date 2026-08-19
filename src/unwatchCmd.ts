@@ -5,11 +5,13 @@
  * (done/failed, transcripts, history shards, outbox dead/, review archives)
  * is deliberately out of scope — see the spec's non-goals.
  */
-import { realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
 import { readWatchlist, watchlistPath, type WatchlistEntry } from "./watchlist.js";
+import { parseTicket } from "./ticket.js";
+import { repoDiscriminator } from "./worktree.js";
 import type { PidfileLock } from "./pidfileLock.js";
 
 export type UnwatchRefusal = "config-defined" | "watchlist-unreadable";
@@ -108,14 +110,50 @@ export function planUnwatch(cfg: Config, nwo: string, deps: UnwatchDeps = {}): P
   return { ok: true, plan: watchedPlan(cfg, entry, deps) };
 }
 
-function watchedPlan(cfg: Config, entry: WatchlistEntry, _deps: UnwatchDeps): UnwatchPlan {
+/** *.md tickets in `dir` whose frontmatter repo: resolves to `repoPath`. Unparsable → skipped. */
+function ticketsTargeting(
+  cfg: Config,
+  dir: string,
+  repoPath: string,
+  deps: UnwatchDeps,
+): { path: string; id: string }[] {
+  const readdirFn = deps.readdirFn ?? readdirSync;
+  const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
+  const target = canonPath(repoPath);
+  let names: string[] = [];
+  try {
+    names = readdirFn(dir).filter((n) => n.endsWith(".md"));
+  } catch {
+    return []; // no dir yet
+  }
+  const out: { path: string; id: string }[] = [];
+  for (const n of names) {
+    const p = join(dir, n);
+    try {
+      const t = parseTicket(p, readFileFn(p), cfg.defaultTimeoutMinutes);
+      const repo = t.frontmatter["repo"];
+      if (typeof repo === "string" && canonPath(repo) === target) out.push({ path: p, id: t.id });
+    } catch {
+      /* unparsable — cannot name this repo; skip */
+    }
+  }
+  return out;
+}
+
+function watchedPlan(cfg: Config, entry: WatchlistEntry, deps: UnwatchDeps): UnwatchPlan {
   const clone = classifyClone(cfg, entry.path);
   const items: PlanItem[] = [];
   const kept: string[] = [];
   if (clone.managed) items.push({ kind: "clone", path: clone.path });
   else kept.push(`clone (user-owned): ${clone.path}`);
-  // Tasks 2–3 splice queue/worktrees/outbox/reviews/history/mirror/cache items
-  // and the blocker in here.
+  const q = dataTreePaths(cfg).queue;
+  for (const t of ticketsTargeting(cfg, q.inbox, entry.path, deps))
+    items.push({ kind: "inbox-ticket", path: t.path, detail: t.id });
+  const ns = join(cfg.worktreeRoot, repoDiscriminator(entry.path));
+  if ((deps.existsFn ?? existsSync)(ns)) items.push({ kind: "worktrees", path: ns });
+  const live = ticketsTargeting(cfg, q.processing, entry.path, deps);
+  const blocked = live.length > 0 ? { ticketId: live[0].id } : null;
+  // Task 3 splices outbox/reviews/history/mirror/cache items in here.
   return {
     nwo: entry.nwo,
     mode: "watched",
@@ -123,7 +161,7 @@ function watchedPlan(cfg: Config, entry: WatchlistEntry, _deps: UnwatchDeps): Un
     clone,
     items,
     kept,
-    blocked: null,
+    blocked,
   };
 }
 
