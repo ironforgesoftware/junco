@@ -82,6 +82,10 @@ import { useLogOverlay } from "./hooks/useLogOverlay.js";
 import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useGithubData } from "./hooks/useGithubData.js";
+import { summarizeUnwatchPlan } from "./unwatchSummary.js";
+// Type-only: unwatchCmd is a pure module, but the dashboard drives it through
+// the CLI (spawned), never in-process — nothing here may pull it into the bundle.
+import type { PlanOutcome } from "../unwatchCmd.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -267,10 +271,15 @@ export function App(props: AppProps): React.JSX.Element {
   const size = useTerminalSize(props.sizeOverride);
   const layout = useMemo(() => computeLayout(size.columns, size.rows), [size]);
 
-  const { repoMappings, watchlistError, addEntry, removeEntry } = useWatchlist(
-    watchlistFile,
-    configRepos,
-  );
+  // No removeEntry here on purpose: the `unwatch` CLI owns the watchlist
+  // write (it deletes the repo's state in the same pass) — the dashboard only
+  // re-reads the file afterwards via `reloadWatchlist`.
+  const {
+    repoMappings,
+    watchlistError,
+    addEntry,
+    reload: reloadWatchlist,
+  } = useWatchlist(watchlistFile, configRepos);
   // Rail selection: KEY-anchored (rowKey — nwo / path / "sys:section"), never a
   // bare index, so a heavy-poll clone discovery can't slide the cursor onto a
   // different row. null = top row (first repo, or queue when no repos).
@@ -876,8 +885,15 @@ export function App(props: AppProps): React.JSX.Element {
   // Fire-and-toast, mirroring runAssess: spawn the real CLI, dedupe by a key,
   // toast the first output line, then force an immediate cheap re-poll so the
   // mutated state (deleted ticket / drained outbox / gone worktree) shows at once.
+  // `onSuccess` runs only on a clean exit, after the toast and before the
+  // re-poll: the caller's own state reconciliation (evict caches, re-read a
+  // file the CLI just rewrote) for effects the cheap snapshot doesn't cover.
   const runLocalAction = useCallback(
-    (name: string, args: string[], opts: { key?: string; label?: string } = {}) => {
+    (
+      name: string,
+      args: string[],
+      opts: { key?: string; label?: string; onSuccess?: () => void } = {},
+    ) => {
       const key = opts.key ?? [name, ...args].join(" ");
       if (localActionInFlightRef.current.has(key)) {
         showToast("info", `${opts.label ?? name} already running`);
@@ -891,6 +907,7 @@ export function App(props: AppProps): React.JSX.Element {
         const line = firstNonEmptyLine(rr.output);
         if (rr.code === 0) showToast("success", line ?? `${name} ok`);
         else showToast("error", line ?? `${name} failed`);
+        if (rr.code === 0) opts.onSuccess?.();
         // Immediate re-poll (cheap fn is cheap; section-gated counts refresh too).
         void localCheapFn({ section: sysSection ?? undefined }).then((c) => {
           if (aliveRef.current) {
@@ -905,32 +922,68 @@ export function App(props: AppProps): React.JSX.Element {
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
   // cursor's LocalRepo.nwo). The config-vs-watchlist decision comes from the
   // matched repoMappings entry; an nwo absent from the union → not in watchlist.
+  //
+  // Three hops, never one: `unwatch --plan` (read-only) → the itemized confirm
+  // modal → `unwatch` (deletes the repo's junco-owned state AND rewrites the
+  // watchlist). The dashboard never writes the file itself any more — it only
+  // re-reads it once the CLI has, so the two can't disagree about what a
+  // "watched" repo is.
   const unwatch = useCallback(
     (nwo: string) => {
       const mapping = repoMappings.find((r) => r.nwo.toLowerCase() === nwo.toLowerCase());
-      if (!mapping) {
-        showToast("info", "not in watchlist");
-        return;
-      }
-      if (mapping.fromConfig) {
-        showToast("info", `${mapping.nwo} is defined in config.json`);
-        return;
-      }
-      if (watchlistError) {
-        showToast("error", "watchlist unreadable — fix it before writing");
-        return;
-      }
-      if (!removeEntry(mapping.nwo)) {
-        showToast("error", "watchlist unreadable — not written");
-        return;
-      }
-      // Drop the repo's cached issue/PR state too — the rail badges and the
-      // header pulse must never read ghost data for a repo that is no longer
-      // watched. Synchronous, not a poll round-trip.
-      githubEvictRepo(mapping.nwo);
-      showToast("success", `unwatched ${mapping.nwo}`);
+      if (!mapping) return void showToast("info", "not in watchlist");
+      if (mapping.fromConfig)
+        return void showToast("info", `${mapping.nwo} is defined in config.json`);
+      if (watchlistError)
+        return void showToast("error", "watchlist unreadable — fix it before writing");
+      void runCliFn("unwatch", [mapping.nwo, "--plan"]).then((rr) => {
+        if (!aliveRef.current) return;
+        if (rr.code !== 0)
+          return void showToast("error", firstNonEmptyLine(rr.output) ?? "unwatch: plan failed");
+        // Store warnings may precede the JSON in the merged stream — parse the LAST line.
+        const lines = rr.output.split("\n").filter((l) => l.trim() !== "");
+        let outcome: PlanOutcome | null = null;
+        try {
+          outcome = JSON.parse(lines[lines.length - 1] ?? "") as PlanOutcome;
+        } catch {
+          /* fall through to the error toast */
+        }
+        if (outcome === null || !outcome.ok)
+          return void showToast("error", "unwatch: unreadable plan");
+        const plan = outcome.plan;
+        if (plan.blocked)
+          return void showToast(
+            "info",
+            `${mapping.nwo}: ticket in flight (${plan.blocked.ticketId}) — wait for it to finish`,
+          );
+        askConfirm({
+          title: `unwatch ${mapping.nwo}`,
+          danger: true,
+          body: summarizeUnwatchPlan(plan),
+          onConfirm: () =>
+            runLocalAction("unwatch", [mapping.nwo], {
+              label: "unwatch",
+              onSuccess: () => {
+                // Drop the repo's cached issue/PR state too — the rail badges
+                // and the header pulse must never read ghost data for a repo
+                // that is no longer watched. Synchronous, not a poll round-trip.
+                githubEvictRepo(mapping.nwo);
+                reloadWatchlist();
+              },
+            }),
+        });
+      });
     },
-    [repoMappings, watchlistError, showToast, removeEntry, githubEvictRepo],
+    [
+      repoMappings,
+      watchlistError,
+      showToast,
+      runCliFn,
+      askConfirm,
+      runLocalAction,
+      githubEvictRepo,
+      reloadWatchlist,
+    ],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row

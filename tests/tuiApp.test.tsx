@@ -15,6 +15,7 @@ import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import type { AssessHistory } from "../src/assessHistory.js";
+import type { UnwatchPlan } from "../src/unwatchCmd.js";
 import { until, fireUntil } from "./helpers/until.js";
 import { makeDashPr, makeDashIssue } from "./helpers/dashFixtures.js";
 
@@ -383,6 +384,40 @@ function renderApp(
 const tick = () => new Promise((r) => setTimeout(r, 30));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Fake `runCliFn` for the unwatch flow, standing in for `junco unwatch`:
+ * the `--plan` call answers with a one-line `PlanOutcome` JSON (override any
+ * plan field via `planOver` — `blocked` is the interesting one), the execute
+ * call removes the entry from the watchlist file itself (which is what the
+ * real CLI does — the dashboard no longer writes the file) and prints the
+ * headline. `spawns` records argv so a test can prove exactly which calls the
+ * flow made. Every non-unwatch command falls through as a plain success. */
+function unwatchCliFake(file: string, nwo: string, planOver: Partial<UnwatchPlan> = {}) {
+  const spawns: [string, string[]][] = [];
+  const runCliFn = async (name: string, args: string[]): Promise<CliRunResult> => {
+    spawns.push([name, args]);
+    if (name !== "unwatch") return { code: 0, output: "", timedOut: false };
+    if (args.includes("--plan")) {
+      const plan: UnwatchPlan = {
+        nwo,
+        mode: "watched",
+        external: false,
+        clone: { path: "/c/coral", managed: false },
+        items: [],
+        kept: ["clone (user-owned): /c/coral"],
+        blocked: null,
+        ...planOver,
+      };
+      return { code: 0, output: `${JSON.stringify({ ok: true, plan })}\n`, timedOut: false };
+    }
+    writeWatchlist(
+      file,
+      readWatchlist(file).entries.filter((e) => e.nwo.toLowerCase() !== nwo.toLowerCase()),
+    );
+    return { code: 0, output: `unwatched ${nwo}: deleted 0 item(s)\n`, timedOut: false };
+  };
+  return { runCliFn, spawns };
+}
+
 describe("App", () => {
   const wl = () => join(mkdtempSync(join(tmpdir(), "junco-app-")), "wl.json");
 
@@ -651,20 +686,68 @@ describe("App", () => {
     expect(readWatchlist(file).entries).toEqual([]); // never persisted
   });
 
-  it("unwatch removes watchlist entries but refuses config entries", async () => {
+  // `U` no longer writes the watchlist itself: it spawns `unwatch --plan`,
+  // shows the itemized plan in the destructive-confirm modal, and only on `y`
+  // spawns the real `unwatch` (which owns the deletion AND the file write).
+  it("unwatch plans, confirms, then executes via the CLI — config entries still refused", async () => {
     const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
     const file = wl();
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
-    const r = renderApp(client, file);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
     await tick();
     r.stdin.write("U"); // selected = acme/api (config)
     await until(() => (r.lastFrame() ?? "").includes("config.json"));
+    expect(spawns).toEqual([]); // the config refusal never reaches the CLI
+    r.stdin.write("j"); // select alx/coral
+    await tick();
+    r.stdin.write("U"); // → plan spawn → confirm modal
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    expect(r.lastFrame()).toContain("Continue?");
+    r.stdin.write("y");
+    // The CLI (faked) owns the write — bounded until-loop, never a fixed tick.
+    await until(() => readWatchlist(file).entries.length === 0);
+    expect(spawns).toEqual([
+      ["unwatch", ["alx/coral", "--plan"]],
+      ["unwatch", ["alx/coral"]],
+    ]);
+  });
+
+  // A ticket in flight for the repo blocks the whole flow at plan time: one
+  // spawn, a toast, and no modal — there is nothing to confirm.
+  it("a blocked plan toasts and never opens the confirm modal", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral", {
+      blocked: { ticketId: "live-1" },
+    });
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
     r.stdin.write("j"); // select alx/coral
     await tick();
     r.stdin.write("U");
-    // The unwatch write is observable on disk — bounded until-loop, never a fixed tick.
-    await until(() => readWatchlist(file).entries.length === 0);
-    expect(readWatchlist(file).entries).toEqual([]);
+    await until(() => (r.lastFrame() ?? "").includes("in flight"));
+    expect(r.lastFrame()).not.toContain("Continue?");
+    expect(spawns).toEqual([["unwatch", ["alx/coral", "--plan"]]]);
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  it("n dismisses the unwatch confirm without spawning the execute", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
+    r.stdin.write("j"); // select alx/coral
+    await tick();
+    r.stdin.write("U");
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("n");
+    await until(() => !(r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    expect(spawns).toEqual([["unwatch", ["alx/coral", "--plan"]]]); // plan only
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
   });
 
   it("? opens the help modal", async () => {
@@ -861,11 +944,14 @@ describe("App", () => {
     const { client } = makeClient({ "acme/api": [], "alx/coral": [readyIssue] });
     const file = wl();
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
-    const r = renderApp(client, file);
+    const { runCliFn } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
     await tick();
     r.stdin.write("j"); // select alx/coral (pane 1) — its issues load
     await until(() => (r.lastFrame() ?? "").includes("●1 review"));
-    r.stdin.write("U"); // unwatch — the issues/staleAt entries drop with the mapping
+    r.stdin.write("U"); // → plan → confirm
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("y"); // execute — the issues/staleAt entries drop in onSuccess
     await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
     expect(readWatchlist(file).entries).toEqual([]);
   });
@@ -1481,7 +1567,7 @@ describe("PRs view", () => {
   // legitimately fetches the selected repo twice (scoped cycle + startup
   // sweep) and coral once; every later call — including the sweep unwatch
   // itself triggers — hangs forever, so a passing test still proves the
-  // SYNCHRONOUS prune in unwatch(), not a refetch.
+  // SYNCHRONOUS prune in the unwatch onSuccess, not a refetch.
   it("unwatching a repo clears its contribution to the ⚑ PR attention chip", async () => {
     const failing = makePr({
       nwo: "alx/coral",
@@ -1503,11 +1589,14 @@ describe("PRs view", () => {
     };
     const file = wlp();
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
-    const r = renderApp(client, file);
+    const { runCliFn } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
     await until(() => (r.lastFrame() ?? "").includes("⚑1 PR"));
     r.stdin.write("j"); // select alx/coral (pane 1)
     await tick();
-    r.stdin.write("U"); // unwatch — the prs aggregate prunes with the mapping
+    r.stdin.write("U"); // → plan → confirm
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("y"); // execute — the prs aggregate prunes with the mapping
     await until(() => !(r.lastFrame() ?? "").includes("⚑1 PR"));
     expect(readWatchlist(file).entries).toEqual([]);
     r.stdin.write("p"); // the PRs view itself must not list the pruned PR either
@@ -1875,7 +1964,7 @@ describe("review view (e)", () => {
     );
   });
 
-  it("no pending batches: v shows the empty state; esc returns to main", async () => {
+  it("no pending batches: e shows the empty state; esc returns to main", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
