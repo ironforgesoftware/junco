@@ -86,6 +86,13 @@ export function discardPending(cfg: Config, id: string, deps: AssessReviewDeps =
   return store.remove(dataTreePaths(cfg).reviewAssess, id, "filed", deps);
 }
 
+/** Unwatch-driven removal: archive into discarded/, distinct from
+ * discardPending's "filed" — a batch purged by `junco unwatch` was never
+ * filed, so filing it under "filed" would misrepresent its provenance. */
+export function purgePending(cfg: Config, id: string, deps: AssessReviewDeps = {}): boolean {
+  return store.remove(dataTreePaths(cfg).reviewAssess, id, "discarded", deps);
+}
+
 export function pendingCount(cfg: Config, deps: AssessReviewDeps = {}): number {
   return store.count(dataTreePaths(cfg).reviewAssess, deps);
 }

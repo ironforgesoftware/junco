@@ -6,8 +6,13 @@ import { makeConfig } from "./helpers/config.js";
 import { writeWatchlist, readWatchlist, type WatchlistEntry } from "../src/watchlist.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
-import { isUnder, planUnwatch, type UnwatchPlan } from "../src/unwatchCmd.js";
+import { isUnder, planUnwatch, githubCacheFilesFor, type UnwatchPlan } from "../src/unwatchCmd.js";
 import { repoDiscriminator } from "../src/worktree.js";
+import { enqueueOp } from "../src/githubOutbox.js";
+import { writePending } from "../src/assessReview.js";
+import { writeDraft } from "../src/commentReview.js";
+import { recordRun, historyFilePath } from "../src/assessHistory.js";
+import { cachePathFor, prCachePathFor } from "../src/tui/ghClient.js";
 
 /** Tmpdir data tree + full Config. `configRepos` populates cfg.github.repos. */
 function makeTree(opts: { configRepos?: { nwo: string; path: string }[] } = {}): {
@@ -165,5 +170,74 @@ describe("isUnder", () => {
     expect(isUnder("/sbxroot/clones/watched/a/b", "/sbxroot/clones/watched")).toBe(true);
     expect(isUnder("/sbxroot/clones/watched", "/sbxroot/clones/watched")).toBe(false);
     expect(isUnder("/sbxroot/clones/watched-evil/x", "/sbxroot/clones/watched")).toBe(false);
+  });
+});
+
+describe("planUnwatch — nwo-keyed stores", () => {
+  it("enumerates outbox ops by nwo and by push repoPath; dead/ untouched", () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    enqueueOp(cfg, "dashboard", { kind: "comment", nwo: "ACME/api", issue: 7, body: "hi" });
+    enqueueOp(cfg, "prflow", { kind: "push", repoPath: clone, branch: "feat/x" });
+    enqueueOp(cfg, "dashboard", { kind: "comment", nwo: "other/repo", issue: 1, body: "no" });
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.items.filter((i) => i.kind === "outbox-op")).toHaveLength(2);
+  });
+
+  it("enumerates pending reviews, assess history, mirror, github-cache", () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    writePending(cfg, {
+      id: "assess-acme-api",
+      nwo: "acme/api",
+      external: false,
+      autoPlan: false,
+      repoPath: clone,
+      createdAt: "2026-08-19T00:00:00Z",
+      findings: [],
+    });
+    writeDraft(cfg, {
+      id: "analyze-acme-api-1",
+      nwo: "acme/api",
+      issue: 3,
+      issueTitle: "Something broke",
+      external: false,
+      repoPath: clone,
+      createdAt: "2026-08-19T00:00:00Z",
+      draft: "Looks like a regression.",
+      footer: true,
+    });
+    recordRun(cfg, "acme/api", { ok: true, at: "2026-08-19T00:00:00Z", found: 0, parked: 0 });
+    mkdirSync(join(dataTreePaths(cfg).mirror, "acme", "api"), { recursive: true });
+    mkdirSync(dataTreePaths(cfg).githubCache, { recursive: true });
+    writeFileSync(cachePathFor(cfg, "acme/api"), "{}", "utf8");
+    writeFileSync(prCachePathFor(cfg, "acme/api"), "{}", "utf8");
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    const kinds = out.plan.items.map((i) => i.kind);
+    for (const k of ["assess-review", "comment-review", "assess-history", "mirror", "github-cache"])
+      expect(kinds).toContain(k);
+    expect(out.plan.items.filter((i) => i.kind === "github-cache")).toHaveLength(2);
+  });
+
+  it("github-cache naming never drifts from ghClient (pin)", () => {
+    const { cfg } = makeTree();
+    const out = githubCacheFilesFor(cfg, "acme/api");
+    expect(out).toEqual([cachePathFor(cfg, "acme/api"), prCachePathFor(cfg, "acme/api")]);
+  });
+
+  it("assessHistory's historyFilePath matches what recordRun/planUnwatch see", () => {
+    const { cfg } = makeTree();
+    watch(cfg, "acme/api", join(dataTreePaths(cfg).clonesWatched, "acme", "api"));
+    recordRun(cfg, "acme/api", { ok: true, at: "2026-08-19T00:00:00Z", found: 1, parked: 1 });
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.items).toContainEqual({
+      kind: "assess-history",
+      path: historyFilePath(cfg, "acme/api"),
+    });
   });
 });

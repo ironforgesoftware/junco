@@ -26,6 +26,7 @@
  * construction).
  */
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
 import { dataTreePaths } from "./dataTree.js";
 import { slugifyId } from "./slug.js";
@@ -59,6 +60,15 @@ const store = makeReviewStore<AssessHistory>(["id"], historyKey);
 
 export function assessHistoryDir(cfg: Config): string {
   return dataTreePaths(cfg).assessHistory;
+}
+
+/** The exact on-disk path for `nwo`'s history file — same join `store` uses
+ * internally (reviewStore.ts's `entryFileName`), exposed so unwatchCmd.ts can
+ * enumerate/delete a repo's history file without a second history-store
+ * instantiation. Exact-key: callers must pass the same casing the store was
+ * written with (historyKey hashes the FULL nwo string). */
+export function historyFilePath(cfg: Config, nwo: string): string {
+  return join(dataTreePaths(cfg).assessHistory, historyKey(nwo) + ".json");
 }
 
 export function listHistory(cfg: Config, deps: AssessHistoryDeps = {}): AssessHistory[] {

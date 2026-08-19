@@ -13,6 +13,11 @@ import { readWatchlist, watchlistPath, type WatchlistEntry } from "./watchlist.j
 import { parseTicket } from "./ticket.js";
 import { repoDiscriminator } from "./worktree.js";
 import type { PidfileLock } from "./pidfileLock.js";
+import { listOps } from "./githubOutbox.js";
+import { listPending } from "./assessReview.js";
+import { listDrafts } from "./commentReview.js";
+import { historyFilePath } from "./assessHistory.js";
+import { slugifyId } from "./slug.js";
 
 export type UnwatchRefusal = "config-defined" | "watchlist-unreadable";
 
@@ -140,6 +145,64 @@ function ticketsTargeting(
   return out;
 }
 
+/** `<dataDir>/github-cache/{issues,prs}-<owner>__<repo>.json`. Mirrors
+ * `tui/ghClient.ts`'s `cachePathFor`/`prCachePathFor` byte-for-byte (pinned by
+ * tests/unwatchCmd.test.ts's drift-pin test) — duplicated here rather than
+ * imported so `src/unwatchCmd.ts` (the CLI graph) never pulls in the heavy
+ * `tui/ghClient.ts` module. */
+export function githubCacheFilesFor(cfg: Config, nwo: string): string[] {
+  const dir = dataTreePaths(cfg).githubCache;
+  const key = nwo.replace(/\//g, "__");
+  return [join(dir, `issues-${key}.json`), join(dir, `prs-${key}.json`)];
+}
+
+/** The shared nwo-keyed enumerator both watched and residue plans call:
+ * outbox ops (by nwo, or by push's repoPath when the op carries no nwo),
+ * pending assess/comment reviews, the assess-history file, the mirror dir,
+ * and the github-cache files. `repoPathOrNull` is null in residue mode
+ * (nothing on disk to match a push op's repoPath against). */
+function nwoKeyedItems(
+  cfg: Config,
+  nwo: string,
+  repoPathOrNull: string | null,
+  deps: UnwatchDeps,
+): PlanItem[] {
+  const existsFn = deps.existsFn ?? existsSync;
+  const lower = nwo.toLowerCase();
+  const canonRepo = repoPathOrNull === null ? null : canonPath(repoPathOrNull);
+  const p = dataTreePaths(cfg);
+  const items: PlanItem[] = [];
+  for (const sop of listOps(cfg, deps)) {
+    const matchNwo = "nwo" in sop.op && sop.op.nwo.toLowerCase() === lower;
+    const matchPath =
+      canonRepo !== null && "repoPath" in sop.op && canonPath(sop.op.repoPath) === canonRepo;
+    if (matchNwo || matchPath)
+      items.push({ kind: "outbox-op", path: sop.path, detail: sop.issueKey ?? sop.op.kind });
+  }
+  for (const b of listPending(cfg, deps))
+    if (b.nwo.toLowerCase() === lower)
+      items.push({
+        kind: "assess-review",
+        path: join(p.reviewAssess, `${slugifyId(b.id)}.json`),
+        detail: b.id,
+      });
+  for (const d of listDrafts(cfg, deps))
+    if (d.nwo.toLowerCase() === lower)
+      items.push({
+        kind: "comment-review",
+        path: join(p.reviewComments, `${slugifyId(d.id)}.json`),
+        detail: d.id,
+      });
+  const hist = historyFilePath(cfg, nwo);
+  if (existsFn(hist)) items.push({ kind: "assess-history", path: hist });
+  const [owner, repo] = nwo.split("/");
+  const mirror = join(p.mirror, owner ?? nwo, repo ?? "repo");
+  if (existsFn(mirror)) items.push({ kind: "mirror", path: mirror });
+  for (const f of githubCacheFilesFor(cfg, nwo))
+    if (existsFn(f)) items.push({ kind: "github-cache", path: f });
+  return items;
+}
+
 function watchedPlan(cfg: Config, entry: WatchlistEntry, deps: UnwatchDeps): UnwatchPlan {
   const clone = classifyClone(cfg, entry.path);
   const items: PlanItem[] = [];
@@ -153,7 +216,7 @@ function watchedPlan(cfg: Config, entry: WatchlistEntry, deps: UnwatchDeps): Unw
   if ((deps.existsFn ?? existsSync)(ns)) items.push({ kind: "worktrees", path: ns });
   const live = ticketsTargeting(cfg, q.processing, entry.path, deps);
   const blocked = live.length > 0 ? { ticketId: live[0].id } : null;
-  // Task 3 splices outbox/reviews/history/mirror/cache items in here.
+  items.push(...nwoKeyedItems(cfg, entry.nwo, entry.path, deps));
   return {
     nwo: entry.nwo,
     mode: "watched",
