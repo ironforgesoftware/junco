@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ticketState, findTicketFile, sweepDependencies } from "../src/ticketDeps.js";
 import { parseTicket } from "../src/ticket.js";
+import { parseResultMeta } from "../src/resultMeta.js";
 import { makeConfig, type ConfigSeams } from "./helpers/config.js";
 import type { Config, Paths } from "../src/types.js";
 
@@ -183,5 +184,40 @@ describe("sweepDependencies — satisfaction stamping", () => {
     expect(existsSync(join(paths.inbox, "child.md"))).toBe(true);
     const t = parseTicket("child.md", readFileSync(join(paths.inbox, "child.md"), "utf8"));
     expect(t.depsSatisfied).toEqual([]);
+  });
+});
+
+describe("sweepDependencies — failure cascade", () => {
+  it("failed dep → dependent finalized to failed/ with dependency_failed marker", async () => {
+    writeFileSync(join(paths.failed, "parent.md"), "---\nid: parent\n---\n");
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\nBody");
+    const r = await sweepDependencies(cfg);
+    expect(r.cascaded).toBe(1);
+    expect(existsSync(join(paths.inbox, "child.md"))).toBe(false);
+    const rec = readFileSync(join(paths.failed, "child.md"), "utf8");
+    expect(parseResultMeta(rec).status).toBe("failed");
+    expect(parseResultMeta(rec).dependencyFailed).toBe("parent");
+  });
+
+  it("cascade is transitive within one sweep", async () => {
+    writeFileSync(join(paths.failed, "a.md"), "---\nid: a\n---\n");
+    writeFileSync(join(paths.inbox, "b.md"), "---\nid: b\ndepends_on: [a]\n---\n");
+    writeFileSync(join(paths.inbox, "c.md"), "---\nid: c\ndepends_on: [b]\n---\n");
+    const r = await sweepDependencies(cfg);
+    expect(r.cascaded).toBe(2);
+    expect(parseResultMeta(readFileSync(join(paths.failed, "c.md"), "utf8")).dependencyFailed).toBe(
+      "b",
+    );
+  });
+
+  it("PR closed without merge → cascade", async () => {
+    writeFileSync(
+      join(paths.done, "parent.md"),
+      "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    const r = await sweepDependencies(cfg, { prStateFn: async () => "closed" });
+    expect(r.cascaded).toBe(1);
+    expect(findTicketFile(paths.failed, "child")).not.toBeNull();
   });
 });

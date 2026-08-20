@@ -4,13 +4,15 @@
  * Pure queue-directory machinery — no bridge coupling; the only network touch
  * is the injectable PR-state probe.
  */
-import { readdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { join, basename } from "node:path";
 import type { Config, Paths, Ticket } from "./types.js";
 import { CLAIM_PREFIX_RE, upsertFrontmatterKey } from "./requeue.js";
 import { queuePaths } from "./config.js";
 import { parseTicket } from "./ticket.js";
 import { parseResultMeta } from "./resultMeta.js";
+import { uniqueDestPath } from "./uniqueDest.js";
+import { metrics } from "./metrics.js";
 import { gh } from "./git.js";
 import { log } from "./logging.js";
 
@@ -142,14 +144,39 @@ function stampSatisfied(t: Ticket, depId: string): boolean {
   return true;
 }
 
+/** Park a waiting dependent in failed/ with a machine-readable marker (spec:
+ * dependency_failed cascade). Mirrors finalize.ts's tmp+rename + uniqueDest
+ * move; zero usage — no session ever ran. */
+function cascadeFail(paths: Paths, t: Ticket, failedDepId: string): void {
+  const content = readFileSync(t.path, "utf8");
+  const body =
+    `${content.trimEnd()}\n\n---\n<!-- junco-result\n` +
+    `status: failed\ndependency_failed: ${failedDepId}\n-->\n\n## Result\n\n` +
+    `> **Failed.** Dependency \`${failedDepId}\` failed terminally; this ticket was parked by ` +
+    `the dependency cascade before it ran. \`junco retry ${failedDepId}\` re-releases it with ` +
+    `that parent (or retry this ticket directly once the dependency is resolved).\n`;
+  const tmp = t.path + ".tmp";
+  writeFileSync(tmp, body, "utf8");
+  renameSync(tmp, t.path);
+  mkdirSync(paths.failed, { recursive: true });
+  const dst = uniqueDestPath(paths.failed, basename(t.path));
+  renameSync(t.path, dst);
+  metrics.recordTask("failed", { input: 0, output: 0, costUsd: 0 }, 0);
+  log.warn("dependency failed — cascading dependent to failed/", {
+    id: t.id,
+    dep: failedDepId,
+    dst,
+  });
+}
+
 /**
  * The dependency sweep (spec 2026-08-20): for every inbox ticket with an
  * unconfirmed depends_on edge, resolve the dep —
  *   absent | inbox | processing → wait
- *   failed                      → cascade (Task 6)
+ *   failed                      → cascade (cascadeFail)
  *   done, no PR recorded        → stamp deps_satisfied
  *   done, PR recorded           → merged → stamp · open/unknown → wait ·
- *                                 closed-unmerged → cascade (Task 6)
+ *                                 closed-unmerged → cascade (cascadeFail)
  * Runs in the daemon loop ahead of the claim pass (single process, serial —
  * the in-place frontmatter stamp cannot race a claim). Lazy: a queue with no
  * edges costs one readdir.
@@ -170,8 +197,10 @@ export async function sweepDependencies(
         const state = ticketState(paths, d);
         if (state === "absent" || state === "inbox" || state === "processing") continue;
         if (state === "failed") {
-          // Cascade lands in Task 6; until then, wait (fail-safe).
-          continue;
+          cascadeFail(paths, t, d);
+          report.cascaded++;
+          changed = true;
+          break; // this ticket is gone from inbox — stop iterating its edges
         }
         const doneFile = findTicketFile(paths.done, d);
         if (!doneFile) continue; // raced away between state check and read
@@ -190,8 +219,13 @@ export async function sweepDependencies(
             report.stamped++;
             changed = true;
           }
+        } else if (pr === "closed") {
+          cascadeFail(paths, t, d);
+          report.cascaded++;
+          changed = true;
+          break;
         }
-        // open/unknown → wait; closed → cascade in Task 6.
+        // open/unknown → wait.
       }
     }
     if (!changed) return report;
