@@ -158,20 +158,28 @@ export async function claimNextTask(
   });
   if (eligible.length === 0) return null;
 
+  // Dependency gate (spec 2026-08-20): claim only when every depends_on edge
+  // has been confirmed by the dependency sweep (ticketDeps.ts). Pure frontmatter
+  // subset check — all satisfaction analysis (done-state, PR merge) lives in the
+  // sweep, which the daemon runs ahead of each claim pass.
+  const unblocked = eligible.filter((t) => t.dependsOn.every((d) => t.depsSatisfied.includes(d)));
+  if (unblocked.length === 0) return null;
+
   // Readiness gate: when there IS eligible work, don't claim it unless the
-  // inference endpoint can actually serve it.
+  // inference endpoint can actually serve it. Runs AFTER the dependency
+  // filter so a fully-blocked queue never probes the endpoint.
   if (opts.readyFn && !(await opts.readyFn())) {
     // readyFn wraps BOTH the endpoint reachability probe and the provider
     // gate (daemon.ts) — a latched/backed-off gate blocks claiming exactly
     // like an unreachable endpoint does, so "inference endpoint not ready"
     // is misleading when only the gate is the reason. Stay readiness-neutral.
     log.warn("not ready to claim (endpoint or provider gate); leaving inbox untouched this poll", {
-      eligible: eligible.length,
+      eligible: unblocked.length,
     });
     return null;
   }
 
-  for (const t of eligible) {
+  for (const t of unblocked) {
     const repoKey =
       t.hasRepo && typeof t.frontmatter.repo === "string"
         ? canonicalizeRepoKey(resolve(expandHome(t.frontmatter.repo)))
