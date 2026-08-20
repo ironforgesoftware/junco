@@ -405,6 +405,13 @@ export const ConfigSchema = z.object({
       configDir: z.string().min(1).default(DEFAULT_BOT_GH_CONFIG_DIR),
     })
     .default({}),
+  planSets: z
+    .object({
+      enabled: z.boolean().default(false),
+      mergePollSeconds: z.number().min(5).default(60),
+      maxTasks: z.number().int().min(1).default(10),
+    })
+    .default({}),
 });
 
 export type ConfigParsed = z.infer<typeof ConfigSchema>;
@@ -656,6 +663,11 @@ export function assembleConfig(
     botAccount: {
       enabled: d.botAccount.enabled,
       configDir: ghConfigDir,
+    },
+    planSets: {
+      enabled: d.planSets.enabled,
+      mergePollSeconds: d.planSets.mergePollSeconds,
+      maxTasks: d.planSets.maxTasks,
     },
   };
 }

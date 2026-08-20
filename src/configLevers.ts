@@ -726,6 +726,35 @@ export const LEVERS: Lever[] = [
     description: "Isolated gh config dir holding the bot login (GH_CONFIG_DIR for daemon gh/git).",
   },
 
+  // --- planSets.* ---
+  {
+    path: "planSets.enabled",
+    type: "boolean",
+    default: false,
+    editable: true,
+    reload: "restart",
+    description:
+      "Enable plan-driven ticket compilation (Layer 2; Layer-1 dependency machinery is always on).",
+  },
+  {
+    path: "planSets.mergePollSeconds",
+    type: "number",
+    default: 60,
+    min: 5,
+    editable: true,
+    reload: "live",
+    description: "Cadence for the plan-set merge sweep that cascades satisfied dependencies.",
+  },
+  {
+    path: "planSets.maxTasks",
+    type: "number",
+    default: 10,
+    min: 1,
+    editable: true,
+    reload: "live",
+    description: "Layer-2 compiler cap on tasks per plan set (reserved).",
+  },
+
   // --- assess.* ---
   {
     path: "assess.maxIssuesPerRun",
