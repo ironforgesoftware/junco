@@ -747,9 +747,10 @@ export async function mainLoop(
         await maybeOutboxDrain();
         await maybeDepSweep();
         // A stop can land during the bridge sweep (multi-repo gh calls,
-        // seconds) or the outbox drain — re-check before claiming brand-new
-        // work, mirroring the scheduler's per-claim check above. Without this
-        // a post-signal claim starts up to timeout_minutes of new work.
+        // seconds), the outbox drain, or the dependency sweep — re-check
+        // before claiming brand-new work, mirroring the scheduler's per-claim
+        // check above. Without this a post-signal claim starts up to
+        // timeout_minutes of new work.
         if (stopFlag.requested) break;
         const handled = await runOnceFn(activeCfg());
         if (handled) {
