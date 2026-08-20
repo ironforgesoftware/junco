@@ -6,14 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-19
+
 ### Added
 
 - `junco replay <ticket-id|path.jsonl> [--budget-per-kind N] [--escalation-window N] [--output-budget-per-turn N] [--output-budget-post-commit N] [--json]` — re-runs a recorded per-ticket event transcript through a fresh guard manager under a chosen (or default) policy and reports what the guards would decide today: a per-run recorded-vs-replayed decision comparison, a verdict, and caveats (`--json` prints the raw report instead). Each of the four supervisor knobs resolves independently by precedence — an explicit flag, then the file's first `junco_run_start.guard`, then the loaded config, then GuardManager's own built-in defaults.
 - Per-ticket event transcripts (`<dataDir>/data/transcripts/<id>.jsonl`) now carry v2 frame records: `junco_run_start`/`junco_run_end` bracket every agent run (flow, body, cwd, model id, tools, timeout, and the guard policy in effect) and `junco_guard_decision` records each nudge/kill — enough to reconstruct a run's identity and guard history from the transcript alone, and what `junco replay` reads.
+- `junco unwatch <owner/repo> [--plan]` — stop watching a repo and delete its junco-owned operational state: inbox tickets, the worktree namespace, and outbox/review/history/mirror/cache traces. `--plan` prints the itemized deletion as JSON and deletes nothing; a ticket for the repo in `processing/` blocks the run; re-running sweeps residue idempotently (including orphaned worktree namespaces). The dashboard's unwatch (`u`) plans first, shows the itemized confirm, and executes through the same CLI core.
+- Skill-link distribution: `<dataDir>/skills` is a junco-managed symlink mount to the packaged `skills/` directory, and the new `skills.harnessDirs` config key lists the harness skills directories (standing consent — junco never writes into a directory not listed) that receive a `junco-dispatch` link through the mount. Links are created and self-healed at daemon startup and after `junco update`; `junco skill install [--harness <name|path>]...` (names: `claude`, `codex`, `pi`, `omp`, `opencode`) adds consent and links on demand; the setup walkthrough gains a Skills chapter that detects installed harnesses and offers them as a multi-select; `junco doctor` reports link health, including the blocked-by-a-real-file state that self-heal deliberately refuses to fix. A valid symlink is never repointed, so a hand-managed mount survives.
+- The dashboard's add-repo flow now runs a bot-grant preflight and asks for explicit confirmation before inviting the bot account into a private personal repository.
 
 ### Changed
 
 - Every agent flow (Q&A, assess, analyze, PR main, PR corrective) now runs through one wrapper, `runEnveloped` (`src/agent/runEnvelope.ts`), which builds the guard manager, opens and frames the per-ticket transcript, calls the agent, and records spend — replacing five hand-copied call sites whose parity previously rested on comments.
+
+### Internal
+
+- Lockfile security bumps: brace-expansion 5.0.9 and nanoid 3.3.18 (transitive). Runtime dependencies unchanged.
 
 ## [0.10.0] - 2026-08-16
 
