@@ -206,6 +206,7 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
     bridgeSweepFn: vi.fn(async () => 0),
     outboxDrainFn: vi.fn(async () => ({ sent: 0, dead: 0, remaining: 0, offline: false })),
+    depSweepFn: vi.fn(async () => ({ stamped: 0, cascaded: 0 })),
     // Never blocks by default — most tests don't care about the gate at all;
     // override with fakeGate(reason) to exercise blocked-claim behavior.
     gate: fakeGate(null),
@@ -2229,5 +2230,77 @@ describe("outbox drain (local mode)", () => {
 
     await mainLoop(cfg, stop, {}, deps as never);
     expect(drains).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — dependency sweep wiring (spec 2026-08-20)
+// ---------------------------------------------------------------------------
+
+describe("dependency sweep wiring (spec 2026-08-20)", () => {
+  it("serial loop runs the dep sweep each eligible tick, throttled by mergePollSeconds", async () => {
+    const stop = new StopFlag();
+    let polls = 0;
+    const depSweepFn = vi.fn(async () => ({ stamped: 0, cascaded: 0 }));
+    const { deps } = makeDeps({
+      depSweepFn,
+      sleep: vi.fn(async () => {
+        if (++polls >= 2) stop.requestStop();
+        await new Promise((r) => setTimeout(r, 1)); // real tick — scheduler-test gotcha
+      }),
+    });
+    // Throttle window spans both polls → exactly one sweep.
+    await mainLoop(makeConfig(), stop, {}, deps);
+    expect(depSweepFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("mergePollSeconds: 0 override sweeps every poll", async () => {
+    const stop = new StopFlag();
+    let polls = 0;
+    const depSweepFn = vi.fn(async () => ({ stamped: 0, cascaded: 0 }));
+    const { deps } = makeDeps({
+      depSweepFn,
+      sleep: vi.fn(async () => {
+        if (++polls >= 2) stop.requestStop();
+        await new Promise((r) => setTimeout(r, 1));
+      }),
+    });
+    await mainLoop(
+      makeConfig({ planSets: { enabled: false, mergePollSeconds: 0, maxTasks: 10 } }),
+      stop,
+      {},
+      deps,
+    );
+    expect(depSweepFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("scheduler mode (maxConcurrent > 1) also sweeps", async () => {
+    const stop = new StopFlag();
+    const depSweepFn = vi.fn(async () => ({ stamped: 0, cascaded: 0 }));
+    const { deps } = makeDeps({
+      depSweepFn,
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+        await new Promise((r) => setTimeout(r, 1));
+      }),
+    });
+    await mainLoop(makeConfig({ maxConcurrent: 2 }), stop, {}, deps);
+    expect(depSweepFn).toHaveBeenCalled();
+  });
+
+  it("a throwing sweep is contained (loop keeps polling)", async () => {
+    const stop = new StopFlag();
+    let polls = 0;
+    const { deps } = makeDeps({
+      depSweepFn: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+      sleep: vi.fn(async () => {
+        if (++polls >= 2) stop.requestStop();
+        await new Promise((r) => setTimeout(r, 1));
+      }),
+    });
+    await expect(mainLoop(makeConfig(), stop, {}, deps)).resolves.toBeUndefined();
+    expect(polls).toBeGreaterThanOrEqual(2);
   });
 });
