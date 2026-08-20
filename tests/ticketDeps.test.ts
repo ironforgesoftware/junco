@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ticketState, findTicketFile } from "../src/ticketDeps.js";
-import type { Paths } from "../src/types.js";
+import { ticketState, findTicketFile, sweepDependencies } from "../src/ticketDeps.js";
+import { parseTicket } from "../src/ticket.js";
+import { makeConfig, type ConfigSeams } from "./helpers/config.js";
+import type { Config, Paths } from "../src/types.js";
 
 let root: string;
 let paths: Paths;
+let seams: ConfigSeams;
+let cfg: Config;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "junco-deps-"));
   paths = {
@@ -16,6 +20,19 @@ beforeEach(() => {
     failed: join(root, "failed"),
   };
   for (const d of Object.values(paths)) mkdirSync(d, { recursive: true });
+  seams = {
+    dataDir: join(root, "data"),
+    queueRoot: root,
+    worktreeRoot: join(root, "wt"),
+    tools: [],
+    criticEnabled: false,
+    planLintEnabled: false,
+    verifyEnabled: false,
+    supervisorEnabled: false,
+    healthEnabled: false,
+    removeWorktreeOnSuccess: true,
+  };
+  cfg = makeConfig(seams);
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -74,5 +91,97 @@ describe("ticketState", () => {
     rmSync(paths.done, { recursive: true, force: true });
     // Should resolve to "absent" (not throw), since ENOENT is expected
     expect(ticketState(paths, "t1")).toBe("absent");
+  });
+});
+
+describe("sweepDependencies — satisfaction stamping", () => {
+  it("no-PR parent in done/ → stamps deps_satisfied", async () => {
+    writeFileSync(
+      join(paths.done, "parent.md"),
+      "---\nid: parent\n---\nBody\n\n---\n<!-- junco-result\nstatus: completed\n-->\n\n## Result\n\nok\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    const r = await sweepDependencies(cfg);
+    expect(r.stamped).toBe(1);
+    const t = parseTicket("child.md", readFileSync(join(paths.inbox, "child.md"), "utf8"));
+    expect(t.depsSatisfied).toEqual(["parent"]);
+  });
+
+  it("parent with pr_url → merged stamps, open waits", async () => {
+    writeFileSync(
+      join(paths.done, "parent.md"),
+      "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    const open = await sweepDependencies(cfg, { prStateFn: async () => "open" });
+    expect(open.stamped).toBe(0);
+    const merged = await sweepDependencies(cfg, { prStateFn: async () => "merged" });
+    expect(merged.stamped).toBe(1);
+  });
+
+  it("unknown PR state (gh error) → waits, never cascades", async () => {
+    writeFileSync(
+      join(paths.done, "parent.md"),
+      "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    const r = await sweepDependencies(cfg, { prStateFn: async () => "unknown" });
+    expect(r).toEqual({ stamped: 0, cascaded: 0 });
+    expect(existsSync(join(paths.inbox, "child.md"))).toBe(true);
+  });
+
+  it("absent / queued / in-flight dep → waits; ticket with no edges → no-op", async () => {
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [ghost]\n---\n");
+    writeFileSync(join(paths.inbox, "plain.md"), "---\nid: plain\n---\n");
+    const r = await sweepDependencies(cfg);
+    expect(r).toEqual({ stamped: 0, cascaded: 0 });
+  });
+
+  it("default prStateFn shells the configured ghBin and maps MERGED", async () => {
+    const fakeGh = join(root, "gh");
+    writeFileSync(fakeGh, `#!/bin/sh\necho '{"state":"MERGED"}'\n`, { mode: 0o755 });
+    const ghCfg = makeConfig(seams, { ghBin: fakeGh });
+    writeFileSync(
+      join(paths.done, "parent.md"),
+      "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    const r = await sweepDependencies(ghCfg);
+    expect(r.stamped).toBe(1);
+  });
+
+  it("two deps resolved in the same pass both stamp, without clobbering (regression)", async () => {
+    writeFileSync(
+      join(paths.done, "p1.md"),
+      "---\nid: p1\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(
+      join(paths.done, "p2.md"),
+      "---\nid: p2\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [p1, p2]\n---\n");
+    const r = await sweepDependencies(cfg);
+    expect(r.stamped).toBe(2);
+    const t = parseTicket("child.md", readFileSync(join(paths.inbox, "child.md"), "utf8"));
+    expect([...t.depsSatisfied].sort()).toEqual(["p1", "p2"]);
+  });
+
+  it("a dep id that doesn't round-trip through the flow-array upsert is left unconfirmed", async () => {
+    // "a,b" is a valid plain YAML scalar in block context (frontmatter `id:`
+    // and a quoted `depends_on` entry), but stampSatisfied's upsert writes
+    // deps_satisfied as an UNQUOTED flow sequence — `[a,b]` re-parses as two
+    // items ["a","b"], not one item "a,b". The post-write verify must catch
+    // that and decline to write, leaving the edge unconfirmed forever (rather
+    // than looping or silently reporting a stamp that never happened).
+    writeFileSync(
+      join(paths.done, "a,b.md"),
+      "---\nid: a,b\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), '---\nid: child\ndepends_on: ["a,b"]\n---\n');
+    const r = await sweepDependencies(cfg);
+    expect(r).toEqual({ stamped: 0, cascaded: 0 });
+    expect(existsSync(join(paths.inbox, "child.md"))).toBe(true);
+    const t = parseTicket("child.md", readFileSync(join(paths.inbox, "child.md"), "utf8"));
+    expect(t.depsSatisfied).toEqual([]);
   });
 });
