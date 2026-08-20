@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ticketState, findTicketFile, sweepDependencies } from "../src/ticketDeps.js";
+import { ticketState, findTicketFile, sweepDependencies, listWaiting } from "../src/ticketDeps.js";
 import { parseTicket } from "../src/ticket.js";
 import { parseResultMeta } from "../src/resultMeta.js";
 import { makeConfig, type ConfigSeams } from "./helpers/config.js";
@@ -219,5 +219,13 @@ describe("sweepDependencies — failure cascade", () => {
     const r = await sweepDependencies(cfg, { prStateFn: async () => "closed" });
     expect(r.cascaded).toBe(1);
     expect(findTicketFile(paths.failed, "child")).not.toBeNull();
+  });
+});
+
+describe("listWaiting", () => {
+  it("reports pending and missing edges per waiting ticket", () => {
+    writeFileSync(join(paths.done, "a.md"), "---\nid: a\n---\n");
+    writeFileSync(join(paths.inbox, "w.md"), "---\nid: w\ndepends_on: [a, ghost]\n---\n");
+    expect(listWaiting(cfg)).toEqual([{ id: "w", pending: ["a", "ghost"], missing: ["ghost"] }]);
   });
 });

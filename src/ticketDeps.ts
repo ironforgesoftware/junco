@@ -169,6 +169,28 @@ function cascadeFail(paths: Paths, t: Ticket, failedDepId: string): void {
   });
 }
 
+export interface WaitingInfo {
+  id: string;
+  /** Unconfirmed depends_on edges. */
+  pending: string[];
+  /** Pending edges that resolve to no ticket anywhere — likely typos or a
+   * half-submitted set (spec: dangling edges wait; the CLI surfaces them). */
+  missing: string[];
+}
+
+/** CLI-facing view of dependency-waiting inbox tickets (list/status/submit). */
+export function listWaiting(cfg: Config): WaitingInfo[] {
+  const paths = queuePaths(cfg);
+  return readWaiting(paths, cfg.defaultTimeoutMinutes).map((t) => {
+    const pending = t.dependsOn.filter((d) => !t.depsSatisfied.includes(d));
+    return {
+      id: t.id,
+      pending,
+      missing: pending.filter((d) => ticketState(paths, d) === "absent"),
+    };
+  });
+}
+
 /**
  * The dependency sweep (spec 2026-08-20): for every inbox ticket with an
  * unconfirmed depends_on edge, resolve the dep —

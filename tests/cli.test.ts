@@ -990,6 +990,60 @@ describe("run(['submit', '-']) — stdin", () => {
     const expected = join(vaultRoot, "Junco", "inbox", "cli-stdin-test.md");
     expect(existsSync(expected)).toBe(true);
   });
+
+  // Dangling-edge warning (spec 2026-08-20, #T9 review fix): submit never
+  // refuses on a depends_on id that resolves nowhere, but warns on stderr —
+  // best-effort, wrapped in try/catch so it can never turn a successful
+  // submit into a failure (Task 3's ticketState/findTicketFile rethrow
+  // non-ENOENT fs errors, which is exactly what that wrapper guards against).
+  it("warns on stderr when depends_on references no queued or finished ticket", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const captured: string[] = [];
+    const errLines: string[] = [];
+    // Precedent: "start's refusal prints the failure to stderr" (above) — capture
+    // into a plain array from mockImplementation rather than reading
+    // errSpy.mock.calls after mockRestore(), which internally mockReset()s and
+    // wipes the recorded calls.
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["submit", "-"], {
+        printFn: (s) => captured.push(s),
+        readStdinFn: async () => "---\nid: kid\ndepends_on: [ghost]\n---\n",
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(code).toBe(0);
+    expect(captured.join("")).toMatch(/submitted:/);
+    expect(errLines.join("")).toContain(
+      "junco submit: warning — depends_on references no queued or finished ticket: ghost (the ticket will wait until they exist)",
+    );
+  });
+
+  it("does not warn on stderr when the ticket has no depends_on", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const captured: string[] = [];
+    const errLines: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    try {
+      await run(["submit", "-"], {
+        printFn: (s) => captured.push(s),
+        readStdinFn: async () => TICKET_CONTENT,
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(errLines.join("")).not.toContain("junco submit: warning");
+  });
 });
 
 // --- submit (no file arg) ---

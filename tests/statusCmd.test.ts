@@ -630,4 +630,44 @@ describe("runStatusCommand", () => {
       rmSync(emptyRoot, { recursive: true, force: true });
     }
   });
+
+  it("surfaces dependency-waiting tickets and missing edges", async () => {
+    writeFileSync(join(root, "inbox", "w.md"), "---\nid: w\ndepends_on: [ghost]\n---\n");
+    const failingFetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await runStatusCommand(cfg, {
+      fetchFn: failingFetch,
+      printFn: print,
+      lockHolderFn: () => null,
+    });
+    const text = out.join("");
+    expect(text).toContain("waiting:   1 on dependencies");
+    expect(text).toContain("w waits on missing ticket(s): ghost");
+  });
+
+  it("degrades silently (no waiting: line, no throw) when the dependency sweep hits an unreadable queue dir", async () => {
+    writeFileSync(join(root, "inbox", "w.md"), "---\nid: w\ndepends_on: [ghost]\n---\n");
+    // Replace done/ with a FILE so readdirSync throws ENOTDIR (not ENOENT) —
+    // ticketState/findTicketFile rethrow anything but ENOENT (Task 3 fix),
+    // which used to propagate out of listWaiting and reject runStatusCommand
+    // mid-print, truncating the output after the queue: line. chmod is flaky
+    // on CI; a file-for-directory swap is deterministic on every platform.
+    rmSync(join(root, "done"), { recursive: true, force: true });
+    writeFileSync(join(root, "done"), "not a directory");
+    const failingFetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const code = await runStatusCommand(cfg, {
+      fetchFn: failingFetch,
+      printFn: print,
+      lockHolderFn: () => null,
+    });
+    expect(code).toBe(0);
+    const text = out.join("");
+    expect(text).toMatch(/queue: {5}/);
+    expect(text).not.toMatch(/waiting:/);
+    // Output was not truncated at queue: — a later section still printed.
+    expect(text).toMatch(/stats: {5}/);
+  });
 });

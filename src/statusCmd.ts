@@ -15,6 +15,7 @@ import { draftCount } from "./commentReview.js";
 import { listHistory } from "./assessHistory.js";
 import { checkForUpdate, type UpdateInfo } from "./updateCheck.js";
 import { readTaskHistory } from "./taskHistory.js";
+import { listWaiting } from "./ticketDeps.js";
 
 export interface StatusDeps {
   fetchFn?: typeof fetch;
@@ -142,6 +143,22 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   print(
     `queue:     inbox ${countMd(paths.inbox)} · processing ${countMd(paths.processing)} · done ${countMd(paths.done)} · failed ${countMd(paths.failed)}\n`,
   );
+
+  // Dependency-waiting surface (spec 2026-08-20) — silent when no edges exist.
+  // Best-effort like every other queue read in this file: a transiently
+  // unreadable queue dir must not truncate status output (the daemon's sweep
+  // warn log is where such errors surface loudly).
+  try {
+    const waiting = listWaiting(cfg);
+    if (waiting.length > 0) {
+      print(`waiting:   ${waiting.length} on dependencies\n`);
+      for (const w of waiting.filter((x) => x.missing.length > 0)) {
+        print(`⚠ ${w.id} waits on missing ticket(s): ${w.missing.join(", ")}\n`);
+      }
+    }
+  } catch {
+    /* unreadable queue dir — omit the waiting lines */
+  }
 
   // Stats line: 24h done/failed + avg duration from the task-history ledger
   // (Task 3); fresh-install fallback to done/failed dir mtimes when the ledger
