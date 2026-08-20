@@ -10,6 +10,8 @@ import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
 import { submitTicket } from "./dispatch.js";
 import { CLAIM_PREFIX_RE } from "./requeue.js";
+import { parseResultMeta } from "./resultMeta.js";
+import { parseTicket } from "./ticket.js";
 
 /**
  * Cut everything from the FIRST appended junco-result separator onward.
@@ -81,6 +83,7 @@ export async function runRetryCommand(
   }
 
   let failures = 0;
+  const retried = new Set<string>();
   for (const entry of targets) {
     const src = join(failedDir, entry);
     try {
@@ -90,11 +93,53 @@ export async function runRetryCommand(
       const cleanName = entry.replace(CLAIM_PREFIX_RE, "");
       const dst = submitTicket(cfg, content, { idHint: cleanName.replace(/\.md$/, "") });
       unlinkSync(src); // only after the inbox copy is safely in place
+      retried.add(parseTicket(cleanName, content).id);
       print(`requeued: ${dst}\n`);
     } catch (e) {
       failures++;
       print(`junco retry: ${entry}: ${e instanceof Error ? e.message : String(e)}\n`);
     }
   }
+
+  // Dependency-cascade resurrection (spec 2026-08-20): a retried parent drags
+  // back the dependents its failure cascade parked — transitively, so one
+  // `junco retry <parent>` re-queues the whole chain. Keyed on the machine
+  // marker cascadeFail wrote (dependency_failed in the last junco-result block).
+  let grew = retried.size > 0;
+  while (grew) {
+    grew = false;
+    let remaining: string[] = [];
+    try {
+      remaining = readdirSync(failedDir).filter((n) => n.endsWith(".md"));
+    } catch {
+      break;
+    }
+    for (const entry of remaining) {
+      const src = join(failedDir, entry);
+      let raw: string;
+      try {
+        raw = readFileSync(src, "utf8");
+      } catch {
+        continue;
+      }
+      const dep = parseResultMeta(raw).dependencyFailed;
+      if (dep === null || !retried.has(dep)) continue;
+      try {
+        let clean = stripResultArtifacts(raw);
+        clean = removeFrontmatterKey(clean, "retry_count");
+        clean = removeFrontmatterKey(clean, "not_before");
+        const cleanName = entry.replace(CLAIM_PREFIX_RE, "");
+        const dst = submitTicket(cfg, clean, { idHint: cleanName.replace(/\.md$/, "") });
+        unlinkSync(src);
+        retried.add(parseTicket(cleanName, clean).id);
+        grew = true;
+        print(`requeued (dependent): ${dst}\n`);
+      } catch (e) {
+        failures++;
+        print(`junco retry: ${entry}: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+    }
+  }
+
   return failures > 0 ? 1 : 0;
 }
