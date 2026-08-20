@@ -743,7 +743,9 @@ export const LEVERS: Lever[] = [
     min: 5,
     editable: true,
     reload: "live",
-    description: "Cadence for the plan-set merge sweep that cascades satisfied dependencies.",
+    description:
+      "Cadence for the plan-set merge sweep that stamps satisfied dependencies and cascades " +
+      "failed ones.",
   },
   {
     path: "planSets.maxTasks",

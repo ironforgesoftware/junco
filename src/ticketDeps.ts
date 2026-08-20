@@ -13,7 +13,7 @@ import { parseTicket } from "./ticket.js";
 import { parseResultMeta } from "./resultMeta.js";
 import { uniqueDestPath } from "./uniqueDest.js";
 import { metrics } from "./metrics.js";
-import { gh } from "./git.js";
+import { gh, GitOpError } from "./git.js";
 import { log } from "./logging.js";
 
 export type TicketState = "done" | "processing" | "inbox" | "failed" | "absent";
@@ -69,28 +69,53 @@ export interface DepSweepReport {
   cascaded: number;
 }
 
+/** Spec: gh-probe failure must warn, not fail silently — an offline or
+ * auth-broken daemon otherwise stalls a dependency set with zero log
+ * evidence. Every path that returns "unknown" (nonzero exit, unrecognized
+ * state, unreachable gh / bad JSON) warns once; legitimate MERGED/OPEN/CLOSED
+ * results never do. The sweep's prCache dedupes repeat probes of the same PR
+ * within one pass, so this fires at most once per PR per sweep. */
 async function defaultPrState(cfg: Config, prUrl: string): Promise<PrState> {
   try {
     const r = await gh(cfg, ["pr", "view", prUrl, "--json", "state"]);
-    if (r.code !== 0) return "unknown";
+    if (r.code !== 0) {
+      log.warn("PR state probe failed; dependency edge waits", {
+        pr: prUrl,
+        exitCode: r.code,
+        stderr: r.stderr.trim().slice(0, 500),
+      });
+      return "unknown";
+    }
     const state = (JSON.parse(r.stdout) as { state?: string }).state;
     if (state === "MERGED") return "merged";
     if (state === "OPEN") return "open";
     if (state === "CLOSED") return "closed";
+    log.warn("PR state probe failed; dependency edge waits", { pr: prUrl, state });
     return "unknown";
-  } catch {
+  } catch (e) {
+    log.warn("PR state probe failed; dependency edge waits", {
+      pr: prUrl,
+      error: e instanceof Error ? e.message : String(e),
+      ...(e instanceof GitOpError ? { exitCode: e.returncode } : {}),
+    });
     return "unknown"; // unreachable gh / bad JSON — wait, never cascade (spec)
   }
 }
 
 /** Inbox tickets with at least one unconfirmed edge. Per-ticket defensive
- * parse, same stance as claimNextTask: one bad file never wedges the sweep. */
+ * parse, same stance as claimNextTask: one bad file never wedges the sweep.
+ * Directory-read errors follow findTicketFile's stance: a missing inbox
+ * (ENOENT) is normal (not created yet) → no tickets; anything else (EACCES,
+ * ENOTDIR, …) must surface — silently reading it as empty would mask an
+ * operator misconfiguration. Callers contain it: the daemon's sweep catches
+ * and warns, and statusCmd's listWaiting call is already try/caught. */
 function readWaiting(paths: Paths, defaultTimeoutMinutes: number): Ticket[] {
   let names: string[] = [];
   try {
     names = readdirSync(paths.inbox).filter((n) => n.endsWith(".md"));
-  } catch {
-    return [];
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw e;
   }
   const out: Ticket[] = [];
   for (const n of names) {

@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ticketState, findTicketFile, sweepDependencies, listWaiting } from "../src/ticketDeps.js";
 import { parseTicket } from "../src/ticket.js";
 import { parseResultMeta } from "../src/resultMeta.js";
+import { log } from "../src/logging.js";
 import { makeConfig, type ConfigSeams } from "./helpers/config.js";
 import type { Config, Paths } from "../src/types.js";
 
@@ -151,6 +152,88 @@ describe("sweepDependencies — satisfaction stamping", () => {
     expect(r.stamped).toBe(1);
   });
 
+  it("gh probe exiting nonzero warns once and the ticket stays in inbox waiting", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const fakeGh = join(root, "gh-fail");
+      writeFileSync(fakeGh, `#!/bin/sh\necho 'gh: auth error' >&2\nexit 1\n`, { mode: 0o755 });
+      const ghCfg = makeConfig(seams, { ghBin: fakeGh });
+      writeFileSync(
+        join(paths.done, "parent.md"),
+        "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+      );
+      writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+      const r = await sweepDependencies(ghCfg);
+      expect(r).toEqual({ stamped: 0, cascaded: 0 });
+      expect(existsSync(join(paths.inbox, "child.md"))).toBe(true);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [msg, meta] = warnSpy.mock.calls[0]!;
+      expect(String(msg)).toMatch(/PR state probe failed/);
+      expect(meta).toMatchObject({ pr: "https://github.com/a/b/pull/7" });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("gh probe returning bad JSON warns once and the ticket stays in inbox waiting", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const fakeGh = join(root, "gh-badjson");
+      writeFileSync(fakeGh, `#!/bin/sh\necho 'not json'\n`, { mode: 0o755 });
+      const ghCfg = makeConfig(seams, { ghBin: fakeGh });
+      writeFileSync(
+        join(paths.done, "parent.md"),
+        "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+      );
+      writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+      const r = await sweepDependencies(ghCfg);
+      expect(r).toEqual({ stamped: 0, cascaded: 0 });
+      expect(existsSync(join(paths.inbox, "child.md"))).toBe(true);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0]![0])).toMatch(/PR state probe failed/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("legitimate open/merged/closed PR states never warn", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      writeFileSync(
+        join(paths.done, "parent.md"),
+        "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+      );
+      writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+      await sweepDependencies(cfg, { prStateFn: async () => "open" });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("two dependents on the same failing PR warn only once per sweep (prCache dedup)", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const fakeGh = join(root, "gh-fail-shared");
+      writeFileSync(fakeGh, `#!/bin/sh\nexit 1\n`, { mode: 0o755 });
+      const ghCfg = makeConfig(seams, { ghBin: fakeGh });
+      writeFileSync(
+        join(paths.done, "parent.md"),
+        "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/a/b/pull/7\n-->\n",
+      );
+      writeFileSync(join(paths.inbox, "c1.md"), "---\nid: c1\ndepends_on: [parent]\n---\n");
+      writeFileSync(join(paths.inbox, "c2.md"), "---\nid: c2\ndepends_on: [parent]\n---\n");
+      const r = await sweepDependencies(ghCfg);
+      expect(r).toEqual({ stamped: 0, cascaded: 0 });
+      const probeWarnings = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("PR state probe failed"),
+      );
+      expect(probeWarnings).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("two deps resolved in the same pass both stamp, without clobbering (regression)", async () => {
     writeFileSync(
       join(paths.done, "p1.md"),
@@ -227,5 +310,20 @@ describe("listWaiting", () => {
     writeFileSync(join(paths.done, "a.md"), "---\nid: a\n---\n");
     writeFileSync(join(paths.inbox, "w.md"), "---\nid: w\ndepends_on: [a, ghost]\n---\n");
     expect(listWaiting(cfg)).toEqual([{ id: "w", pending: ["a", "ghost"], missing: ["ghost"] }]);
+  });
+});
+
+describe("readWaiting error stance (internal, via sweepDependencies/listWaiting)", () => {
+  it("missing inbox dir (ENOENT) resolves to no waiting tickets, not a throw", async () => {
+    rmSync(paths.inbox, { recursive: true, force: true });
+    expect(await sweepDependencies(cfg)).toEqual({ stamped: 0, cascaded: 0 });
+    expect(listWaiting(cfg)).toEqual([]);
+  });
+
+  it("rethrows ENOTDIR when the inbox path is a file, not a directory", async () => {
+    rmSync(paths.inbox, { recursive: true, force: true });
+    writeFileSync(paths.inbox, "x");
+    await expect(sweepDependencies(cfg)).rejects.toThrow(/ENOTDIR/);
+    expect(() => listWaiting(cfg)).toThrow(/ENOTDIR/);
   });
 });
