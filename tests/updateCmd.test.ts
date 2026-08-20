@@ -47,6 +47,11 @@ const harness = (o: {
         return o.restartCode ?? 0;
       },
       discoverServiceFn: async () => ((o.discovered ?? true) ? {} : null),
+      // No-op by default — the stub Config above omits `skills`, so letting
+      // this fall through to the real ensureSkillLinks would crash on
+      // `cfg.skills.harnessDirs`. Tests exercising the skill-link wiring
+      // itself override this.
+      ensureSkillLinksFn: () => ({ created: [], repaired: [], skipped: [], warnings: [] }),
     },
   };
 };
@@ -121,5 +126,54 @@ describe("runUpdateCommand", () => {
     const out = rec.out.join("");
     expect(out).toContain("may be shadowing");
     expect(out).not.toContain("updated v0.7.0 → v0.7.0");
+  });
+
+  it("re-ensures skill links after a successful install", async () => {
+    let ensured = 0;
+    const { deps } = harness({ check: UPD, lockHolder: null });
+    const code = await runUpdateCommand(CONFIG_PATH, {
+      ...deps,
+      ensureSkillLinksFn: () => {
+        ensured++;
+        return { created: ["/sbxroot/data/skills"], repaired: [], skipped: [], warnings: [] };
+      },
+    });
+    expect(code).toBe(0);
+    expect(ensured).toBe(1);
+  });
+
+  it("does not ensure links when npm install fails", async () => {
+    let ensured = 0;
+    const { deps } = harness({ check: UPD, npmExit: 1, lockHolder: 42 });
+    const code = await runUpdateCommand(CONFIG_PATH, {
+      ...deps,
+      ensureSkillLinksFn: () => {
+        ensured++;
+        return { created: [], repaired: [], skipped: [], warnings: [] };
+      },
+    });
+    expect(code).toBe(1);
+    expect(ensured).toBe(0);
+  });
+
+  it("prints created/repaired via print and warnings via errPrint", async () => {
+    const { deps, rec } = harness({ check: UPD, lockHolder: null });
+    const code = await runUpdateCommand(CONFIG_PATH, {
+      ...deps,
+      ensureSkillLinksFn: () => ({
+        created: ["/sbxroot/data/skills/claude/junco-dispatch"],
+        repaired: ["/sbxroot/data/skills/pi/junco-dispatch"],
+        skipped: [],
+        warnings: ["/sbxroot/data/skills: target missing"],
+      }),
+    });
+    expect(code).toBe(0);
+    expect(rec.out.join("")).toContain(
+      "skill link created: /sbxroot/data/skills/claude/junco-dispatch",
+    );
+    expect(rec.out.join("")).toContain(
+      "skill link repaired: /sbxroot/data/skills/pi/junco-dispatch",
+    );
+    expect(rec.err.join("")).toContain("skill link warning: /sbxroot/data/skills: target missing");
   });
 });

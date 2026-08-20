@@ -161,7 +161,7 @@ describe("review view: mouse", () => {
     const client = { ...stubClient, listReview: async () => okv([batch1, batch2]) };
     const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("repos"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r2")); // both batches listed
     const x = 5;
     const y = lineOf(r.lastFrame() ?? "", "o/r2");

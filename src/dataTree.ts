@@ -85,6 +85,7 @@ export interface DataTreePaths {
   assessHistory: string; // per-repo `junco assess` history (one file per repo)
   history: string; // per-task finalize records (tasks-YYYY-MM.jsonl shards)
   transcripts: string;
+  skills: string; // <root>/skills symlink mount -> packaged skills/ (skillLinks.ts owns it)
   watchlistFile: string;
   updateCheckFile: string; // npm update-check cache (spec 2026-07-16)
   spendFile: string;
@@ -160,6 +161,7 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     assessHistory: join(r, L.assessHistory),
     history: join(r, L.history),
     transcripts: join(r, L.transcripts),
+    skills: join(r, "skills"),
     watchlistFile: join(r, WATCHLIST_FILENAME),
     updateCheckFile: join(r, L.updateCheck),
     spendFile: join(r, L.spend),
@@ -258,6 +260,10 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
   const existsFn = deps.existsFn ?? existsSync;
   const writeFn = deps.writeFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
   const p = dataTreePaths(cfg);
+  // p.skills is deliberately NOT mkdir'd here: it is a symlink mount owned by
+  // skillLinks.ts's ensureSkillLinks(), not a plain directory. A real dir
+  // materialized at that path by this loop would permanently occupy the
+  // mount name ("occupied by a non-symlink") and block the symlink forever.
   const dirs = [
     p.queue.inbox,
     p.queue.processing,

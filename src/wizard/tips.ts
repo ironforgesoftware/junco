@@ -29,6 +29,7 @@ export type TipKey =
   | "githubApproval"
   | "account"
   | "extras"
+  | "skills"
   | "review"
   | "signoff";
 
@@ -50,6 +51,8 @@ export const TIPS: Record<TipKey, string> = {
     "A dedicated bot account keeps junco's PRs, comments, and labels attributed to the bot — and since the bot can never approve its own work, your approval labels stay meaningful. Your personal gh login stays untouched for everything you run by hand.",
   extras:
     "The recommended set is pre-checked. Space toggles, Enter continues — each row explains itself below.",
+  skills:
+    "Skills teach coding agents to write well-formed junco tickets — links live under <dataDir>/skills.",
   review: "more levers keep their safe defaults — `junco config list` shows every one.",
   signoff: "The nest is ready.",
 };

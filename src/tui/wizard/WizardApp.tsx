@@ -19,6 +19,7 @@ import { RepoSafety } from "./chapters/RepoSafety.js";
 import { Github } from "./chapters/Github.js";
 import { Account } from "./chapters/Account.js";
 import { Extras } from "./chapters/Extras.js";
+import { Skills } from "./chapters/Skills.js";
 import { Review } from "./chapters/Review.js";
 import { Finale } from "./chapters/Finale.js";
 
@@ -108,6 +109,8 @@ export function WizardApp({
       <Account {...chapterProps} />
     ) : idx === 6 ? (
       <Extras {...chapterProps} />
+    ) : idx === 7 ? (
+      <Skills {...chapterProps} detectedHarnesses={io.detectedHarnesses} />
     ) : (
       <Review {...chapterProps} onWrite={write} onCancel={cancel} />
     );

@@ -15,6 +15,7 @@ import type { CliRunResult } from "../src/tui/cliRunner.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import type { AssessHistory } from "../src/assessHistory.js";
+import type { UnwatchPlan } from "../src/unwatchCmd.js";
 import { until, fireUntil } from "./helpers/until.js";
 import { makeDashPr, makeDashIssue } from "./helpers/dashFixtures.js";
 
@@ -151,6 +152,7 @@ function makeClient(
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -213,6 +215,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -278,6 +281,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
     repoPermission: async () => okv({ canPush: true }),
     prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
     ensureBotAccess: async () => okv({ skipped: true }),
+    botGrantPreflight: async () => okv({ needed: false as const }),
     dispatchTicket: async (nwo, num) =>
       okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
     listReview: async () => okv([]),
@@ -382,6 +386,49 @@ function renderApp(
 }
 const tick = () => new Promise((r) => setTimeout(r, 30));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Fake `runCliFn` for the unwatch flow, standing in for `junco unwatch`:
+ * the `--plan` call answers with a one-line `PlanOutcome` JSON (override any
+ * plan field via `planOver` — `blocked` is the interesting one), the execute
+ * call removes the entry from the watchlist file itself (which is what the
+ * real CLI does — the dashboard no longer writes the file) and prints the
+ * headline. `spawns` records argv so a test can prove exactly which calls the
+ * flow made. Every non-unwatch command falls through as a plain success. */
+function unwatchCliFake(file: string, nwo: string, planOver: Partial<UnwatchPlan> = {}) {
+  const spawns: [string, string[]][] = [];
+  const runCliFn = async (name: string, args: string[]): Promise<CliRunResult> => {
+    spawns.push([name, args]);
+    if (name !== "unwatch") return { code: 0, output: "", timedOut: false };
+    if (args.includes("--plan")) {
+      const plan: UnwatchPlan = {
+        nwo,
+        mode: "watched",
+        external: false,
+        clone: { path: "/c/coral", managed: false },
+        items: [],
+        kept: ["clone (user-owned): /c/coral"],
+        blocked: null,
+        ...planOver,
+      };
+      return { code: 0, output: `${JSON.stringify({ ok: true, plan })}\n`, timedOut: false };
+    }
+    writeWatchlist(
+      file,
+      readWatchlist(file).entries.filter((e) => e.nwo.toLowerCase() !== nwo.toLowerCase()),
+    );
+    return { code: 0, output: `unwatched ${nwo}: deleted 0 item(s)\n`, timedOut: false };
+  };
+  return { runCliFn, spawns };
+}
+
+/** Rail-selection marker: the ▌ cursor sits on the row bearing `nwo`. The rail
+ * band is the frame's left 26 cols (same slice as the mouse tests), so a toast
+ * or issue row mentioning the nwo can never satisfy it. */
+function railSelOn(r: { lastFrame: () => string | undefined }, nwo: string): boolean {
+  return (r.lastFrame() ?? "")
+    .split("\n")
+    .some((l) => l.slice(0, 26).includes("▌") && l.slice(0, 26).includes(nwo));
+}
 
 describe("App", () => {
   const wl = () => join(mkdtempSync(join(tmpdir(), "junco-app-")), "wl.json");
@@ -651,20 +698,104 @@ describe("App", () => {
     expect(readWatchlist(file).entries).toEqual([]); // never persisted
   });
 
-  it("unwatch removes watchlist entries but refuses config entries", async () => {
+  // `U` no longer writes the watchlist itself: it spawns `unwatch --plan`,
+  // shows the itemized plan in the destructive-confirm modal, and only on `y`
+  // spawns the real `unwatch` (which owns the deletion AND the file write).
+  it("unwatch plans, confirms, then executes via the CLI — config entries still refused", async () => {
     const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
     const file = wl();
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
-    const r = renderApp(client, file);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
     await tick();
-    r.stdin.write("u"); // selected = acme/api (config)
+    r.stdin.write("U"); // selected = acme/api (config)
     await until(() => (r.lastFrame() ?? "").includes("config.json"));
+    expect(spawns).toEqual([]); // the config refusal never reaches the CLI
     r.stdin.write("j"); // select alx/coral
-    await tick();
-    r.stdin.write("u");
-    // The unwatch write is observable on disk — bounded until-loop, never a fixed tick.
+    await until(() => railSelOn(r, "alx/coral"));
+    r.stdin.write("U"); // → plan spawn → confirm modal
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    expect(r.lastFrame()).toContain("Continue?");
+    r.stdin.write("y");
+    // The CLI (faked) owns the write — bounded until-loop, never a fixed tick.
     await until(() => readWatchlist(file).entries.length === 0);
-    expect(readWatchlist(file).entries).toEqual([]);
+    expect(spawns).toEqual([
+      ["unwatch", ["alx/coral", "--plan"]],
+      ["unwatch", ["alx/coral"]],
+    ]);
+    // reloadWatchlist pin: the success toast commits in the same batch as the
+    // reload's state updates, so once it shows, the stale mapping is gone …
+    await until(() => (r.lastFrame() ?? "").includes("unwatched alx/coral"));
+    // … and U now lands on whatever the clamp selected (the config repo or a
+    // system row) and is refused WITHOUT a spawn — a third spawn here would
+    // mean the mapping survived the CLI's file write (i.e. reload never ran).
+    r.stdin.write("U");
+    await until(() => {
+      const f = r.lastFrame() ?? "";
+      return f.includes("config.json") || f.includes("not in watchlist");
+    });
+    expect(spawns).toHaveLength(2);
+  });
+
+  // A ticket in flight for the repo blocks the whole flow at plan time: one
+  // spawn, a toast, and no modal — there is nothing to confirm.
+  it("a blocked plan toasts and never opens the confirm modal", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral", {
+      blocked: { ticketId: "live-1" },
+    });
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
+    r.stdin.write("j"); // select alx/coral
+    await until(() => railSelOn(r, "alx/coral"));
+    r.stdin.write("U");
+    await until(() => (r.lastFrame() ?? "").includes("in flight"));
+    expect(r.lastFrame()).not.toContain("Continue?");
+    expect(spawns).toEqual([["unwatch", ["alx/coral", "--plan"]]]);
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  it("n dismisses the unwatch confirm without spawning the execute", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
+    r.stdin.write("j"); // select alx/coral
+    await until(() => railSelOn(r, "alx/coral"));
+    r.stdin.write("U");
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("n");
+    await until(() => !(r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    expect(spawns).toEqual([["unwatch", ["alx/coral", "--plan"]]]); // plan only
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  // Enter must NOT confirm a danger modal: the unwatch confirm opens from an
+  // async continuation (after the --plan spawn resolves), so a stray Enter
+  // typed at the wrong moment would otherwise trigger a destructive delete the
+  // operator never read. Only the literal `y` executes (covered above); here
+  // Enter-then-n must leave everything intact — if Enter had confirmed, the
+  // execute would have spawned and emptied the watchlist file.
+  it("Enter does not confirm the unwatch danger modal", async () => {
+    const { client } = makeClient({ "acme/api": [], "alx/coral": [] });
+    const file = wl();
+    writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
+    const { runCliFn, spawns } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
+    await tick();
+    r.stdin.write("j"); // select alx/coral
+    await until(() => railSelOn(r, "alx/coral"));
+    r.stdin.write("U");
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("\r"); // Enter — swallowed by the danger confirm (no state change) …
+    r.stdin.write("n"); // … so this still finds the modal open and cancels it
+    await until(() => !(r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    expect(spawns).toEqual([["unwatch", ["alx/coral", "--plan"]]]); // no execute
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
   });
 
   it("? opens the help modal", async () => {
@@ -743,6 +874,7 @@ describe("App", () => {
       repoPermission: async () => okv({ canPush: true }),
       prepareExternalRepo: async (nwo) => okv({ path: `${CLONES_DIR}/${nwo}`, forkNwo: nwo }),
       ensureBotAccess: async () => okv({ skipped: true }),
+      botGrantPreflight: async () => okv({ needed: false as const }),
       dispatchTicket: async (nwo, num) =>
         okv({ id: `gh-${nwo}-${num}`, destPath: `${CLONES_DIR}/${nwo}` }),
       listReview: async () => okv([]),
@@ -861,11 +993,14 @@ describe("App", () => {
     const { client } = makeClient({ "acme/api": [], "alx/coral": [readyIssue] });
     const file = wl();
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
-    const r = renderApp(client, file);
+    const { runCliFn } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
     await tick();
     r.stdin.write("j"); // select alx/coral (pane 1) — its issues load
     await until(() => (r.lastFrame() ?? "").includes("●1 review"));
-    r.stdin.write("u"); // unwatch — the issues/staleAt entries drop with the mapping
+    r.stdin.write("U"); // → plan → confirm
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("y"); // execute — the issues/staleAt entries drop in onSuccess
     await until(() => !(r.lastFrame() ?? "").includes("●1 review"));
     expect(readWatchlist(file).entries).toEqual([]);
   });
@@ -1097,7 +1232,7 @@ describe("App", () => {
       expect(prCalls[0]).toEqual(["acme/api", 100]);
     });
 
-    // The review view (v) is keyboard-driven (cursor-based, no scroll offset);
+    // The review view (e) is keyboard-driven (cursor-based, no scroll offset);
     // a leaked click/wheel must never fall through to the main-layout hit-test
     // (which would openDetail() and eject the operator into the issue overlay).
     it("review view ignores mouse events: no eject into issue-detail, no stray scroll", async () => {
@@ -1126,7 +1261,7 @@ describe("App", () => {
         ]);
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
-      r.stdin.write("v");
+      r.stdin.write("e");
       await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
       // Same coordinates that, in the main view, focus pane 2 and (on a second
       // click) open the issue-detail overlay — see "first click focuses pane 2
@@ -1481,7 +1616,7 @@ describe("PRs view", () => {
   // legitimately fetches the selected repo twice (scoped cycle + startup
   // sweep) and coral once; every later call — including the sweep unwatch
   // itself triggers — hangs forever, so a passing test still proves the
-  // SYNCHRONOUS prune in unwatch(), not a refetch.
+  // SYNCHRONOUS prune in the unwatch onSuccess, not a refetch.
   it("unwatching a repo clears its contribution to the ⚑ PR attention chip", async () => {
     const failing = makePr({
       nwo: "alx/coral",
@@ -1503,11 +1638,14 @@ describe("PRs view", () => {
     };
     const file = wlp();
     writeWatchlist(file, [{ nwo: "alx/coral", path: "/c/coral" }]);
-    const r = renderApp(client, file);
+    const { runCliFn } = unwatchCliFake(file, "alx/coral");
+    const r = renderApp(client, file, 999999, runCliFn);
     await until(() => (r.lastFrame() ?? "").includes("⚑1 PR"));
     r.stdin.write("j"); // select alx/coral (pane 1)
     await tick();
-    r.stdin.write("u"); // unwatch — the prs aggregate prunes with the mapping
+    r.stdin.write("U"); // → plan → confirm
+    await until(() => (r.lastFrame() ?? "").includes("unwatch alx/coral"));
+    r.stdin.write("y"); // execute — the prs aggregate prunes with the mapping
     await until(() => !(r.lastFrame() ?? "").includes("⚑1 PR"));
     expect(readWatchlist(file).entries).toEqual([]);
     r.stdin.write("p"); // the PRs view itself must not list the pruned PR either
@@ -1824,7 +1962,7 @@ describe("assess hotkey (s/S)", () => {
   });
 });
 
-describe("review view (v)", () => {
+describe("review view (e)", () => {
   const wl8 = () => join(mkdtempSync(join(tmpdir(), "junco-review-")), "wl.json");
 
   const reviewBatch = {
@@ -1859,12 +1997,12 @@ describe("review view (v)", () => {
     footer: true,
   };
 
-  it("v opens the review view and enter drills into a batch's findings", async () => {
+  it("e opens the review view and enter drills into a batch's findings", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
     r.stdin.write("\r"); // enter → checklist
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -1875,11 +2013,11 @@ describe("review view (v)", () => {
     );
   });
 
-  it("no pending batches: v shows the empty state; esc returns to main", async () => {
+  it("no pending batches: e shows the empty state; esc returns to main", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
     r.stdin.write(ESC);
     await until(() => !(r.lastFrame() ?? "").includes("no pending assess reviews"));
@@ -1942,7 +2080,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r"); // open batch (all unfiled → all pre-checked)
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -2013,7 +2151,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r");
     // f1 is filed → ✓ (not pre-checked); f2 unfiled → pre-checked [x].
@@ -2034,7 +2172,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -2044,14 +2182,14 @@ describe("review view (v)", () => {
     await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
   });
 
-  it("v lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
+  it("e lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
     (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
       okv([commentDraft]);
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     // Both rows present: the batch (o/r + finding count) and the draft (o/r#5 + comment badge).
     await until(
       () => (r.lastFrame() ?? "").includes("o/r#5") && (r.lastFrame() ?? "").includes("comment"),
@@ -2078,7 +2216,7 @@ describe("review view (v)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
     r.stdin.write("\r"); // no batches → cursor 0 opens the draft preview
     await until(() => (r.lastFrame() ?? "").includes("Broken build"));
@@ -2102,7 +2240,7 @@ describe("review view (v)", () => {
       };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("v");
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
     r.stdin.write("\r"); // → draft preview
     await until(() => (r.lastFrame() ?? "").includes("Broken build"));
@@ -2178,6 +2316,9 @@ describe("bot access after adding an owned repo", () => {
 
   it("a grant success toasts the bot login, on top of the watching toast", async () => {
     const { client } = makeClient({ "acme/api": [] });
+    // Non-gated preflight (public/org repo): the legacy silent grant runs.
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: false });
     client.ensureBotAccess = async () => okv({ skipped: false, login: "junco-agent" });
     const file = wl5();
     const r = renderApp(client, file);
@@ -2191,6 +2332,8 @@ describe("bot access after adding an owned repo", () => {
 
   it("a grant failure surfaces the underlying error instead of a fixed prescription", async () => {
     const { client } = makeClient({ "acme/api": [] });
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: false });
     client.ensureBotAccess = async () => ({ ok: false, error: "needs admin — ask an org admin" });
     const file = wl5();
     const r = renderApp(client, file);
@@ -2211,6 +2354,98 @@ describe("bot access after adding an owned repo", () => {
     await until(() => readWatchlist(file).entries.length > 0);
     await until(() => (r.lastFrame() ?? "").includes("watching alx/coral"));
     expect(r.lastFrame()).not.toContain("bot ");
+  });
+
+  // Private personal repo: the invite is confirm-gated through the shared
+  // modal — `y` grants, `n` skips with the escape-hatch toast (onCancel).
+  const gateClient = () => {
+    const { client } = makeClient({ "acme/api": [] });
+    const grants: string[] = [];
+    client.botGrantPreflight = async () =>
+      okv({ needed: true as const, login: "junco-agent", privatePersonal: true });
+    client.ensureBotAccess = async (nwo: string) => {
+      grants.push(nwo);
+      return okv({ skipped: false, login: "junco-agent" });
+    };
+    return { client, grants };
+  };
+
+  it("private personal repo: y on the confirm gate runs the grant", async () => {
+    const { client, grants } = gateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    expect(grants).toEqual([]); // gate open — nothing granted yet
+    r.stdin.write("y");
+    await until(() => (r.lastFrame() ?? "").includes("bot junco-agent granted write"));
+    expect(grants).toEqual(["alx/coral"]);
+  });
+
+  it("private personal repo: n on the confirm gate skips and toasts the escape hatch", async () => {
+    const { client, grants } = gateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("n");
+    await until(() => (r.lastFrame() ?? "").includes("bot access skipped"));
+    expect(grants).toEqual([]);
+    expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
+  });
+
+  // The gate opens ASYNCHRONOUSLY (after the preflight round-trips), so it
+  // can land while a text-owning view has taken over — the two views the
+  // input cascade returns on before the confirm layer. Both must still
+  // operate the modal, not go keyboard-dead (addRepo) or double-handle
+  // (config).
+  const deferredGateClient = () => {
+    const base = gateClient();
+    let release!: () => void;
+    const released = new Promise<void>((res) => (release = res));
+    const gate = okv({ needed: true as const, login: "junco-agent", privatePersonal: true });
+    base.client.botGrantPreflight = async () => {
+      await released;
+      return gate;
+    };
+    return { ...base, release: () => release() };
+  };
+
+  it("gate arriving while the add-repo form is reopened still takes y", async () => {
+    const { client, grants, release } = deferredGateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    r.stdin.write("a"); // reopen the form while the preflight is in flight
+    await until(() => (r.lastFrame() ?? "").includes("add repo to watchlist"));
+    release();
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("y");
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["alx/coral"]);
+  });
+
+  it("gate arriving over the config editor takes enter without leaking into it", async () => {
+    const { client, grants, release } = deferredGateClient();
+    const file = wl5();
+    const r = renderApp(client, file);
+    await tick();
+    await addOwnedRepo(r);
+    await until(() => readWatchlist(file).entries.length > 0);
+    r.stdin.write(","); // open the config editor while the preflight is in flight
+    await until(() => (r.lastFrame() ?? "").includes("edit/toggle"));
+    release();
+    await until(() => (r.lastFrame() ?? "").includes("invite bot as collaborator?"));
+    r.stdin.write("\r"); // enter = confirm; must NOT start a lever edit below
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["alx/coral"]);
+    // Back on the config body, still in browse mode — the footer's enter hint
+    // reads "edit/toggle" only while no lever edit is open.
+    await until(() => (r.lastFrame() ?? "").includes("edit/toggle"));
   });
 });
 
@@ -2302,7 +2537,7 @@ describe("queue system row", () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("repos")); // mounted
-    r.stdin.write("e");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
     expect(r.lastFrame()).toContain("waiting (1)");
     // esc returns focus to the rail; the queue body stays (body follows the
@@ -2346,7 +2581,7 @@ describe("queue system row", () => {
       async () => cheapTall,
     );
     await until(() => (r.lastFrame() ?? "").includes("repos"));
-    r.stdin.write("e");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
     // G parks the section cursor on the LAST selectable row — the window
     // follows it to the bottom and the pane never blanks.
@@ -2402,12 +2637,13 @@ describe("workspace filter + pane navigation (medium)", () => {
     // footer (pane 1 → unwatch; pane 2 → dispatch) rather than color.
     const { client } = makeClient({ "acme/api": [upl] });
     const r = renderApp(client, wl5());
-    await until(() => (r.lastFrame() ?? "").includes("unwatch")); // pane 1 footer
+    // "unwatch" is guarded — the winning char (U) renders uppercased in place.
+    await until(() => (r.lastFrame() ?? "").includes("Unwatch")); // pane 1 footer
     r.stdin.write(ESC + "[C"); // →
     await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 footer
-    expect(r.lastFrame()).not.toContain("unwatch");
+    expect(r.lastFrame()).not.toContain("Unwatch");
     r.stdin.write(ESC + "[D"); // ←
-    await until(() => (r.lastFrame() ?? "").includes("unwatch"));
+    await until(() => (r.lastFrame() ?? "").includes("Unwatch"));
   });
 
   it("g / G jump to the first / last issue", async () => {
@@ -2787,7 +3023,7 @@ describe("workspace wide mode", () => {
     r.stdin.write(ESC + "[D"); // ← back to pane 2
     await until(() => (r.lastFrame() ?? "").includes("dispatch"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1
-    await until(() => (r.lastFrame() ?? "").includes("unwatch"));
+    await until(() => (r.lastFrame() ?? "").includes("Unwatch")); // guarded: U renders uppercase
   });
 });
 

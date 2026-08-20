@@ -118,6 +118,19 @@ describe("dataTreePaths", () => {
     expect(p.logFile).toBe("/sbxroot/state/worker.log");
     expect(p.updateCheckFile).toBe("/sbxroot/state/update-check.json");
   });
+
+  it("exposes skills as <root>/skills in both layouts", () => {
+    const flat = dataTreePaths(makeConfig({ dataDir: "/sbxroot/state", dataLayout: "flat" }));
+    expect(flat.skills).toBe(join("/sbxroot/state", "skills"));
+    const v2 = dataTreePaths(
+      makeConfig({
+        dataDir: "/sbxroot/home/.junco",
+        queueRoot: "/sbxroot/home/.junco/queue",
+        dataLayout: "v2",
+      }),
+    );
+    expect(v2.skills).toBe(join("/sbxroot/home/.junco", "skills"));
+  });
 });
 
 describe("sandboxDenyPaths", () => {

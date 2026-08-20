@@ -19,6 +19,7 @@ import {
   type SelfPackage,
   type UpdateInfo,
 } from "./updateCheck.js";
+import { ensureSkillLinks, type SkillLinksReport } from "./skillLinks.js";
 
 export interface UpdateCmdDeps {
   loadConfigFn?: (p: string) => Config;
@@ -36,6 +37,9 @@ export interface UpdateCmdDeps {
   restartFn?: (configPath: string) => Promise<number>;
   /** Service-unit discovery (launchd/systemd) by config path; null → no unit references it. */
   discoverServiceFn?: (configPath: string) => Promise<unknown | null>;
+  /** Re-ensures skill links against the newly installed package (Task 3).
+   * Defaults to the real ensureSkillLinks. */
+  ensureSkillLinksFn?: (cfg: Config) => SkillLinksReport;
   printFn?: (s: string) => void;
   errPrintFn?: (s: string) => void;
 }
@@ -106,6 +110,14 @@ export async function runUpdateCommand(
     errPrint(`junco update: npm install failed (exit ${npmExit}) — daemon untouched\n`);
     return 1;
   }
+
+  // Re-ensure skill links against the NEW package (the mount may have been
+  // created by an older version; a fresh npm root never changes the path,
+  // but a broken chain heals here rather than at next daemon start).
+  const links = (deps.ensureSkillLinksFn ?? ensureSkillLinks)(cfg);
+  for (const c of links.created) print(`skill link created: ${c}\n`);
+  for (const r of links.repaired) print(`skill link repaired: ${r}\n`);
+  for (const w of links.warnings) errPrint(`skill link warning: ${w}\n`);
 
   // 4. Drain-restart, only when a daemon actually holds the lock (same
   // lockPath derivation as restartCmd/start: worker.lock beside config.json).

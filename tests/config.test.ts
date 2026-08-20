@@ -1032,3 +1032,22 @@ describe("dataDir resolution (unified data root)", () => {
     expect(() => ConfigSchema.parse({})).not.toThrow();
   });
 });
+
+describe("skills config", () => {
+  const parse = (raw: object) =>
+    assembleConfig(ConfigSchema.parse(raw), {}, { existsFn: () => false });
+
+  it("defaults skills.harnessDirs to [] when the block is absent", () => {
+    const cfg = parse({});
+    expect(cfg.skills.harnessDirs).toEqual([]);
+  });
+
+  it("expands ~ in skills.harnessDirs", () => {
+    const cfg = parse({ skills: { harnessDirs: ["~/.claude/skills"] } });
+    expect(cfg.skills.harnessDirs).toEqual([join(homedir(), ".claude/skills")]);
+  });
+
+  it("rejects a non-array harnessDirs", () => {
+    expect(() => ConfigSchema.parse({ skills: { harnessDirs: "~/.claude/skills" } })).toThrow();
+  });
+});

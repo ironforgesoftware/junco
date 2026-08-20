@@ -64,6 +64,12 @@ export interface AssessConfig {
   npmBin: string; // binary for the dependency scan (`npm audit --json`)
   fileAs: "me" | "bot"; // identity `junco assess file` posts under ("bot" = the dedicated bot account; fails loud when its login is missing)
 }
+/** Skill-link distribution (spec 2026-08-19): harness skills dirs that get a
+ * junco-dispatch symlink via <dataDir>/skills. Presence in this list is the
+ * operator's standing consent — junco never writes to a dir not listed. */
+export interface SkillsConfig {
+  harnessDirs: string[];
+}
 /** [botAccount] — dedicated machine-account identity for daemon GitHub traffic. */
 export interface BotAccountConfig {
   enabled: boolean; // false = today's ambient-gh-auth behavior
@@ -189,6 +195,8 @@ export interface Config {
   github: GithubConfig;
   // Vulnerability assessment knobs (junco assess flow).
   assess: AssessConfig;
+  // Skill-link distribution (junco skill install / ensureSkillLinks).
+  skills: SkillsConfig;
   // Agent execution sandbox (native OS isolation of tool subprocesses).
   sandbox: SandboxConfig;
   // Dedicated bot identity for daemon GitHub traffic (spec 2026-07-15).

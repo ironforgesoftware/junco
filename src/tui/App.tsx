@@ -82,6 +82,10 @@ import { useLogOverlay } from "./hooks/useLogOverlay.js";
 import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useGithubData } from "./hooks/useGithubData.js";
+import { summarizeUnwatchPlan } from "./unwatchSummary.js";
+// Type-only: unwatchCmd is a pure module, but the dashboard drives it through
+// the CLI (spawned), never in-process — nothing here may pull it into the bundle.
+import type { PlanOutcome } from "../unwatchCmd.js";
 
 export interface AppProps {
   client: DashboardClient;
@@ -267,10 +271,15 @@ export function App(props: AppProps): React.JSX.Element {
   const size = useTerminalSize(props.sizeOverride);
   const layout = useMemo(() => computeLayout(size.columns, size.rows), [size]);
 
-  const { repoMappings, watchlistError, addEntry, removeEntry } = useWatchlist(
-    watchlistFile,
-    configRepos,
-  );
+  // No removeEntry here on purpose: the `unwatch` CLI owns the watchlist
+  // write (it deletes the repo's state in the same pass) — the dashboard only
+  // re-reads the file afterwards via `reloadWatchlist`.
+  const {
+    repoMappings,
+    watchlistError,
+    addEntry,
+    reload: reloadWatchlist,
+  } = useWatchlist(watchlistFile, configRepos);
   // Rail selection: KEY-anchored (rowKey — nwo / path / "sys:section"), never a
   // bare index, so a heavy-poll clone discovery can't slide the cursor onto a
   // different row. null = top row (first repo, or queue when no repos).
@@ -301,6 +310,9 @@ export function App(props: AppProps): React.JSX.Element {
   const health = useHealth(client, healthPollMs);
   const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
+  // useConfirm sits above useAddRepoForm because the add-repo flow feeds its
+  // bot-grant confirm gate through the same modal (askConfirm is stable).
+  const { confirm, askConfirm, clearConfirm } = useConfirm();
   const { addRepoError, addRepoBusy, handleAddRepo, setAddRepoError } = useAddRepoForm({
     client,
     clonesDir,
@@ -309,6 +321,7 @@ export function App(props: AppProps): React.JSX.Element {
     setView,
     aliveRef,
     watchlistError,
+    askConfirm,
   });
   const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
   const {
@@ -342,7 +355,6 @@ export function App(props: AppProps): React.JSX.Element {
   const [repoDetailTarget, setRepoDetailTarget] = useState<UnifiedRepo | null>(null);
   const [localCheap, setLocalCheap] = useState<LocalCheap | null>(null);
   const [localHeavy, setLocalHeavy] = useState<LocalHeavy | null>(null);
-  const { confirm, askConfirm, clearConfirm } = useConfirm();
   // Latest npm version when newer than the running one (header chip + help
   // line); null when no update is known/available.
   const updateLatest = useUpdateCheck(props.checkUpdateFn);
@@ -876,8 +888,15 @@ export function App(props: AppProps): React.JSX.Element {
   // Fire-and-toast, mirroring runAssess: spawn the real CLI, dedupe by a key,
   // toast the first output line, then force an immediate cheap re-poll so the
   // mutated state (deleted ticket / drained outbox / gone worktree) shows at once.
+  // `onSuccess` runs only on a clean exit, after the toast and before the
+  // re-poll: the caller's own state reconciliation (evict caches, re-read a
+  // file the CLI just rewrote) for effects the cheap snapshot doesn't cover.
   const runLocalAction = useCallback(
-    (name: string, args: string[], opts: { key?: string; label?: string } = {}) => {
+    (
+      name: string,
+      args: string[],
+      opts: { key?: string; label?: string; onSuccess?: () => void } = {},
+    ) => {
       const key = opts.key ?? [name, ...args].join(" ");
       if (localActionInFlightRef.current.has(key)) {
         showToast("info", `${opts.label ?? name} already running`);
@@ -891,6 +910,7 @@ export function App(props: AppProps): React.JSX.Element {
         const line = firstNonEmptyLine(rr.output);
         if (rr.code === 0) showToast("success", line ?? `${name} ok`);
         else showToast("error", line ?? `${name} failed`);
+        if (rr.code === 0) opts.onSuccess?.();
         // Immediate re-poll (cheap fn is cheap; section-gated counts refresh too).
         void localCheapFn({ section: sysSection ?? undefined }).then((c) => {
           if (aliveRef.current) {
@@ -905,32 +925,90 @@ export function App(props: AppProps): React.JSX.Element {
   // Takes an explicit nwo (github passes currentRepo.nwo; LOCAL passes its
   // cursor's LocalRepo.nwo). The config-vs-watchlist decision comes from the
   // matched repoMappings entry; an nwo absent from the union → not in watchlist.
+  //
+  // Three hops, never one: `unwatch --plan` (read-only) → the itemized confirm
+  // modal → `unwatch` (deletes the repo's junco-owned state AND rewrites the
+  // watchlist). The dashboard never writes the file itself any more — it only
+  // re-reads it once the CLI has, so the two can't disagree about what a
+  // "watched" repo is.
   const unwatch = useCallback(
     (nwo: string) => {
       const mapping = repoMappings.find((r) => r.nwo.toLowerCase() === nwo.toLowerCase());
-      if (!mapping) {
-        showToast("info", "not in watchlist");
-        return;
-      }
-      if (mapping.fromConfig) {
-        showToast("info", `${mapping.nwo} is defined in config.json`);
-        return;
-      }
-      if (watchlistError) {
-        showToast("error", "watchlist unreadable — fix it before writing");
-        return;
-      }
-      if (!removeEntry(mapping.nwo)) {
-        showToast("error", "watchlist unreadable — not written");
-        return;
-      }
-      // Drop the repo's cached issue/PR state too — the rail badges and the
-      // header pulse must never read ghost data for a repo that is no longer
-      // watched. Synchronous, not a poll round-trip.
-      githubEvictRepo(mapping.nwo);
-      showToast("success", `unwatched ${mapping.nwo}`);
+      if (!mapping) return void showToast("info", "not in watchlist");
+      if (mapping.fromConfig)
+        return void showToast("info", `${mapping.nwo} is defined in config.json`);
+      if (watchlistError)
+        return void showToast("error", "watchlist unreadable — fix it before writing");
+      void runCliFn("unwatch", [mapping.nwo, "--plan"])
+        .then((rr) => {
+          if (!aliveRef.current) return;
+          // Parse BEFORE branching on the exit code: a refusal exits 1 but still
+          // prints its {ok:false, reason} JSON line, and the friendly message
+          // beats a raw JSON blob in the toast. (TOCTOU-only path — the guards
+          // above already caught both reasons against the current snapshot.)
+          // Store warnings may precede the JSON in the merged stream — parse the
+          // LAST non-empty line.
+          const lines = rr.output.split("\n").filter((l) => l.trim() !== "");
+          let outcome: PlanOutcome | null = null;
+          try {
+            const parsed: unknown = JSON.parse(lines[lines.length - 1] ?? "");
+            if (parsed !== null && typeof parsed === "object" && "ok" in parsed)
+              outcome = parsed as PlanOutcome;
+          } catch {
+            /* not JSON — the exit-code branch below owns the toast */
+          }
+          if (outcome !== null && !outcome.ok)
+            return void showToast(
+              "error",
+              outcome.reason === "config-defined"
+                ? `${mapping.nwo} is defined in config.json`
+                : "watchlist unreadable — fix it before writing",
+            );
+          if (rr.code !== 0)
+            return void showToast("error", firstNonEmptyLine(rr.output) ?? "unwatch: plan failed");
+          // Shape-check a contract-violating {ok:true} payload (no/garbled plan)
+          // into a toast — this continuation must never throw (see .catch).
+          const plan = outcome?.plan;
+          if (plan === undefined || !Array.isArray(plan.items) || !Array.isArray(plan.kept))
+            return void showToast("error", "unwatch: unreadable plan");
+          if (plan.blocked)
+            return void showToast(
+              "info",
+              `${mapping.nwo}: ticket in flight (${plan.blocked.ticketId}) — wait for it to finish`,
+            );
+          askConfirm({
+            title: `unwatch ${mapping.nwo}`,
+            danger: true,
+            body: summarizeUnwatchPlan(plan),
+            onConfirm: () =>
+              runLocalAction("unwatch", [mapping.nwo], {
+                label: "unwatch",
+                onSuccess: () => {
+                  // Drop the repo's cached issue/PR state too — the rail badges
+                  // and the header pulse must never read ghost data for a repo
+                  // that is no longer watched. Synchronous, not a poll round-trip.
+                  githubEvictRepo(mapping.nwo);
+                  reloadWatchlist();
+                },
+              }),
+          });
+        })
+        .catch(() => {
+          // Belt-and-braces for a destructive flow: a bug in the continuation
+          // must surface as a toast, never as an unhandled rejection.
+          if (aliveRef.current) showToast("error", "unwatch: plan failed");
+        });
     },
-    [repoMappings, watchlistError, showToast, removeEntry, githubEvictRepo],
+    [
+      repoMappings,
+      watchlistError,
+      showToast,
+      runCliFn,
+      askConfirm,
+      runLocalAction,
+      githubEvictRepo,
+      reloadWatchlist,
+    ],
   );
 
   // A wide terminal that shrinks below 110 cols — or a rail move onto a row
@@ -1716,24 +1794,27 @@ export function App(props: AppProps): React.JSX.Element {
     // cascade so it can never be misread as a plain `c` (e.g. the analyze
     // binding) now that exitOnCtrlC:false lets Ctrl-C reach these handlers.
     if (key.ctrl && input === "c") return;
-    // The AddRepoForm (+ its TextFields) own all input while open.
-    if (view === "addRepo") return; // layer 2 (text field owns input)
-
-    // ConfigView owns all input while open (own useInput + onExit, mirroring
-    // addRepo above) — kept ahead of the mode toggle and LOCAL dispatch so
-    // neither `m` nor a LOCAL-mode key ever leaks past it mid-edit.
-    if (view === "config") return; // layer 2b
-
-    // layer 3 — the destructive-action confirm modal owns input while open,
-    // ahead of every view branch (it can open over any body).
+    // layer 2 — the confirm modal owns input while open, ahead of EVERY view
+    // branch including the text-owning ones below: the add-repo bot-grant
+    // gate opens asynchronously (post-preflight), so it can land while
+    // addRepo/config hold the view — and the modal ternary has already
+    // replaced (addRepo) or covered (config, its useInput detached via
+    // inputActive) that body. Handling confirm first keeps the modal
+    // keyboard-operable there instead of dead behind the early returns.
     // Toast is dismissed by the next keystroke, before it is acted on.
-    dismissToast();
     if (confirm) {
+      dismissToast();
       if (key.escape || input === "n") {
+        const onCancel = confirm.onCancel;
         clearConfirm();
+        onCancel?.();
         return;
       }
-      if (key.return || input === "y") {
+      // Enter confirms only a NON-danger confirm. A danger confirm demands the
+      // literal `y`: the unwatch modal opens from an async continuation (after
+      // its `--plan` spawn resolves), so a stray Enter typed during that window
+      // must never land on a destructive confirm the operator hasn't read.
+      if ((key.return && !confirm.danger) || input === "y") {
         const fn = confirm.onConfirm;
         clearConfirm();
         fn();
@@ -1741,6 +1822,17 @@ export function App(props: AppProps): React.JSX.Element {
       }
       return;
     }
+
+    // The AddRepoForm (+ its TextFields) own all input while open.
+    if (view === "addRepo") return; // layer 2a (text field owns input)
+
+    // ConfigView owns all input while open (own useInput + onExit, mirroring
+    // addRepo above) — kept ahead of the mode toggle and LOCAL dispatch so
+    // neither `m` nor a LOCAL-mode key ever leaks past it mid-edit.
+    if (view === "config") return; // layer 2b
+
+    // layer 3 — toast dismissal for every branch below the modal layers.
+    dismissToast();
 
     // layer 3b — the full-screen log overlay owns ALL input while open; its
     // filter/follow/scroll keys never leak to the view underneath.
@@ -2220,7 +2312,16 @@ export function App(props: AppProps): React.JSX.Element {
               fn();
             }}
           />
-          <Button keyHint="esc" label="cancel" tone="neutral" onPress={clearConfirm} />
+          <Button
+            keyHint="esc"
+            label="cancel"
+            tone="neutral"
+            onPress={() => {
+              const onCancel = confirm.onCancel;
+              clearConfirm();
+              onCancel?.();
+            }}
+          />
         </Box>
       </Box>
     </Modal>
@@ -2273,7 +2374,11 @@ export function App(props: AppProps): React.JSX.Element {
       {view === "config" ? (
         // `,` (layer 3c) can set view="config" over any body — checked ahead
         // of the main fragment below.
-        <ConfigView configPath={configPath} onExit={() => setView("main")} />
+        <ConfigView
+          configPath={configPath}
+          onExit={() => setView("main")}
+          inputActive={confirm === null}
+        />
       ) : logOverlay ? (
         // The full-screen log overlay replaces the whole body while open; it
         // owns input via handleLogOverlayInput in the cascade above.

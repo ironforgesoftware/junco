@@ -160,6 +160,7 @@ export function ConfigView({
   configPath,
   onExit,
   visibleRows,
+  inputActive = true,
 }: {
   configPath: string;
   onExit: () => void;
@@ -168,6 +169,11 @@ export function ConfigView({
    * small deterministic window instead of depending on the terminal size
    * ink-testing-library reports (it has no `rows` at all). */
   visibleRows?: number;
+  /** False while a modal above owns input (App's confirm gate can open
+   * asynchronously over the still-mounted editor): detaches this view's
+   * useInput AND the inline edit TextField's, so modal keys never
+   * double-handle here. */
+  inputActive?: boolean;
 }): React.JSX.Element {
   const { stdout } = useStdout();
   const terminalRows = stdout?.rows ?? 24;
@@ -303,35 +309,38 @@ export function ConfigView({
     setScrollOffset(0);
   };
 
-  useGuardedInput((_input, key) => {
-    if (editing !== null) {
-      // Typing/backspace/submit belong to the inline TextField below (it has
-      // its own active useInput); this hook's only job while editing is Esc.
-      if (key.escape) updateEditing(null);
-      return;
-    }
-    if (key.escape) {
-      onExit();
-      return;
-    }
-    if (key.upArrow) {
-      moveField(-1);
-      return;
-    }
-    if (key.downArrow) {
-      moveField(1);
-      return;
-    }
-    if (key.leftArrow) {
-      moveSection(-1);
-      return;
-    }
-    if (key.rightArrow) {
-      moveSection(1);
-      return;
-    }
-    if (key.return) startEdit();
-  });
+  useGuardedInput(
+    (_input, key) => {
+      if (editing !== null) {
+        // Typing/backspace/submit belong to the inline TextField below (it has
+        // its own active useInput); this hook's only job while editing is Esc.
+        if (key.escape) updateEditing(null);
+        return;
+      }
+      if (key.escape) {
+        onExit();
+        return;
+      }
+      if (key.upArrow) {
+        moveField(-1);
+        return;
+      }
+      if (key.downArrow) {
+        moveField(1);
+        return;
+      }
+      if (key.leftArrow) {
+        moveSection(-1);
+        return;
+      }
+      if (key.rightArrow) {
+        moveSection(1);
+        return;
+      }
+      if (key.return) startEdit();
+    },
+    { isActive: inputActive },
+  );
 
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
@@ -414,7 +423,7 @@ export function ConfigView({
                       value={editing ?? ""}
                       onChange={updateEditing}
                       onSubmit={commitEdit}
-                      focus
+                      focus={inputActive}
                       mask={l.type === "secret"}
                       placeholder=""
                     />

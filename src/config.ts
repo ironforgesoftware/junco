@@ -394,6 +394,11 @@ export const ConfigSchema = z.object({
       fileAs: z.enum(["me", "bot"]).default("me"),
     })
     .default({}),
+  skills: z
+    .object({
+      harnessDirs: z.array(z.string().min(1)).default([]),
+    })
+    .default({}),
   botAccount: z
     .object({
       enabled: z.boolean().default(false),
@@ -637,6 +642,9 @@ export function assembleConfig(
       minSeverity: d.assess.minSeverity,
       npmBin: d.assess.npmBin,
       fileAs: d.assess.fileAs,
+    },
+    skills: {
+      harnessDirs: d.skills.harnessDirs.map(expandHome),
     },
     sandbox: {
       enabled: d.sandbox.enabled,

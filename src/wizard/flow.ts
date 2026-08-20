@@ -35,6 +35,8 @@ export interface WizardAnswers {
   /** Bot-account enable flag only — configDir stays the schema default (YAGNI). */
   botAccount: boolean;
   extras: { sandbox: boolean; verify: boolean; health: boolean; transcripts: boolean };
+  /** Harness skills dirs to link (skills.harnessDirs); [] = write no key. */
+  harnessDirs: string[];
 }
 
 /** Rail order — Welcome is chapter 0; the finale renders after Review. */
@@ -46,6 +48,7 @@ export const CHAPTERS = [
   "GitHub",
   "Account",
   "Extras",
+  "Skills",
   "Review",
 ] as const;
 
@@ -63,6 +66,8 @@ export function defaultAnswers(): WizardAnswers {
     github: { enabled: false, repos: [], requireApproval: true },
     botAccount: false,
     extras: { sandbox: true, verify: true, health: true, transcripts: true },
+    // The `--yes` path links nothing — consent needs an interactive choice.
+    harnessDirs: [],
   };
 }
 
@@ -110,6 +115,7 @@ export function buildConfigObject(a: WizardAnswers): Record<string, unknown> {
   if (!a.extras.health) obs.healthEnabled = false;
   if (!a.extras.transcripts) obs.transcripts = false;
   if (Object.keys(obs).length > 0) obj.observability = obs;
+  if (a.harnessDirs.length > 0) obj.skills = { harnessDirs: a.harnessDirs };
   return obj;
 }
 
@@ -168,6 +174,7 @@ function coveredPaths(a: WizardAnswers): { path: string; value: unknown }[] {
     { path: "verify.enabled", value: a.extras.verify },
     { path: "observability.healthEnabled", value: a.extras.health },
     { path: "observability.transcripts", value: a.extras.transcripts },
+    { path: "skills.harnessDirs", value: a.harnessDirs },
   ];
 }
 
@@ -241,6 +248,7 @@ export function answersFromConfig(raw: Record<string, unknown>): WizardAnswers {
       health: (g("observability.healthEnabled") as boolean) ?? d.extras.health,
       transcripts: (g("observability.transcripts") as boolean) ?? d.extras.transcripts,
     },
+    harnessDirs: (g("skills.harnessDirs") as string[]) ?? [],
   };
 }
 

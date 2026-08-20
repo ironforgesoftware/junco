@@ -33,6 +33,7 @@ function fakeIo(overrides: Partial<WizardIO> = {}): WizardIO {
     effectiveDataDir: "/sbx/home/.junco",
     dataDirLegacyFallback: false,
     botGhConfigDir: "/sbx/junco-gh",
+    detectedHarnesses: [],
     detectBotLogin: async () => null,
     runGhLogin: async () => 0,
     ...overrides,
@@ -104,6 +105,8 @@ async function driveToWritten(
   await press(stdin, ENTER); // ambient gh login (default)
   await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
   await press(stdin, ENTER); // keep recommended set
+  await until(() => (lastFrame() ?? "").includes("No known agent harnesses detected"), LONG_TRIES);
+  await press(stdin, ENTER); // no harnesses detected (fake io) → continue
   await until(() => (lastFrame() ?? "").includes("This is the exact config.json"), LONG_TRIES);
   await press(stdin, ENTER); // Write config → io.write()
   await until(() => (lastFrame() ?? "").includes("Wrote config:"), LONG_TRIES);

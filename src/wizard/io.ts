@@ -48,6 +48,9 @@ export interface WizardIO {
   dataDirLegacyFallback: boolean;
   /** Isolated gh config dir the Account chapter logs the bot into. */
   botGhConfigDir: string;
+  /** Registry harnesses that look installed on THIS machine (parent of the
+   * skills dir exists) — the Skills chapter's option list. */
+  detectedHarnesses: { name: string; dir: string }[];
   /** Bot login under botGhConfigDir, or null. Never throws. */
   detectBotLogin(): Promise<string | null>;
   /** Interactive gh device-flow login (caller suspends Ink around it). */

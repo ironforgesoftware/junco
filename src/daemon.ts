@@ -28,6 +28,7 @@ import {
   type StopFlagLike,
 } from "./health.js";
 import { log } from "./logging.js";
+import { ensureSkillLinks, type SkillLinksReport } from "./skillLinks.js";
 import { metrics } from "./metrics.js";
 import { ProviderGate, type GateStateKind } from "./providerGate.js";
 import { makeSpendLedger, type SpendLedger } from "./spendLedger.js";
@@ -253,6 +254,13 @@ export interface MainLoopDeps {
    * acquirePidfileLock. */
   migrateLockFn?: (lockFile: string) => { release: () => void } | null;
   mkdirs?: (cfg: Config) => void;
+  /** Skill-link distribution (Task 3): symlinks the package skills/ dir into
+   * <dataDir>/skills and fans out per-harness junco-dispatch links (Task 2's
+   * ensureSkillLinks). Runs immediately after the data-tree ensure so the
+   * mount's parent always exists first. Idempotent + never throws — an
+   * all-quiet report (nothing created/repaired/warned) logs nothing.
+   * Defaults to the real ensureSkillLinks. */
+  ensureSkillLinksFn?: (cfg: Config) => SkillLinksReport;
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
   startHealthServerFn?: (opts: HealthServerOpts) => Promise<HealthServerHandle>;
@@ -601,6 +609,7 @@ export async function mainLoop(
   const migrateFn = deps.migrateFn ?? migrateStateTree;
   const migrateLockFn = deps.migrateLockFn ?? ((f: string) => acquirePidfileLock(f));
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
+  const ensureSkillLinksFn = deps.ensureSkillLinksFn ?? ensureSkillLinks;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
 
   // Migrate BEFORE mkdirs: ensureDataTree mkdir-p's the whole new tree, so if
@@ -639,6 +648,19 @@ export async function mainLoop(
     }
   }
   mkdirs(cfg);
+  // Skill links (Task 3): symlink the packaged skills/ dir into <dataDir>/skills
+  // and fan out per-harness junco-dispatch links, right after the data tree
+  // exists (the mount's parent) and before anything else touches it. Never
+  // throws — failures land as warnings in the report. An all-quiet run (the
+  // common case once links are established) logs nothing.
+  const linkReport = ensureSkillLinksFn(cfg);
+  if (linkReport.created.length + linkReport.repaired.length + linkReport.warnings.length > 0) {
+    log.info("skill links ensured", {
+      created: linkReport.created,
+      repaired: linkReport.repaired,
+      warnings: linkReport.warnings,
+    });
+  }
   // Stamp the start time once the queue dirs exist; the health server reports
   // uptime off this. Idempotent — first call wins.
   metrics.markStarted();

@@ -23,6 +23,7 @@ export function useWatchlist(
   watchlistError: string | null;
   addEntry: (entry: WatchlistEntry) => boolean;
   removeEntry: (nwo: string) => boolean;
+  reload: () => void;
 } {
   const initialWatchlist = readWatchlist(watchlistFile);
   const [watchlistEntries, setWatchlistEntries] = useState<WatchlistEntry[]>(
@@ -75,5 +76,16 @@ export function useWatchlist(
     [commitMutation],
   );
 
-  return { repoMappings, watchlistEntries, watchlistError, addEntry, removeEntry };
+  // Re-read the file into state after something ELSE wrote it — the `unwatch`
+  // CLI owns the removal now, so the dashboard has to pick the result up
+  // rather than mutate its own copy. Error state is always refreshed (a file
+  // that went corrupt must surface); entries only on a clean read, so a
+  // transient parse failure can't blank the rail.
+  const reload = useCallback(() => {
+    const { entries, error } = readWatchlist(watchlistFile);
+    setWatchlistError(error);
+    if (!error) setWatchlistEntries(entries);
+  }, [watchlistFile]);
+
+  return { repoMappings, watchlistEntries, watchlistError, addEntry, removeEntry, reload };
 }

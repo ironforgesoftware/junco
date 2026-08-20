@@ -196,6 +196,11 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // override this.
     migrateLockFn: vi.fn(() => ({ release: vi.fn() })),
     mkdirs: vi.fn(() => {}),
+    // Never creates/repairs/warns by default — the "all-quiet" report, which
+    // also keeps the daemon's post-mkdirs info log silent for every OTHER
+    // test in this file (see "logs the skill-link report..." for the
+    // non-quiet case).
+    ensureSkillLinksFn: vi.fn(() => ({ created: [], repaired: [], skipped: [], warnings: [] })),
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
     startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
@@ -943,6 +948,109 @@ describe("mainLoop", () => {
     await mainLoop(cfg, stop, {}, deps);
 
     expect(deps.runOnceFn).not.toHaveBeenCalled();
+  });
+
+  it("runs ensureSkillLinks once at startup, after the data tree ensure", async () => {
+    const cfg = makeConfig();
+    const stop = new StopFlag();
+    const calls: string[] = [];
+    const { deps } = makeDeps({
+      mkdirs: vi.fn(() => {
+        calls.push("tree");
+      }),
+      ensureSkillLinksFn: vi.fn(() => {
+        calls.push("links");
+        return { created: [], repaired: [], skipped: [], warnings: [] };
+      }),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(calls).toEqual(["tree", "links"]);
+  });
+
+  it("passes the frozen startup cfg to ensureSkillLinksFn", async () => {
+    const cfg = makeConfig();
+    const stop = new StopFlag();
+    const ensureSkillLinksFn = vi.fn(() => ({
+      created: [],
+      repaired: [],
+      skipped: [],
+      warnings: [],
+    }));
+    const { deps } = makeDeps({
+      ensureSkillLinksFn,
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(ensureSkillLinksFn).toHaveBeenCalledTimes(1);
+    expect(ensureSkillLinksFn).toHaveBeenCalledWith(cfg);
+  });
+
+  it("logs the skill-link report at info only when it carries created/repaired/warnings", async () => {
+    const { log } = await import("../src/logging.js");
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        ensureSkillLinksFn: vi.fn(() => ({
+          created: ["/d/skills/claude/junco-dispatch"],
+          repaired: [],
+          skipped: [],
+          warnings: ["/d/skills: target missing"],
+        })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      const linkLogs = infoSpy.mock.calls.filter((c) => String(c[0]) === "skill links ensured");
+      expect(linkLogs).toHaveLength(1);
+      expect(linkLogs[0]?.[1]).toEqual({
+        created: ["/d/skills/claude/junco-dispatch"],
+        repaired: [],
+        warnings: ["/d/skills: target missing"],
+      });
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("logs nothing for skill links when the report is all-quiet (nothing created/repaired/warned)", async () => {
+    const { log } = await import("../src/logging.js");
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const { deps } = makeDeps({
+        ensureSkillLinksFn: vi.fn(() => ({
+          created: [],
+          repaired: [],
+          skipped: ["/d/skills/pi/junco-dispatch"],
+          warnings: [],
+        })),
+        sleep: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      const linkLogs = infoSpy.mock.calls.filter((c) => String(c[0]) === "skill links ensured");
+      expect(linkLogs).toHaveLength(0);
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });
 

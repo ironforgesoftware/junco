@@ -129,6 +129,13 @@ export interface CliDeps {
   /** Injected by tests: the outbox list/flush core (default lazily from outboxCmd.js).
    *  A seam so the flush path's bot-auth attach is observable without real state. */
   runOutboxCommandFn?: typeof import("./outboxCmd.js").runOutboxCommand;
+  /** Injected by tests: the skill-install core (default lazily from skillCmd.js).
+   *  A seam so `--harness <registry name>` is testable without ever calling the
+   *  real ensureSkillLinks — its dirs expand against the REAL os.homedir(), not
+   *  this run()'s injected `env.HOME` (see resolveHarnessArg/expandHome). */
+  runSkillInstallCommandFn?: typeof import("./skillCmd.js").runSkillInstallCommand;
+  /** Injected by tests: the unwatch plan/execute core (default lazily from unwatchCmd.js). */
+  runUnwatchCommandFn?: typeof import("./unwatchCmd.js").runUnwatchCommand;
   /** Largest ticket timeout (seconds) currently reachable in the queue, used to
    *  size the `service` stop-timeout so a long ticket isn't SIGKILLed mid-drain
    *  (#118). Default: a best-effort scan of inbox/ + processing/. */
@@ -194,6 +201,7 @@ Subcommands:
          [--output-budget-per-turn N] [--output-budget-post-commit N] [--json]
                         Re-run a recorded event transcript through the guards
                         under a chosen (or default) policy — a what-if report
+  unwatch <owner/repo> [--plan]  Stop watching a repo and delete its junco-owned state (--plan previews as JSON)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
   data [--json]  Print the data tree (paths, counts, provenance); 'data migrate' unifies legacy roots
@@ -216,6 +224,9 @@ Subcommands:
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
+  skill install [--harness <name|path>]...  Link the junco-dispatch skill into
+                  harness skills dirs via <dataDir>/skills (names: claude,
+                  codex, pi, omp, opencode); no args re-ensures configured links
   schema       Print the ticket frontmatter JSON Schema and exit
 
   (no subcommand) → ensures the supervised daemon is running (interactive
@@ -228,6 +239,7 @@ Options:
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
+  --plan                (unwatch) Print what would be deleted as JSON; delete nothing
   --help, -h            Show this help message
   --version             Print junco's version and exit
 `;
@@ -268,6 +280,8 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       "escalation-window": { type: "string" },
       "output-budget-per-turn": { type: "string" },
       "output-budget-post-commit": { type: "string" },
+      harness: { type: "string", multiple: true },
+      plan: { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -670,6 +684,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
+  // unwatch: plan/execute deletion of a repo's junco-owned operational state
+  // (src/unwatchCmd.ts). Lazy import keeps its watchlist/outbox/review-store
+  // graph off every other subcommand.
+  // ------------------------------------------------------------
+  if (subcommand === "unwatch") {
+    const cfg = loadConfigFn(configPath);
+    const runUnwatchCommandFn =
+      deps.runUnwatchCommandFn ?? (await import("./unwatchCmd.js")).runUnwatchCommand;
+    return runUnwatchCommandFn(
+      cfg,
+      positionals.slice(1),
+      { plan: values.plan as boolean },
+      { printFn },
+    );
+  }
+
+  // ------------------------------------------------------------
   // outbox: list or flush the offline GitHub backlog (src/githubOutbox.ts)
   // ------------------------------------------------------------
   if (subcommand === "outbox") {
@@ -769,6 +800,22 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     const { runAnalyzeCommand } = await import("./analyzeCmd.js");
     return runAnalyzeCommand(cfg, positionals[1], { printFn });
+  }
+
+  // ------------------------------------------------------------
+  // skill: skill-link management (src/skillCmd.ts) — install creates the
+  // <dataDir>/skills mount + consented harness links; the daemon re-ensures
+  // the same set at every startup.
+  // ------------------------------------------------------------
+  if (subcommand === "skill") {
+    if (positionals[1] === "install") {
+      const runSkillInstallCommandFn =
+        deps.runSkillInstallCommandFn ?? (await import("./skillCmd.js")).runSkillInstallCommand;
+      const harness = (values.harness as string[] | undefined) ?? [];
+      return runSkillInstallCommandFn(configPath, { harness }, { printFn });
+    }
+    process.stderr.write(`Usage: junco skill install [--harness <name|path>]...\n`);
+    return 2;
   }
 
   // ------------------------------------------------------------

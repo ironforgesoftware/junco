@@ -46,9 +46,11 @@ export function cachePathFor(cfg: Config, nwo: string): string {
 
 /** `<dataDir>/github-cache/prs-<owner>__<repo>.json` — a sibling path to
  * `cachePathFor`, kept separate (not a param on it) so issues and PRs never
- * collide in the same file. Not exported: nothing outside this module needs
- * to address the PR cache directly. */
-function prCachePathFor(cfg: Config, nwo: string): string {
+ * collide in the same file. Exported only for the unwatchCmd.ts drift-pin
+ * test (tests/unwatchCmd.test.ts), which asserts unwatchCmd's independently
+ * duplicated naming never diverges from this one — no other caller should
+ * address the PR cache directly. */
+export function prCachePathFor(cfg: Config, nwo: string): string {
   return join(dataTreePaths(cfg).githubCache, `prs-${nwo.replace(/\//g, "__")}.json`);
 }
 
@@ -148,6 +150,22 @@ export interface DashboardClient {
    * (ok, skipped:true) when bot mode is off or access already exists;
    * otherwise runs the invite-as-operator/accept-as-bot grant. */
   ensureBotAccess(nwo: string): Promise<Result<{ skipped: boolean; login?: string }>>;
+  /** Read-only pre-check for the post-add bot grant: reports whether a grant
+   * would actually run (bot mode on AND the bot lacks push), and whether it
+   * would send a collaborator invitation to a PRIVATE repo on a PERSONAL
+   * account — the case the dashboard confirms with the operator before
+   * `ensureBotAccess` fires. The repo-meta probe runs under the OPERATOR's
+   * ambient identity (pre-grant, the bot cannot see a private repo at all);
+   * a failed probe reports `privatePersonal: false` so callers fall back to
+   * the legacy silent-grant path and its own error surfacing. Fail-open is
+   * DELIBERATE: failing closed would pop a gate whose body wrongly asserts
+   * "private on a personal account" for org/public repos whenever the meta
+   * probe flakes — and the window is tiny (the operator just completed
+   * several successful gh calls, and the probe itself retries on network
+   * errors). */
+  botGrantPreflight(
+    nwo: string,
+  ): Promise<Result<{ needed: false } | { needed: true; login: string; privatePersonal: boolean }>>;
   /** Build + submit a ticket for `nwo#num` via the shared dispatch core. */
   dispatchTicket(nwo: string, num: number): Promise<Result<{ id: string; destPath: string }>>;
   /** Parked `junco assess` batches awaiting human confirmation. */
@@ -538,6 +556,36 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         const { login } = await (deps.grantFn ?? grantBotAccess)(cfg, nwo, { ghFn });
         return { skipped: false, login };
       });
+    },
+
+    botGrantPreflight(nwo) {
+      return attempt(
+        async (): Promise<
+          { needed: false } | { needed: true; login: string; privatePersonal: boolean }
+        > => {
+          if (!cfg.botAccount.enabled) return { needed: false };
+          const botCfg = await (deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c)))(cfg);
+          const access = await (deps.classifyFn ?? classifyRepoAccess)(botCfg, nwo, { ghFn });
+          if (access.mode === "direct") return { needed: false };
+          // withBotAuth throws when enabled-but-unauthed, so ghAuth is present here.
+          const login = botCfg.ghAuth!.login;
+          const r = await ghFn(
+            cfg,
+            ["api", `repos/${nwo}`, "--jq", "{private: .private, ownerType: .owner.type}"],
+            { check: false, timeoutMs: GH_TIMEOUT, retryNetwork: true },
+          );
+          let meta: { private: boolean; ownerType: string } | null = null;
+          if (r.code === 0) {
+            try {
+              meta = JSON.parse(r.stdout) as { private: boolean; ownerType: string };
+            } catch {
+              meta = null;
+            }
+          }
+          const privatePersonal = meta !== null && meta.private && meta.ownerType === "User";
+          return { needed: true, login, privatePersonal };
+        },
+      );
     },
 
     dispatchTicket(nwo, num) {

@@ -172,6 +172,7 @@ command is just `junco`.)
 junco dashboard                # the cockpit: watch repos, dispatch, approve, monitor PRs
 junco start                    # or run the daemon in the foreground; Ctrl-C to stop
 junco submit my-task.md        # feed it a Markdown ticket directly
+junco skill install --harness claude   # link the junco-dispatch skill into your agent harness
 ```
 
 ## Or drop a ticket in a folder
