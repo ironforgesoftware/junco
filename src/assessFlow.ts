@@ -23,12 +23,10 @@ import type { SpendLedger } from "./spendLedger.js";
 import { queuePaths, expandHome } from "./config.js";
 import { gh, git, runCmd, GitOpError, isNetworkError } from "./git.js";
 import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
-import { GuardManager } from "./agent/guardManager.js";
+import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { READ_ONLY_TOOLS } from "./runOnce.js";
-import { transcriptPathFor } from "./slug.js";
-import { dataTreePaths } from "./dataTree.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { fetchFindingMarkers } from "./githubOutbox.js";
 import {
@@ -272,34 +270,28 @@ export async function runAssessFlow(
   const assessTools = ticket.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
   const assessCfg: Config = { ...cfg, tools: assessTools };
   const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(assessCfg, repoPath);
-  const guardManager = cfg.supervisorEnabled
-    ? new GuardManager({
-        supervisorConfig: {
-          budgetPerKind: cfg.supervisorBudgetPerKind,
-          escalationWindowTurns: cfg.supervisorEscalationWindow,
-        },
-        outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
-        outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
-      })
-    : undefined;
-  const agentResult = await runAgent({
-    body: ticket.body,
-    cwd: repoPath,
-    timeoutMs: ticket.timeoutSeconds * 1000,
-    createSession: factory,
-    guardManager,
-    abortSignal: deps.abortSignal,
-    onProgress: deps.onProgress,
-    onGuardDecision: deps.onGuardDecision,
-    transcriptPath: cfg.transcriptsEnabled
-      ? transcriptPathFor(dataTreePaths(cfg).transcripts, ticket.id)
-      : undefined,
-  });
-  // Record spend immediately, BEFORE any requeue/finalize branching below —
-  // mirrors runOnce.ts's Q&A wire and prFlow's main-session record: the
-  // dollars were spent regardless of what the ticket does next (Phase-3
-  // Task 3). No-op when deps.spend is absent or costUsd is 0/non-finite.
-  deps.spend?.recordUsd(agentResult.usage.costUsd);
+  // Spend is recorded immediately by the envelope, BEFORE any requeue/finalize
+  // branching below — mirrors runOnce.ts's Q&A wire and prFlow's main-session
+  // record: the dollars were spent regardless of what the ticket does next
+  // (Phase-3 Task 3). No-op when deps.spend is absent or costUsd is
+  // 0/non-finite.
+  const agentResult = await runEnveloped(
+    assessCfg,
+    {
+      ticketId: ticket.id,
+      flow: "assess",
+      body: ticket.body,
+      cwd: repoPath,
+      timeoutMs: ticket.timeoutSeconds * 1000,
+    },
+    {
+      createSession: factory,
+      abortSignal: deps.abortSignal,
+      onProgress: deps.onProgress,
+      onGuardDecision: deps.onGuardDecision,
+      spend: deps.spend,
+    },
+  );
 
   // Transient failure → requeue with backoff (mirror runOnce.ts:243-254). Safe
   // because nothing has been filed yet: a rerun converges through dedup. On a

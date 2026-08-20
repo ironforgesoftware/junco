@@ -140,16 +140,13 @@ export interface RunAgentOptions {
    */
   onGuardDecision?: (decision: GuardDecision) => void;
   /**
-   * Append every non-delta event as a JSON line — the debugging record for
-   * failed runs. Parent dir is created; write failures only warn.
+   * Caller-owned, already-open transcript sink (the run envelope). Append
+   * every non-delta event as a JSON line — the debugging record for failed
+   * runs; write failures only warn. runAgent never end()s it — the caller
+   * (runEnveloped) opened it and writes its own junco_run_start/run_end
+   * frame around this run's events, so it also owns closing it.
    */
-  transcriptPath?: string;
-  /**
-   * Factory for the transcript sink (used only when `transcriptPath` is set).
-   * Injectable so the fs writes go through a deps seam like every other side
-   * effect; defaults to the real fs-backed `defaultTranscriptSink` (#128).
-   */
-  transcriptSink?: TranscriptSinkFactory;
+  transcript?: TranscriptSink | null;
   /**
    * Grace period (ms) to wait for the in-flight prompt() to actually settle
    * AFTER an abort is initiated, before treating the run as wedged and
@@ -244,13 +241,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     armAbortGrace();
   };
   opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
-  // Transcript writes go through an injectable sink (#128), defaulting to the
-  // real fs-backed sink. Sink-internal failures degrade to a warning and drop
-  // the transcript, so the write sites below stay best-effort.
-  let transcript: TranscriptSink | null = null;
-  if (opts.transcriptPath) {
-    transcript = (opts.transcriptSink ?? defaultTranscriptSink)(opts.transcriptPath);
-  }
+  // Transcript writes go through a caller-owned sink (#128): runEnveloped
+  // opens it and frames it with its own junco_run_start/run_end records.
+  // Sink-internal failures degrade to a warning and drop the transcript, so
+  // the write sites below stay best-effort. runAgent never end()s it — the
+  // caller owns the lifecycle.
+  const transcript: TranscriptSink | null = opts.transcript ?? null;
   try {
     // Subscribe immediately before prompt() (so no startup events are missed),
     // but inside the try so the session is still disposed if subscribe throws.
@@ -354,7 +350,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     if (graceTimer !== undefined) clearTimeout(graceTimer);
     opts.abortSignal?.removeEventListener("abort", onExternalAbort);
     unsubscribe?.();
-    transcript?.end();
+    // No transcript.end() here: the caller (runEnveloped) owns the sink's
+    // lifecycle and closes it after writing its own run_end frame.
     // Best-effort: a wedged session's dispose may throw; don't let it mask the
     // salvaged result.
     try {

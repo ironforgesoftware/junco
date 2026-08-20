@@ -5,8 +5,8 @@ import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
-import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
-import { GuardManager } from "./agent/guardManager.js";
+import { makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
@@ -23,11 +23,9 @@ import { runAssessFlow } from "./assessFlow.js";
 // function bodies, never during module evaluation).
 import { runAnalyzeFlow } from "./analyzeFlow.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
-import { classifyProviderFailure, GATE_CLASSES } from "./providerFailure.js";
+import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
-import { transcriptPathFor } from "./slug.js";
-import { dataTreePaths } from "./dataTree.js";
 import {
   NOOP_REPORTER,
   outcomeFromPrFlow,
@@ -399,50 +397,38 @@ export async function executeClaimed(
           : cfg.model;
       const qaCfg: Config = { ...cfg, tools: qaTools, model: qaModel };
       const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
-      // Construct the loop-guard supervisor when enabled (M2). It feeds off the
-      // agent event stream inside runAgent: nudge → mid-run steer, kill → abort.
-      const guardManager = cfg.supervisorEnabled
-        ? new GuardManager({
-            supervisorConfig: {
-              budgetPerKind: cfg.supervisorBudgetPerKind,
-              escalationWindowTurns: cfg.supervisorEscalationWindow,
-            },
-            outputBudgetPerTurn: cfg.supervisorOutputBudgetPerTurn,
-            outputBudgetPostCommit: cfg.supervisorOutputBudgetPostCommit,
-          })
-        : undefined;
-      const result = await runAgent({
-        body: next.body,
-        cwd,
-        timeoutMs: next.timeoutSeconds * 1000,
-        createSession: factory,
-        guardManager,
-        abortSignal: deps.abortSignal,
-        onProgress: (p) => metrics.setTaskProgress(next.id, p),
-        onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
-        transcriptPath: cfg.transcriptsEnabled
-          ? transcriptPathFor(dataTreePaths(cfg).transcripts, next.id)
-          : undefined,
-      });
-      // Record spend immediately, BEFORE any classification/requeue logic
-      // below: a session that goes on to requeue (transient failure, gate
-      // class) still spent real money, and the ledger must count it (Phase-3
-      // Task 4). No-op when deps.spend is absent or costUsd is 0/non-finite
-      // (recordUsd's own guard).
-      deps.spend?.recordUsd(result.usage.costUsd);
+      // qaCfg (not cfg) goes to the envelope so run_start records the planner
+      // model + narrowed tools. Spend is recorded immediately by the envelope,
+      // BEFORE any classification/requeue logic below: a session that goes on
+      // to requeue (transient failure, gate class) still spent real money,
+      // and the ledger must count it (Phase-3 Task 4). No-op when deps.spend
+      // is absent or costUsd is 0/non-finite (recordUsd's own guard).
+      const result = await runEnveloped(
+        qaCfg,
+        {
+          ticketId: next.id,
+          flow: next.github?.kind === "plan" ? "plan" : "qa",
+          body: next.body,
+          cwd,
+          timeoutMs: next.timeoutSeconds * 1000,
+        },
+        {
+          createSession: factory,
+          abortSignal: deps.abortSignal,
+          onProgress: (p) => metrics.setTaskProgress(next.id, p),
+          onGuardDecision: (d) => metrics.recordGuardDecision(d.action),
+          spend: deps.spend,
+        },
+      );
       // Infrastructure failures (bad key, quota, 429, model typo) are not the
       // ticket's fault: report to the gate (pauses claiming) and requeue
       // WITHOUT consuming the retry budget. Only zero-commit runs — Q&A never
       // commits. Transient (outage/unknown) failures keep the budgeted path.
       const cls = classifyProviderFailure(result.errorMessage);
-      // Parity with prFlow's `hardError` guard (excludes abortedByGuard AND
-      // timedOut): a timeout landing mid-retry-backoff leaves the FIRST
-      // attempt's errorMessage captured (no clean auto_retry_end ever fires —
-      // the timeout aborts the run before the SDK can decide retry/recover),
-      // so that stale error must not be gate-routed as if it were the run's
-      // actual outcome. timedOut/abortedByGuard win: existing timeout/guard
-      // semantics apply below instead.
-      if (deps.gate && !result.timedOut && !result.abortedByGuard && GATE_CLASSES.has(cls)) {
+      // #180.3: isRoutableFailure (providerFailure.ts) — same rule that
+      // gates prFlow's `hardError`. timedOut/abortedByGuard win: existing
+      // timeout/guard semantics apply below instead.
+      if (deps.gate && isRoutableFailure(result) && GATE_CLASSES.has(cls)) {
         deps.gate.reportFailure(cls, result.errorMessage ?? cls);
         const rq = requeueTicketKeepBudget(
           cfg,
@@ -454,11 +440,11 @@ export async function executeClaimed(
         log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
         return;
       }
-      // #180.3: same timeout/guard exclusion as the GATE_CLASSES routing above
-      // and prFlow's hardError gate — a timed-out run carries a STALE first-
-      // attempt errorMessage, so reporting it would push the shared gate into
-      // outage_backoff and pause claiming for other tickets.
-      if (deps.gate && !result.timedOut && !result.abortedByGuard && cls === "outage")
+      // #180.3: same isRoutableFailure rule as the GATE_CLASSES routing
+      // above — a timed-out run carries a STALE first-attempt errorMessage,
+      // so reporting it would push the shared gate into outage_backoff and
+      // pause claiming for other tickets.
+      if (deps.gate && isRoutableFailure(result) && cls === "outage")
         deps.gate.reportFailure(cls, result.errorMessage ?? cls);
       // Transient failure (endpoint hiccup, truncated stream) → requeue with
       // backoff instead of finalizing to failed/ (budget permitting).
@@ -474,7 +460,7 @@ export async function executeClaimed(
           return;
         }
       }
-      if (deps.gate && result.errorMessage === null && !result.timedOut && !result.abortedByGuard) {
+      if (deps.gate && result.errorMessage === null && isRoutableFailure(result)) {
         deps.gate.reportSuccess();
       }
       const fin = finalize(claimed, result, { done: paths.done, failed: paths.failed });

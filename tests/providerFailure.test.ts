@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyProviderFailure } from "../src/providerFailure.js";
+import { classifyProviderFailure, isRoutableFailure } from "../src/providerFailure.js";
 
 describe("classifyProviderFailure", () => {
   it("null/undefined/empty → unknown", () => {
@@ -96,5 +96,26 @@ describe("classifyProviderFailure", () => {
   it("ordinary agent text and guard kills → unknown", () => {
     expect(classifyProviderFailure("agent looped writing the same file")).toBe("unknown");
     expect(classifyProviderFailure("run aborted: output budget exceeded")).toBe("unknown");
+  });
+});
+
+describe("isRoutableFailure", () => {
+  // #180.3 parity: a result is only routable to the provider gate when
+  // neither timedOut nor abortedByGuard is set — both are SOFT-abort paths
+  // that leave a stale/inapplicable errorMessage on the result.
+  it("false, false → routable", () => {
+    expect(isRoutableFailure({ timedOut: false, abortedByGuard: false })).toBe(true);
+  });
+
+  it("true, false (timedOut) → not routable", () => {
+    expect(isRoutableFailure({ timedOut: true, abortedByGuard: false })).toBe(false);
+  });
+
+  it("false, true (abortedByGuard) → not routable", () => {
+    expect(isRoutableFailure({ timedOut: false, abortedByGuard: true })).toBe(false);
+  });
+
+  it("true, true → not routable", () => {
+    expect(isRoutableFailure({ timedOut: true, abortedByGuard: true })).toBe(false);
   });
 });

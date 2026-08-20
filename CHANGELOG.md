@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `junco replay <ticket-id|path.jsonl> [--budget-per-kind N] [--escalation-window N] [--output-budget-per-turn N] [--output-budget-post-commit N] [--json]` — re-runs a recorded per-ticket event transcript through a fresh guard manager under a chosen (or default) policy and reports what the guards would decide today: a per-run recorded-vs-replayed decision comparison, a verdict, and caveats (`--json` prints the raw report instead). Each of the four supervisor knobs resolves independently by precedence — an explicit flag, then the file's first `junco_run_start.guard`, then the loaded config, then GuardManager's own built-in defaults.
+- Per-ticket event transcripts (`<dataDir>/data/transcripts/<id>.jsonl`) now carry v2 frame records: `junco_run_start`/`junco_run_end` bracket every agent run (flow, body, cwd, model id, tools, timeout, and the guard policy in effect) and `junco_guard_decision` records each nudge/kill — enough to reconstruct a run's identity and guard history from the transcript alone, and what `junco replay` reads.
+
+### Changed
+
+- Every agent flow (Q&A, assess, analyze, PR main, PR corrective) now runs through one wrapper, `runEnveloped` (`src/agent/runEnvelope.ts`), which builds the guard manager, opens and frames the per-ticket transcript, calls the agent, and records spend — replacing five hand-copied call sites whose parity previously rested on comments.
+
 ## [0.10.0] - 2026-08-16
 
 ### Changed

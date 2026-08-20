@@ -12,6 +12,8 @@
  * .git/index.lock etc.) carry that phrase, and crash-path reason strings
  * reach this classifier.
  */
+import type { RunResult } from "./types.js";
+
 export type ProviderFailureClass =
   | "auth"
   | "quota"
@@ -58,3 +60,15 @@ export const GATE_CLASSES: ReadonlySet<ProviderFailureClass> = new Set([
   "rate_limit",
   "model_not_found",
 ]);
+
+// #180.3 parity: a result is routable to the provider gate only when neither
+// timedOut nor abortedByGuard is set. Both are SOFT-abort paths — a guard
+// KILL and a timeout landing mid-retry-backoff both leave the result's
+// errorMessage stale or inapplicable (the timeout case captures the FIRST
+// attempt's error before the SDK can decide retry/recover; no clean
+// auto_retry_end ever fires), so reporting either to the gate would
+// misclassify the run's actual outcome. Previously three hand-copied
+// expressions in runOnce.ts plus prFlow's `hardError` guard, kept in sync by
+// comment only — this is the one place that now owns the rule.
+export const isRoutableFailure = (r: Pick<RunResult, "timedOut" | "abortedByGuard">): boolean =>
+  !r.timedOut && !r.abortedByGuard;
