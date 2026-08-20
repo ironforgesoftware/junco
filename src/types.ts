@@ -266,6 +266,14 @@ export interface Ticket {
   /** Per-ticket sandbox egress opt-in (frontmatter `network: true`). Null = use
    * the configured `sandbox.network` default. Only ever widens this ticket. */
   network: boolean | null;
+  /** Ticket ids that must be satisfied before claim (spec 2026-08-20): the dep
+   * ticket done AND (when it opened a PR) that PR merged. Dispatcher-settable. */
+  dependsOn: string[];
+  /** Worker-managed: edges the dependency sweep (ticketDeps.ts) has confirmed
+   * satisfied. Claim gates on depends_on ⊆ deps_satisfied — a pure subset check. */
+  depsSatisfied: string[];
+  /** Plan-set membership/provenance (spec 2026-08-20). Null = not part of a set. */
+  plan: { id: string; task: string | null; hash: string | null } | null;
 }
 
 /** Claim-order priority ranking (higher claims first). Shared by runOnce.ts

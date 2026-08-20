@@ -81,6 +81,29 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
     // Strict-true like `network:` — anything else is a documented no.
     githubRequest = { createIssue: (reqRaw as Record<string, unknown>).create_issue === true };
   }
+  const depsRaw = frontmatter.depends_on;
+  const dependsOn = Array.isArray(depsRaw)
+    ? depsRaw.filter((d): d is string => typeof d === "string" && d.trim() !== "")
+    : typeof depsRaw === "string" && depsRaw.trim() !== ""
+      ? [depsRaw]
+      : [];
+  const satRaw = frontmatter.deps_satisfied;
+  const depsSatisfied = Array.isArray(satRaw)
+    ? satRaw.filter((d): d is string => typeof d === "string" && d.trim() !== "")
+    : [];
+  const planRaw = frontmatter.plan;
+  let plan: Ticket["plan"] = null;
+  if (planRaw !== null && typeof planRaw === "object" && !Array.isArray(planRaw)) {
+    const p = planRaw as Record<string, unknown>;
+    // id is required (parity with github.nwo strictness); task/hash optional.
+    if (typeof p.id === "string" && p.id.trim() !== "") {
+      plan = {
+        id: p.id,
+        task: typeof p.task === "string" ? p.task : null,
+        hash: typeof p.hash === "string" ? p.hash : null,
+      };
+    }
+  }
   return {
     path,
     id,
@@ -108,5 +131,8 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       typeof frontmatter.workdir === "string" && frontmatter.workdir.trim() !== ""
         ? frontmatter.workdir
         : null,
+    dependsOn,
+    depsSatisfied,
+    plan,
   };
 }

@@ -78,6 +78,9 @@ function makeTicket(body: string): Ticket {
     analyze: null,
     workdir: null,
     network: null,
+    dependsOn: [],
+    depsSatisfied: [],
+    plan: null,
   };
 }
 
