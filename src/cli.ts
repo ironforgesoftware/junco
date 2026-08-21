@@ -37,6 +37,7 @@ import {
   isLoopbackHost,
   assembleConfig,
   configDeprecations,
+  expandHome,
 } from "./config.js";
 import type { ConfigParsed } from "./config.js";
 import { parseTicket } from "./ticket.js";
@@ -62,6 +63,10 @@ import {
 } from "./logging.js";
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
+import { extractPlanSetBody } from "./githubInbox.js";
+import { parsePlanSet, compilePlan, hashPlan } from "./planCompiler.js";
+import { materializePlanSet, submitPlanSet } from "./planSets.js";
+import { slugifyId } from "./slug.js";
 import { describeTicketSchema } from "./ticketSchema.js";
 import { runStatusCommand } from "./statusCmd.js";
 import { runListCommand } from "./listCmd.js";
@@ -223,6 +228,8 @@ Subcommands:
   update       Update junco to the latest npm release (drains, then restarts the daemon)
   worktree prune <path>  Prune a stale/backup worktree (lock-guarded; refuses live)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
+  submit --plan <file> --repo <path>  Compile an approved junco-plan fence
+                  into its child tickets and submit them all
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
   skill install [--harness <name|path>]...  Link the junco-dispatch skill into
@@ -240,7 +247,9 @@ Options:
   --once                (start) Process one task then exit
   --platform <name>     (service) Target platform: launchd | systemd
                         [default: launchd on macOS, systemd elsewhere]
-  --plan                (unwatch) Print what would be deleted as JSON; delete nothing
+  --plan                (unwatch) Print what would be deleted as JSON; delete nothing;
+                        (submit) Compile a junco-plan fence into child tickets
+  --repo <path>        (submit --plan) Repo path stamped into the compiled tickets
   --help, -h            Show this help message
   --version             Print junco's version and exit
 `;
@@ -283,6 +292,7 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       "output-budget-post-commit": { type: "string" },
       harness: { type: "string", multiple: true },
       plan: { type: "boolean", default: false },
+      repo: { type: "string" },
     },
     allowPositionals: true,
     strict: true,
@@ -1005,6 +1015,76 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     const cfg = loadConfigFn(configPath);
     const idHint = fileArg !== "-" ? basename(fileArg).replace(/\.md$/, "") : undefined;
+
+    // submit --plan <file> --repo <path>: compile an approved junco-plan
+    // fence into its child tickets and fan them out. Local trust model — no
+    // approval machinery here; the dispatcher is trusted exactly like every
+    // locally-authored ticket today (the junco-dispatch preview gate is the
+    // approval). Kept as its own branch (rather than folding into the
+    // single-ticket path below) because a plan set has no single `dst` to
+    // report — it prints one line per child plus a set-level summary line.
+    if (values.plan === true) {
+      if (fileArg === "-") {
+        process.stderr.write(
+          "Usage: junco submit --plan <file> --repo <path> (stdin not supported)\n",
+        );
+        return 2;
+      }
+      if (!cfg.planSets.enabled) {
+        process.stderr.write(
+          "junco submit: plan sets are disabled — set planSets.enabled in config.json\n",
+        );
+        return 1;
+      }
+      const repoFlag = values.repo as string | undefined;
+      if (!repoFlag) {
+        process.stderr.write("Usage: junco submit --plan <file> --repo <path>\n");
+        return 2;
+      }
+      const fence = extractPlanSetBody(content);
+      if (fence === null) {
+        process.stderr.write(`junco submit: no junco-plan fence found in '${fileArg}'\n`);
+        return 1;
+      }
+      const parsed = parsePlanSet(fence, { maxTasks: cfg.planSets.maxTasks });
+      if (!parsed.ok) {
+        for (const e of parsed.errors) process.stderr.write(`junco submit: plan error: ${e}\n`);
+        return 1;
+      }
+      const planId = "plan-" + slugifyId(basename(fileArg).replace(/\.md$/, ""));
+      const hash = hashPlan(fence);
+      const repoPath = resolve(expandHome(repoFlag));
+      const children = compilePlan(parsed.plan, { planId, repoPath, hash, github: null });
+      materializePlanSet(
+        cfg,
+        {
+          v: 1,
+          planId,
+          hash,
+          repoPath,
+          github: null,
+          tasks: children.map((c) => ({
+            id: c.taskId,
+            ticketId: c.ticketId,
+            dependsOn: c.dependsOn,
+          })),
+          createdAt: new Date().toISOString(),
+          statusCommentId: null,
+          degradedPosted: false,
+          lastLabel: null,
+          closed: false,
+        },
+        fence,
+      );
+      const r = submitPlanSet(cfg, children);
+      printFn(`plan set ${planId} (${children.length} tasks, rev ${hash})\n`);
+      if (r.submitted.length === 0) {
+        printFn(`plan set ${planId}: all ${children.length} tickets already in the queue\n`);
+        return 0;
+      }
+      for (const id of r.submitted) printFn(`submitted: ${join(inboxPath(cfg), `${id}.md`)}\n`);
+      return 0;
+    }
 
     let dst: string;
     try {

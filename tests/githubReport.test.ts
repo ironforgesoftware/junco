@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildFinalComment, makeGithubReporter, COMMENT_LIMIT } from "../src/githubReport.js";
+import { extractPlanSetBody, PLAN_SET_FENCE } from "../src/githubInbox.js";
 import type { TicketOutcome } from "../src/reporter.js";
 import type { Ticket, Config } from "../src/types.js";
 import { GitOpError, type CmdResult } from "../src/git.js";
@@ -50,6 +51,7 @@ const cfg = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
+  planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
 } as unknown as Config;
 // Offline-outbox tests need a real dataDir (enqueueOp writes files under
 // <dataDir>/outbox/) — a per-test mkdtemp keeps them sandboxed.
@@ -202,6 +204,19 @@ describe("makeGithubReporter", () => {
       expect.arrayContaining(["--add-label", "junco:done"]),
     );
   });
+
+  it("set children (plan + github) produce zero reporter traffic — the sweep owns set reporting", async () => {
+    const f = fakeGh();
+    const r = makeGithubReporter(cfg, f as never);
+    const setChildTicket: Ticket = {
+      ...ticket(gt),
+      plan: { id: "p1", task: "schema", hash: "abc" },
+    };
+    await r.onStart(setChildTicket);
+    await r.onRequeue(setChildTicket);
+    await r.onFinal(setChildTicket, out({ status: "completed", prUrl: "https://x/pr/1" }));
+    expect(f.calls).toEqual([]);
+  });
 });
 
 describe("plan-kind reporting", () => {
@@ -301,6 +316,64 @@ describe("plan-kind reporting", () => {
       out({ kind: "qa", status: "failed", prUrl: null, failureReason: "endpoint died" }),
     );
     expect(f.calls[1]).toEqual(expect.arrayContaining(["--add-label", "junco:failed"]));
+  });
+
+  // #293-critical-1: with planSets.enabled, planPrompt.ts teaches the planner
+  // to emit a junco-plan fence INSTEAD of junco-ticket — before this fix, the
+  // plan branch only ever tried extractPlanBody (junco-ticket), so this
+  // finalText round-tripped through the OLD code as "could not produce a
+  // plan (missing/empty junco-ticket fence)" and flipped junco:failed on
+  // every plan-set run.
+  const setFenceOnly =
+    "chatter\n\n```junco-plan\nversion: 1\ntasks:\n" +
+    "  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}\n```\n";
+
+  it("Layer 2 (planSets enabled): a junco-plan-only finalText posts a comment whose fence extractPlanSetBody recovers", async () => {
+    const calls: string[][] = [];
+    let commentBody: string | null = null;
+    const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+      calls.push(args);
+      if (args[1] === "comment") {
+        const idx = args.indexOf("--body-file");
+        commentBody = readFileSync(args[idx + 1], "utf8");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const setCfg: Config = {
+      ...cfg,
+      planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+    };
+    await makeGithubReporter(setCfg, { ghFn } as never).onFinal(
+      planTicket,
+      out({ kind: "qa", status: "completed", prUrl: null, finalText: setFenceOnly }),
+    );
+    expect(calls[0][1]).toBe("comment");
+    expect(commentBody).not.toBeNull();
+    expect(commentBody).toContain("```" + PLAN_SET_FENCE);
+    const recovered = extractPlanSetBody(commentBody ?? "");
+    expect(recovered).not.toBeNull();
+    expect(recovered).toContain("T A");
+    // planning → plan-ready, same as the junco-ticket success path.
+    expect(calls[1]).toEqual(
+      expect.arrayContaining([
+        "--add-label",
+        "junco:plan-ready",
+        "--remove-label",
+        "junco:planning",
+      ]),
+    );
+  });
+
+  it("Layer 2 (planSets disabled): the same junco-plan-only finalText still takes the failure path — feature inert when off", async () => {
+    const f = fakeGh();
+    await makeGithubReporter(cfg, f as never).onFinal(
+      planTicket,
+      out({ kind: "qa", status: "completed", prUrl: null, finalText: setFenceOnly }),
+    );
+    expect(f.calls[0][1]).toBe("comment");
+    expect(f.calls[1]).toEqual(
+      expect.arrayContaining(["--add-label", "junco:failed", "--remove-label", "junco:planning"]),
+    );
   });
 });
 

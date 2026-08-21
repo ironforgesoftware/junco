@@ -100,6 +100,7 @@ describe("dataTreePaths", () => {
     const p = dataTreePaths(cfg);
     expect(p.outbox).toBe("/sbxroot/home/.junco/data/outbox");
     expect(p.transcripts).toBe("/sbxroot/home/.junco/data/transcripts");
+    expect(p.plans).toBe("/sbxroot/home/.junco/data/plans");
     expect(p.spendFile).toBe("/sbxroot/home/.junco/data/spend.json");
     expect(p.clonesWatched).toBe("/sbxroot/home/.junco/cache/clones/watched");
     expect(p.githubCache).toBe("/sbxroot/home/.junco/cache/github-cache");

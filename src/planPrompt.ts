@@ -45,10 +45,41 @@ export function buildPlannerPrompt(opts: {
   body: string;
   nwo: string;
   parent: { title: string; body: string | null } | null;
+  planSets?: boolean;
 }): string {
   const template = loadDispatchTemplate();
   const example = loadExample();
   const issueBody = opts.body.trim();
+
+  const planSetRule = opts.planSets
+    ? `
+
+6. IF AND ONLY IF the issue naturally decomposes into 2–10 tasks with real
+   dependency ordering, you may instead emit ONE fenced block tagged
+   \`junco-plan\` (INSTEAD of the junco-ticket fence): a YAML document —
+
+\`\`\`junco-plan
+version: 1
+shared_context: |
+  Constraints that apply to every task.
+tasks:
+  - id: short-slug            # [a-z0-9][a-z0-9-]{0,31}; must not match r?<digits>
+    title: Verb-first title
+    depends_on: []            # other task ids; the worker orders execution
+    description: |
+      Self-contained: what to build and why.
+    acceptance:
+      - Testable assertion
+    prohibitions:
+      - What must not change
+    verification: |
+      commands the worker runs to verify (optional)
+\`\`\`
+
+   Each task becomes its own ticket and pull request, executed in dependency
+   order (a task starts only after its dependencies' PRs are merged). Prefer
+   the single junco-ticket fence whenever the work fits one PR.`
+    : "";
 
   const parts: string[] = [
     `You are the PLANNER for the junco worker. A GitHub issue on \`${opts.nwo}\` has been
@@ -75,7 +106,7 @@ Rules:
 \`\`\`\`${PLAN_FENCE}
 # <verb-first title>
 ...every template section...
-\`\`\`\`
+\`\`\`\`${planSetRule}
 
 A missing or empty fence fails the ticket.`,
     `--- TICKET TEMPLATE (follow the body sections; ignore its frontmatter guidance) ---\n\n${template}`,

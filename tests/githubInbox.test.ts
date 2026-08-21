@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, join as joinPath } from "node:path";
 import {
@@ -10,7 +10,9 @@ import {
   pollGithubInbox,
   newBridgeState,
   extractPlanBody,
+  extractPlanSetBody,
   buildPlanComment,
+  PLAN_SET_FENCE,
   githubTicketId,
   PLAN_COMMENT_MARKER,
   type GhIssue,
@@ -20,13 +22,15 @@ import { log } from "../src/logging.js";
 import type { Config } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
+import { OUTBOX_MARKER_PREFIX } from "../src/githubOutbox.js";
 
 // ticketInFlight (every dispatch path) calls queuePaths(cfg); point bridge
 // configs at a vault dir that does not exist so readdirSync ENOENTs → "absent".
 const NX_VAULT = join(tmpdir(), `junco-nx-${Math.random().toString(36).slice(2)}`);
 const NX_STATE_DIR = join(tmpdir(), `junco-state-${Math.random().toString(36).slice(2)}`);
 
-// Minimal Config for conversion tests — only the fields issueToTicket reads.
+// Minimal Config for conversion tests — only the fields issueToTicket and
+// buildPlanningTicket read.
 const cfg = {
   github: {
     enabled: true,
@@ -38,6 +42,7 @@ const cfg = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
+  planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
 } as unknown as Config;
 const repo = { nwo: "acme/api", path: "/home/u/code/api" };
 const issue = (labels: string[], over: Partial<GhIssue> = {}): GhIssue => ({
@@ -202,6 +207,7 @@ describe("pollGithubInbox", () => {
       }
       if (args[0] === "label") return ok("");
       if (args[0] === "issue" && args[1] === "edit") return ok("");
+      if (args[0] === "issue" && args[1] === "comment") return ok("");
       if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
       if (args[0] === "api" && args[1] === "graphql") {
         // Two GraphQL queries share this argv shape — route by field: the
@@ -809,6 +815,168 @@ describe("pollGithubInbox", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+
+    describe("plan-set dispatch (spec 2026-08-20 layer 2)", () => {
+      // The comment carries BOTH fences — a junco-plan set AND a junco-ticket
+      // single plan — so the same fixture proves precedence (enabled: true
+      // dispatches the set and ignores junco-ticket) and byte-identical
+      // fallback (enabled: false ignores junco-plan and runs the pre-existing
+      // junco-ticket path unchanged).
+      const FENCE_SET = `version: 1
+tasks:
+  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}
+  - {id: b, title: T B, depends_on: [a], description: Build B., acceptance: [works]}
+`;
+      const mixedFenceComment =
+        "<!-- junco:plan -->\nProposed plan\n\n```junco-ticket\n" +
+        planBody +
+        "\n```\n\n```junco-plan\n" +
+        FENCE_SET +
+        "```\n";
+
+      it("enabled: true → junco-plan fence dispatches two child tickets + queued label swap", async () => {
+        const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+        try {
+          const localCfg = {
+            ...bridgeCfg,
+            dataDir: join(root, "data"),
+            queueRoot: join(root, "tickets"),
+            planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+          } as Config;
+          const f = makeFakes({
+            issues: [readyIssue],
+            events: approvedAfter,
+            permission: "write",
+            comments: [planComment(mixedFenceComment)],
+          });
+          const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+          expect(n).toBe(1);
+          // dispatchPlanSet fans out via the real submitTicket, not the
+          // injected submitFn — the single-ticket path never runs.
+          expect(f.submitted).toHaveLength(0);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(true);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(true);
+          const edit = f.calls.find((c) => c[1] === "edit");
+          expect(edit).toEqual(
+            expect.arrayContaining([
+              "--add-label",
+              "junco:queued",
+              "--remove-label",
+              "junco:plan-ready",
+              "--remove-label",
+              "junco:approved",
+            ]),
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      it("enabled: false → junco-plan fence ignored; junco-ticket path runs (no set tickets)", async () => {
+        const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+        try {
+          const localCfg = {
+            ...bridgeCfg,
+            dataDir: join(root, "data"),
+            queueRoot: join(root, "tickets"),
+            planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
+          } as Config;
+          const f = makeFakes({
+            issues: [readyIssue],
+            events: approvedAfter,
+            permission: "write",
+            comments: [planComment(mixedFenceComment)],
+          });
+          const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+          expect(n).toBe(1);
+          expect(f.submitted).toHaveLength(1);
+          expect(f.submitted[0].idHint).toBe(EXEC_ID);
+          expect(f.submitted[0].content).toContain("# The plan");
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(false);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(false);
+          const edit = f.calls.find((c) => c[1] === "edit");
+          expect(edit).toEqual(
+            expect.arrayContaining([
+              "--add-label",
+              "junco:queued",
+              "--remove-label",
+              "junco:plan-ready",
+              "--remove-label",
+              "junco:approved",
+            ]),
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      it("compile failure: junco:failed label swap FIRST, then a marked failure comment; nothing dispatched", async () => {
+        const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+        try {
+          const localCfg = {
+            ...bridgeCfg,
+            dataDir: join(root, "data"),
+            queueRoot: join(root, "tickets"),
+            planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+          } as Config;
+          // Duplicate task id "a" — a compile error caught by parsePlanSet.
+          const badFence = `version: 1
+tasks:
+  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}
+  - {id: a, title: T A2, depends_on: [], description: Build A again., acceptance: [works]}
+`;
+          const badFenceComment =
+            "<!-- junco:plan -->\nProposed plan\n\n```junco-plan\n" + badFence + "```\n";
+          const f = makeFakes({
+            issues: [readyIssue],
+            events: approvedAfter,
+            permission: "write",
+            comments: [planComment(badFenceComment)],
+          });
+          let commentBody: string | null = null;
+          const ghFn = async (c: unknown, args: string[]): Promise<CmdResult> => {
+            if (args[0] === "issue" && args[1] === "comment") {
+              const idx = args.indexOf("--body-file");
+              commentBody = readFileSync(args[idx + 1], "utf8");
+            }
+            return f.ghFn(c, args);
+          };
+          const n = await pollGithubInbox(localCfg, newBridgeState(), {
+            ghFn,
+            gitFn: f.gitFn,
+            submitFn: f.submitFn,
+          } as never);
+          expect(n).toBe(0);
+          // Nothing dispatches on a compile error — the queue root is never
+          // even touched (materializePlanSet/submitPlanSet never ran).
+          expect(existsSync(join(root, "tickets", "inbox"))).toBe(false);
+
+          const editIdx = f.calls.findIndex((c) => c[0] === "issue" && c[1] === "edit");
+          const commentIdx = f.calls.findIndex((c) => c[0] === "issue" && c[1] === "comment");
+          expect(editIdx).toBeGreaterThanOrEqual(0);
+          expect(commentIdx).toBeGreaterThan(editIdx); // labels BEFORE the comment (bounds re-entry)
+
+          const edit = f.calls[editIdx];
+          expect(edit).toEqual(
+            expect.arrayContaining([
+              "--add-label",
+              "junco:failed",
+              "--remove-label",
+              "junco:plan-ready",
+              "--remove-label",
+              "junco:approved",
+            ]),
+          );
+
+          expect(commentBody).toContain("duplicate task id");
+          // Outbox idempotency marker embedded in the posted body — a lost-ack
+          // replay dedups against this instead of double-posting (#132).
+          expect(commentBody).toContain(OUTBOX_MARKER_PREFIX);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    });
   });
 
   describe("ask/planning duplicate guard", () => {
@@ -988,6 +1156,31 @@ describe("buildPlanComment", () => {
     expect(
       buildPlanComment("x".repeat(70_000), { issue: 1, trigger: "junco", requireApproval: true }),
     ).toBeNull();
+  });
+});
+
+describe("junco-plan fence (spec 2026-08-20 layer 2)", () => {
+  it("extractPlanSetBody pulls the last junco-plan fence; junco-ticket fences are ignored", () => {
+    const text =
+      "intro\n```junco-ticket\nsingle\n```\n\n````junco-plan\nversion: 1\ntasks: []\n````\ntail";
+    expect(extractPlanSetBody(text)).toBe("version: 1\ntasks: []");
+    expect(extractPlanBody(text)).toBe("single");
+  });
+
+  it("extractPlanSetBody returns null when no complete junco-plan fence exists", () => {
+    expect(extractPlanSetBody("```junco-plan\nunclosed")).toBeNull();
+    expect(extractPlanSetBody("no fences at all")).toBeNull();
+  });
+
+  it("buildPlanComment renders with the requested fence tag and stays re-extractable", () => {
+    const c = buildPlanComment("version: 1\ntasks: []", {
+      issue: 7,
+      trigger: "junco",
+      requireApproval: true,
+      fenceTag: PLAN_SET_FENCE,
+    });
+    expect(c).not.toBeNull();
+    expect(extractPlanSetBody(c as string)).toBe("version: 1\ntasks: []");
   });
 });
 

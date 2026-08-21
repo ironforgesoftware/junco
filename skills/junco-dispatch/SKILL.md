@@ -54,7 +54,39 @@ Ask the minimum needed — autodetect where possible, ask inline when not.
    - 30 min: trivial (1 file, 1 commit, no tests)
    - 60 min: small (2–4 files, build or test run)
    - 90–120 min: moderate (feature work, refactor)
-   - 180 min: large. If you'd pick more than 180, **decompose into multiple tickets** — offer that to the user instead.
+   - 180 min: large. If you'd pick more than 180, **decompose into a ticket set** instead — see "Ticket sets" below.
+
+## Ticket sets
+
+When a task naturally decomposes into 2+ tickets with real dependency ordering (e.g. "add the API, then the UI that calls it, then the docs"), author them as a SET rather than one oversized ticket:
+
+- Give each ticket an explicit `id:` — short and stable, since sibling tickets reference it.
+- Reference sibling ids in `depends_on:`. The worker won't claim a ticket until every id in its `depends_on:` list has finished successfully AND (if it opened a PR) that PR merged.
+- Submit the tickets in any order — `junco submit` never refuses on a forward-referenced id; a `depends_on` entry that names nothing yet queued or finished just prints a warning and waits.
+- The worker executes the set in dependency order automatically, gating each ticket's claim on its dependencies' merged PRs. One ticket is still one PR — the set is what expresses work that genuinely needs several.
+- If a ticket mid-chain fails, its dependents cascade to `failed/` too (a `dependency_failed` marker names which dependency). `junco retry <parent>` revives the whole chain — it resurrects the cascaded dependents transitively, not just the one ticket named.
+
+**Compiler-backed alternative.** When the operator has `planSets.enabled` on, `junco submit --plan <file> --repo <path>` compiles ONE fenced `junco-plan` document into the same dependency-ordered ticket set, instead of you hand-authoring N separate ticket files. Shape (abbreviated — the same YAML the daemon's own planner emits when plan sets are on):
+
+```junco-plan
+version: 1
+shared_context: |
+  Constraints that apply to every task.
+tasks:
+  - id: short-slug            # [a-z0-9][a-z0-9-]{0,31}; must not match r?<digits>
+    title: Verb-first title
+    depends_on: []            # other task ids in this same document
+    description: |
+      Self-contained: what to build and why.
+    acceptance:
+      - Testable assertion
+    prohibitions:
+      - What must not change
+    verification: |
+      commands the worker runs to verify (optional)
+```
+
+Each task becomes its own ticket and pull request, executed in dependency order. The compiler builds the `plan:`/`depends_on:` frontmatter itself — never hand-author those fields on a compiled set. Reach for this when plan sets are enabled and you'd otherwise be hand-writing more than a couple of dependent tickets; fall back to hand-authored tickets with `depends_on:` when plan sets are off, or the work doesn't cleanly fit the compiler's task shape.
 
 ## Drafting procedure
 
@@ -130,7 +162,7 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 - **Invented labels** — breaks `gh pr create` after push.
 - **Optional suggestions** — "you might also want to check X". Either it's a step or it isn't.
 - **Narrative verification** — use executable commands, not "confirm everything is working".
-- **Multiple parallel branches / PRs per ticket** — junco is one-ticket = one-PR.
+- **Multiple parallel branches / PRs per ticket** — junco is one-ticket = one-PR. Work that genuinely needs several PRs is a SET of tickets with `depends_on` edges between them (see "Ticket sets" below), never one ticket juggling multiple branches.
 
 ## Dispatch procedure
 

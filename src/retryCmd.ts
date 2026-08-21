@@ -82,6 +82,48 @@ export async function runRetryCommand(
     }
   }
 
+  // Plan-set supersede guard (spec 2026-08-20 #293-critical-6): a ticket
+  // disposed by supersedeUnclaimed (planSets.ts) carries a `superseded:
+  // <hash>` marker in its last junco-result block — a fresh copy under the
+  // SAME ticketId may already be queued (or done/running) from the plan
+  // revision that pre-empted it. `--all` skips it outright — there is
+  // nothing useful to retry, and requeuing it would collide with the fresh
+  // copy's id. An EXPLICIT name still retries it (the operator asked by
+  // name) but gets a warning first, since a newer copy may already be live.
+  if (opts.all) {
+    const kept: string[] = [];
+    for (const entry of targets) {
+      let raw: string;
+      try {
+        raw = readFileSync(join(failedDir, entry), "utf8");
+      } catch {
+        kept.push(entry); // unreadable — let the main loop's own try/catch report it
+        continue;
+      }
+      if (parseResultMeta(raw).superseded !== null) {
+        print(`skipped (superseded): ${entry}\n`);
+        continue;
+      }
+      kept.push(entry);
+    }
+    targets = kept;
+  } else {
+    for (const entry of targets) {
+      let raw: string;
+      try {
+        raw = readFileSync(join(failedDir, entry), "utf8");
+      } catch {
+        continue; // unreadable — the main loop's own try/catch reports it
+      }
+      const hash = parseResultMeta(raw).superseded;
+      if (hash !== null) {
+        print(
+          `junco retry: warning — ${entry} was superseded by plan rev ${hash}; a newer copy may already be queued\n`,
+        );
+      }
+    }
+  }
+
   let failures = 0;
   const retried = new Set<string>();
   for (const entry of targets) {

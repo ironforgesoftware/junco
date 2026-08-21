@@ -51,6 +51,7 @@ const LAYOUTS = {
     assessHistory: ASSESS_HISTORY_SUBDIR,
     history: HISTORY_SUBDIR,
     transcripts: "transcripts",
+    plans: "plans",
     githubCache: "github-cache",
     updateCheck: UPDATE_CHECK_FILENAME,
     spend: "spend.json",
@@ -64,6 +65,7 @@ const LAYOUTS = {
     assessHistory: "data/assess-history",
     history: "data/history",
     transcripts: "data/transcripts",
+    plans: "data/plans",
     githubCache: "cache/github-cache",
     updateCheck: "cache/update-check.json",
     spend: "data/spend.json",
@@ -85,6 +87,7 @@ export interface DataTreePaths {
   assessHistory: string; // per-repo `junco assess` history (one file per repo)
   history: string; // per-task finalize records (tasks-YYYY-MM.jsonl shards)
   transcripts: string;
+  plans: string;
   skills: string; // <root>/skills symlink mount -> packaged skills/ (skillLinks.ts owns it)
   watchlistFile: string;
   updateCheckFile: string; // npm update-check cache (spec 2026-07-16)
@@ -161,6 +164,7 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     assessHistory: join(r, L.assessHistory),
     history: join(r, L.history),
     transcripts: join(r, L.transcripts),
+    plans: join(r, L.plans),
     skills: join(r, "skills"),
     watchlistFile: join(r, WATCHLIST_FILENAME),
     updateCheckFile: join(r, L.updateCheck),
@@ -278,6 +282,7 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
     p.assessHistory,
     p.history,
     p.transcripts,
+    p.plans,
     p.logsDir, // v2: <root>/logs — flat: join(root, ".") normalizes to root, a mkdir no-op
   ];
   for (const d of dirs) mkdirFn(d);

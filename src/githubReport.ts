@@ -15,8 +15,10 @@ import type { TicketReporter, TicketOutcome } from "./reporter.js";
 import {
   lifecycleLabels,
   extractPlanBody,
+  extractPlanSetBody,
   buildPlanComment,
   COMMENT_LIMIT,
+  PLAN_SET_FENCE,
 } from "./githubInbox.js";
 import { gh } from "./git.js";
 import { log } from "./logging.js";
@@ -146,6 +148,11 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
 
   return {
     async onStart(t: Ticket): Promise<void> {
+      // Plan-set children: per-child comments and label flips on the shared parent
+      // issue would thrash (N children, one issue) and cascaded children never
+      // reach this reporter at all — maintainPlanSets (planSetBridge.ts) recomputes
+      // set state from the queue each sweep and owns ALL set-level issue traffic.
+      if (t.plan && t.github) return;
       if (!t.github || t.github.external || t.github.kind === "plan") return; // planning label persists
       const g = t.github;
       await guardOrQueue(
@@ -156,6 +163,11 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       );
     },
     async onRequeue(t: Ticket): Promise<void> {
+      // Plan-set children: per-child comments and label flips on the shared parent
+      // issue would thrash (N children, one issue) and cascaded children never
+      // reach this reporter at all — maintainPlanSets (planSetBridge.ts) recomputes
+      // set state from the queue each sweep and owns ALL set-level issue traffic.
+      if (t.plan && t.github) return;
       if (!t.github || t.github.external || t.github.kind === "plan") return;
       const g = t.github;
       await guardOrQueue(
@@ -166,6 +178,11 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       );
     },
     async onFinal(t: Ticket, outcome: TicketOutcome): Promise<void> {
+      // Plan-set children: per-child comments and label flips on the shared parent
+      // issue would thrash (N children, one issue) and cascaded children never
+      // reach this reporter at all — maintainPlanSets (planSetBridge.ts) recomputes
+      // set state from the queue each sweep and owns ALL set-level issue traffic.
+      if (t.plan && t.github) return;
       if (!t.github || t.github.external) return;
       const g = t.github;
       if (g.kind === "plan") {
@@ -173,14 +190,32 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
         // Prefer allText: the plan fence often precedes a trailing assistant
         // message, which #36 narrowed finalText to — so the fence survives only
         // in the whole-run text (#86, same class as the assess bug #67).
-        const planBody = done ? extractPlanBody(outcome.allText ?? outcome.finalText) : null;
-        const comment = planBody
-          ? buildPlanComment(planBody, {
-              issue: g.issue,
-              trigger: cfg.github.triggerLabel,
-              requireApproval: cfg.github.requireApproval,
-            })
-          : null;
+        const text = outcome.allText ?? outcome.finalText;
+        // Layer 2: when planSets.enabled, planPrompt.ts teaches the planner to
+        // emit a junco-plan (multi-task set) fence INSTEAD of a junco-ticket
+        // fence — so a junco-plan fence must be tried FIRST here, mirroring the
+        // dispatch door's precedence (pollGithubInbox). planSets disabled:
+        // extractPlanSetBody is never even attempted, so a junco-plan-only
+        // finalText is indistinguishable from "no plan" and correctly falls
+        // through to the junco-ticket path (and then the failure path below) —
+        // the feature stays completely inert when off.
+        const setBody = done && cfg.planSets.enabled ? extractPlanSetBody(text) : null;
+        const planBody = done && setBody === null ? extractPlanBody(text) : null;
+        const comment =
+          setBody !== null
+            ? buildPlanComment(setBody, {
+                issue: g.issue,
+                trigger: cfg.github.triggerLabel,
+                requireApproval: cfg.github.requireApproval,
+                fenceTag: PLAN_SET_FENCE,
+              })
+            : planBody !== null
+              ? buildPlanComment(planBody, {
+                  issue: g.issue,
+                  trigger: cfg.github.triggerLabel,
+                  requireApproval: cfg.github.requireApproval,
+                })
+              : null;
         if (comment) {
           await guardOrQueue(
             "plan comment",
@@ -203,8 +238,10 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
         } else {
           const reason = !done
             ? (outcome.failureReason ?? `status ${outcome.status}`)
-            : planBody === null
-              ? "planner produced no usable plan (missing/empty junco-ticket fence)"
+            : setBody === null && planBody === null
+              ? cfg.planSets.enabled
+                ? "planner produced no usable plan (missing/empty junco-ticket or junco-plan fence)"
+                : "planner produced no usable plan (missing/empty junco-ticket fence)"
               : "plan too large for an issue comment";
           const failureComment = `**Junco could not produce a plan** for this issue.\n\n> ${reason.slice(0, 1000)}\n\n_Remove the \`${ll.failed}\` label to re-plan._\n`;
           await guardOrQueue(

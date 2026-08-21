@@ -8,8 +8,10 @@
  * plus the PR are the source of truth.
  */
 
-import { readdirSync } from "node:fs";
+import { readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Config, GithubRepoMapping } from "./types.js";
 import { gh, git } from "./git.js";
 import { queuePaths } from "./config.js";
@@ -17,7 +19,19 @@ import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
 import { PLAN_FENCE, buildPlannerPrompt } from "./planPrompt.js";
 import { resolveWatchedRepos } from "./watchlist.js";
-import { flushOutbox, type FlushResult } from "./githubOutbox.js";
+import {
+  flushOutbox,
+  tryOrEnqueue,
+  withCommentMarker,
+  type FlushResult,
+  type OutboxOp,
+} from "./githubOutbox.js";
+// NOTE: planSetBridge.ts imports githubTicketId/lifecycleLabels from this
+// module, so this import creates a module cycle. Runtime-safe: both bindings
+// are only dereferenced inside function bodies (pollGithubInbox /
+// dispatchPlanSet / maintainPlanSets), never during module evaluation — same
+// pattern as runOnce.ts's assessFlow/analyzeFlow cycles.
+import { dispatchPlanSet, maintainPlanSets } from "./planSetBridge.js";
 
 /** GitHub's hard cap is 65,536 chars; leave headroom for the truncation note.
  * Lives here (not githubReport.ts) so buildPlanComment can share it without an
@@ -150,6 +164,7 @@ export function issueToTicket(
 export function buildPlanningTicket(
   issue: GhIssue,
   repo: GithubRepoMapping,
+  cfg: Config,
   parent: { title: string; body: string | null } | null,
 ): { id: string; content: string } {
   const id = githubTicketId(repo.nwo, issue.number, "plan");
@@ -168,11 +183,16 @@ export function buildPlanningTicket(
     body: issue.body ?? "",
     nwo: repo.nwo,
     parent,
+    planSets: cfg.planSets.enabled,
   });
   return { id, content: fm.join("\n") + "\n\n" + prompt };
 }
 
 export const PLAN_COMMENT_MARKER = "<!-- junco:plan -->";
+
+/** Fence tag for a plan SET (multi-ticket) comment/finalText, as opposed to the
+ * single-ticket `PLAN_FENCE` ("junco-ticket"). See extractPlanSetBody. */
+export const PLAN_SET_FENCE = "junco-plan";
 
 // Mirrors ticket.ts FRONTMATTER_RE — used to STRIP a smuggled block, never to parse it.
 const SMUGGLED_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
@@ -189,21 +209,22 @@ function longestBacktickRun(text: string): number {
   return max;
 }
 
-/** Pull the plan body out of the LAST ```junco-ticket fence in `text` (planner
- * finalText or a plan comment — same format both places). Fence-length-aware
- * CommonMark matching: an opening fence of N backticks is closed by the first
- * later line that is a run of >= N backticks with no info text, so a plan that
- * itself contains a ```bash block (the template mandates one) does not truncate
- * at the inner fence. Any frontmatter block inside the fence is stripped:
+/** Pull the LAST complete ```<fenceTag> block out of `text` (planner finalText
+ * or a plan comment — same format both places). Fence-length-aware CommonMark
+ * matching: an opening fence of N backticks is closed by the first later line
+ * that is a run of >= N backticks with no info text, so a plan that itself
+ * contains a ```bash block (the template mandates one) does not truncate at
+ * the inner fence. Any frontmatter block inside the fence is stripped:
  * frontmatter is machine-owned, model output and issue text can never set
- * repo:/workdir:/tools:. Null = no usable (complete) plan. */
-export function extractPlanBody(text: string): string | null {
+ * repo:/workdir:/tools:. Null = no usable (complete) block. Shared by the
+ * single-ticket (junco-ticket) and plan-set (junco-plan) extractors. */
+function extractFencedBlock(text: string, fenceTag: string): string | null {
   // Normalize CRLF (and lone CR) to LF first: editing the plan comment in
   // GitHub's web UI yields CRLF, and the fence match survives only via
   // incidental `\s*` tolerance while interior `\r` would otherwise leak
   // verbatim into the execution ticket and PR body (#134).
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  const openRe = new RegExp("^(`{3,})" + PLAN_FENCE + "\\s*$");
+  const openRe = new RegExp("^(`{3,})" + fenceTag + "\\s*$");
   let last: string | null = null;
   for (let i = 0; i < lines.length; i++) {
     const m = openRe.exec(lines[i]);
@@ -226,24 +247,40 @@ export function extractPlanBody(text: string): string | null {
   return stripped === "" ? null : stripped;
 }
 
+/** Pull the plan body out of the LAST ```junco-ticket fence in `text`. See
+ * extractFencedBlock for the matching rules. Null = no usable (complete)
+ * plan. */
+export function extractPlanBody(text: string): string | null {
+  return extractFencedBlock(text, PLAN_FENCE);
+}
+
+/** Pull the plan-set body out of the LAST ```junco-plan fence in `text`. See
+ * extractFencedBlock for the matching rules. Null = no usable (complete)
+ * plan set. */
+export function extractPlanSetBody(text: string): string | null {
+  return extractFencedBlock(text, PLAN_SET_FENCE);
+}
+
 /** Render the ONE plan comment: marker (machine-recoverable) + instructions +
- * the plan in a fence (readable AND re-extractable). Null when the result
- * would blow GitHub's comment cap — the caller fails the plan instead of
- * truncating the machine copy. */
+ * the plan in a fence (readable AND re-extractable). `fenceTag` selects the
+ * fence (default `PLAN_FENCE` = "junco-ticket"); the plan-set bridge passes
+ * `PLAN_SET_FENCE` instead. Null when the result would blow GitHub's comment
+ * cap — the caller fails the plan instead of truncating the machine copy. */
 export function buildPlanComment(
   planBody: string,
-  opts: { issue: number; trigger: string; requireApproval: boolean },
+  opts: { issue: number; trigger: string; requireApproval: boolean; fenceTag?: string },
 ): string | null {
+  const tag = opts.fenceTag ?? PLAN_FENCE;
   const next = opts.requireApproval
     ? `review it, then apply \`${opts.trigger}:approved\` to execute. You can EDIT this comment first — the edited plan is what runs.`
     : `it will execute on the next sweep (\`require_approval = false\`). You can still EDIT this comment before then.`;
   // Outer fence must outrun any inner fence in the plan (>= 4 backticks so the
-  // template's mandatory ```bash block round-trips through extractPlanBody).
+  // template's mandatory ```bash block round-trips through the fence extractors).
   const fence = "`".repeat(Math.max(4, longestBacktickRun(planBody) + 1));
   const out =
     `${PLAN_COMMENT_MARKER}\n**Proposed plan** for #${opts.issue} — ${next}\n\n` +
     fence +
-    PLAN_FENCE +
+    tag +
     "\n" +
     planBody +
     "\n" +
@@ -366,8 +403,11 @@ async function ensureLabels(
  * verification error → "unverified" (skip this sweep, retry next). Also used
  * for the approval label — `atMs` lets the caller compare against the plan
  * comment's timestamp (a stale approval that predates the current plan must
- * not authorize it). */
-async function verifyLabelApplier(
+ * not authorize it). Exported for the plan-set bridge (see
+ * docs/superpowers/specs/2026-08-20-plan-driven-ticket-sets-design.md), which
+ * reuses the same writer/timestamp verification for a plan-SET's approval
+ * label. */
+export async function verifyLabelApplier(
   cfg: Config,
   nwo: string,
   issueNumber: number,
@@ -514,8 +554,11 @@ async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Pr
  * updatedAtMs (NaN when missing/unparseable — the approval gate fails closed
  * on it) lets the caller bind an approval to the comment's CURRENT content:
  * GitHub bumps updated_at on every edit while created_at stays fixed, so an
- * edit after approval is only visible through updated_at. */
-async function findOwnPlanComment(
+ * edit after approval is only visible through updated_at. Exported for the
+ * plan-set bridge (see docs/superpowers/specs/2026-08-20-plan-driven-ticket-
+ * sets-design.md), which recovers its own-authored plan-set comment the same
+ * way. */
+export async function findOwnPlanComment(
   cfg: Config,
   nwo: string,
   issueNumber: number,
@@ -601,6 +644,60 @@ export function buildExecutionTicket(
     "---",
   ];
   return { id, content: fm.join("\n") + "\n\n" + planBody + "\n" };
+}
+
+/** Post a single issue comment via `gh issue comment --body-file` (avoids
+ * shell-escaping the body). Mirrors githubReport.ts's postComment tempfile
+ * pattern — including embedding the outbox idempotency marker
+ * (withCommentMarker) in the posted body, so a lost-ack replay of a queued
+ * comment op is deduped by the next flush and never double-posts (#132) —
+ * a standalone door-side helper since githubInbox.ts has no reporter-style
+ * closure to hang a comment poster off of. Used by the plan-set dispatch
+ * door to post a compile-failure summary. `body` is the RAW (unmarked) text:
+ * callers pass the same raw body to the paired outbox `{ kind: "comment" }`
+ * op, so tryOrEnqueue/flush compute the identical content-derived marker on
+ * both the live path and a queued replay. */
+async function postIssueComment(
+  cfg: Config,
+  nwo: string,
+  issueNumber: number,
+  body: string,
+  ghFn: typeof gh,
+): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "junco-ghc-"));
+  const file = join(dir, "comment.md");
+  writeFileSync(file, withCommentMarker(nwo, issueNumber, body), "utf8");
+  try {
+    await ghFn(cfg, ["issue", "comment", String(issueNumber), "--repo", nwo, "--body-file", file], {
+      timeoutMs: GH_TIMEOUT,
+      retryNetwork: true,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Outbox-aware guard: on a network-shaped failure, `fn`'s side effect is
+ * parked in the durable outbox (`op`) instead of being lost; any other
+ * failure keeps the old best-effort contract — warn and swallow, since the
+ * next sweep re-derives and retries state from GitHub reality. Local copy of
+ * githubReport.ts's guardOrQueue idiom (never import reporter internals —
+ * this module has no standing reporter-callback context to hang it off of). */
+async function guardOrQueue(
+  cfg: Config,
+  label: string,
+  id: string,
+  op: OutboxOp,
+  fn: () => Promise<void>,
+): Promise<void> {
+  try {
+    await tryOrEnqueue(cfg, "bridge", op, fn);
+  } catch (e) {
+    log.warn(`github bridge: ${label} failed (issue state on GitHub may be stale)`, {
+      id,
+      error: errMsg(e),
+    });
+  }
 }
 
 /**
@@ -738,6 +835,104 @@ export async function pollGithubInbox(
                   continue;
                 }
               }
+              // Layer 2: a junco-plan fence (multi-task set) takes precedence
+              // when the feature is on; the single-ticket junco-ticket path
+              // below is unchanged and still handles every pre-existing plan
+              // comment.
+              const setBody = cfg.planSets.enabled ? extractPlanSetBody(comment.body) : null;
+              if (setBody !== null) {
+                const dr = dispatchPlanSet(
+                  cfg,
+                  repo,
+                  issue.number,
+                  setBody,
+                  new Date().toISOString(),
+                );
+                if (!dr.ok) {
+                  const errList = dr.errors.map((e) => `- ${e}`).join("\n");
+                  // Unlike the supersede failure comment (planSetBridge.ts),
+                  // "edit + re-approve" is a dead end here: this branch already
+                  // removed plan-ready and flips to junco:failed below, so the
+                  // dispatch branch (which requires plan-ready) can never see a
+                  // re-approval — and re-adding plan-ready by hand while
+                  // junco:failed stands gets stripped by the lingering-label
+                  // cleanup on the next sweep. Mirror the single-ticket failure
+                  // comment's working gesture instead (githubReport.ts).
+                  const failureComment =
+                    `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
+                    `_Remove the \`${ll.failed}\` label to re-plan from scratch._\n`;
+                  const failId = `${repo.nwo}#${issue.number}`;
+                  const failRemove = [
+                    ll.planReady,
+                    ...(cfg.github.requireApproval ? [ll.approved] : []),
+                  ];
+                  // Labels FIRST, then the comment — the inverse of the
+                  // reporter's comment-first ordering. There, the comment is
+                  // the valuable artifact worth protecting; here, flipping to
+                  // junco:failed is what BOUNDS re-entry into this branch: a
+                  // lost label swap would otherwise leave plan-ready+approved
+                  // standing, and every subsequent sweep would re-dispatch
+                  // this same compile failure and post another failure
+                  // comment, unbounded. The compile errors also land in the
+                  // daemon log either way, so the comment is comparatively
+                  // cheap to lose to an outbox queue/warn-and-swallow.
+                  await guardOrQueue(
+                    cfg,
+                    "plan set failure labels",
+                    failId,
+                    {
+                      kind: "labels",
+                      nwo: repo.nwo,
+                      issue: issue.number,
+                      add: [ll.failed],
+                      remove: failRemove,
+                    },
+                    async () => {
+                      const failArgs = [
+                        "issue",
+                        "edit",
+                        String(issue.number),
+                        "--repo",
+                        repo.nwo,
+                        "--add-label",
+                        ll.failed,
+                        "--remove-label",
+                        ll.planReady,
+                      ];
+                      if (cfg.github.requireApproval) failArgs.push("--remove-label", ll.approved);
+                      await ghFn(cfg, failArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
+                    },
+                  );
+                  await guardOrQueue(
+                    cfg,
+                    "plan set failure comment",
+                    failId,
+                    { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
+                    () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
+                  );
+                  continue;
+                }
+                // Same submit-before-label ordering as the single path.
+                const setArgs = [
+                  "issue",
+                  "edit",
+                  String(issue.number),
+                  "--repo",
+                  repo.nwo,
+                  "--add-label",
+                  ll.queued,
+                  "--remove-label",
+                  ll.planReady,
+                ];
+                if (cfg.github.requireApproval) setArgs.push("--remove-label", ll.approved);
+                await ghFn(cfg, setArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
+                bridged++;
+                log.info("github bridge: approved plan set dispatched", {
+                  nwo: repo.nwo,
+                  issue: issue.number,
+                });
+                continue;
+              }
               const planBody = extractPlanBody(comment.body);
               if (!planBody) {
                 log.error("github bridge: plan comment has no extractable plan; fix the comment", {
@@ -831,7 +1026,7 @@ export async function pollGithubInbox(
           const parent = isAsk ? null : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
           const t = isAsk
             ? issueToTicket(issue, repo, cfg, null)
-            : buildPlanningTicket(issue, repo, parent);
+            : buildPlanningTicket(issue, repo, cfg, parent);
           const stateLabel = isAsk ? ll.queued : ll.planning;
           // Same in-flight guard as the execution path: a prior sweep may have
           // submitted this ticket and then lost the label add (crash, or a
@@ -876,5 +1071,19 @@ export async function pollGithubInbox(
       });
     }
   }
+
+  // Sweep-driven plan-set maintenance (dashboard/labels/degraded comment):
+  // once per sweep, after the repo/issue loop, so it runs on the same
+  // cadence regardless of which (if any) repos had eligible issues this
+  // round. Contained like everything else here — a maintenance bug must
+  // never take the queue down with it.
+  if (cfg.planSets.enabled) {
+    try {
+      await maintainPlanSets(cfg, { ghFn });
+    } catch (e) {
+      log.warn("plan-set maintenance failed; queue unaffected", { error: errMsg(e) });
+    }
+  }
+
   return bridged;
 }
