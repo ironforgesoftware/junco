@@ -12,6 +12,8 @@ import { queuePaths } from "./config.js";
 import { ticketState, findTicketFile } from "./ticketDeps.js";
 import { parseResultMeta } from "./resultMeta.js";
 import { parseTicket } from "./ticket.js";
+import { submitTicket } from "./dispatch.js";
+import type { CompiledChild } from "./planCompiler.js";
 
 export interface PlanSetRecord {
   v: 1;
@@ -159,4 +161,28 @@ export function renderDashboard(record: PlanSetRecord, state: SetState): string 
   }
   lines.push("", "_Maintained by the worker each sweep; edits here are overwritten._");
   return lines.join("\n") + "\n";
+}
+
+/** Idempotent fan-out: a child whose id exists ANYWHERE in the queue —
+ * done/ and failed/ included — is skipped, never re-run. This is deliberately
+ * stricter than the bridge's single-ticket ticketInFlight guard (inbox+
+ * processing only): a set child that finished between a crash and the
+ * re-sweep must not execute twice; set re-cycling goes through supersede,
+ * not the remove-label gesture. */
+export function submitPlanSet(
+  cfg: Config,
+  children: CompiledChild[],
+): { submitted: string[]; skipped: string[] } {
+  const paths = queuePaths(cfg);
+  const submitted: string[] = [];
+  const skipped: string[] = [];
+  for (const c of children) {
+    if (ticketState(paths, c.ticketId) !== "absent") {
+      skipped.push(c.ticketId);
+      continue;
+    }
+    submitTicket(cfg, c.content, { idHint: c.ticketId });
+    submitted.push(c.ticketId);
+  }
+  return { submitted, skipped };
 }
