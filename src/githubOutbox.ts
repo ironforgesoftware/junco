@@ -74,7 +74,7 @@ export interface StoredOp {
   id: string; // filename stem
   path: string;
   createdAt: string; // ISO
-  origin: "dashboard" | "reporter" | "prflow" | "assess" | "analyze";
+  origin: "dashboard" | "reporter" | "prflow" | "assess" | "analyze" | "bridge";
   issueKey: string | null; // "<nwo>#<n>"
   attempts: number;
   lastError: string | null;
