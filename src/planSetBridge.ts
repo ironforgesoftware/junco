@@ -1,10 +1,10 @@
 /**
  * Bridge doors for plan sets (spec 2026-08-20, Layer 2): dispatch and
- * sweep-driven maintenance (dashboard/labels/degraded comment — supersede
- * lands in a later task). Trust shape: the model authored a fence, a human
- * approved the comment (temporal check in pollGithubInbox), and THIS code —
- * never model text — builds every byte of child frontmatter via the pure
- * compiler.
+ * sweep-driven maintenance (supersede detection, dashboard/labels/degraded
+ * comment). Trust shape: the model authored a fence, a human approved the
+ * comment (temporal check in pollGithubInbox and, for supersede, trySupersede
+ * below), and THIS code — never model text — builds every byte of child
+ * frontmatter via the pure compiler.
  */
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -15,11 +15,21 @@ import type { Config, GithubRepoMapping } from "./types.js";
 // are only dereferenced inside function bodies (dispatchPlanSet /
 // maintainPlanSets / pollGithubInbox), never during module evaluation — same
 // pattern as runOnce.ts's assessFlow/analyzeFlow cycles.
-import { githubTicketId, lifecycleLabels } from "./githubInbox.js";
+import {
+  githubTicketId,
+  lifecycleLabels,
+  findOwnPlanComment,
+  verifyLabelApplier,
+  extractPlanSetBody,
+} from "./githubInbox.js";
 import { parsePlanSet, compilePlan, hashPlan } from "./planCompiler.js";
+import { submitTicket } from "./dispatch.js";
+import { ticketState } from "./ticketDeps.js";
+import { queuePaths } from "./config.js";
 import {
   materializePlanSet,
   submitPlanSet,
+  supersedeUnclaimed,
   listPlanSetRecords,
   writePlanSetRecord,
   resolveSetState,
@@ -91,8 +101,9 @@ export function dispatchPlanSet(
 
 export interface MaintainPlanSetsDeps {
   ghFn?: typeof gh;
-  /** Unused today — reserved for the supersede door (a later task) to stamp
-   * a fresh record's createdAt without reaching for `Date.now()` directly. */
+  /** createdAt stamp for a FRESH record written by a supersede recompile
+   * (see trySupersede). Defaults to `new Date().toISOString()` — injectable
+   * so tests can pin it instead of reaching for `Date.now()` directly. */
   nowIso?: string;
 }
 
@@ -265,13 +276,276 @@ function desiredSetLabel(state: SetState, ll: ReturnType<typeof lifecycleLabels>
   return ll.queued;
 }
 
+// ---------------------------------------------------------------------------
+// Supersede — an edited, re-approved plan comment recompiles the set in
+// place. Runs BEFORE the closed-skip in maintainPlanSets: a closed (all-
+// terminal) record is exactly the case a human reopens by editing the plan
+// comment and re-approving, so this check must not be gated on `!closed`.
+// ---------------------------------------------------------------------------
+
+type SupersedeOutcome =
+  | { kind: "unchanged" } // no comment, no fence, hash unchanged, or approval not (yet) satisfied
+  | { kind: "deferred" } // children still in flight — retry next sweep
+  | { kind: "compile-failed" } // recompile failed; old record left in place
+  | { kind: "superseded"; record: PlanSetRecord }; // fresh record fanned out
+
+/** Compile-failure comment posted when a supersede recompile fails — same
+ * shape as dispatchPlanSet's compile-failure comment (githubInbox.ts), worded
+ * for the recompile case: nothing here is a first dispatch, so the old set
+ * keeps running rather than "nothing was dispatched". */
+function buildSupersedeFailureComment(errors: string[]): string {
+  const errList = errors.map((e) => `- ${e}`).join("\n");
+  return (
+    `**Junco could not recompile this plan set** — the previous plan set is unchanged.\n\n` +
+    `${errList}\n\n_Edit the plan comment and re-apply approval to retry._\n`
+  );
+}
+
+/** Remove the `approved` label — shared by the success path (step 8: it
+ * authorized the supersede that just happened) and the compile-failure path
+ * (bounding re-entry in `requireApproval` mode: leaving it standing would
+ * re-satisfy the approval gate on every subsequent sweep). */
+async function removeApprovedLabel(
+  cfg: Config,
+  g: { nwo: string; issue: number },
+  ll: ReturnType<typeof lifecycleLabels>,
+  ghFn: typeof gh,
+  label: string,
+): Promise<void> {
+  await guardOrQueue(
+    cfg,
+    label,
+    `${g.nwo}#${g.issue}`,
+    { kind: "labels", nwo: g.nwo, issue: g.issue, add: [], remove: [ll.approved] },
+    async () => {
+      await ghFn(
+        cfg,
+        ["issue", "edit", String(g.issue), "--repo", g.nwo, "--remove-label", ll.approved],
+        { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      );
+    },
+  );
+}
+
 /**
- * One maintenance pass over every open plan-set record: dashboard comment,
- * degraded comment, set-level label, close-on-all-terminal. Called once per
- * pollGithubInbox sweep, after the repo/issue loop. Records with
- * `github === null` (never dispatched to GitHub) or `closed === true`
- * (all-terminal already handled) are skipped — supersede (reopening a closed
- * record) lands in a later task.
+ * Detect and apply an edited-and-re-approved plan comment for one record
+ * (numbered steps below match the design's supersede behavior 1-8):
+ *
+ * 1. Fetch the bridge's own plan comment. No comment → unchanged.
+ * 2. Extract the fence; skip when absent, its hash matches the current
+ *    record (no edit), or its hash matches `lastFailedHash` (a compile error
+ *    the human hasn't fixed yet — re-attempting it every sweep would re-post
+ *    the same failure comment forever; see step 6).
+ * 3. `requireApproval` gates the edit behind the SAME temporal check as
+ *    dispatch: the `approved` label, applied by a verified writer, strictly
+ *    after the comment's last edit. `requireApproval` false: the edit alone
+ *    (hash difference) is authorization enough.
+ * 4. Quiescence: any child still processing defers the whole sweep for this
+ *    record — disposing an unclaimed sibling while another is mid-run would
+ *    leave a partially-superseded set with no clean rollback.
+ * 5. Dispose every unclaimed (inbox) child (`supersedeUnclaimed`) — frees
+ *    their ticketIds, since the SAME planId means an edited-but-same-id task
+ *    recompiles to the identical ticketId.
+ * 6. Recompile from the fence with the SAME planId. A compile error leaves
+ *    the old record in place (already-disposed children stay disposed; the
+ *    human edits again) and posts a failure comment — never a partial write —
+ *    but is BOUNDED: `lastFailedHash` is stamped so this exact candidate
+ *    never re-triggers, and (in `requireApproval` mode) the `approved` label
+ *    is removed so re-triggering also requires a fresh approval event, not
+ *    just an untouched stale one.
+ * 7. Fan out and materialize a FRESH record. Per child: `done` → skip (task
+ *    id is task identity across plan versions); `inbox`/`processing` →
+ *    shouldn't happen post-disposal/quiescence, skip defensively; `absent`
+ *    OR `failed` (our own just-disposed superseded marker, OR an unrelated
+ *    PRIOR execution failure) → submit the fresh copy unconditionally — the
+ *    ticketState resolver's inbox > failed precedence means any dependent
+ *    waits on the fresh copy, never the stale failed one.
+ * 8. Remove the `approved` label — it authorized THIS supersede; leaving it
+ *    would immediately re-trigger on the next sweep.
+ */
+async function trySupersede(
+  cfg: Config,
+  record: PlanSetRecord,
+  g: { nwo: string; issue: number },
+  ghFn: typeof gh,
+  ll: ReturnType<typeof lifecycleLabels>,
+  getLogin: () => Promise<string>,
+  nowIso: string,
+): Promise<SupersedeOutcome> {
+  let comment: { body: string; createdAtMs: number; updatedAtMs: number } | null;
+  try {
+    const login = await getLogin();
+    comment = await findOwnPlanComment(cfg, g.nwo, g.issue, login, ghFn);
+  } catch (e) {
+    log.warn("plan-set supersede: could not read the plan comment; skipping this sweep", {
+      planId: record.planId,
+      error: errMsg(e),
+    });
+    return { kind: "unchanged" };
+  }
+  if (comment === null) return { kind: "unchanged" }; // 1. no own-authored comment
+
+  const candidate = extractPlanSetBody(comment.body);
+  if (candidate === null) return { kind: "unchanged" }; // 2. no complete fence
+  const newHash = hashPlan(candidate);
+  if (newHash === record.hash) return { kind: "unchanged" }; // 2. no edit
+  if (newHash === record.lastFailedHash) return { kind: "unchanged" }; // 2. already-failed edit, unfixed
+
+  if (cfg.github.requireApproval) {
+    // 3. Approval rule — labels fetched lazily, only once an edit is on the
+    // table (every other sweep skips this gh call entirely).
+    let labels: Set<string>;
+    try {
+      const r = await ghFn(
+        cfg,
+        ["issue", "view", String(g.issue), "--repo", g.nwo, "--json", "labels"],
+        { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      );
+      const parsed = JSON.parse(r.stdout) as { labels?: { name: string }[] };
+      labels = new Set((parsed.labels ?? []).map((l) => l.name));
+    } catch (e) {
+      log.warn("plan-set supersede: could not read issue labels; skipping this sweep", {
+        planId: record.planId,
+        error: errMsg(e),
+      });
+      return { kind: "unchanged" };
+    }
+    if (!labels.has(ll.approved)) return { kind: "unchanged" }; // awaiting review
+    const approval = await verifyLabelApplier(cfg, g.nwo, g.issue, ll.approved, ghFn);
+    if (approval.verdict !== "ok") {
+      log.warn("plan-set supersede: approval not by a verified writer; ignoring", {
+        planId: record.planId,
+      });
+      return { kind: "unchanged" };
+    }
+    // Fail closed on an unparseable timestamp on either side: an edit after
+    // the approval must invalidate it — the fence that recompiles is read
+    // fresh above, so a stale approval must not authorize a NEWER edit.
+    if (
+      !(Number.isFinite(comment.updatedAtMs) && approval.atMs !== null) ||
+      approval.atMs <= comment.updatedAtMs
+    ) {
+      log.warn("plan-set supersede: approval predates the plan comment's latest edit; ignoring", {
+        planId: record.planId,
+      });
+      return { kind: "unchanged" };
+    }
+  }
+
+  // 4. Quiescence.
+  const state = resolveSetState(cfg, record);
+  if (state.anyProcessing) {
+    log.info("plan set supersede deferred — children in flight", { planId: record.planId });
+    return { kind: "deferred" };
+  }
+
+  // 5. Dispose unclaimed children BEFORE recompiling — a compile failure must
+  // still leave them disposed (recoverable via a further edit), never re-run.
+  supersedeUnclaimed(cfg, record, newHash);
+
+  // 6. Recompile with the SAME planId.
+  const parsed = parsePlanSet(candidate, { maxTasks: cfg.planSets.maxTasks });
+  if (!parsed.ok) {
+    const failureBody = buildSupersedeFailureComment(parsed.errors);
+    const failId = `${g.nwo}#${g.issue}`;
+    await guardOrQueue(
+      cfg,
+      "supersede compile-failure comment",
+      failId,
+      { kind: "comment", nwo: g.nwo, issue: g.issue, body: failureBody },
+      () => postSetComment(cfg, g.nwo, g.issue, failureBody, ghFn),
+    );
+    // Bound re-entry: without removing `approved` (in requireApproval mode)
+    // and stamping lastFailedHash (in BOTH modes), this exact candidate would
+    // re-trigger — and re-post this same comment — on every future sweep
+    // until the human happens to edit again.
+    if (cfg.github.requireApproval) {
+      await removeApprovedLabel(cfg, g, ll, ghFn, "supersede compile-failure label cleanup");
+    }
+    record.lastFailedHash = newHash;
+    writePlanSetRecord(cfg, record);
+    return { kind: "compile-failed" };
+  }
+  const children = compilePlan(parsed.plan, {
+    planId: record.planId,
+    repoPath: record.repoPath,
+    hash: newHash,
+    github: g,
+  });
+
+  // 7. Fan out + a FRESH record: new hash, same planId, keep statusCommentId
+  // and lastLabel (the dashboard/label steps below re-derive lastLabel from
+  // fresh queue reality), reset degradedPosted/closed/lastFailedHash, and
+  // drop lastDashboard so the next render is treated as a change (the
+  // dashboard repaints).
+  const fresh: PlanSetRecord = {
+    v: 1,
+    planId: record.planId,
+    hash: newHash,
+    repoPath: record.repoPath,
+    github: g,
+    tasks: children.map((c) => ({ id: c.taskId, ticketId: c.ticketId, dependsOn: c.dependsOn })),
+    createdAt: nowIso,
+    statusCommentId: record.statusCommentId,
+    degradedPosted: false,
+    lastLabel: record.lastLabel,
+    closed: false,
+  };
+  materializePlanSet(cfg, fresh, candidate);
+  // Per-child fan-out rule (spec: "task id is task identity across plan
+  // versions" — only a DONE ticket skips on recompile):
+  //   done                → skip (its work already happened)
+  //   inbox / processing  → shouldn't occur here (unclaimed siblings were
+  //                         just disposed above; quiescence already refused
+  //                         to proceed while anything was processing) — warn
+  //                         and skip defensively rather than double-submit.
+  //   absent / failed     → submit the fresh copy unconditionally. `failed`
+  //                         covers BOTH our own just-disposed superseded
+  //                         marker AND an unrelated prior execution failure
+  //                         (#293-critical-2: silently skipping the latter
+  //                         stranded its dependents, since a stale failed/
+  //                         ticket is not "absent"). The old failed/ copy is
+  //                         left as audit; ticketState's inbox > failed
+  //                         precedence means any dependent's edge resolves
+  //                         against the FRESH copy, never the stale one.
+  const paths = queuePaths(cfg);
+  const submitted: string[] = [];
+  const skipped: string[] = [];
+  for (const c of children) {
+    const st = ticketState(paths, c.ticketId);
+    if (st === "done") {
+      skipped.push(c.ticketId);
+      continue;
+    }
+    if (st === "inbox" || st === "processing") {
+      log.warn("plan-set supersede: child unexpectedly still in flight at fan-out; skipping", {
+        planId: record.planId,
+        ticketId: c.ticketId,
+        state: st,
+      });
+      skipped.push(c.ticketId);
+      continue;
+    }
+    submitTicket(cfg, c.content, { idHint: c.ticketId });
+    submitted.push(c.ticketId);
+  }
+  log.info("plan set supersede fan-out", { planId: record.planId, submitted, skipped });
+
+  // 8. Remove the approved label — it authorized this supersede.
+  await removeApprovedLabel(cfg, g, ll, ghFn, "approved label removal (supersede)");
+
+  log.info("plan set superseded", { planId: record.planId, oldHash: record.hash, hash: newHash });
+  return { kind: "superseded", record: fresh };
+}
+
+/**
+ * One maintenance pass over every open plan-set record: supersede detection,
+ * dashboard comment, degraded comment, set-level label, close-on-all-
+ * terminal. Called once per pollGithubInbox sweep, after the repo/issue loop.
+ * Records with `github === null` (never dispatched to GitHub) are always
+ * skipped; `closed === true` records are skipped UNLESS supersede reopens
+ * them this sweep (an edited, re-approved plan comment on a finished set) —
+ * see trySupersede.
  */
 export async function maintainPlanSets(
   cfg: Config,
@@ -279,10 +553,31 @@ export async function maintainPlanSets(
 ): Promise<void> {
   const ghFn = deps.ghFn ?? gh;
   const ll = lifecycleLabels(cfg.github.triggerLabel);
+  const nowIso = deps.nowIso ?? new Date().toISOString();
+  // Memoized across the whole sweep — every candidate record needs the same
+  // viewer login (findOwnPlanComment's own-authored filter), and this
+  // function has no BridgeState to cache it on the way viewerLogin does.
+  let cachedLogin: string | null = null;
+  const getLogin = async (): Promise<string> => {
+    if (cachedLogin === null) {
+      const r = await ghFn(cfg, ["api", "user", "--jq", ".login"], {
+        timeoutMs: GH_TIMEOUT,
+        retryNetwork: true,
+      });
+      cachedLogin = r.stdout.trim();
+    }
+    return cachedLogin;
+  };
 
-  for (const record of listPlanSetRecords(cfg)) {
-    const g = record.github;
-    if (g === null || record.closed) continue;
+  for (const storedRecord of listPlanSetRecords(cfg)) {
+    const g = storedRecord.github;
+    if (g === null) continue;
+
+    const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso);
+    if (outcome.kind === "deferred" || outcome.kind === "compile-failed") continue;
+    const record = outcome.kind === "superseded" ? outcome.record : storedRecord;
+
+    if (record.closed) continue;
     let changed = false;
 
     const state = resolveSetState(cfg, record);
@@ -342,7 +637,8 @@ export async function maintainPlanSets(
       changed = true;
     }
 
-    // 5. Close: maintenance stops here; a later supersede reopens with a fresh record.
+    // 5. Close: maintenance stops here; a supersede (see trySupersede, above)
+    // reopens with a fresh record on a later sweep.
     if (state.allTerminal && !record.closed) {
       record.closed = true;
       changed = true;

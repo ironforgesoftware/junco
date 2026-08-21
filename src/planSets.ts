@@ -5,11 +5,12 @@
  * lives in planSetBridge.ts.
  */
 import { readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
 import { queuePaths } from "./config.js";
 import { ticketState, findTicketFile } from "./ticketDeps.js";
+import { uniqueDestPath } from "./uniqueDest.js";
 import { parseResultMeta } from "./resultMeta.js";
 import { parseTicket } from "./ticket.js";
 import { submitTicket } from "./dispatch.js";
@@ -33,6 +34,15 @@ export interface PlanSetRecord {
    * existed; readPlanSetRecord only checks `v === 1`, so those tolerate it
    * being undefined (the next sweep just re-syncs unconditionally once). */
   lastDashboard?: string;
+  /** Hash of the last plan-comment fence a supersede recompile FAILED to
+   * compile (Task 11). Bounds re-entry: without it, a compile error that the
+   * human hasn't fixed yet would re-trigger — and re-post the same failure
+   * comment — on every single sweep forever. The supersede trigger requires
+   * the candidate hash to differ from BOTH `hash` (no edit) and this field
+   * (already-failed edit, unchanged) — the human must edit again (a NEW
+   * hash) or the check never re-fires. Additive, same tolerance as
+   * `lastDashboard`. */
+  lastFailedHash?: string;
 }
 
 export function plansDir(cfg: Config): string {
@@ -191,4 +201,39 @@ export function submitPlanSet(
     submitted.push(c.ticketId);
   }
   return { submitted, skipped };
+}
+
+/** Dispose every UNCLAIMED (still in inbox/) child of `record` ahead of a
+ * supersede recompile: a done/processing child is left running/finished (its
+ * work already happened or is in flight — not ours to discard), but an inbox
+ * child that never started would otherwise collide on re-fan-out (the new
+ * plan reuses the same planId, so an edited-but-same-id task compiles to the
+ * identical ticketId). Mirrors cascadeFail's file mechanics (tmp+rename the
+ * result marker in place, then uniqueDest-move into failed/) but deliberately
+ * NOT its `dependency_failed` marker or metrics.recordTask call: these
+ * children never ran, so this is not a task failure to report — it is
+ * pre-emption by a newer approved plan. One batch per call. */
+export function supersedeUnclaimed(
+  cfg: Config,
+  record: PlanSetRecord,
+  newHash: string,
+): { disposed: string[] } {
+  const paths = queuePaths(cfg);
+  const disposed: string[] = [];
+  for (const t of record.tasks) {
+    const f = findTicketFile(paths.inbox, t.ticketId);
+    if (!f) continue; // done/processing/failed/absent — not ours to dispose
+    const content = readFileSync(f, "utf8");
+    const body =
+      `${content.trimEnd()}\n\n---\n<!-- junco-result\n` +
+      `status: failed\nsuperseded: ${newHash}\n-->\n\n## Result\n\n` +
+      `> Superseded before running — the plan was edited and re-approved (rev \`${newHash}\`).\n`;
+    const tmp = f + ".tmp";
+    writeFileSync(tmp, body, "utf8");
+    renameSync(tmp, f);
+    mkdirSync(paths.failed, { recursive: true });
+    renameSync(f, uniqueDestPath(paths.failed, basename(f)));
+    disposed.push(t.ticketId);
+  }
+  return { disposed };
 }

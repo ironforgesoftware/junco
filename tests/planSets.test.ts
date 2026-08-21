@@ -20,6 +20,7 @@ import {
   resolveSetState,
   renderDashboard,
   submitPlanSet,
+  supersedeUnclaimed,
   PLAN_STATUS_MARKER,
   type PlanSetRecord,
 } from "../src/planSets.js";
@@ -167,6 +168,38 @@ describe("plan-set store", () => {
       expect(r.skipped.sort()).toEqual(["p1-a", "p1-b"]);
       expect(r.submitted).toEqual(["p1-c"]);
       expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(true);
+    });
+  });
+
+  describe("supersedeUnclaimed", () => {
+    it("disposes inbox children with a superseded marker; done/processing untouched", () => {
+      const rec = record({
+        tasks: [
+          { id: "a", ticketId: "p1-a", dependsOn: [] },
+          { id: "b", ticketId: "p1-b", dependsOn: [] },
+          { id: "c", ticketId: "p1-c", dependsOn: [] },
+        ],
+      });
+      writeFileSync(join(qp.inbox, "p1-a.md"), "---\nid: p1-a\n---\nBody A\n");
+      writeFileSync(
+        join(qp.done, "p1-b.md"),
+        "---\nid: p1-b\n---\nBody B\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+      );
+      writeFileSync(join(qp.processing, "p1-c.md"), "---\nid: p1-c\n---\nBody C\n");
+
+      const r = supersedeUnclaimed(cfg, rec, "newhash1");
+      expect(r.disposed).toEqual(["p1-a"]);
+
+      // The inbox child moved into failed/ with the superseded marker.
+      expect(existsSync(join(qp.inbox, "p1-a.md"))).toBe(false);
+      const failedContent = readFileSync(join(qp.failed, "p1-a.md"), "utf8");
+      expect(failedContent).toContain("status: failed");
+      expect(failedContent).toContain("superseded: newhash1");
+      expect(failedContent).not.toContain("dependency_failed");
+
+      // done/processing children are untouched.
+      expect(existsSync(join(qp.done, "p1-b.md"))).toBe(true);
+      expect(existsSync(join(qp.processing, "p1-c.md"))).toBe(true);
     });
   });
 });
