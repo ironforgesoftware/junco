@@ -63,7 +63,7 @@ version: 1
 shared_context: |
   Constraints that apply to every task.
 tasks:
-  - id: short-slug            # [a-z0-9][a-z0-9-]{0,31}; NOT purely numeric
+  - id: short-slug            # [a-z0-9][a-z0-9-]{0,31}; must not match r?<digits>
     title: Verb-first title
     depends_on: []            # other task ids; the worker orders execution
     description: |
