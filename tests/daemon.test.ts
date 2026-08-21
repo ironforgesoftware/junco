@@ -1984,6 +1984,42 @@ describe("runScheduler", () => {
     // with — never more than 2 tasks ran at once.
     expect(peak).toBe(2);
   });
+
+  it("dependency-gated claim: real claimNextTask (no claimFn stub) skips a blocked child and claims only the free ticket", async () => {
+    // Honest home for this coverage: unlike every other test in this describe
+    // block, claimFn is left undefined so runScheduler falls back to the real
+    // claimNextTask — exercising the dependency gate (spec 2026-08-20) through
+    // the actual scheduler dispatch path, not a scripted stand-in. Only
+    // executeFn is stubbed (a spy), so this never touches the Pi SDK.
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-dep-"));
+    const j = join(root, "Junco");
+    for (const d of ["inbox", "processing", "done", "failed"]) {
+      mkdirSync(join(j, d), { recursive: true });
+    }
+    writeFileSync(
+      join(j, "inbox", "blocked.md"),
+      "---\nid: blocked\ndepends_on: [ghost]\n---\nBody\n",
+      "utf8",
+    );
+    writeFileSync(join(j, "inbox", "free.md"), "---\nid: free\n---\nBody\n", "utf8");
+    const cfg = makeConfig({ queueRoot: j, maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    const executed: string[] = [];
+    const executeFn = async (_c: Config, w: ClaimedWork): Promise<void> => {
+      executed.push(w.ticket.id);
+    };
+    // Stop after the first poll. A real macrotask tick, not an instant
+    // resolve — sleep() is reached on every path through the poll body
+    // (idle branch or the Promise.race-with-inflight branch), so calling
+    // requestStop() here reliably ends the run after one pass.
+    const stopAfterFirstPoll = async (): Promise<void> => {
+      stop.requestStop();
+      await new Promise((r) => setTimeout(r, 1));
+    };
+    await runScheduler(cfg, stop, {}, { executeFn, sleep: stopAfterFirstPoll });
+    expect(executed).toEqual(["free"]); // the blocked child was never dispatched
+    expect(readdirSync(join(j, "inbox"))).toEqual(["blocked.md"]); // still parked, unclaimed
+  });
 });
 
 // ---------------------------------------------------------------------------

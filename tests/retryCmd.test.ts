@@ -143,4 +143,33 @@ describe("dependency-cascade resurrection (spec 2026-08-20)", () => {
     await runRetryCommand(cfg, ["a"], {}, { printFn: () => {} });
     expect(existsSync(join(failedDir, "z.md"))).toBe(true);
   });
+
+  it("--all already sweeps a cascade-marked dependent in its own pass; the cascade loop must not re-requeue it", async () => {
+    // --all's targets snapshot is EVERY entry in failed/, so the parent and its
+    // dependent both get requeued by the main --all loop in the same pass —
+    // the cascade while-loop below only exists to catch a dependent that
+    // ISN'T also in the --all sweep. Here it is, so the cascade loop's
+    // post-loop readdir of failed/ must come back empty and print nothing.
+    writeFileSync(
+      join(failedDir, "a.md"),
+      "---\nid: a\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\n\nx\n",
+    );
+    writeFileSync(
+      join(failedDir, "b.md"),
+      "---\nid: b\ndepends_on: [a]\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\ndependency_failed: a\n-->\n",
+    );
+    const out: string[] = [];
+    const code = await runRetryCommand(cfg, [], { all: true }, { printFn: (s) => out.push(s) });
+    expect(code).toBe(0);
+    // Both land in inbox exactly once, under their own (un-suffixed) names —
+    // a re-requeue attempt by the cascade loop would collide on submitTicket's
+    // EEXIST guard, which would show up as a `failures++` error line, not a
+    // duplicate file.
+    expect(readdirSync(inbox).sort()).toEqual(["a.md", "b.md"]);
+    expect(readdirSync(failedDir)).toHaveLength(0);
+    const joined = out.join("");
+    expect(joined).not.toContain("requeued (dependent):"); // already handled by --all
+    expect(joined).not.toMatch(/junco retry:.*already queued/); // no collision either
+    expect((joined.match(/^requeued: /gm) ?? []).length).toBe(2);
+  });
 });
