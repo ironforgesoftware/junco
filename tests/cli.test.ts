@@ -867,7 +867,11 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = makeConfig(
 
 let dispatchTmpDirs: string[] = [];
 
-function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: string } {
+function freshDispatchVault(extraConfig: Record<string, unknown> = {}): {
+  cfg: Config;
+  vaultRoot: string;
+  configPath: string;
+} {
   const vaultRoot = mkdtempSync(join(tmpdir(), "junco-cli-dispatch-"));
   dispatchTmpDirs.push(vaultRoot);
   const cfg: Config = {
@@ -876,10 +880,17 @@ function freshDispatchVault(): { cfg: Config; vaultRoot: string; configPath: str
     queueRoot: join(vaultRoot, "Junco"),
   };
   // write a real config.json at the canonical ~/.junco/config.json location
-  // (HOME=vaultRoot for these tests) so loadConfig can load it.
+  // (HOME=vaultRoot for these tests) so loadConfig can load it. `extraConfig`
+  // (e.g. `{ planSets: { enabled: true } }`) is merged in for tests that need
+  // a feature toggle on — submit --plan tests go through this real disk
+  // config, never a loadConfigFn override.
   const configPath = join(vaultRoot, ".junco", "config.json");
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
+  writeFileSync(
+    configPath,
+    JSON.stringify({ vaultRoot, juncoSubdir: "Junco", ...extraConfig }),
+    "utf8",
+  );
   return { cfg, vaultRoot, configPath };
 }
 
@@ -1057,6 +1068,157 @@ describe("run(['submit']) — missing file argument", () => {
       env: { HOME: vaultRoot },
     });
     expect(code).toBe(2);
+  });
+});
+
+// --- submit --plan (Task 12, spec 2026-08-20 Layer 2): the local CLI door
+// that compiles an approved junco-plan fence into child tickets. ---
+
+describe("run(['submit', '--plan', ...]) — plan-set CLI door", () => {
+  function wrapFence(fence: string): string {
+    return `# Test plan\n\n\`\`\`junco-plan\n${fence.trimEnd()}\n\`\`\`\n`;
+  }
+
+  const TWO_TASK_FENCE =
+    "version: 1\n" +
+    "tasks:\n" +
+    "  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}\n" +
+    "  - {id: b, title: T B, depends_on: [a], description: Build B., acceptance: [works]}\n";
+
+  it("submit --plan compiles a set into the inbox", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "my-plan.md");
+    writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+    const captured: string[] = [];
+    const code = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    const out = captured.join("");
+    expect(code).toBe(0);
+    expect(out).toMatch(/^plan set plan-my-plan \(2 tasks, rev [0-9a-f]{12}\)\n/);
+    expect((out.match(/^submitted:/gm) ?? []).length).toBe(2);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const aPath = join(inboxDir, "plan-my-plan-a.md");
+    const bPath = join(inboxDir, "plan-my-plan-b.md");
+    expect(existsSync(aPath)).toBe(true);
+    expect(existsSync(bPath)).toBe(true);
+    expect(readFileSync(bPath, "utf8")).toContain("depends_on: [plan-my-plan-a]");
+  });
+
+  it("submit --plan refuses compile errors whole and dispatches nothing", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "bad-plan.md");
+    const badFence =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [a], description: Build A., acceptance: [works]}\n" +
+      "  - {id: a, title: T A2, depends_on: [], description: Build A2., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(badFence), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+    const errLines: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+        printFn: () => {},
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(code).toBe(1);
+    const errorLines = errLines
+      .join("")
+      .split("\n")
+      .filter((l) => l.includes("plan error:"));
+    expect(errorLines.length).toBeGreaterThanOrEqual(2);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+
+  it("submit --plan without --repo or with planSets disabled fails with guidance", async () => {
+    // missing --repo (planSets enabled)
+    {
+      const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+      const planFile = join(vaultRoot, "plan.md");
+      writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+      const errLines: string[] = [];
+      const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+        errLines.push(String(s));
+        return true;
+      });
+      let code: number;
+      try {
+        code = await run(["submit", "--plan", planFile], {
+          printFn: () => {},
+          env: { HOME: vaultRoot },
+        });
+      } finally {
+        errSpy.mockRestore();
+      }
+      expect(code).toBe(2);
+      expect(errLines.join("")).toContain("Usage: junco submit --plan");
+    }
+
+    // planSets disabled (--repo present)
+    {
+      const { vaultRoot } = freshDispatchVault({ planSets: { enabled: false } });
+      const planFile = join(vaultRoot, "plan.md");
+      writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+      const repoDir = join(vaultRoot, "repo");
+      const errLines: string[] = [];
+      const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+        errLines.push(String(s));
+        return true;
+      });
+      let code: number;
+      try {
+        code = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+          printFn: () => {},
+          env: { HOME: vaultRoot },
+        });
+      } finally {
+        errSpy.mockRestore();
+      }
+      expect(code).toBe(1);
+      expect(errLines.join("")).toContain(
+        "junco submit: plan sets are disabled — set planSets.enabled in config.json",
+      );
+    }
+  });
+
+  it("resubmitting the same plan with all children already queued prints the already-queued line and exits 0", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "dup-plan.md");
+    const oneTaskFence =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(oneTaskFence), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+
+    const first = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: () => {},
+      env: { HOME: vaultRoot },
+    });
+    expect(first).toBe(0);
+
+    const captured: string[] = [];
+    const second = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(second).toBe(0);
+    expect(captured.join("")).toContain(
+      "plan set plan-dup-plan: all 1 tickets already in the queue",
+    );
   });
 });
 
