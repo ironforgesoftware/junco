@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parsePlanSet, hashPlan } from "../src/planCompiler.js";
+import { parsePlanSet, hashPlan, compilePlan, type PlanSet } from "../src/planCompiler.js";
+import { parseTicket } from "../src/ticket.js";
 
 const VALID = `version: 1
 shared_context: |
@@ -108,5 +109,79 @@ describe("hashPlan", () => {
     expect(hashPlan("a")).toMatch(/^[0-9a-f]{12}$/);
     expect(hashPlan("a")).not.toBe(hashPlan("b"));
     expect(hashPlan("a")).toBe(hashPlan("a"));
+  });
+});
+
+const PLAN: PlanSet = {
+  version: 1,
+  sharedContext: "All changes additive.",
+  tasks: [
+    {
+      id: "schema",
+      title: "Add keys",
+      dependsOn: [],
+      description: "Add the keys.",
+      acceptance: ["Keys parse", "Defaults hold"],
+      prohibitions: ["No queue changes"],
+      verification: "npx vitest run tests/ticket.test.ts",
+    },
+    {
+      id: "resolver",
+      title: "Resolve state",
+      dependsOn: ["schema"],
+      description: "Build the resolver.",
+      acceptance: ["Resolves done"],
+      prohibitions: [],
+      verification: null,
+    },
+  ],
+};
+const CTX = {
+  planId: "gh-acme-api-1a2b3c4d-9",
+  repoPath: "/sbxroot/clone",
+  hash: "abc123def456",
+  github: { nwo: "acme/api", issue: 9 },
+};
+
+describe("compilePlan", () => {
+  it("emits one child per task with door-built frontmatter and edge translation", () => {
+    const kids = compilePlan(PLAN, CTX);
+    expect(kids.map((k) => k.ticketId)).toEqual([
+      "gh-acme-api-1a2b3c4d-9-schema",
+      "gh-acme-api-1a2b3c4d-9-resolver",
+    ]);
+    const t = parseTicket("x.md", kids[1].content);
+    expect(t.id).toBe("gh-acme-api-1a2b3c4d-9-resolver");
+    expect(t.frontmatter.repo).toBe("/sbxroot/clone");
+    expect(t.github).toEqual({ nwo: "acme/api", issue: 9, kind: "pr", external: false });
+    expect(t.plan).toEqual({ id: CTX.planId, task: "resolver", hash: CTX.hash });
+    expect(t.dependsOn).toEqual(["gh-acme-api-1a2b3c4d-9-schema"]);
+    expect(t.frontmatter.pr_title).toBeUndefined();
+  });
+
+  it("renders the TEMPLATE-aligned body: title, description, acceptance, prohibitions, shared context, deps note, verification", () => {
+    const body = parseTicket("x.md", compilePlan(PLAN, CTX)[0].content).body;
+    expect(body).toContain("# Add keys");
+    expect(body).toContain("Add the keys.");
+    expect(body).toContain("## Behavior (acceptance — testable assertions)");
+    expect(body).toContain("- Keys parse");
+    expect(body).toContain("## Prohibitions");
+    expect(body).toContain("- No queue changes");
+    expect(body).toContain("## Shared context");
+    expect(body).toContain("All changes additive.");
+    expect(body).toContain("## Verification (junco runs this — do NOT run it yourself)");
+    expect(body).toContain("npx vitest run tests/ticket.test.ts");
+  });
+
+  it("a dependent task's body names its dependency tickets; a no-verification task omits the section", () => {
+    const kids = compilePlan(PLAN, CTX);
+    const dep = parseTicket("x.md", kids[1].content).body;
+    expect(dep).toContain("gh-acme-api-1a2b3c4d-9-schema");
+    expect(dep).not.toContain("## Verification");
+  });
+
+  it("local (github: null) children carry no github block", () => {
+    const t = parseTicket("x.md", compilePlan(PLAN, { ...CTX, github: null })[0].content);
+    expect(t.github).toBeNull();
   });
 });

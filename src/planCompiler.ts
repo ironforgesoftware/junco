@@ -157,3 +157,81 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, plan: { version: 1, sharedContext, tasks } };
 }
+
+export interface CompileCtx {
+  planId: string;
+  repoPath: string;
+  hash: string;
+  github: { nwo: string; issue: number } | null;
+}
+export interface CompiledChild {
+  taskId: string;
+  ticketId: string;
+  dependsOn: string[];
+  content: string;
+}
+
+/** Deterministic fan-out of a validated plan. Frontmatter is DOOR-built here
+ * (never model text — parsePlanSet refused smuggled blocks); the body follows
+ * the junco-dispatch TEMPLATE section conventions so planLint, the critic
+ * (whole-body spec), and verify.ts (## Verification bash blocks) consume it
+ * with zero runtime changes (spec Layer 3). */
+export function compilePlan(plan: PlanSet, ctx: CompileCtx): CompiledChild[] {
+  return plan.tasks.map((task) => {
+    const ticketId = `${ctx.planId}-${task.id}`;
+    const dependsOn = task.dependsOn.map((d) => `${ctx.planId}-${d}`);
+    const fm: string[] = ["---", `id: ${ticketId}`, `repo: ${JSON.stringify(ctx.repoPath)}`];
+    if (ctx.github) {
+      fm.push(
+        "github:",
+        `  nwo: ${JSON.stringify(ctx.github.nwo)}`,
+        `  issue: ${ctx.github.issue}`,
+        "  kind: pr",
+      );
+    }
+    fm.push(
+      "plan:",
+      `  id: ${JSON.stringify(ctx.planId)}`,
+      `  task: ${JSON.stringify(task.id)}`,
+      `  hash: ${JSON.stringify(ctx.hash)}`,
+    );
+    if (dependsOn.length > 0) fm.push(`depends_on: [${dependsOn.join(", ")}]`);
+    fm.push("---");
+
+    const body: string[] = [`# ${task.title}`, "", task.description, ""];
+    body.push("## Behavior (acceptance — testable assertions)", "");
+    for (const a of task.acceptance) body.push(`- ${a}`);
+    body.push("");
+    if (task.prohibitions.length > 0) {
+      body.push("## Prohibitions", "");
+      for (const p of task.prohibitions) body.push(`- ${p}`);
+      body.push("");
+    }
+    if (plan.sharedContext || dependsOn.length > 0) {
+      body.push("## Shared context", "");
+      if (plan.sharedContext) body.push(plan.sharedContext, "");
+      if (dependsOn.length > 0) {
+        body.push(
+          `This task is part of plan \`${ctx.planId}\`. Its prerequisite tickets — already merged into the base branch by the time this runs — are: ${dependsOn.map((d) => `\`${d}\``).join(", ")}.`,
+          "",
+        );
+      }
+    }
+    if (task.verification) {
+      body.push(
+        "## Verification (junco runs this — do NOT run it yourself)",
+        "",
+        "```bash",
+        task.verification,
+        "```",
+        "",
+      );
+    }
+    return {
+      taskId: task.id,
+      ticketId,
+      dependsOn,
+      content: fm.join("\n") + "\n\n" + body.join("\n").trimEnd() + "\n",
+    };
+  });
+}
