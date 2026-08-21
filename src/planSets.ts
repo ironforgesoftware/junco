@@ -8,6 +8,10 @@ import { readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
+import { queuePaths } from "./config.js";
+import { ticketState, findTicketFile } from "./ticketDeps.js";
+import { parseResultMeta } from "./resultMeta.js";
+import { parseTicket } from "./ticket.js";
 
 export interface PlanSetRecord {
   v: 1;
@@ -67,4 +71,92 @@ export function materializePlanSet(cfg: Config, record: PlanSetRecord, fenceBody
   mkdirSync(dir, { recursive: true });
   atomicWrite(join(dir, `${record.planId}.md`), fenceBody.trimEnd() + "\n");
   writePlanSetRecord(cfg, record);
+}
+
+export const PLAN_STATUS_MARKER = "<!-- junco:plan-status -->";
+export type TaskRunState = "queued" | "waiting" | "processing" | "done" | "failed" | "absent";
+export interface TaskStatus {
+  id: string;
+  ticketId: string;
+  state: TaskRunState;
+  prUrl: string | null;
+  dependencyFailed: string | null;
+}
+export interface SetState {
+  tasks: TaskStatus[];
+  allTerminal: boolean;
+  allDone: boolean;
+  anyFailed: boolean;
+  anyProcessing: boolean;
+}
+
+/** Recompute a set's task states from queue reality — the single source the
+ * dashboard/labels derive from. Sweep-driven on purpose: cascaded children
+ * never pass through the reporter, so event-driven state would go stale. */
+export function resolveSetState(cfg: Config, record: PlanSetRecord): SetState {
+  const paths = queuePaths(cfg);
+  const tasks: TaskStatus[] = record.tasks.map((t) => {
+    const st = ticketState(paths, t.ticketId);
+    let state: TaskRunState;
+    let prUrl: string | null = null;
+    let dependencyFailed: string | null = null;
+    if (st === "done" || st === "failed") {
+      state = st;
+      const f = findTicketFile(st === "done" ? paths.done : paths.failed, t.ticketId);
+      if (f) {
+        const meta = parseResultMeta(readFileSync(f, "utf8"));
+        prUrl = meta.prUrl;
+        dependencyFailed = meta.dependencyFailed;
+      }
+    } else if (st === "processing") {
+      state = "processing";
+    } else if (st === "inbox") {
+      const f = findTicketFile(paths.inbox, t.ticketId);
+      let pending = false;
+      if (f) {
+        try {
+          const parsed = parseTicket(f, readFileSync(f, "utf8"));
+          pending = parsed.dependsOn.some((d) => !parsed.depsSatisfied.includes(d));
+        } catch {
+          /* vanished/unreadable — treat as queued; next sweep refreshes */
+        }
+      }
+      state = pending ? "waiting" : "queued";
+    } else {
+      state = "absent";
+    }
+    return { id: t.id, ticketId: t.ticketId, state, prUrl, dependencyFailed };
+  });
+  const terminal = (s: TaskRunState): boolean => s === "done" || s === "failed";
+  return {
+    tasks,
+    allTerminal: tasks.every((t) => terminal(t.state)),
+    allDone: tasks.every((t) => t.state === "done"),
+    anyFailed: tasks.some((t) => t.state === "failed"),
+    anyProcessing: tasks.some((t) => t.state === "processing"),
+  };
+}
+
+export function renderDashboard(record: PlanSetRecord, state: SetState): string {
+  const lines: string[] = [
+    PLAN_STATUS_MARKER,
+    `**Plan set status** — plan \`${record.planId}\`, rev \`${record.hash}\``,
+    "",
+  ];
+  for (const t of state.tasks) {
+    const box = t.state === "done" ? "x" : " ";
+    let detail: string = t.state;
+    if (t.state === "done" && t.prUrl) detail = `done — ${t.prUrl}`;
+    if (t.state === "failed")
+      detail = t.dependencyFailed
+        ? `failed — dependency \`${t.dependencyFailed}\` failed`
+        : "failed";
+    if (t.state === "waiting") {
+      const deps = record.tasks.find((r) => r.id === t.id)?.dependsOn ?? [];
+      detail = `waiting on: ${deps.map((d) => `\`${d}\``).join(", ")}`;
+    }
+    lines.push(`- [${box}] \`${t.id}\` — ${detail}`);
+  }
+  lines.push("", "_Maintained by the worker each sweep; edits here are overwritten._");
+  return lines.join("\n") + "\n";
 }
