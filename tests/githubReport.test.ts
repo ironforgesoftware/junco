@@ -202,6 +202,19 @@ describe("makeGithubReporter", () => {
       expect.arrayContaining(["--add-label", "junco:done"]),
     );
   });
+
+  it("set children (plan + github) produce zero reporter traffic — the sweep owns set reporting", async () => {
+    const f = fakeGh();
+    const r = makeGithubReporter(cfg, f as never);
+    const setChildTicket: Ticket = {
+      ...ticket(gt),
+      plan: { id: "p1", task: "schema", hash: "abc" },
+    };
+    await r.onStart(setChildTicket);
+    await r.onRequeue(setChildTicket);
+    await r.onFinal(setChildTicket, out({ status: "completed", prUrl: "https://x/pr/1" }));
+    expect(f.calls).toEqual([]);
+  });
 });
 
 describe("plan-kind reporting", () => {

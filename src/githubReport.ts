@@ -146,6 +146,11 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
 
   return {
     async onStart(t: Ticket): Promise<void> {
+      // Plan-set children: per-child comments and label flips on the shared parent
+      // issue would thrash (N children, one issue) and cascaded children never
+      // reach this reporter at all — maintainPlanSets (planSetBridge.ts) recomputes
+      // set state from the queue each sweep and owns ALL set-level issue traffic.
+      if (t.plan && t.github) return;
       if (!t.github || t.github.external || t.github.kind === "plan") return; // planning label persists
       const g = t.github;
       await guardOrQueue(
@@ -156,6 +161,11 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       );
     },
     async onRequeue(t: Ticket): Promise<void> {
+      // Plan-set children: per-child comments and label flips on the shared parent
+      // issue would thrash (N children, one issue) and cascaded children never
+      // reach this reporter at all — maintainPlanSets (planSetBridge.ts) recomputes
+      // set state from the queue each sweep and owns ALL set-level issue traffic.
+      if (t.plan && t.github) return;
       if (!t.github || t.github.external || t.github.kind === "plan") return;
       const g = t.github;
       await guardOrQueue(
@@ -166,6 +176,11 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       );
     },
     async onFinal(t: Ticket, outcome: TicketOutcome): Promise<void> {
+      // Plan-set children: per-child comments and label flips on the shared parent
+      // issue would thrash (N children, one issue) and cascaded children never
+      // reach this reporter at all — maintainPlanSets (planSetBridge.ts) recomputes
+      // set state from the queue each sweep and owns ALL set-level issue traffic.
+      if (t.plan && t.github) return;
       if (!t.github || t.github.external) return;
       const g = t.github;
       if (g.kind === "plan") {
