@@ -10,7 +10,9 @@ import {
   pollGithubInbox,
   newBridgeState,
   extractPlanBody,
+  extractPlanSetBody,
   buildPlanComment,
+  PLAN_SET_FENCE,
   githubTicketId,
   PLAN_COMMENT_MARKER,
   type GhIssue,
@@ -988,6 +990,31 @@ describe("buildPlanComment", () => {
     expect(
       buildPlanComment("x".repeat(70_000), { issue: 1, trigger: "junco", requireApproval: true }),
     ).toBeNull();
+  });
+});
+
+describe("junco-plan fence (spec 2026-08-20 layer 2)", () => {
+  it("extractPlanSetBody pulls the last junco-plan fence; junco-ticket fences are ignored", () => {
+    const text =
+      "intro\n```junco-ticket\nsingle\n```\n\n````junco-plan\nversion: 1\ntasks: []\n````\ntail";
+    expect(extractPlanSetBody(text)).toBe("version: 1\ntasks: []");
+    expect(extractPlanBody(text)).toBe("single");
+  });
+
+  it("extractPlanSetBody returns null when no complete junco-plan fence exists", () => {
+    expect(extractPlanSetBody("```junco-plan\nunclosed")).toBeNull();
+    expect(extractPlanSetBody("no fences at all")).toBeNull();
+  });
+
+  it("buildPlanComment renders with the requested fence tag and stays re-extractable", () => {
+    const c = buildPlanComment("version: 1\ntasks: []", {
+      issue: 7,
+      trigger: "junco",
+      requireApproval: true,
+      fenceTag: PLAN_SET_FENCE,
+    });
+    expect(c).not.toBeNull();
+    expect(extractPlanSetBody(c as string)).toBe("version: 1\ntasks: []");
   });
 });
 

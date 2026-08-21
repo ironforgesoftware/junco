@@ -174,6 +174,10 @@ export function buildPlanningTicket(
 
 export const PLAN_COMMENT_MARKER = "<!-- junco:plan -->";
 
+/** Fence tag for a plan SET (multi-ticket) comment/finalText, as opposed to the
+ * single-ticket `PLAN_FENCE` ("junco-ticket"). See extractPlanSetBody. */
+export const PLAN_SET_FENCE = "junco-plan";
+
 // Mirrors ticket.ts FRONTMATTER_RE — used to STRIP a smuggled block, never to parse it.
 const SMUGGLED_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
 
@@ -189,21 +193,22 @@ function longestBacktickRun(text: string): number {
   return max;
 }
 
-/** Pull the plan body out of the LAST ```junco-ticket fence in `text` (planner
- * finalText or a plan comment — same format both places). Fence-length-aware
- * CommonMark matching: an opening fence of N backticks is closed by the first
- * later line that is a run of >= N backticks with no info text, so a plan that
- * itself contains a ```bash block (the template mandates one) does not truncate
- * at the inner fence. Any frontmatter block inside the fence is stripped:
+/** Pull the LAST complete ```<fenceTag> block out of `text` (planner finalText
+ * or a plan comment — same format both places). Fence-length-aware CommonMark
+ * matching: an opening fence of N backticks is closed by the first later line
+ * that is a run of >= N backticks with no info text, so a plan that itself
+ * contains a ```bash block (the template mandates one) does not truncate at
+ * the inner fence. Any frontmatter block inside the fence is stripped:
  * frontmatter is machine-owned, model output and issue text can never set
- * repo:/workdir:/tools:. Null = no usable (complete) plan. */
-export function extractPlanBody(text: string): string | null {
+ * repo:/workdir:/tools:. Null = no usable (complete) block. Shared by the
+ * single-ticket (junco-ticket) and plan-set (junco-plan) extractors. */
+function extractFencedBlock(text: string, fenceTag: string): string | null {
   // Normalize CRLF (and lone CR) to LF first: editing the plan comment in
   // GitHub's web UI yields CRLF, and the fence match survives only via
   // incidental `\s*` tolerance while interior `\r` would otherwise leak
   // verbatim into the execution ticket and PR body (#134).
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  const openRe = new RegExp("^(`{3,})" + PLAN_FENCE + "\\s*$");
+  const openRe = new RegExp("^(`{3,})" + fenceTag + "\\s*$");
   let last: string | null = null;
   for (let i = 0; i < lines.length; i++) {
     const m = openRe.exec(lines[i]);
@@ -226,24 +231,40 @@ export function extractPlanBody(text: string): string | null {
   return stripped === "" ? null : stripped;
 }
 
+/** Pull the plan body out of the LAST ```junco-ticket fence in `text`. See
+ * extractFencedBlock for the matching rules. Null = no usable (complete)
+ * plan. */
+export function extractPlanBody(text: string): string | null {
+  return extractFencedBlock(text, PLAN_FENCE);
+}
+
+/** Pull the plan-set body out of the LAST ```junco-plan fence in `text`. See
+ * extractFencedBlock for the matching rules. Null = no usable (complete)
+ * plan set. */
+export function extractPlanSetBody(text: string): string | null {
+  return extractFencedBlock(text, PLAN_SET_FENCE);
+}
+
 /** Render the ONE plan comment: marker (machine-recoverable) + instructions +
- * the plan in a fence (readable AND re-extractable). Null when the result
- * would blow GitHub's comment cap — the caller fails the plan instead of
- * truncating the machine copy. */
+ * the plan in a fence (readable AND re-extractable). `fenceTag` selects the
+ * fence (default `PLAN_FENCE` = "junco-ticket"); the plan-set bridge passes
+ * `PLAN_SET_FENCE` instead. Null when the result would blow GitHub's comment
+ * cap — the caller fails the plan instead of truncating the machine copy. */
 export function buildPlanComment(
   planBody: string,
-  opts: { issue: number; trigger: string; requireApproval: boolean },
+  opts: { issue: number; trigger: string; requireApproval: boolean; fenceTag?: string },
 ): string | null {
+  const tag = opts.fenceTag ?? PLAN_FENCE;
   const next = opts.requireApproval
     ? `review it, then apply \`${opts.trigger}:approved\` to execute. You can EDIT this comment first — the edited plan is what runs.`
     : `it will execute on the next sweep (\`require_approval = false\`). You can still EDIT this comment before then.`;
   // Outer fence must outrun any inner fence in the plan (>= 4 backticks so the
-  // template's mandatory ```bash block round-trips through extractPlanBody).
+  // template's mandatory ```bash block round-trips through the fence extractors).
   const fence = "`".repeat(Math.max(4, longestBacktickRun(planBody) + 1));
   const out =
     `${PLAN_COMMENT_MARKER}\n**Proposed plan** for #${opts.issue} — ${next}\n\n` +
     fence +
-    PLAN_FENCE +
+    tag +
     "\n" +
     planBody +
     "\n" +
@@ -366,8 +387,11 @@ async function ensureLabels(
  * verification error → "unverified" (skip this sweep, retry next). Also used
  * for the approval label — `atMs` lets the caller compare against the plan
  * comment's timestamp (a stale approval that predates the current plan must
- * not authorize it). */
-async function verifyLabelApplier(
+ * not authorize it). Exported for the plan-set bridge (see
+ * docs/superpowers/specs/2026-08-20-plan-driven-ticket-sets-design.md), which
+ * reuses the same writer/timestamp verification for a plan-SET's approval
+ * label. */
+export async function verifyLabelApplier(
   cfg: Config,
   nwo: string,
   issueNumber: number,
@@ -514,8 +538,11 @@ async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Pr
  * updatedAtMs (NaN when missing/unparseable — the approval gate fails closed
  * on it) lets the caller bind an approval to the comment's CURRENT content:
  * GitHub bumps updated_at on every edit while created_at stays fixed, so an
- * edit after approval is only visible through updated_at. */
-async function findOwnPlanComment(
+ * edit after approval is only visible through updated_at. Exported for the
+ * plan-set bridge (see docs/superpowers/specs/2026-08-20-plan-driven-ticket-
+ * sets-design.md), which recovers its own-authored plan-set comment the same
+ * way. */
+export async function findOwnPlanComment(
   cfg: Config,
   nwo: string,
   issueNumber: number,
