@@ -28,7 +28,8 @@ import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 const NX_VAULT = join(tmpdir(), `junco-nx-${Math.random().toString(36).slice(2)}`);
 const NX_STATE_DIR = join(tmpdir(), `junco-state-${Math.random().toString(36).slice(2)}`);
 
-// Minimal Config for conversion tests — only the fields issueToTicket reads.
+// Minimal Config for conversion tests — only the fields issueToTicket and
+// buildPlanningTicket read.
 const cfg = {
   github: {
     enabled: true,
@@ -40,6 +41,7 @@ const cfg = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
+  planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
 } as unknown as Config;
 const repo = { nwo: "acme/api", path: "/home/u/code/api" };
 const issue = (labels: string[], over: Partial<GhIssue> = {}): GhIssue => ({

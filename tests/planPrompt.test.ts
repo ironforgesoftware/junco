@@ -41,4 +41,15 @@ describe("buildPlannerPrompt", () => {
     const p = buildPlannerPrompt({ ...opts, body: "" });
     expect(p).toContain("_(the issue has no body — plan from the title and the repo)_");
   });
+
+  it("teaches the junco-plan fence only when planSets is on", () => {
+    const base = { title: "T", body: "B", nwo: "a/b", parent: null };
+    const off = buildPlannerPrompt(base);
+    const on = buildPlannerPrompt({ ...base, planSets: true });
+    expect(off).not.toContain("junco-plan");
+    expect(on).toContain("```junco-plan");
+    expect(on).toContain("depends_on");
+    // single-ticket teaching survives in both modes
+    expect(on).toContain("junco-ticket");
+  });
 });

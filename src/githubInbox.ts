@@ -150,6 +150,7 @@ export function issueToTicket(
 export function buildPlanningTicket(
   issue: GhIssue,
   repo: GithubRepoMapping,
+  cfg: Config,
   parent: { title: string; body: string | null } | null,
 ): { id: string; content: string } {
   const id = githubTicketId(repo.nwo, issue.number, "plan");
@@ -168,6 +169,7 @@ export function buildPlanningTicket(
     body: issue.body ?? "",
     nwo: repo.nwo,
     parent,
+    planSets: cfg.planSets.enabled,
   });
   return { id, content: fm.join("\n") + "\n\n" + prompt };
 }
@@ -858,7 +860,7 @@ export async function pollGithubInbox(
           const parent = isAsk ? null : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
           const t = isAsk
             ? issueToTicket(issue, repo, cfg, null)
-            : buildPlanningTicket(issue, repo, parent);
+            : buildPlanningTicket(issue, repo, cfg, parent);
           const stateLabel = isAsk ? ll.queued : ll.planning;
           // Same in-flight guard as the execution path: a prior sweep may have
           // submitted this ticket and then lost the label add (crash, or a
