@@ -40,6 +40,7 @@ import {
 } from "./config.js";
 import type { ConfigParsed } from "./config.js";
 import { parseTicket } from "./ticket.js";
+import { ticketState } from "./ticketDeps.js";
 import { withBotAuth } from "./ghAuth.js";
 import {
   StopFlag,
@@ -1014,6 +1015,26 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
 
     printFn(`submitted: ${dst}\n`);
+
+    // Dangling-edge warning (spec 2026-08-20): submit never refuses — sets may
+    // arrive out of order — but a dep that exists nowhere is probably a typo.
+    // Best-effort only: this must never fail an already-successful submit, so
+    // any error (e.g. an unreadable queue dir) is swallowed silently — it will
+    // surface loudly elsewhere (list/status/the sweep itself).
+    try {
+      const submitted = parseTicket(basename(dst), content);
+      const missing = submitted.dependsOn.filter(
+        (d) => !submitted.depsSatisfied.includes(d) && ticketState(queuePaths(cfg), d) === "absent",
+      );
+      if (missing.length > 0) {
+        process.stderr.write(
+          `junco submit: warning — depends_on references no queued or finished ticket: ${missing.join(", ")} (the ticket will wait until they exist)\n`,
+        );
+      }
+    } catch {
+      /* best-effort warning; the submit already succeeded */
+    }
+
     return 0;
   }
 

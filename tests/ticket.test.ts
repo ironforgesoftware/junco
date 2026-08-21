@@ -253,4 +253,44 @@ describe("parseTicket", () => {
       parseTicket("/in/t10.md", `---\nid: t10\ngithub_request: banana\n---\nb`).githubRequest,
     ).toBeNull();
   });
+
+  describe("dependency fields (spec 2026-08-20)", () => {
+    it("parses depends_on, deps_satisfied, and plan", () => {
+      const t = parseTicket(
+        "t.md",
+        `---
+depends_on: [a, b]
+deps_satisfied: [a]
+plan:
+  id: gh-acme-api-1a2b3c4d-7
+  task: t3
+  hash: abc123def456
+---
+Body`,
+      );
+      expect(t.dependsOn).toEqual(["a", "b"]);
+      expect(t.depsSatisfied).toEqual(["a"]);
+      expect(t.plan).toEqual({
+        id: "gh-acme-api-1a2b3c4d-7",
+        task: "t3",
+        hash: "abc123def456",
+      });
+    });
+
+    it("defaults: absent keys → empty arrays / null plan", () => {
+      const t = parseTicket("t.md", "---\nid: x\n---\nBody");
+      expect(t.dependsOn).toEqual([]);
+      expect(t.depsSatisfied).toEqual([]);
+      expect(t.plan).toBeNull();
+    });
+
+    it("coerces a scalar depends_on to a one-element list; drops non-string entries", () => {
+      expect(parseTicket("t.md", "---\ndepends_on: a\n---\n").dependsOn).toEqual(["a"]);
+      expect(parseTicket("t.md", "---\ndepends_on: [a, 3, '']\n---\n").dependsOn).toEqual(["a"]);
+    });
+
+    it("plan without a string id is rejected whole", () => {
+      expect(parseTicket("t.md", "---\nplan:\n  task: t3\n---\n").plan).toBeNull();
+    });
+  });
 });

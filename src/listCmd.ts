@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Config } from "./types.js";
 import { queuePaths } from "./config.js";
 import { parseResultMeta } from "./resultMeta.js";
+import { parseTicket } from "./ticket.js";
 
 const BOXES = ["inbox", "processing", "done", "failed"] as const;
 type Box = (typeof BOXES)[number];
@@ -72,6 +73,15 @@ export async function runListCommand(
           if (s) statusTag = `  [${s}]`;
         } catch {
           /* vanished between stat and read → list it without a status tag */
+        }
+      }
+      if (b === "inbox") {
+        try {
+          const t = parseTicket(join(dir, e.n), readFileSync(join(dir, e.n), "utf8"));
+          const pending = t.dependsOn.filter((d) => !t.depsSatisfied.includes(d));
+          if (pending.length > 0) statusTag = `  [waiting on: ${pending.join(", ")}]`;
+        } catch {
+          /* vanished between stat and read → no tag */
         }
       }
       print(`  ${e.n}  (${age(e.mtime, now)})${statusTag}\n`);

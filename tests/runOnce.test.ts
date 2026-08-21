@@ -1222,6 +1222,37 @@ describe("claimNextTask (priority ordering)", () => {
   });
 });
 
+describe("claimNextTask dependency gate (spec 2026-08-20)", () => {
+  it("skips a ticket with unsatisfied depends_on; claims once deps_satisfied covers it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    const inbox = join(j, "inbox");
+
+    writeFileSync(join(inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\nBody");
+    expect(await claimNextTask(cfg(root))).toBeNull();
+
+    writeFileSync(
+      join(inbox, "child.md"),
+      "---\nid: child\ndepends_on: [parent]\ndeps_satisfied: [parent]\n---\nBody",
+    );
+    const work = await claimNextTask(cfg(root));
+    expect(work?.ticket.id).toBe("child");
+  });
+
+  it("an unblocked sibling is claimed past a blocked one", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    const inbox = join(j, "inbox");
+
+    writeFileSync(join(inbox, "blocked.md"), "---\nid: blocked\ndepends_on: [p]\n---\n");
+    writeFileSync(join(inbox, "free.md"), "---\nid: free\n---\n");
+    const work = await claimNextTask(cfg(root));
+    expect(work?.ticket.id).toBe("free");
+  });
+});
+
 describe("planner model override", () => {
   it("plan-kind tickets swap cfg.model.id when planner_model_id is set", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-run-"));

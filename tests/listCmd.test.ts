@@ -72,4 +72,10 @@ describe("runListCommand", () => {
     expect(text).toMatch(/inbox \(6\)/);
     expect(text).toMatch(/… 3 more/);
   });
+
+  it("annotates inbox tickets waiting on dependencies", async () => {
+    writeFileSync(join(root, "inbox", "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    await runListCommand(cfg, "inbox", { printFn: (s) => out.push(s) });
+    expect(out.join("")).toContain("[waiting on: parent]");
+  });
 });

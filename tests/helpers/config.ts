@@ -136,6 +136,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
       extraAllowWrite: [],
     },
     botAccount: { enabled: false, configDir: "/sbxroot/junco-gh" },
+    planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
     ...overrides,
   };
 }

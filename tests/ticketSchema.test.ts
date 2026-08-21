@@ -185,4 +185,11 @@ describe("describeTicketSchema()", () => {
     expect(props.amends_pr.type).toBe("number");
     expect(props.amends_pr.minimum).toBe(1);
   });
+
+  it("documents the plan-set keys (spec 2026-08-20)", () => {
+    const props = TICKET_FRONTMATTER_JSON_SCHEMA.properties as Record<string, unknown>;
+    expect(props.depends_on).toBeDefined();
+    expect(props.deps_satisfied).toBeDefined();
+    expect(props.plan).toBeDefined();
+  });
 });

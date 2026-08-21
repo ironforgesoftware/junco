@@ -41,6 +41,7 @@ import { pollGithubInbox, newBridgeState } from "./githubInbox.js";
 import { makeGithubReporter } from "./githubReport.js";
 import type { TicketReporter } from "./reporter.js";
 import { outboxDepth, flushOutbox, type FlushResult } from "./githubOutbox.js";
+import { sweepDependencies } from "./ticketDeps.js";
 
 // ---------------------------------------------------------------------------
 // StopFlag
@@ -272,6 +273,8 @@ export interface MainLoopDeps {
    * behavior), so a second flusher here would be redundant. Defaults to the
    * real flushOutbox. */
   outboxDrainFn?: (cfg: Config) => Promise<FlushResult>;
+  /** Dependency sweep seam (spec 2026-08-20); default sweepDependencies. */
+  depSweepFn?: typeof sweepDependencies;
   /** Live-reload seam (Task 6): when set, per-iteration config reads prefer
    * `configHolder.current` over the `cfg` this loop was started with. Setup
    * (restart-kind) collaborators above intentionally keep reading the
@@ -530,6 +533,24 @@ export async function mainLoop(
   const activeCfg = (): Config =>
     deps.configHolder ? overlayFrozenRestartFields(cfg, deps.configHolder.current) : cfg;
 
+  // Dependency sweep (spec 2026-08-20): stamps deps_satisfied for done+merged
+  // parents and cascades dependents of failed ones. Mode-agnostic — runs with
+  // the bridge disabled — and lazy: a queue with no depends_on edges costs one
+  // readdir per throttled tick.
+  const depSweepFn = deps.depSweepFn ?? sweepDependencies;
+  let lastDepSweepMs = -Infinity;
+  const maybeDepSweep = async (): Promise<void> => {
+    if (monoMs() - lastDepSweepMs < activeCfg().planSets.mergePollSeconds * 1000) return;
+    lastDepSweepMs = monoMs();
+    try {
+      await depSweepFn(activeCfg());
+    } catch (e) {
+      log.warn("dependency sweep failed; queue unaffected", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
   // Provider gate (Task 10): classification-driven claim pausing. A latched
   // auth/quota/misconfig state (or an unexpired rate-limit/outage backoff)
   // pauses claiming without touching retry_count; runOnce/executeClaimed
@@ -712,6 +733,7 @@ export async function mainLoop(
         maybeBridgeSweepFn: async () => {
           await maybeBridgeSweep();
           await maybeOutboxDrain();
+          await maybeDepSweep();
         },
         reporter,
         gate,
@@ -723,10 +745,12 @@ export async function mainLoop(
         metrics.recordPoll();
         await maybeBridgeSweep();
         await maybeOutboxDrain();
+        await maybeDepSweep();
         // A stop can land during the bridge sweep (multi-repo gh calls,
-        // seconds) or the outbox drain — re-check before claiming brand-new
-        // work, mirroring the scheduler's per-claim check above. Without this
-        // a post-signal claim starts up to timeout_minutes of new work.
+        // seconds), the outbox drain, or the dependency sweep — re-check
+        // before claiming brand-new work, mirroring the scheduler's per-claim
+        // check above. Without this a post-signal claim starts up to
+        // timeout_minutes of new work.
         if (stopFlag.requested) break;
         const handled = await runOnceFn(activeCfg());
         if (handled) {

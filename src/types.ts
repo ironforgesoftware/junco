@@ -75,6 +75,15 @@ export interface BotAccountConfig {
   enabled: boolean; // false = today's ambient-gh-auth behavior
   configDir: string; // isolated GH_CONFIG_DIR holding the bot login (expanded)
 }
+/** [planSets] — plan-driven ticket sets (spec 2026-08-20). `enabled` gates plan
+ * COMPILATION (Layer 2, not yet implemented); the Layer-1 dependency machinery
+ * (depends_on claim gating, merge sweep, cascade) is always on and activates
+ * lazily per edge. `maxTasks` is the Layer-2 compiler cap (reserved). */
+export interface PlanSetsConfig {
+  enabled: boolean;
+  mergePollSeconds: number;
+  maxTasks: number;
+}
 /** Runtime-resolved bot auth context (src/ghAuth.ts) — attached to Config by
  * entrypoints, never parsed from config.json. Carried by cfg into git()/gh()
  * so child processes authenticate as the bot. */
@@ -201,6 +210,8 @@ export interface Config {
   sandbox: SandboxConfig;
   // Dedicated bot identity for daemon GitHub traffic (spec 2026-07-15).
   botAccount: BotAccountConfig;
+  // Plan-driven ticket sets (spec 2026-08-20).
+  planSets: PlanSetsConfig;
   // Resolved at entrypoints when botAccount.enabled — NOT part of config.json.
   ghAuth?: GhAuthContext;
 }
@@ -266,6 +277,14 @@ export interface Ticket {
   /** Per-ticket sandbox egress opt-in (frontmatter `network: true`). Null = use
    * the configured `sandbox.network` default. Only ever widens this ticket. */
   network: boolean | null;
+  /** Ticket ids that must be satisfied before claim (spec 2026-08-20): the dep
+   * ticket done AND (when it opened a PR) that PR merged. Dispatcher-settable. */
+  dependsOn: string[];
+  /** Worker-managed: edges the dependency sweep (ticketDeps.ts) has confirmed
+   * satisfied. Claim gates on depends_on ⊆ deps_satisfied — a pure subset check. */
+  depsSatisfied: string[];
+  /** Plan-set membership/provenance (spec 2026-08-20). Null = not part of a set. */
+  plan: { id: string; task: string | null; hash: string | null } | null;
 }
 
 /** Claim-order priority ranking (higher claims first). Shared by runOnce.ts

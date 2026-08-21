@@ -13,6 +13,7 @@ describe("parseResultMeta", () => {
       status: "timeout_partial",
       durationSeconds: 3661,
       prUrl: "https://github.com/o/r/pull/7",
+      dependencyFailed: null,
     });
   });
 
@@ -21,6 +22,7 @@ describe("parseResultMeta", () => {
       status: "completed",
       durationSeconds: 12,
       prUrl: null,
+      dependencyFailed: null,
     });
   });
 
@@ -37,11 +39,13 @@ describe("parseResultMeta", () => {
       status: null,
       durationSeconds: null,
       prUrl: null,
+      dependencyFailed: null,
     });
     expect(parseResultMeta("<!-- junco-result\nstatus:")).toEqual({
       status: "",
       durationSeconds: null,
       prUrl: null,
+      dependencyFailed: null,
     });
   });
 

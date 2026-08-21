@@ -162,6 +162,28 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
         title: { type: "string", description: "Issue title, for display/logging." },
       },
     },
+    depends_on: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Ticket ids that must be satisfied before this ticket is claimed: each referenced ticket finished successfully AND (when it opened a pull request) that PR was merged. Unsatisfied edges leave the ticket queued; a terminally failed dependency parks this ticket in failed/ (dependency cascade).",
+    },
+    deps_satisfied: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Worker-managed: depends_on entries the dependency sweep has confirmed satisfied. Do not set by hand.",
+    },
+    plan: {
+      type: "object",
+      description:
+        "Optional plan-set membership/provenance: ties this ticket to an approved plan. `hash` is worker-managed (content hash of the approved plan).",
+      properties: {
+        id: { type: "string", description: "Plan-set identifier." },
+        task: { type: "string", description: "Task id within the plan that produced this ticket." },
+        hash: { type: "string", description: "Worker-managed: approved-plan content hash." },
+      },
+    },
   },
   required: [],
 };

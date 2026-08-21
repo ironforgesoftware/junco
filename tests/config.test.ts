@@ -1051,3 +1051,19 @@ describe("skills config", () => {
     expect(() => ConfigSchema.parse({ skills: { harnessDirs: "~/.claude/skills" } })).toThrow();
   });
 });
+
+describe("planSets section (spec 2026-08-20)", () => {
+  it("defaults: disabled, 60s merge poll, 10-task cap", () => {
+    const cfg = loadConfig(writeJson({}));
+    expect(cfg.planSets).toEqual({ enabled: false, mergePollSeconds: 60, maxTasks: 10 });
+  });
+
+  it("explicit values parse through", () => {
+    const cfg = loadConfig(
+      writeJson({
+        planSets: { enabled: true, mergePollSeconds: 120, maxTasks: 5 },
+      }),
+    );
+    expect(cfg.planSets).toEqual({ enabled: true, mergePollSeconds: 120, maxTasks: 5 });
+  });
+});

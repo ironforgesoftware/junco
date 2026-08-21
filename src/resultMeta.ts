@@ -10,6 +10,7 @@ export interface ResultMeta {
   status: string | null;
   durationSeconds: number | null;
   prUrl: string | null;
+  dependencyFailed: string | null;
 }
 
 const BLOCK_RE = /<!-- junco-result\n([\s\S]*?)(?:-->|$)/g;
@@ -17,12 +18,18 @@ const BLOCK_RE = /<!-- junco-result\n([\s\S]*?)(?:-->|$)/g;
 export function parseResultMeta(content: string): ResultMeta {
   let last: string | null = null;
   for (const m of content.matchAll(BLOCK_RE)) last = m[1];
-  if (last === null) return { status: null, durationSeconds: null, prUrl: null };
+  if (last === null)
+    return { status: null, durationSeconds: null, prUrl: null, dependencyFailed: null };
   const field = (key: string): string | null => {
     const m = new RegExp(`^${key}: ?(.*)$`, "m").exec(last as string);
     return m ? m[1].trim() : null;
   };
   const durRaw = field("duration_seconds");
   const dur = durRaw !== null && /^\d+$/.test(durRaw) ? parseInt(durRaw, 10) : null;
-  return { status: field("status"), durationSeconds: dur, prUrl: field("pr_url") };
+  return {
+    status: field("status"),
+    durationSeconds: dur,
+    prUrl: field("pr_url"),
+    dependencyFailed: field("dependency_failed"),
+  };
 }

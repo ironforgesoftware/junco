@@ -92,3 +92,55 @@ describe("runRetryCommand", () => {
     expect(await runRetryCommand(cfg, [], {}, { printFn: (s) => out.push(s) })).toBe(2);
   });
 });
+
+describe("dependency-cascade resurrection (spec 2026-08-20)", () => {
+  let root: string;
+  let cfg: Config;
+  let inbox: string;
+  let failedDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "junco-retry-"));
+    for (const d of ["inbox", "processing", "done", "failed"])
+      mkdirSync(join(root, d), { recursive: true });
+    inbox = join(root, "inbox");
+    failedDir = join(root, "failed");
+    cfg = { queueRoot: root, defaultTimeoutMinutes: 30 } as unknown as Config;
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("retrying a parent drags back its cascaded dependents, transitively", async () => {
+    writeFileSync(
+      join(failedDir, "a.md"),
+      "---\nid: a\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\n\nx\n",
+    );
+    writeFileSync(
+      join(failedDir, "b.md"),
+      "---\nid: b\ndepends_on: [a]\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\ndependency_failed: a\n-->\n",
+    );
+    writeFileSync(
+      join(failedDir, "c.md"),
+      "---\nid: c\ndepends_on: [b]\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\ndependency_failed: b\n-->\n",
+    );
+    const out: string[] = [];
+    const code = await runRetryCommand(cfg, ["a"], {}, { printFn: (s) => out.push(s) });
+    expect(code).toBe(0);
+    expect(existsSync(join(inbox, "a.md"))).toBe(true);
+    expect(existsSync(join(inbox, "b.md"))).toBe(true);
+    expect(existsSync(join(inbox, "c.md"))).toBe(true);
+    expect(out.join("")).toContain("requeued (dependent):");
+  });
+
+  it("an unrelated failed ticket is left alone", async () => {
+    writeFileSync(
+      join(failedDir, "a.md"),
+      "---\nid: a\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\n-->\n",
+    );
+    writeFileSync(
+      join(failedDir, "z.md"),
+      "---\nid: z\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\n-->\n",
+    );
+    await runRetryCommand(cfg, ["a"], {}, { printFn: () => {} });
+    expect(existsSync(join(failedDir, "z.md"))).toBe(true);
+  });
+});
