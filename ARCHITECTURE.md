@@ -384,4 +384,15 @@ copy. `junco submit --plan <file> --repo <path>` runs the same compiler behind
 the same `planSets.enabled` flag, but as a local CLI door — no GitHub issue,
 no approval gate, trusted exactly like any locally-authored ticket.
 
+Two known edges: an offline-queued parent PR (the outbox `pr` op's push/create
+replay parked while GitHub was unreachable) currently satisfies a dependent's
+`depends_on` edge at ticket-**done**, not at PR-merge — the finalized ticket
+file records no `pr_url` until the op replays, so a same-sweep dependent can
+claim before the real PR exists; a follow-up will close this window. And
+disabling `planSets.enabled` mid-set freezes that issue's set labels and
+dashboard comment at their last-synced state (`maintainPlanSets` short-
+circuits the whole sweep when the flag is off) — the children keep executing
+via the always-on Layer-1 machinery regardless; re-enabling the flag resumes
+reporting from wherever queue reality has moved to.
+
 The **stable public contract** is the ticket frontmatter schema (`junco schema` / `ticketSchema.ts`). Changing it is a breaking change for any tool that generates tickets.

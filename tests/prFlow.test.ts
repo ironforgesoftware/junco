@@ -962,6 +962,38 @@ exit 1
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0);
   });
 
+  it("offline push for a plan-set child parks a null finalize — the sweep owns set reporting, not a per-child replay (#293-critical-3)", async () => {
+    // Same offline-push shape as the previous test, but the ticket also
+    // carries task.plan (a set child sharing its parent issue with siblings).
+    // Without the `!task.plan` guard, the queued op's finalize block would
+    // replay a per-child comment + label flip on that shared issue when
+    // connectivity returns — bypassing githubReport.ts's onFinal suppression
+    // for plan-set children and thrashing the issue (N children, one issue).
+    const cfg = makeConfig(h, { gitBin: gitFailShim(h.root, "git-offpush-set.sh", "push", NET) });
+    const { task, path } = makeTicket(
+      h,
+      "offpush-set.md",
+      `---\nid: offpush-set\nrepo: ${h.work}\n---\n# Add a feature\n\nDo it.\n`,
+    );
+    task.github = { nwo: "owner/repo", issue: 7, kind: "pr", external: false };
+    task.plan = { id: "p1", task: "b", hash: "abc123" };
+    const flow = await runPrFlow(cfg, task, path, ctxFor(cfg, task), {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      dirs: { done: h.done, failed: h.failed },
+      retryBaseDelayMs: 5,
+    });
+    expect(flow.prQueued).toBe(true);
+    const ops = listOps(cfg);
+    expect(ops).toHaveLength(1);
+    const op = ops[0].op as Extract<OutboxOp, { kind: "pr" }>;
+    expect(op.kind).toBe("pr");
+    // The PR create/push replay itself is untouched — only the comment/label
+    // finalize tail is suppressed for a plan-set child.
+    expect(op.branch).toMatch(/^junco\//);
+    expect(op.pushed).toBe(false);
+    expect(op.finalize).toBeNull();
+  });
+
   it("offline TIMEOUT soft-abort with commits routes to done/ (timeout_partial), not failed/ (#123)", async () => {
     // A timed-out session that committed continues to the phase-11 push. Offline,
     // the composite push→PR→comment op is parked (prQueued) but pushed stays

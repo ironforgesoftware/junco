@@ -11,6 +11,10 @@ export interface ResultMeta {
   durationSeconds: number | null;
   prUrl: string | null;
   dependencyFailed: string | null;
+  /** Plan-set supersede marker (planSets.ts's supersedeUnclaimed): the hash of
+   * the plan revision that pre-empted this ticket before it ever ran. Null =
+   * not a superseded ticket (an ordinary failure, or done/still-queued). */
+  superseded: string | null;
 }
 
 const BLOCK_RE = /<!-- junco-result\n([\s\S]*?)(?:-->|$)/g;
@@ -19,7 +23,13 @@ export function parseResultMeta(content: string): ResultMeta {
   let last: string | null = null;
   for (const m of content.matchAll(BLOCK_RE)) last = m[1];
   if (last === null)
-    return { status: null, durationSeconds: null, prUrl: null, dependencyFailed: null };
+    return {
+      status: null,
+      durationSeconds: null,
+      prUrl: null,
+      dependencyFailed: null,
+      superseded: null,
+    };
   const field = (key: string): string | null => {
     const m = new RegExp(`^${key}: ?(.*)$`, "m").exec(last as string);
     return m ? m[1].trim() : null;
@@ -31,5 +41,6 @@ export function parseResultMeta(content: string): ResultMeta {
     durationSeconds: dur,
     prUrl: field("pr_url"),
     dependencyFailed: field("dependency_failed"),
+    superseded: field("superseded"),
   };
 }

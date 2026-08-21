@@ -173,3 +173,57 @@ describe("dependency-cascade resurrection (spec 2026-08-20)", () => {
     expect((joined.match(/^requeued: /gm) ?? []).length).toBe(2);
   });
 });
+
+describe("plan-set supersede guard (spec 2026-08-20 #293-critical-6)", () => {
+  let root: string;
+  let cfg: Config;
+  let inbox: string;
+  let failedDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "junco-retry-superseded-"));
+    for (const d of ["inbox", "processing", "done", "failed"])
+      mkdirSync(join(root, d), { recursive: true });
+    inbox = join(root, "inbox");
+    failedDir = join(root, "failed");
+    cfg = { queueRoot: root, defaultTimeoutMinutes: 30 } as unknown as Config;
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  // Same shape supersedeUnclaimed (planSets.ts) writes when a plan-set child
+  // is disposed ahead of a recompile — never ran, pre-empted by a newer
+  // approved plan revision.
+  const supersededBody =
+    "---\nid: p1-b\n---\nOld B body\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: rev2\n-->\n";
+
+  it("--all skips a superseded ticket (stays in failed/, prints a skip line)", async () => {
+    writeFileSync(join(failedDir, "p1-b.md"), supersededBody, "utf8");
+    writeFileSync(
+      join(failedDir, "ordinary.md"),
+      "---\nid: ordinary\n---\nx\n\n---\n<!-- junco-result\nstatus: failed\n-->\n",
+      "utf8",
+    );
+    const out: string[] = [];
+    const code = await runRetryCommand(cfg, [], { all: true }, { printFn: (s) => out.push(s) });
+    expect(code).toBe(0);
+    // The superseded ticket is left exactly where it was — a fresh copy under
+    // the same ticketId may already be running the real work.
+    expect(existsSync(join(failedDir, "p1-b.md"))).toBe(true);
+    expect(existsSync(join(inbox, "p1-b.md"))).toBe(false);
+    // An ordinary failure in the same batch is unaffected.
+    expect(existsSync(join(inbox, "ordinary.md"))).toBe(true);
+    expect(out.join("")).toContain("skipped (superseded): p1-b.md");
+  });
+
+  it("an explicit retry by name still proceeds, but warns", async () => {
+    writeFileSync(join(failedDir, "p1-b.md"), supersededBody, "utf8");
+    const out: string[] = [];
+    const code = await runRetryCommand(cfg, ["p1-b"], {}, { printFn: (s) => out.push(s) });
+    expect(code).toBe(0);
+    expect(existsSync(join(inbox, "p1-b.md"))).toBe(true); // the operator asked by name — honored
+    expect(existsSync(join(failedDir, "p1-b.md"))).toBe(false);
+    expect(out.join("")).toContain(
+      "junco retry: warning — p1-b.md was superseded by plan rev rev2; a newer copy may already be queued",
+    );
+  });
+});

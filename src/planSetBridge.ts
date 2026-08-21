@@ -353,13 +353,17 @@ async function removeApprovedLabel(
  *    never re-triggers, and (in `requireApproval` mode) the `approved` label
  *    is removed so re-triggering also requires a fresh approval event, not
  *    just an untouched stale one.
- * 7. Fan out and materialize a FRESH record. Per child: `done` → skip (task
- *    id is task identity across plan versions); `inbox`/`processing` →
- *    shouldn't happen post-disposal/quiescence, skip defensively; `absent`
- *    OR `failed` (our own just-disposed superseded marker, OR an unrelated
- *    PRIOR execution failure) → submit the fresh copy unconditionally — the
- *    ticketState resolver's inbox > failed precedence means any dependent
- *    waits on the fresh copy, never the stale failed one.
+ * 7. Fan out FIRST, THEN materialize a FRESH record (crash-idempotent order —
+ *    see the inline comment at the fan-out loop for why the reverse order is
+ *    unsafe). Per child: `done` → skip (task id is task identity across plan
+ *    versions); `inbox`/`processing` → already landed (a crashed pass of
+ *    this same supersede, or — pre-disposal/quiescence — shouldn't happen),
+ *    skip; `absent` OR `failed` (our own just-disposed superseded marker, OR
+ *    an unrelated PRIOR execution failure) → submit the fresh copy
+ *    unconditionally — the ticketState resolver's inbox > failed precedence
+ *    means any dependent waits on the fresh copy, never the stale failed
+ *    one; a per-child submit failure is caught and logged, never aborting
+ *    the rest of the fan-out or the record materialization that follows.
  * 8. Remove the `approved` label — it authorized THIS supersede; leaving it
  *    would immediately re-trigger on the next sweep.
  */
@@ -473,11 +477,85 @@ async function trySupersede(
     github: g,
   });
 
-  // 7. Fan out + a FRESH record: new hash, same planId, keep statusCommentId
-  // and lastLabel (the dashboard/label steps below re-derive lastLabel from
-  // fresh queue reality), reset degradedPosted/closed/lastFailedHash, and
-  // drop lastDashboard so the next render is treated as a change (the
-  // dashboard repaints).
+  // 7. Fan out FIRST, materialize the FRESH record LAST (#293-critical-4:
+  // crash idempotence). The reverse order — materialize then fan out — was
+  // NOT crash-safe: a crash between them left a fresh record (new hash) on
+  // disk while the old disposed children still read "failed", so the next
+  // sweep's hash check at step 2 would see "unchanged" (record.hash already
+  // equals the candidate's hash) and never resume the fan-out — a spurious
+  // degraded/failed close, with the new plan never actually submitted. With
+  // the fan-out running first, a crash mid-loop leaves the OLD record on
+  // disk, so the next sweep re-triggers this exact supersede from step 2
+  // onward: `supersedeUnclaimed`'s disposal of already-disposed children is a
+  // no-op (findTicketFile only looks in inbox/, where they no longer are),
+  // and the per-child rule below already treats "inbox"/"processing" as
+  // "already landed" and skips it — which is exactly the right call on a
+  // crash-reentry pass, not just the pre-existing (single-pass) defensive
+  // case it was written for.
+  //
+  // Per-child fan-out rule (spec: "task id is task identity across plan
+  // versions" — only a DONE ticket skips on recompile):
+  //   done                → skip (its work already happened)
+  //   inbox / processing  → already landed — an earlier, crashed pass of
+  //                         THIS SAME supersede resubmitted it (or, on a
+  //                         first pass, this shouldn't occur at all, since
+  //                         unclaimed siblings were just disposed above and
+  //                         quiescence already refused to proceed while
+  //                         anything was processing) — skip either way,
+  //                         never double-submit.
+  //   absent / failed     → submit the fresh copy unconditionally. `failed`
+  //                         covers BOTH our own just-disposed superseded
+  //                         marker AND an unrelated prior execution failure
+  //                         (#293-critical-2: silently skipping the latter
+  //                         stranded its dependents, since a stale failed/
+  //                         ticket is not "absent"). The old failed/ copy is
+  //                         left as audit; ticketState's inbox > failed
+  //                         precedence means any dependent's edge resolves
+  //                         against the FRESH copy, never the stale one.
+  //   submit throws       → (e.g. an inbox-slug collision) contained per
+  //                         child so one bad submit never aborts the rest of
+  //                         the fan-out or the record materialization below —
+  //                         logged and left "absent"; a future sweep's
+  //                         supersede (if the plan is edited again) or a
+  //                         manual retry is what recovers it.
+  const paths = queuePaths(cfg);
+  const submitted: string[] = [];
+  const skipped: string[] = [];
+  for (const c of children) {
+    const st = ticketState(paths, c.ticketId);
+    if (st === "done") {
+      skipped.push(c.ticketId);
+      continue;
+    }
+    if (st === "inbox" || st === "processing") {
+      log.warn("plan-set supersede: child already landed at fan-out; skipping", {
+        planId: record.planId,
+        ticketId: c.ticketId,
+        state: st,
+      });
+      skipped.push(c.ticketId);
+      continue;
+    }
+    try {
+      submitTicket(cfg, c.content, { idHint: c.ticketId });
+      submitted.push(c.ticketId);
+    } catch (e) {
+      log.warn("plan-set supersede: child submit failed at fan-out; skipping", {
+        planId: record.planId,
+        ticketId: c.ticketId,
+        error: errMsg(e),
+      });
+      skipped.push(c.ticketId);
+    }
+  }
+  log.info("plan set supersede fan-out", { planId: record.planId, submitted, skipped });
+
+  // New hash, same planId, keep statusCommentId and lastLabel (the
+  // dashboard/label steps below re-derive lastLabel from fresh queue
+  // reality), reset degradedPosted/closed/lastFailedHash, and drop
+  // lastDashboard so the next render is treated as a change (the dashboard
+  // repaints). Materialized only now that fan-out has run — see the ordering
+  // note above.
   const fresh: PlanSetRecord = {
     v: 1,
     planId: record.planId,
@@ -492,44 +570,6 @@ async function trySupersede(
     closed: false,
   };
   materializePlanSet(cfg, fresh, candidate);
-  // Per-child fan-out rule (spec: "task id is task identity across plan
-  // versions" — only a DONE ticket skips on recompile):
-  //   done                → skip (its work already happened)
-  //   inbox / processing  → shouldn't occur here (unclaimed siblings were
-  //                         just disposed above; quiescence already refused
-  //                         to proceed while anything was processing) — warn
-  //                         and skip defensively rather than double-submit.
-  //   absent / failed     → submit the fresh copy unconditionally. `failed`
-  //                         covers BOTH our own just-disposed superseded
-  //                         marker AND an unrelated prior execution failure
-  //                         (#293-critical-2: silently skipping the latter
-  //                         stranded its dependents, since a stale failed/
-  //                         ticket is not "absent"). The old failed/ copy is
-  //                         left as audit; ticketState's inbox > failed
-  //                         precedence means any dependent's edge resolves
-  //                         against the FRESH copy, never the stale one.
-  const paths = queuePaths(cfg);
-  const submitted: string[] = [];
-  const skipped: string[] = [];
-  for (const c of children) {
-    const st = ticketState(paths, c.ticketId);
-    if (st === "done") {
-      skipped.push(c.ticketId);
-      continue;
-    }
-    if (st === "inbox" || st === "processing") {
-      log.warn("plan-set supersede: child unexpectedly still in flight at fan-out; skipping", {
-        planId: record.planId,
-        ticketId: c.ticketId,
-        state: st,
-      });
-      skipped.push(c.ticketId);
-      continue;
-    }
-    submitTicket(cfg, c.content, { idHint: c.ticketId });
-    submitted.push(c.ticketId);
-  }
-  log.info("plan set supersede fan-out", { planId: record.planId, submitted, skipped });
 
   // 8. Remove the approved label — it authorized this supersede.
   await removeApprovedLabel(cfg, g, ll, ghFn, "approved label removal (supersede)");

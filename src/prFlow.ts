@@ -585,9 +585,16 @@ export async function runPrFlow(
       labels: ctx.forkNwo !== null ? [] : ctx.labels,
       reviewers: ctx.reviewers,
       // External tickets stay silent on the upstream issue — no comment/label
-      // replay when connectivity returns (etiquette invariant).
+      // replay when connectivity returns (etiquette invariant). Plan-set
+      // children (task.plan set) are likewise excluded: their comment/label
+      // traffic on the shared parent issue is owned exclusively by the sweep
+      // (maintainPlanSets in planSetBridge.ts) — replaying a per-child
+      // finalize here would post a duplicate comment and thrash the set-level
+      // label, bypassing the reporter's own onFinal suppression for these
+      // tickets (githubReport.ts). The PR create/push replay itself is
+      // unaffected — only this finalize (comment + label) tail is suppressed.
       finalize:
-        task.github && !task.github.external
+        task.github && !task.github.external && !task.plan
           ? { ticketId: task.id, status, finalText: result.finalText }
           : null,
       pushed,

@@ -15,7 +15,7 @@
  * recover both the argv and the exact body bytes per call.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -41,7 +41,26 @@ import { dispatchPlanSet, maintainPlanSets } from "../src/planSetBridge.js";
 import { PLAN_COMMENT_MARKER, PLAN_SET_FENCE, extractPlanSetBody } from "../src/githubInbox.js";
 import { hashPlan } from "../src/planCompiler.js";
 import { sweepDependencies } from "../src/ticketDeps.js";
+import { log } from "../src/logging.js";
 import { makeConfig } from "./helpers/config.js";
+
+// Boxed passthrough (mirrors tests/daemon.test.ts's runOnceBox pattern): every
+// test gets the REAL submitTicket unless it overrides `.current` for its own
+// duration. Needed only by the crash-window test below — a genuine per-child
+// linkSync EEXIST race can't be forced from a test: whatever file we'd place
+// to collide is exactly what ticketState's own pre-check would already read
+// as "already landed" and skip BEFORE ever reaching submitTicket.
+const submitTicketBox = vi.hoisted(() => ({
+  current: null as unknown as (...a: unknown[]) => unknown,
+}));
+vi.mock("../src/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/dispatch.js")>();
+  submitTicketBox.current = actual.submitTicket as unknown as (...a: unknown[]) => unknown;
+  return {
+    ...actual,
+    submitTicket: (...args: unknown[]) => submitTicketBox.current(...args),
+  };
+});
 
 const NOW = "2026-08-20T12:00:00.000Z";
 
@@ -616,6 +635,81 @@ tasks:
     const blocks = readLog();
     const approvedRemoval = blocks.find((b) => b.argv.includes("--remove-label junco:approved"));
     expect(approvedRemoval).toBeDefined();
+  });
+
+  // #293-critical-4: crash-idempotent supersede ordering — the fan-out loop
+  // must run to completion (containing any per-child submit failure) BEFORE
+  // the fresh record is materialized, not after. This test can't force a
+  // genuine crash mid-loop, so it proves the same observable shape a crash
+  // would leave behind via the next-closest thing: one child's submitTicket
+  // call throws (simulating an inbox-slug collision) while its siblings
+  // succeed. It demonstrates two things the OLD (materialize-then-fan-out)
+  // ordering could not guarantee together: (a) a per-child failure is
+  // contained — the rest of the fan-out still lands, and (b) the record is
+  // written only AFTER the loop finishes, not straddling it — the exact
+  // window where the old ordering could strand a fresh (new-hash) record on
+  // disk with children not yet actually submitted, which the NEXT sweep's
+  // hash check (step 2: newHash === record.hash) would then wrongly read as
+  // "unchanged" and never retry.
+  it("a partial fan-out failure (one child's submit throws) still materializes the fresh record after the others land, and warns", async () => {
+    const rec = baseRecord({
+      hash: "orig-hash",
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:done",
+      closed: true, // a finished set — supersede must reopen it
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(qp.inbox, "p1-b.md"), "---\nid: p1-b\n---\nOld B body\n");
+
+    writeFakeGh(root, approvedSupersedeGhOpts(EDITED_FENCE));
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    // EDITED_FENCE compiles to tasks a/b/c — make ONLY "c"'s submit throw,
+    // exactly like a genuine inbox-slug collision (dispatch.ts's "ticket
+    // already queued" error), while "b" (a real recompile) still goes
+    // through the real submitTicket.
+    const realSubmitTicket = submitTicketBox.current;
+    submitTicketBox.current = (...args: unknown[]) => {
+      const opts = args[2] as { idHint?: string } | undefined;
+      if (opts?.idHint === "p1-c") {
+        throw new Error("ticket already queued: /sbxroot/queue/inbox/p1-c.md");
+      }
+      return realSubmitTicket(...args);
+    };
+    try {
+      await maintainPlanSets(cfg);
+    } finally {
+      submitTicketBox.current = realSubmitTicket;
+    }
+
+    // "b" (the edited recompile) landed normally; "c" did not — its submit
+    // threw and was contained, not fatal to the rest of the fan-out.
+    const freshB = readFileSync(join(qp.inbox, "p1-b.md"), "utf8");
+    expect(freshB).toContain("T B v2");
+    expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(false);
+
+    // The fresh record is STILL materialized — new hash, full task list
+    // (including the failed "c", which the fan-out will pick up on a later
+    // supersede or an operator retry) — proving materialization happens once
+    // fan-out has run, not interleaved with (or ahead of) it.
+    const expectedHash = hashPlan(extractPlanSetBody(ownPlanComment(EDITED_FENCE)) as string);
+    const persisted = readPlanSetRecord(cfg, "p1");
+    expect(persisted?.hash).toBe(expectedHash);
+    expect(persisted?.hash).not.toBe("orig-hash");
+    expect(persisted?.tasks.map((t) => t.id).sort()).toEqual(["a", "b", "c"]);
+
+    const warned = warnSpy.mock.calls.some(
+      (call) => typeof call[0] === "string" && call[0].includes("child submit failed at fan-out"),
+    );
+    expect(warned).toBe(true);
+    warnSpy.mockRestore();
   });
 
   it("supersede defers while a child is processing", async () => {

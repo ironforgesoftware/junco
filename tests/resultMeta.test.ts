@@ -14,6 +14,7 @@ describe("parseResultMeta", () => {
       durationSeconds: 3661,
       prUrl: "https://github.com/o/r/pull/7",
       dependencyFailed: null,
+      superseded: null,
     });
   });
 
@@ -23,7 +24,12 @@ describe("parseResultMeta", () => {
       durationSeconds: 12,
       prUrl: null,
       dependencyFailed: null,
+      superseded: null,
     });
+  });
+
+  it("parses the superseded marker (planSets.ts's supersedeUnclaimed)", () => {
+    expect(parseResultMeta(BLOCK("status: failed\nsuperseded: abc123")).superseded).toBe("abc123");
   });
 
   it("last block wins on a retried ticket", () => {
@@ -40,12 +46,14 @@ describe("parseResultMeta", () => {
       durationSeconds: null,
       prUrl: null,
       dependencyFailed: null,
+      superseded: null,
     });
     expect(parseResultMeta("<!-- junco-result\nstatus:")).toEqual({
       status: "",
       durationSeconds: null,
       prUrl: null,
       dependencyFailed: null,
+      superseded: null,
     });
   });
 

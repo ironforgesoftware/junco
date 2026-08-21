@@ -850,9 +850,17 @@ export async function pollGithubInbox(
                 );
                 if (!dr.ok) {
                   const errList = dr.errors.map((e) => `- ${e}`).join("\n");
+                  // Unlike the supersede failure comment (planSetBridge.ts),
+                  // "edit + re-approve" is a dead end here: this branch already
+                  // removed plan-ready and flips to junco:failed below, so the
+                  // dispatch branch (which requires plan-ready) can never see a
+                  // re-approval — and re-adding plan-ready by hand while
+                  // junco:failed stands gets stripped by the lingering-label
+                  // cleanup on the next sweep. Mirror the single-ticket failure
+                  // comment's working gesture instead (githubReport.ts).
                   const failureComment =
                     `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
-                    `_Edit the plan comment and re-apply approval to retry._\n`;
+                    `_Remove the \`${ll.failed}\` label to re-plan from scratch._\n`;
                   const failId = `${repo.nwo}#${issue.number}`;
                   const failRemove = [
                     ll.planReady,

@@ -76,9 +76,12 @@ export interface BotAccountConfig {
   configDir: string; // isolated GH_CONFIG_DIR holding the bot login (expanded)
 }
 /** [planSets] — plan-driven ticket sets (spec 2026-08-20). `enabled` gates plan
- * COMPILATION (Layer 2, not yet implemented); the Layer-1 dependency machinery
- * (depends_on claim gating, merge sweep, cascade) is always on and activates
- * lazily per edge. `maxTasks` is the Layer-2 compiler cap (reserved). */
+ * COMPILATION: whether a `junco-plan` fence is compiled into a dependency-
+ * ordered ticket set — the doors are the bridge (dispatchPlanSet, an approved
+ * plan comment) and the local CLI (`junco submit --plan`). The Layer-1
+ * dependency machinery (depends_on claim gating, merge sweep, cascade) is
+ * always on and activates lazily per edge, independent of this flag.
+ * `maxTasks` is the compiler's per-plan task cap. */
 export interface PlanSetsConfig {
   enabled: boolean;
   mergePollSeconds: number;
