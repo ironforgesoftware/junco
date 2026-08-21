@@ -26,12 +26,12 @@ import {
   type FlushResult,
   type OutboxOp,
 } from "./githubOutbox.js";
-// NOTE: planSetBridge.ts imports githubTicketId from this module, so this
-// import creates a module cycle. Runtime-safe: both bindings are only
-// dereferenced inside function bodies (pollGithubInbox / dispatchPlanSet),
-// never during module evaluation — same pattern as runOnce.ts's assessFlow/
-// analyzeFlow cycles.
-import { dispatchPlanSet } from "./planSetBridge.js";
+// NOTE: planSetBridge.ts imports githubTicketId/lifecycleLabels from this
+// module, so this import creates a module cycle. Runtime-safe: both bindings
+// are only dereferenced inside function bodies (pollGithubInbox /
+// dispatchPlanSet / maintainPlanSets), never during module evaluation — same
+// pattern as runOnce.ts's assessFlow/analyzeFlow cycles.
+import { dispatchPlanSet, maintainPlanSets } from "./planSetBridge.js";
 
 /** GitHub's hard cap is 65,536 chars; leave headroom for the truncation note.
  * Lives here (not githubReport.ts) so buildPlanComment can share it without an
@@ -1063,5 +1063,19 @@ export async function pollGithubInbox(
       });
     }
   }
+
+  // Sweep-driven plan-set maintenance (dashboard/labels/degraded comment):
+  // once per sweep, after the repo/issue loop, so it runs on the same
+  // cadence regardless of which (if any) repos had eligible issues this
+  // round. Contained like everything else here — a maintenance bug must
+  // never take the queue down with it.
+  if (cfg.planSets.enabled) {
+    try {
+      await maintainPlanSets(cfg, { ghFn });
+    } catch (e) {
+      log.warn("plan-set maintenance failed; queue unaffected", { error: errMsg(e) });
+    }
+  }
+
   return bridged;
 }

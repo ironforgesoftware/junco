@@ -27,6 +27,12 @@ export interface PlanSetRecord {
   degradedPosted: boolean;
   lastLabel: string | null; // last set-level lifecycle label applied
   closed: boolean; // all-terminal handled; maintenance stops
+  /** Last dashboard body successfully written to the status comment (bridge
+   * sets, Task 10). Byte-identical render on the next sweep skips the gh
+   * call entirely. Additive — absent on records from before this field
+   * existed; readPlanSetRecord only checks `v === 1`, so those tolerate it
+   * being undefined (the next sweep just re-syncs unconditionally once). */
+  lastDashboard?: string;
 }
 
 export function plansDir(cfg: Config): string {
