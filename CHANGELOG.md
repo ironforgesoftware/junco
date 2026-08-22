@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `JUNCO_CONFIG` names the config file explicitly, for scripted, CI and sandbox contexts. It overrides the canonical `~/.junco/config.json` (a leading `~` expands; an empty value is ignored), and the daemon's `worker.lock` follows it — so two configs mean two independent instances. Config resolution otherwise remains a pure function of the environment, never the working directory.
-- The daemon now writes `data/metrics.json` — the counters `junco status` and the dashboard read over `/health`, persisted for out-of-process readers. Written atomically, debounced, and stamped at startup and shutdown; a write failure is logged and never interrupts the worker.
+- `JUNCO_CONFIG` names the config file explicitly, for scripted, CI and sandbox contexts. It overrides the canonical `~/.junco/config.json` (a leading `~` expands; a relative value is resolved to an absolute path; an empty value is ignored), and the daemon's `worker.lock` follows it — so two configs each take their own lock and both run. **They are independent instances only if they also set different `dataDir`s**: the lock sits next to `config.json`, not under the data root, so two configs over one `dataDir` mean two daemons on one queue, which corrupts it. See `docs/configuration.md`. The overridden config is denied to the agent sandbox alongside the canonical and legacy ones.
+- The daemon now writes `metrics.json` into the data tree (`<dataDir>/data/metrics.json`; `<dataDir>/metrics.json` on a pre-0.10 `flat` root) — the counters `junco status` and the dashboard read over `/health`, persisted for out-of-process readers. Written atomically, debounced, and stamped at startup and shutdown; a write failure is logged and never interrupts the worker.
 
 ### Changed
 

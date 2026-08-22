@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, dirname, isAbsolute } from "node:path";
 import {
   loadConfig,
   queuePaths,
@@ -19,6 +19,7 @@ import {
   ConfigSchema,
   expandHome,
   configDeprecations,
+  configPathOverride,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -826,6 +827,54 @@ describe("resolveConfigPath / juncoHome / legacyConfigPath", () => {
   it("an empty or whitespace JUNCO_CONFIG is ignored", () => {
     const env = { HOME: "/h", JUNCO_CONFIG: "   " };
     expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
+  });
+
+  it("a relative JUNCO_CONFIG resolves to an absolute path — no launch-directory drift", () => {
+    // Pre-fix this was returned verbatim, so the config path (and with it
+    // dataDir, queueRoot and worker.lock) followed the launch directory —
+    // the cwd-dependence this module was rewritten to eliminate.
+    const env = { HOME: "/h", JUNCO_CONFIG: "junco.json" };
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/one");
+    try {
+      const p = resolveConfigPath({ existsFn: () => false, env });
+      expect(isAbsolute(p)).toBe(true);
+      expect(p).toBe(join("/one", "junco.json"));
+      // Being already absolute is what makes the two spellings of the
+      // worker.lock derivation agree from ANY directory: `junco start` uses
+      // dirname(resolve(configPath)) (cli.ts) while `junco doctor` uses
+      // dirname(configPath) — on a relative value a launchd daemon (cwd "/")
+      // and an operator shell looked for the lock in two different places.
+      cwdSpy.mockReturnValue("/two");
+      expect(resolve(p)).toBe(p);
+      expect(dirname(resolve(p))).toBe(dirname(p));
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  it("an absolute JUNCO_CONFIG is normalized and never depends on process.cwd()", () => {
+    const env = { HOME: "/h", JUNCO_CONFIG: "/w/sub/../cfg.json" };
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/one");
+    try {
+      expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/w/cfg.json");
+      cwdSpy.mockReturnValue("/two");
+      expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/w/cfg.json");
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  it("configPathOverride is the ONE spelling of the override, shared with the sandbox deny list", () => {
+    expect(configPathOverride({ HOME: "/h", JUNCO_CONFIG: "/w/cfg.json" })).toBe("/w/cfg.json");
+    expect(configPathOverride({ HOME: "/h", JUNCO_CONFIG: "~/cfg.json" })).toBe(
+      join(homedir(), "cfg.json"),
+    );
+    expect(configPathOverride({ HOME: "/h" })).toBeUndefined();
+    expect(configPathOverride({ HOME: "/h", JUNCO_CONFIG: "   " })).toBeUndefined();
+    // resolveConfigPath must never disagree with it — dataTree.sandboxDenyPaths
+    // denies exactly what this returns, and a drift means a readable apiKey.
+    const env = { HOME: "/h", JUNCO_CONFIG: "~/cfg.json" };
+    expect(resolveConfigPath({ existsFn: () => true, env })).toBe(configPathOverride(env));
   });
 
   it("legacyConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {

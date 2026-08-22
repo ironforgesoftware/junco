@@ -115,6 +115,7 @@ import {
   juncoHome,
   legacyConfigPath,
   defaultUserConfigPath,
+  configPathOverride,
 } from "./config.js";
 import {
   migrateStateTree,
@@ -518,15 +519,19 @@ export async function runDataMigrate(
   // I-2: whether THIS run's config lives at the legacy XDG path — decoupled
   // from targetRoot/legacyRoot (data-root state), see the module doc comment.
   //
-  // Under a JUNCO_CONFIG override (#275) `configPath` is neither this nor
-  // `canonicalConfigPath` — it's some explicitly-named third path — so this
-  // equality is false and the relocation phase below never fires. That is
-  // correct (an operator who named a config explicitly does not want it
-  // silently moved), but it's incidental: this check was never written with
-  // JUNCO_CONFIG in mind. Do not "fix" it into something that would relocate
-  // a deliberately-placed config.
+  // An EXPLICITLY-NAMED config (JUNCO_CONFIG, #275) is never relocated: an
+  // operator who named a config does not want it silently moved, and moving
+  // it would break every subsequent command in that same environment (ENOENT
+  // on the named path; bare `junco` would open the setup wizard instead). The
+  // override check is the guard, and it is NOT redundant with the equality
+  // below: JUNCO_CONFIG accepts any value, including exactly the legacy path,
+  // so `JUNCO_CONFIG=~/.config/junco/config.json junco data migrate` on a
+  // pre-0.10 install would otherwise make `configPathIsLegacy` true and fire
+  // the relocation phase. Do not drop it, and do not "fix" the equality into
+  // something that relocates a deliberately-placed config.
+  const configIsExplicitlyNamed = configPathOverride(env) !== undefined;
   const canonicalConfigPath = defaultUserConfigPath(env);
-  const configPathIsLegacy = configPath === legacyConfigPath(env);
+  const configPathIsLegacy = !configIsExplicitlyNamed && configPath === legacyConfigPath(env);
 
   // 1a. Daemon-up refusal — both signals skipped entirely by --force.
   if (!opts.force) {

@@ -47,7 +47,18 @@ import type { MetricsSnapshot } from "./metrics.js";
  * is an internal debounce cadence, not an operator-facing knob. */
 const METRICS_WRITE_INTERVAL_MS = 10_000;
 
+/** Monotonic milliseconds — the same source (and spelling) every other daemon
+ * debounce uses (`monoMs` in daemon.ts, `sleepInterruptible`). Deliberately
+ * NOT `Date.now()`: a backwards wall-clock step (NTP correction, DST on a
+ * localtime-keyed clock) makes `t - lastWriteAt` negative, which is `<` the
+ * interval, so every debounced write would be suppressed for the duration of
+ * the step. The value has no epoch meaning — only differences are used. */
+const monoMs = (): number => Number(process.hrtime.bigint() / 1_000_000n);
+
 export interface MetricsWriterDeps {
+  /** Monotonic ms source for the debounce window (default: `monoMs`). Only
+   * differences between successive calls are ever read, never an absolute
+   * time — a test clock can start anywhere. */
   now?: () => number;
   writeFileFn?: typeof writeFileSync;
   renameFn?: typeof renameSync;
@@ -68,7 +79,7 @@ export interface MetricsWriter {
 }
 
 export function makeMetricsWriter(file: string, deps: MetricsWriterDeps = {}): MetricsWriter {
-  const now = deps.now ?? (() => Date.now());
+  const now = deps.now ?? monoMs;
   const writeFileFn = deps.writeFileFn ?? writeFileSync;
   const renameFn = deps.renameFn ?? renameSync;
   const mkdirFn = deps.mkdirFn ?? mkdirSync;
