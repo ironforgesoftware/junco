@@ -155,7 +155,9 @@ That fourth test is load-bearing: it pins the ruling above against a future "let
 
 **Insertion point: after the collaborator block ends (`src/daemon.ts:634`) and BEFORE `migLock` (`:651`).**
 
-**Why exactly there — this is easy to get wrong.** The startup order is: migrate (`:656`) → `mkdirs`/`ensureDataTree` (`:671`) → skill links (`:678`) → `recoverOrphans` (`:692`, destructive) → `pruneStaleWorktrees` (`:693`, destructive) → `waitForEndpoint` (`:694`) → "worker online" (`:696`) → health bind (`:706`). **`ensureDataTree` creates the resolved queue**, so a check placed after it degrades from "your tickets are in the other root" to "you have no tickets yet" — the detector still works, but the operator loses the signal that something is wrong. It must also precede both destructive steps.
+**Why exactly there — this is easy to get wrong.** The startup order is: migrate (`:656`) → `mkdirs`/`ensureDataTree` (`:671`) → skill links (`:678`) → `recoverOrphans` (`:692`, destructive) → `pruneStaleWorktrees` (`:693`, destructive) → `waitForEndpoint` (`:694`) → "worker online" (`:696`) → health bind (`:706`). It must precede both destructive steps, so the operator sees the mismatch before the daemon acts on the wrong root.
+
+**Correction (final review):** this plan originally gave a second reason first — that `ensureDataTree` creating the resolved queue would degrade the finding to "you have no tickets yet". **That argument is false and has been removed from the shipped code, tests, and CHANGELOG.** `discoverTasks` returns `[]` for both ENOENT and an existing-empty directory, so whether the queue dir exists changes nothing about the detector's answer. Recorded here rather than deleted because the false reason is the more memorable one, and a maintainer who rediscovers it, finds it inert, and concludes the whole ordering constraint is cargo-culting could move the guard below `recoverOrphans` and silently destroy the feature.
 
 Match the existing prominent-warning idiom at `src/cli.ts:576-580`: prose message plus structured path fields plus an `advice:` field. Logger API: `src/logging.ts:179-184`.
 
