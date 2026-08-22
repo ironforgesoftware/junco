@@ -215,6 +215,55 @@ describe("sandboxDenyPaths", () => {
     expect(deny.dirs).not.toContain("/sbxroot/home/.junco");
     expect(deny.dirs).not.toContain("/sbxroot/home/.junco/cache");
   });
+
+  // Drift guard (#277): sandboxDenyPaths is a hand-maintained enumeration —
+  // it cannot simply deny the root, because the agent's own cwd
+  // (cache/worktrees) and git object reads (cache/clones) live under it. That
+  // makes it prone to silent omission: `plans` joined the data tree with the
+  // plan-sets work and stayed agent-readable until 2026-08-21. This test fails
+  // when a NEW DataTreePaths field is neither denied nor listed as exempt, so
+  // the choice has to be made deliberately rather than forgotten.
+  it("classifies every data-tree entry as denied or deliberately exempt", () => {
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/home/.junco",
+      queueRoot: "/sbxroot/home/.junco/queue",
+      worktreeRoot: "/sbxroot/home/.junco/cache/worktrees",
+      dataLayout: "v2",
+      github: {
+        ...makeConfig().github,
+        externalReposRoot: "/sbxroot/home/.junco/cache/clones/external",
+      },
+    });
+    const paths = dataTreePaths(cfg);
+    const deny = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
+    const denied = [...deny.dirs, ...deny.files];
+
+    // Each entry must stay agent-READABLE, with the reason it has to.
+    const EXEMPT: Record<string, string> = {
+      root: "CRITICAL invariant: ancestor of the agent's writable roots",
+      queue: "not a path (Paths object) — denied via cfg.queueRoot",
+      worktrees: "the agent's own cwd",
+      clonesWatched: "git object reads from the watched clone",
+      clonesExternal: "git object reads from external clones",
+      skills:
+        "symlink to the INSTALLED PACKAGE's public skills/ dir — canonicalize() " +
+        "realpaths it, so a deny here would land on the junco install, not the data tree",
+    };
+
+    const covered = (v: string) => denied.some((d) => v === d || v.startsWith(d + "/"));
+
+    for (const [field, value] of Object.entries(paths)) {
+      if (field in EXEMPT) continue;
+      expect(
+        typeof value,
+        `DataTreePaths.${field} is new and unclassified: deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
+      ).toBe("string");
+      expect(
+        covered(value as string),
+        `DataTreePaths.${field} (${String(value)}) is neither denied nor exempt — deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
+      ).toBe(true);
+    }
+  });
 });
 
 describe("ensureDataTree", () => {
