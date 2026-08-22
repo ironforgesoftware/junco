@@ -195,6 +195,13 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * working tree — only cache/'s named subtrees (mirror, github-cache) are
  * denied, never cache/ itself.
  *
+ * `skills` is exempt for a different reason: it is a SYMLINK to the installed
+ * package's `skills/` dir (skillLinks.ts:97-98), so `canonicalize()` would
+ * resolve a deny here onto the junco installation rather than the data tree —
+ * denying the wrong target to protect public packaged content. The full list
+ * of exemptions, each with its reason, is asserted in tests/dataTree.test.ts
+ * ("classifies every data-tree entry as denied or deliberately exempt").
+ *
  * `env` resolves the canonical config file location (`defaultUserConfigPath`)
  * — it may hold `model.apiKey`; before the single-root move the config lived
  * outside the data root and escaped this deny list entirely, so folding it

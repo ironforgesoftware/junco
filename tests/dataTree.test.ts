@@ -207,7 +207,7 @@ describe("sandboxDenyPaths", () => {
     // too, since an un-migrated machine's daemon actually reads it — the
     // ACTIVE config, not the canonical one, may hold model.apiKey.
     expect(deny.files).toContain(legacyConfigPath({ HOME: "/sbxroot/home" }));
-    // never an ancestor of the agent's writable roots (backend.ts:42-53 invariant):
+    // never an ancestor of the agent's writable roots (backend.ts:66-77 invariant):
     for (const d of deny.dirs) {
       expect("/sbxroot/home/.junco/cache/worktrees".startsWith(d + "/")).toBe(false);
       expect("/sbxroot/home/.junco/cache/clones".startsWith(d + "/")).toBe(false);
