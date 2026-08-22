@@ -195,17 +195,36 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * backends enforce them differently (Seatbelt subpath vs literal; bwrap tmpfs
  * vs /dev/null bind).
  *
- * #277: this is DENY-BY-DEFAULT. The whole data root is denied wholesale and
- * the agent's execution roots are allowed back — it is no longer a
- * hand-maintained enumeration of the sensitive subtrees, which drifted (`plans`
- * joined the tree with the plan-sets work and stayed agent-readable until
- * 2026-08-21). Precedence is longest-prefix-wins over the composed rule set
+ * #277: this is DENY-BY-DEFAULT, in two layers that do NOT subsume each other.
+ * Precedence is longest-prefix-wins over the composed rule set
  * (`agent/sandbox/precedence.ts`), never list order, so a deny, an allow-back
  * inside it, and a re-deny inside THAT all coexist:
  *
  *   v2:    deny <root>  >  allow <root>/cache  >  deny cache/{mirror,github-cache}
  *                                               + deny cache/update-check.json (a `files` entry)
  *   flat:  deny <root>  >  allow worktrees/ and clones/   (no cache/ tier exists)
+ *
+ * 1. CONTAINMENT — the whole data root is denied wholesale, so anything
+ *    daemon-owned is denied the day it JOINS the tree rather than the day
+ *    someone remembers to list it here. That is what killed the old drift mode
+ *    (`plans` joined the tree with the plan-sets work and stayed agent-readable
+ *    until 2026-08-21).
+ * 2. EXPLICIT SUBTREE DENIES at each subtree's own natural depth — every
+ *    daemon-owned subtree is ALSO named below. Redundant while the allow-backs
+ *    sit where the layout puts them; NOT redundant when one moves. `allowDirs`
+ *    re-allows two legacy-overridable roots by name, and an operator who points
+ *    one of them at a whole tier (`git.worktreeRoot = <root>/data` on v2)
+ *    out-specifies a deny that exists only at the root — transcripts, plan-set
+ *    records, the outbox and history would be agent-readable again, which is
+ *    exactly what the pre-#277 enumeration prevented (final review 2026-08-22,
+ *    reproduced by execution). A deny at the subtree's own depth cannot be
+ *    out-specified by a shallower allow-back, and an exact-path tie resolves to
+ *    deny (precedence.ts's `effect` tiebreak).
+ *
+ * Containment covers what nobody listed; the explicit denies cover what an
+ * allow-back uncovered. Neither is a fallback for the other, and the drift
+ * guard in tests/dataTree.test.ts asserts the RESOLVED effect of every
+ * `DataTreePaths` field so a new entry still has to be classified either way.
  *
  * Denying an ancestor of the agent's writable roots is safe BECAUSE the writable
  * roots are themselves allow rules at their own depth (`policy.readRules`) — the
@@ -219,19 +238,47 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * operator can park them anywhere, including inside the root but outside the
  * tier that would otherwise cover them.
  *
- * `skills` is now DENIED (it is `<root>/skills`, under the wholesale deny) and
- * needs no exemption: nothing here names it, so the old hazard — it is a SYMLINK
- * to the installed package's `skills/` dir (skillLinks.ts), and `canonicalize()`
- * would have resolved a deny ON it onto the junco installation, protecting
- * public packaged content instead of the data tree — cannot arise. It is a
- * distribution mount for external harnesses, never read by the sandboxed agent.
+ * `skills` is DENIED by containment (it is `<root>/skills`) and is deliberately
+ * NOT named here: it is a SYMLINK to the installed package's `skills/` dir
+ * (skillLinks.ts), a distribution mount for external harnesses that the
+ * sandboxed agent never reads, so a deny ON it would be resolved onto the junco
+ * INSTALLATION by `canonicalize()` — protecting public packaged content instead
+ * of the data tree.
+ *
+ * What the three layers actually do with it, corrected at final review
+ * 2026-08-22 and re-verified here by running real `sandbox-exec` against a real
+ * tree on macOS (the note that stood here before had it exactly backwards,
+ * over-confident about the OS layer — the error class this branch exists to
+ * police):
+ *   - Seatbelt DENIES `cat <root>/skills/SKILL.md` while permitting the same
+ *     read against the symlink's real target. The `skills` entry itself lies
+ *     inside the denied subpath, so the traversal never reaches that target.
+ *   - bwrap denies it too — its tmpfs over the root replaces the directory the
+ *     symlink lives in. (Reasoned, not executed: no bwrap on this host.)
+ *   - Only the JS path-jail PERMITS it, because `canonicalize()` resolves the
+ *     symlink OUT of the denied root before `resolveRead` ever sees the path.
+ * Accepted: what the path-jail reaches is the installed package's public
+ * `skills/` dir, no data-tree content is reachable that way, and canonicalizing
+ * first is exactly what closes the direction that WOULD matter — a symlink
+ * planted in the worktree aiming at `config.json` came back denied on both the
+ * path-jail and Seatbelt in that same run. Note the drift guard's
+ * `resolveRead(paths.skills) === "deny"` is the raw-path answer: what the OS
+ * backends enforce, and what the path-jail never asks.
  * Every entry's resolved effect is asserted in tests/dataTree.test.ts
  * ("classifies every data-tree entry as denied or deliberately readable").
  *
  * The root receipt files stay enumerated in `files`. Most are redundant under
  * the root deny, but they are what keeps a receipt denied when a layout puts one
  * INSIDE an allow-back — v2's `cache/update-check.json` is exactly that case
- * today, and it is only denied because it is listed here.
+ * today, and it is only denied because it is listed here. Accepted residual on
+ * bwrap ONLY: that one receipt is written lazily by the CLI-side update checker
+ * (updateCheck.ts), and bwrap skips a deny whose target does not exist, so while
+ * it is absent a cache written mid-session is readable inside the `cache/`
+ * ro-bind. It is NOT pre-created the way the directories are: `data migrate`
+ * treats a FILE at a destination as a conflict (`isRecursivelyEmptyDir`), so a
+ * placeholder would permanently block the real cache from migrating. The content
+ * is public npm-registry data (a version string and two timestamps) with no
+ * operator data in it; Seatbelt and the path-jail deny it by name regardless.
  *
  * `env` resolves the canonical config file location (`defaultUserConfigPath`)
  * — it may hold `model.apiKey`; the config can live outside the data root
@@ -252,20 +299,43 @@ export function sandboxDenyPaths(
   // See the LAYOUTS comment above for why the fallback is "flat", not "v2".
   const cacheRoot = LAYOUTS[cfg.dataLayout ?? "flat"].cacheRoot;
   return {
+    // Deduped: `logsDir` IS the root under the flat layout (join(r, ".")), and
+    // a duplicated deny would emit a redundant mount/profile line per backend.
     dirs: [
-      // The whole tree, wholesale (#277). Everything daemon-owned — tickets,
-      // review queues, outbox ops, transcripts, plan-set records, history,
-      // logs, receipts — is denied by containment, so none of them can be
-      // forgotten here again.
-      p.root,
-      // Kept as-is: a legacy vaultRoot queue lives OUTSIDE the root.
-      cfg.queueRoot,
-      // Re-denied inside the cache/ allow-back below (v2). Under flat both sit
-      // directly at the root with no allow-back over them, so these two entries
-      // are redundant there — listing them unconditionally keeps one code path
-      // and one obvious reading: these are never agent-readable in any layout.
-      p.mirror,
-      p.githubCache, // legacy TUI cache (tui/ghClient.ts still owns it)
+      ...new Set([
+        // --- Layer 1: containment (see the doc comment above). The whole tree,
+        // wholesale (#277). Everything daemon-owned is denied by belonging to
+        // the root, so nothing can be forgotten here again.
+        p.root,
+        // Kept as-is: a legacy vaultRoot queue lives OUTSIDE the root.
+        cfg.queueRoot,
+        // --- Layer 2: every daemon-owned subtree at its own natural depth, so
+        // a mis-set allow-back (`git.worktreeRoot`/`github.externalReposRoot`
+        // pointed at a whole tier) can never out-specify the deny that protects
+        // it. Ordered as the tree reads, not by sensitivity — all of it is
+        // daemon-owned. `clonesWatched`/`worktrees`/`clonesExternal` are the
+        // agent's execution roots and are deliberately absent (they are
+        // allow-backs below); `skills` is deliberately absent too (see the doc
+        // comment). Every one of these is materialized by ensureDataTree, which
+        // matters on bwrap: a deny whose target does not exist is skipped
+        // (agent/sandbox/backend.ts), so an unmaterialized subtree inside an
+        // allow-back would be a real hole.
+        ...Object.values(p.queue),
+        p.reviewAssess,
+        p.reviewComments,
+        p.outbox,
+        p.transcripts,
+        p.plans,
+        p.history,
+        p.assessHistory,
+        p.logsDir,
+        // Re-denied inside the cache/ allow-back (v2). Under flat both sit
+        // directly at the root with no allow-back over them, so these two are
+        // Layer-2 entries there — listing them unconditionally keeps one code
+        // path and one obvious reading: never agent-readable in any layout.
+        p.mirror,
+        p.githubCache, // legacy TUI cache (tui/ghClient.ts still owns it)
+      ]),
     ],
     allowDirs: [
       // The tier the agent actually executes in. v2 puts worktrees and clone
@@ -331,6 +401,18 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
     join(p.reviewComments, "discarded"),
     join(p.outbox, "dead"),
     p.mirror,
+    // Sibling of p.mirror and denied alongside it, so it must be materialized
+    // alongside it too. It used to be created lazily on the TUI's first cache
+    // write (tui/ghClient.ts) — a violation of this module's own eager-tree
+    // invariant with a security edge on bwrap: `bwrapArgs` skips a deny whose
+    // target is absent, and under v2 this one sits INSIDE the `cache/`
+    // allow-back, so on a tree where the TUI had never cached anything the
+    // deny was dropped, `cache/` was ro-bound wholesale, and an operator
+    // opening the TUI mid-run put their token-fetched GitHub issue/PR data
+    // inside the agent's readable view (final review 2026-08-22, I-1).
+    // Seatbelt and the path-jail deny it by name unconditionally, so the
+    // window was bwrap/Linux-only.
+    p.githubCache,
     p.clonesWatched,
     p.assessHistory,
     p.history,

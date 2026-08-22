@@ -242,11 +242,28 @@ describe("sandboxDenyPaths", () => {
       ]),
     );
     expect(deny.allowDirs).toContain("/sbxroot/home/.junco/cache");
-    // The enumerated daemon-state subtrees are gone — the root deny covers them.
-    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/data/outbox");
-    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/data/transcripts");
-    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/review");
-    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/logs");
+    // Layer 2 (final review 2026-08-22): the daemon-state subtrees are ALSO
+    // denied at their own depth, so a mis-set allow-back pointed at a whole
+    // tier can't out-specify them. The root deny is what covers anything not
+    // listed; these are what survive an allow-back moving.
+    expect(deny.dirs).toEqual(
+      expect.arrayContaining([
+        "/sbxroot/home/.junco/data/outbox",
+        "/sbxroot/home/.junco/data/transcripts",
+        "/sbxroot/home/.junco/data/plans",
+        "/sbxroot/home/.junco/data/history",
+        "/sbxroot/home/.junco/data/assess-history",
+        "/sbxroot/home/.junco/review/assess",
+        "/sbxroot/home/.junco/review/comments",
+        "/sbxroot/home/.junco/logs",
+        "/sbxroot/home/.junco/queue/inbox",
+      ]),
+    );
+    // …but the agent's execution roots are never denied by name — they are
+    // allow-backs, and a Layer-2 entry for one would be self-defeating.
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/cache/clones/watched");
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/cache/worktrees");
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/skills"); // see sandboxDenyPaths' doc comment
     expect(deny.files).toContain("/sbxroot/home/.junco/config.json");
     expect(deny.files).toContain("/sbxroot/home/.junco/migrate.lock");
     // I-3 (final review 2026-08-05): the legacy XDG config path is denied
@@ -305,6 +322,58 @@ describe("sandboxDenyPaths", () => {
       for (const [what, path] of ALLOWED) {
         expect(effect(path), `[${layout}] ${what} must be READABLE (${path})`).toBe("allow");
       }
+    }
+  });
+
+  // Final review 2026-08-22 (I-2), reproduced verbatim: `allowDirs` re-allows
+  // git.worktreeRoot / github.externalReposRoot BY NAME (both are legacy-
+  // overridable and may sit inside the root but outside the tier that covers
+  // them), so an operator who points either at v2's whole `data/` tier creates
+  // an allow-back that out-specifies any deny living only at the root. The
+  // pre-#277 enumeration kept those subtrees denied under exactly this
+  // configuration; the Layer-2 denies are what keep that true now.
+  it("a legacy override pointed at the v2 data/ tier cannot re-expose daemon state", () => {
+    const root = "/sbxroot/home/.junco";
+    const v2With = (overrides: Partial<Config>): Config =>
+      makeConfig({
+        dataDir: root,
+        queueRoot: join(root, "queue"),
+        worktreeRoot: join(root, "cache/worktrees"),
+        dataLayout: "v2",
+        github: { ...makeConfig().github, externalReposRoot: join(root, "cache/clones/external") },
+        ...overrides,
+      });
+    const misset: [string, Config][] = [
+      ["git.worktreeRoot", v2With({ worktreeRoot: join(root, "data") })],
+      [
+        "github.externalReposRoot",
+        v2With({
+          github: { ...makeConfig().github, externalReposRoot: join(root, "data") },
+        }),
+      ],
+    ];
+
+    for (const [key, cfg] of misset) {
+      const p = dataTreePaths(cfg);
+      // The agent's cwd as that misconfiguration would actually place it.
+      const rules = agentReadRules(cfg, join(root, "data", "tkt-1"));
+      const DENIED: [string, string][] = [
+        ["transcripts", join(p.transcripts, "tkt-1.jsonl")],
+        ["plan-set record", join(p.plans, "set-1.json")],
+        ["outbox op", join(p.outbox, "op-1.json")],
+        ["task history", join(p.history, "tasks-2026-08.jsonl")],
+        ["assess history", join(p.assessHistory, "owner__repo.json")],
+        ["spend receipt", p.spendFile],
+      ];
+      for (const [what, path] of DENIED) {
+        expect(
+          resolveRead(path, rules),
+          `${key} = <root>/data must not re-expose ${what} (${path})`,
+        ).toBe("deny");
+      }
+      // The tier itself IS allowed back — that is the operator's stated intent,
+      // and the point of the fix is that it costs them only what they asked for.
+      expect(resolveRead(join(root, "data", "tkt-1", "src/a.ts"), rules)).toBe("allow");
     }
   });
 
@@ -401,6 +470,69 @@ describe("ensureDataTree", () => {
     });
     ensureDataTree(cfg, { mkdirFn: (d) => made.push(d), existsFn: () => false, writeFn: () => {} });
     expect(made).toContain("/sbxroot/home/.junco/logs");
+  });
+
+  // Final review 2026-08-22 (I-1). github-cache was created lazily on the TUI's
+  // first cache write (tui/ghClient.ts), against this module's own eager-tree
+  // invariant — and under v2 it is a DENY target sitting inside the `cache/`
+  // allow-back, so on a tree where the TUI had never cached anything bwrap
+  // skipped its tmpfs (it skips a deny whose target is absent) while `cache/`
+  // stayed ro-bound: opening the TUI mid-run put token-fetched GitHub data in
+  // the agent's readable view.
+  it("materializes github-cache eagerly in both layouts (it is a deny target, not a lazy cache)", () => {
+    const madeFor = (cfg: Config): string[] => {
+      const made: string[] = [];
+      ensureDataTree(cfg, {
+        mkdirFn: (d) => made.push(d),
+        existsFn: () => false,
+        writeFn: () => {},
+      });
+      return made;
+    };
+    expect(
+      madeFor(makeConfig({ dataDir: "/sbxroot/data", queueRoot: "/sbxroot/data/queue" })),
+    ).toContain("/sbxroot/data/github-cache");
+    expect(
+      madeFor(
+        makeConfig({
+          dataDir: "/sbxroot/home/.junco",
+          queueRoot: "/sbxroot/home/.junco/queue",
+          dataLayout: "v2",
+        }),
+      ),
+    ).toContain("/sbxroot/home/.junco/cache/github-cache");
+  });
+
+  // The general form of I-1, so the next deny that moves inside an allow-back
+  // can't reintroduce it: a deny whose target is absent is SKIPPED by bwrap
+  // (agent/sandbox/backend.ts — it cannot create a mountpoint under the ro root
+  // bind), which is only harmless while the wholesale root tmpfs still covers
+  // the path. A deny inside an allow-back has lost that cover, so it must exist
+  // at spawn time — i.e. ensureDataTree has to materialize it.
+  it("materializes every deny target that sits inside an allow-back", () => {
+    let checked = 0;
+    for (const layout of ["flat", "v2"] as const) {
+      const cfg = LAYOUT_FIXTURES[layout].cfg();
+      const made: string[] = [];
+      ensureDataTree(cfg, {
+        mkdirFn: (d) => made.push(d),
+        existsFn: () => false,
+        writeFn: () => {},
+      });
+      const { dirs, allowDirs } = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
+      const insideAnAllowBack = dirs.filter((d) =>
+        allowDirs.some((a) => d === a || d.startsWith(a + "/")),
+      );
+      for (const d of insideAnAllowBack) {
+        checked++;
+        expect(
+          made,
+          `[${layout}] ${d} is denied INSIDE an allow-back but ensureDataTree never creates it — bwrap would skip its mount while it is absent`,
+        ).toContain(d);
+      }
+    }
+    // Non-vacuity: v2 nests mirror + github-cache inside the cache/ allow-back.
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 
   it("does NOT create legacy-overridden roots outside dataDir", () => {

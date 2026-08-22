@@ -108,10 +108,35 @@ function readRuleMounts(rule: ReadRule, writable: boolean): string[] {
 /** The order bwrap's mounts must be emitted in: `orderRules` specificity
  *  order (least specific first), with the writable-root binds hoisted as late
  *  as that ordering permits — after every rule that does not lie inside them,
- *  but still before the (necessarily deeper) rules that do. Each entry carries
- *  whether it is a writable root, because `readRules` maps writable roots and
- *  read allow-backs to the same allow/subtree rule and only the former binds
- *  read-write. */
+ *  but still before the rules that do. Each entry carries whether it is a
+ *  writable root, because `readRules` maps writable roots and read allow-backs
+ *  to the same allow/subtree rule and only the former binds read-write.
+ *
+ *  The hoist CAN reorder overlapping rules. This comment used to claim it could
+ *  not; that was false, corrected at final review 2026-08-22 by execution.
+ *  Bucket 2 is "under a writable root", which is not the same as "deeper than
+ *  every writable root": with nested writable roots (an `extra_allow_write` that
+ *  contains the worktree), a deny under the outer root that CONTAINS the inner
+ *  one is bucket 2 yet shallower than the inner root's bind, so it is emitted
+ *  after that bind and tmpfs-masks it:
+ *
+ *    writableRoots ["/a", "/a/b/c"], readDenyPaths ["/a/b"]
+ *      → --bind /a/b/c … then --tmpfs /a/b, wiping the worktree,
+ *
+ *  while `resolveRead` and the Seatbelt profile both answer "allow" for
+ *  /a/b/c/file.
+ *
+ *  Tolerated, not overlooked, because the divergence only ever runs one way.
+ *  For an allow to wrongly beat a deny that `resolveRead` says should win, that
+ *  deny would have to be at least as specific AND emitted earlier — and a deny
+ *  more specific than an overlapping allow necessarily lies under a writable
+ *  root whenever that allow does, putting it in bucket 2 and therefore after it;
+ *  within a bucket `orderRules` order is preserved. So bwrap can come out
+ *  STRICTER than the other two backends, never looser, and the symptom is loud
+ *  (the agent's worktree comes up empty and the build fails) rather than a
+ *  silent over-permission. Moving a bucket-2 rule that contains a writable root
+ *  into bucket 0 would close the gap; not done, because it takes a shape nothing
+ *  produces today — nested writable roots separated by an `extra_deny_read`. */
 function mountOrder(policy: SandboxPolicy): { rule: ReadRule; writable: boolean }[] {
   const writableRoots = new Set(policy.writableRoots);
   const entries = orderRules(readRules(policy)).map((rule) => ({
@@ -143,7 +168,9 @@ function mountOrder(policy: SandboxPolicy): { rule: ReadRule; writable: boolean 
  *  Writable roots go as late as the specificity ordering permits, but a deny
  *  *inside* a writable root (an operator's extra_deny_read in their own
  *  worktree) is deeper still and stays after that bind — otherwise re-binding
- *  the pristine host subtree would silently un-deny it.
+ *  the pristine host subtree would silently un-deny it. (Deeper than the root it
+ *  is inside; see `mountOrder` for the nested-writable-roots case where such a
+ *  deny is shallower than a DIFFERENT writable root.)
  *
  *  Mounts are emitted only for paths that EXIST (`existsFn` injectable for
  *  tests), with one exception. A deny needs its target present because bwrap
