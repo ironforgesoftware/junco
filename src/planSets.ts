@@ -28,6 +28,18 @@ export interface PlanSetRecord {
   degradedPosted: boolean;
   lastLabel: string | null; // last set-level lifecycle label applied
   closed: boolean; // all-terminal handled; maintenance stops
+  /** When `closed` was set (ISO). Records closed longer ago than
+   * PLAN_SET_COLD_MS stop being probed for plan-comment edits — without this,
+   * every set ever created costs one paginated `gh api …/comments` call on
+   * every sweep, forever (#298). Additive: a closed record written before this
+   * field existed has no closedAt and is treated as WARM, so the change can
+   * only remove cost, never silently drop a supersede. Limitation: once a
+   * record goes cold, editing its plan comment and re-approving (the
+   * trySupersede gesture) is no longer noticed — there is no gh-driven hook
+   * that re-warms it (see planSetBridge.ts's maintainPlanSets), so a plan set
+   * closed longer than the window must be re-submitted from scratch instead
+   * of edited in place. */
+  closedAt?: string;
   /** Last dashboard body successfully written to the status comment (bridge
    * sets, Task 10). Byte-identical render on the next sweep skips the gh
    * call entirely. Additive — absent on records from before this field

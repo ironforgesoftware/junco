@@ -44,6 +44,14 @@ import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.j
 const GH_TIMEOUT = 60_000;
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** How long after close a plan-set record keeps being probed for plan-comment
+ * edits. Past this, the sweep skips it entirely — the supersede path is for
+ * live work, and an unbounded per-sweep gh call per historical set is the
+ * cost #298 flagged. Generous on purpose: the probe is the only way a plan
+ * edit is noticed, so this trades a rare very-late supersede for a bounded
+ * steady-state cost. */
+const PLAN_SET_COLD_MS = 30 * 24 * 60 * 60 * 1000;
+
 export type DispatchResult =
   | { ok: true; submitted: string[]; skipped: string[] }
   | { ok: false; errors: string[] };
@@ -613,6 +621,14 @@ export async function maintainPlanSets(
     const g = storedRecord.github;
     if (g === null) continue;
 
+    // Cold: closed long enough ago that we stop paying a gh probe for it every
+    // sweep. `closedAt` absent (older record) counts as warm — never skip on
+    // missing data.
+    if (storedRecord.closed && storedRecord.closedAt) {
+      const age = Date.parse(nowIso) - Date.parse(storedRecord.closedAt);
+      if (Number.isFinite(age) && age > PLAN_SET_COLD_MS) continue;
+    }
+
     const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso);
     if (outcome.kind === "deferred" || outcome.kind === "compile-failed") continue;
     const record = outcome.kind === "superseded" ? outcome.record : storedRecord;
@@ -681,6 +697,7 @@ export async function maintainPlanSets(
     // reopens with a fresh record on a later sweep.
     if (state.allTerminal && !record.closed) {
       record.closed = true;
+      record.closedAt = nowIso;
       changed = true;
     }
 

@@ -394,6 +394,34 @@ describe("maintainPlanSets", () => {
     expect(afterSecond - afterFirst).toBe(2);
   });
 
+  // -------------------------------------------------------------------------
+  // Cold window (#298) — a record closed long enough ago stops paying the
+  // per-sweep supersede probe (login + own-comment fetch) at all.
+  // -------------------------------------------------------------------------
+
+  it("does not probe a record closed longer ago than the cold window", async () => {
+    writePlanSetRecord(cfg, baseRecord({ closed: true, closedAt: "2020-01-01T00:00:00.000Z" }));
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readLog().length).toBe(before);
+  });
+
+  it("still probes a recently-closed record", async () => {
+    writePlanSetRecord(cfg, baseRecord({ closed: true, closedAt: "2026-08-21T00:00:00.000Z" }));
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readLog().length).toBeGreaterThan(before);
+  });
+
+  it("still probes a closed record from before closedAt existed", async () => {
+    // No closedAt at all — older records predate the field. Must be treated
+    // as warm (never silently skipped).
+    writePlanSetRecord(cfg, baseRecord({ closed: true }));
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readLog().length).toBeGreaterThan(before);
+  });
+
   it("failure posts one degraded comment (once) and the failed label at all-terminal", async () => {
     // "a" done, "b" failed with a dependency-failure reason — this also
     // covers the carried-over gap: renderDashboard's
