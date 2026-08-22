@@ -3,7 +3,7 @@ import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { submitAsIssue, wrapInFence } from "../src/submitAsIssue.js";
-import { extractPlanBody } from "../src/githubInbox.js";
+import { extractPlanBody, extractPlanSetBody } from "../src/githubInbox.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { makeConfig } from "./helpers/config.js";
 import type { Config } from "../src/types.js";
@@ -31,6 +31,11 @@ timeout_minutes: 60
 echo has a code fence
 \`\`\`
 `;
+
+const PLAN_DOC =
+  "```junco-plan\nversion: 1\ntasks:\n  - id: t-one\n    title: Do one\n    description: |\n      Self-contained.\n    acceptance:\n      - done\n```\n";
+
+const INVALID_PLAN_DOC = "```junco-plan\nversion: 1\ntasks: []\n```\n";
 
 const fakeBotAuth = async (c: Config): Promise<Config> => ({
   ...c,
@@ -329,6 +334,185 @@ describe("submitAsIssue", () => {
 
     expect(code).not.toBe(0);
     expect(errs.join("")).toContain("gh login");
+    expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+});
+
+describe("submitAsIssue --as-issue --plan (parked plan-set issue)", () => {
+  function planCfg(overrides: Partial<Config> = {}): Config {
+    return baseCfg({
+      planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+      ...overrides,
+    });
+  }
+
+  it("files a parked issue wrapping a validated junco-plan fence", async () => {
+    const cfg = planCfg();
+    const calls: string[][] = [];
+    let capturedBody = "";
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "create") {
+        const idx = args.indexOf("--body-file");
+        capturedBody = readFileSync(args[idx + 1], "utf8");
+        return { code: 0, stdout: "https://github.com/acme/api/issues/11\n", stderr: "" };
+      }
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const out: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "plan.md",
+      PLAN_DOC,
+      { plan: true, repoFlag: REPO_PATH },
+      {
+        ghFn: ghFn as never,
+        printFn: (s) => out.push(s),
+        errFn: () => {},
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(0);
+    const create = calls.find((c) => c[0] === "issue" && c[1] === "create")!;
+    expect(create).toContain("--repo");
+    expect(create).toContain("acme/api");
+    expect(create.join(" ")).not.toContain("--label"); // parked: no labels, ever
+
+    const extracted = extractPlanSetBody(capturedBody);
+    expect(extracted).not.toBeNull();
+    expect(extracted).toContain("t-one");
+    expect(capturedBody).toContain("<!-- junco:as-issue -->");
+    expect(out.join("")).toContain("issues/11");
+    expect(out.join("")).toContain(cfg.github.triggerLabel); // launch instruction names the label
+  });
+
+  it("refuses --plan when planSets are disabled", async () => {
+    const cfg = planCfg({ planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 } });
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "plan.md",
+      PLAN_DOC,
+      { plan: true, repoFlag: REPO_PATH },
+      {
+        ghFn: ghFn as never,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("planSets.enabled");
+    expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+
+  it("refuses --plan without --repo", async () => {
+    const cfg = planCfg();
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "plan.md",
+      PLAN_DOC,
+      { plan: true, repoFlag: undefined },
+      {
+        ghFn: ghFn as never,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(2);
+    expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+
+  it("refuses --plan when the fence does not validate", async () => {
+    const cfg = planCfg();
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "plan.md",
+      INVALID_PLAN_DOC,
+      { plan: true, repoFlag: REPO_PATH },
+      {
+        ghFn: ghFn as never,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("plan error");
+    expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+
+  it("refuses --plan when the file has no junco-plan fence", async () => {
+    const cfg = planCfg();
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "plan.md",
+      "no fence here at all",
+      { plan: true, repoFlag: REPO_PATH },
+      {
+        ghFn: ghFn as never,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("no junco-plan fence found");
+    expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+
+  it("refuses --plan when --repo is not a bridge-watched repo", async () => {
+    const cfg = planCfg();
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "plan.md",
+      PLAN_DOC,
+      { plan: true, repoFlag: "/elsewhere" },
+      {
+        ghFn: ghFn as never,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("not a bridge-watched repo");
     expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
   });
 });

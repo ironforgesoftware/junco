@@ -5,6 +5,7 @@
  * Frontmatter is machine-owned at extraction time (buildExecutionTicket), so
  * everything except id/repo/pr_title is discarded here — loudly.
  */
+import { basename } from "node:path";
 import type { Config } from "./types.js";
 import { parseTicket } from "./ticket.js";
 import { resolveWatchedRepos } from "./watchlist.js";
@@ -13,6 +14,9 @@ import { createIssueLive } from "./assessFiling.js";
 import { gh } from "./git.js";
 import { expandHome } from "./config.js";
 import { canonPath } from "./unwatchCmd.js";
+import { extractPlanSetBody } from "./githubInbox.js";
+import { parsePlanSet } from "./planCompiler.js";
+import { slugifyId } from "./slug.js";
 
 const CARRIED_KEYS = new Set(["id", "repo", "pr_title"]);
 
@@ -46,8 +50,11 @@ export interface SubmitAsIssueDeps {
  * File `content` (already-read ticket text for `fileArg`) as a parked,
  * unlabeled issue on the ticket's `repo:` target — which must already be a
  * bridge-watched repo, since an unwatched repo could never launch the parked
- * issue. `opts.plan`/`opts.repoFlag` are reserved for the plan-set door
- * (Task 5); this path only ever handles a single ticket.
+ * issue. When `opts.plan` is set, this instead parks a plan-set fence
+ * (validated with the same extractPlanSetBody → parsePlanSet rules the local
+ * `junco submit --plan` branch runs) against `opts.repoFlag`, wrapped as a
+ * `junco-plan` fence the bridge compiles once a human applies the trigger
+ * label (Task 3's door).
  */
 export async function submitAsIssue(
   cfg: Config,
@@ -71,6 +78,64 @@ export async function submitAsIssue(
         "the bot authors the parked issue; a human's trigger label launches it. Run: junco auth login\n",
     );
     return 1;
+  }
+
+  if (opts.plan) {
+    if (!cfg.planSets.enabled) {
+      err(
+        "junco submit --as-issue --plan: plan sets are disabled — set planSets.enabled in config.json\n",
+      );
+      return 1;
+    }
+    if (!opts.repoFlag) {
+      err("Usage: junco submit --as-issue --plan <file> --repo <path>\n");
+      return 2;
+    }
+    const fence = extractPlanSetBody(content);
+    if (fence === null) {
+      err(`junco submit --as-issue: no junco-plan fence found in '${fileArg}'\n`);
+      return 1;
+    }
+    const parsedPlan = parsePlanSet(fence, { maxTasks: cfg.planSets.maxTasks });
+    if (!parsedPlan.ok) {
+      for (const e of parsedPlan.errors) err(`junco submit --as-issue: plan error: ${e}\n`);
+      return 1;
+    }
+    const target = canonPath(expandHome(opts.repoFlag));
+    const watched = resolveWatchedRepos(cfg).find((r) => canonPath(r.path) === target);
+    if (!watched) {
+      err(`junco submit --as-issue: ${opts.repoFlag} is not a bridge-watched repo\n`);
+      return 1;
+    }
+    const planId = "plan-" + slugifyId(basename(fileArg).replace(/\.md$/, ""));
+    const issueBody =
+      `_Parked junco plan set — apply the \`${cfg.github.triggerLabel}\` label to compile and queue it._\n\n` +
+      wrapInFence("junco-plan", fence) +
+      "\n\n<!-- junco:as-issue -->\n";
+
+    let cfgBot: Config;
+    try {
+      cfgBot = await withBotAuthFn(cfg);
+    } catch (e) {
+      err(`junco submit --as-issue: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+
+    const url = await createIssueLive(
+      cfgBot,
+      watched.nwo,
+      `plan set: ${planId}`,
+      issueBody,
+      [],
+      ghFn,
+    );
+    if (url === null) {
+      err("junco submit --as-issue: gh issue create failed (see log)\n");
+      return 1;
+    }
+    print(`parked as issue: ${url}\n`);
+    print(`apply label '${cfg.github.triggerLabel}' to queue\n`);
+    return 0;
   }
 
   // parseTicket (src/ticket.ts) never throws — unparsable YAML degrades to an

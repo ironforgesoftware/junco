@@ -1022,17 +1022,23 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const cfg = loadConfigFn(configPath);
     const idHint = fileArg !== "-" ? basename(fileArg).replace(/\.md$/, "") : undefined;
 
-    // submit --as-issue <file>: file the ticket as a parked, unlabeled GitHub
-    // issue via the bot account (src/submitAsIssue.ts) instead of the local
-    // inbox — a human applying the trigger label is what launches it. Checked
-    // ahead of --plan: `--as-issue --plan` is the plan-set door (Task 5), not
-    // this single-ticket path.
-    if (values["as-issue"] === true && values.plan !== true) {
+    // submit --as-issue <file> [--plan --repo <path>]: file as a parked,
+    // unlabeled GitHub issue via the bot account (src/submitAsIssue.ts)
+    // instead of the local inbox/compiler — a human applying the trigger
+    // label is what launches it. Both forms route here, BEFORE the local
+    // --plan branch below, so `--as-issue --plan` never reaches the local
+    // compiler: a bare `--as-issue` parks a single ticket, and `--as-issue
+    // --plan` parks a plan-set fence (submitAsIssue.ts's opts.plan path
+    // mirrors this file's own extractPlanSetBody → parsePlanSet validation).
+    if (values["as-issue"] === true) {
       if (fileArg === "-") {
         process.stderr.write("Usage: junco submit --as-issue <file> (stdin not supported)\n");
         return 2;
       }
-      return await submitAsIssue(cfg, fileArg, content, { plan: false });
+      return await submitAsIssue(cfg, fileArg, content, {
+        plan: values.plan === true,
+        repoFlag: values.repo as string | undefined,
+      });
     }
 
     // submit --plan <file> --repo <path>: compile an approved junco-plan
