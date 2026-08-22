@@ -6,11 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Upgraded `@earendil-works/pi-coding-agent` to 0.84.2. Session creation migrated from the removed `authStorage`/`modelRegistry` options to the SDK's async `ModelRuntime`, with the operator's API key supplied through a junco-owned in-memory credential store — it still never reaches disk or the agent's environment. Operator `models.json` files using `compat.sendSessionIdHeader` must switch to `sessionAffinityFormat` (removed upstream in 0.80.7).
+
 ### Fixed
 
 - Sandbox: plan-set records (`plans/`, `data/plans`) and `migrate.lock` are now denied to the agent sandbox. The plan-set records directory joined the data tree with the plan-sets work but was never added to the sandbox deny list, leaving control-plane state (repo paths, issue numbers, task ids) agent-readable. A new classification test fails if a future data-tree entry is added without being denied or explicitly exempted.
 - Plan sets: a dependent ticket no longer claims while its dependency's PR is still queued for offline delivery — the offline endgame now records a machine-readable `pr_queued` marker, the dependency sweep waits on it, and the outbox writes the real `pr_url` back onto the finalized ticket when the PR opens.
 - Plan sets: the maintenance sweep stops probing the plan comment of sets closed more than 30 days ago, so its per-sweep GitHub cost no longer grows with every set ever created.
+
+### Security
+
+- Cleared 9 Dependabot alerts (4 high, 5 moderate). They were unfixable downstream: the SDK's own `npm-shrinkwrap.json` pinned vulnerable `undici`, `protobufjs`, and `brace-expansion`, which root-level `overrides` cannot reach. 0.84.2's shrinkwrap ships patched pins; `npm audit` now reports 0 vulnerabilities.
 
 ## [0.11.0] - 2026-08-19
 

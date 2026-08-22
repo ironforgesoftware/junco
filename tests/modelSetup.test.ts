@@ -28,7 +28,8 @@ const MODEL_DEFAULTS: ModelConfig = {
   maxTokens: 49152,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   thinkingLevel: "medium",
-  compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  thinkingLevelMap: { medium: "medium", xhigh: "xhigh" },
+  compat: { maxTokensField: "max_tokens", thinkingFormat: "chat-template" },
 };
 
 function mkCfg(model: Partial<ModelConfig> = {}): Config {
@@ -63,8 +64,11 @@ describe("buildInlineProviderConfig", () => {
     expect(m.contextWindow).toBe(131072);
     expect(m.maxTokens).toBe(49152);
     expect(m.reasoning).toBe(true);
-    expect(m.compat.thinkingFormat).toBe("qwen-chat-template");
+    expect(m.compat.thinkingFormat).toBe("chat-template");
     expect(m.compat.maxTokensField).toBe("max_tokens");
+    // The SDK reads thinkingLevelMap from the MODEL spec (not compat) — it must
+    // be forwarded or effort names reach the chat template unmapped.
+    expect(m.thinkingLevelMap).toEqual({ medium: "medium", xhigh: "xhigh" });
   });
 
   it("flows configured overrides through (api, context window, compat)", () => {
@@ -194,7 +198,7 @@ function fakeRegistry(models: Record<string, unknown>) {
 }
 
 /** Fails the test if called — asserts a cascade branch is never reached. */
-const fail = (): never => {
+const fail = async (): Promise<never> => {
   throw new Error("must not be called");
 };
 
@@ -205,7 +209,7 @@ describe("resolveModelViaRegistries", () => {
     dir = null;
   });
 
-  it("models.json hit wins (path models_json), no provider registered", () => {
+  it("models.json hit wins (path models_json), no provider registered", async () => {
     dir = mkdtempSync(join(tmpdir(), "junco-models-"));
     const existingModelsJsonPath = join(dir, "models.json");
     writeFileSync(existingModelsJsonPath, JSON.stringify({ providers: {} }));
@@ -214,40 +218,43 @@ describe("resolveModelViaRegistries", () => {
     const file = fakeRegistry({ "anthropic/claude-x": sentinel });
     const mem = fakeRegistry({});
     const cfg = mkCfg({ id: "anthropic/claude-x", modelsJson: existingModelsJsonPath });
-    const out = resolveModelViaRegistries(cfg, { fromFile: () => file, inMemory: () => mem });
+    const out = await resolveModelViaRegistries(cfg, {
+      fromFile: async () => file,
+      inMemory: async () => mem,
+    });
     expect(out).toMatchObject({ model: sentinel, path: "models_json" });
     expect(file.registered).toEqual([]);
   });
 
-  it("catalog hit resolves WITHOUT registerProvider (the clobber bug stays dead)", () => {
+  it("catalog hit resolves WITHOUT registerProvider (the clobber bug stays dead)", async () => {
     const sentinel = { catalog: "builtin" };
     const mem = fakeRegistry({ "anthropic/claude-x": sentinel });
     const cfg = mkCfg({ id: "anthropic/claude-x", modelsJson: null, apiKey: null });
-    const out = resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem });
+    const out = await resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: async () => mem });
     expect(out).toMatchObject({ model: sentinel, path: "catalog" });
     expect(mem.registered).toEqual([]);
   });
 
-  it("catalog miss falls through to inline when a key exists", () => {
+  it("catalog miss falls through to inline when a key exists", async () => {
     const mem = fakeRegistry({});
     const cfg = mkCfg({ id: "unknownprov/m1", modelsJson: null, apiKey: "k" });
-    const out = resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem });
+    const out = await resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: async () => mem });
     expect(out.path).toBe("inline");
     expect(mem.registered[0]?.name).toBe("unknownprov");
   });
 
-  it("catalog miss with a null key throws an actionable config error", () => {
+  it("catalog miss with a null key throws an actionable config error", async () => {
     const mem = fakeRegistry({});
     const cfg = mkCfg({ id: "unknownprov/m1", modelsJson: null, apiKey: null });
-    expect(() => resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem })).toThrow(
-      /did not resolve from the builtin catalog/,
-    );
+    await expect(
+      resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: async () => mem }),
+    ).rejects.toThrow(/did not resolve from the builtin catalog/);
   });
 
-  it("ineligible (local) config goes straight to inline", () => {
+  it("ineligible (local) config goes straight to inline", async () => {
     const mem = fakeRegistry({});
     const cfg = mkCfg({ id: "local/my-model", modelsJson: null, apiKey: "1234" });
-    const out = resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: () => mem });
+    const out = await resolveModelViaRegistries(cfg, { fromFile: fail, inMemory: async () => mem });
     expect(out.path).toBe("inline");
   });
 });

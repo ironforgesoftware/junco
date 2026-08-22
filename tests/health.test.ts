@@ -76,7 +76,8 @@ function hostedModel(overrides: Partial<ModelConfig> = {}): ModelConfig {
     maxTokens: 49152,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     thinkingLevel: "medium",
-    compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+    thinkingLevelMap: { medium: "medium", xhigh: "xhigh" },
+    compat: { maxTokensField: "max_tokens", thinkingFormat: "chat-template" },
     ...overrides,
   };
 }

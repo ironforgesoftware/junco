@@ -1,10 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId, defaultTranscriptSink } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
+import { inMemoryCredentialStore } from "../src/agent/credentialStore.js";
+import { resolveModelViaRegistries, type RegistryOps } from "../src/agent/modelSetup.js";
+import { makeConfig } from "./helpers/config.js";
 
 // Overridable createWriteStream so the transcript stream can be stubbed
 // (issue #26: fs.createWriteStream opens ASYNCHRONOUSLY — open/write failures
@@ -738,12 +741,12 @@ describe("runAgent (external force-stop)", () => {
 });
 
 // The models.json (file) path of makePiSessionFactory relies on the SDK's
-// ModelRegistry.create(authStorage, path) resolving a provider+model from a
+// ModelRuntime.create({ modelsPath }) resolving a provider+model from a
 // Pi-style models.json. This exercises that contract WITHOUT a live model
-// (building the registry from a file does no network I/O).
+// (building the runtime from a file does no network I/O).
 describe("models.json file path — SDK resolution", () => {
-  it("ModelRegistry.create resolves a provider+model from a Pi models.json", async () => {
-    const { ModelRegistry, AuthStorage } = await import("@earendil-works/pi-coding-agent");
+  it("ModelRuntime.create resolves a provider+model from a Pi models.json", async () => {
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
     const dir = mkdtempSync(join(tmpdir(), "junco-mj-"));
     try {
       const p = join(dir, "models.json");
@@ -772,14 +775,184 @@ describe("models.json file path — SDK resolution", () => {
           },
         }),
       );
-      const registry = ModelRegistry.create(AuthStorage.inMemory(), p);
-      const model = registry.find("omlx", "my-model");
+      const runtime = await ModelRuntime.create({
+        credentials: inMemoryCredentialStore(),
+        modelsPath: p,
+        refreshOnCreate: false,
+        // No-op store, matching production (sdkRegistryOps' NOOP_MODELS_STORE) —
+        // without it the SDK builds a FileModelsStore next to `p`.
+        modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
+      });
+      const model = runtime.getModel("omlx", "my-model");
       expect(model).toBeTruthy();
       expect(model!.contextWindow).toBe(200000);
       expect(model!.maxTokens).toBe(8192);
       expect(model!.reasoning).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Important #1(b): makePiSessionFactory hands `resolvedModel.registry.backing`
+  // (the SDK ModelRuntime instance itself) to createAgentSession as `modelRuntime`
+  // — if that handoff ever silently loses the runtime (e.g. `backing` comes back
+  // undefined), createAgentSession falls back to a FILE-BACKED ModelRuntime under
+  // ~/.pi (sdk.js: `options.modelRuntime ?? await ModelRuntime.create({authPath,
+  // modelsPath})`), touching the operator's real auth.json/models.json and losing
+  // any inline-registered provider. This pins that the runtime `sdkRegistryOps`
+  // constructs is a real, usable ModelRuntime — the same shape `.backing` carries.
+  it("the SDK runtime usable as `backing` exposes getModel (createAgentSession needs that exact runtime)", async () => {
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+    const runtime = await ModelRuntime.create({
+      credentials: inMemoryCredentialStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+      modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
+    });
+    expect(typeof (runtime as { getModel?: unknown }).getModel).toBe("function");
+  });
+
+  // The key-never-on-disk invariant (session.ts's sdkRegistryOps doc comment):
+  // ModelRuntime.create's own defaults are file-backed (`authPath` under
+  // ~/.pi/agent/auth.json, `modelsPath` under ~/.pi/agent/models.json) and the
+  // backend CREATES ~/.pi if it doesn't exist. Stating `credentials` and
+  // `modelsPath` explicitly is what prevents that. Nothing currently fails if
+  // a future SDK default starts writing there again — this pins it.
+  it("resolving through the real SDK never creates ~/.pi (key-never-on-disk invariant)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "junco-pi-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+      const runtime = await ModelRuntime.create({
+        credentials: inMemoryCredentialStore({ omlx: "sk-must-not-persist" }),
+        modelsPath: null,
+        refreshOnCreate: false,
+        modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
+      });
+      expect(runtime.getModels().length).toBeGreaterThan(0);
+      // The SDK's defaults would put auth.json and models.json under ~/.pi and
+      // CREATE them; stating credentials + modelsPath is what prevents it.
+      expect(existsSync(join(home, ".pi"))).toBe(false);
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // Pins the migration's central design claim: seeding the credentials store
+  // up front (rather than the async setRuntimeApiKey) is what makes the
+  // operator's key resolve at request time. This must run on the CATALOG
+  // path, not the inline path: on the inline path `buildInlineProviderConfig`
+  // (modelSetup.ts) embeds `cfg.model.apiKey` directly into the registered
+  // provider config, and the SDK's `getAuth` falls back to that
+  // provider-embedded key when the credential store has no matching entry —
+  // so an inline-path version of this test passes even with an EMPTY
+  // credential store and proves nothing about seeding. The catalog branch of
+  // `resolveModelViaRegistries` deliberately never calls `registerProvider`
+  // (see that function's doc comment), so there is no provider-embedded key
+  // and the seeded credential is the only possible source of auth — this was
+  // confirmed by experiment: removing the seed makes this exact test fail.
+  // Drives junco's real cascade (resolveModelViaRegistries) against a config
+  // that resolves through the SDK's builtin hosted catalog, exactly as
+  // makePiSessionFactory does, then asks the real SDK ModelRuntime to resolve
+  // request auth for the resolved model — offline (no network; getAuth only
+  // reads the in-memory credential; the ambient env-var fallback the SDK's
+  // anthropic provider would otherwise consult is neutralized below so the
+  // seed is the only path to a result).
+  // `sdkRegistryOps` itself is module-private in session.ts, so this rebuilds
+  // its exact four-option `ModelRuntime.create` bridge locally rather than
+  // widening session.ts's export surface for the test.
+  it("the seeded credential resolves into request auth on the catalog path", async () => {
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+    const NOOP_MODELS_STORE = {
+      read: async () => undefined,
+      write: async () => {},
+      delete: async () => {},
+    };
+    // Ambient-fallback guard: resolveProviderAuth only consults these env
+    // vars when the credential store has NO entry for the provider. Clearing
+    // them means an unseeded store resolves to `undefined`, not a host key —
+    // otherwise this test's discrimination would depend on the machine it
+    // runs on.
+    const ANTHROPIC_ENV_VARS = [
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_OAUTH_TOKEN",
+      "ANTHROPIC_API_KEY",
+    ];
+    const savedEnv = new Map(ANTHROPIC_ENV_VARS.map((k) => [k, process.env[k]]));
+    for (const k of ANTHROPIC_ENV_VARS) delete process.env[k];
+
+    try {
+      const credentials = inMemoryCredentialStore({ anthropic: "sk-catalog-secret" });
+      const make = async (modelsPath: string | null) => {
+        const runtime = await ModelRuntime.create({
+          credentials,
+          modelsPath,
+          refreshOnCreate: false,
+          modelsStore: NOOP_MODELS_STORE,
+        });
+        return {
+          find: (provider: string, modelId: string) => runtime.getModel(provider, modelId),
+          registerProvider: (name: string, config: Record<string, unknown>) =>
+            runtime.registerProvider(name, config),
+          backing: runtime,
+        };
+      };
+      const ops: RegistryOps = { fromFile: (p) => make(p), inMemory: () => make(null) };
+
+      const cfg = makeConfig(
+        {
+          dataDir: "/sbxroot/data",
+          queueRoot: "/sbxroot/data/queue",
+          worktreeRoot: "/sbxroot/worktrees",
+          tools: [],
+          criticEnabled: false,
+          planLintEnabled: false,
+          verifyEnabled: false,
+          supervisorEnabled: false,
+          healthEnabled: false,
+          removeWorktreeOnSuccess: true,
+        },
+        {
+          model: {
+            // A real builtin-catalog provider/model id (verified against the
+            // installed 0.84.2: pi-ai/dist/providers/data/anthropic.json).
+            id: "anthropic/claude-sonnet-4-5",
+            source: "catalog",
+            baseUrlExplicit: false,
+            retry: { maxRetries: null, baseDelayMs: null },
+            modelsJson: null,
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            // null = defer to the provider's own auth resolution; the catalog
+            // path never reads this field (no registerProvider call), so any
+            // value would do, but null best documents that.
+            apiKey: null,
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 200000,
+            maxTokens: 64000,
+            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+            thinkingLevel: "medium",
+            compat: {},
+          },
+        },
+      );
+
+      const out = await resolveModelViaRegistries(cfg, ops);
+      expect(out.path).toBe("catalog");
+
+      const rt = out.registry.backing as {
+        getAuth(model: unknown): Promise<{ auth: { apiKey?: string } } | undefined>;
+      };
+      expect((await rt.getAuth(out.model))?.auth.apiKey).toBe("sk-catalog-secret");
+    } finally {
+      for (const [k, v] of savedEnv) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   });
 });

@@ -173,12 +173,40 @@ export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
 
 // junco's previously-hardcoded compat block (src/agent/session.ts), now the
 // default. The SDK and the config file both use camelCase — no camelization.
+//
+// thinkingFormat is the GENERIC "chat-template" (kwargs declared below), not
+// the SDK's fixed "qwen-chat-template" branch: that branch emits only
+// enable_thinking/preserve_thinking and never forwards reasoning_effort, so on
+// templates that steer thinking depth through a reasoning_effort kwarg
+// (Qwen 3.8+) every configured thinkingLevel silently ran at the template
+// default. SDK reference: @earendil-works/pi-ai dist/api/openai-completions.js,
+// buildChatTemplateKwargs/resolveChatTemplateKwargValue.
 const DEFAULT_COMPAT: Record<string, unknown> = {
   supportsDeveloperRole: false,
   supportsReasoningEffort: false,
   maxTokensField: "max_tokens",
   supportsUsageInStreaming: true,
-  thinkingFormat: "qwen-chat-template",
+  thinkingFormat: "chat-template",
+  chatTemplateKwargs: {
+    enable_thinking: { $var: "thinking.enabled" },
+    preserve_thinking: true,
+    // Resolved through model.thinkingLevelMap; dropped when thinking is off.
+    reasoning_effort: { omitWhenOff: true },
+  },
+};
+
+// Collapse junco's six thinking levels onto the three-value effort vocabulary
+// Qwen 3.8+ chat templates accept (low/medium/xhigh; template default xhigh —
+// which is why an unforwarded effort ran everything at xhigh). "off" needs no
+// entry: enable_thinking carries it and omitWhenOff drops the effort kwarg.
+// Override via model.thinkingLevelMap for templates with a different
+// vocabulary (a config override replaces this map wholesale).
+const DEFAULT_THINKING_LEVEL_MAP: Record<string, string> = {
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "xhigh",
+  xhigh: "xhigh",
 };
 
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1";
@@ -266,6 +294,7 @@ export const ConfigSchema = z.object({
         })
         .default({}),
       thinkingLevel: z.string().default("medium"),
+      thinkingLevelMap: z.record(z.string()).default(DEFAULT_THINKING_LEVEL_MAP),
       compat: z.record(z.unknown()).default({}),
     })
     .default({}),
@@ -589,6 +618,7 @@ export function assembleConfig(
         cacheWrite: d.model.cost.cacheWrite,
       },
       thinkingLevel: d.model.thinkingLevel,
+      thinkingLevelMap: d.model.thinkingLevelMap,
       compat: { ...DEFAULT_COMPAT, ...d.model.compat },
     },
     defaultTimeoutMinutes: d.worker.defaultTimeoutMinutes,

@@ -1,6 +1,6 @@
 /**
  * Model + provider resolution — turns the resolved `cfg.model` config into the
- * inputs the Pi SDK's ModelRegistry needs, WITHOUT importing the SDK (so this
+ * inputs the Pi SDK's ModelRuntime needs, WITHOUT importing the SDK (so this
  * stays pure and unit-testable). `session.ts` consumes these; `health.ts` uses
  * `resolveProbeBaseUrl` for its reachability probe.
  */
@@ -65,7 +65,8 @@ export interface InlineProviderConfig {
   provider: string;
   modelId: string;
   /** Shape matches Pi's ProviderConfigInput; typed loosely so this file needs
-   * no SDK import. session.ts casts it at the registerProvider call. */
+   * no SDK import. The cast (`as SdkModelRuntime`) happens in `sdkRegistryOps`
+   * in session.ts, at the `ModelRuntime.create(...)` call site. */
   providerConfig: Record<string, unknown>;
 }
 
@@ -101,6 +102,9 @@ export function buildInlineProviderConfig(cfg: Config): InlineProviderConfig {
           },
           contextWindow: m.contextWindow,
           maxTokens: m.maxTokens,
+          // The SDK reads thinkingLevelMap from the MODEL spec (not compat) —
+          // without it, effort names reach the chat template unmapped.
+          thinkingLevelMap: m.thinkingLevelMap,
           // compat is per-MODEL in the programmatic API (the on-disk models.json
           // splits it provider/model). maxTokensField is load-bearing — some
           // servers (oMLX) reject the auto-detected `max_completion_tokens`.
@@ -114,10 +118,19 @@ export function buildInlineProviderConfig(cfg: Config): InlineProviderConfig {
 export interface RegistryLike {
   find(provider: string, modelId: string): unknown;
   registerProvider(name: string, config: Record<string, unknown>): void;
+  /**
+   * Opaque handle to whatever backs this registry — the SDK's `ModelRuntime`
+   * in production, `undefined` in tests. `session.ts` passes it to
+   * `createAgentSession` as `modelRuntime` so the session runs on the SAME
+   * runtime that resolution registered the inline provider on; without it, an
+   * inline-endpoint model would resolve here and then be unknown to the
+   * session. Deliberately `unknown` so this module stays SDK-free.
+   */
+  readonly backing?: unknown;
 }
 export interface RegistryOps {
-  fromFile(modelsJsonPath: string): RegistryLike;
-  inMemory(): RegistryLike;
+  fromFile(modelsJsonPath: string): Promise<RegistryLike>;
+  inMemory(): Promise<RegistryLike>;
 }
 export interface ResolvedModel {
   model: unknown;
@@ -132,16 +145,16 @@ export interface ResolvedModel {
  * provider REPLACES the SDK's builtin models for that provider (the pre-Phase-1
  * bug that bound "anthropic/…" to the local default endpoint).
  */
-export function resolveModelViaRegistries(
+export async function resolveModelViaRegistries(
   cfg: Config,
   ops: RegistryOps,
   warn: (msg: string, meta?: Record<string, unknown>) => void = () => {},
-): ResolvedModel {
+): Promise<ResolvedModel> {
   const m = cfg.model;
   const { provider, modelId } = splitModelId(m.id);
 
   if (m.modelsJson && existsSync(m.modelsJson)) {
-    const registry = ops.fromFile(m.modelsJson);
+    const registry = await ops.fromFile(m.modelsJson);
     const model = registry.find(provider, modelId);
     if (model) return { model, registry, path: "models_json" };
     warn("model not in models.json; falling through", {
@@ -152,7 +165,7 @@ export function resolveModelViaRegistries(
   }
 
   if (catalogEligible(m)) {
-    const registry = ops.inMemory();
+    const registry = await ops.inMemory();
     const model = registry.find(provider, modelId);
     if (model) return { model, registry, path: "catalog" };
     warn("model not in the builtin catalog; falling through to inline", { provider, modelId });
@@ -165,7 +178,7 @@ export function resolveModelViaRegistries(
         `at a Pi models.json, or use a catalog provider id.`,
     );
   }
-  const registry = ops.inMemory();
+  const registry = await ops.inMemory();
   const { providerConfig } = buildInlineProviderConfig(cfg);
   registry.registerProvider(provider, providerConfig);
   const model = registry.find(provider, modelId);
