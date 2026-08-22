@@ -597,6 +597,11 @@ export async function runPrFlow(
         task.github && !task.github.external && !task.plan
           ? { ticketId: task.id, status, finalText: result.finalText }
           : null,
+      // Always populated (unlike finalize.ticketId, deliberately null for
+      // external tickets and plan-set children) — drives the pr_url
+      // write-back onto this ticket's done file when the outbox flush
+      // finally opens the PR (#298).
+      ticketId: task.id,
       pushed,
       prUrl: null,
     });

@@ -958,6 +958,9 @@ exit 1
     expect(op.branch).toMatch(/^junco\//);
     expect(op.finalize?.status).toBe(flow.status);
     expect(op.pushed).toBe(false);
+    // ticketId (#298) always carries the finalized ticket, independent of
+    // finalize — the flush's pr_url write-back reads it.
+    expect(op.ticketId).toBe("offpush");
     // Worktree preserved (never cleaned on an offline branch).
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0);
   });
@@ -992,6 +995,12 @@ exit 1
     expect(op.branch).toMatch(/^junco\//);
     expect(op.pushed).toBe(false);
     expect(op.finalize).toBeNull();
+    // ticketId (#298) is a SEPARATE field from finalize.ticketId — it stays
+    // populated even though finalize is deliberately suppressed for a
+    // plan-set child, so the flush can still write pr_url back onto this
+    // ticket's own done file (the parent issue's finalize stays owned by the
+    // set sweep).
+    expect(op.ticketId).toBe("offpush-set");
   });
 
   it("offline TIMEOUT soft-abort with commits routes to done/ (timeout_partial), not failed/ (#123)", async () => {
@@ -2001,6 +2010,9 @@ exec ${JSON.stringify(realGit)} "$@"
     expect(pr.head).toBe(`${FORK_NWO.split("/")[0]}:junco/gh-up-stream-7`);
     expect(pr.labels).toEqual([]); // fork PRs are label-free (upstream namespace not ours)
     expect(pr.finalize).toBeNull(); // external — no upstream comment/label replay
+    // ticketId (#298) still carries the ticket id even for an external
+    // ticket — it does not revive the suppressed finalize behavior.
+    expect(pr.ticketId).toBe("gh-up-stream-7");
   }, 30000);
 
   it("fork PR recovery: 'already exists' resolves the URL via gh pr list --head owner:branch (issue #75)", async () => {

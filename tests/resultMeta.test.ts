@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseResultMeta } from "../src/resultMeta.js";
+import { parseResultMeta, upsertResultPrUrl } from "../src/resultMeta.js";
 
 const BLOCK = (meta: string): string =>
   `# t\n\nbody\n\n---\n<!-- junco-result\n${meta}\n-->\n\n## Result\n\nok\n`;
@@ -72,5 +72,29 @@ describe("parseResultMeta", () => {
       parseResultMeta("<!-- junco-result\nstatus: completed\npr_queued: true\n-->").prQueued,
     ).toBe(true);
     expect(parseResultMeta("<!-- junco-result\nstatus: completed\n-->").prQueued).toBe(false);
+  });
+});
+
+describe("upsertResultPrUrl", () => {
+  it("adds pr_url to the last block and clears pr_queued", () => {
+    const before =
+      "body\n<!-- junco-result\nstatus: completed\npushed: true\npr_queued: true\n-->\n";
+    const after = upsertResultPrUrl(before, "https://github.com/o/r/pull/7");
+    expect(parseResultMeta(after).prUrl).toBe("https://github.com/o/r/pull/7");
+    expect(parseResultMeta(after).prQueued).toBe(false);
+    expect(after).toContain("status: completed");
+    expect(after).toContain("pushed: true");
+  });
+
+  it("rewrites only the LAST block", () => {
+    const two =
+      "<!-- junco-result\nstatus: failed\n-->\n<!-- junco-result\nstatus: completed\npr_queued: true\n-->\n";
+    const after = upsertResultPrUrl(two, "https://x/1");
+    expect(after).toContain("status: failed");
+    expect(parseResultMeta(after).prUrl).toBe("https://x/1");
+  });
+
+  it("leaves content with no block untouched", () => {
+    expect(upsertResultPrUrl("no block here\n", "https://x/1")).toBe("no block here\n");
   });
 });

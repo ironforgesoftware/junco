@@ -30,6 +30,9 @@ import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
 import { upgradeQueuedFiledRecord } from "./assessReview.js";
 import { dataTreePaths } from "./dataTree.js";
+import { queuePaths } from "./config.js";
+import { findTicketFile } from "./ticketDeps.js";
+import { upsertResultPrUrl } from "./resultMeta.js";
 
 export type OutboxOp =
   | { kind: "labels"; nwo: string; issue: number; add: string[]; remove: string[] }
@@ -52,6 +55,13 @@ export type OutboxOp =
       labels: string[];
       reviewers: string[];
       finalize: { ticketId: string; status: string; finalText: string } | null;
+      /** The finalized ticket this PR belongs to, so the flush can write the
+       * real pr_url back into its done file when the PR is finally opened
+       * (#298). Distinct from `finalize.ticketId`, which is deliberately null
+       * for external tickets and plan-set children — exactly the tickets
+       * `depends_on` cares about. Optional: ops queued by older builds parse
+       * without it and simply skip the upsert. */
+      ticketId?: string | null;
       pushed: boolean;
       prUrl: string | null;
       /** Set on the tail op re-enqueued when a created PR op dead-letters with
@@ -472,6 +482,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
   const rmFn = deps.rmFn ?? ((p: string) => rmSync(p, { force: true }));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
+  const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const { dir, dead } = outboxPaths(cfg);
   const result: FlushResult = { sent: 0, dead: 0, remaining: 0, offline: false };
 
@@ -667,6 +678,31 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
               rmSync(dirname(bodyFile), { recursive: true, force: true });
             }
             rewrite(s);
+
+            // The ticket finalized to done/ before this PR existed (offline
+            // endgame). Write the real URL into its result block so the
+            // dependency sweep can probe it — dependents are parked waiting on
+            // exactly this (#298). Best-effort: a missing or unreadable done
+            // file must never fail the op, which has already succeeded.
+            if (op.ticketId) {
+              try {
+                const doneFile = findTicketFile(queuePaths(cfg).done, op.ticketId);
+                if (doneFile) {
+                  writeFileFn(doneFile, upsertResultPrUrl(readFileFn(doneFile), op.prUrl!));
+                } else {
+                  // Normal: the ticket may have been retried, archived, or
+                  // moved by hand since it finalized. Nothing to update.
+                  log.warn("outbox: done ticket not found for pr_url write-back", {
+                    ticket: op.ticketId,
+                  });
+                }
+              } catch (e) {
+                log.warn("outbox: could not record pr_url on the done ticket", {
+                  ticket: op.ticketId,
+                  error: describeError(e),
+                });
+              }
+            }
           }
           if (op.finalize !== null && op.issue !== null) {
             const body = prFlushComment(op.finalize, op.prUrl!);

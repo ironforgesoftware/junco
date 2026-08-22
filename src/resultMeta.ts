@@ -52,3 +52,28 @@ export function parseResultMeta(content: string): ResultMeta {
     prQueued: field("pr_queued") === "true",
   };
 }
+
+/**
+ * Set `pr_url` in the LAST `junco-result` block and drop any `pr_queued`
+ * marker, returning the rewritten content. Used by the outbox when an offline
+ * PR op finally opens its PR (#298): the ticket already finalized to done/
+ * with no URL, and the dependency sweep needs the real one to probe. Content
+ * with no block is returned unchanged — callers treat that as "nothing to
+ * update", never as an error.
+ */
+export function upsertResultPrUrl(content: string, url: string): string {
+  const blocks = [...content.matchAll(BLOCK_RE)];
+  const last = blocks[blocks.length - 1];
+  if (!last) return content;
+  const body = last[1];
+  const kept = body
+    .split("\n")
+    .filter((l) => !/^pr_queued:/.test(l) && !/^pr_url:/.test(l))
+    .join("\n")
+    .replace(/\n+$/, "");
+  const rebuilt = `${kept}\npr_url: ${url}\n`;
+  const start = last.index ?? 0;
+  return (
+    content.slice(0, start) + last[0].replace(body, rebuilt) + content.slice(start + last[0].length)
+  );
+}
