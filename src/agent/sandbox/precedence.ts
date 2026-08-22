@@ -12,7 +12,7 @@ export interface ReadRule {
 
 /** True when `abs` is `r` itself or lies inside the subtree rooted at `r`,
  *  matched on path boundaries (never a raw string prefix). Mirrors the
- *  `isUnder` shape in pathJail.ts:23-26 — rules here are already-canonical
+ *  `isUnder()` shape in pathJail.ts — rules here are already-canonical
  *  absolute paths, so no further resolution happens. */
 function isUnder(abs: string, r: string): boolean {
   return abs === r || abs.startsWith(r + sep);

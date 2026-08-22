@@ -103,9 +103,9 @@ describe("buildPolicy", () => {
 // whole root made every in-worktree read a SandboxViolation. Sensitive
 // subtrees stay denied; the execution roots must stay readable/writable.
 //
-// pathJail (assertReadAllowed/assertWriteAllowed) does not yet consume
-// readRules()'s precedence (that's Task 3) — these assertions still cover
-// its current flat-deny-list behavior, which is unchanged by this task.
+// pathJail's assertReadAllowed consumes readRules()'s precedence directly
+// (see pathJail.ts) — these assertions exercise that same longest-prefix
+// resolution through the real buildPolicy() output.
 describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
   const dataDir = "/sbxroot/home/x/.local/state/junco";
   const cwd = `${dataDir}/worktrees/tkt-1`;
@@ -163,8 +163,9 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
   // The mechanism this whole plan (#277) is building toward: denying dataDir
   // WHOLESALE (Task 7 arms this for real, in dataTree.ts — out of scope
   // here) is only safe because the writable root is an allow rule that
-  // out-specifies the ancestor deny. Proven here at the readRules/resolveRead
-  // level, independent of pathJail (Task 3) and the OS backends (Tasks 4-5).
+  // out-specifies the ancestor deny. Proven here directly at the
+  // readRules/resolveRead level, independent of pathJail's and the OS
+  // backends' respective consumption of that same resolver.
   it("would survive a wholesale dataDir deny: the worktree stays allowed, siblings stay denied", () => {
     const wholesale = { ...policy, readDenyPaths: [...policy.readDenyPaths, dataDir] };
     const rules = readRules(wholesale);

@@ -86,15 +86,15 @@ export function buildPolicy(opts: {
 }
 
 /** The policy's read rules as one ordered-by-specificity-agnostic list — the
- *  single source both the OS profiles (Tasks 4-5) and the JS jail (Task 3)
- *  are generated from. Composition order here doesn't matter: orderRules
- *  sorts by specificity, not list position. Writable roots are included as
- *  allow/subtree rules — a root the agent may write but not read is
- *  incoherent, and this is what makes denying a writable root's ancestor
- *  (e.g. the whole data root, #277 Task 7) safe: the writable root
- *  out-specifies the ancestor deny. It is NOT an unconditional override — a
- *  deny deeper than a writable root (an operator's extra_deny_read inside
- *  their own worktree) still wins. */
+ *  single source both the OS profiles (Tasks 4-5) and the JS jail
+ *  (pathJail.ts's assertReadAllowed) are generated from. Composition order
+ *  here doesn't matter: orderRules sorts by specificity, not list position.
+ *  Writable roots are included as allow/subtree rules — a root the agent may
+ *  write but not read is incoherent, and this is what makes denying a
+ *  writable root's ancestor (e.g. the whole data root, #277 Task 7) safe: the
+ *  writable root out-specifies the ancestor deny. It is NOT an unconditional
+ *  override — a deny deeper than a writable root (an operator's
+ *  extra_deny_read inside their own worktree) still wins. */
 export function readRules(policy: SandboxPolicy): ReadRule[] {
   return [
     ...policy.readDenyPaths.map((path): ReadRule => ({ path, effect: "deny", kind: "subtree" })),
