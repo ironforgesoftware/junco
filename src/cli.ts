@@ -70,6 +70,8 @@ import {
   submitPlanSet,
   readPlanSetRecord,
   supersedeUnclaimed,
+  resolveSetState,
+  type PlanSetRecord,
 } from "./planSets.js";
 import { slugifyId } from "./slug.js";
 import { describeTicketSchema } from "./ticketSchema.js";
@@ -1092,29 +1094,52 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         resubmitFailed: supersede,
         submitFn: deps.submitPlanFn,
       });
-      materializePlanSet(
-        cfg,
-        {
-          v: 1,
-          planId,
-          hash,
-          repoPath,
-          github: null,
-          tasks: children.map((c) => ({
-            id: c.taskId,
-            ticketId: c.ticketId,
-            dependsOn: c.dependsOn,
-          })),
-          createdAt: new Date().toISOString(),
-          statusCommentId: null,
-          degradedPosted: false,
-          lastLabel: null,
-          closed: false,
-        },
-        fence,
-      );
+      const record: PlanSetRecord = {
+        v: 1,
+        planId,
+        hash,
+        repoPath,
+        github: null,
+        tasks: children.map((c) => ({
+          id: c.taskId,
+          ticketId: c.ticketId,
+          dependsOn: c.dependsOn,
+        })),
+        createdAt: new Date().toISOString(),
+        statusCommentId: null,
+        degradedPosted: false,
+        lastLabel: null,
+        closed: false,
+      };
+      materializePlanSet(cfg, record, fence);
       printFn(`plan set ${planId} (${children.length} tasks, rev ${hash})\n`);
       if (r.submitted.length === 0 && r.stranded.length === 0) {
+        // Fix wave C, item 2: `submitted`/`stranded` both empty does not by
+        // itself mean every child is healthy. Under the STRICT policy (this
+        // run made no edit, so `supersede` is false), a child a PRIOR run's
+        // supersede disposed into `failed/` (a `superseded:` marker) and then
+        // failed to resubmit (see the `r.stranded.length > 0` branch below)
+        // stays stuck there forever: strict-policy `submitPlanSet` only ever
+        // submits an `absent` child (see its `resubmitFailed` doc comment),
+        // and `junco retry --all` deliberately skips a superseded-marked
+        // file too. Detect it with the SAME state resolution the
+        // dashboard/reporter use — `resolveSetState`'s `superseded` task
+        // state already disambiguates a disposed-and-never-resubmitted copy
+        // from a genuine execution failure (see `pickFailedTicketFile`) — and
+        // surface it here rather than reporting a clean no-op. Deliberately
+        // NOT switching this unchanged re-run to the loose policy instead:
+        // that would also resurrect any sibling that failed on its own
+        // merits, which is exactly what the strict policy exists to prevent.
+        const state = resolveSetState(cfg, record);
+        const stranded = state.tasks.filter((t) => t.state === "superseded");
+        if (stranded.length > 0) {
+          for (const t of stranded) {
+            process.stderr.write(
+              `junco submit: plan set ${planId}: ${t.ticketId} is stranded (disposed by a prior supersede, never resubmitted) — edit '${fileArg}' and re-run to recover it\n`,
+            );
+          }
+          return 1;
+        }
         printFn(`plan set ${planId}: all ${children.length} tickets already in the queue\n`);
         return 0;
       }
@@ -1124,9 +1149,18 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       // and this command exited 1 with a fatal message. Surface the same
       // signal here instead of silently returning 0, or the operator has no
       // way to notice a stranded child short of re-reading the daemon log.
-      // The record above was still materialized (mirrors the bridge: a
-      // stranded child stays `absent`, so a later re-run of this same
-      // command with an unchanged hash retries it under the strict policy).
+      // The record above was still materialized. Fix wave C, item 2: that
+      // does NOT by itself mean a later unchanged re-run retries this child —
+      // only true when nothing was disposed this run (no prior record, or
+      // `supersede` false: the child really does stay `absent`, and a
+      // strict-policy re-run resubmits it fine). When THIS stranding happened
+      // during a supersede (`supersede` true — `supersedeUnclaimed` already
+      // disposed the prior copy into `failed/` with a `superseded:` marker
+      // before the fresh copy's submit threw here), the child sits in
+      // `failed/`, not `absent`, and an unchanged re-run's STRICT policy will
+      // never pick a `failed` child back up on its own — see the
+      // `superseded`-state check above (the "already in the queue" branch)
+      // for how that case is actually surfaced on a later re-run.
       if (r.stranded.length > 0) {
         for (const id of r.stranded) {
           process.stderr.write(`junco submit: plan set ${planId}: failed to submit ${id}\n`);

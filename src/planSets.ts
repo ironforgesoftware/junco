@@ -56,13 +56,36 @@ export interface PlanSetRecord {
    * hash) or the check never re-fires. Additive, same tolerance as
    * `lastDashboard`. */
   lastFailedHash?: string;
-  /** Ticket ids whose submit THREW during a supersede fan-out (not ids that
-   * were legitimately skipped as already-landed). The fresh record carries the
+  /** Ticket ids whose submit THREW during a fan-out — either the INITIAL
+   * dispatch (`dispatchPlanSet`) or a supersede recompile (`trySupersede`);
+   * not ids that were legitimately skipped as already-landed (fix wave C,
+   * item 1: dispatchPlanSet used to leave this unset, so a child stranded at
+   * initial dispatch had no recovery path at all — the drain below only ever
+   * saw what supersede seeded). After a supersede, the fresh record carries a
    * new hash, so trySupersede's gate would otherwise block any re-trigger and
    * — since the child never landed — there is no failed/ file for `junco
    * retry` either, stranding it until the human edits the plan again (#298).
    * The next sweep retries these before the gate. Additive: absent = none. */
   pendingFanout?: string[];
+  /** ISO timestamp of the first sweep the close gate (`maintainPlanSets`
+   * step 5, planSetBridge.ts) held this record open despite every task being
+   * terminal — i.e. `state.allTerminal && record.lastFailedHash`: a set stuck
+   * behind an unresolved compile-failed edit that a human either never fixes,
+   * or defeats entirely by deleting the plan comment (the lookup then returns
+   * null, `trySupersede` reads `unchanged`, and `lastFailedHash` never gets a
+   * chance to clear — fix wave C, item 3). Such a record can never acquire
+   * `closedAt`, so without this field the cold window above never engages for
+   * it either, and it pays the SAME paginated `gh api …/comments` probe every
+   * sweep, forever — re-opening the exact per-sweep cost `closedAt` was added
+   * to bound (#298). `staleSince` gets the identical treatment, reusing
+   * `PLAN_SET_COLD_MS` (see maintainPlanSets) rather than a second constant.
+   * Cleared whenever the gate stops holding the record open: a successful
+   * supersede replaces the record with an entirely fresh object that never
+   * carries this field forward (same discipline as `lastFailedHash` itself —
+   * see trySupersede's "superseded" outcome). Additive, same tolerance as
+   * `closedAt`/`pendingFanout`: absent = never stuck (or a record from before
+   * this field existed) = warm. */
+  staleSince?: string;
 }
 
 export function plansDir(cfg: Config): string {

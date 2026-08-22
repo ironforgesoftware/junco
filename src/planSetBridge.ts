@@ -105,17 +105,35 @@ export function dispatchPlanSet(
     skipped: r.skipped.length,
     stranded: r.stranded.length,
   });
+  // Seed `pendingFanout` from any child whose submit THREW (fix wave C, item
+  // 1) so the next `maintainPlanSets` sweep's `drainPendingFanout` resubmits
+  // it straight from the record — see the comment on DispatchResult's
+  // `stranded` below for why this, and not merely the caller leaving
+  // `plan-ready` standing, is what actually recovers a child stranded at
+  // INITIAL dispatch (as opposed to a supersede fan-out, which already seeds
+  // this field itself — see trySupersede).
+  if (r.stranded.length > 0) {
+    record.pendingFanout = r.stranded;
+    writePlanSetRecord(cfg, record);
+  }
   // DispatchResult keeps the pre-existing `submitted: string[]` (ticketId-only)
   // shape — the bridge has no destination path to report to GitHub, unlike
   // the CLI door, which now prints submitPlanSet's real `dst` (#298).
-  // `stranded` (I3, #298 review round 2): the caller (githubInbox.ts) must
-  // NOT swap `plan-ready` for `junco:queued` when this is non-empty — doing
-  // so was a REGRESSION versus this branch's own predecessor, where a
-  // per-child submit throw propagated and the label swap never happened, so
-  // the next sweep re-dispatched and resubmitted the missing child. This
-  // branch's `submitPlanSet` now CONTAINS that throw instead of propagating
-  // it, so the caller must check `stranded` itself to get the same recovery
-  // guarantee back.
+  // `stranded` (I3, #298 review round 2): a per-child submit throw is
+  // CONTAINED inside `submitPlanSet` rather than propagating, so this
+  // function reports it back on `stranded` instead of the caller's dispatch
+  // simply throwing. The ACTUAL recovery is the `pendingFanout` seeding just
+  // above: `drainPendingFanout` resubmits from the record on the next sweep,
+  // independent of whatever labels stand on the GitHub issue. (An earlier
+  // version of this comment claimed that the caller — githubInbox.ts — merely
+  // leaving `plan-ready` standing was sufficient on its own to guarantee a
+  // retry. It is not: that same sweep's `maintainPlanSets` unconditionally
+  // sets a lifecycle label on the fresh record materialized above regardless
+  // of what the caller does with `plan-ready`, so by the NEXT sweep the
+  // "already dispatched" branch in githubInbox.ts would see `plan-ready` next
+  // to a lifecycle label, strip both `plan-ready`/`approved`, and `continue`
+  // — never re-dispatching. Before `pendingFanout` was seeded here, nothing
+  // else picked the child back up either; it was permanently lost.)
   return {
     ok: true,
     submitted: r.submitted.map((s) => s.ticketId),
@@ -649,10 +667,11 @@ async function trySupersede(
 
   // New hash, same planId, keep statusCommentId and lastLabel (the
   // dashboard/label steps below re-derive lastLabel from fresh queue
-  // reality), reset degradedPosted/closed/lastFailedHash, and drop
-  // lastDashboard so the next render is treated as a change (the dashboard
-  // repaints). Materialized only now that fan-out has run — see the ordering
-  // note above.
+  // reality), reset degradedPosted/closed/lastFailedHash/staleSince (fix wave
+  // C, item 3: a set that just successfully superseded is by definition no
+  // longer stuck), and drop lastDashboard so the next render is treated as a
+  // change (the dashboard repaints). Materialized only now that fan-out has
+  // run — see the ordering note above.
   const fresh: PlanSetRecord = {
     v: 1,
     planId: record.planId,
@@ -717,6 +736,22 @@ export async function maintainPlanSets(
     // missing data.
     if (storedRecord.closed && storedRecord.closedAt) {
       const age = Date.parse(nowIso) - Date.parse(storedRecord.closedAt);
+      if (Number.isFinite(age) && age > PLAN_SET_COLD_MS) continue;
+    }
+
+    // Cold, part 2 (fix wave C, item 3): a record that can never CLOSE at
+    // all — every task terminal, but step 5's `!record.lastFailedHash` guard
+    // holds it open forever because the human never fixes (or defeats
+    // entirely by deleting) the failed edit — has no `closedAt` to ever
+    // engage the cold window above, so it would otherwise pay the SAME
+    // paginated `gh api …/comments` probe every sweep, indefinitely: exactly
+    // the cost `closedAt` was added to bound (#298). `staleSince` (stamped
+    // below, in step 5, the first sweep the gate holds the record open) gets
+    // the identical treatment, reusing `PLAN_SET_COLD_MS` rather than a
+    // second constant — past the window, the sweep stops noticing a further
+    // edit to this stuck set, same limitation as a genuinely cold closed one.
+    if (storedRecord.staleSince) {
+      const age = Date.parse(nowIso) - Date.parse(storedRecord.staleSince);
       if (Number.isFinite(age) && age > PLAN_SET_COLD_MS) continue;
     }
 
@@ -834,6 +869,21 @@ export async function maintainPlanSets(
       record.closed = true;
       record.closedAt = nowIso;
       changed = true;
+    } else if (state.allTerminal && !record.closed && record.lastFailedHash) {
+      // Fix wave C, item 3: this record WOULD close (every task terminal)
+      // except the guard just above holds it open. Stamp `staleSince` the
+      // FIRST sweep that happens — not on every sweep it keeps happening —
+      // so the cold-window skip near the top of this function eventually
+      // bounds the per-sweep gh probe a permanently-stuck record (the human
+      // never fixes the edit, or defeats the retry entirely by deleting the
+      // plan comment) would otherwise pay forever. A record that later DOES
+      // get fixed is replaced wholesale by trySupersede's fresh record (which
+      // never carries `staleSince` forward — same as `lastFailedHash`), so
+      // no explicit clearing is needed here.
+      if (!record.staleSince) {
+        record.staleSince = nowIso;
+        changed = true;
+      }
     }
 
     // 6. Persist once per iteration.

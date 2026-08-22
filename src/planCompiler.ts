@@ -102,7 +102,7 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
   }
   if (sharedContext !== null && SMUGGLED_HEADING_RE.test(sharedContext)) {
     errors.push(
-      "shared_context contains a markdown heading (##) — headings may only appear in the compiler-built body sections",
+      "shared_context contains a markdown heading (##) — headings may only appear in the compiler-built body sections — use ### or deeper for a subheading",
     );
   }
   const tasksRaw = Array.isArray(doc.tasks) ? doc.tasks : null;
@@ -148,7 +148,7 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     }
     if (title !== null && SMUGGLED_HEADING_RE.test(title)) {
       errors.push(
-        `${at}: title contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+        `${at}: title contains a markdown heading (##) — headings may only appear in the compiler-built body sections — use ### or deeper for a subheading`,
       );
     }
     const dependsOn = strArr(m.depends_on ?? []) ?? null;
@@ -170,7 +170,7 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     }
     if (description !== null && SMUGGLED_HEADING_RE.test(description)) {
       errors.push(
-        `${at}: description contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+        `${at}: description contains a markdown heading (##) — headings may only appear in the compiler-built body sections — use ### or deeper for a subheading`,
       );
     }
     const acceptance = strArr(m.acceptance) ?? [];
@@ -187,7 +187,7 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     }
     if (acceptance.some((a) => SMUGGLED_HEADING_RE.test(a))) {
       errors.push(
-        `${at}: acceptance contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+        `${at}: acceptance contains a markdown heading (##) — headings may only appear in the compiler-built body sections — use ### or deeper for a subheading`,
       );
     }
     const prohibitions = strArr(m.prohibitions ?? []) ?? [];
@@ -203,7 +203,7 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     }
     if (prohibitions.some((p) => SMUGGLED_HEADING_RE.test(p))) {
       errors.push(
-        `${at}: prohibitions contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+        `${at}: prohibitions contains a markdown heading (##) — headings may only appear in the compiler-built body sections — use ### or deeper for a subheading`,
       );
     }
     const verification =
@@ -235,7 +235,7 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     // of running it.
     if (verification !== null && SMUGGLED_HEADING_RE.test(verification)) {
       errors.push(
-        `${at}: verification contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+        `${at}: verification contains a markdown heading (##) — headings may only appear in the compiler-built body sections — use ### or deeper for a subheading`,
       );
     }
     tasks.push({

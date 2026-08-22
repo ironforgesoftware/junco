@@ -88,7 +88,7 @@ tasks:
 
 Each task becomes its own ticket and pull request, executed in dependency order. The compiler builds the `plan:`/`depends_on:` frontmatter itself — never hand-author those fields on a compiled set. Reach for this when plan sets are enabled and you'd otherwise be hand-writing more than a couple of dependent tickets; fall back to hand-authored tickets with `depends_on:` when plan sets are off, or the work doesn't cleanly fit the compiler's task shape.
 
-The compiler refuses (never strips) a plan whose free-text fields — `title`, `description`, `acceptance`, `prohibitions`, `verification`, `shared_context` — contain a frontmatter delimiter (`---`), a code fence (` ``` `), or a `## `-prefixed markdown heading. Those all collide with structure the compiler itself builds into the child ticket's body, so write plain prose in these fields — no fenced code, no `##` headings, no `---` lines.
+The compiler refuses (never strips) a plan whose free-text fields — `title`, `description`, `acceptance`, `prohibitions`, `verification`, `shared_context` — contain a frontmatter delimiter (`---`), a code fence (` ``` `), or a `## `-prefixed markdown heading. Those all collide with structure the compiler itself builds into the child ticket's body, so write plain prose in these fields — no fenced code, no `##` headings, no `---` lines. Need a subheading inside one of these fields anyway? Use `###` or deeper — only a two-`#` heading is refused.
 
 ## Drafting procedure
 

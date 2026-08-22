@@ -982,13 +982,19 @@ tasks:
 
       // I3 (#298 review round 2): a per-child submit throw is now CONTAINED
       // inside dispatchPlanSet/submitPlanSet — it no longer propagates and
-      // aborts this door's dispatch. Before this branch the throw propagated,
-      // so the label swap below never ran and the next sweep naturally
-      // re-dispatched and resubmitted the missing child. This door must
-      // check `stranded` itself to keep that same guarantee: it must NOT
-      // swap `plan-ready` for `junco:queued` when a child is stranded, or the
-      // "already dispatched" branch treats the issue as done and nothing
-      // ever retries the missing child.
+      // aborts this door's dispatch. This door must NOT swap `plan-ready` for
+      // `junco:queued` when a child is stranded — that much still stands as a
+      // belt-and-suspenders guard — but merely leaving `plan-ready` standing
+      // does NOT by itself guarantee a retry (fix wave C, item 1): this same
+      // sweep's `maintainPlanSets` unconditionally sets a lifecycle label on
+      // the fresh record regardless, so a later sweep's "already dispatched"
+      // branch sees `plan-ready` next to that label and cleans both up
+      // without ever re-dispatching. The actual recovery is that
+      // dispatchPlanSet now seeds the record's `pendingFanout` from
+      // `stranded`, so `maintainPlanSets`'s `drainPendingFanout` resubmits
+      // the stranded child straight from the record — see
+      // planSetBridge.test.ts's "retries a child stranded by a fan-out
+      // failure ... INITIAL DISPATCH" for that recovery proven end to end.
       it("a stranded child submit leaves plan-ready standing (no premature queued swap)", async () => {
         const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
         try {
@@ -1014,16 +1020,24 @@ tasks:
             submitFn: throwingSubmit,
           } as never);
           expect(n).toBe(0); // not counted as bridged — never reaches the label swap
-          // "a" landed through the contained fan-out; "b" did not.
+          // "a" landed through the contained fan-out via THIS door's injected
+          // `submitFn`; "b" did not — its throw is what stranded it.
           expect(f.submitted.map((s) => s.idHint)).toEqual([`${EXEC_ID}-a`]);
-          // `plan-ready` (and `approved`) are left standing — the dispatch
-          // branch's OWN queued-swap (`--remove-label junco:plan-ready`) must
-          // NOT fire, so the next sweep retries the whole dispatch. (The same
-          // sweep's UNRELATED `maintainPlanSets` pass — which runs on every
-          // sweep regardless, against the record dispatchPlanSet already
-          // materialized — legitimately issues its own first label swap for
-          // this now-open set; that is independent of the bug under test
-          // here, so this only asserts the SPECIFIC swap I3 prevents.)
+          // `plan-ready` (and `approved`) are left standing — belt-and-
+          // suspenders (the dispatch branch's OWN queued-swap
+          // (`--remove-label junco:plan-ready`) must NOT fire), but NOT what
+          // actually recovers "b" (fix wave C, item 1: see the comment at the
+          // `dr.stranded` check in githubInbox.ts). Recovery is
+          // dispatchPlanSet seeding the record's `pendingFanout` with "b"'s
+          // ticket id: this SAME sweep's UNRELATED `maintainPlanSets` pass —
+          // which runs on every sweep regardless, against the record
+          // dispatchPlanSet already materialized — drains it via the REAL
+          // `submitTicket` (that call site does not forward this door's
+          // injected `submitFn`, which is why `f.submitted` above stays
+          // `[EXEC_ID-a]` even though "b" does land) and also issues its own
+          // first label swap for this now-open set; that maintenance pass is
+          // independent of the bug under test here, so this only asserts the
+          // SPECIFIC swap I3 prevents.)
           const dispatchLabelSwap = f.calls.find(
             (c) => c[0] === "issue" && c[1] === "edit" && c.includes("junco:plan-ready"),
           );

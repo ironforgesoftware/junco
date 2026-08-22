@@ -38,7 +38,12 @@ import {
   type PlanSetRecord,
 } from "../src/planSets.js";
 import { dispatchPlanSet, maintainPlanSets } from "../src/planSetBridge.js";
-import { PLAN_COMMENT_MARKER, PLAN_SET_FENCE, extractPlanSetBody } from "../src/githubInbox.js";
+import {
+  PLAN_COMMENT_MARKER,
+  PLAN_SET_FENCE,
+  extractPlanSetBody,
+  githubTicketId,
+} from "../src/githubInbox.js";
 import { hashPlan } from "../src/planCompiler.js";
 import { sweepDependencies } from "../src/ticketDeps.js";
 import { submitTicket } from "../src/dispatch.js";
@@ -456,6 +461,41 @@ describe("maintainPlanSets", () => {
     expect(readLog().length).toBe(before);
   });
 
+  // Fix wave C, item 3: a record that can NEVER close (every task terminal,
+  // but the close gate's `!record.lastFailedHash` guard holds it open — see
+  // the compile-failed-supersede tests below) has no `closedAt` to ever
+  // engage the cold window above. `staleSince` gets the SAME bounded
+  // treatment. These two isolate that skip in the same direct-write style as
+  // the `closedAt` pair above; the end-to-end stamping (via an actual
+  // compile-failed supersede) is covered separately, further down.
+  it("does not probe a record stuck behind an unresolved compile-failed edit longer than the cold window", async () => {
+    writePlanSetRecord(
+      cfg,
+      baseRecord({
+        closed: false,
+        lastFailedHash: "some-failed-hash",
+        staleSince: "2020-01-01T00:00:00.000Z",
+      }),
+    );
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readLog().length).toBe(before);
+  });
+
+  it("still probes a recently-stuck record", async () => {
+    writePlanSetRecord(
+      cfg,
+      baseRecord({
+        closed: false,
+        lastFailedHash: "some-failed-hash",
+        staleSince: "2026-08-21T00:00:00.000Z",
+      }),
+    );
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readLog().length).toBeGreaterThan(before);
+  });
+
   // I4 (#298 review round 2): isolates the label-mapping half of the bug from
   // the closing-decision half (covered separately below, in the
   // compile-failed supersede test) — this record has NO genuine failure at
@@ -813,6 +853,47 @@ tasks:
   // landed there is no failed/ file for `junco retry` either — recovery
   // requires draining `pendingFanout` BEFORE the hash gate, even on a sweep
   // where nothing changed.
+  // Fix wave C, item 1: dispatchPlanSet (INITIAL dispatch — no prior record,
+  // no supersede) used to leave `pendingFanout` unset even when a child's
+  // submit threw, so the drain below had nothing to work with — a child
+  // stranded at first dispatch had NO recovery path at all, unlike a child
+  // stranded during a supersede fan-out (trySupersede already seeds this
+  // field — see the neighboring tests). This proves dispatchPlanSet now
+  // seeds it too, and that a later `maintainPlanSets` sweep's
+  // `drainPendingFanout` actually resubmits the child from it.
+  it("retries a child stranded at INITIAL DISPATCH (not supersede) on a later sweep's drain", async () => {
+    const repo = { nwo: "acme/api", path: "/sbxroot/repo" };
+    const planId = githubTicketId(repo.nwo, 9);
+
+    // Sweep 1 (dispatch): "b"'s submit throws — a transient error, contained
+    // per-child, so it must not abort "a"'s submit or the record write.
+    let failFor: string | null = `${planId}-b`;
+    const submitFn: typeof submitTicket = (c, content, opts, deps) => {
+      if (opts?.idHint === failFor) throw new Error("disk full");
+      return submitTicket(c, content, opts, deps);
+    };
+    const dr = dispatchPlanSet(cfg, repo, 9, FENCE, NOW, { submitFn });
+    expect(dr.ok).toBe(true);
+    if (!dr.ok) return;
+    expect(dr.submitted).toEqual([`${planId}-a`]);
+    expect(dr.stranded).toEqual([`${planId}-b`]);
+    expect(existsSync(join(qp.inbox, `${planId}-b.md`))).toBe(false);
+
+    const afterDispatch = readPlanSetRecord(cfg, planId);
+    expect(afterDispatch?.pendingFanout).toEqual([`${planId}-b`]);
+
+    // Sweep 2 (a later maintenance sweep): "b" no longer fails — the drain
+    // must resubmit it straight from the record, with no fresh dispatch and
+    // no supersede (the plan comment fixture defaults to none — see
+    // writeFakeGh's `comments` default of "").
+    failFor = null;
+    await maintainPlanSets(cfg, { submitFn });
+
+    expect(existsSync(join(qp.inbox, `${planId}-b.md`))).toBe(true);
+    expect(readFileSync(join(qp.inbox, `${planId}-b.md`), "utf8")).toContain("T B");
+    expect(readPlanSetRecord(cfg, planId)?.pendingFanout ?? []).toEqual([]);
+  });
+
   it("retries a child stranded by a fan-out failure on the next sweep, even though the hash is unchanged", async () => {
     const rec = baseRecord({
       hash: "orig-hash",
@@ -1075,6 +1156,60 @@ tasks:
     // is what the pre-I4 fallthrough produced for an all-terminal set with
     // no GENUINE failure (only a done task and a superseded one).
     expect(persisted?.lastLabel).toBe("junco:failed");
+  });
+
+  // Fix wave C, item 3: the PRECEDING test proves the set stays open; this
+  // one proves `staleSince` gets stamped as a side effect — once, on the
+  // FIRST sweep it happens, not re-stamped on every later sweep the same
+  // unfixed edit keeps it stuck — and that far enough past the cold window
+  // the sweep stops probing it at all, the same bounded treatment a
+  // genuinely closed record gets from `closedAt`.
+  it("a set stuck behind an unresolved compile-failed edit gets staleSince stamped once, on the first sweep it reads all-terminal, then goes cold", async () => {
+    const rec = baseRecord({
+      hash: "orig-hash",
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:working",
+      closed: false,
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(qp.inbox, "p1-b.md"), "---\nid: p1-b\n---\nOld B body\n");
+
+    const BAD_EDITED_FENCE = `version: 1
+tasks:
+  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}
+  - {id: a, title: T A2, depends_on: [], description: Build A again., acceptance: [works]}
+`;
+    writeFakeGh(root, approvedSupersedeGhOpts(BAD_EDITED_FENCE));
+
+    // Sweep 1: compile fails; disposing "b" makes the set read all-terminal
+    // for the first time — staleSince gets stamped.
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    const afterFirst = readPlanSetRecord(cfg, "p1");
+    expect(afterFirst?.lastFailedHash).toBeDefined();
+    expect(afterFirst?.closed).toBe(false);
+    expect(afterFirst?.staleSince).toBe("2026-08-22T00:00:00.000Z");
+
+    // Sweep 2: still stuck on the SAME unfixed edit (trySupersede
+    // short-circuits at the hash gate, same as the preceding test) —
+    // staleSince must NOT move to the later sweep's time; it marks when the
+    // set FIRST got stuck, not "still stuck as of."
+    await maintainPlanSets(cfg, { nowIso: "2026-08-23T00:00:00.000Z" });
+    const afterSecond = readPlanSetRecord(cfg, "p1");
+    expect(afterSecond?.staleSince).toBe("2026-08-22T00:00:00.000Z");
+    expect(afterSecond?.closed).toBe(false);
+
+    // One cold window later, the sweep stops probing it altogether — same
+    // bounded per-sweep cost a genuinely closed record gets from `closedAt`.
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-09-22T01:00:00.000Z" });
+    expect(readLog().length).toBe(before);
   });
 
   it("supersede resubmits an execution-failed old task (not just an unclaimed one); its dependent does not cascade", async () => {

@@ -1264,6 +1264,97 @@ describe("run(['submit', '--plan', ...]) — plan-set CLI door", () => {
     expect(captured.join("")).toContain("submitted:");
   });
 
+  // Fix wave C, item 2: the PRECEDING test strands "b" on the supersede run
+  // itself (exit 1 — the operator sees it immediately). This test covers the
+  // NEXT thing an operator naturally tries: re-running the SAME (unedited)
+  // file again. Before this fix that re-run reported
+  // "all 2 tickets already in the queue" and exited 0 — while "b" sat
+  // unrecoverable in failed/ with a `superseded:` marker (supersedeUnclaimed
+  // already disposed it; `junco retry --all` skips superseded-marked files
+  // too) and the strict policy (no edit ⇒ no supersede) never resubmits a
+  // `failed` child on its own.
+  it("an unchanged re-run after a supersede-then-stranded child does NOT report success — it surfaces the stranded child and exits nonzero", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "cross-plan.md");
+    writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+
+    // Run 1: v1 fans out "a" and "b" cleanly.
+    const first = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: () => {},
+      env: { HOME: vaultRoot },
+    });
+    expect(first).toBe(0);
+
+    // Edit the plan (v2: different body → different hash, same task ids).
+    const editedFence =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A v2., acceptance: [works]}\n" +
+      "  - {id: b, title: T B, depends_on: [a], description: Build B v2., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(editedFence), "utf8");
+
+    // Run 2: supersedes — disposes both unclaimed v1 children into failed/
+    // with a `superseded:` marker, then fans out v2. "a" lands; "b"'s submit
+    // throws (a transient error, contained per-child) and is left stranded.
+    const errLines2: string[] = [];
+    const errSpy2 = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines2.push(String(s));
+      return true;
+    });
+    let second: number;
+    try {
+      second = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+        printFn: () => {},
+        env: { HOME: vaultRoot },
+        submitPlanFn: (c, content, opts, submitDeps) => {
+          if (opts?.idHint === "plan-cross-plan-b") throw new Error("disk full");
+          return submitTicket(c, content, opts, submitDeps);
+        },
+      });
+    } finally {
+      errSpy2.mockRestore();
+    }
+    expect(second).toBe(1);
+    expect(errLines2.join("")).toContain("failed to submit plan-cross-plan-b");
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const failedDir = join(vaultRoot, "Junco", "failed");
+    expect(existsSync(join(inboxDir, "plan-cross-plan-a.md"))).toBe(true);
+    expect(existsSync(join(inboxDir, "plan-cross-plan-b.md"))).toBe(false);
+    const strandedFailed = readdirSync(failedDir).filter((f) => f.includes("plan-cross-plan-b"));
+    expect(strandedFailed.length).toBe(1);
+    expect(readFileSync(join(failedDir, strandedFailed[0]), "utf8")).toMatch(/superseded:/);
+
+    // Run 3: the SAME (unedited) file — hash is unchanged, so `supersede` is
+    // false and the strict policy applies. "b" is skipped (it's `failed`, not
+    // `absent`), so `submitted`/`stranded` are both empty. This must NOT read
+    // as a clean no-op: "b" is genuinely stuck.
+    const captured3: string[] = [];
+    const errLines3: string[] = [];
+    const errSpy3 = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines3.push(String(s));
+      return true;
+    });
+    let third: number;
+    try {
+      third = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+        printFn: (s) => captured3.push(s),
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      errSpy3.mockRestore();
+    }
+    expect(third).toBe(1);
+    expect(captured3.join("")).not.toContain("already in the queue");
+    expect(errLines3.join("")).toContain("plan-cross-plan-b is stranded");
+    expect(errLines3.join("")).toContain(planFile); // names the remedy: edit this file and re-run
+
+    // "b" is still exactly where it was — no phantom resubmit, no silent drop.
+    expect(existsSync(join(inboxDir, "plan-cross-plan-b.md"))).toBe(false);
+    expect(readdirSync(failedDir).filter((f) => f.includes("plan-cross-plan-b")).length).toBe(1);
+  });
+
   // #298: planId is derived from the FILENAME, so a re-run with an edited
   // plan always collides with the previous record. Without a supersede, the
   // record gets clobbered to the new hash while the v1 child stays queued

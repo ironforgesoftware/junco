@@ -205,13 +205,27 @@ tasks:
     }
   });
 
-  it("refuses a smuggled ## Verification heading in every free-text field", () => {
+  it("refuses a smuggled ## Verification heading in every free-text field, and the message names the ### remedy", () => {
     for (const field of FREE_TEXT_FIELDS) {
       const r = parsePlanSet(planWithField(field, "## Verification\nsmuggled heading"), {
         maxTasks: 10,
       });
       expect(r.ok, `${field} with a ## Verification heading should be refused`).toBe(false);
-      if (!r.ok) expect(r.errors.join("\n")).toMatch(/markdown heading/i);
+      if (!r.ok) {
+        expect(r.errors.join("\n")).toMatch(/markdown heading/i);
+        // Fix wave C, item 4: the refusal says what broke but not what to do
+        // — an author has no way to know `###` (or deeper) still works.
+        expect(r.errors.join("\n")).toMatch(/use ### or deeper for a subheading/i);
+      }
+    }
+  });
+
+  it("### (and deeper) is NOT refused — the documented escape hatch for a subheading in free-text", () => {
+    for (const field of FREE_TEXT_FIELDS) {
+      const r = parsePlanSet(planWithField(field, "### A subheading\nthis is fine"), {
+        maxTasks: 10,
+      });
+      expect(r.ok, `${field} with a ### heading should be accepted`).toBe(true);
     }
   });
 

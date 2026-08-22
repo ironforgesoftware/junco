@@ -915,17 +915,26 @@ export async function pollGithubInbox(
                 }
                 // I3 (#298 review round 2): a per-child submit throw is now
                 // CONTAINED inside dispatchPlanSet/submitPlanSet rather than
-                // propagating — so this door must check `stranded` itself to
-                // keep the pre-existing recovery guarantee (before this
-                // branch, the throw propagated, the label swap below never
-                // ran, and the next sweep naturally re-dispatched and
-                // resubmitted the missing child). Leave `plan-ready` (and, in
-                // requireApproval mode, `approved`) standing — swapping to
-                // `junco:queued` here would make the "already dispatched"
-                // branch above treat this issue as done and never retry, and
-                // `pendingFanout` (the bridge's OTHER stranded-child recovery
-                // path) is never set on this first-dispatch door, so nothing
-                // else would resubmit it either.
+                // propagating. dispatchPlanSet ALSO seeds the record's
+                // `pendingFanout` from `stranded` (fix wave C, item 1) — THAT
+                // is the actual recovery: the next `maintainPlanSets` sweep's
+                // `drainPendingFanout` resubmits straight from the record,
+                // independent of what labels stand on this issue. Still leave
+                // `plan-ready` (and, in requireApproval mode, `approved`)
+                // standing rather than swapping to `junco:queued` here — this
+                // is belt-and-suspenders, not load-bearing: it only keeps this
+                // door itself from reporting the set as cleanly dispatched
+                // while a child hasn't actually landed yet. (A prior version
+                // of this comment claimed leaving `plan-ready` standing was
+                // BY ITSELF sufficient to guarantee a retry — it is not: the
+                // SAME sweep's `maintainPlanSets` unconditionally sets a
+                // lifecycle label on the fresh record regardless of what this
+                // branch does, so by the NEXT sweep the "already dispatched"
+                // branch above would see `plan-ready` next to a lifecycle
+                // label, strip both, and `continue` — never re-dispatching.
+                // Before `pendingFanout` was seeded on this door, nothing else
+                // would have resubmitted the child either — it was lost for
+                // good.)
                 if (dr.stranded.length > 0) {
                   log.warn(
                     "github bridge: plan set dispatch stranded child submit(s); leaving plan-ready for retry",
