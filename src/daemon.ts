@@ -755,6 +755,35 @@ export async function mainLoop(
       migLock.release();
     }
   }
+  // #281 item 7 — mkdirs runs AFTER migrate.lock was released just above, and
+  // that ordering is deliberate, not an oversight. Recorded here so the next
+  // reader does not re-derive the analysis (or "fix" a window that was left
+  // alone on purpose):
+  //
+  // - Nothing executes in the window. `migLock.release()` is the last
+  //   statement of the `finally`; only two closing braces separate it from
+  //   this call.
+  // - In normal operation only `junco data migrate --force` gets inside it.
+  //   This process holds `worker.lock` across the WHOLE startup — cli.ts
+  //   acquires it before calling mainLoop and releases it in the `finally`
+  //   after the loop returns — and an unforced migrate refuses on either
+  //   signal of a live daemon: the /health probe, or a live holder of the
+  //   worker.lock it derives from its own config path exactly as cli.ts does
+  //   (dataMigrateCmd.ts phase 1a; both signals skipped only by --force).
+  // - What such a migrate could collide with is small: `ensureDataTree`
+  //   (mkdirs) mkdir -p's the tree and writes a `.gitignore` when none
+  //   exists. It never deletes, moves, or overwrites anything. Empty
+  //   scaffolding it materializes under a concurrent migrate's destination is
+  //   repaired away by that migrate's own recursively-empty check
+  //   (dataMigrate.ts); the worst case is a nested dir arriving between that
+  //   check and the rename, so the rename fails ENOTEMPTY and the migrate
+  //   aborts — after printing a receipt of the pairs that DID land, and with
+  //   its resume driven off the filesystem, so a re-run picks up exactly the
+  //   stragglers. No data is lost in either direction.
+  // - The genuinely destructive startup steps — recoverOrphansFn and pruneFn
+  //   below — were never under migrate.lock at all. That is a larger,
+  //   pre-existing exposure, deliberately out of scope here rather than
+  //   anything this window introduces.
   mkdirs(cfg);
   // Skill links (Task 3): symlink the packaged skills/ dir into <dataDir>/skills
   // and fan out per-harness junco-dispatch links, right after the data tree

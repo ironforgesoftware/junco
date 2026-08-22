@@ -12,6 +12,7 @@ import {
   writeFileSync,
   existsSync,
   readFileSync,
+  readdirSync,
   renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ import {
   migrationTargetRoot,
   dataRootPairs,
   pendingConfigRelocation,
+  isRecursivelyEmptyDir,
 } from "../src/dataMigrate.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 import { dataTreePaths } from "../src/dataTree.js";
@@ -743,5 +745,31 @@ describe("pendingConfigRelocation (item 11, #281)", () => {
       from: xdgLegacy,
       to: canonical,
     });
+  });
+});
+
+/**
+ * F5 (final review 2026-08-22). `isRecursivelyEmptyDir`'s ENOTDIR → `false`
+ * conversion is not a tidy-up detail: it is the ONLY thing that makes
+ * `moveDataRootPair` treat a FILE at the destination as a conflict rather
+ * than as replaceable scaffolding — and `junco data migrate`'s phase 9 hands
+ * it a file every time (the config relocation's canonical `config.json`).
+ * Lose the conversion and the receipted "canonical config already exists —
+ * not overwritten" guarantee becomes a delete of the operator's live config.
+ * `readdirTypedFn`'s contract in `dataMigrateCmd.ts` states the requirement
+ * this pins on the production side.
+ */
+describe("isRecursivelyEmptyDir — a FILE is never 'recursively empty'", () => {
+  it("returns false for a file, via the ENOTDIR the real readdir default throws", () => {
+    const root = freshRoot();
+    const file = join(root, "config.json");
+    writeFileSync(file, JSON.stringify({ model: { id: "canonical-model" } }), "utf8");
+    expect(isRecursivelyEmptyDir(file, (d) => readdirSync(d, { withFileTypes: true }))).toBe(false);
+  });
+
+  it("still returns true for a tree holding directories only", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "review", "assess", "filed"), { recursive: true });
+    expect(isRecursivelyEmptyDir(root, (d) => readdirSync(d, { withFileTypes: true }))).toBe(true);
   });
 });

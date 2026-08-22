@@ -6,7 +6,7 @@
 
 **Architecture:** Almost everything lives in `src/dataMigrateCmd.ts` (the command, its receipt, and its dry-run) plus `src/dataMigrate.ts` (the pair planner). Task 1 lands the deps seam first because it is what makes the error-path tasks testable; the rest are independent.
 
-**Tech Stack:** TypeScript strict/ESM, vitest. `tests/dataMigrateCmd.test.ts` is the main surface (64 tests at baseline).
+**Tech Stack:** TypeScript strict/ESM, vitest. `tests/dataMigrateCmd.test.ts` is the main surface (**35 tests at baseline** `ce22fbd` — an earlier draft of this line said 64, which is wrong and would read as if this branch deleted tests; corrected in the fix round after final review F2).
 
 **Spec:** GitHub issue #281.
 
@@ -21,9 +21,9 @@
 
 ## Rulings — three items are NOT implemented
 
-- **Item 8 (journal duplication on a failed `rmSync`) — DROPPED.** #305's `dedupeSteps` (`src/migratePathRewrite.ts:136`, applied at `dataMigrateCmd.ts:958`) already de-fangs it: a duplicated journal entry is collapsed before it reaches a reader. Implementing it now would be churn against a problem that no longer has a symptom.
+- **Item 8 (journal duplication on a failed `rmSync`) — DROPPED.** No consumer is harmed by a duplicate, so there is no symptom to fix: `destinationHoldsPartialCopy` (`src/dataMigrateCmd.ts:482`) only re-sets a flag, and the path-rewrite phase filters then de-dupes what it reads (`dedupeSteps`, `src/migratePathRewrite.ts:171`). **De-duplication is NOT global** — corrected in the fix round after final review F3, which caught the original wording ("a duplicated journal entry is collapsed before it reaches a reader") claiming more than the code does. `dedupeSteps` is applied at exactly ONE place, `src/dataMigrateCmd.ts:1276` (building the path-rewrite prefix map), and `appendJournal` (`src/dataMigrate.ts:394`) de-dupes **only** `skipped-conflict` steps — its own comment says `"renamed"` entries always append, because the same pair can genuinely rename twice. So a duplicated `renamed` entry DOES persist in `migrated.json` and any other reader, a human included, sees it. The drop stands on "no consumer is harmed", not on de-duplication.
 - **Item 12 (`reviewStore` `subdir`→`dir` log key) — DROPPED.** Renamed in `ac80e2c`. Verified: no consumer, no test, no documented contract. There is nothing to fix and nothing to document.
-- **Item 7 (`ensureDataTree` after `migrate.lock` release) — CODE CHANGE DROPPED, comment only.** The race is not reachable in normal operation: `worker.lock` is held across the whole daemon startup (`cli.ts:705` → `:781` → `:796`), so only `--force` enters the window; one statement sits between release and `mkdirs`; and `ensureDataTree` only mkdirs and writes a `.gitignore`. Worst case is an ENOTEMPTY abort with an honest receipt that the filesystem-driven resume recovers. The genuinely destructive `recoverOrphans`/`pruneStaleWorktrees` (`daemon.ts:782-783`) were never under that lock in the first place. Record the reasoning in a comment so the next reader does not re-derive it.
+- **Item 7 (`ensureDataTree` after `migrate.lock` release) — CODE CHANGE DROPPED, comment only.** The race is not reachable in normal operation: `worker.lock` is held across the whole daemon startup (`cli.ts:705` → `:781` → `:796`), so only `--force` enters the window; NO statement runs between the release and `mkdirs` (two closing braces — an earlier draft said "one statement", corrected in the fix round); and `ensureDataTree` only mkdirs and writes a `.gitignore`. Worst case is an ENOTEMPTY abort with an honest receipt that the filesystem-driven resume recovers. The genuinely destructive `recoverOrphans`/`pruneStaleWorktrees` were never under that lock in the first place. Record the reasoning in a comment so the next reader does not re-derive it — **done in the fix round after final review F1** (the comment sits at the `migLock.release()` → `mkdirs(cfg)` window in `src/daemon.ts`; that is this item's only deliverable).
 
 ---
 

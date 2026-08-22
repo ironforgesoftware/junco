@@ -15,6 +15,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  lstatSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -2586,6 +2587,142 @@ describe("runDataMigrate — moveDataRootPair destructive-fs seam", () => {
     // the seam and not `node:fs`.
     expect(readFileSync(join(dataDir, "queue", "inbox", "t1.md"), "utf8")).toBe("ticket body");
     expect(existsSync(join(srcDir, "t1.md"))).toBe(true);
+  });
+});
+
+/**
+ * F4 (final review 2026-08-22): the command's destructive calls OUTSIDE
+ * `moveDataRootPair` are on the seam too — the data-root loop's removal of a
+ * merged legacy `migrated.json`, and phase 7's `.gitignore`/`skills`/rmdir
+ * cleanup of the legacy root. They are the ones a fixture can aim at real
+ * paths: phase 7 only runs when `fixedLegacyRoot` is non-null, i.e. when the
+ * target root IS `$HOME/.junco` — which is precisely what these fixtures
+ * arrange (HOME redirected to a tmp dir). Leaving them on `node:fs` would
+ * mean a test that stubs the removal seam, and reasonably believes the real
+ * filesystem is out of reach, unlinking the operator's own
+ * `~/.local/state/junco/.gitignore` and skills mount. Each test stubs the
+ * seam with no-op recorders and asserts the real entries SURVIVE: a call site
+ * that regresses to `node:fs` fails both the recording assertion and the
+ * survival one.
+ */
+describe("runDataMigrate — destructive-fs seam outside the pair move", () => {
+  let originalHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    tmpHome = freshRoot("junco-dmc-home-");
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it("routes the journal-merge's removal of the legacy migrated.json through rmFn", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(legacyRoot, { recursive: true });
+    // The self-referential pair: its destination IS this run's own journal,
+    // so the loop merges the steps and removes the source file instead of
+    // renaming (dataMigrateCmd.ts's `pair.to === migratedFile` branch).
+    const legacyJournal = join(legacyRoot, "migrated.json");
+    writeFileSync(
+      legacyJournal,
+      JSON.stringify({
+        version: 1,
+        steps: [{ from: join(legacyRoot, "old"), to: join(legacyRoot, "new"), action: "renamed" }],
+      }),
+      "utf8",
+    );
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+    expect(cfg.dataDir).toBe(legacyRoot); // the merge branch needs the legacy root as the source
+
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    // The merge itself really happened — the legacy steps are in the target
+    // journal, so this run took the branch under test.
+    const merged = JSON.parse(readFileSync(join(tmpHome, ".junco", "migrated.json"), "utf8")) as {
+      steps: Array<{ from: string; to: string; action: string }>;
+    };
+    expect(merged.steps).toContainEqual({
+      from: join(legacyRoot, "old"),
+      to: join(legacyRoot, "new"),
+      action: "renamed",
+    });
+    expect(out.join("")).toMatch(/migrated\.json: merged/);
+    // ...and its removal went through the seam, with the options this call
+    // site has always used (`force`, no `recursive` — it is a single file).
+    expect(rmCalls).toContainEqual({ p: legacyJournal, opts: { force: true } });
+    // The stub deleted nothing, so the legacy file is still there: proof the
+    // rm never reached the real filesystem.
+    expect(existsSync(legacyJournal)).toBe(true);
+  });
+
+  it("routes phase 7's legacy-root cleanup through unlinkFn and rmdirFn", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(legacyRoot, { recursive: true });
+    // The two entries phase 7 removes ITSELF (no flatToV2Pairs pair covers
+    // either): junco's own scaffolded .gitignore, byte-exact, and the skills
+    // symlink mount.
+    const legacyGitignore = join(legacyRoot, ".gitignore");
+    writeFileSync(legacyGitignore, "*\n", "utf8");
+    const legacySkills = join(legacyRoot, "skills");
+    symlinkSync(join(root, "nonexistent-skills-target"), legacySkills);
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+
+    const unlinkCalls: string[] = [];
+    const rmdirCalls: string[] = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        unlinkFn: (p) => {
+          unlinkCalls.push(p);
+        },
+        rmdirFn: (p) => {
+          rmdirCalls.push(p);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    // Exact sequence, in phase order: scaffold .gitignore, then the skills
+    // mount, then the rmdir they exist to unblock.
+    expect(unlinkCalls).toEqual([legacyGitignore, legacySkills]);
+    expect(rmdirCalls).toEqual([legacyRoot]);
+    expect(out.join("")).toMatch(/removed legacy root/); // the stub "succeeded"
+    // Nothing the seam stands in for reached the real filesystem — on a real
+    // machine these three paths are under the operator's $HOME.
+    expect(existsSync(legacyGitignore)).toBe(true);
+    expect(lstatSync(legacySkills).isSymbolicLink()).toBe(true);
+    expect(existsSync(legacyRoot)).toBe(true);
   });
 });
 

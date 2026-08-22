@@ -201,7 +201,21 @@ export interface DataMigrateDeps {
    * in both shape and scope, hence the distinct name; `isFile()` widens
    * `MigrateDeps`' version because the copy listing needs to count only real
    * files (a symlink is neither a directory nor a file to copy-verify).
-   * Default: readdirSync(d, { withFileTypes: true }). */
+   * Default: readdirSync(d, { withFileTypes: true }).
+   *
+   * REQUIRED of any stub: it MUST throw an `ENOTDIR`-coded error when `d` is
+   * not a directory, exactly as the real `readdirSync` does. That throw is
+   * load-bearing, not incidental. `isRecursivelyEmptyDir` (dataMigrate.ts)
+   * converts ENOTDIR — and only ENOTDIR — into `false` = "not empty" =
+   * conflict, and that conversion is the ONLY thing standing between phase 9
+   * (`moveDataRootPair(configPath, canonicalConfigPath, fs)`, which hands
+   * this seam a FILE) and repair-DELETING an existing canonical
+   * `config.json`. A stub that answers `[]` for every path — the natural
+   * shape, and all a directory-only fixture needs — makes that file look
+   * recursively empty and turns the receipted "never overwritten" guarantee
+   * into a silent delete of the operator's live config. (Throwing some other
+   * error is wrong in the opposite direction: any non-ENOTDIR code
+   * propagates and aborts the run.) */
   readdirTypedFn?: (
     d: string,
   ) => Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
@@ -211,8 +225,10 @@ export interface DataMigrateDeps {
    * `size`, the per-file byte-count verify. Default: fs.statSync. */
   statFn?: (p: string) => { isDirectory(): boolean; size: number };
   /** Removal primitive for the destructive rms of the move: the repair of an
-   * empty scaffolding destination and the EXDEV fallback's source delete
-   * (plus the queue move's own EXDEV source delete). Name taken verbatim from
+   * empty scaffolding destination, the EXDEV fallback's source delete (plus
+   * the queue move's own EXDEV source delete), and the data-root loop's
+   * removal of a legacy `migrated.json` whose steps it just merged into the
+   * target journal. Name taken verbatim from
    * `MigrateDeps.rmFn`. Options come from the CALL SITE and the default
    * forwards them unchanged — `force: true` is NEVER defaulted in, or the
    * ENOENT that today signals a real bug in the repair path would be silently
@@ -221,6 +237,25 @@ export interface DataMigrateDeps {
   /** `mkdir -p` of a moved pair's parent directory (flatToV2Pairs' targets
    * scatter across data/, cache/, logs/). Default: fs.mkdirSync. */
   mkdirFn?: (p: string, opts: { recursive: true }) => void;
+  /** Single-entry unlink — phase 7's legacy-root cleanup ONLY: junco's own
+   * scaffolded `.gitignore` and the `skills` SYMLINK mount, the two entries
+   * `flatToV2Pairs` has no pair for and which would otherwise make the rmdir
+   * below fail ENOTEMPTY on every real machine. Deliberately NOT folded into
+   * `rmFn`: `rmSync` is a different primitive (it lstats and dispatches), and
+   * these two calls must keep `unlinkSync`'s semantics verbatim. Routed for
+   * the same reason every other destructive op in this module is (see
+   * `MoveFsDeps`): a test that stubs the removal seam and takes the real
+   * filesystem to be protected would otherwise unlink the REAL
+   * `~/.local/state/junco/.gitignore` and skills mount the moment its fixture
+   * makes `fixedLegacyRoot` non-null. Default: fs.unlinkSync. */
+  unlinkFn?: (p: string) => void;
+  /** Plain, NON-recursive rmdir of the emptied legacy root (phase 7). Also
+   * deliberately not `rmFn`: `rmSync(p, {})` throws ERR_FS_EISDIR on a
+   * directory (empty or not), and `rmSync(p, {recursive:true})` would delete
+   * a legacy root that still holds a conflicted pair — whereas the whole
+   * point of this call is that it refuses (ENOTEMPTY) and the receipt lists
+   * what stayed. Default: fs.rmdirSync. */
+  rmdirFn?: (p: string) => void;
 }
 
 /**
@@ -233,6 +268,13 @@ export interface DataMigrateDeps {
  * verbatim from `dataMigrate.ts`'s `MigrateDeps` wherever that interface
  * already spells the same operation (`rmFn`, `readdirTypedFn`) — one
  * vocabulary per operation across both modules, deliberately.
+ *
+ * Scope note (final review 2026-08-22, F4): this bundle covers the PAIR MOVE.
+ * The command's other destructive calls are seamed too, but as their own
+ * `DataMigrateDeps` members rather than here — `unlinkFn`/`rmdirFn` for phase
+ * 7's legacy-root cleanup, because neither is an `rmSync` and folding them in
+ * would change what they do. A test that means "the real filesystem cannot be
+ * touched" has to stub those two as well as these.
  */
 interface MoveFsDeps {
   existsFn: (p: string) => boolean;
@@ -714,6 +756,16 @@ export async function runDataMigrate(
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
   const env = deps.env ?? process.env;
   const readdirFn = deps.readdirFn ?? ((p: string) => readdirSync(p));
+  // Bound out here rather than inline in `fs` below because the data-root
+  // loop's journal-merge removal is the one `rmFn` call site OUTSIDE
+  // `moveDataRootPair` (same operation, same seam key, one binding).
+  const rmFn =
+    deps.rmFn ?? ((p: string, o: { recursive?: boolean; force?: boolean }) => rmSync(p, o));
+  // Phase 7's own removals — not part of the pair move, and not `rmSync`
+  // (see their DataMigrateDeps doc comments for why neither can be folded
+  // into `rmFn` without changing what it does).
+  const unlinkFn = deps.unlinkFn ?? ((p: string) => unlinkSync(p));
+  const rmdirFn = deps.rmdirFn ?? ((p: string) => rmdirSync(p));
   // The pair-move filesystem seam (see MoveFsDeps). Each default is the exact
   // call the code made inline before it was injectable — `rmFn` forwards the
   // CALLER's options verbatim rather than defaulting any in, so the repair rm
@@ -725,7 +777,7 @@ export async function runDataMigrate(
     syncPathFn,
     readdirTypedFn: deps.readdirTypedFn ?? ((d: string) => readdirSync(d, { withFileTypes: true })),
     statFn: deps.statFn ?? ((p: string) => statSync(p)),
-    rmFn: deps.rmFn ?? ((p: string, o: { recursive?: boolean; force?: boolean }) => rmSync(p, o)),
+    rmFn,
     mkdirFn: deps.mkdirFn ?? ((p: string, o: { recursive: true }) => mkdirSync(p, o)),
   };
 
@@ -1046,7 +1098,7 @@ export async function runDataMigrate(
           if (legacySteps.length > 0) {
             appendJournal(migratedFile, legacySteps, readFileFn, writeFileFn, renameFn);
           }
-          rmSync(pair.from, { force: true });
+          rmFn(pair.from, { force: true });
           dataRootReceipt.push(`${pair.from} -> ${pair.to}: merged`);
           continue;
         }
@@ -1269,7 +1321,9 @@ export async function runDataMigrate(
     // whenever the fixed legacy path still exists, not gated on
     // `cfg.legacy.dataRoot` (which flips to false the moment ANY marker
     // lands at the target, well before every pair has necessarily moved).
-    // Plain, non-recursive rmdirSync: refuses silently (ENOTEMPTY) when a
+    // Plain, non-recursive rmdir (`rmdirFn`, default `rmdirSync` — the
+    // removals in this phase run on their own seam members, see
+    // DataMigrateDeps): refuses silently (ENOTEMPTY) when a
     // conflicted pair (or anything else) is still inside, and the receipt
     // lists what stayed rather than ever forcing it.
     if (legacyRoot !== null && existsFn(legacyRoot)) {
@@ -1302,7 +1356,7 @@ export async function runDataMigrate(
         }
         if (content === "*\n") {
           try {
-            unlinkSync(legacyGitignore);
+            unlinkFn(legacyGitignore);
           } catch {
             /* best-effort — rmdir below just reports it as a leftover */
           }
@@ -1318,12 +1372,12 @@ export async function runDataMigrate(
       // root by ensureSkillLinks on the next daemon start.
       const legacySkills = join(legacyRoot, "skills");
       try {
-        if (lstatFn(legacySkills).isSymbolicLink()) unlinkSync(legacySkills);
+        if (lstatFn(legacySkills).isSymbolicLink()) unlinkFn(legacySkills);
       } catch {
         /* absent or unreadable — rmdir below reports it as a leftover */
       }
       try {
-        rmdirSync(legacyRoot);
+        rmdirFn(legacyRoot);
         dataRootReceipt.push(`removed legacy root ${legacyRoot}`);
       } catch {
         let remaining: string[] = [];

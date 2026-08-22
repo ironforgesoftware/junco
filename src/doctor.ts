@@ -249,6 +249,17 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       legacyRoot !== null &&
       dataRootHasTree(targetRoot, existsFn) &&
       dataRootHasTree(legacyRoot, existsFn);
+    if (bothRootsHaveTrees) {
+      report(
+        "warn",
+        "both data roots hold a tree",
+        `${targetRoot} and ${legacyRoot} — either an interrupted 'junco data migrate' left stragglers, ` +
+          `or a pre-0.10 binary ran after a completed migrate and recreated the legacy root. Re-run ` +
+          `'junco data migrate' — it resumes safely and never overwrites. Inspect both roots before ` +
+          `deleting anything by hand.`,
+      );
+    }
+
     // 2b-ter. The config FILE's own pending relocation (item 11, #281). 2b
     // above covers pending data DIRS only, so doctor used to print a clean
     // bill of health over a migration that still owed `junco data migrate`'s
@@ -270,17 +281,6 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
         "unrelocated config",
         `${configMove.from} -> ${configMove.to} — the data tree can be unified while the config ` +
           `itself is still at the pre-0.10 path; run 'junco data migrate' to move it`,
-      );
-    }
-
-    if (bothRootsHaveTrees) {
-      report(
-        "warn",
-        "both data roots hold a tree",
-        `${targetRoot} and ${legacyRoot} — either an interrupted 'junco data migrate' left stragglers, ` +
-          `or a pre-0.10 binary ran after a completed migrate and recreated the legacy root. Re-run ` +
-          `'junco data migrate' — it resumes safely and never overwrites. Inspect both roots before ` +
-          `deleting anything by hand.`,
       );
     }
 
