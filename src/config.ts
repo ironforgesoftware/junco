@@ -717,6 +717,64 @@ export function validateConfigObject(obj: unknown): void {
   ConfigSchema.parse(obj);
 }
 
+export interface KnownQueueRoot {
+  /** Absolute path to the queue root (the dir holding inbox/processing/...). */
+  root: string;
+  /** Operator-facing label, e.g. "canonical", "legacy data root", "vault". */
+  label: string;
+  /** True for the root the running config actually resolves to. */
+  resolved: boolean;
+}
+
+/**
+ * Every queue root this installation could plausibly own, deduped by
+ * resolved path, with the one the running config actually resolves to
+ * flagged `resolved: true`. Pure: no I/O, no cwd, no argv — the split-queue
+ * incident (2026-08-01) that motivates this function came from a resolution
+ * path that quietly depended on more than the environment, so this one
+ * deliberately doesn't.
+ *
+ * Reuses `juncoHome`/`homeOf` — the exact helpers `resolveDataRoot` (this
+ * file, `:516`) uses to derive the canonical and legacy-data-root shapes —
+ * rather than re-deriving those path shapes here. A second spelling of
+ * "where the legacy root is" is exactly the drift this codebase keeps
+ * getting bitten by (see `resolveBotGhConfigDir`'s doc comment above for
+ * the prior incident of that same shape).
+ *
+ * Only two of the four conceptual roots the split-queue plan names —
+ * canonical `~/.junco/queue` and legacy data root
+ * `~/.local/state/junco/queue` — are independently derivable from `env`
+ * alone. The other two (a legacy `vaultRoot`/`juncoSubdir` queue and an
+ * explicit `dataDir`/`stateDir` override) are arbitrary, operator-chosen
+ * strings that `assembleConfig` folds into `queueRoot` and does not retain
+ * separately on `Config` — and this function is intentionally given only
+ * `cfg.queueRoot`, not the raw schema, so it can't re-derive them from a
+ * second copy of that logic either. When `cfg.queueRoot` doesn't match
+ * either derivable shape, it is still always included (labeled
+ * "configured") rather than guessed at — the resolved root is authoritative
+ * for whatever it is on THIS run; only unresolved history is unrecoverable.
+ */
+export function knownQueueRoots(
+  cfg: Pick<Config, "queueRoot">,
+  env: Record<string, string | undefined> = process.env,
+): KnownQueueRoot[] {
+  const knownShapes: Array<{ root: string; label: string }> = [
+    { root: join(juncoHome(env), "queue"), label: "canonical" },
+    { root: join(homeOf(env), ".local", "state", "junco", "queue"), label: "legacy data root" },
+  ];
+  const byRoot = new Map<string, KnownQueueRoot>();
+  for (const shape of knownShapes) {
+    byRoot.set(shape.root, { root: shape.root, label: shape.label, resolved: false });
+  }
+  const resolvedMatch = byRoot.get(cfg.queueRoot);
+  if (resolvedMatch) {
+    resolvedMatch.resolved = true;
+  } else {
+    byRoot.set(cfg.queueRoot, { root: cfg.queueRoot, label: "configured", resolved: true });
+  }
+  return [...byRoot.values()];
+}
+
 export function queuePaths(cfg: Config): Paths {
   const root = cfg.queueRoot;
   return {

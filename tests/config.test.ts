@@ -19,6 +19,7 @@ import {
   ConfigSchema,
   expandHome,
   configDeprecations,
+  knownQueueRoots,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -816,6 +817,65 @@ describe("queuePaths", () => {
     const paths = queuePaths({ queueRoot: "/v/Junco" } as any);
     expect(paths.inbox).toBe("/v/Junco/inbox");
     expect(paths.failed).toBe("/v/Junco/failed");
+  });
+});
+
+describe("knownQueueRoots (split-queue startup guards, #274/#273)", () => {
+  it("enumerates canonical, legacy data root, and vault, flagging the resolved one", () => {
+    const roots = knownQueueRoots({ queueRoot: "/h/.junco/queue" }, { HOME: "/h" });
+    expect(roots.map((r) => r.root)).toContain("/h/.junco/queue");
+    expect(roots.find((r) => r.root === "/h/.junco/queue")?.resolved).toBe(true);
+    expect(roots.filter((r) => r.resolved)).toHaveLength(1);
+  });
+
+  it("dedupes roots that resolve to the same path", () => {
+    const roots = knownQueueRoots({ queueRoot: "/h/.junco/queue" }, { HOME: "/h" });
+    expect(new Set(roots.map((r) => r.root)).size).toBe(roots.length);
+  });
+
+  it("always includes the resolved root even when it matches no known shape", () => {
+    const roots = knownQueueRoots({ queueRoot: "/somewhere/odd" }, { HOME: "/h" });
+    expect(roots.find((r) => r.root === "/somewhere/odd")?.resolved).toBe(true);
+  });
+
+  it("is a pure function of its inputs — no cwd, no argv", () => {
+    const a = knownQueueRoots({ queueRoot: "/h/.junco/queue" }, { HOME: "/h" });
+    const b = knownQueueRoots({ queueRoot: "/h/.junco/queue" }, { HOME: "/h" });
+    expect(a).toEqual(b);
+  });
+
+  // Strengthening tests (added after the falsification pass required by the
+  // task brief — see task-1-report.md): the four tests above pass even if
+  // the canonical or legacy-data-root candidates are silently dropped from
+  // the enumeration, because none of them assert on the NON-resolved
+  // candidates' presence. These pin that down directly.
+  it("includes the canonical root, unresolved, even when the resolved root is elsewhere", () => {
+    const roots = knownQueueRoots({ queueRoot: "/somewhere/odd" }, { HOME: "/h" });
+    const canonical = roots.find((r) => r.root === "/h/.junco/queue");
+    expect(canonical).toBeDefined();
+    expect(canonical?.resolved).toBe(false);
+    expect(canonical?.label).toBe("canonical");
+  });
+
+  it("includes the legacy data root, unresolved, even when the resolved root is elsewhere", () => {
+    const roots = knownQueueRoots({ queueRoot: "/somewhere/odd" }, { HOME: "/h" });
+    const legacy = roots.find((r) => r.root === "/h/.local/state/junco/queue");
+    expect(legacy).toBeDefined();
+    expect(legacy?.resolved).toBe(false);
+    expect(legacy?.label).toBe("legacy data root");
+  });
+
+  it("dedupes when the resolved root equals the legacy data root, not just canonical", () => {
+    const roots = knownQueueRoots({ queueRoot: "/h/.local/state/junco/queue" }, { HOME: "/h" });
+    const matches = roots.filter((r) => r.root === "/h/.local/state/junco/queue");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].resolved).toBe(true);
+    expect(matches[0].label).toBe("legacy data root");
+  });
+
+  it("falls back to os.homedir() when env.HOME is unset — no process.env read internally", () => {
+    const roots = knownQueueRoots({ queueRoot: "/somewhere/odd" }, {});
+    expect(roots.find((r) => r.root === join(homedir(), ".junco", "queue"))).toBeDefined();
   });
 });
 
