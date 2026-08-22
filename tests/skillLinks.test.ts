@@ -268,9 +268,15 @@ describe("isSkillLinkFailure", () => {
 describe("renderSkillLinkEntry", () => {
   // Reword-invariance: renderSkillLinkEntry is the ONE place prose lives now,
   // so a reworded `detail` must change only the rendered text — never the
-  // `kind`/`path`/`harnessDir` a caller decides behavior on. This is exactly
-  // the fragility structured entries replace (skillCmd used to prefix/suffix
-  // match this same prose for its exit code and print prefix).
+  // `kind`/`path`/`harnessDir` a caller decides behavior on. This pins a
+  // property of the new design, not a reproduction of an old bug: the
+  // pre-refactor skillCmd's exit-code check matched only the warning
+  // string's leading path, and its print loop printed "warning:"
+  // unconditionally — neither depended on this trailing detail prose, so
+  // rewording it would not have changed either old decision. (What the old
+  // code DID decide by content-matching prose was the "ok" vs "skipped"
+  // suffix check and the mkdir-failed dirname arm — see the regression
+  // guards in tests/skillCmd.test.ts.)
   it("changing detail text changes only the rendered string, not the entry's kind/path/harnessDir", () => {
     const base: SkillLinkEntry = {
       path: "/h/skills/junco-dispatch",

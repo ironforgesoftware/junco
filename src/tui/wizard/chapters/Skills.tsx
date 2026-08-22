@@ -61,9 +61,14 @@ export function Skills({
             // Pre-check: already-consented dirs on rerun; everything detected
             // on a fresh run (the operator still confirms with enter).
             // sameHarnessDir, not raw equality: the registry emits the tilde
-            // spelling while loadConfig expands skills.harnessDirs, so a
-            // config holding the absolute form of a detected tilde dir must
-            // still pre-check (#292).
+            // spelling, but a config can hold the absolute form instead —
+            // `junco skill install --harness <path>` stores whatever the
+            // operator typed verbatim (skillCmd.ts), and the wizard reads
+            // that value straight from the raw parsed config JSON
+            // (answersFromConfig over raw, never through loadConfig's
+            // skills.harnessDirs expansion), so a config holding the
+            // absolute form of a detected tilde dir must still pre-check
+            // (#292).
             checked:
               answers.harnessDirs.length > 0
                 ? answers.harnessDirs.some((d) => sameHarnessDir(d, h.dir))

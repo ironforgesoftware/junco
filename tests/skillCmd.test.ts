@@ -148,7 +148,11 @@ describe("runSkillInstallCommand", () => {
   // "ok" and "harness-not-installed" are the two "nothing to do" kinds
   // (skillLinks.ts): a genuine already-valid link (nothing to do, truly "ok")
   // and a harness whose parent dir doesn't exist here — never linked at all.
-  // Printing both under "ok:" misleads for the latter.
+  // Printing both under "ok:" misleads for the latter. Regression guard for
+  // a real historical decision: the old code drew this same "ok" vs
+  // "skipped" line by suffix-matching `s.endsWith("(harness not
+  // installed)")` on the rendered warning string — content-dependent in
+  // exactly the way structured entries now replace.
   it("prints a genuine valid link as 'ok:' but an uninstalled-harness skip as 'skipped:' — exit code unchanged", async () => {
     const h = harness({});
     h.deps.ensureFn = () => ({
@@ -214,6 +218,9 @@ describe("runSkillInstallCommand", () => {
   // mkdir-failed is keyed on the harness DIR itself, not a link path — this
   // is exactly the case the old `dirname` arm existed to catch. A structured
   // `harnessDir` matches it directly, no path arithmetic required.
+  // Regression guard for that pre-refactor branch (the old exit-code check
+  // was `w.startsWith(p) || w.startsWith(dirname(p))`; this test pins the
+  // `dirname(p)` half).
   it("exit 1 on a mkdir-failed entry for a requested harness (the old dirname-arm case)", async () => {
     const dir = "/sbxroot/home/.claude/skills";
     const h = harness({}, [dir]);
@@ -224,11 +231,20 @@ describe("runSkillInstallCommand", () => {
     expect(code).toBe(1);
   });
 
-  // Falsifies the original fragility directly: rewording a failing entry's
-  // `detail` text must change neither the exit code nor the printed prefix
-  // ("warning:") — only structured fields (kind, harnessDir) may drive those
-  // decisions now. The old code decided both by matching against the
-  // rendered prose itself.
+  // Property of the new design, not a reproduction of the old fragility:
+  // rewording a failing entry's `detail` text must change neither the exit
+  // code nor the printed prefix ("warning:") — only structured fields (kind,
+  // harnessDir) may drive those decisions now. This does NOT falsify the
+  // pre-refactor code: its exit-code check matched only the warning
+  // string's leading path (`w.startsWith(p) || w.startsWith(dirname(p))`),
+  // and its print loop printed "warning:" unconditionally for every
+  // warning — neither decision depended on trailing detail text, so this
+  // same reword would not have changed either outcome under the old
+  // implementation either. The tests that DO reproduce the old code's
+  // actual content-dependent decisions are above: "prints a genuine valid
+  // link as 'ok:' but an uninstalled-harness skip as 'skipped:' ..." (the
+  // old `endsWith("(harness not installed)")` check) and "exit 1 on a
+  // mkdir-failed entry ... (the old dirname-arm case)".
   it("rewording an entry's detail text changes neither the exit code nor the print prefix", async () => {
     const dir = "/sbxroot/home/.claude/skills";
     const runWithDetail = async (detail: string) => {
