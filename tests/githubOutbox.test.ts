@@ -418,6 +418,93 @@ describe("flushOutbox", () => {
     expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(2); // original + tail
   });
 
+  it("a pr op that dead-letters BEFORE creating the PR clears pr_queued so a waiting dependent proceeds (#298)", async () => {
+    // Mirror-image of the #77 test above: there the PR was already created
+    // and the FINALIZE tail was stranded; here the PR was never created at
+    // all (a permanent, non-network gh pr create failure — expired token,
+    // deleted base branch, lost repo write access), which would otherwise
+    // leave `pr_queued: true` on the done ticket forever — sweepDependencies
+    // treats that marker as an unconditional, uncascaded WAIT
+    // (src/ticketDeps.ts:262). The dead-letter path must strip the marker so
+    // the pre-#298 behaviour is restored: the dependent's edge stamps and it
+    // finds out for itself, noisily, when ITS OWN pr create fails.
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-deadmark-"));
+    const seams: ConfigSeams = {
+      dataDir: join(root, "data"),
+      queueRoot: root,
+      worktreeRoot: join(root, "wt"),
+      tools: [],
+      criticEnabled: false,
+      planLintEnabled: false,
+      verifyEnabled: false,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: true,
+    };
+    const cfg = makeConfig(seams);
+    const inbox = join(root, "inbox");
+    const done = join(root, "done");
+    mkdirSync(inbox, { recursive: true });
+    mkdirSync(done, { recursive: true });
+
+    // The parent finalized DONE offline: pr_queued is set, no pr_url yet.
+    const parentPath = join(done, "parent.md");
+    writeFileSync(
+      parentPath,
+      "---\nid: parent\n---\nBody\n\n---\n<!-- junco-result\nstatus: completed\npushed: true\npr_queued: true\n-->\n",
+    );
+    // The dependent is parked in inbox/ waiting on that edge.
+    const childPath = join(inbox, "child.md");
+    writeFileSync(childPath, "---\nid: child\ndepends_on: [parent]\n---\n");
+
+    enqueueOp(cfg, "prflow", {
+      kind: "pr",
+      repoPath: "/repo",
+      branch: "junco/parent",
+      nwo: "a/b",
+      issue: null,
+      base: "main",
+      title: "t",
+      bodyText: "b",
+      draft: false,
+      labels: [],
+      reviewers: [],
+      finalize: null,
+      ticketId: "parent",
+      pushed: true,
+      prUrl: null,
+    });
+
+    // Before the flush: the sweep waits, exactly as Task 1 intends.
+    const before = await sweepDependencies(cfg, { prStateFn: async () => "merged" });
+    expect(before).toEqual({ stamped: 0, cascaded: 0 });
+
+    // gh pr create fails permanently on every attempt — not the outbox's to
+    // queue, so the op just burns attempts and dead-letters.
+    const f = fakes(() => {
+      throw PERM_ERR;
+    });
+    let res: Awaited<ReturnType<typeof flushOutbox>> | undefined;
+    for (let i = 0; i < MAX_OP_ATTEMPTS; i++) {
+      res = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    }
+    expect(res!.dead).toBe(1);
+    expect(readdirSync(outboxPaths(cfg).dead)).toHaveLength(1);
+
+    // The marker is gone — pre-#298 behaviour restored.
+    const parentMeta = parseResultMeta(readFileSync(parentPath, "utf8"));
+    expect(parentMeta.prQueued).toBe(false);
+    expect(parentMeta.prUrl).toBeNull();
+
+    // The dependent proceeds instead of waiting on a strand nothing will
+    // ever clear (it will fail loudly on its own PR create later — outside
+    // this test's scope, which only proves the strand itself is cleared).
+    const swept = await sweepDependencies(cfg, { prStateFn: async () => "merged" });
+    expect(swept).toEqual({ stamped: 1, cascaded: 0 });
+    const child = parseTicket(childPath, readFileSync(childPath, "utf8"));
+    expect(child.depsSatisfied).toEqual(["parent"]);
+  });
+
   it("pr composite: push → create → finalize comment → labels, with checkpoint resume", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-f5-"));
     const cfg = {
@@ -641,8 +728,10 @@ describe("flushOutbox", () => {
       queueRoot: root,
       github: { triggerLabel: "junco" },
     } as unknown as Config;
-    // No done/ directory or file at all — the ticket may have been retried,
-    // archived, or moved by hand since it finalized. The op must still send.
+    // No done/ directory or file at all — the ticket was moved or removed by
+    // hand since it finalized (archived, manually deleted, …), never
+    // retried: `junco retry` only reads failed/ (src/retryCmd.ts:49) and an
+    // offline-PR ticket always finalizes to done/. The op must still send.
     enqueueOp(cfg, "prflow", {
       kind: "pr",
       repoPath: "/repo",
@@ -669,6 +758,80 @@ describe("flushOutbox", () => {
     const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
     expect(r.sent).toBe(1);
     expect(r.dead).toBe(0);
+  });
+
+  it("a checkpointed pr op retries the write-back on a later flush after a transiently-missing done file (#298)", async () => {
+    // Before this fix, the write-back lived INSIDE `if (op.prUrl === null)`
+    // — a one-shot that ran only in the same execute() call that created the
+    // PR. Here prUrl is already checkpointed non-null when the op is FIRST
+    // enqueued (simulating a resumed op / the finalizeOnly tail), so the old
+    // code would skip the write-back on every single flush, forever. The fix
+    // hoists it to run whenever ticketId+prUrl are both present, converting
+    // it into a converging retry.
+    const root = mkdtempSync(join(tmpdir(), "junco-obx-wb-retry-"));
+    const cfg = {
+      dataDir: root,
+      queueRoot: root,
+      github: { triggerLabel: "junco" },
+    } as unknown as Config;
+    const doneDir = join(root, "done");
+    // done/ does not exist yet — a transient race between the ticket
+    // finalizing and this flush running.
+
+    enqueueOp(cfg, "prflow", {
+      kind: "pr",
+      repoPath: "/repo",
+      branch: "junco/t2",
+      nwo: "a/b",
+      issue: 7,
+      base: "main",
+      title: "t",
+      bodyText: "b",
+      draft: false,
+      labels: [],
+      reviewers: [],
+      finalize: { ticketId: "gh-a-b-7", status: "completed", finalText: "did the thing" },
+      ticketId: "t2",
+      pushed: true,
+      prUrl: "https://github.com/a/b/pull/50", // already checkpointed — PR exists
+    });
+
+    let allowLabelEdit = false;
+    const f = fakes((_tool, args) => {
+      if (args[0] === "api" && args[1] === "user") return { stdout: "junco-bot\n" };
+      if (args[0] === "api") return { stdout: "" }; // no marker upstream yet
+      if (args[0] === "issue" && args[1] === "comment") return undefined;
+      if (args[0] === "issue" && args[1] === "edit") {
+        if (!allowLabelEdit) throw NET_ERR;
+        return undefined;
+      }
+      return undefined;
+    });
+
+    // First flush: done/ doesn't exist yet, so the write-back logs
+    // "not found" (best-effort, never fails the op) — then the label flip
+    // goes offline, so the whole op survives unchanged for a second flush.
+    const r1 = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(r1.offline).toBe(true);
+    expect(outboxDepth(cfg)).toBe(1); // op still queued
+
+    // Between flushes: the ticket actually finalizes to done/, and GitHub
+    // comes back for the label flip.
+    mkdirSync(doneDir, { recursive: true });
+    const donePath = join(doneDir, "t2.md");
+    writeFileSync(
+      donePath,
+      "---\nid: t2\n---\nBody\n\n---\n<!-- junco-result\nstatus: completed\npushed: true\npr_queued: true\n-->\n",
+    );
+    allowLabelEdit = true;
+
+    // Second flush of the SAME op: the write-back is re-attempted and this
+    // time succeeds.
+    const r2 = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+    expect(r2.sent).toBe(1);
+    const after = parseResultMeta(readFileSync(donePath, "utf8"));
+    expect(after.prUrl).toBe("https://github.com/a/b/pull/50");
+    expect(after.prQueued).toBe(false);
   });
 
   it("ops without remote/head replay exactly as before (origin, bare branch)", async () => {

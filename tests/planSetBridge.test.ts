@@ -422,6 +422,23 @@ describe("maintainPlanSets", () => {
     expect(readLog().length).toBeGreaterThan(before);
   });
 
+  it("a closed record with no closedAt acquires one after a sweep, and a later sweep past the window skips it", async () => {
+    // Without this stamp, a set closed BEFORE the cold-window upgrade would
+    // stay warm forever — the exact cost #298's TTL was meant to bound —
+    // because the absent-closedAt-means-warm rule above never lets it go
+    // cold on its own.
+    writePlanSetRecord(cfg, baseRecord({ closed: true }));
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readPlanSetRecord(cfg, "p1")?.closedAt).toBe("2026-08-22T00:00:00.000Z");
+
+    // One window later (>30 days), the now-stamped record goes cold: the
+    // next sweep skips its supersede probe entirely, same as a record that
+    // was closed with a fresh closedAt from the start.
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-09-22T00:00:00.000Z" });
+    expect(readLog().length).toBe(before);
+  });
+
   it("failure posts one degraded comment (once) and the failed label at all-terminal", async () => {
     // "a" done, "b" failed with a dependency-failure reason — this also
     // covers the carried-over gap: renderDashboard's

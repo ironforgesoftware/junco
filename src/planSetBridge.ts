@@ -633,7 +633,23 @@ export async function maintainPlanSets(
     if (outcome.kind === "deferred" || outcome.kind === "compile-failed") continue;
     const record = outcome.kind === "superseded" ? outcome.record : storedRecord;
 
-    if (record.closed) continue;
+    if (record.closed) {
+      // A record closed before the cold-window upgrade (or by a build that
+      // predates `closedAt` entirely) never acquired the stamp — the
+      // warm-on-absent rule above (`storedRecord.closed && storedRecord.closedAt`)
+      // means such a record is warm FOREVER, so it keeps paying the paginated
+      // `gh api …/comments` probe every sweep, indefinitely: exactly the cost
+      // the cold window exists to bound (#298). Stamp it here — the one place
+      // that still runs for an already-closed record — so it goes cold after
+      // one more window, same as a record closed after the upgrade. No
+      // supersede is lost: trySupersede (above) already had its chance this
+      // sweep before this branch is reached.
+      if (!record.closedAt) {
+        record.closedAt = nowIso;
+        writePlanSetRecord(cfg, record);
+      }
+      continue;
+    }
     let changed = false;
 
     const state = resolveSetState(cfg, record);

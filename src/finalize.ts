@@ -4,6 +4,7 @@ import { TERMINAL_DONE_STATUSES, type RunResult } from "./types.js";
 import type { PrOutcome } from "./prFlow.js";
 import { metrics } from "./metrics.js";
 import { uniqueDestPath } from "./uniqueDest.js";
+import { PR_QUEUED_SENTENCE } from "./resultMeta.js";
 
 export interface TerminalDirs {
   done: string;
@@ -156,9 +157,7 @@ function renderPrResult(
   // Offline endgame: the PR was parked in the outbox (no URL yet). Say so in the
   // Result section — the composite op opens it when GitHub is reachable again.
   if (prOutcome.prQueued) {
-    lines.push(
-      "PR queued for offline push — junco will open it automatically when GitHub is reachable.",
-    );
+    lines.push(PR_QUEUED_SENTENCE);
   } else if (prOutcome.pushQueued) {
     // Offline AMEND (issue #50): the PR already exists but the commits are only
     // queued. Be honest rather than reporting unqualified success.
