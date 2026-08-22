@@ -15,7 +15,12 @@ import {
   configDeprecations,
   dataRootHasTree,
 } from "./config.js";
-import { pendingMigrations, migrationTargetRoot, fixedLegacyRoot } from "./dataMigrate.js";
+import {
+  pendingMigrations,
+  migrationTargetRoot,
+  fixedLegacyRoot,
+  pendingConfigRelocation,
+} from "./dataMigrate.js";
 import { dataTreePaths } from "./dataTree.js";
 import { SKILL_DIR_NAME } from "./skillLinks.js";
 import { endpointReachable, probePolicy } from "./health.js";
@@ -252,6 +257,30 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           `or a pre-0.10 binary ran after a completed migrate and recreated the legacy root. Re-run ` +
           `'junco data migrate' — it resumes safely and never overwrites. Inspect both roots before ` +
           `deleting anything by hand.`,
+      );
+    }
+
+    // 2b-ter. The config FILE's own pending relocation (item 11, #281). 2b
+    // above covers pending data DIRS only, so doctor used to print a clean
+    // bill of health over a migration that still owed `junco data migrate`'s
+    // phase-9 move — reporting parity it did not have. Deliberately its own
+    // line rather than another entry in 2b's list: a config.json among
+    // "unmigrated data dirs" would misname what it is.
+    //
+    // Warn, never fail — same posture as 2b/2b-bis: a config that still loads
+    // from the legacy path is a working install pending an operator decision,
+    // not a broken one. `pendingConfigRelocation` is the mover's OWN gate
+    // (dataMigrate.ts), so this can never warn about something `junco data
+    // migrate` would refuse to do — in particular under a JUNCO_CONFIG
+    // override (#307), where the config is deliberately never relocated and a
+    // warning here could never be cleared.
+    const configMove = pendingConfigRelocation(configPath, env);
+    if (configMove !== null) {
+      report(
+        "warn",
+        "unrelocated config",
+        `${configMove.from} -> ${configMove.to} — the data tree can be unified while the config ` +
+          `itself is still at the pre-0.10 path; run 'junco data migrate' to move it`,
       );
     }
 

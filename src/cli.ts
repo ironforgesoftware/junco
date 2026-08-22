@@ -1136,7 +1136,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       );
     }
     const { runData } = await import("./dataCmd.js");
-    return runData(cfg, { json: values.json as boolean }, { printFn });
+    return runData(cfg, configPath, { json: values.json as boolean }, { printFn });
   }
 
   // ------------------------------------------------------------

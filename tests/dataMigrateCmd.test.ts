@@ -15,9 +15,10 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  lstatSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Config } from "../src/types.js";
 import { runDataMigrate } from "../src/dataMigrateCmd.js";
 import { loadConfig } from "../src/config.js";
@@ -157,6 +158,79 @@ describe("runDataMigrate — dry-run", () => {
     expect(code).toBe(0);
     expect(out.join("")).toMatch(/dry-run/);
     expect(existsSync(dataDir)).toBe(false);
+  });
+
+  // Item 4 (#281): the acting run only attempts the legacy-root removal (and
+  // only receipts it) when the fixed legacy candidate actually `existsFn`s
+  // (phase 7) — the dry-run's "(legacy root ... would be removed once empty)"
+  // hint used to print unconditionally off `legacyRoot !== null`, which is
+  // true whenever the TARGET happens to resolve to the canonical `~/.junco`
+  // (see `fixedLegacyRoot`) regardless of whether anything is actually sitting
+  // at that fixed path. That is a real dry-run/act divergence: the dry-run
+  // promised work the acting run would silently skip.
+  it("does not promise legacy-root removal when the fixed legacy candidate doesn't exist on disk (item 4, #281)", async () => {
+    const root = trackRoot(freshRoot());
+    const fakeHome = join(root, "fake-home");
+    const dataDir = join(fakeHome, ".junco"); // already at the canonical location
+    // A flat-named marker under dataDir itself — a genuine in-place restructure
+    // is pending, so the "data root:" section's `else` branch (which nests the
+    // legacy-root hint) is exercised at all.
+    mkdirSync(join(dataDir, "transcripts"), { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(dataDir, "queue"),
+      dataLayout: "flat",
+    });
+
+    // The fixed legacy candidate (`<HOME>/.local/state/junco`) genuinely does
+    // not exist on this machine.
+    expect(existsSync(join(fakeHome, ".local", "state", "junco"))).toBe(false);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s), env: { HOME: fakeHome } },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/data root:/); // the pending in-place pair IS reported
+    expect(out.join("")).not.toMatch(/would be removed once empty/);
+  });
+
+  // Companion case: when the legacy root genuinely DOES exist, the hint must
+  // still appear — the fix gates on `existsFn`, it does not remove the hint
+  // outright.
+  it("still promises legacy-root removal in dry-run when the legacy root genuinely exists", async () => {
+    const root = trackRoot(freshRoot());
+    const fakeHome = join(root, "fake-home");
+    const dataDir = join(fakeHome, ".junco");
+    mkdirSync(dataDir, { recursive: true });
+    const legacyRoot = join(fakeHome, ".local", "state", "junco");
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true }); // a real leftover pair
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(dataDir, "queue"),
+      dataLayout: "v2",
+    });
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s), env: { HOME: fakeHome } },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/would be removed once empty/);
   });
 });
 
@@ -1126,6 +1200,85 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
     expect(out2.join("")).toContain("config: nothing to relocate");
   });
 
+  it("a journal-write failure after the relocation still receipts the move that happened (item 9, #281)", async () => {
+    // Phase 9 used to journal the config relocation BEFORE pushing its receipt
+    // line — inverted relative to the data-root loop, whose receipt records
+    // each pair as it lands. A throw in between therefore printed "config:
+    // nothing to relocate" for a config that had just moved: the receipt sent
+    // the operator to the OLD path in the one situation (a partial failure)
+    // where it is the only record they have.
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+    const journalFile = join(tmpHome, ".junco", "migrated.json");
+
+    // Fault 1 — the config's own rename crosses a device boundary (legacy XDG
+    // on one filesystem, ~/.junco on another), so the relocation goes through
+    // Task 1's seamed EXDEV fallback: copyDirFn -> verifyCopyPath -> fsync ->
+    // rmFn deletes the legacy file. Scoped to `from === configPath` so
+    // rewriteConfig's own tmp+rename (from `${configPath}.tmp`) and
+    // appendJournal's (from `${journalFile}.tmp`) are untouched.
+    const exdevRename = (from: string, to: string): void => {
+      if (from === configPath) {
+        const e = new Error("SIMULATED EXDEV") as NodeJS.ErrnoException;
+        e.code = "EXDEV";
+        throw e;
+      }
+      renameSync(from, to);
+    };
+    // Fault 2 — the journal write fails right after that move, which is the
+    // throw this test exists for.
+    const failingJournalWrite = (p: string, s: string): void => {
+      if (p === `${journalFile}.tmp`) throw new Error("SIMULATED ENOSPC");
+      writeFileSync(p, s, "utf8");
+    };
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        renameFn: exdevRename,
+        writeFileFn: failingJournalWrite,
+      },
+    );
+    const printed = out.join("");
+
+    // The move really happened: the file is at the canonical path and gone
+    // from the legacy one.
+    expect(existsSync(canonical)).toBe(true);
+    expect(existsSync(configPath)).toBe(false);
+    // ...and the journal really did fail to record it.
+    expect(
+      existsSync(journalFile)
+        ? (
+            JSON.parse(readFileSync(journalFile, "utf8")) as {
+              steps: Array<{ from: string; to: string }>;
+            }
+          ).steps.some((s) => s.from === configPath)
+        : false,
+    ).toBe(false);
+
+    // The receipt must not send the operator to the old path...
+    expect(printed).not.toContain("config: nothing to relocate");
+    // ...it names the outcome that actually occurred, cross-device fallback
+    // and all.
+    expect(printed).toContain(`config:\n  moved ${configPath} -> ${canonical} (cross-device)`);
+    // The journal failure is still a failure — reported on its own line
+    // (#197.1 guard) and propagated, so exit stays 1 and the original error
+    // still reaches the operator.
+    expect(printed).toContain("journal write failed after the config relocation");
+    expect(printed).toContain("SIMULATED ENOSPC");
+    expect(code).toBe(1);
+  });
+
   it("never relocates an explicitly-named config, even when JUNCO_CONFIG names exactly the legacy path (#275)", async () => {
     // The footgun: JUNCO_CONFIG accepts ANY value, including the legacy path
     // itself, so `configPath === legacyConfigPath(env)` is genuinely reachable
@@ -1228,6 +1381,41 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
     expect(existsSync(canonical)).toBe(false);
     expect(existsSync(configPath)).toBe(true);
     expect(existsSync(join(tmpHome, ".junco"))).toBe(false); // dry-run never mkdirs
+  });
+
+  // Item 5 (#281): this branch (the dry-run preview of the config move's own
+  // skipped-conflict) had no test at all — the string never appeared anywhere
+  // under tests/.
+  it("--dry-run reports a skipped-conflict preview when the canonical config already exists (item 5, #281)", async () => {
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "legacy-model" } }), "utf8");
+
+    const canonicalDir = join(tmpHome, ".junco");
+    mkdirSync(canonicalDir, { recursive: true });
+    const canonical = join(canonicalDir, "config.json");
+    writeFileSync(canonical, JSON.stringify({ model: { id: "canonical-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    // A dry-run never fails, even when it foresees a conflict.
+    expect(code).toBe(0);
+    expect(out.join("")).toContain(
+      `config: ${configPath} -> ${canonical} ` +
+        `(canonical path already exists — would be a skipped-conflict, never overwritten)`,
+    );
+    // Untouched — it's a preview.
+    expect(JSON.parse(readFileSync(configPath, "utf8")).model).toEqual({ id: "legacy-model" });
+    expect(JSON.parse(readFileSync(canonical, "utf8")).model).toEqual({ id: "canonical-model" });
   });
 });
 
@@ -1717,6 +1905,223 @@ describe("runDataMigrate — data-root move conflicts", () => {
   });
 });
 
+/**
+ * Item 6 (#281): the resumed-migration shape where BOTH roots still hold the
+ * same flat-named pair. `dataRootPairs` used to drop the legacy candidate
+ * outright, so run 1 exited 0 having never planned/moved/journaled/reported it
+ * and run 2 failed on the same pair. Both are planned now — and the loser is a
+ * REPORTED conflict, never a second move: the winner's destination here is
+ * deliberately recursively empty (ensureDataTree-style scaffolding), which is
+ * the one shape `moveDataRootPair` would happily repair-delete and rename onto
+ * — merging two data roots into one destination behind an incoherent
+ * "moved ... moved" receipt (the Critical-2 `claimedByEarlierPhase` bug class).
+ */
+describe("runDataMigrate — both data roots pend the same target (item 6, #281)", () => {
+  let originalHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    tmpHome = trackRoot(freshRoot("junco-dmc-contended-home-"));
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+  });
+
+  it("moves the dataDir source, reports the legacy straggler as a conflict, merges nothing, and is stable on re-run", async () => {
+    const root = trackRoot(freshRoot());
+    const targetRoot = join(tmpHome, ".junco");
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    // An uncontested pending pair — proves ordinary pairs still migrate.
+    mkdirSync(join(targetRoot, "transcripts"), { recursive: true });
+    writeFileSync(join(targetRoot, "transcripts", "t.jsonl"), "{}\n", "utf8");
+    // The contended pair: the winner is bare scaffolding (recursively empty).
+    mkdirSync(join(targetRoot, "outbox"), { recursive: true });
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true });
+    writeFileSync(join(legacyRoot, "outbox", "straggler.json"), "straggler\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg1 = loadConfig(configPath);
+    expect(cfg1.dataDir).toBe(targetRoot); // resolution already flipped
+    expect(cfg1.legacy.dataRoot).toBe(false);
+
+    const out1: string[] = [];
+    const code1 = await runDataMigrate(
+      cfg1,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out1.push(s) },
+    );
+
+    // The uncontested pair migrated normally.
+    expect(existsSync(join(targetRoot, "data", "transcripts", "t.jsonl"))).toBe(true);
+    // The winner took the slot; the straggler was NOT merged onto it, and its
+    // own source is untouched — nothing deleted on either side.
+    expect(existsSync(join(targetRoot, "data", "outbox"))).toBe(true);
+    expect(existsSync(join(targetRoot, "data", "outbox", "straggler.json"))).toBe(false);
+    expect(readFileSync(join(legacyRoot, "outbox", "straggler.json"), "utf8")).toBe("straggler\n");
+    expect(existsSync(legacyRoot)).toBe(true); // still holds outbox/ — not removed
+
+    // Run 1 reports it rather than exiting 0 in silence, and names BOTH sides.
+    expect(code1).toBe(1);
+    expect(out1.join("")).toMatch(/skipped-conflict/);
+    expect(out1.join("")).toContain(join(legacyRoot, "outbox"));
+    expect(out1.join("")).toContain(join(targetRoot, "outbox"));
+
+    // Re-run: the winner's source is gone, so the straggler is the sole,
+    // uncontested candidate for that destination and the ORDINARY rules take
+    // over — here the destination is the winner's empty scaffolding, so
+    // `moveDataRootPair`'s recursively-empty repair path completes the move
+    // (that judgement belongs to the mover, which can see the destination;
+    // run 1's guard only refused to CHOOSE between two live sources).
+    const cfg2 = loadConfig(configPath);
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      cfg2,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(0);
+    expect(readFileSync(join(targetRoot, "data", "outbox", "straggler.json"), "utf8")).toBe(
+      "straggler\n",
+    );
+    expect(existsSync(join(legacyRoot, "outbox"))).toBe(false);
+  });
+
+  it("a winner holding real data makes the straggler a stable conflict on every run — never merged, never deleted", async () => {
+    const root = trackRoot(freshRoot());
+    const targetRoot = join(tmpHome, ".junco");
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(join(targetRoot, "transcripts"), { recursive: true });
+    mkdirSync(join(targetRoot, "outbox"), { recursive: true });
+    writeFileSync(join(targetRoot, "outbox", "mine.json"), "mine\n", "utf8");
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true });
+    writeFileSync(join(legacyRoot, "outbox", "straggler.json"), "straggler\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const out1: string[] = [];
+    const code1 = await runDataMigrate(
+      loadConfig(configPath),
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out1.push(s) },
+    );
+    expect(code1).toBe(1);
+    expect(out1.join("")).toContain("both data roots hold this pair");
+    expect(readFileSync(join(targetRoot, "data", "outbox", "mine.json"), "utf8")).toBe("mine\n");
+    expect(readFileSync(join(legacyRoot, "outbox", "straggler.json"), "utf8")).toBe("straggler\n");
+    expect(existsSync(join(targetRoot, "data", "outbox", "straggler.json"))).toBe(false);
+
+    // Run 2 is the ordinary non-empty-destination conflict — still exit 1,
+    // still nothing merged or deleted on either side.
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      loadConfig(configPath),
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(1);
+    expect(out2.join("")).toMatch(/skipped-conflict/);
+    expect(readFileSync(join(targetRoot, "data", "outbox", "mine.json"), "utf8")).toBe("mine\n");
+    expect(readFileSync(join(legacyRoot, "outbox", "straggler.json"), "utf8")).toBe("straggler\n");
+  });
+
+  it("the dry-run names the contended pair instead of silently planning one of the two", async () => {
+    const root = trackRoot(freshRoot());
+    const targetRoot = join(tmpHome, ".junco");
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(join(targetRoot, "transcripts"), { recursive: true });
+    mkdirSync(join(targetRoot, "outbox"), { recursive: true });
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true });
+    writeFileSync(join(legacyRoot, "outbox", "straggler.json"), "straggler\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      loadConfig(configPath),
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0); // a dry-run never fails on a conflict it only forecasts
+    const text = out.join("");
+    expect(text).toContain(
+      `${join(legacyRoot, "outbox")} -> ${join(targetRoot, "data", "outbox")} (contended — ` +
+        `${join(targetRoot, "outbox")} holds this pair too and takes the destination; ` +
+        `will be reported as a conflict, never merged)`,
+    );
+  });
+});
+
+describe("runDataMigrate — gh-creds conflicts get their own heading (item 1, #281)", () => {
+  it("a non-empty gh-creds destination is reported under 'gh config conflicts:', not lumped into 'data-root conflicts:'", async () => {
+    const root = trackRoot(freshRoot());
+    // No data-root pairs are pending at all here (dataDir is untouched) — the
+    // ONLY conflict this run produces is the gh-creds one, so any appearance
+    // of a "data-root conflicts:" heading below would prove the gh conflict
+    // leaked into the wrong section.
+    const dataDir = join(root, "mydata");
+    const fakeHome = join(root, "fake-home");
+    const legacyGh = join(root, "legacy-gh");
+    mkdirSync(legacyGh, { recursive: true });
+    writeFileSync(join(legacyGh, "hosts.yml"), "github.com:\n  oauth_token: legacy\n", "utf8");
+
+    // The canonical gh-creds destination already holds a real file — a
+    // conflict, not repairable scaffolding.
+    const targetGh = join(fakeHome, ".junco", "gh");
+    mkdirSync(targetGh, { recursive: true });
+    writeFileSync(join(targetGh, "hosts.yml"), "github.com:\n  oauth_token: canonical\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(dataDir, "queue"),
+      legacy: {
+        vaultRoot: false,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+        ghConfigDir: true,
+      },
+      botAccount: { enabled: false, configDir: legacyGh },
+    });
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: (s) => out.push(s), env: { HOME: fakeHome } },
+    );
+    const printed = out.join("");
+
+    expect(code).toBe(1);
+    // Both sides left untouched, exactly like any other skipped-conflict.
+    expect(existsSync(join(legacyGh, "hosts.yml"))).toBe(true);
+    expect(existsSync(join(targetGh, "hosts.yml"))).toBe(true);
+    expect(printed).toContain(
+      `gh config conflicts:\n  ${legacyGh} -> ${targetGh}: destination already exists and is not empty`,
+    );
+    // The whole point of item 1: this must NOT print under the data-root
+    // heading — there are zero data-root pairs pending in this fixture, so
+    // that heading must not appear at all.
+    expect(printed).not.toMatch(/data-root conflicts:/);
+    expect(printed).toMatch(/conflict/i);
+  });
+});
+
 describe("runDataMigrate — non-default dataDir gets written explicitly", () => {
   it("rewrites observability.stateDir into a literal top-level dataDir", async () => {
     const root = trackRoot(freshRoot());
@@ -1925,6 +2330,690 @@ describe("runDataMigrate — EXDEV fallback", () => {
     expect(sawDestBeforeSourceGone).toBe(true); // sync ran after copy, before delete
     expect(existsSync(srcFile)).toBe(false); // source removed only afterwards
     expect(readFileSync(destFile, "utf8")).toBe("ticket body");
+  });
+});
+
+/**
+ * #281 task-1: every destructive fs op inside `moveDataRootPair` — the
+ * recursive-empty probe, the repair `rm`, the parent `mkdir`, and the EXDEV
+ * fallback's verify/fsync/source-delete — runs through the deps seam, so the
+ * error paths are reachable from a test without a real filesystem (what tasks
+ * 2 and 4 of the bundle need). Each test stubs the seam and then asserts the
+ * REAL filesystem was NOT touched: if a call site regresses to `node:fs`, that
+ * is the assertion that fails.
+ */
+describe("runDataMigrate — moveDataRootPair destructive-fs seam", () => {
+  it("repairs a scaffolding destination via readdirTypedFn + rmFn, never the real fs", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    const src = join(dataDir, "outbox");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "op1.json"), "{}", "utf8");
+    // The REAL destination holds a file, so the REAL readdirSync would make
+    // this a skipped-conflict. The stubbed readdirTypedFn reports it empty, so
+    // the repair path runs instead — proof the probe went through the seam.
+    const dest = join(dataDir, "data", "outbox");
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "keep.json"), "keep", "utf8");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const readdirTypedCalls: string[] = [];
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const renameCalls: Array<[string, string]> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out.push(s),
+        readdirTypedFn: (d) => {
+          readdirTypedCalls.push(d);
+          return [];
+        },
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+        renameFn: (from, to) => {
+          renameCalls.push([from, to]);
+          if (from === src) return; // pretend it moved; leave the real fs alone
+          renameSync(from, to);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(readdirTypedCalls).toContain(dest);
+    const repair = rmCalls.find((c) => c.p === dest);
+    expect(repair).toBeDefined();
+    expect(repair?.opts).toEqual({ recursive: true });
+    expect(repair?.opts.force).toBeUndefined(); // force would swallow a real ENOENT
+    expect(renameCalls).toContainEqual([src, dest]);
+    // Nothing the seam stands in for reached the real filesystem.
+    expect(existsSync(join(dest, "keep.json"))).toBe(true);
+    expect(existsSync(join(src, "op1.json"))).toBe(true);
+  });
+
+  it("takes the EXDEV file branch through statFn, mkdirFn and rmFn", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    mkdirSync(dataDir, { recursive: true });
+    const src = join(dataDir, "spend.json");
+    writeFileSync(src, "{}\n", "utf8");
+    const dest = join(dataDir, "data", "spend.json");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const statCalls: string[] = [];
+    const syncCalls: string[] = [];
+    const copyCalls: Array<[string, string]> = [];
+    const mkdirCalls: Array<{ p: string; opts: { recursive: true } }> = [];
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out.push(s),
+        renameFn: (from, to) => {
+          if (to === dest) {
+            const err = new Error(
+              "EXDEV: cross-device link not permitted",
+            ) as NodeJS.ErrnoException;
+            err.code = "EXDEV";
+            throw err;
+          }
+          renameSync(from, to);
+        },
+        // No-op copy: nothing ever lands on the real filesystem, so a stat of
+        // `dest` through the real fs would throw ENOENT.
+        copyDirFn: (from, to) => {
+          copyCalls.push([from, to]);
+        },
+        statFn: (p) => {
+          statCalls.push(p);
+          return { isDirectory: () => false, size: 3 };
+        },
+        mkdirFn: (p, opts) => {
+          mkdirCalls.push({ p, opts });
+        },
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+        syncPathFn: (p) => {
+          syncCalls.push(p);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(copyCalls).toContainEqual([src, dest]);
+    // EXACT sequence, not `toContain`: the file branch stats `from` twice (the
+    // directory-vs-file dispatch, then its size) and `to` twice (its size, then
+    // the fsync dispatch). Any one of those four reverting to the real
+    // `statSync` drops an entry here — a `toContain` pair would not notice.
+    expect(statCalls).toEqual([src, src, dest, dest]);
+    expect(mkdirCalls).toContainEqual({ p: dirname(dest), opts: { recursive: true } });
+    expect(syncCalls).toEqual([dest, dirname(dest)]); // file branch: the file + its parent
+    expect(rmCalls).toContainEqual({ p: src, opts: { recursive: true, force: true } });
+    // Neither the source delete nor the parent mkdir reached the real fs.
+    expect(existsSync(src)).toBe(true);
+    expect(existsSync(join(dataDir, "data"))).toBe(false);
+  });
+
+  it("takes the EXDEV directory branch through readdirTypedFn + statFn", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    const src = join(dataDir, "outbox");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "op1.json"), "{}", "utf8");
+    const dest = join(dataDir, "data", "outbox");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const entry = { name: "op1.json", isDirectory: () => false, isFile: () => true };
+    const readdirTypedCalls: string[] = [];
+    const statCalls: string[] = [];
+    const syncCalls: string[] = [];
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out.push(s),
+        renameFn: (from, to) => {
+          if (to === dest) {
+            const err = new Error(
+              "EXDEV: cross-device link not permitted",
+            ) as NodeJS.ErrnoException;
+            err.code = "EXDEV";
+            throw err;
+          }
+          renameSync(from, to);
+        },
+        copyDirFn: () => {}, // no-op: the destination never exists for real
+        readdirTypedFn: (d) => {
+          readdirTypedCalls.push(d);
+          return d === src || d === dest ? [entry] : [];
+        },
+        statFn: (p) => {
+          statCalls.push(p);
+          return { isDirectory: () => p === src || p === dest, size: 2 };
+        },
+        mkdirFn: () => {},
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+        syncPathFn: (p) => {
+          syncCalls.push(p);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    // EXACT sequences (see the file-branch test): the source listing for the
+    // verify, then the destination listing for the fsync pass; the dispatch
+    // stat on `from`, the two per-file size stats, then the fsync dispatch on
+    // `to`. `toContain` would survive a call site reverting to the real fs
+    // whenever the real fs happens to agree with the fake.
+    expect(readdirTypedCalls).toEqual([src, dest]); // real readdirSync: ENOENT on dest
+    expect(statCalls).toEqual([src, join(src, "op1.json"), join(dest, "op1.json"), dest]);
+    expect(syncCalls).toEqual([join(dest, "op1.json"), dest]); // file, then its dir
+    expect(rmCalls).toContainEqual({ p: src, opts: { recursive: true, force: true } });
+    expect(existsSync(join(src, "op1.json"))).toBe(true); // source delete never hit the real fs
+  });
+
+  // The queue-move phase shares the EXDEV copy/verify/fsync helpers with
+  // moveDataRootPair, so its source delete runs through the same `rmFn` —
+  // leaving that one line on `node:fs` while the helpers around it are
+  // injectable is the half-seam the rest of this block exists to avoid.
+  it("routes the queue move's own EXDEV source delete through rmFn", async () => {
+    const root = trackRoot(freshRoot());
+    const vaultRoot = join(root, "vault");
+    const srcDir = join(vaultRoot, "Junco", "inbox");
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, "t1.md"), "ticket body", "utf8");
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(vaultRoot, "Junco"),
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+        ghConfigDir: false,
+      },
+    });
+
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: () => {},
+        renameFn: (from, to) => {
+          if (to.includes(join("data", "queue"))) {
+            const err = new Error(
+              "EXDEV: cross-device link not permitted",
+            ) as NodeJS.ErrnoException;
+            err.code = "EXDEV";
+            throw err;
+          }
+          renameSync(from, to);
+        },
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(rmCalls).toContainEqual({ p: srcDir, opts: { recursive: true, force: true } });
+    // The real copy ran (default copyDirFn/statFn/readdirTypedFn), but the
+    // stubbed rmFn means the source survives — proof the delete went through
+    // the seam and not `node:fs`.
+    expect(readFileSync(join(dataDir, "queue", "inbox", "t1.md"), "utf8")).toBe("ticket body");
+    expect(existsSync(join(srcDir, "t1.md"))).toBe(true);
+  });
+});
+
+/**
+ * F4 (final review 2026-08-22): the command's destructive calls OUTSIDE
+ * `moveDataRootPair` are on the seam too — the data-root loop's removal of a
+ * merged legacy `migrated.json`, and phase 7's `.gitignore`/`skills`/rmdir
+ * cleanup of the legacy root. They are the ones a fixture can aim at real
+ * paths: phase 7 only runs when `fixedLegacyRoot` is non-null, i.e. when the
+ * target root IS `$HOME/.junco` — which is precisely what these fixtures
+ * arrange (HOME redirected to a tmp dir). Leaving them on `node:fs` would
+ * mean a test that stubs the removal seam, and reasonably believes the real
+ * filesystem is out of reach, unlinking the operator's own
+ * `~/.local/state/junco/.gitignore` and skills mount. Each test stubs the
+ * seam with no-op recorders and asserts the real entries SURVIVE: a call site
+ * that regresses to `node:fs` fails both the recording assertion and the
+ * survival one.
+ */
+describe("runDataMigrate — destructive-fs seam outside the pair move", () => {
+  let originalHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    tmpHome = freshRoot("junco-dmc-home-");
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it("routes the journal-merge's removal of the legacy migrated.json through rmFn", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(legacyRoot, { recursive: true });
+    // The self-referential pair: its destination IS this run's own journal,
+    // so the loop merges the steps and removes the source file instead of
+    // renaming (dataMigrateCmd.ts's `pair.to === migratedFile` branch).
+    const legacyJournal = join(legacyRoot, "migrated.json");
+    writeFileSync(
+      legacyJournal,
+      JSON.stringify({
+        version: 1,
+        steps: [{ from: join(legacyRoot, "old"), to: join(legacyRoot, "new"), action: "renamed" }],
+      }),
+      "utf8",
+    );
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+    expect(cfg.dataDir).toBe(legacyRoot); // the merge branch needs the legacy root as the source
+
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    // The merge itself really happened — the legacy steps are in the target
+    // journal, so this run took the branch under test.
+    const merged = JSON.parse(readFileSync(join(tmpHome, ".junco", "migrated.json"), "utf8")) as {
+      steps: Array<{ from: string; to: string; action: string }>;
+    };
+    expect(merged.steps).toContainEqual({
+      from: join(legacyRoot, "old"),
+      to: join(legacyRoot, "new"),
+      action: "renamed",
+    });
+    expect(out.join("")).toMatch(/migrated\.json: merged/);
+    // ...and its removal went through the seam, with the options this call
+    // site has always used (`force`, no `recursive` — it is a single file).
+    expect(rmCalls).toContainEqual({ p: legacyJournal, opts: { force: true } });
+    // The stub deleted nothing, so the legacy file is still there: proof the
+    // rm never reached the real filesystem.
+    expect(existsSync(legacyJournal)).toBe(true);
+  });
+
+  it("routes phase 7's legacy-root cleanup through unlinkFn and rmdirFn", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(legacyRoot, { recursive: true });
+    // The two entries phase 7 removes ITSELF (no flatToV2Pairs pair covers
+    // either): junco's own scaffolded .gitignore, byte-exact, and the skills
+    // symlink mount.
+    const legacyGitignore = join(legacyRoot, ".gitignore");
+    writeFileSync(legacyGitignore, "*\n", "utf8");
+    const legacySkills = join(legacyRoot, "skills");
+    symlinkSync(join(root, "nonexistent-skills-target"), legacySkills);
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+
+    const unlinkCalls: string[] = [];
+    const rmdirCalls: string[] = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        unlinkFn: (p) => {
+          unlinkCalls.push(p);
+        },
+        rmdirFn: (p) => {
+          rmdirCalls.push(p);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    // Exact sequence, in phase order: scaffold .gitignore, then the skills
+    // mount, then the rmdir they exist to unblock.
+    expect(unlinkCalls).toEqual([legacyGitignore, legacySkills]);
+    expect(rmdirCalls).toEqual([legacyRoot]);
+    expect(out.join("")).toMatch(/removed legacy root/); // the stub "succeeded"
+    // Nothing the seam stands in for reached the real filesystem — on a real
+    // machine these three paths are under the operator's $HOME.
+    expect(existsSync(legacyGitignore)).toBe(true);
+    expect(lstatSync(legacySkills).isSymbolicLink()).toBe(true);
+    expect(existsSync(legacyRoot)).toBe(true);
+  });
+});
+
+/**
+ * #281 item 2: the EXDEV fallback copies, verifies, fsyncs and only THEN
+ * deletes the source — so a copy that dies partway leaves a partial
+ * destination behind with the source still whole. Run 1 always printed the
+ * raw error, but the pair never reached the receipt or the journal, so run 2
+ * and every run after saw only the generic "destination already exists and is
+ * not empty": indistinguishable from real pre-existing data at the target, and
+ * permanently stuck. These tests are about the LATER run — what an operator is
+ * told when they come back and retry.
+ */
+describe("runDataMigrate — an interrupted cross-device copy (item 2, #281)", () => {
+  it("names the partial destination on run 1 and again on run 2, without relabelling a genuine conflict", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    // Pair A — the one whose cross-device copy dies partway.
+    const srcOutbox = join(dataDir, "outbox");
+    const dstOutbox = join(dataDir, "data", "outbox");
+    mkdirSync(srcOutbox, { recursive: true });
+    writeFileSync(join(srcOutbox, "a.json"), "aaa", "utf8");
+    writeFileSync(join(srcOutbox, "b.json"), "bbb", "utf8");
+    // Pair B — a destination that genuinely holds pre-existing data, planned
+    // AFTER pair A (flatToV2Pairs order), so run 1 never reaches it and run 2
+    // reports both in one receipt. It must keep the ordinary conflict message:
+    // the fix must not make every populated destination read as junco's own
+    // wreckage, because the two need opposite operator responses.
+    const srcHistory = join(dataDir, "history");
+    const dstHistory = join(dataDir, "data", "history");
+    mkdirSync(srcHistory, { recursive: true });
+    writeFileSync(join(srcHistory, "h.json"), "h", "utf8");
+    mkdirSync(dstHistory, { recursive: true });
+    writeFileSync(join(dstHistory, "real.json"), "real", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    // Run 1: outbox's rename crosses a device boundary, and the copy fails
+    // after the first of its two files has landed — exactly the half-copied
+    // state the issue describes.
+    const out1: string[] = [];
+    const code1 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out1.push(s),
+        renameFn: (from, to) => {
+          if (from === srcOutbox) {
+            const e = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+            e.code = "EXDEV";
+            throw e;
+          }
+          renameSync(from, to);
+        },
+        copyDirFn: (from, to) => {
+          mkdirSync(to, { recursive: true });
+          writeFileSync(join(to, "a.json"), readFileSync(join(from, "a.json"), "utf8"), "utf8");
+          throw new Error("SIMULATED EIO mid-copy");
+        },
+      },
+    );
+    const printed1 = out1.join("");
+
+    expect(code1).toBe(1);
+    // The source is untouched: the fallback deletes it only after a verified,
+    // fsynced copy, and it never got that far.
+    expect(existsSync(join(srcOutbox, "a.json"))).toBe(true);
+    expect(existsSync(join(srcOutbox, "b.json"))).toBe(true);
+    // ...and half a copy really is sitting at the destination.
+    expect(existsSync(join(dstOutbox, "a.json"))).toBe(true);
+    expect(existsSync(join(dstOutbox, "b.json"))).toBe(false);
+    // Run 1's receipt names the pair, the partial destination and the intact
+    // source. Before the fix the pair was absent from the receipt entirely —
+    // only the raw error at the bottom hinted that anything had happened.
+    expect(printed1).toContain(`${srcOutbox} -> ${dstOutbox}: cross-device copy INTERRUPTED`);
+    expect(printed1).toContain(`the source at ${srcOutbox} was NOT touched`);
+    expect(printed1).toContain("SIMULATED EIO mid-copy");
+    // ...and it is recorded durably, which is what lets run 2 speak at all.
+    const journal = JSON.parse(readFileSync(join(dataDir, "migrated.json"), "utf8")) as {
+      steps: Array<{ from: string; to: string; action: string }>;
+    };
+    expect(journal.steps).toContainEqual({
+      from: srcOutbox,
+      to: dstOutbox,
+      action: "partial-copy",
+    });
+
+    // Run 2 — no faults at all: a plain re-run, the way an operator retries.
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: (s) => out2.push(s) },
+    );
+    const printed2 = out2.join("");
+
+    // Still a conflict — the exit-code contract is unchanged.
+    expect(code2).toBe(1);
+    // THE POINT OF THE TASK: run 2 says WHICH kind of obstruction this is and
+    // which side is authoritative.
+    expect(printed2).toContain(
+      `${srcOutbox} -> ${dstOutbox}: destination holds a partial copy from an interrupted cross-device move`,
+    );
+    expect(printed2).toContain(`the source at ${srcOutbox} is intact`);
+    // The genuine conflict in the SAME run is untouched by that.
+    expect(printed2).toContain(
+      `${srcHistory} -> ${dstHistory}: destination already exists and is not empty`,
+    );
+    expect(printed2).not.toContain(
+      `${srcHistory} -> ${dstHistory}: destination holds a partial copy`,
+    );
+    // Nothing moved on either side of either pair.
+    expect(existsSync(join(srcOutbox, "b.json"))).toBe(true);
+    expect(existsSync(join(srcHistory, "h.json"))).toBe(true);
+    expect(existsSync(join(dstHistory, "real.json"))).toBe(true);
+  });
+
+  it("stops claiming a partial copy once the pair has actually moved", async () => {
+    // The record is durable, so it has to expire on its own or it becomes a
+    // lie: after the operator clears the wreckage and the move lands, a LATER
+    // conflict at that same destination is an ordinary one and must read as
+    // such. A "renamed" step supersedes the "partial-copy" one.
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    const src = join(dataDir, "outbox");
+    const dst = join(dataDir, "data", "outbox");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "a.json"), "aaa", "utf8");
+    writeFileSync(join(src, "b.json"), "bbb", "utf8");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const exdev = (from: string, to: string): void => {
+      if (from === src) {
+        const e = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+        e.code = "EXDEV";
+        throw e;
+      }
+      renameSync(from, to);
+    };
+
+    // Run 1 — the interrupted copy, journaled as "partial-copy".
+    const code1 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: () => {},
+        renameFn: exdev,
+        copyDirFn: (from, to) => {
+          mkdirSync(to, { recursive: true });
+          writeFileSync(join(to, "a.json"), readFileSync(join(from, "a.json"), "utf8"), "utf8");
+          throw new Error("SIMULATED EIO mid-copy");
+        },
+      },
+    );
+    expect(code1).toBe(1);
+
+    // Run 2 — the operator does what the receipt told them: clear the partial
+    // destination and re-run. This time the copy completes.
+    rmSync(dst, { recursive: true, force: true });
+    const code2 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: () => {}, renameFn: exdev },
+    );
+    expect(code2).toBe(0);
+    expect(existsSync(join(dst, "b.json"))).toBe(true);
+    expect(existsSync(src)).toBe(false);
+
+    // Run 3 — a genuinely NEW obstruction at the same destination (the
+    // journal's own comment names the case: an operator restores a backup at
+    // the old path). The stale partial-copy record must not colour it.
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "restored.json"), "restored", "utf8");
+    const out3: string[] = [];
+    const code3 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: (s) => out3.push(s) },
+    );
+    const printed3 = out3.join("");
+
+    expect(code3).toBe(1);
+    expect(printed3).toContain(`${src} -> ${dst}: destination already exists and is not empty`);
+    expect(printed3).not.toContain("partial copy");
+  });
+});
+
+/**
+ * The same defect at the SECOND `moveDataRootPair` call site — phase 9's
+ * config relocation (carried finding from item 9's task): a throw inside the
+ * EXDEV fallback there left `configMoveReceipt` empty, so the receipt printed
+ * "config: nothing to relocate" over a partial config file sitting at the
+ * canonical path.
+ */
+describe("runDataMigrate — an interrupted cross-device config relocation (item 2, #281)", () => {
+  let originalHome: string | undefined;
+  let originalXdgConfigHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    tmpHome = freshRoot("junco-dmc-cfgpartial-");
+    process.env.HOME = tmpHome;
+    delete process.env.XDG_CONFIG_HOME; // hermetic: pin legacyConfigPath to $HOME/.config
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it("receipts and journals the partial canonical config instead of printing 'nothing to relocate'", async () => {
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+    const journalFile = join(tmpHome, ".junco", "migrated.json");
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        // Scoped to `from === configPath` so rewriteConfig's own tmp+rename and
+        // appendJournal's are untouched (same shape as the item-9 test).
+        renameFn: (from, to) => {
+          if (from === configPath) {
+            const e = new Error("SIMULATED EXDEV") as NodeJS.ErrnoException;
+            e.code = "EXDEV";
+            throw e;
+          }
+          renameSync(from, to);
+        },
+        // A TRUNCATED copy — the realistic shape of a cross-device copy dying
+        // on a full or failing target. verifyCopyPath's size check catches it.
+        copyDirFn: (_from, to) => {
+          writeFileSync(to, "{", "utf8");
+        },
+      },
+    );
+    const printed = out.join("");
+
+    expect(code).toBe(1);
+    // The operator's real config is still whole at the legacy path...
+    expect(existsSync(configPath)).toBe(true);
+    expect(loadConfig(configPath).model.id).toBe("test-model");
+    // ...and a partial one really is sitting at the canonical path.
+    expect(readFileSync(canonical, "utf8")).toBe("{");
+
+    // The receipt must not claim there was nothing to do here.
+    expect(printed).not.toContain("config: nothing to relocate");
+    expect(printed).toContain(`${configPath} -> ${canonical}: cross-device copy INTERRUPTED`);
+    // It names the intact side and tells the operator to clear the partial one
+    // BEFORE running junco again — config resolution prefers the canonical
+    // path the moment it exists, which is what makes this urgent.
+    expect(printed).toContain(`Your config is still whole at ${configPath}`);
+    expect(printed).toContain("size mismatch"); // the underlying cause survives
+
+    // Durably recorded at the target root, like every other pair.
+    const journal = JSON.parse(readFileSync(journalFile, "utf8")) as {
+      steps: Array<{ from: string; to: string; action: string }>;
+    };
+    expect(journal.steps).toContainEqual({
+      from: configPath,
+      to: canonical,
+      action: "partial-copy",
+    });
+
+    // Why this phase has no "run 2" of its own: the partial file now IS what
+    // resolveConfigPath returns, so a re-run never re-enters phase 9. The
+    // receipt line and the journal entry above are the operator's whole record.
+    const { resolveConfigPath } = await import("../src/config.js");
+    expect(resolveConfigPath({ env: { HOME: tmpHome } })).toBe(canonical);
   });
 });
 

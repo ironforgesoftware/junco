@@ -650,6 +650,66 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
     expect(code).toBe(0);
   });
 
+  // Item 11 (#281): both reporters surfaced pending DATA pairs and said
+  // nothing about a config still sitting at the legacy XDG path — so doctor
+  // printed a clean bill of health over a migration that was demonstrably not
+  // finished. A warn, never a fail: relocating is an operator decision (same
+  // posture as 2b/2b-bis above), not a broken install.
+  it("warns that the config itself is still at the legacy XDG path, and never fails on it", async () => {
+    const out: string[] = [];
+    const legacyCfgPath = join("/sbxroot/home", ".config", "junco", "config.json");
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      legacyCfgPath,
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home" },
+      }),
+    );
+    const text = out.join("");
+    expect(text).toMatch(/⚠ unrelocated config/);
+    expect(text).toContain(legacyCfgPath);
+    expect(text).toContain(join("/sbxroot/home", ".junco", "config.json"));
+    expect(text).toContain("junco data migrate");
+    expect(code).toBe(0); // warn-level only — never fails doctor
+  });
+
+  // #307's guard, mirrored rather than re-spelled: an explicitly-named config
+  // is DELIBERATELY never relocated, so warning here would raise something
+  // `junco data migrate` correctly refuses to act on — a warning that can
+  // never be cleared, run after run.
+  it("stays silent when JUNCO_CONFIG explicitly names that same legacy path", async () => {
+    const out: string[] = [];
+    const legacyCfgPath = join("/sbxroot/home", ".config", "junco", "config.json");
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      legacyCfgPath,
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home", JUNCO_CONFIG: legacyCfgPath },
+      }),
+    );
+    expect(out.join("")).not.toMatch(/unrelocated config/);
+    expect(code).toBe(0);
+  });
+
+  it("stays silent for a config already at the canonical path", async () => {
+    const out: string[] = [];
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      join("/sbxroot/home", ".junco", "config.json"),
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home" },
+      }),
+    );
+    expect(out.join("")).not.toMatch(/unrelocated config/);
+    expect(code).toBe(0);
+  });
+
   it("does not warn when only one root holds a tree", async () => {
     const out: string[] = [];
     const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;

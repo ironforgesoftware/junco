@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { Config, LegacyPathFlags } from "./types.js";
 import { configDeprecations } from "./config.js";
 import { dataTreePaths, type DataTreePaths } from "./dataTree.js";
-import { pendingMigrations } from "./dataMigrate.js";
+import { pendingMigrations, pendingConfigRelocation } from "./dataMigrate.js";
 import { pendingCount, assessReviewPaths } from "./assessReview.js";
 import { draftCount, commentReviewPaths } from "./commentReview.js";
 import { outboxDepth, deadCount } from "./githubOutbox.js";
@@ -35,6 +35,13 @@ export interface DataCmdDeps {
    * the SAME moment, closing the midnight-rollover flake window. Default:
    * Date.now. */
   nowFn?: () => number;
+  /** Process environment — feeds `pendingMigrations`' target/legacy root
+   * derivation and the pending config-relocation report (item 11, #281).
+   * Defaults to `process.env`; injectable so a test never reads the real
+   * HOME/XDG_CONFIG_HOME/JUNCO_CONFIG (the relocation report is a pure
+   * function of the config path and these, so without the seam it would
+   * answer differently on the maintainer's machine than in CI). */
+  env?: Record<string, string | undefined>;
 }
 
 interface FileInfo {
@@ -317,6 +324,7 @@ function renderText(
   p: DataTreePaths,
   counts: DataCounts,
   pending: Array<{ from: string; to: string }>,
+  configMove: { from: string; to: string } | null,
   deprecations: string[],
   existsFn: (p: string) => boolean,
   print: (s: string) => void,
@@ -426,10 +434,20 @@ function renderText(
   fileLine("worker.log", p.logFile, counts.logFile);
   fileLine("migrated.json", p.migratedFile, counts.migratedFile);
 
-  if (pending.length > 0) {
+  if (pending.length > 0 || configMove !== null) {
     print(`\n`);
     for (const m of pending) {
       print(`⚠ unmigrated: ${m.from} → ${m.to} (run 'junco data migrate')\n`);
+    }
+    // Item 11 (#281): its own line, and its own wording — every line above is
+    // a data DIRECTORY still awaiting a move, this one is the config FILE.
+    // Without it `junco data` claimed the tree was fully unified while
+    // `junco data migrate`'s phase 9 still owed this relocation.
+    if (configMove !== null) {
+      print(
+        `⚠ config not relocated: ${configMove.from} → ${configMove.to} ` +
+          `(run 'junco data migrate')\n`,
+      );
     }
   }
 
@@ -446,17 +464,37 @@ function renderText(
 /**
  * `junco data` — pure view: reads paths/counts, never mutates. `opts.json`
  * emits the machine-readable shape instead of the human tree.
+ *
+ * `configPath` is this process's ALREADY-RESOLVED config path (same second
+ * positional as `runDataMigrate`, deliberately — they are siblings over the
+ * same tree). It is here only so the view can report a pending config-file
+ * relocation (item 11, #281) through the mover's own gate; nothing is read
+ * from it.
  */
-export function runData(cfg: Config, opts: { json: boolean }, deps: DataCmdDeps = {}): number {
+export function runData(
+  cfg: Config,
+  configPath: string,
+  opts: { json: boolean },
+  deps: DataCmdDeps = {},
+): number {
   const readdirFn = deps.readdirFn ?? readdirSync;
   const statFn = deps.statFn ?? statSync;
   const existsFn = deps.existsFn ?? existsSync;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const nowFn = deps.nowFn ?? (() => Date.now());
+  const env = deps.env ?? process.env;
 
   const p = dataTreePaths(cfg);
-  const pending = pendingMigrations(cfg, existsFn);
+  const pending = pendingMigrations(cfg, existsFn, env);
+  // Item 11 (#281): NOT folded into `pending` — that array is also doctor's
+  // "unmigrated data dirs" list, and a config.json among data directories
+  // would misname it in both places. `pendingConfigRelocation` is `junco data
+  // migrate`'s OWN phase-9 gate (dataMigrate.ts), so this view can never
+  // report a relocation the mover refuses to perform — in particular under a
+  // JUNCO_CONFIG override (#307), where an explicitly-named config is
+  // deliberately never relocated.
+  const configMove = pendingConfigRelocation(configPath, env);
   const deprecations = configDeprecations(cfg);
   const counts = computeCounts(cfg, p, readdirFn, statFn, existsFn, readFileFn, nowFn);
 
@@ -470,6 +508,10 @@ export function runData(cfg: Config, opts: { json: boolean }, deps: DataCmdDeps 
           counts,
           legacy: cfg.legacy,
           pendingMigrations: pending,
+          // Always present, `null` when nothing is owed — a key that appears
+          // only sometimes makes every consumer write the same optional-chain
+          // twice over.
+          pendingConfigRelocation: configMove,
           deprecations,
         },
         null,
@@ -479,6 +521,6 @@ export function runData(cfg: Config, opts: { json: boolean }, deps: DataCmdDeps 
     return 0;
   }
 
-  renderText(cfg, p, counts, pending, deprecations, existsFn, print);
+  renderText(cfg, p, counts, pending, configMove, deprecations, existsFn, print);
   return 0;
 }

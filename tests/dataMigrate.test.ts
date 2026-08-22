@@ -12,6 +12,7 @@ import {
   writeFileSync,
   existsSync,
   readFileSync,
+  readdirSync,
   renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +24,9 @@ import {
   stateTreeMigrations,
   flatToV2Pairs,
   migrationTargetRoot,
+  dataRootPairs,
+  pendingConfigRelocation,
+  isRecursivelyEmptyDir,
 } from "../src/dataMigrate.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 import { dataTreePaths } from "../src/dataTree.js";
@@ -607,5 +611,165 @@ describe("pendingMigrations — single-root layout pairs (2026-08-03 plan)", () 
       from: join(fixedLegacy, "outbox"),
       to: join(targetRoot, "data", "outbox"),
     });
+  });
+});
+
+/**
+ * Item 6 (#281): when BOTH source roots hold the same flat-named pair, the
+ * old dedupe let `cfg.dataDir` take the target slot and dropped the legacy
+ * candidate from the returned array entirely — so run 1 exited 0 having never
+ * planned, moved, journaled or reported the straggler, and run 2 (the slot now
+ * uncontested) hit a populated destination and reported `skipped-conflict`
+ * with exit 1. Both pending sources must now be represented, with the loser
+ * marked `contendedBy` so the mover reports it as a plan-time conflict instead
+ * of merging two roots onto one destination.
+ */
+describe("dataRootPairs — both roots pend the same target (item 6, #281)", () => {
+  const env = { HOME: "/sbxroot/home" };
+  const targetRoot = join("/sbxroot/home", ".junco");
+  const fixedLegacy = join("/sbxroot/home", ".local", "state", "junco");
+  const cfg = makeConfig({
+    dataDir: targetRoot, // resolution already flipped to the canonical root
+    queueRoot: join(targetRoot, "queue"),
+    dataLayout: "flat",
+  });
+
+  it("keeps BOTH pending sources and marks the loser contendedBy the winner", () => {
+    const contested = new Set([join(targetRoot, "outbox"), join(fixedLegacy, "outbox")]);
+    const pairs = dataRootPairs(cfg, targetRoot, fixedLegacy, (p) => contested.has(p));
+    const forTarget = pairs.filter((p) => p.to === join(targetRoot, "data", "outbox"));
+    expect(forTarget).toHaveLength(2);
+    // The winner is the dataDir source (probed first) — unmarked.
+    expect(forTarget[0]).toEqual({
+      from: join(targetRoot, "outbox"),
+      to: join(targetRoot, "data", "outbox"),
+      pending: true,
+    });
+    // The legacy straggler survives, explicitly marked as contended.
+    const loser = forTarget.find((p) => p.from === join(fixedLegacy, "outbox"));
+    expect(loser).toBeDefined();
+    expect(loser?.pending).toBe(true);
+    expect(loser?.contendedBy).toBe(join(targetRoot, "outbox"));
+    // Winners precede their contended partner — the mover's guard depends on
+    // seeing the claim before the loser comes round.
+    expect(pairs.indexOf(forTarget[0])).toBeLessThan(pairs.indexOf(loser!));
+  });
+
+  it("pendingMigrations (doctor / junco data --json) reports both stragglers, not one", () => {
+    const contested = new Set([join(targetRoot, "outbox"), join(fixedLegacy, "outbox")]);
+    const pending = pendingMigrations(cfg, (p) => contested.has(p), env);
+    expect(pending).toContainEqual({
+      from: join(targetRoot, "outbox"),
+      to: join(targetRoot, "data", "outbox"),
+    });
+    expect(pending).toContainEqual({
+      from: join(fixedLegacy, "outbox"),
+      to: join(targetRoot, "data", "outbox"),
+    });
+  });
+
+  it("an ordinary machine (one source pending) still gets exactly one, unmarked pair per target", () => {
+    // Only the legacy root holds the pair — the inert dataDir candidate is
+    // still deduped away, so no duplicate 'nothing to move' lines appear.
+    const pairs = dataRootPairs(cfg, targetRoot, fixedLegacy, (p) =>
+      p.startsWith(join(fixedLegacy, "")),
+    );
+    const forTarget = pairs.filter((p) => p.to === join(targetRoot, "data", "outbox"));
+    expect(forTarget).toHaveLength(1);
+    expect(forTarget[0].from).toBe(join(fixedLegacy, "outbox"));
+    expect(forTarget[0].contendedBy).toBeUndefined();
+    // And nothing anywhere in the list is marked when nothing is contested.
+    expect(pairs.every((p) => p.contendedBy === undefined)).toBe(true);
+    // Single-source machine (no legacy root at all): one pair per target.
+    const single = dataRootPairs(cfg, targetRoot, null, () => true);
+    expect(new Set(single.map((p) => p.to)).size).toBe(single.length);
+    expect(single.every((p) => p.contendedBy === undefined)).toBe(true);
+  });
+
+  it("neither source pending: still one inert pair per target, unmarked", () => {
+    const pairs = dataRootPairs(cfg, targetRoot, fixedLegacy, () => false);
+    expect(new Set(pairs.map((p) => p.to)).size).toBe(pairs.length);
+    expect(pairs.every((p) => !p.pending && p.contendedBy === undefined)).toBe(true);
+  });
+});
+
+/**
+ * Item 11 (#281): the ONE spelling of "is a config relocation pending", shared
+ * by the mover (`runDataMigrate`'s phase-9 gate) and the two read-only
+ * reporters (`junco doctor`, `junco data`). Before this existed both reporters
+ * were silent about a config still sitting at the legacy XDG path — they told
+ * the operator the migration was complete while it demonstrably was not.
+ *
+ * The `JUNCO_CONFIG` guard (#307) is the load-bearing half: an explicitly-named
+ * config is DELIBERATELY never relocated, so reporting one as "pending" would
+ * raise a warning `junco data migrate` correctly refuses to clear — run after
+ * run, forever. A second spelling of that guard living in the reporters is
+ * exactly the drift this function exists to prevent.
+ */
+describe("pendingConfigRelocation (item 11, #281)", () => {
+  const env = { HOME: "/sbxroot/home" };
+  const legacy = join("/sbxroot/home", ".config", "junco", "config.json");
+  const canonical = join("/sbxroot/home", ".junco", "config.json");
+
+  it("reports the pair when this run's config is at the legacy XDG path", () => {
+    expect(pendingConfigRelocation(legacy, env)).toEqual({ from: legacy, to: canonical });
+  });
+
+  it("reports nothing for a config already at the canonical path", () => {
+    expect(pendingConfigRelocation(canonical, env)).toBeNull();
+  });
+
+  it("reports nothing under a JUNCO_CONFIG override that names exactly the legacy path", () => {
+    // The whole point of the guard: JUNCO_CONFIG accepts any value, the legacy
+    // path included, and an explicitly-named config is never relocated. A
+    // "pending" here would be a warning no migrate run can ever clear.
+    expect(pendingConfigRelocation(legacy, { ...env, JUNCO_CONFIG: legacy })).toBeNull();
+  });
+
+  it("reports nothing under a JUNCO_CONFIG override naming an unrelated path", () => {
+    const named = "/sbxroot/elsewhere/junco.json";
+    expect(pendingConfigRelocation(named, { ...env, JUNCO_CONFIG: named })).toBeNull();
+  });
+
+  it("treats an empty/whitespace JUNCO_CONFIG as unset (same rule as configPathOverride)", () => {
+    expect(pendingConfigRelocation(legacy, { ...env, JUNCO_CONFIG: "   " })).toEqual({
+      from: legacy,
+      to: canonical,
+    });
+  });
+
+  it("honours XDG_CONFIG_HOME when deriving the legacy path", () => {
+    const xdg = "/sbxroot/xdg";
+    const xdgLegacy = join(xdg, "junco", "config.json");
+    expect(pendingConfigRelocation(xdgLegacy, { ...env, XDG_CONFIG_HOME: xdg })).toEqual({
+      from: xdgLegacy,
+      to: canonical,
+    });
+  });
+});
+
+/**
+ * F5 (final review 2026-08-22). `isRecursivelyEmptyDir`'s ENOTDIR → `false`
+ * conversion is not a tidy-up detail: it is the ONLY thing that makes
+ * `moveDataRootPair` treat a FILE at the destination as a conflict rather
+ * than as replaceable scaffolding — and `junco data migrate`'s phase 9 hands
+ * it a file every time (the config relocation's canonical `config.json`).
+ * Lose the conversion and the receipted "canonical config already exists —
+ * not overwritten" guarantee becomes a delete of the operator's live config.
+ * `readdirTypedFn`'s contract in `dataMigrateCmd.ts` states the requirement
+ * this pins on the production side.
+ */
+describe("isRecursivelyEmptyDir — a FILE is never 'recursively empty'", () => {
+  it("returns false for a file, via the ENOTDIR the real readdir default throws", () => {
+    const root = freshRoot();
+    const file = join(root, "config.json");
+    writeFileSync(file, JSON.stringify({ model: { id: "canonical-model" } }), "utf8");
+    expect(isRecursivelyEmptyDir(file, (d) => readdirSync(d, { withFileTypes: true }))).toBe(false);
+  });
+
+  it("still returns true for a tree holding directories only", () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "review", "assess", "filed"), { recursive: true });
+    expect(isRecursivelyEmptyDir(root, (d) => readdirSync(d, { withFileTypes: true }))).toBe(true);
   });
 });

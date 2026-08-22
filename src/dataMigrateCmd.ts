@@ -125,6 +125,7 @@ import {
   fixedLegacyRoot,
   dataRootPairs,
   isRecursivelyEmptyDir,
+  pendingConfigRelocation,
   appendJournal,
   readJournal,
   type MigrateResult,
@@ -191,8 +192,99 @@ export interface DataMigrateDeps {
    * post-move path-rewrite phase (migratePathRewrite.ts) to list a queue
    * dir's `*.md` tickets. No other phase needs directory listing exposed as
    * a seam (moves/copies work on whole dirs via renameFn/copyDirFn). Default:
-   * fs.readdirSync. */
+   * fs.readdirSync. NOT the pair-move seam — see `readdirTypedFn` below. */
   readdirFn?: (p: string) => string[];
+  /** Typed readdir (withFileTypes) — name taken verbatim from
+   * `dataMigrate.ts`'s `MigrateDeps`/`isRecursivelyEmptyDir`, which this feeds
+   * (the repair-vs-conflict verdict for a data-root destination) alongside the
+   * EXDEV fallback's recursive file listing. Distinct from `readdirFn` above
+   * in both shape and scope, hence the distinct name; `isFile()` widens
+   * `MigrateDeps`' version because the copy listing needs to count only real
+   * files (a symlink is neither a directory nor a file to copy-verify).
+   * Default: readdirSync(d, { withFileTypes: true }).
+   *
+   * REQUIRED of any stub: it MUST throw an `ENOTDIR`-coded error when `d` is
+   * not a directory, exactly as the real `readdirSync` does. That throw is
+   * load-bearing, not incidental. `isRecursivelyEmptyDir` (dataMigrate.ts)
+   * converts ENOTDIR — and only ENOTDIR — into `false` = "not empty" =
+   * conflict, and that conversion is the ONLY thing standing between phase 9
+   * (`moveDataRootPair(configPath, canonicalConfigPath, fs)`, which hands
+   * this seam a FILE) and repair-DELETING an existing canonical
+   * `config.json`. A stub that answers `[]` for every path — the natural
+   * shape, and all a directory-only fixture needs — makes that file look
+   * recursively empty and turns the receipted "never overwritten" guarantee
+   * into a silent delete of the operator's live config. (Throwing some other
+   * error is wrong in the opposite direction: any non-ENOTDIR code
+   * propagates and aborts the run.) */
+  readdirTypedFn?: (
+    d: string,
+  ) => Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  /** stat for the EXDEV copy verification. Must keep answering BOTH
+   * `isDirectory()` — verifyCopyPath/fsyncCopiedPath dispatch a directory pair
+   * from a file pair, and phase 9's config relocation passes a FILE — and
+   * `size`, the per-file byte-count verify. Default: fs.statSync. */
+  statFn?: (p: string) => { isDirectory(): boolean; size: number };
+  /** Removal primitive for the destructive rms of the move: the repair of an
+   * empty scaffolding destination, the EXDEV fallback's source delete (plus
+   * the queue move's own EXDEV source delete), and the data-root loop's
+   * removal of a legacy `migrated.json` whose steps it just merged into the
+   * target journal. Name taken verbatim from
+   * `MigrateDeps.rmFn`. Options come from the CALL SITE and the default
+   * forwards them unchanged — `force: true` is NEVER defaulted in, or the
+   * ENOENT that today signals a real bug in the repair path would be silently
+   * swallowed. Default: fs.rmSync. */
+  rmFn?: (p: string, opts: { recursive?: boolean; force?: boolean }) => void;
+  /** `mkdir -p` of a moved pair's parent directory (flatToV2Pairs' targets
+   * scatter across data/, cache/, logs/). Default: fs.mkdirSync. */
+  mkdirFn?: (p: string, opts: { recursive: true }) => void;
+  /** Single-entry unlink — phase 7's legacy-root cleanup ONLY: junco's own
+   * scaffolded `.gitignore` and the `skills` SYMLINK mount, the two entries
+   * `flatToV2Pairs` has no pair for and which would otherwise make the rmdir
+   * below fail ENOTEMPTY on every real machine. Deliberately NOT folded into
+   * `rmFn`: `rmSync` is a different primitive (it lstats and dispatches), and
+   * these two calls must keep `unlinkSync`'s semantics verbatim. Routed for
+   * the same reason every other destructive op in this module is (see
+   * `MoveFsDeps`): a test that stubs the removal seam and takes the real
+   * filesystem to be protected would otherwise unlink the REAL
+   * `~/.local/state/junco/.gitignore` and skills mount the moment its fixture
+   * makes `fixedLegacyRoot` non-null. Default: fs.unlinkSync. */
+  unlinkFn?: (p: string) => void;
+  /** Plain, NON-recursive rmdir of the emptied legacy root (phase 7). Also
+   * deliberately not `rmFn`: `rmSync(p, {})` throws ERR_FS_EISDIR on a
+   * directory (empty or not), and `rmSync(p, {recursive:true})` would delete
+   * a legacy root that still holds a conflicted pair — whereas the whole
+   * point of this call is that it refuses (ENOTEMPTY) and the receipt lists
+   * what stayed. Default: fs.rmdirSync. */
+  rmdirFn?: (p: string) => void;
+}
+
+/**
+ * The filesystem seam the data-root pair move runs on — `moveDataRootPair`
+ * and the EXDEV copy/verify/fsync helpers it shares with the queue-move
+ * phase. Every member is a destructive or destructive-adjacent op, so all of
+ * them are injectable together: a PARTIAL seam is worse than none here (stub
+ * `existsFn` alone and the untouched `readdirSync` below it throws ENOENT), and
+ * the error paths are unreachable from a test otherwise. Names are copied
+ * verbatim from `dataMigrate.ts`'s `MigrateDeps` wherever that interface
+ * already spells the same operation (`rmFn`, `readdirTypedFn`) — one
+ * vocabulary per operation across both modules, deliberately.
+ *
+ * Scope note (final review 2026-08-22, F4): this bundle covers the PAIR MOVE.
+ * The command's other destructive calls are seamed too, but as their own
+ * `DataMigrateDeps` members rather than here — `unlinkFn`/`rmdirFn` for phase
+ * 7's legacy-root cleanup, because neither is an `rmSync` and folding them in
+ * would change what they do. A test that means "the real filesystem cannot be
+ * touched" has to stub those two as well as these.
+ */
+interface MoveFsDeps {
+  existsFn: (p: string) => boolean;
+  renameFn: (from: string, to: string) => void;
+  copyDirFn: (from: string, to: string) => void;
+  syncPathFn: (p: string) => void;
+  readdirTypedFn: (d: string) => Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  statFn: (p: string) => { isDirectory(): boolean; size: number };
+  rmFn: (p: string, opts: { recursive?: boolean; force?: boolean }) => void;
+  mkdirFn: (p: string, opts: { recursive: true }) => void;
 }
 
 interface QueueStep {
@@ -249,11 +341,11 @@ function ghPair(
   return { from, to, pending: existsFn(from) };
 }
 
-function listFilesRecursive(root: string): string[] {
+function listFilesRecursive(root: string, fs: MoveFsDeps): string[] {
   const out: string[] = [];
-  for (const e of readdirSync(root, { withFileTypes: true })) {
+  for (const e of fs.readdirTypedFn(root)) {
     const full = join(root, e.name);
-    if (e.isDirectory()) out.push(...listFilesRecursive(full).map((r) => join(e.name, r)));
+    if (e.isDirectory()) out.push(...listFilesRecursive(full, fs).map((r) => join(e.name, r)));
     else if (e.isFile()) out.push(e.name);
   }
   return out;
@@ -264,12 +356,12 @@ function listFilesRecursive(root: string): string[] {
  * matching byte count. Throws (never swallows) so the caller's generic
  * error handling reports it and the untouched source stays exactly where
  * it was. Directory-only (queue's four dirs are always directories). */
-function verifyCopy(from: string, to: string): void {
-  for (const rel of listFilesRecursive(from)) {
-    const srcSize = statSync(join(from, rel)).size;
+function verifyCopy(from: string, to: string, fs: MoveFsDeps): void {
+  for (const rel of listFilesRecursive(from, fs)) {
+    const srcSize = fs.statFn(join(from, rel)).size;
     let dstSize: number;
     try {
-      dstSize = statSync(join(to, rel)).size;
+      dstSize = fs.statFn(join(to, rel)).size;
     } catch {
       throw new Error(`EXDEV copy verification failed — missing ${join(to, rel)}`);
     }
@@ -286,14 +378,14 @@ function verifyCopy(from: string, to: string): void {
  * job is moving ticket files. The design spec (§11) calls for
  * copy+fsync+verify+delete; the size verify still runs first (above).
  * Directory-only. */
-function fsyncCopied(to: string, syncPathFn: (p: string) => void): void {
+function fsyncCopied(to: string, fs: MoveFsDeps): void {
   const dirs = new Set<string>([to]);
-  for (const rel of listFilesRecursive(to)) {
+  for (const rel of listFilesRecursive(to, fs)) {
     const full = join(to, rel);
-    syncPathFn(full);
+    fs.syncPathFn(full);
     dirs.add(dirname(full));
   }
-  for (const d of dirs) syncPathFn(d);
+  for (const d of dirs) fs.syncPathFn(d);
 }
 
 /** `verifyCopy`/`fsyncCopied` assume a directory pair (queue's four dirs are
@@ -302,15 +394,15 @@ function fsyncCopied(to: string, syncPathFn: (p: string) => void): void {
  * (watchlist.json, spend.json, worker.log, ...). These wrappers dispatch on
  * `from`'s type so the same EXDEV fallback machinery (copy → verify → fsync →
  * delete-source, #196) covers both shapes without duplicating it. */
-function verifyCopyPath(from: string, to: string): void {
-  if (statSync(from).isDirectory()) {
-    verifyCopy(from, to);
+function verifyCopyPath(from: string, to: string, fs: MoveFsDeps): void {
+  if (fs.statFn(from).isDirectory()) {
+    verifyCopy(from, to, fs);
     return;
   }
-  const srcSize = statSync(from).size;
+  const srcSize = fs.statFn(from).size;
   let dstSize: number;
   try {
-    dstSize = statSync(to).size;
+    dstSize = fs.statFn(to).size;
   } catch {
     throw new Error(`EXDEV copy verification failed — missing ${to}`);
   }
@@ -319,13 +411,95 @@ function verifyCopyPath(from: string, to: string): void {
   }
 }
 
-function fsyncCopiedPath(to: string, syncPathFn: (p: string) => void): void {
-  if (statSync(to).isDirectory()) {
-    fsyncCopied(to, syncPathFn);
+function fsyncCopiedPath(to: string, fs: MoveFsDeps): void {
+  if (fs.statFn(to).isDirectory()) {
+    fsyncCopied(to, fs);
     return;
   }
-  syncPathFn(to);
-  syncPathFn(dirname(to));
+  fs.syncPathFn(to);
+  fs.syncPathFn(dirname(to));
+}
+
+/**
+ * Item 2 (#281) — raised when the EXDEV fallback dies anywhere between the
+ * first copied byte and the last fsync. The distinction it carries is the
+ * whole point: in THIS window the source has provably not been touched (the
+ * only statement that removes it runs after, and only after, a verified and
+ * fsynced copy), while the destination may hold anything from nothing to a
+ * complete-but-unflushed tree. Both facts are what the caller needs to say
+ * something true, so they travel with the error rather than being re-derived.
+ *
+ * Deliberately NOT raised for a failure of the source delete that follows:
+ * there the destination is a COMPLETE, verified copy and the source is the
+ * half-removed side, so the operator's correct response is the exact opposite
+ * (keep the destination, clear the source remnant). Calling both "a partial
+ * copy" would send them to delete the wrong side of a move.
+ */
+class PartialCopyError extends Error {
+  constructor(
+    readonly from: string,
+    readonly to: string,
+    readonly reason: unknown,
+  ) {
+    super(
+      `cross-device copy ${from} -> ${to} failed partway — a partial copy may ` +
+        `remain at ${to}; ${from} was left untouched: ${describeError(reason)}`,
+    );
+    this.name = "PartialCopyError";
+  }
+}
+
+function describeError(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** The receipt line for a pair whose cross-device copy was interrupted —
+ * pushed BEFORE the error propagates (the same receipt-then-journal order the
+ * data-root loop and phase 9 use), because the catch-path receipt is the
+ * operator's record of a run that never reached its end. `hint` is the
+ * caller's site-specific next step: the two sides of an interrupted copy are
+ * not interchangeable, so what to remove has to be named. */
+function partialCopyReceiptLine(e: PartialCopyError, hint: string): string {
+  return (
+    `${e.from} -> ${e.to}: cross-device copy INTERRUPTED — a partial copy may ` +
+    `remain at ${e.to}; the source at ${e.from} was NOT touched. ${hint} ` +
+    `(${describeError(e.reason)})`
+  );
+}
+
+/** Does the durable journal say THIS destination is an earlier run's partial
+ * copy rather than genuine pre-existing data (item 2, #281)? The two produce
+ * the same `skipped-conflict` from `moveDataRootPair` — it only sees a
+ * non-empty destination — but demand opposite responses from the operator, so
+ * the difference has to come from the record of what actually happened.
+ *
+ * A later "renamed" for the same pair SUPERSEDES the partial-copy record: once
+ * the pair has genuinely moved (operator cleared the wreckage, re-ran, it
+ * landed), any FUTURE conflict at that destination is a new, ordinary one and
+ * must not inherit the old story. Repeated `skipped-conflict` steps — which
+ * run 2 itself journals — are ignored on purpose, so the hint survives every
+ * re-run until the move actually completes. */
+function destinationHoldsPartialCopy(steps: MigrationStep[], from: string, to: string): boolean {
+  let partial = false;
+  for (const s of steps) {
+    if (s.from !== from || s.to !== to) continue;
+    if (s.action === "partial-copy") partial = true;
+    else if (s.action === "renamed") partial = false;
+  }
+  return partial;
+}
+
+/** The conflict line for a destination that exists and is not empty. Says
+ * WHICH kind of obstruction it is when the journal knows (item 2, #281): a
+ * partial copy means the source is the authoritative side and the destination
+ * is junco's own wreckage; the ordinary case means real data sits at both ends
+ * and only the operator can decide. */
+function conflictLine(from: string, to: string, partial: boolean, journalFile: string): string {
+  return partial
+    ? `${from} -> ${to}: destination holds a partial copy from an interrupted ` +
+        `cross-device move (recorded in ${journalFile}) — the source at ${from} ` +
+        `is intact; remove the partial destination, then re-run`
+    : `${from} -> ${to}: destination already exists and is not empty`;
 }
 
 /** Move one flat→v2 (or gh-creds) pair, reusing the queue move's EXDEV
@@ -340,32 +514,46 @@ function fsyncCopiedPath(to: string, syncPathFn: (p: string) => void): void {
  * data/, cache/, logs/. Callers must check `claimedByEarlierPhase` BEFORE
  * calling this (Critical 2) — this function has no way to know a destination
  * was legitimately populated by an earlier phase of the SAME run rather than
- * being inert scaffolding, so it would otherwise repair-and-delete it. */
+ * being inert scaffolding, so it would otherwise repair-and-delete it.
+ *
+ * Every fs primitive comes from `fs` (MoveFsDeps) — nothing here reaches
+ * `node:fs` directly. The two `rmFn` calls keep the options they have always
+ * had and are deliberately different: the repair below is NOT forced, so an
+ * ENOENT there still surfaces as the bug it would be, while the EXDEV source
+ * delete keeps the `force` it needs for a source already partly gone. */
 function moveDataRootPair(
   from: string,
   to: string,
-  existsFn: (p: string) => boolean,
-  renameFn: (from: string, to: string) => void,
-  copyDirFn: (from: string, to: string) => void,
-  syncPathFn: (p: string) => void,
+  fs: MoveFsDeps,
 ): "moved" | "copied" | "skipped-conflict" {
-  if (existsFn(to)) {
-    if (isRecursivelyEmptyDir(to, (d) => readdirSync(d, { withFileTypes: true }))) {
-      rmSync(to, { recursive: true });
+  if (fs.existsFn(to)) {
+    if (isRecursivelyEmptyDir(to, fs.readdirTypedFn)) {
+      fs.rmFn(to, { recursive: true });
     } else {
       return "skipped-conflict";
     }
   }
-  mkdirSync(dirname(to), { recursive: true });
+  fs.mkdirFn(dirname(to), { recursive: true });
   try {
-    renameFn(from, to);
+    fs.renameFn(from, to);
     return "moved";
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
-      copyDirFn(from, to);
-      verifyCopyPath(from, to);
-      fsyncCopiedPath(to, syncPathFn); // #196: durable before deleting source
-      rmSync(from, { recursive: true, force: true });
+      // The partial-copy window (item 2, #281). A throw anywhere in these
+      // three statements leaves whatever landed at `to` sitting there, and the
+      // caller's generic error handling could only report the raw fs error —
+      // so the pair never reached the receipt OR the journal, and every LATER
+      // run saw nothing but a populated destination it had no way to explain.
+      // Wrapping tells the caller what state it is in; the source delete
+      // BELOW is deliberately outside the window (see PartialCopyError).
+      try {
+        fs.copyDirFn(from, to);
+        verifyCopyPath(from, to, fs);
+        fsyncCopiedPath(to, fs); // #196: durable before deleting source
+      } catch (copyErr) {
+        throw new PartialCopyError(from, to, copyErr);
+      }
+      fs.rmFn(from, { recursive: true, force: true });
       return "copied";
     }
     throw e;
@@ -456,6 +644,7 @@ function printReceipt(
   dataRootReceipt: string[],
   dataRootConflicts: string[],
   ghReceipt: string[],
+  ghConflicts: string[],
   rewriteReport: RewriteReport,
   configReceipt: string[] | null,
   configMoveReceipt: string[],
@@ -500,6 +689,13 @@ function printReceipt(
       ? `\ngh config:\n${ghReceipt.map((l) => `  ${l}`).join("\n")}\n`
       : "\ngh config: nothing to move\n",
   );
+  if (ghConflicts.length > 0) {
+    // Item 1 (#281): its own heading — a gh-creds conflict is a different
+    // subsystem from a data-root one, and used to print under
+    // "data-root conflicts:" above, which told the operator the wrong thing
+    // conflicted.
+    print(`\ngh config conflicts:\n${ghConflicts.map((c) => `  ${c}`).join("\n")}\n`);
+  }
   print(
     rewriteReport.rewritten > 0
       ? `\npath rewrite:\n  ${rewriteReport.rewritten} path(s) rewritten across ${rewriteReport.files.length} file(s)\n` +
@@ -560,6 +756,30 @@ export async function runDataMigrate(
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
   const env = deps.env ?? process.env;
   const readdirFn = deps.readdirFn ?? ((p: string) => readdirSync(p));
+  // Bound out here rather than inline in `fs` below because the data-root
+  // loop's journal-merge removal is the one `rmFn` call site OUTSIDE
+  // `moveDataRootPair` (same operation, same seam key, one binding).
+  const rmFn =
+    deps.rmFn ?? ((p: string, o: { recursive?: boolean; force?: boolean }) => rmSync(p, o));
+  // Phase 7's own removals — not part of the pair move, and not `rmSync`
+  // (see their DataMigrateDeps doc comments for why neither can be folded
+  // into `rmFn` without changing what it does).
+  const unlinkFn = deps.unlinkFn ?? ((p: string) => unlinkSync(p));
+  const rmdirFn = deps.rmdirFn ?? ((p: string) => rmdirSync(p));
+  // The pair-move filesystem seam (see MoveFsDeps). Each default is the exact
+  // call the code made inline before it was injectable — `rmFn` forwards the
+  // CALLER's options verbatim rather than defaulting any in, so the repair rm
+  // stays unforced.
+  const fs: MoveFsDeps = {
+    existsFn,
+    renameFn,
+    copyDirFn,
+    syncPathFn,
+    readdirTypedFn: deps.readdirTypedFn ?? ((d: string) => readdirSync(d, { withFileTypes: true })),
+    statFn: deps.statFn ?? ((p: string) => statSync(p)),
+    rmFn,
+    mkdirFn: deps.mkdirFn ?? ((p: string, o: { recursive: true }) => mkdirSync(p, o)),
+  };
 
   // The single-root move target (see the module doc comment). Computed once
   // and threaded through every phase below, along with the fixed legacy path
@@ -575,15 +795,19 @@ export async function runDataMigrate(
   // operator who named a config does not want it silently moved, and moving
   // it would break every subsequent command in that same environment (ENOENT
   // on the named path; bare `junco` would open the setup wizard instead). The
-  // override check is the guard, and it is NOT redundant with the equality
-  // below: JUNCO_CONFIG accepts any value, including exactly the legacy path,
-  // so `JUNCO_CONFIG=~/.config/junco/config.json junco data migrate` on a
-  // pre-0.10 install would otherwise make `configPathIsLegacy` true and fire
-  // the relocation phase. Do not drop it, and do not "fix" the equality into
-  // something that relocates a deliberately-placed config.
+  // override check is the guard, and it is NOT redundant with the legacy-path
+  // equality: JUNCO_CONFIG accepts any value, including exactly the legacy
+  // path, so `JUNCO_CONFIG=~/.config/junco/config.json junco data migrate` on
+  // a pre-0.10 install would otherwise fire the relocation phase.
+  //
+  // Both halves now live in ONE place — `pendingConfigRelocation`
+  // (dataMigrate.ts) — because `junco doctor` and `junco data` report this
+  // same pending relocation (item 11, #281) and a second spelling of the
+  // guard in the reporters would drift from the mover's: they would warn
+  // about a relocation this phase correctly refuses to perform, forever.
   const configIsExplicitlyNamed = configPathOverride(env) !== undefined;
   const canonicalConfigPath = defaultUserConfigPath(env);
-  const configPathIsLegacy = !configIsExplicitlyNamed && configPath === legacyConfigPath(env);
+  const configPathIsLegacy = pendingConfigRelocation(configPath, env) !== null;
   // The confusing case the guard above creates: JUNCO_CONFIG names a path
   // that happens to equal the legacy one, so configPathIsLegacy is (correctly)
   // false — but "no relocation needed (already at <legacy path>)" would then
@@ -658,6 +882,19 @@ export async function runDataMigrate(
       print("\nstate tree: nothing pending\n");
     } else {
       print("\nstate tree:\n");
+      // Item 4 (#281) investigation: unlike `flatToV2Pairs` (dataMigrate.ts:127
+      // filters `p.from !== p.to`), `stateTreeMigrations` carries no identity
+      // filter of its own — but it does not need one. Every one of its six
+      // pairs hardcodes a DIFFERENT literal old-name and v2-shaped subpath
+      // (e.g. "github-outbox" -> outbox's `L.outbox` ["outbox"|"data/outbox"],
+      // "repos" -> clonesWatched's ["clones/watched"|"cache/clones/watched"]),
+      // so `from === to` is not just untriggered by today's fixtures, it is
+      // structurally unreachable for ANY Config: no combination of
+      // `cfg.dataLayout`/`cfg.github`/`cfg.legacy` can make an old flat name
+      // collide with its own v2 destination string. Confirmed by exhaustive
+      // reading of `stateTreeMigrations` (dataMigrate.ts) and `dataTreePaths`
+      // (dataTree.ts) — an `x -> x` identity arrow here is dead code, so none
+      // is added to guard against it.
       for (const p of pending) print(`  ${p.from} -> ${p.to}\n`);
     }
     if (!dataRootAll.some((p) => p.pending)) {
@@ -669,12 +906,24 @@ export async function runDataMigrate(
           qSteps.some((s) => s.pending) && p.to === vaultQueueTarget && p.pending;
         const suffix = isVaultQueueCollision
           ? " (stray — the vaultRoot queue move owns this destination; will be reported as a conflict, never merged)"
-          : p.pending
-            ? ""
-            : " (nothing to move)";
+          : // Item 6 (#281): the other data root holds this pair too. Same
+            // shape of promise as the vaultRoot collision above — the acting
+            // run reports it, it never moves.
+            p.contendedBy !== undefined
+            ? ` (contended — ${p.contendedBy} holds this pair too and takes the destination; will be reported as a conflict, never merged)`
+            : p.pending
+              ? ""
+              : " (nothing to move)";
         print(`  ${p.from} -> ${p.to}${suffix}\n`);
       }
-      if (legacyRoot !== null) {
+      // Item 4 (#281): gated on `existsFn`, matching phase 7's own acting-run
+      // condition (`legacyRoot !== null && existsFn(legacyRoot)`) below —
+      // `legacyRoot !== null` alone only says the TARGET resolves to the
+      // canonical `~/.junco` (see `fixedLegacyRoot`), which says nothing about
+      // whether anything is actually sitting at the fixed legacy path. Without
+      // this gate the dry-run promised a removal the acting run would
+      // silently skip.
+      if (legacyRoot !== null && existsFn(legacyRoot)) {
         print(`  (legacy root ${legacyRoot} would be removed once empty)\n`);
       }
     }
@@ -738,6 +987,13 @@ export async function runDataMigrate(
   const dataRootReceipt: string[] = [];
   const dataRootConflicts: string[] = [];
   const ghReceipt: string[] = [];
+  // Item 1 (#281): the gh-creds pair's own conflict tracking, kept separate
+  // from `dataRootConflicts` — the two subsystems are otherwise unrelated
+  // (an operator resolving a data-root conflict gains nothing from a gh-creds
+  // one printed under the same heading, and vice versa), so each earns its
+  // own receipt heading below rather than sharing one that only names one of
+  // the two.
+  const ghConflicts: string[] = [];
   // Phase trackers for an honest catch-path receipt: "not-run" = the phase
   // was never reached; "interrupted" = migrateFn threw mid-run (its completed
   // pairs are journaled durably); null configReceipt = rewrite never completed.
@@ -746,6 +1002,12 @@ export async function runDataMigrate(
   // of targetRoot — phase 4 runs before the data-root move could ever
   // relocate it, so "interrupted" must point here, not at the target.
   const stateTreeJournalFile = join(cfg.dataDir, "migrated.json");
+  // Item 2 (#281): what EARLIER runs recorded at the target root, read ONCE
+  // here — before this run appends anything of its own — so a conflict below
+  // can be told apart from an earlier interrupted cross-device copy's leftover
+  // destination. `readJournal` never throws (missing/corrupt → no steps), so a
+  // machine with no journal simply gets today's generic message.
+  const priorJournalSteps = readJournal(migratedFile, readFileFn).steps;
   let configReceipt: string[] | null = null;
   // I-2: the config-relocation phase's own receipt/conflict tracking —
   // separate from configReceipt (the content-rewrite phase above it).
@@ -781,9 +1043,9 @@ export async function runDataMigrate(
         } catch (e) {
           if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
             copyDirFn(s.from, s.to);
-            verifyCopy(s.from, s.to);
-            fsyncCopied(s.to, syncPathFn); // #196: durable before deleting source
-            rmSync(s.from, { recursive: true, force: true });
+            verifyCopy(s.from, s.to, fs);
+            fsyncCopied(s.to, fs); // #196: durable before deleting source
+            fs.rmFn(s.from, { recursive: true, force: true });
             queueReceipt.push(`queue/${s.key}: copied (cross-device) ${s.from} -> ${s.to}`);
             queueJournalSteps.push({ from: s.from, to: s.to, action: "renamed" });
           } else {
@@ -836,7 +1098,7 @@ export async function runDataMigrate(
           if (legacySteps.length > 0) {
             appendJournal(migratedFile, legacySteps, readFileFn, writeFileFn, renameFn);
           }
-          rmSync(pair.from, { force: true });
+          rmFn(pair.from, { force: true });
           dataRootReceipt.push(`${pair.from} -> ${pair.to}: merged`);
           continue;
         }
@@ -850,19 +1112,53 @@ export async function runDataMigrate(
           dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
           continue;
         }
-        const action = moveDataRootPair(
-          pair.from,
-          pair.to,
-          existsFn,
-          renameFn,
-          copyDirFn,
-          syncPathFn,
-        );
-        if (action === "skipped-conflict") {
+        if (pair.contendedBy !== undefined) {
+          // Item 6 (#281): the SAME rule as Critical 2 one branch up, for the
+          // other way a destination gets claimed twice in one run — an earlier
+          // pending pair from the other data root (`dataRootPairs` marks the
+          // loser rather than dropping it). Merging them is not an option:
+          // `moveDataRootPair` would repair-delete a recursively-empty winner
+          // and rename this source onto it, silently fusing two data roots
+          // behind a receipt claiming both "moved". Report, touch nothing.
+          // Marked at plan time and honoured even if the winner's source
+          // vanished under the lock (a concurrent migrate) — that direction
+          // fails safe: a conflict is reported, nothing is destroyed, and the
+          // next run finds the pair uncontested.
           dataRootConflicts.push(
-            `${pair.from} -> ${pair.to}: destination already exists and is not empty`,
+            `${pair.from} -> ${pair.to}: both data roots hold this pair — ${pair.contendedBy} took ` +
+              `the destination this run and nothing was merged. Reconcile the two sources by hand ` +
+              `(move or remove one), then re-run.`,
           );
-          dataRootReceipt.push(`${pair.from} -> ${pair.to}: skipped-conflict`);
+          dataRootReceipt.push(`${pair.from} -> ${pair.to}: skipped-conflict (contended source)`);
+          dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
+          continue;
+        }
+        let action: "moved" | "copied" | "skipped-conflict";
+        try {
+          action = moveDataRootPair(pair.from, pair.to, fs);
+        } catch (e) {
+          if (e instanceof PartialCopyError) {
+            // Item 2 (#281): receipt first, then the record — the `finally`
+            // below writes `dataRootJournalSteps` even on this throw, so the
+            // partial destination is both named to THIS operator and left
+            // self-describing for the next run. Without it, the pair appeared
+            // in neither: run 1 said "data root: nothing to move" over a
+            // half-copied tree, and run 2 could only call it a generic
+            // conflict.
+            dataRootReceipt.push(
+              partialCopyReceiptLine(e, "Remove the partial destination, then re-run."),
+            );
+            dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "partial-copy" });
+          }
+          throw e;
+        }
+        if (action === "skipped-conflict") {
+          const partial = destinationHoldsPartialCopy(priorJournalSteps, pair.from, pair.to);
+          dataRootConflicts.push(conflictLine(pair.from, pair.to, partial, migratedFile));
+          dataRootReceipt.push(
+            `${pair.from} -> ${pair.to}: skipped-conflict` +
+              (partial ? " (partial copy from an interrupted run)" : ""),
+          );
           dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
         } else {
           dataRootReceipt.push(
@@ -873,10 +1169,32 @@ export async function runDataMigrate(
       }
 
       if (gh !== null && existsFn(gh.from)) {
-        const action = moveDataRootPair(gh.from, gh.to, existsFn, renameFn, copyDirFn, syncPathFn);
+        // The gh pair runs the SAME mover, so it has the same partial-copy
+        // window (item 2, #281) — its own legacy path and target can sit on
+        // different filesystems just as easily. Handled identically, onto its
+        // own receipt/conflict arrays (item 1).
+        let action: "moved" | "copied" | "skipped-conflict";
+        try {
+          action = moveDataRootPair(gh.from, gh.to, fs);
+        } catch (e) {
+          if (e instanceof PartialCopyError) {
+            ghReceipt.push(
+              partialCopyReceiptLine(e, "Remove the partial destination, then re-run."),
+            );
+            dataRootJournalSteps.push({ from: gh.from, to: gh.to, action: "partial-copy" });
+          }
+          throw e;
+        }
         if (action === "skipped-conflict") {
-          dataRootConflicts.push(
-            `${gh.from} -> ${gh.to}: destination already exists and is not empty`,
+          // Item 1 (#281): its own array/heading, not `dataRootConflicts` —
+          // see the declaration above.
+          ghConflicts.push(
+            conflictLine(
+              gh.from,
+              gh.to,
+              destinationHoldsPartialCopy(priorJournalSteps, gh.from, gh.to),
+              migratedFile,
+            ),
           );
           ghReceipt.push(`${gh.from} -> ${gh.to}: skipped-conflict`);
           dataRootJournalSteps.push({ from: gh.from, to: gh.to, action: "skipped-conflict" });
@@ -1003,7 +1321,9 @@ export async function runDataMigrate(
     // whenever the fixed legacy path still exists, not gated on
     // `cfg.legacy.dataRoot` (which flips to false the moment ANY marker
     // lands at the target, well before every pair has necessarily moved).
-    // Plain, non-recursive rmdirSync: refuses silently (ENOTEMPTY) when a
+    // Plain, non-recursive rmdir (`rmdirFn`, default `rmdirSync` — the
+    // removals in this phase run on their own seam members, see
+    // DataMigrateDeps): refuses silently (ENOTEMPTY) when a
     // conflicted pair (or anything else) is still inside, and the receipt
     // lists what stayed rather than ever forcing it.
     if (legacyRoot !== null && existsFn(legacyRoot)) {
@@ -1036,7 +1356,7 @@ export async function runDataMigrate(
         }
         if (content === "*\n") {
           try {
-            unlinkSync(legacyGitignore);
+            unlinkFn(legacyGitignore);
           } catch {
             /* best-effort — rmdir below just reports it as a leftover */
           }
@@ -1052,12 +1372,12 @@ export async function runDataMigrate(
       // root by ensureSkillLinks on the next daemon start.
       const legacySkills = join(legacyRoot, "skills");
       try {
-        if (lstatFn(legacySkills).isSymbolicLink()) unlinkSync(legacySkills);
+        if (lstatFn(legacySkills).isSymbolicLink()) unlinkFn(legacySkills);
       } catch {
         /* absent or unreadable — rmdir below reports it as a leftover */
       }
       try {
-        rmdirSync(legacyRoot);
+        rmdirFn(legacyRoot);
         dataRootReceipt.push(`removed legacy root ${legacyRoot}`);
       } catch {
         let remaining: string[] = [];
@@ -1081,27 +1401,71 @@ export async function runDataMigrate(
     // THIS run's config actually lives at the legacy XDG path; a canonical-
     // already machine (the common case) never reaches moveDataRootPair.
     // Reuses moveDataRootPair verbatim (file-aware since #196's
-    // verifyCopyPath/fsyncCopiedPath dispatch on statSync) — its own
+    // verifyCopyPath/fsyncCopiedPath dispatch on `fs.statFn`) — its own
     // existsFn(to) check is what makes a pre-existing canonical file an
     // unconditional skipped-conflict, never overwritten. Journaled at the
     // target root exactly like every other pair above, so a re-run (config
     // already relocated, resolveConfigPath now finds it) sees nothing left
     // to do here.
     if (configPathIsLegacy) {
-      const action = moveDataRootPair(
-        configPath,
-        canonicalConfigPath,
-        existsFn,
-        renameFn,
-        copyDirFn,
-        syncPathFn,
-      );
-      const step: MigrationStep = {
-        from: configPath,
-        to: canonicalConfigPath,
-        action: action === "skipped-conflict" ? "skipped-conflict" : "renamed",
-      };
-      appendJournal(migratedFile, [step], readFileFn, writeFileFn, renameFn);
+      let action: "moved" | "copied" | "skipped-conflict";
+      try {
+        action = moveDataRootPair(configPath, canonicalConfigPath, fs);
+      } catch (e) {
+        if (e instanceof PartialCopyError) {
+          // Item 2 (#281) at the SECOND call site. Same defect as the
+          // data-root loop's — a throw here left `configMoveReceipt` empty, so
+          // the receipt printed "config: nothing to relocate" over a partial
+          // config file at the canonical path — and the same fix, receipt then
+          // record. What differs is the RE-RUN: `resolveConfigPath` (config.ts)
+          // prefers the canonical path the moment it EXISTS, so once a partial
+          // copy has landed there, the next run resolves to that partial file
+          // and `configPathIsLegacy` is false — this phase is never re-entered
+          // and there is no later conflict message to improve (a genuine
+          // pre-existing canonical config still reaches the branch below,
+          // unchanged). That makes this receipt line and the journal entry the
+          // operator's entire record, and makes clearing the partial file
+          // urgent rather than optional — so the hint says so.
+          configMoveReceipt.push(
+            partialCopyReceiptLine(
+              e,
+              `Your config is still whole at ${configPath} — remove the partial ` +
+                `${canonicalConfigPath} before running junco again, since config ` +
+                `resolution prefers the canonical path the moment it exists.`,
+            ),
+          );
+          try {
+            appendJournal(
+              migratedFile,
+              [{ from: configPath, to: canonicalConfigPath, action: "partial-copy" }],
+              readFileFn,
+              writeFileFn,
+              renameFn,
+            );
+          } catch (journalErr) {
+            // #197.1, in the direction the successful-relocation guard below
+            // does NOT take: there the journal failure is the only thing that
+            // went wrong, so it propagates. Here a real copy failure is
+            // already in flight and is the more important error, so the
+            // journal failure is reported on its own line and the ORIGINAL is
+            // re-thrown — never masked by a bookkeeping error.
+            print(
+              `\njunco data migrate: journal write failed after an interrupted ` +
+                `config relocation: ${describeError(journalErr)}\n`,
+            );
+          }
+        }
+        throw e;
+      }
+      // Receipt BEFORE the journal (item 9, #281), the same order the
+      // data-root loop above uses and the order printReceipt's own doc comment
+      // promises ("built incrementally by the caller (pushed as each pair
+      // completes), so a throw mid-loop leaves them holding exactly the pairs
+      // that landed"). Journaling first inverted that: a throw in the
+      // appendJournal below left `configMoveReceipt` empty, so the receipt
+      // printed "config: nothing to relocate" for a file that had ALREADY
+      // moved — pointing the operator at the old path in the one situation (a
+      // partial failure) where the receipt is the only record they have.
       if (action === "skipped-conflict") {
         configMoveConflict = true;
         configMoveReceipt.push(
@@ -1113,6 +1477,32 @@ export async function runDataMigrate(
           `moved ${configPath} -> ${canonicalConfigPath}${action === "copied" ? " (cross-device)" : ""}`,
         );
       }
+      const step: MigrationStep = {
+        from: configPath,
+        to: canonicalConfigPath,
+        action: action === "skipped-conflict" ? "skipped-conflict" : "renamed",
+      };
+      try {
+        appendJournal(migratedFile, [step], readFileFn, writeFileFn, renameFn);
+      } catch (journalErr) {
+        // The #197.1 guard both other journal writes carry (:955, :1047),
+        // which this phase was missing: a journal-write failure must never
+        // become the operator's ONLY account of what happened. The data-root
+        // loop keeps an in-flight migration error and prints the journal
+        // failure alongside it; the path-rewrite phase routes its own onto
+        // that phase's warning channel. Here the relocation above has already
+        // happened and — since the reorder — is already on the receipt, so
+        // this names the failure as SUBSEQUENT to the move (rather than
+        // letting the bare fs error read as though the migration itself
+        // failed) and then propagates it: unlike path-rewrite's cosmetic
+        // "rewrote" step, a durable record that could not be written is a
+        // real filesystem failure and still earns exit 1.
+        print(
+          `\njunco data migrate: journal write failed after the config relocation: ` +
+            `${journalErr instanceof Error ? journalErr.message : String(journalErr)}\n`,
+        );
+        throw journalErr;
+      }
     }
 
     // 10. Receipt.
@@ -1123,6 +1513,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      ghConflicts,
       rewriteReport,
       configReceipt,
       configMoveReceipt,
@@ -1131,7 +1522,8 @@ export async function runDataMigrate(
     );
 
     const stateConflicts = typeof stateOutcome === "string" ? 0 : stateOutcome.conflicts.length;
-    const totalConflicts = stateConflicts + dataRootConflicts.length + (configMoveConflict ? 1 : 0);
+    const totalConflicts =
+      stateConflicts + dataRootConflicts.length + ghConflicts.length + (configMoveConflict ? 1 : 0);
     if (totalConflicts > 0) {
       print(`\njunco data migrate: ${totalConflicts} conflict(s) — resolve manually and re-run\n`);
       return 1;
@@ -1145,6 +1537,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      ghConflicts,
       rewriteReport,
       configReceipt,
       configMoveReceipt,
