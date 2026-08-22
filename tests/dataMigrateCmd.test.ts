@@ -1126,6 +1126,85 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
     expect(out2.join("")).toContain("config: nothing to relocate");
   });
 
+  it("a journal-write failure after the relocation still receipts the move that happened (item 9, #281)", async () => {
+    // Phase 9 used to journal the config relocation BEFORE pushing its receipt
+    // line — inverted relative to the data-root loop, whose receipt records
+    // each pair as it lands. A throw in between therefore printed "config:
+    // nothing to relocate" for a config that had just moved: the receipt sent
+    // the operator to the OLD path in the one situation (a partial failure)
+    // where it is the only record they have.
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+    const journalFile = join(tmpHome, ".junco", "migrated.json");
+
+    // Fault 1 — the config's own rename crosses a device boundary (legacy XDG
+    // on one filesystem, ~/.junco on another), so the relocation goes through
+    // Task 1's seamed EXDEV fallback: copyDirFn -> verifyCopyPath -> fsync ->
+    // rmFn deletes the legacy file. Scoped to `from === configPath` so
+    // rewriteConfig's own tmp+rename (from `${configPath}.tmp`) and
+    // appendJournal's (from `${journalFile}.tmp`) are untouched.
+    const exdevRename = (from: string, to: string): void => {
+      if (from === configPath) {
+        const e = new Error("SIMULATED EXDEV") as NodeJS.ErrnoException;
+        e.code = "EXDEV";
+        throw e;
+      }
+      renameSync(from, to);
+    };
+    // Fault 2 — the journal write fails right after that move, which is the
+    // throw this test exists for.
+    const failingJournalWrite = (p: string, s: string): void => {
+      if (p === `${journalFile}.tmp`) throw new Error("SIMULATED ENOSPC");
+      writeFileSync(p, s, "utf8");
+    };
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        renameFn: exdevRename,
+        writeFileFn: failingJournalWrite,
+      },
+    );
+    const printed = out.join("");
+
+    // The move really happened: the file is at the canonical path and gone
+    // from the legacy one.
+    expect(existsSync(canonical)).toBe(true);
+    expect(existsSync(configPath)).toBe(false);
+    // ...and the journal really did fail to record it.
+    expect(
+      existsSync(journalFile)
+        ? (
+            JSON.parse(readFileSync(journalFile, "utf8")) as {
+              steps: Array<{ from: string; to: string }>;
+            }
+          ).steps.some((s) => s.from === configPath)
+        : false,
+    ).toBe(false);
+
+    // The receipt must not send the operator to the old path...
+    expect(printed).not.toContain("config: nothing to relocate");
+    // ...it names the outcome that actually occurred, cross-device fallback
+    // and all.
+    expect(printed).toContain(`config:\n  moved ${configPath} -> ${canonical} (cross-device)`);
+    // The journal failure is still a failure — reported on its own line
+    // (#197.1 guard) and propagated, so exit stays 1 and the original error
+    // still reaches the operator.
+    expect(printed).toContain("journal write failed after the config relocation");
+    expect(printed).toContain("SIMULATED ENOSPC");
+    expect(code).toBe(1);
+  });
+
   it("never relocates an explicitly-named config, even when JUNCO_CONFIG names exactly the legacy path (#275)", async () => {
     // The footgun: JUNCO_CONFIG accepts ANY value, including the legacy path
     // itself, so `configPath === legacyConfigPath(env)` is genuinely reachable

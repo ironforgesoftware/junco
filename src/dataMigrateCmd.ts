@@ -1148,12 +1148,15 @@ export async function runDataMigrate(
     // to do here.
     if (configPathIsLegacy) {
       const action = moveDataRootPair(configPath, canonicalConfigPath, fs);
-      const step: MigrationStep = {
-        from: configPath,
-        to: canonicalConfigPath,
-        action: action === "skipped-conflict" ? "skipped-conflict" : "renamed",
-      };
-      appendJournal(migratedFile, [step], readFileFn, writeFileFn, renameFn);
+      // Receipt BEFORE the journal (item 9, #281), the same order the
+      // data-root loop above uses and the order printReceipt's own doc comment
+      // promises ("built incrementally by the caller (pushed as each pair
+      // completes), so a throw mid-loop leaves them holding exactly the pairs
+      // that landed"). Journaling first inverted that: a throw in the
+      // appendJournal below left `configMoveReceipt` empty, so the receipt
+      // printed "config: nothing to relocate" for a file that had ALREADY
+      // moved — pointing the operator at the old path in the one situation (a
+      // partial failure) where the receipt is the only record they have.
       if (action === "skipped-conflict") {
         configMoveConflict = true;
         configMoveReceipt.push(
@@ -1164,6 +1167,32 @@ export async function runDataMigrate(
         configMoveReceipt.push(
           `moved ${configPath} -> ${canonicalConfigPath}${action === "copied" ? " (cross-device)" : ""}`,
         );
+      }
+      const step: MigrationStep = {
+        from: configPath,
+        to: canonicalConfigPath,
+        action: action === "skipped-conflict" ? "skipped-conflict" : "renamed",
+      };
+      try {
+        appendJournal(migratedFile, [step], readFileFn, writeFileFn, renameFn);
+      } catch (journalErr) {
+        // The #197.1 guard both other journal writes carry (:955, :1047),
+        // which this phase was missing: a journal-write failure must never
+        // become the operator's ONLY account of what happened. The data-root
+        // loop keeps an in-flight migration error and prints the journal
+        // failure alongside it; the path-rewrite phase routes its own onto
+        // that phase's warning channel. Here the relocation above has already
+        // happened and — since the reorder — is already on the receipt, so
+        // this names the failure as SUBSEQUENT to the move (rather than
+        // letting the bare fs error read as though the migration itself
+        // failed) and then propagates it: unlike path-rewrite's cosmetic
+        // "rewrote" step, a durable record that could not be written is a
+        // real filesystem failure and still earns exit 1.
+        print(
+          `\njunco data migrate: journal write failed after the config relocation: ` +
+            `${journalErr instanceof Error ? journalErr.message : String(journalErr)}\n`,
+        );
+        throw journalErr;
       }
     }
 
