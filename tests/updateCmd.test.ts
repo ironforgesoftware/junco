@@ -51,7 +51,7 @@ const harness = (o: {
       // this fall through to the real ensureSkillLinks would crash on
       // `cfg.skills.harnessDirs`. Tests exercising the skill-link wiring
       // itself override this.
-      ensureSkillLinksFn: () => ({ created: [], repaired: [], skipped: [], warnings: [] }),
+      ensureSkillLinksFn: () => ({ entries: [] }),
     },
   };
 };
@@ -135,7 +135,7 @@ describe("runUpdateCommand", () => {
       ...deps,
       ensureSkillLinksFn: () => {
         ensured++;
-        return { created: ["/sbxroot/data/skills"], repaired: [], skipped: [], warnings: [] };
+        return { entries: [{ path: "/sbxroot/data/skills", kind: "created" }] };
       },
     });
     expect(code).toBe(0);
@@ -149,7 +149,7 @@ describe("runUpdateCommand", () => {
       ...deps,
       ensureSkillLinksFn: () => {
         ensured++;
-        return { created: [], repaired: [], skipped: [], warnings: [] };
+        return { entries: [] };
       },
     });
     expect(code).toBe(1);
@@ -161,10 +161,15 @@ describe("runUpdateCommand", () => {
     const code = await runUpdateCommand(CONFIG_PATH, {
       ...deps,
       ensureSkillLinksFn: () => ({
-        created: ["/sbxroot/data/skills/claude/junco-dispatch"],
-        repaired: ["/sbxroot/data/skills/pi/junco-dispatch"],
-        skipped: [],
-        warnings: ["/sbxroot/data/skills: target missing"],
+        entries: [
+          { path: "/sbxroot/data/skills/claude/junco-dispatch", kind: "created" },
+          { path: "/sbxroot/data/skills/pi/junco-dispatch", kind: "repaired" },
+          {
+            path: "/sbxroot/data/skills",
+            kind: "target-missing",
+            detail: "/pkg/skills",
+          },
+        ],
       }),
     });
     expect(code).toBe(0);

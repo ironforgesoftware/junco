@@ -200,7 +200,7 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // also keeps the daemon's post-mkdirs info log silent for every OTHER
     // test in this file (see "logs the skill-link report..." for the
     // non-quiet case).
-    ensureSkillLinksFn: vi.fn(() => ({ created: [], repaired: [], skipped: [], warnings: [] })),
+    ensureSkillLinksFn: vi.fn(() => ({ entries: [] })),
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
     startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
@@ -970,7 +970,7 @@ describe("mainLoop", () => {
       }),
       ensureSkillLinksFn: vi.fn(() => {
         calls.push("links");
-        return { created: [], repaired: [], skipped: [], warnings: [] };
+        return { entries: [] };
       }),
       sleep: vi.fn(async () => {
         stop.requestStop();
@@ -985,12 +985,7 @@ describe("mainLoop", () => {
   it("passes the frozen startup cfg to ensureSkillLinksFn", async () => {
     const cfg = makeConfig();
     const stop = new StopFlag();
-    const ensureSkillLinksFn = vi.fn(() => ({
-      created: [],
-      repaired: [],
-      skipped: [],
-      warnings: [],
-    }));
+    const ensureSkillLinksFn = vi.fn(() => ({ entries: [] }));
     const { deps } = makeDeps({
       ensureSkillLinksFn,
       sleep: vi.fn(async () => {
@@ -1004,19 +999,20 @@ describe("mainLoop", () => {
     expect(ensureSkillLinksFn).toHaveBeenCalledWith(cfg);
   });
 
-  it("logs the skill-link report at info only when it carries created/repaired/warnings", async () => {
+  it("logs the skill-link report at info only when it carries created/repaired/failure entries", async () => {
     const { log } = await import("../src/logging.js");
     const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
     try {
       const cfg = makeConfig();
       const stop = new StopFlag();
+      const created = { path: "/d/skills/claude/junco-dispatch", kind: "created" as const };
+      const failed = {
+        path: "/d/skills",
+        kind: "target-missing" as const,
+        detail: "/pkg/skills",
+      };
       const { deps } = makeDeps({
-        ensureSkillLinksFn: vi.fn(() => ({
-          created: ["/d/skills/claude/junco-dispatch"],
-          repaired: [],
-          skipped: [],
-          warnings: ["/d/skills: target missing"],
-        })),
+        ensureSkillLinksFn: vi.fn(() => ({ entries: [created, failed] })),
         sleep: vi.fn(async () => {
           stop.requestStop();
         }),
@@ -1026,17 +1022,13 @@ describe("mainLoop", () => {
 
       const linkLogs = infoSpy.mock.calls.filter((c) => String(c[0]) === "skill links ensured");
       expect(linkLogs).toHaveLength(1);
-      expect(linkLogs[0]?.[1]).toEqual({
-        created: ["/d/skills/claude/junco-dispatch"],
-        repaired: [],
-        warnings: ["/d/skills: target missing"],
-      });
+      expect(linkLogs[0]?.[1]).toEqual({ entries: [created, failed] });
     } finally {
       infoSpy.mockRestore();
     }
   });
 
-  it("logs nothing for skill links when the report is all-quiet (nothing created/repaired/warned)", async () => {
+  it("logs nothing for skill links when the report is all-quiet (only ok / harness-not-installed entries)", async () => {
     const { log } = await import("../src/logging.js");
     const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
     try {
@@ -1044,10 +1036,10 @@ describe("mainLoop", () => {
       const stop = new StopFlag();
       const { deps } = makeDeps({
         ensureSkillLinksFn: vi.fn(() => ({
-          created: [],
-          repaired: [],
-          skipped: ["/d/skills/pi/junco-dispatch"],
-          warnings: [],
+          entries: [
+            { path: "/d/skills/pi/junco-dispatch", kind: "ok" as const },
+            { path: "/h/.codex/skills", kind: "harness-not-installed" as const },
+          ],
         })),
         sleep: vi.fn(async () => {
           stop.requestStop();

@@ -19,7 +19,12 @@ import {
   type SelfPackage,
   type UpdateInfo,
 } from "./updateCheck.js";
-import { ensureSkillLinks, type SkillLinksReport } from "./skillLinks.js";
+import {
+  ensureSkillLinks,
+  isSkillLinkFailure,
+  renderSkillLinkEntry,
+  type SkillLinksReport,
+} from "./skillLinks.js";
 
 export interface UpdateCmdDeps {
   loadConfigFn?: (p: string) => Config;
@@ -115,9 +120,15 @@ export async function runUpdateCommand(
   // created by an older version; a fresh npm root never changes the path,
   // but a broken chain heals here rather than at next daemon start).
   const links = (deps.ensureSkillLinksFn ?? ensureSkillLinks)(cfg);
-  for (const c of links.created) print(`skill link created: ${c}\n`);
-  for (const r of links.repaired) print(`skill link repaired: ${r}\n`);
-  for (const w of links.warnings) errPrint(`skill link warning: ${w}\n`);
+  for (const e of links.entries.filter((e) => e.kind === "created")) {
+    print(`skill link created: ${renderSkillLinkEntry(e)}\n`);
+  }
+  for (const e of links.entries.filter((e) => e.kind === "repaired")) {
+    print(`skill link repaired: ${renderSkillLinkEntry(e)}\n`);
+  }
+  for (const e of links.entries.filter((e) => isSkillLinkFailure(e.kind))) {
+    errPrint(`skill link warning: ${renderSkillLinkEntry(e)}\n`);
+  }
 
   // 4. Drain-restart, only when a daemon actually holds the lock (same
   // lockPath derivation as restartCmd/start: worker.lock beside config.json).

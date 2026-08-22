@@ -28,6 +28,7 @@ function fakeIo(overrides: Partial<WizardIO> = {}): WizardIO {
       configPath: "/tmp/x/config.json",
       queueRoot: "/tmp/x/q",
       changes: [],
+      skillLinkFailures: [],
     })),
     flightCheck: async () => [],
     effectiveDataDir: "/sbx/home/.junco",

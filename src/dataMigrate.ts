@@ -36,7 +36,13 @@ import { log } from "./logging.js";
 export interface MigrationStep {
   from: string;
   to: string;
-  action: "renamed" | "skipped-conflict" | "noop";
+  // "rewrote" (task-2, #283): dataMigrateCmd.ts's post-move path-rewrite
+  // phase (src/migratePathRewrite.ts) — journaled as one summary step for
+  // the whole phase, not per rewritten value. readJournal/appendJournal are
+  // both generic over this field (appendJournal only special-cases
+  // "skipped-conflict" for its dedup rule; every other action, "rewrote"
+  // included, always appends) — neither needed a change for this addition.
+  action: "renamed" | "skipped-conflict" | "noop" | "rewrote";
 }
 
 export interface MigrateResult {
@@ -106,6 +112,7 @@ export function flatToV2Pairs(
     ["assess-history", "data/assess-history"],
     ["history", "data/history"],
     ["transcripts", "data/transcripts"],
+    ["plans", "data/plans"],
     ["spend.json", "data/spend.json"],
     ["metrics.json", "data/metrics.json"],
     ["clones", "cache/clones"],

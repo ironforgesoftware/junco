@@ -358,6 +358,214 @@ describe("pollGithubInbox", () => {
     });
   });
 
+  describe("junco-ticket fence door (2026-08-21)", () => {
+    const fenceBody = "# Do the thing\n\n## Tasks\n\n- do it\n";
+    const fencedBody = "Parked ticket.\n\n```junco-ticket\n" + fenceBody + "```\n";
+
+    it("queues a junco-ticket fence from the issue body verbatim, skipping the planner", async () => {
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: fencedBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      const t = f.submitted[0];
+      // Execution ticket, not a planning ticket: body is the fence content verbatim.
+      expect(t.content).toContain("# Do the thing");
+      expect(t.content).not.toContain("# Junco ticket template"); // planner-prompt marker absent
+      expect(t.content).toContain("kind: pr");
+      expect(t.idHint).toBe(EXEC_ID);
+      // State label is queued, not planning.
+      const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+      expect(edit).toContain("junco:queued");
+      expect(edit).not.toContain("junco:planning");
+    });
+
+    it("ask label wins over a junco-ticket fence (prose ask ticket, fence not extracted)", async () => {
+      const body = "Please explain X.\n\n```junco-ticket\n# Sneaky\n```\n";
+      const askIssue = { ...rawIssue, body, labels: [{ name: "junco" }, { name: "junco:ask" }] };
+      const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].idHint).toBe(EXEC_ID);
+      expect(f.submitted[0].content).toContain("Please explain X.");
+      expect(f.submitted[0].content).toContain("workdir:"); // ask rails, not repo:
+      expect(f.submitted[0].content).toContain("kind: ask");
+      const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+      expect(edit).toContain("junco:queued");
+    });
+
+    it("no fence still routes to the planner (regression)", async () => {
+      const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].idHint).toBe(PLAN_ID);
+      expect(f.submitted[0].content).toContain("kind: plan");
+      const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+      expect(edit).toContain("junco:planning");
+      expect(edit).not.toContain("junco:queued");
+    });
+
+    it("refuses a fence body edited after the trigger label (re-vouch guard covers the fence door)", async () => {
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: fencedBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "2026-07-06T01:00:00Z", // edited an hour AFTER labeling
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+      expect(f.calls.find((c) => c[0] === "issue" && c[1] === "edit")).toBeUndefined();
+    });
+  });
+
+  describe("junco-plan fence door (2026-08-21)", () => {
+    // Mirrors the approval-comment "plan-set dispatch" fixtures below
+    // (describe("plan-set dispatch (spec 2026-08-20 layer 2)")): dispatchPlanSet
+    // fans children out via the REAL submitTicket, not the injected submitFn,
+    // so these tests point dataDir/queueRoot at a real tmp dir and assert on
+    // the files it writes rather than on f.submitted.
+    const FENCE_SET = `version: 1
+tasks:
+  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}
+  - {id: b, title: T B, depends_on: [a], description: Build B., acceptance: [works]}
+`;
+    const fenceSetBody = "Parked ticket.\n\n```junco-plan\n" + FENCE_SET + "```\n";
+    const withPlanSets = (root: string): Config =>
+      ({
+        ...bridgeCfg,
+        dataDir: join(root, "data"),
+        queueRoot: join(root, "tickets"),
+        planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+      }) as Config;
+
+    it("compiles a junco-plan fence from the issue body when plan sets are enabled", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const localCfg = withPlanSets(root);
+        const f = makeFakes({
+          issues: [{ ...rawIssue, body: fenceSetBody }],
+          events: labeledEvent,
+          permission: "write",
+          lastEditedAt: "null",
+        });
+        const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+        expect(n).toBe(1);
+        // dispatchPlanSet fans out via the real submitTicket, not the
+        // injected submitFn — the single-ticket path never runs.
+        expect(f.submitted).toHaveLength(0);
+        expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(true);
+        expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(true);
+        const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+        expect(edit).toEqual(expect.arrayContaining(["--add-label", "junco:queued"]));
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("posts a failure comment and junco:failed when the issue-body plan fence does not compile", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const localCfg = withPlanSets(root);
+        const badBody = "```junco-plan\nversion: 1\ntasks: []\n```\n"; // zero tasks = compile error
+        const f = makeFakes({
+          issues: [{ ...rawIssue, body: badBody }],
+          events: labeledEvent,
+          permission: "write",
+          lastEditedAt: "null",
+        });
+        let commentBody: string | null = null;
+        const ghFn = async (c: unknown, args: string[]): Promise<CmdResult> => {
+          if (args[0] === "issue" && args[1] === "comment") {
+            const idx = args.indexOf("--body-file");
+            commentBody = readFileSync(args[idx + 1], "utf8");
+          }
+          return f.ghFn(c, args);
+        };
+        const n = await pollGithubInbox(localCfg, newBridgeState(), {
+          ghFn,
+          gitFn: f.gitFn,
+          submitFn: f.submitFn,
+        } as never);
+        expect(n).toBe(0);
+        expect(f.submitted).toHaveLength(0);
+        // Nothing dispatches on a compile error — the queue root is never
+        // even touched (materializePlanSet/submitPlanSet never ran).
+        expect(existsSync(join(root, "tickets", "inbox"))).toBe(false);
+
+        const editIdx = f.calls.findIndex((c) => c[0] === "issue" && c[1] === "edit");
+        const commentIdx = f.calls.findIndex((c) => c[0] === "issue" && c[1] === "comment");
+        expect(editIdx).toBeGreaterThanOrEqual(0);
+        expect(commentIdx).toBeGreaterThan(editIdx); // labels BEFORE the comment (bounds re-entry)
+
+        const edit = f.calls[editIdx];
+        expect(edit).toEqual(expect.arrayContaining(["--add-label", "junco:failed"]));
+        expect(edit).not.toContain("--remove-label"); // no plan-ready/approved on this door
+
+        const commentCalls = f.calls.filter((c) => c[0] === "issue" && c[1] === "comment");
+        expect(commentCalls).toHaveLength(1);
+        expect(commentBody).toContain("non-empty list");
+        expect(commentBody).toContain(OUTBOX_MARKER_PREFIX);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("ignores a junco-plan fence when plan sets are disabled (falls through to the planner)", async () => {
+      const localCfg = {
+        ...bridgeCfg,
+        planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
+      } as Config;
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: fenceSetBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      // Same assertion as Task 2's "no fence still routes to the planner"
+      // regression test: a PLANNING ticket, not an execution/set dispatch.
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].idHint).toBe(PLAN_ID);
+      expect(f.submitted[0].content).toContain("kind: plan");
+      const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+      expect(edit).toContain("junco:planning");
+      expect(edit).not.toContain("junco:queued");
+    });
+
+    it("ask label wins over a junco-plan fence (no plan set dispatched)", async () => {
+      const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+      try {
+        const localCfg = withPlanSets(root);
+        const askIssue = {
+          ...rawIssue,
+          body: fenceSetBody,
+          labels: [{ name: "junco" }, { name: "junco:ask" }],
+        };
+        const f = makeFakes({
+          issues: [askIssue],
+          events: labeledEvent,
+          permission: "write",
+          lastEditedAt: "null",
+        });
+        const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
+        expect(n).toBe(1);
+        expect(f.submitted).toHaveLength(1);
+        expect(f.submitted[0].content).toContain("kind: ask");
+        expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("fail-closed: no labeled event found → no submit, no label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: "", permission: "write" });
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
@@ -851,11 +1059,14 @@ tasks:
           });
           const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
           expect(n).toBe(1);
-          // dispatchPlanSet fans out via the real submitTicket, not the
-          // injected submitFn — the single-ticket path never runs.
-          expect(f.submitted).toHaveLength(0);
-          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(true);
-          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(true);
+          // dispatchPlanSet now fans out through the SAME injected submitFn as
+          // the single-ticket path (the BridgeDeps.submitFn seam threaded down
+          // from pollGithubInbox) — both children are submitted through it, so
+          // the real submitTicket never writes to the inbox here.
+          expect(f.submitted).toHaveLength(2);
+          expect(f.submitted.map((s) => s.idHint).sort()).toEqual([`${EXEC_ID}-a`, `${EXEC_ID}-b`]);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(false);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(false);
           const edit = f.calls.find((c) => c[1] === "edit");
           expect(edit).toEqual(
             expect.arrayContaining([
@@ -972,6 +1183,73 @@ tasks:
           // Outbox idempotency marker embedded in the posted body — a lost-ack
           // replay dedups against this instead of double-posting (#132).
           expect(commentBody).toContain(OUTBOX_MARKER_PREFIX);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      // I3 (#298 review round 2): a per-child submit throw is now CONTAINED
+      // inside dispatchPlanSet/submitPlanSet — it no longer propagates and
+      // aborts this door's dispatch. This door must NOT swap `plan-ready` for
+      // `junco:queued` when a child is stranded — that much still stands as a
+      // belt-and-suspenders guard — but merely leaving `plan-ready` standing
+      // does NOT by itself guarantee a retry (fix wave C, item 1): this same
+      // sweep's `maintainPlanSets` unconditionally sets a lifecycle label on
+      // the fresh record regardless, so a later sweep's "already dispatched"
+      // branch sees `plan-ready` next to that label and cleans both up
+      // without ever re-dispatching. The actual recovery is that
+      // dispatchPlanSet now seeds the record's `pendingFanout` from
+      // `stranded`, so `maintainPlanSets`'s `drainPendingFanout` resubmits
+      // the stranded child straight from the record — see
+      // planSetBridge.test.ts's "retries a child stranded by a fan-out
+      // failure ... INITIAL DISPATCH" for that recovery proven end to end.
+      it("a stranded child submit leaves plan-ready standing (no premature queued swap)", async () => {
+        const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+        try {
+          const localCfg = {
+            ...bridgeCfg,
+            dataDir: join(root, "data"),
+            queueRoot: join(root, "tickets"),
+            planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+          } as Config;
+          const f = makeFakes({
+            issues: [readyIssue],
+            events: approvedAfter,
+            permission: "write",
+            comments: [planComment(mixedFenceComment)],
+          });
+          const throwingSubmit = (c: unknown, content: string, o?: { idHint?: string }): string => {
+            if (o?.idHint === `${EXEC_ID}-b`) throw new Error("disk full");
+            return f.submitFn(c, content, o);
+          };
+          const n = await pollGithubInbox(localCfg, newBridgeState(), {
+            ghFn: f.ghFn,
+            gitFn: f.gitFn,
+            submitFn: throwingSubmit,
+          } as never);
+          expect(n).toBe(0); // not counted as bridged — never reaches the label swap
+          // "a" landed through the contained fan-out via THIS door's injected
+          // `submitFn`; "b" did not — its throw is what stranded it.
+          expect(f.submitted.map((s) => s.idHint)).toEqual([`${EXEC_ID}-a`]);
+          // `plan-ready` (and `approved`) are left standing — belt-and-
+          // suspenders (the dispatch branch's OWN queued-swap
+          // (`--remove-label junco:plan-ready`) must NOT fire), but NOT what
+          // actually recovers "b" (fix wave C, item 1: see the comment at the
+          // `dr.stranded` check in githubInbox.ts). Recovery is
+          // dispatchPlanSet seeding the record's `pendingFanout` with "b"'s
+          // ticket id: this SAME sweep's UNRELATED `maintainPlanSets` pass —
+          // which runs on every sweep regardless, against the record
+          // dispatchPlanSet already materialized — drains it via the REAL
+          // `submitTicket` (that call site does not forward this door's
+          // injected `submitFn`, which is why `f.submitted` above stays
+          // `[EXEC_ID-a]` even though "b" does land) and also issues its own
+          // first label swap for this now-open set; that maintenance pass is
+          // independent of the bug under test here, so this only asserts the
+          // SPECIFIC swap I3 prevents.)
+          const dispatchLabelSwap = f.calls.find(
+            (c) => c[0] === "issue" && c[1] === "edit" && c.includes("junco:plan-ready"),
+          );
+          expect(dispatchLabelSwap).toBeUndefined();
         } finally {
           rmSync(root, { recursive: true, force: true });
         }

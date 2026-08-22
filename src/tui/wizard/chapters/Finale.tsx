@@ -9,6 +9,7 @@ import { NEXT_STEPS, TIPS, BIRD } from "../../../wizard/tips.js";
 import { theme } from "../../theme.js";
 import { useGuardedInput } from "../../useGuardedInput.js";
 import { ClickableBox } from "../../ClickableBox.js";
+import { renderSkillLinkEntry } from "../../../skillLinks.js";
 import type { CheckResult } from "../../../wizard/detect.js";
 import type { WriteResult, WizardIO } from "../../../wizard/io.js";
 
@@ -50,6 +51,17 @@ export function Finale({ result, io, onDone, revealMs = 150 }: FinaleProps): Rea
         <Text color={theme.success}>✓</Text> Queue ready: {result.queueRoot}
         {"/{inbox,processing,done,failed}"}
       </Text>
+      {result.skillLinkFailures.length > 0 && (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Skill links</Text>
+          {result.skillLinkFailures.map((e, i) => (
+            <Text key={i}>
+              <Text color={theme.warn}>⚠</Text> {renderSkillLinkEntry(e)}
+            </Text>
+          ))}
+          <Text dimColor>Re-run `junco skill install` any time to retry.</Text>
+        </Box>
+      )}
       <Box marginTop={1} flexDirection="column">
         <Text bold>Flight check</Text>
         {checks ? (
