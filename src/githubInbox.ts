@@ -1023,6 +1023,69 @@ export async function pollGithubInbox(
             continue;
           }
           const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);
+          // junco-plan fence: a multi-task set dispatches through the plan-set
+          // compiler, mirroring the approval-comment door. Checked before the
+          // single-ticket fence, same precedence as the comment path. Gated on
+          // planSets.enabled exactly like that path — disabled, the fence is
+          // invisible and the issue falls through to the planner.
+          const fenceSet =
+            isAsk || !cfg.planSets.enabled ? null : extractPlanSetBody(issue.body ?? "");
+          if (fenceSet !== null) {
+            const dr = dispatchPlanSet(cfg, repo, issue.number, fenceSet, new Date().toISOString());
+            if (!dr.ok) {
+              const errList = dr.errors.map((e) => `- ${e}`).join("\n");
+              const failureComment =
+                `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
+                `_Remove the \`${ll.failed}\` label and re-apply the \`${cfg.github.triggerLabel}\` label to retry._\n`;
+              const failId = `${repo.nwo}#${issue.number}`;
+              await guardOrQueue(
+                cfg,
+                "issue plan set failure labels",
+                failId,
+                {
+                  kind: "labels",
+                  nwo: repo.nwo,
+                  issue: issue.number,
+                  add: [ll.failed],
+                  remove: [],
+                },
+                async () => {
+                  await ghFn(
+                    cfg,
+                    [
+                      "issue",
+                      "edit",
+                      String(issue.number),
+                      "--repo",
+                      repo.nwo,
+                      "--add-label",
+                      ll.failed,
+                    ],
+                    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+                  );
+                },
+              );
+              await guardOrQueue(
+                cfg,
+                "issue plan set failure comment",
+                failId,
+                { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
+                () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
+              );
+              continue;
+            }
+            await ghFn(
+              cfg,
+              ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.queued],
+              { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+            );
+            bridged++;
+            log.info("github bridge: issue-body plan set dispatched", {
+              nwo: repo.nwo,
+              issue: issue.number,
+            });
+            continue;
+          }
           // Issue-as-inbox door (spec 2026-08-21): a vouched body carrying a
           // junco-ticket fence queues verbatim — the planner is only the fence
           // PRODUCER for issues that arrive without one. Ask wins over a fence
