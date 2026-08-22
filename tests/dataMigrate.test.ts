@@ -24,6 +24,7 @@ import {
   flatToV2Pairs,
   migrationTargetRoot,
   dataRootPairs,
+  pendingConfigRelocation,
 } from "../src/dataMigrate.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 import { dataTreePaths } from "../src/dataTree.js";
@@ -687,5 +688,60 @@ describe("dataRootPairs — both roots pend the same target (item 6, #281)", () 
     const pairs = dataRootPairs(cfg, targetRoot, fixedLegacy, () => false);
     expect(new Set(pairs.map((p) => p.to)).size).toBe(pairs.length);
     expect(pairs.every((p) => !p.pending && p.contendedBy === undefined)).toBe(true);
+  });
+});
+
+/**
+ * Item 11 (#281): the ONE spelling of "is a config relocation pending", shared
+ * by the mover (`runDataMigrate`'s phase-9 gate) and the two read-only
+ * reporters (`junco doctor`, `junco data`). Before this existed both reporters
+ * were silent about a config still sitting at the legacy XDG path — they told
+ * the operator the migration was complete while it demonstrably was not.
+ *
+ * The `JUNCO_CONFIG` guard (#307) is the load-bearing half: an explicitly-named
+ * config is DELIBERATELY never relocated, so reporting one as "pending" would
+ * raise a warning `junco data migrate` correctly refuses to clear — run after
+ * run, forever. A second spelling of that guard living in the reporters is
+ * exactly the drift this function exists to prevent.
+ */
+describe("pendingConfigRelocation (item 11, #281)", () => {
+  const env = { HOME: "/sbxroot/home" };
+  const legacy = join("/sbxroot/home", ".config", "junco", "config.json");
+  const canonical = join("/sbxroot/home", ".junco", "config.json");
+
+  it("reports the pair when this run's config is at the legacy XDG path", () => {
+    expect(pendingConfigRelocation(legacy, env)).toEqual({ from: legacy, to: canonical });
+  });
+
+  it("reports nothing for a config already at the canonical path", () => {
+    expect(pendingConfigRelocation(canonical, env)).toBeNull();
+  });
+
+  it("reports nothing under a JUNCO_CONFIG override that names exactly the legacy path", () => {
+    // The whole point of the guard: JUNCO_CONFIG accepts any value, the legacy
+    // path included, and an explicitly-named config is never relocated. A
+    // "pending" here would be a warning no migrate run can ever clear.
+    expect(pendingConfigRelocation(legacy, { ...env, JUNCO_CONFIG: legacy })).toBeNull();
+  });
+
+  it("reports nothing under a JUNCO_CONFIG override naming an unrelated path", () => {
+    const named = "/sbxroot/elsewhere/junco.json";
+    expect(pendingConfigRelocation(named, { ...env, JUNCO_CONFIG: named })).toBeNull();
+  });
+
+  it("treats an empty/whitespace JUNCO_CONFIG as unset (same rule as configPathOverride)", () => {
+    expect(pendingConfigRelocation(legacy, { ...env, JUNCO_CONFIG: "   " })).toEqual({
+      from: legacy,
+      to: canonical,
+    });
+  });
+
+  it("honours XDG_CONFIG_HOME when deriving the legacy path", () => {
+    const xdg = "/sbxroot/xdg";
+    const xdgLegacy = join(xdg, "junco", "config.json");
+    expect(pendingConfigRelocation(xdgLegacy, { ...env, XDG_CONFIG_HOME: xdg })).toEqual({
+      from: xdgLegacy,
+      to: canonical,
+    });
   });
 });

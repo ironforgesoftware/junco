@@ -30,7 +30,13 @@ import {
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
-import { juncoHome, homeOf } from "./config.js";
+import {
+  juncoHome,
+  homeOf,
+  configPathOverride,
+  legacyConfigPath,
+  defaultUserConfigPath,
+} from "./config.js";
 import { log } from "./logging.js";
 
 export interface MigrationStep {
@@ -288,6 +294,49 @@ export function pendingMigrations(
     .filter((p) => p.pending)
     .map(({ from, to }) => ({ from, to }));
   return [...pendingStateTreeMigrations(cfg, existsFn), ...layoutPending];
+}
+
+/**
+ * THE single spelling of "does this run still owe a config-file relocation?"
+ * — the legacy XDG `config.json` → canonical `~/.junco/config.json` move that
+ * `junco data migrate`'s phase 9 performs. Returns the pair, or `null` when
+ * nothing is owed.
+ *
+ * Deliberately kept OUT of `pendingMigrations` (item 11, #281): that array is
+ * rendered by doctor as "unmigrated data dirs" and by `junco data --json` as
+ * `pendingMigrations`, and a config FILE listed among data DIRECTORIES would
+ * be wrong in both. It gets its own report at each call site instead.
+ *
+ * The `JUNCO_CONFIG` half is the load-bearing one (#307). An explicitly-named
+ * config is DELIBERATELY never relocated — an operator who named a config does
+ * not want it silently moved, and moving it would break every subsequent
+ * command in that same environment. So a reporter that called this "pending"
+ * would raise a warning `junco data migrate` correctly refuses to clear, run
+ * after run, forever. The override check is NOT redundant with the equality
+ * below: `JUNCO_CONFIG` accepts any value, the legacy path included, so
+ * `JUNCO_CONFIG=~/.config/junco/config.json` on a pre-0.10 install would
+ * otherwise satisfy the equality. Do not drop it, and do not "fix" the
+ * equality into something that relocates a deliberately-placed config.
+ *
+ * `configPath` is the ALREADY-RESOLVED path this process loaded (every caller
+ * has it: `runDataMigrate`/`runData` take it as an argument, `runDoctor` as
+ * its first parameter), so there is no existence probe here and no `existsFn`
+ * seam: `resolveConfigPath` only ever returns the legacy path when that file
+ * exists, and phase 9 gates on this exact predicate — an existence check here
+ * would be a second, drift-prone opinion about the same question. Purely a
+ * function of `(configPath, env)`, hence hermetically testable.
+ *
+ * Throws, via `configPathOverride`, on a RELATIVE `JUNCO_CONFIG` — same as
+ * every other consumer. Unreachable in practice: config resolution already
+ * rejected it long before any of these callers ran.
+ */
+export function pendingConfigRelocation(
+  configPath: string,
+  env: Record<string, string | undefined> = process.env,
+): { from: string; to: string } | null {
+  if (configPathOverride(env) !== undefined) return null;
+  if (configPath !== legacyConfigPath(env)) return null;
+  return { from: configPath, to: defaultUserConfigPath(env) };
 }
 
 /** RECURSIVE emptiness check: true when the subtree holds directories only —

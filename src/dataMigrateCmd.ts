@@ -125,6 +125,7 @@ import {
   fixedLegacyRoot,
   dataRootPairs,
   isRecursivelyEmptyDir,
+  pendingConfigRelocation,
   appendJournal,
   readJournal,
   type MigrateResult,
@@ -742,15 +743,19 @@ export async function runDataMigrate(
   // operator who named a config does not want it silently moved, and moving
   // it would break every subsequent command in that same environment (ENOENT
   // on the named path; bare `junco` would open the setup wizard instead). The
-  // override check is the guard, and it is NOT redundant with the equality
-  // below: JUNCO_CONFIG accepts any value, including exactly the legacy path,
-  // so `JUNCO_CONFIG=~/.config/junco/config.json junco data migrate` on a
-  // pre-0.10 install would otherwise make `configPathIsLegacy` true and fire
-  // the relocation phase. Do not drop it, and do not "fix" the equality into
-  // something that relocates a deliberately-placed config.
+  // override check is the guard, and it is NOT redundant with the legacy-path
+  // equality: JUNCO_CONFIG accepts any value, including exactly the legacy
+  // path, so `JUNCO_CONFIG=~/.config/junco/config.json junco data migrate` on
+  // a pre-0.10 install would otherwise fire the relocation phase.
+  //
+  // Both halves now live in ONE place — `pendingConfigRelocation`
+  // (dataMigrate.ts) — because `junco doctor` and `junco data` report this
+  // same pending relocation (item 11, #281) and a second spelling of the
+  // guard in the reporters would drift from the mover's: they would warn
+  // about a relocation this phase correctly refuses to perform, forever.
   const configIsExplicitlyNamed = configPathOverride(env) !== undefined;
   const canonicalConfigPath = defaultUserConfigPath(env);
-  const configPathIsLegacy = !configIsExplicitlyNamed && configPath === legacyConfigPath(env);
+  const configPathIsLegacy = pendingConfigRelocation(configPath, env) !== null;
   // The confusing case the guard above creates: JUNCO_CONFIG names a path
   // that happens to equal the legacy one, so configPathIsLegacy is (correctly)
   // false — but "no relocation needed (already at <legacy path>)" would then
