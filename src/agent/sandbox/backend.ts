@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import type { SandboxPolicy } from "./policy.js";
+import { type SandboxPolicy, readRules } from "./policy.js";
+import { orderRules, type ReadRule } from "./precedence.js";
 
 export type ExecProbe = (cmd: string, args: string[]) => Promise<{ code: number }>;
 
@@ -28,8 +29,29 @@ function q(p: string): string {
   return `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** SBPL line for one read rule. Only the three combinations `readRules`
+ *  actually produces are mapped (allow/subtree, deny/subtree, deny/file) —
+ *  see policy.ts's `readRules`. */
+function readRuleLine(rule: ReadRule): string {
+  if (rule.effect === "allow") return `(allow file-read* (subpath ${q(rule.path)}))`;
+  return rule.kind === "file"
+    ? `(deny file-read* (literal ${q(rule.path)}))`
+    : `(deny file-read* (subpath ${q(rule.path)}))`;
+}
+
 /** Generate an SBPL profile: deny by default; broad read minus denied
- *  subpaths/files; write only under the writable roots; network per policy. */
+ *  subpaths/files (with allow-backs re-overridden by nested denies); write
+ *  only under the writable roots; network per policy.
+ *
+ *  SBPL is last-match-wins, and the broad `(allow file-read*)` above already
+ *  depends on that: every rule emitted below beats it for the paths it
+ *  covers. Read rules are emitted via `orderRules(readRules(policy))` —
+ *  least-specific first (see precedence.ts) — so a rule nested inside a
+ *  broader one always appears later and wins, matching what `resolveRead`
+ *  computes for the JS path-jail. Order among non-overlapping (sibling)
+ *  rules is otherwise irrelevant to meaning: SBPL rules whose subpaths never
+ *  contain the same file don't compete for last-match, regardless of the
+ *  order they're emitted in. */
 export function seatbeltProfile(policy: SandboxPolicy): string {
   const lines: string[] = [
     "(version 1)",
@@ -41,8 +63,7 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
     "(allow signal (target self))",
     "(allow file-read*)",
   ];
-  for (const d of policy.readDenyPaths) lines.push(`(deny file-read* (subpath ${q(d)}))`);
-  for (const f of policy.readDenyFiles) lines.push(`(deny file-read* (literal ${q(f)}))`);
+  for (const rule of orderRules(readRules(policy))) lines.push(readRuleLine(rule));
   const writes = policy.writableRoots.map((r) => `(subpath ${q(r)})`).join(" ");
   lines.push(`(allow file-write* ${writes} (literal "/dev/null") (literal "/dev/dtracehelper"))`);
   lines.push(policy.network ? "(allow network*)" : "(deny network*)");

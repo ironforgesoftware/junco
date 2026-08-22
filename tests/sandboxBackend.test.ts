@@ -20,6 +20,19 @@ const denyNet: SandboxPolicy = {
 };
 const allowNet: SandboxPolicy = { ...denyNet, network: true };
 
+// The #277 three-deep shape: deny the root wholesale, allow cache/ back,
+// re-deny a sensitive subtree nested inside that allow-back. Deliberately
+// listed root-then-mirror (not depth order) — emission order must come from
+// orderRules, not list position.
+const nestedPolicy: SandboxPolicy = {
+  writableRoots: ["/sbxroot/work/tree"],
+  readDenyPaths: ["/sbxroot/.junco", "/sbxroot/.junco/cache/mirror"],
+  readDenyFiles: [],
+  readAllowPaths: ["/sbxroot/.junco/cache"],
+  network: false,
+  scratchDir: "/sbxroot/scratch",
+};
+
 // The C1 regression shape: the worktree (cwd) and clones live UNDER the data
 // root; only the sensitive subtrees/files are denied — never the root itself.
 const dataDir = "/sbxroot/home/x/.local/state/junco";
@@ -55,6 +68,33 @@ describe("seatbeltProfile", () => {
     // The root itself is NOT denied — the worktree the agent runs in and the
     // clone gitdirs live under it, and a subpath deny overrides the broad allow.
     expect(p).not.toContain(`(deny file-read* (subpath "${dataDir}"))`);
+  });
+
+  // Every prior assertion in this describe block is `toContain` — order-blind
+  // by construction. SBPL is last-match-wins, so *meaning* depends entirely on
+  // line order; only an indexOf-based assertion can catch a reordering bug.
+  describe("precedence order (allow-over-deny, #277)", () => {
+    it("emits the cache allow AFTER the junco deny and BEFORE the mirror deny", () => {
+      const p = seatbeltProfile(nestedPolicy);
+      const denyRoot = p.indexOf(`(deny file-read* (subpath "/sbxroot/.junco"))`);
+      const allowCache = p.indexOf(`(allow file-read* (subpath "/sbxroot/.junco/cache"))`);
+      const denyMirror = p.indexOf(`(deny file-read* (subpath "/sbxroot/.junco/cache/mirror"))`);
+      expect(denyRoot).toBeGreaterThanOrEqual(0);
+      expect(allowCache).toBeGreaterThan(denyRoot);
+      expect(denyMirror).toBeGreaterThan(allowCache);
+    });
+
+    it("keeps the broad catch-all allow before every read deny/allow-back rule", () => {
+      const p = seatbeltProfile(nestedPolicy);
+      const broadAllow = p.indexOf("(allow file-read*)");
+      const denyRoot = p.indexOf(`(deny file-read* (subpath "/sbxroot/.junco"))`);
+      const allowCache = p.indexOf(`(allow file-read* (subpath "/sbxroot/.junco/cache"))`);
+      const denyMirror = p.indexOf(`(deny file-read* (subpath "/sbxroot/.junco/cache/mirror"))`);
+      expect(broadAllow).toBeGreaterThanOrEqual(0);
+      expect(denyRoot).toBeGreaterThan(broadAllow);
+      expect(allowCache).toBeGreaterThan(broadAllow);
+      expect(denyMirror).toBeGreaterThan(broadAllow);
+    });
   });
 });
 
