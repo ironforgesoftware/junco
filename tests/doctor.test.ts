@@ -583,6 +583,90 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
     expect(text).toContain("junco data migrate");
   });
 
+  // Task review Critical: "both roots hold a tree" (#280) is not diagnostic
+  // of a single cause — an INTERRUPTED 'junco data migrate' produces the
+  // identical signal (dataMigrateCmd.ts's module doc: the move loop is
+  // non-atomic, and resume is filesystem-driven precisely so that recovers),
+  // so the message must read as safe under EITHER cause rather than guessing
+  // between them. cfg.dataDir is set to juncoHome(env) here (rather than
+  // okConfig's synthetic default) so fixedLegacyRoot recognizes it as the
+  // canonical target and computes the fixed legacy root from it.
+  it("warns when both the canonical and legacy data roots hold a tree, with advice safe under either cause", async () => {
+    const out: string[] = [];
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      "/sbxroot/home/.junco/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home" },
+        existsFn: (p: string) =>
+          p.startsWith("/sbxroot/home/.junco/queue") ||
+          p.startsWith("/sbxroot/home/.local/state/junco/queue") ||
+          p.endsWith("/skills"),
+      }),
+    );
+    const text = out.join("");
+    expect(text).toMatch(/both data roots/i);
+    expect(text).toContain("/sbxroot/home/.junco");
+    expect(text).toContain("/sbxroot/home/.local/state/junco");
+    // Names both hypotheses and recommends the one remedy that's safe under
+    // either: re-running migrate (it resumes safely and never overwrites).
+    // Must NOT tell the operator to delete anything by hand or forbid re-run.
+    expect(text).toMatch(/interrupted 'junco data migrate'/);
+    expect(text).toMatch(/pre-0\.10 binary/);
+    expect(text).toMatch(/Re-run 'junco data migrate'/);
+    expect(text).not.toMatch(/do not re-run/i);
+    expect(text).not.toMatch(/remove the stale tree/i);
+    expect(code).toBe(0); // a warning, never a failure
+  });
+
+  // Task review Critical: the old message contradicted 2b's own "run 'junco
+  // data migrate'" advice, so 2b was suppressed whenever both roots held a
+  // tree. The new message no longer contradicts 2b — a genuinely pending
+  // migration (the interrupted-migrate cause above) is exactly what 2b
+  // reports — so there is nothing left to suppress. Same fixture as the
+  // previous test: proves 2b fires on its own condition alongside 2b-bis.
+  it("does not suppress 2b's 'unmigrated data dirs' warning when both roots hold a tree", async () => {
+    const out: string[] = [];
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      "/sbxroot/home/.junco/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home" },
+        existsFn: (p: string) =>
+          p.startsWith("/sbxroot/home/.junco/queue") ||
+          p.startsWith("/sbxroot/home/.local/state/junco/queue") ||
+          p.endsWith("/skills"),
+      }),
+    );
+    const text = out.join("");
+    expect(text).toMatch(/⚠ unmigrated data dirs/);
+    expect(text).toContain(join("/sbxroot/home/.local/state/junco", "queue"));
+    expect(text).toContain(join("/sbxroot/home/.junco", "queue"));
+    expect(text).toMatch(/both data roots/i);
+    expect(code).toBe(0);
+  });
+
+  it("does not warn when only one root holds a tree", async () => {
+    const out: string[] = [];
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      "/sbxroot/home/.junco/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home" },
+        existsFn: (p: string) =>
+          p.startsWith("/sbxroot/home/.junco/queue") || p.endsWith("/skills"),
+      }),
+    );
+    expect(out.join("")).not.toMatch(/both data roots/i);
+    expect(code).toBe(0);
+  });
+
   it("legacy worktreeRoot dir with leftovers → info-level (✓) hint, itself not a warning", async () => {
     const lines: string[] = [];
     // legacy.worktreeRoot:true also trips the "deprecated config keys" WARN

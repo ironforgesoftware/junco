@@ -13,8 +13,9 @@ import {
   queuePaths,
   isLoopbackHost,
   configDeprecations,
+  dataRootHasTree,
 } from "./config.js";
-import { pendingMigrations } from "./dataMigrate.js";
+import { pendingMigrations, migrationTargetRoot, fixedLegacyRoot } from "./dataMigrate.js";
 import { dataTreePaths } from "./dataTree.js";
 import { SKILL_DIR_NAME } from "./skillLinks.js";
 import { endpointReachable, probePolicy } from "./health.js";
@@ -216,10 +217,42 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // plan) when `cfg.legacy.dataRoot` — `env` threads through so the
     // computed target root is hermetically testable, same seam as every
     // other env-driven check in this file.
+    const targetRoot = migrationTargetRoot(cfg, env);
+    const legacyRoot = fixedLegacyRoot(targetRoot, env);
     const pending = pendingMigrations(cfg, existsFn, env);
     if (pending.length > 0) {
       const list = pending.map((m) => `${m.from} -> ${m.to}`).join(", ");
       report("warn", "unmigrated data dirs", `${list} — run 'junco data migrate' to unify`);
+    }
+
+    // 2b-bis. Both data roots hold a tree (#280) — NOT diagnostic of a single
+    // cause (finding, task review): a pre-0.10 binary run after a completed
+    // 'junco data migrate' recreates the legacy root from its hardcoded
+    // default, but an INTERRUPTED migrate produces the exact same signal —
+    // its move loop iterates pairs with separate, non-atomic rename calls
+    // (dataMigrateCmd.ts's module doc), so a crash after the target picks up
+    // one pair but before the rest leaves stragglers in the legacy root too.
+    // That second case is an ordinary, resumable state (same module doc:
+    // resume is filesystem-driven precisely so this recovers) — so this
+    // check does NOT gate or suppress 2b above, and its own advice is
+    // written to be safe under either cause rather than guessing between
+    // them: re-running 'junco data migrate' is correct either way (it is
+    // resumable, refuses to run while the daemon is up, and never
+    // overwrites — conflicts are reported, nothing already moved is rolled
+    // back), so nothing here tells the operator to delete anything by hand.
+    const bothRootsHaveTrees =
+      legacyRoot !== null &&
+      dataRootHasTree(targetRoot, existsFn) &&
+      dataRootHasTree(legacyRoot, existsFn);
+    if (bothRootsHaveTrees) {
+      report(
+        "warn",
+        "both data roots hold a tree",
+        `${targetRoot} and ${legacyRoot} — either an interrupted 'junco data migrate' left stragglers, ` +
+          `or a pre-0.10 binary ran after a completed migrate and recreated the legacy root. Re-run ` +
+          `'junco data migrate' — it resumes safely and never overwrites. Inspect both roots before ` +
+          `deleting anything by hand.`,
+      );
     }
 
     // 2c. legacy worktree-root override (spec §7): while git.worktreeRoot is

@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { dataTreePaths, ensureDataTree, sandboxDenyPaths } from "../src/dataTree.js";
-import { legacyConfigPath } from "../src/config.js";
+import { legacyConfigPath, configPathOverride, resolveConfigPath } from "../src/config.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
 /** Full-Config fixture (same shape as tests/daemon.test.ts's makeConfig) —
@@ -214,6 +214,35 @@ describe("sandboxDenyPaths", () => {
     }
     expect(deny.dirs).not.toContain("/sbxroot/home/.junco");
     expect(deny.dirs).not.toContain("/sbxroot/home/.junco/cache");
+  });
+
+  it("denies the ACTIVE config under a JUNCO_CONFIG override — it may hold model.apiKey (#275)", () => {
+    const cfg = makeConfig({
+      dataDir: "/sbxroot/home/.junco",
+      queueRoot: "/sbxroot/home/.junco/queue",
+      dataLayout: "v2",
+    });
+    const env = { HOME: "/sbxroot/home", JUNCO_CONFIG: "/srv/junco/ci.json" };
+    const deny = sandboxDenyPaths(cfg, env);
+    // Seatbelt is broadly `(allow file-read*)` with named denies, so an
+    // un-denied override is an outright agent-readable API key.
+    expect(deny.files).toContain("/srv/junco/ci.json");
+    // The two fixed paths stay denied — the override is an addition, never a
+    // replacement (a machine can be mid-migration under an override too).
+    expect(deny.files).toContain("/sbxroot/home/.junco/config.json");
+    expect(deny.files).toContain(legacyConfigPath(env));
+    // The deny list must be the SAME spelling resolveConfigPath uses: two
+    // independent spellings of the override would drift, and a drift here is
+    // a silently readable model.apiKey. Pinned against a tilde value, where a
+    // naive `env.JUNCO_CONFIG` would leak an unexpanded "~/ci.json".
+    const tildeEnv = { HOME: "/sbxroot/home", JUNCO_CONFIG: "~/ci.json" };
+    expect(sandboxDenyPaths(cfg, tildeEnv).files).toContain(
+      resolveConfigPath({ existsFn: () => true, env: tildeEnv }),
+    );
+    expect(sandboxDenyPaths(cfg, tildeEnv).files).toContain(configPathOverride(tildeEnv));
+    // No override: nothing extra, and certainly no undefined in the list.
+    const plain = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
+    expect(plain.files).toEqual(deny.files.filter((f) => f !== "/srv/junco/ci.json"));
   });
 
   // Drift guard (#277): sandboxDenyPaths is a hand-maintained enumeration —

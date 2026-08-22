@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,7 @@ import {
   expandHome,
   configDeprecations,
   knownQueueRoots,
+  configPathOverride,
 } from "../src/config.js";
 
 function writeJson(obj: unknown): string {
@@ -801,6 +802,81 @@ describe("resolveConfigPath / juncoHome / legacyConfigPath", () => {
       "/xdg/junco/config.json",
     );
     expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
+  });
+
+  it("JUNCO_CONFIG overrides the canonical path even when the canonical file exists", () => {
+    expect(
+      resolveConfigPath({ existsFn: () => true, env: { HOME: "/h", JUNCO_CONFIG: "/w/cfg.json" } }),
+    ).toBe("/w/cfg.json");
+  });
+
+  it("JUNCO_CONFIG wins even when the file does not exist (an explicit instruction)", () => {
+    expect(
+      resolveConfigPath({
+        existsFn: () => false,
+        env: { HOME: "/h", JUNCO_CONFIG: "/w/cfg.json" },
+      }),
+    ).toBe("/w/cfg.json");
+  });
+
+  it("JUNCO_CONFIG expands a leading ~", () => {
+    expect(
+      resolveConfigPath({ existsFn: () => false, env: { HOME: "/h", JUNCO_CONFIG: "~/cfg.json" } }),
+    ).toBe(join(homedir(), "cfg.json"));
+  });
+
+  it("an empty or whitespace JUNCO_CONFIG is ignored", () => {
+    const env = { HOME: "/h", JUNCO_CONFIG: "   " };
+    expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
+  });
+
+  it("a relative JUNCO_CONFIG is rejected — resolving it would still depend on the launch directory", () => {
+    // Pre-fix this was silently resolve()d against cwd, which freezes rather
+    // than removes the launch-directory dependence: a launchd daemon (cwd
+    // "/") and an operator shell would still land on two different absolute
+    // paths (and two different worker.locks) from the same relative value.
+    // JUNCO_CONFIG is new enough on this branch that nothing depends on the
+    // old resolve-anyway behaviour, so it's now a hard error instead.
+    const env = { HOME: "/h", JUNCO_CONFIG: "junco.json" };
+    expect(() => configPathOverride(env)).toThrow(
+      'JUNCO_CONFIG must be an absolute path (a leading "~" is fine) — got "junco.json"',
+    );
+    // resolveConfigPath delegates to configPathOverride, so it throws too.
+    expect(() => resolveConfigPath({ existsFn: () => false, env })).toThrow(/JUNCO_CONFIG/);
+  });
+
+  it("a JUNCO_CONFIG that isn't a recognized tilde form is still relative and is rejected", () => {
+    // expandHome only special-cases exactly "~" and "~/...". "~foo" is left
+    // alone by expandHome and is not an absolute path either, so it takes the
+    // same relative-value error path as any other relative value.
+    expect(() => configPathOverride({ HOME: "/h", JUNCO_CONFIG: "~foo/cfg.json" })).toThrow(
+      /JUNCO_CONFIG must be an absolute path/,
+    );
+  });
+
+  it("an absolute JUNCO_CONFIG is normalized and never depends on process.cwd()", () => {
+    const env = { HOME: "/h", JUNCO_CONFIG: "/w/sub/../cfg.json" };
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/one");
+    try {
+      expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/w/cfg.json");
+      cwdSpy.mockReturnValue("/two");
+      expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/w/cfg.json");
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  it("configPathOverride is the ONE spelling of the override, shared with the sandbox deny list", () => {
+    expect(configPathOverride({ HOME: "/h", JUNCO_CONFIG: "/w/cfg.json" })).toBe("/w/cfg.json");
+    expect(configPathOverride({ HOME: "/h", JUNCO_CONFIG: "~/cfg.json" })).toBe(
+      join(homedir(), "cfg.json"),
+    );
+    expect(configPathOverride({ HOME: "/h" })).toBeUndefined();
+    expect(configPathOverride({ HOME: "/h", JUNCO_CONFIG: "   " })).toBeUndefined();
+    // resolveConfigPath must never disagree with it — dataTree.sandboxDenyPaths
+    // denies exactly what this returns, and a drift means a readable apiKey.
+    const env = { HOME: "/h", JUNCO_CONFIG: "~/cfg.json" };
+    expect(resolveConfigPath({ existsFn: () => true, env })).toBe(configPathOverride(env));
   });
 
   it("legacyConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {

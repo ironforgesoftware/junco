@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { Config, Paths } from "./types.js";
 import { catalogEligible } from "./agent/modelSetup.js";
@@ -155,15 +155,89 @@ export interface ResolveConfigDeps {
 }
 
 /**
+ * The explicitly-named config path from `JUNCO_CONFIG` (#275) — tilde-expanded
+ * and required to be absolute, then `resolve()`d to a normalized absolute
+ * path — or `undefined` when the variable is unset, empty, or whitespace-only
+ * (same "empty is unset" rule as `homeOf`/`legacyConfigPath`). A relative
+ * value throws (see below) rather than being silently accepted.
+ *
+ * THE single spelling of "how the override resolves". `resolveConfigPath`
+ * (which path do we load) and `sandboxDenyPaths` (which path must the agent
+ * not read) both call this rather than re-deriving it — two independent
+ * spellings would drift, and a drift here means the ACTIVE config, with its
+ * possible `model.apiKey`, is silently readable inside the agent sandbox
+ * (dataTree.ts's I-3 gap, reopened at a third location).
+ *
+ * A RELATIVE value (`JUNCO_CONFIG=junco.json`, easily exported from a shell
+ * profile) is REJECTED, not resolved: `resolve()` cannot remove a relative
+ * value's launch-directory dependence, it can only freeze it to whichever cwd
+ * happens to be current when this function runs. A launchd daemon (cwd `/`)
+ * and an operator shell would still land on two different absolute paths —
+ * and two different `worker.lock`s — from the same `JUNCO_CONFIG=junco.json`,
+ * so `status`/`doctor` could silently report "not running" against a live
+ * daemon. cwd-dependence is exactly what this module was rewritten to
+ * eliminate (split-queue incident, 2026-08-01), and `JUNCO_CONFIG` is new
+ * enough on this branch that nothing depends on the old resolve-anyway
+ * behaviour — so a relative value is a hard, actionable error instead.
+ *
+ * An ABSOLUTE value is still `resolve()`d, purely to normalize `..` segments
+ * (`/w/sub/../cfg.json` → `/w/cfg.json`) into one canonical spelling — that's
+ * what lets `resolveConfigPath`, `sandboxDenyPaths`, and the migrate guard's
+ * equality check agree without each re-deriving it.
+ */
+export function configPathOverride(
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const override = env.JUNCO_CONFIG;
+  if (!(override && override.trim() !== "")) return undefined;
+  const trimmed = override.trim();
+  const expanded = expandHome(trimmed);
+  if (!isAbsolute(expanded)) {
+    throw new Error(
+      `JUNCO_CONFIG must be an absolute path (a leading "~" is fine) — got ${JSON.stringify(trimmed)}`,
+    );
+  }
+  return resolve(expanded);
+}
+
+/**
  * Where the config lives — a pure function of the environment, never of the
  * working directory or argv (split-queue incident, 2026-08-01): the canonical
  * ~/.junco/config.json, falling back to the legacy XDG path only while the
  * canonical file does not exist. The returned path may not exist — first-run
  * detection checks that separately.
+ *
+ * JUNCO_CONFIG (#275), when set to a non-empty value, wins outright — checked
+ * before the canonical path, and normalized to an absolute path by
+ * `configPathOverride`, which rejects a relative value outright rather than
+ * resolving it (see there for why). `junco start` derives the daemon-singleton
+ * worker.lock as
+ * `dirname(resolveConfigPath())/worker.lock`; several other modules
+ * (ensureDaemon, cli, restartCmd, dataMigrateCmd, updateCmd, and doctor via
+ * the equivalent `dirname(configPath)`, no `resolve()`) re-derive the same
+ * path independently rather than importing a shared helper, so an override
+ * relocates the lock right along with the config everywhere. Two named
+ * configs are therefore two daemon instances — but only genuinely independent
+ * ones when they also resolve to DIFFERENT `dataDir`s: two configs over one
+ * data root give two daemons both holding a lock over one queue, which
+ * corrupts it (docs/configuration.md states the precondition).
  */
 export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
   const existsFn = deps.existsFn ?? existsSync;
   const env = deps.env ?? process.env;
+  // An explicit JUNCO_CONFIG wins outright — above the canonical path, not
+  // below it. Below, the variable would be useless on exactly the machines it
+  // exists for (any machine with a real ~/.junco/config.json would ignore
+  // it). A non-existent value still wins: the contract already allows the
+  // returned path not to exist, and an explicit instruction should not be
+  // silently overridden — this also lets a script name the config it is about
+  // to create. Empty/whitespace is treated as unset, matching homeOf and
+  // legacyConfigPath. configPathOverride rejects a relative value outright
+  // (throws) rather than resolving it, so a launch-directory dependence can't
+  // sneak back in here (#275, and the split-queue incident this module was
+  // rewritten for).
+  const override = configPathOverride(env);
+  if (override !== undefined) return override;
   const canonical = defaultUserConfigPath(env);
   if (existsFn(canonical)) return canonical;
   const legacy = legacyConfigPath(env);

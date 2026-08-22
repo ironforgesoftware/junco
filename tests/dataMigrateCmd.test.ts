@@ -14,6 +14,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -513,6 +514,399 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     expect(out2.join("")).toMatch(/queue: nothing to move/);
   });
 
+  it("#283: rewrites the watchlist entry and the queue ticket's repo:/workdir: to point at the relocated clone, receipted under 'path rewrite:'", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    const targetRoot = join(tmpHome, ".junco");
+
+    // A watched clone under the flat root's "clones" name — relocates to
+    // <targetRoot>/cache/clones via flatToV2Pairs' single `clones` pair, same
+    // move exercised by the "relocates the legacy flat tree" test above.
+    const legacyClone = join(legacyRoot, "clones", "watched", "acme", "repo");
+    mkdirSync(legacyClone, { recursive: true });
+    writeFileSync(join(legacyClone, "marker.txt"), "hi", "utf8");
+
+    // The dynamic watchlist points at that clone by absolute path.
+    mkdirSync(legacyRoot, { recursive: true });
+    writeFileSync(
+      join(legacyRoot, "watchlist.json"),
+      JSON.stringify([{ nwo: "acme/repo", path: legacyClone }], null, 2) + "\n",
+      "utf8",
+    );
+
+    // A live queue ticket referencing the same clone via repo:/workdir: —
+    // exact emitter quoting style (repo: ${JSON.stringify(path)}).
+    mkdirSync(join(legacyRoot, "queue", "inbox"), { recursive: true });
+    const ticketRaw =
+      "---\n" +
+      "id: t1\n" +
+      `repo: ${JSON.stringify(legacyClone)}\n` +
+      `workdir: ${JSON.stringify(legacyClone)}\n` +
+      "---\n" +
+      "Fix the thing.\n";
+    writeFileSync(join(legacyRoot, "queue", "inbox", "t1.md"), ticketRaw, "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+    expect(cfg.legacy.dataRoot).toBe(true);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+    expect(code).toBe(0);
+
+    const newClone = join(targetRoot, "cache", "clones", "watched", "acme", "repo");
+    expect(existsSync(join(newClone, "marker.txt"))).toBe(true);
+
+    // Watchlist rewritten in place at its new location.
+    const watchlist = JSON.parse(
+      readFileSync(join(targetRoot, "watchlist.json"), "utf8"),
+    ) as Array<{
+      nwo: string;
+      path: string;
+    }>;
+    expect(watchlist).toEqual([{ nwo: "acme/repo", path: newClone }]);
+
+    // Ticket rewritten in place at its new location — both repo: and
+    // workdir:, byte-identical elsewhere (id:, delimiters, body).
+    const ticketPath = join(targetRoot, "queue", "inbox", "t1.md");
+    expect(existsSync(ticketPath)).toBe(true);
+    const ticketOut = readFileSync(ticketPath, "utf8");
+    expect(ticketOut).toBe(
+      "---\n" +
+        "id: t1\n" +
+        `repo: ${JSON.stringify(newClone)}\n` +
+        `workdir: ${JSON.stringify(newClone)}\n` +
+        "---\n" +
+        "Fix the thing.\n",
+    );
+
+    // 3 paths: the watchlist entry, plus repo: and workdir: in the ticket —
+    // across 2 files (the watchlist and the ticket).
+    expect(out.join("")).toMatch(/path rewrite:\n\s+3 path\(s\) rewritten across 2 file\(s\)/);
+
+    // A second run is a no-op: the map is seeded from the durable journal
+    // again (essentially never empty post-seeding), but every value it
+    // would touch has already been rewritten, so rewritePath matches
+    // nothing and the rewrite phase reports nothing to rewrite (idempotent
+    // via design rule 4, migratePathRewrite.ts).
+    const reloaded = loadConfig(configPath);
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      reloaded,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(0);
+    expect(out2.join("")).toMatch(/path rewrite: nothing to rewrite/);
+    expect(readFileSync(ticketPath, "utf8")).toBe(ticketOut);
+  });
+
+  it("task-3: rewrites repoPath in pending assess/comment records, plan-set records, and push/pr outbox ops (dead/ included), leaving labels ops untouched", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    const targetRoot = join(tmpHome, ".junco");
+
+    const legacyClone = join(legacyRoot, "clones", "watched", "acme", "repo");
+    mkdirSync(legacyClone, { recursive: true });
+    writeFileSync(join(legacyClone, "marker.txt"), "hi", "utf8");
+
+    // Pending assess batch — review/assess is identity-named under v2, so
+    // only the root changes.
+    mkdirSync(join(legacyRoot, "review", "assess"), { recursive: true });
+    const assessBatch = {
+      id: "assess-acme-repo-1",
+      nwo: "acme/repo",
+      external: false,
+      autoPlan: false,
+      repoPath: legacyClone,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      findings: [],
+    };
+    writeFileSync(
+      join(legacyRoot, "review", "assess", "assess-acme-repo-1.json"),
+      JSON.stringify(assessBatch, null, 2) + "\n",
+      "utf8",
+    );
+
+    // Pending comment draft — review/comments, same identity-named root.
+    mkdirSync(join(legacyRoot, "review", "comments"), { recursive: true });
+    const commentDraft = {
+      id: "analyze-acme-repo-1",
+      nwo: "acme/repo",
+      issue: 9,
+      issueTitle: "Something",
+      external: false,
+      repoPath: legacyClone,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draft: "body",
+      footer: true,
+    };
+    writeFileSync(
+      join(legacyRoot, "review", "comments", "analyze-acme-repo-1.json"),
+      JSON.stringify(commentDraft, null, 2) + "\n",
+      "utf8",
+    );
+
+    // Plan-set record — plans/ (flat) -> data/plans (v2).
+    mkdirSync(join(legacyRoot, "plans"), { recursive: true });
+    const planRecord = {
+      v: 1,
+      planId: "plan1",
+      hash: "h1",
+      repoPath: legacyClone,
+      github: { nwo: "acme/repo", issue: 5 },
+      tasks: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      statusCommentId: null,
+      degradedPosted: false,
+      lastLabel: null,
+      closed: false,
+    };
+    writeFileSync(
+      join(legacyRoot, "plans", "plan1.json"),
+      JSON.stringify(planRecord, null, 2) + "\n",
+      "utf8",
+    );
+
+    // Outbox ops — outbox/ (flat) -> data/outbox (v2); a push op, a pr op, a
+    // labels op (no path — must stay untouched), and a dead-lettered push op.
+    mkdirSync(join(legacyRoot, "outbox", "dead"), { recursive: true });
+    const pushOp = {
+      id: "1-0000-aaaa-push",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: null,
+      attempts: 0,
+      lastError: null,
+      op: { kind: "push", repoPath: legacyClone, branch: "feat/x" },
+    };
+    writeFileSync(
+      join(legacyRoot, "outbox", "1-0000-aaaa-push.json"),
+      JSON.stringify(pushOp, null, 2),
+      "utf8",
+    );
+    const prOp = {
+      id: "2-0000-bbbb-pr",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: "acme/repo#3",
+      attempts: 0,
+      lastError: null,
+      op: {
+        kind: "pr",
+        repoPath: legacyClone,
+        branch: "feat/x",
+        nwo: "acme/repo",
+        issue: 3,
+        base: "main",
+        title: "t",
+        bodyText: "b",
+        draft: false,
+        labels: [],
+        reviewers: [],
+        finalize: null,
+        pushed: false,
+        prUrl: null,
+      },
+    };
+    writeFileSync(
+      join(legacyRoot, "outbox", "2-0000-bbbb-pr.json"),
+      JSON.stringify(prOp, null, 2),
+      "utf8",
+    );
+    const labelsOp = {
+      id: "3-0000-cccc-labels",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "dashboard",
+      issueKey: "acme/repo#4",
+      attempts: 0,
+      lastError: null,
+      op: { kind: "labels", nwo: "acme/repo", issue: 4, add: ["x"], remove: [] },
+    };
+    const labelsRaw = JSON.stringify(labelsOp, null, 2);
+    writeFileSync(join(legacyRoot, "outbox", "3-0000-cccc-labels.json"), labelsRaw, "utf8");
+    const deadOp = {
+      id: "4-0000-dddd-push",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: null,
+      attempts: 3,
+      lastError: "boom",
+      op: { kind: "push", repoPath: legacyClone, branch: "feat/y" },
+    };
+    writeFileSync(
+      join(legacyRoot, "outbox", "dead", "4-0000-dddd-push.json"),
+      JSON.stringify(deadOp, null, 2),
+      "utf8",
+    );
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+    expect(cfg.legacy.dataRoot).toBe(true);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+    expect(code).toBe(0);
+
+    const newClone = join(targetRoot, "cache", "clones", "watched", "acme", "repo");
+
+    const assessOut = JSON.parse(
+      readFileSync(join(targetRoot, "review", "assess", "assess-acme-repo-1.json"), "utf8"),
+    ) as typeof assessBatch;
+    expect(assessOut).toEqual({ ...assessBatch, repoPath: newClone });
+
+    const commentOut = JSON.parse(
+      readFileSync(join(targetRoot, "review", "comments", "analyze-acme-repo-1.json"), "utf8"),
+    ) as typeof commentDraft;
+    expect(commentOut).toEqual({ ...commentDraft, repoPath: newClone });
+
+    const planOut = JSON.parse(
+      readFileSync(join(targetRoot, "data", "plans", "plan1.json"), "utf8"),
+    ) as typeof planRecord;
+    expect(planOut).toEqual({ ...planRecord, repoPath: newClone });
+
+    const pushFile = join(targetRoot, "data", "outbox", "1-0000-aaaa-push.json");
+    const pushOut = JSON.parse(readFileSync(pushFile, "utf8")) as typeof pushOp;
+    expect(pushOut).toEqual({ ...pushOp, op: { ...pushOp.op, repoPath: newClone } });
+
+    const prFile = join(targetRoot, "data", "outbox", "2-0000-bbbb-pr.json");
+    const prOut = JSON.parse(readFileSync(prFile, "utf8")) as typeof prOp;
+    expect(prOut).toEqual({ ...prOp, op: { ...prOp.op, repoPath: newClone } });
+
+    const deadFile = join(targetRoot, "data", "outbox", "dead", "4-0000-dddd-push.json");
+    const deadOut = JSON.parse(readFileSync(deadFile, "utf8")) as typeof deadOp;
+    expect(deadOut).toEqual({ ...deadOp, op: { ...deadOp.op, repoPath: newClone } });
+
+    // The labels op carries no path — byte-identical, not even touched.
+    expect(
+      readFileSync(join(targetRoot, "data", "outbox", "3-0000-cccc-labels.json"), "utf8"),
+    ).toBe(labelsRaw);
+
+    // 6 paths rewritten (assess, comment, plan, push, pr, dead push) across 6 files.
+    expect(out.join("")).toMatch(/path rewrite:\n\s+6 path\(s\) rewritten across 6 file\(s\)/);
+
+    // Minor 6 (fix-wave review): a second full run is a no-op for these four
+    // newer stores too, not just the watchlist/ticket pair the "#283" test
+    // above already covers — true by construction (idempotence rule 4,
+    // migratePathRewrite.ts), but previously unexercised.
+    const assessRaw = readFileSync(
+      join(targetRoot, "review", "assess", "assess-acme-repo-1.json"),
+      "utf8",
+    );
+    const commentRaw = readFileSync(
+      join(targetRoot, "review", "comments", "analyze-acme-repo-1.json"),
+      "utf8",
+    );
+    const planRaw = readFileSync(join(targetRoot, "data", "plans", "plan1.json"), "utf8");
+    const pushRaw = readFileSync(pushFile, "utf8");
+    const prRaw = readFileSync(prFile, "utf8");
+    const deadRaw = readFileSync(deadFile, "utf8");
+
+    const reloaded = loadConfig(configPath);
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      reloaded,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(0);
+    expect(out2.join("")).toMatch(/path rewrite: nothing to rewrite/);
+
+    expect(
+      readFileSync(join(targetRoot, "review", "assess", "assess-acme-repo-1.json"), "utf8"),
+    ).toBe(assessRaw);
+    expect(
+      readFileSync(join(targetRoot, "review", "comments", "analyze-acme-repo-1.json"), "utf8"),
+    ).toBe(commentRaw);
+    expect(readFileSync(join(targetRoot, "data", "plans", "plan1.json"), "utf8")).toBe(planRaw);
+    expect(readFileSync(pushFile, "utf8")).toBe(pushRaw);
+    expect(readFileSync(prFile, "utf8")).toBe(prRaw);
+    expect(readFileSync(deadFile, "utf8")).toBe(deadRaw);
+  });
+
+  it("Important 2 (fix-wave, #283): resumes the rewrite phase from the durable journal — a stale path from a run that died before this phase still gets rewritten", async () => {
+    const targetRoot = join(tmpHome, ".junco");
+    const root = trackRoot(freshRoot());
+
+    // Simulate the START of "run 2": run 1 already renamed a tree and
+    // durably journaled it (appendJournal runs in a `finally`), but the
+    // process died before reaching the path-rewrite phase — so the
+    // watchlist/ticket, though already physically relocated to targetRoot,
+    // still hold the OLD prefix in their CONTENT.
+    const staleClonesRoot = join(tmpHome, ".local", "state", "junco", "clones");
+    const newClonesRoot = join(targetRoot, "cache", "clones");
+    mkdirSync(join(targetRoot, "data"), { recursive: true }); // v2-layout marker
+    writeFileSync(
+      join(targetRoot, "migrated.json"),
+      JSON.stringify(
+        { version: 1, steps: [{ from: staleClonesRoot, to: newClonesRoot, action: "renamed" }] },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
+
+    const staleClone = join(staleClonesRoot, "watched", "acme", "repo");
+    writeFileSync(
+      join(targetRoot, "watchlist.json"),
+      JSON.stringify([{ nwo: "acme/repo", path: staleClone }], null, 2) + "\n",
+      "utf8",
+    );
+    mkdirSync(join(targetRoot, "queue", "inbox"), { recursive: true });
+    const staleTicket =
+      "---\n" + "id: t1\n" + `repo: ${JSON.stringify(staleClone)}\n` + "---\nFix the thing.\n";
+    writeFileSync(join(targetRoot, "queue", "inbox", "t1.md"), staleTicket, "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+    // Nothing pending anywhere else — the ONLY way this run could see the
+    // stale prefix is by reading it back out of the durable journal.
+    expect(cfg.legacy.dataRoot).toBe(false);
+    expect(cfg.dataDir).toBe(targetRoot);
+    expect(cfg.dataLayout).toBe("v2");
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/data root: nothing to move/);
+    expect(out.join("")).toMatch(/queue: nothing to move/);
+
+    const newClone = join(newClonesRoot, "watched", "acme", "repo");
+    const watchlist = JSON.parse(
+      readFileSync(join(targetRoot, "watchlist.json"), "utf8"),
+    ) as Array<{
+      nwo: string;
+      path: string;
+    }>;
+    expect(watchlist).toEqual([{ nwo: "acme/repo", path: newClone }]);
+
+    const ticketOut = readFileSync(join(targetRoot, "queue", "inbox", "t1.md"), "utf8");
+    expect(ticketOut).toBe(
+      "---\n" + "id: t1\n" + `repo: ${JSON.stringify(newClone)}\n` + "---\nFix the thing.\n",
+    );
+    expect(out.join("")).toMatch(/path rewrite:\n\s+2 path\(s\) rewritten across 2 file\(s\)/);
+  });
+
   it("I-1: leaves an operator-customized legacy-root .gitignore in place and reports it as a leftover, rather than removing it", async () => {
     const root = trackRoot(freshRoot());
     const legacyRoot = join(tmpHome, ".local", "state", "junco");
@@ -537,6 +931,59 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     expect(readFileSync(join(legacyRoot, ".gitignore"), "utf8")).toBe("*.local\n");
     expect(existsSync(legacyRoot)).toBe(true);
     expect(out.join("")).toMatch(/not removed — still contains: \.gitignore/);
+  });
+
+  it("N3: unlinks a leftover skills symlink mount before the rmdir, so the legacy root is actually removed", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(legacyRoot, { recursive: true });
+    // skillLinks.ts recreates <root>/skills as a symlink at every daemon
+    // startup. A migrated mount's target is the old package dir — its
+    // existence is irrelevant here, since existsFn (which follows links)
+    // must never be what identifies it; only lstat can.
+    symlinkSync(join(root, "nonexistent-skills-target"), join(legacyRoot, "skills"));
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(legacyRoot)).toBe(false);
+    expect(out.join("")).toMatch(/removed legacy root/);
+  });
+
+  it("N3: a real directory (not a symlink) at the legacy skills path is left alone and reported as a leftover", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    // NOT a symlink — an actual directory sitting at that path, holding a
+    // real file. Must never be unlinked.
+    mkdirSync(join(legacyRoot, "skills"), { recursive: true });
+    writeFileSync(join(legacyRoot, "skills", "real-file.txt"), "hi", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(join(legacyRoot, "skills", "real-file.txt"))).toBe(true);
+    expect(existsSync(legacyRoot)).toBe(true);
+    expect(out.join("")).toMatch(/not removed — still contains: skills/);
   });
 
   it("--dry-run prints the cross-root plan and moves nothing", async () => {
@@ -677,6 +1124,57 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
     );
     expect(code2).toBe(0);
     expect(out2.join("")).toContain("config: nothing to relocate");
+  });
+
+  it("never relocates an explicitly-named config, even when JUNCO_CONFIG names exactly the legacy path (#275)", async () => {
+    // The footgun: JUNCO_CONFIG accepts ANY value, including the legacy path
+    // itself, so `configPath === legacyConfigPath(env)` is genuinely reachable
+    // under an override. Relocating there would move the file out from under
+    // the variable and ENOENT every subsequent command in that environment.
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+    const env = { HOME: tmpHome, JUNCO_CONFIG: configPath };
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s), env },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(configPath)).toBe(true);
+    expect(existsSync(canonical)).toBe(false);
+    // The receipt names JUNCO_CONFIG as the reason, not the bare "nothing to
+    // relocate" — that phrasing alone would say nothing about why a config
+    // sitting at the legacy path was left there.
+    expect(out.join("")).toContain(
+      `config: nothing to relocate — JUNCO_CONFIG explicitly names ${configPath}, which is never relocated`,
+    );
+    // The named config still loads under the same environment afterwards —
+    // the ENOENT this guard exists to prevent.
+    expect(loadConfig(configPath).model.id).toBe("test-model");
+
+    // --dry-run agrees (one flag drives both branches), and its message names
+    // JUNCO_CONFIG rather than reading "already at <legacy path>" as though
+    // the legacy path were canonical.
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s), env },
+    );
+    expect(code2).toBe(0);
+    expect(out2.join("")).toContain(
+      `config: no relocation — JUNCO_CONFIG explicitly names ${configPath}, which is never relocated`,
+    );
   });
 
   it("never overwrites an existing canonical config — receipted as a conflict, both files left untouched, exit 1", async () => {

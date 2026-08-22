@@ -8,7 +8,12 @@
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config, Paths } from "./types.js";
-import { queuePaths, defaultUserConfigPath, legacyConfigPath } from "./config.js";
+import {
+  queuePaths,
+  defaultUserConfigPath,
+  legacyConfigPath,
+  configPathOverride,
+} from "./config.js";
 
 export const REVIEW_ASSESS_SUBDIR = "review/assess";
 export const REVIEW_COMMENTS_SUBDIR = "review/comments";
@@ -92,7 +97,7 @@ export interface DataTreePaths {
   watchlistFile: string;
   updateCheckFile: string; // npm update-check cache (spec 2026-07-16)
   spendFile: string;
-  metricsFile: string; // PR 3 writes it; listed now
+  metricsFile: string; // written by metricsWriter.ts (daemon startup/tick/shutdown)
   logFile: string;
   migratedFile: string; // dataMigrate journal (Task 4)
   // startup-migration mutex (#197.2) — daemon.ts holds THIS field; dataMigrateCmd.ts computes the
@@ -209,15 +214,28 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * review 2026-08-05): on an un-migrated machine the daemon actually reads
  * the legacy XDG path, not the canonical one — denying only the canonical
  * path would leave the ACTIVE config (and its possible `model.apiKey`)
- * agent-readable until `junco data migrate` runs. A nonexistent deny file is
- * already the norm in this list (`metricsFile` is writer-less today), so
- * both sandbox backends tolerate a legacy path that doesn't exist.
+ * agent-readable until `junco data migrate` runs. `configPathOverride(env)`
+ * is the same gap at a third location (#275): under `JUNCO_CONFIG` the ACTIVE
+ * config is neither of the two fixed paths, and Seatbelt is broadly
+ * `(allow file-read*)` with named denies, so an un-denied override is an
+ * outright readable API key. It is resolved through config.ts's own helper —
+ * never re-spelled here — so this list cannot drift from `resolveConfigPath`.
+ *
+ * A nonexistent deny file is already the norm in this list — every receipt
+ * file here is absent until its first write — and both backends tolerate that
+ * by construction: Seatbelt denies by name whether or not the path exists, and
+ * `bwrapArgs` emits deny mounts only for paths that pass its `existsFn` guard.
+ * So a legacy (or not-yet-created override) path that doesn't exist costs
+ * nothing.
  */
 export function sandboxDenyPaths(
   cfg: Config,
   env: Record<string, string | undefined> = process.env,
 ): { dirs: string[]; files: string[] } {
   const p = dataTreePaths(cfg);
+  // #275: the explicitly-named config, when one is in effect. Same helper
+  // resolveConfigPath uses — see the doc comment above.
+  const overriddenConfigPath = configPathOverride(env);
   return {
     dirs: [
       cfg.queueRoot,
@@ -254,6 +272,9 @@ export function sandboxDenyPaths(
       p.migrateLockFile, // daemon-owned, sibling of migrated.json above
       defaultUserConfigPath(env), // may hold model.apiKey — see doc comment above
       legacyConfigPath(env), // I-3: the ACTIVE config on an un-migrated machine
+      // #275: the ACTIVE config under a JUNCO_CONFIG override — neither of the
+      // two fixed paths above. Spread so an unset variable adds nothing.
+      ...(overriddenConfigPath !== undefined ? [overriddenConfigPath] : []),
     ],
   };
 }

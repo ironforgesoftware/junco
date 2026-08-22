@@ -1001,6 +1001,17 @@ describe("lock path derivation", () => {
       join("/tmp/junco-default-home", ".junco", "worker.lock"),
     );
   });
+
+  it("JUNCO_CONFIG relocates both the config and the worker.lock beside it", async () => {
+    const acquireLockFn = vi.fn(() => makeFakeLock());
+    const deps = makeDeps({
+      acquireLockFn,
+      loadConfigFn: vi.fn(() => stubConfig()),
+      env: { HOME: "/tmp/foo", JUNCO_CONFIG: "/tmp/elsewhere/cfg.json" },
+    });
+    await run(["start"], deps);
+    expect(acquireLockFn).toHaveBeenCalledWith(join("/tmp/elsewhere", "worker.lock"));
+  });
 });
 
 // ---------------------------------------------------------------------------
