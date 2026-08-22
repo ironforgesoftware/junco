@@ -17,7 +17,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Config } from "../src/types.js";
 import { runDataMigrate } from "../src/dataMigrateCmd.js";
 import { loadConfig } from "../src/config.js";
@@ -1925,6 +1925,263 @@ describe("runDataMigrate — EXDEV fallback", () => {
     expect(sawDestBeforeSourceGone).toBe(true); // sync ran after copy, before delete
     expect(existsSync(srcFile)).toBe(false); // source removed only afterwards
     expect(readFileSync(destFile, "utf8")).toBe("ticket body");
+  });
+});
+
+/**
+ * #281 task-1: every destructive fs op inside `moveDataRootPair` — the
+ * recursive-empty probe, the repair `rm`, the parent `mkdir`, and the EXDEV
+ * fallback's verify/fsync/source-delete — runs through the deps seam, so the
+ * error paths are reachable from a test without a real filesystem (what tasks
+ * 2 and 4 of the bundle need). Each test stubs the seam and then asserts the
+ * REAL filesystem was NOT touched: if a call site regresses to `node:fs`, that
+ * is the assertion that fails.
+ */
+describe("runDataMigrate — moveDataRootPair destructive-fs seam", () => {
+  it("repairs a scaffolding destination via readdirTypedFn + rmFn, never the real fs", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    const src = join(dataDir, "outbox");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "op1.json"), "{}", "utf8");
+    // The REAL destination holds a file, so the REAL readdirSync would make
+    // this a skipped-conflict. The stubbed readdirTypedFn reports it empty, so
+    // the repair path runs instead — proof the probe went through the seam.
+    const dest = join(dataDir, "data", "outbox");
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "keep.json"), "keep", "utf8");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const readdirTypedCalls: string[] = [];
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const renameCalls: Array<[string, string]> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out.push(s),
+        readdirTypedFn: (d) => {
+          readdirTypedCalls.push(d);
+          return [];
+        },
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+        renameFn: (from, to) => {
+          renameCalls.push([from, to]);
+          if (from === src) return; // pretend it moved; leave the real fs alone
+          renameSync(from, to);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(readdirTypedCalls).toContain(dest);
+    const repair = rmCalls.find((c) => c.p === dest);
+    expect(repair).toBeDefined();
+    expect(repair?.opts).toEqual({ recursive: true });
+    expect(repair?.opts.force).toBeUndefined(); // force would swallow a real ENOENT
+    expect(renameCalls).toContainEqual([src, dest]);
+    // Nothing the seam stands in for reached the real filesystem.
+    expect(existsSync(join(dest, "keep.json"))).toBe(true);
+    expect(existsSync(join(src, "op1.json"))).toBe(true);
+  });
+
+  it("takes the EXDEV file branch through statFn, mkdirFn and rmFn", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    mkdirSync(dataDir, { recursive: true });
+    const src = join(dataDir, "spend.json");
+    writeFileSync(src, "{}\n", "utf8");
+    const dest = join(dataDir, "data", "spend.json");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const statCalls: string[] = [];
+    const syncCalls: string[] = [];
+    const copyCalls: Array<[string, string]> = [];
+    const mkdirCalls: Array<{ p: string; opts: { recursive: true } }> = [];
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out.push(s),
+        renameFn: (from, to) => {
+          if (to === dest) {
+            const err = new Error(
+              "EXDEV: cross-device link not permitted",
+            ) as NodeJS.ErrnoException;
+            err.code = "EXDEV";
+            throw err;
+          }
+          renameSync(from, to);
+        },
+        // No-op copy: nothing ever lands on the real filesystem, so a stat of
+        // `dest` through the real fs would throw ENOENT.
+        copyDirFn: (from, to) => {
+          copyCalls.push([from, to]);
+        },
+        statFn: (p) => {
+          statCalls.push(p);
+          return { isDirectory: () => false, size: 3 };
+        },
+        mkdirFn: (p, opts) => {
+          mkdirCalls.push({ p, opts });
+        },
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+        syncPathFn: (p) => {
+          syncCalls.push(p);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(copyCalls).toContainEqual([src, dest]);
+    // EXACT sequence, not `toContain`: the file branch stats `from` twice (the
+    // directory-vs-file dispatch, then its size) and `to` twice (its size, then
+    // the fsync dispatch). Any one of those four reverting to the real
+    // `statSync` drops an entry here — a `toContain` pair would not notice.
+    expect(statCalls).toEqual([src, src, dest, dest]);
+    expect(mkdirCalls).toContainEqual({ p: dirname(dest), opts: { recursive: true } });
+    expect(syncCalls).toEqual([dest, dirname(dest)]); // file branch: the file + its parent
+    expect(rmCalls).toContainEqual({ p: src, opts: { recursive: true, force: true } });
+    // Neither the source delete nor the parent mkdir reached the real fs.
+    expect(existsSync(src)).toBe(true);
+    expect(existsSync(join(dataDir, "data"))).toBe(false);
+  });
+
+  it("takes the EXDEV directory branch through readdirTypedFn + statFn", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    const src = join(dataDir, "outbox");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "op1.json"), "{}", "utf8");
+    const dest = join(dataDir, "data", "outbox");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const entry = { name: "op1.json", isDirectory: () => false, isFile: () => true };
+    const readdirTypedCalls: string[] = [];
+    const statCalls: string[] = [];
+    const syncCalls: string[] = [];
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out.push(s),
+        renameFn: (from, to) => {
+          if (to === dest) {
+            const err = new Error(
+              "EXDEV: cross-device link not permitted",
+            ) as NodeJS.ErrnoException;
+            err.code = "EXDEV";
+            throw err;
+          }
+          renameSync(from, to);
+        },
+        copyDirFn: () => {}, // no-op: the destination never exists for real
+        readdirTypedFn: (d) => {
+          readdirTypedCalls.push(d);
+          return d === src || d === dest ? [entry] : [];
+        },
+        statFn: (p) => {
+          statCalls.push(p);
+          return { isDirectory: () => p === src || p === dest, size: 2 };
+        },
+        mkdirFn: () => {},
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+        syncPathFn: (p) => {
+          syncCalls.push(p);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    // EXACT sequences (see the file-branch test): the source listing for the
+    // verify, then the destination listing for the fsync pass; the dispatch
+    // stat on `from`, the two per-file size stats, then the fsync dispatch on
+    // `to`. `toContain` would survive a call site reverting to the real fs
+    // whenever the real fs happens to agree with the fake.
+    expect(readdirTypedCalls).toEqual([src, dest]); // real readdirSync: ENOENT on dest
+    expect(statCalls).toEqual([src, join(src, "op1.json"), join(dest, "op1.json"), dest]);
+    expect(syncCalls).toEqual([join(dest, "op1.json"), dest]); // file, then its dir
+    expect(rmCalls).toContainEqual({ p: src, opts: { recursive: true, force: true } });
+    expect(existsSync(join(src, "op1.json"))).toBe(true); // source delete never hit the real fs
+  });
+
+  // The queue-move phase shares the EXDEV copy/verify/fsync helpers with
+  // moveDataRootPair, so its source delete runs through the same `rmFn` —
+  // leaving that one line on `node:fs` while the helpers around it are
+  // injectable is the half-seam the rest of this block exists to avoid.
+  it("routes the queue move's own EXDEV source delete through rmFn", async () => {
+    const root = trackRoot(freshRoot());
+    const vaultRoot = join(root, "vault");
+    const srcDir = join(vaultRoot, "Junco", "inbox");
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, "t1.md"), "ticket body", "utf8");
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ vaultRoot, juncoSubdir: "Junco" }), "utf8");
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(vaultRoot, "Junco"),
+      legacy: {
+        vaultRoot: true,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+        ghConfigDir: false,
+      },
+    });
+
+    const rmCalls: Array<{ p: string; opts: { recursive?: boolean; force?: boolean } }> = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: () => {},
+        renameFn: (from, to) => {
+          if (to.includes(join("data", "queue"))) {
+            const err = new Error(
+              "EXDEV: cross-device link not permitted",
+            ) as NodeJS.ErrnoException;
+            err.code = "EXDEV";
+            throw err;
+          }
+          renameSync(from, to);
+        },
+        rmFn: (p, opts) => {
+          rmCalls.push({ p, opts });
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(rmCalls).toContainEqual({ p: srcDir, opts: { recursive: true, force: true } });
+    // The real copy ran (default copyDirFn/statFn/readdirTypedFn), but the
+    // stubbed rmFn means the source survives — proof the delete went through
+    // the seam and not `node:fs`.
+    expect(readFileSync(join(dataDir, "queue", "inbox", "t1.md"), "utf8")).toBe("ticket body");
+    expect(existsSync(join(srcDir, "t1.md"))).toBe(true);
   });
 });
 

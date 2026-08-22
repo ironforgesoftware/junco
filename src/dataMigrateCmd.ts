@@ -191,8 +191,57 @@ export interface DataMigrateDeps {
    * post-move path-rewrite phase (migratePathRewrite.ts) to list a queue
    * dir's `*.md` tickets. No other phase needs directory listing exposed as
    * a seam (moves/copies work on whole dirs via renameFn/copyDirFn). Default:
-   * fs.readdirSync. */
+   * fs.readdirSync. NOT the pair-move seam — see `readdirTypedFn` below. */
   readdirFn?: (p: string) => string[];
+  /** Typed readdir (withFileTypes) — name taken verbatim from
+   * `dataMigrate.ts`'s `MigrateDeps`/`isRecursivelyEmptyDir`, which this feeds
+   * (the repair-vs-conflict verdict for a data-root destination) alongside the
+   * EXDEV fallback's recursive file listing. Distinct from `readdirFn` above
+   * in both shape and scope, hence the distinct name; `isFile()` widens
+   * `MigrateDeps`' version because the copy listing needs to count only real
+   * files (a symlink is neither a directory nor a file to copy-verify).
+   * Default: readdirSync(d, { withFileTypes: true }). */
+  readdirTypedFn?: (
+    d: string,
+  ) => Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  /** stat for the EXDEV copy verification. Must keep answering BOTH
+   * `isDirectory()` — verifyCopyPath/fsyncCopiedPath dispatch a directory pair
+   * from a file pair, and phase 9's config relocation passes a FILE — and
+   * `size`, the per-file byte-count verify. Default: fs.statSync. */
+  statFn?: (p: string) => { isDirectory(): boolean; size: number };
+  /** Removal primitive for the destructive rms of the move: the repair of an
+   * empty scaffolding destination and the EXDEV fallback's source delete
+   * (plus the queue move's own EXDEV source delete). Name taken verbatim from
+   * `MigrateDeps.rmFn`. Options come from the CALL SITE and the default
+   * forwards them unchanged — `force: true` is NEVER defaulted in, or the
+   * ENOENT that today signals a real bug in the repair path would be silently
+   * swallowed. Default: fs.rmSync. */
+  rmFn?: (p: string, opts: { recursive?: boolean; force?: boolean }) => void;
+  /** `mkdir -p` of a moved pair's parent directory (flatToV2Pairs' targets
+   * scatter across data/, cache/, logs/). Default: fs.mkdirSync. */
+  mkdirFn?: (p: string, opts: { recursive: true }) => void;
+}
+
+/**
+ * The filesystem seam the data-root pair move runs on — `moveDataRootPair`
+ * and the EXDEV copy/verify/fsync helpers it shares with the queue-move
+ * phase. Every member is a destructive or destructive-adjacent op, so all of
+ * them are injectable together: a PARTIAL seam is worse than none here (stub
+ * `existsFn` alone and the untouched `readdirSync` below it throws ENOENT), and
+ * the error paths are unreachable from a test otherwise. Names are copied
+ * verbatim from `dataMigrate.ts`'s `MigrateDeps` wherever that interface
+ * already spells the same operation (`rmFn`, `readdirTypedFn`) — one
+ * vocabulary per operation across both modules, deliberately.
+ */
+interface MoveFsDeps {
+  existsFn: (p: string) => boolean;
+  renameFn: (from: string, to: string) => void;
+  copyDirFn: (from: string, to: string) => void;
+  syncPathFn: (p: string) => void;
+  readdirTypedFn: (d: string) => Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  statFn: (p: string) => { isDirectory(): boolean; size: number };
+  rmFn: (p: string, opts: { recursive?: boolean; force?: boolean }) => void;
+  mkdirFn: (p: string, opts: { recursive: true }) => void;
 }
 
 interface QueueStep {
@@ -249,11 +298,11 @@ function ghPair(
   return { from, to, pending: existsFn(from) };
 }
 
-function listFilesRecursive(root: string): string[] {
+function listFilesRecursive(root: string, fs: MoveFsDeps): string[] {
   const out: string[] = [];
-  for (const e of readdirSync(root, { withFileTypes: true })) {
+  for (const e of fs.readdirTypedFn(root)) {
     const full = join(root, e.name);
-    if (e.isDirectory()) out.push(...listFilesRecursive(full).map((r) => join(e.name, r)));
+    if (e.isDirectory()) out.push(...listFilesRecursive(full, fs).map((r) => join(e.name, r)));
     else if (e.isFile()) out.push(e.name);
   }
   return out;
@@ -264,12 +313,12 @@ function listFilesRecursive(root: string): string[] {
  * matching byte count. Throws (never swallows) so the caller's generic
  * error handling reports it and the untouched source stays exactly where
  * it was. Directory-only (queue's four dirs are always directories). */
-function verifyCopy(from: string, to: string): void {
-  for (const rel of listFilesRecursive(from)) {
-    const srcSize = statSync(join(from, rel)).size;
+function verifyCopy(from: string, to: string, fs: MoveFsDeps): void {
+  for (const rel of listFilesRecursive(from, fs)) {
+    const srcSize = fs.statFn(join(from, rel)).size;
     let dstSize: number;
     try {
-      dstSize = statSync(join(to, rel)).size;
+      dstSize = fs.statFn(join(to, rel)).size;
     } catch {
       throw new Error(`EXDEV copy verification failed — missing ${join(to, rel)}`);
     }
@@ -286,14 +335,14 @@ function verifyCopy(from: string, to: string): void {
  * job is moving ticket files. The design spec (§11) calls for
  * copy+fsync+verify+delete; the size verify still runs first (above).
  * Directory-only. */
-function fsyncCopied(to: string, syncPathFn: (p: string) => void): void {
+function fsyncCopied(to: string, fs: MoveFsDeps): void {
   const dirs = new Set<string>([to]);
-  for (const rel of listFilesRecursive(to)) {
+  for (const rel of listFilesRecursive(to, fs)) {
     const full = join(to, rel);
-    syncPathFn(full);
+    fs.syncPathFn(full);
     dirs.add(dirname(full));
   }
-  for (const d of dirs) syncPathFn(d);
+  for (const d of dirs) fs.syncPathFn(d);
 }
 
 /** `verifyCopy`/`fsyncCopied` assume a directory pair (queue's four dirs are
@@ -302,15 +351,15 @@ function fsyncCopied(to: string, syncPathFn: (p: string) => void): void {
  * (watchlist.json, spend.json, worker.log, ...). These wrappers dispatch on
  * `from`'s type so the same EXDEV fallback machinery (copy → verify → fsync →
  * delete-source, #196) covers both shapes without duplicating it. */
-function verifyCopyPath(from: string, to: string): void {
-  if (statSync(from).isDirectory()) {
-    verifyCopy(from, to);
+function verifyCopyPath(from: string, to: string, fs: MoveFsDeps): void {
+  if (fs.statFn(from).isDirectory()) {
+    verifyCopy(from, to, fs);
     return;
   }
-  const srcSize = statSync(from).size;
+  const srcSize = fs.statFn(from).size;
   let dstSize: number;
   try {
-    dstSize = statSync(to).size;
+    dstSize = fs.statFn(to).size;
   } catch {
     throw new Error(`EXDEV copy verification failed — missing ${to}`);
   }
@@ -319,13 +368,13 @@ function verifyCopyPath(from: string, to: string): void {
   }
 }
 
-function fsyncCopiedPath(to: string, syncPathFn: (p: string) => void): void {
-  if (statSync(to).isDirectory()) {
-    fsyncCopied(to, syncPathFn);
+function fsyncCopiedPath(to: string, fs: MoveFsDeps): void {
+  if (fs.statFn(to).isDirectory()) {
+    fsyncCopied(to, fs);
     return;
   }
-  syncPathFn(to);
-  syncPathFn(dirname(to));
+  fs.syncPathFn(to);
+  fs.syncPathFn(dirname(to));
 }
 
 /** Move one flat→v2 (or gh-creds) pair, reusing the queue move's EXDEV
@@ -340,32 +389,35 @@ function fsyncCopiedPath(to: string, syncPathFn: (p: string) => void): void {
  * data/, cache/, logs/. Callers must check `claimedByEarlierPhase` BEFORE
  * calling this (Critical 2) — this function has no way to know a destination
  * was legitimately populated by an earlier phase of the SAME run rather than
- * being inert scaffolding, so it would otherwise repair-and-delete it. */
+ * being inert scaffolding, so it would otherwise repair-and-delete it.
+ *
+ * Every fs primitive comes from `fs` (MoveFsDeps) — nothing here reaches
+ * `node:fs` directly. The two `rmFn` calls keep the options they have always
+ * had and are deliberately different: the repair below is NOT forced, so an
+ * ENOENT there still surfaces as the bug it would be, while the EXDEV source
+ * delete keeps the `force` it needs for a source already partly gone. */
 function moveDataRootPair(
   from: string,
   to: string,
-  existsFn: (p: string) => boolean,
-  renameFn: (from: string, to: string) => void,
-  copyDirFn: (from: string, to: string) => void,
-  syncPathFn: (p: string) => void,
+  fs: MoveFsDeps,
 ): "moved" | "copied" | "skipped-conflict" {
-  if (existsFn(to)) {
-    if (isRecursivelyEmptyDir(to, (d) => readdirSync(d, { withFileTypes: true }))) {
-      rmSync(to, { recursive: true });
+  if (fs.existsFn(to)) {
+    if (isRecursivelyEmptyDir(to, fs.readdirTypedFn)) {
+      fs.rmFn(to, { recursive: true });
     } else {
       return "skipped-conflict";
     }
   }
-  mkdirSync(dirname(to), { recursive: true });
+  fs.mkdirFn(dirname(to), { recursive: true });
   try {
-    renameFn(from, to);
+    fs.renameFn(from, to);
     return "moved";
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
-      copyDirFn(from, to);
-      verifyCopyPath(from, to);
-      fsyncCopiedPath(to, syncPathFn); // #196: durable before deleting source
-      rmSync(from, { recursive: true, force: true });
+      fs.copyDirFn(from, to);
+      verifyCopyPath(from, to, fs);
+      fsyncCopiedPath(to, fs); // #196: durable before deleting source
+      fs.rmFn(from, { recursive: true, force: true });
       return "copied";
     }
     throw e;
@@ -560,6 +612,20 @@ export async function runDataMigrate(
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
   const env = deps.env ?? process.env;
   const readdirFn = deps.readdirFn ?? ((p: string) => readdirSync(p));
+  // The pair-move filesystem seam (see MoveFsDeps). Each default is the exact
+  // call the code made inline before it was injectable — `rmFn` forwards the
+  // CALLER's options verbatim rather than defaulting any in, so the repair rm
+  // stays unforced.
+  const fs: MoveFsDeps = {
+    existsFn,
+    renameFn,
+    copyDirFn,
+    syncPathFn,
+    readdirTypedFn: deps.readdirTypedFn ?? ((d: string) => readdirSync(d, { withFileTypes: true })),
+    statFn: deps.statFn ?? ((p: string) => statSync(p)),
+    rmFn: deps.rmFn ?? ((p: string, o: { recursive?: boolean; force?: boolean }) => rmSync(p, o)),
+    mkdirFn: deps.mkdirFn ?? ((p: string, o: { recursive: true }) => mkdirSync(p, o)),
+  };
 
   // The single-root move target (see the module doc comment). Computed once
   // and threaded through every phase below, along with the fixed legacy path
@@ -781,9 +847,9 @@ export async function runDataMigrate(
         } catch (e) {
           if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
             copyDirFn(s.from, s.to);
-            verifyCopy(s.from, s.to);
-            fsyncCopied(s.to, syncPathFn); // #196: durable before deleting source
-            rmSync(s.from, { recursive: true, force: true });
+            verifyCopy(s.from, s.to, fs);
+            fsyncCopied(s.to, fs); // #196: durable before deleting source
+            fs.rmFn(s.from, { recursive: true, force: true });
             queueReceipt.push(`queue/${s.key}: copied (cross-device) ${s.from} -> ${s.to}`);
             queueJournalSteps.push({ from: s.from, to: s.to, action: "renamed" });
           } else {
@@ -850,14 +916,7 @@ export async function runDataMigrate(
           dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
           continue;
         }
-        const action = moveDataRootPair(
-          pair.from,
-          pair.to,
-          existsFn,
-          renameFn,
-          copyDirFn,
-          syncPathFn,
-        );
+        const action = moveDataRootPair(pair.from, pair.to, fs);
         if (action === "skipped-conflict") {
           dataRootConflicts.push(
             `${pair.from} -> ${pair.to}: destination already exists and is not empty`,
@@ -873,7 +932,7 @@ export async function runDataMigrate(
       }
 
       if (gh !== null && existsFn(gh.from)) {
-        const action = moveDataRootPair(gh.from, gh.to, existsFn, renameFn, copyDirFn, syncPathFn);
+        const action = moveDataRootPair(gh.from, gh.to, fs);
         if (action === "skipped-conflict") {
           dataRootConflicts.push(
             `${gh.from} -> ${gh.to}: destination already exists and is not empty`,
@@ -1081,21 +1140,14 @@ export async function runDataMigrate(
     // THIS run's config actually lives at the legacy XDG path; a canonical-
     // already machine (the common case) never reaches moveDataRootPair.
     // Reuses moveDataRootPair verbatim (file-aware since #196's
-    // verifyCopyPath/fsyncCopiedPath dispatch on statSync) — its own
+    // verifyCopyPath/fsyncCopiedPath dispatch on `fs.statFn`) — its own
     // existsFn(to) check is what makes a pre-existing canonical file an
     // unconditional skipped-conflict, never overwritten. Journaled at the
     // target root exactly like every other pair above, so a re-run (config
     // already relocated, resolveConfigPath now finds it) sees nothing left
     // to do here.
     if (configPathIsLegacy) {
-      const action = moveDataRootPair(
-        configPath,
-        canonicalConfigPath,
-        existsFn,
-        renameFn,
-        copyDirFn,
-        syncPathFn,
-      );
+      const action = moveDataRootPair(configPath, canonicalConfigPath, fs);
       const step: MigrationStep = {
         from: configPath,
         to: canonicalConfigPath,
