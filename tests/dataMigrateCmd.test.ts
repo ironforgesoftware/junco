@@ -1126,6 +1126,57 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
     expect(out2.join("")).toContain("config: nothing to relocate");
   });
 
+  it("never relocates an explicitly-named config, even when JUNCO_CONFIG names exactly the legacy path (#275)", async () => {
+    // The footgun: JUNCO_CONFIG accepts ANY value, including the legacy path
+    // itself, so `configPath === legacyConfigPath(env)` is genuinely reachable
+    // under an override. Relocating there would move the file out from under
+    // the variable and ENOENT every subsequent command in that environment.
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+    const env = { HOME: tmpHome, JUNCO_CONFIG: configPath };
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s), env },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(configPath)).toBe(true);
+    expect(existsSync(canonical)).toBe(false);
+    // The receipt names JUNCO_CONFIG as the reason, not the bare "nothing to
+    // relocate" — that phrasing alone would say nothing about why a config
+    // sitting at the legacy path was left there.
+    expect(out.join("")).toContain(
+      `config: nothing to relocate — JUNCO_CONFIG explicitly names ${configPath}, which is never relocated`,
+    );
+    // The named config still loads under the same environment afterwards —
+    // the ENOENT this guard exists to prevent.
+    expect(loadConfig(configPath).model.id).toBe("test-model");
+
+    // --dry-run agrees (one flag drives both branches), and its message names
+    // JUNCO_CONFIG rather than reading "already at <legacy path>" as though
+    // the legacy path were canonical.
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s), env },
+    );
+    expect(code2).toBe(0);
+    expect(out2.join("")).toContain(
+      `config: no relocation — JUNCO_CONFIG explicitly names ${configPath}, which is never relocated`,
+    );
+  });
+
   it("never overwrites an existing canonical config — receipted as a conflict, both files left untouched, exit 1", async () => {
     const legacyConfigDir = join(tmpHome, ".config", "junco");
     mkdirSync(legacyConfigDir, { recursive: true });
