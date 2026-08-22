@@ -704,12 +704,19 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
     expect(code).toBe(0);
     expect(existsSync(configPath)).toBe(true);
     expect(existsSync(canonical)).toBe(false);
-    expect(out.join("")).toContain("config: nothing to relocate");
+    // The receipt names JUNCO_CONFIG as the reason, not the bare "nothing to
+    // relocate" — that phrasing alone would say nothing about why a config
+    // sitting at the legacy path was left there.
+    expect(out.join("")).toContain(
+      `config: nothing to relocate — JUNCO_CONFIG explicitly names ${configPath}, which is never relocated`,
+    );
     // The named config still loads under the same environment afterwards —
     // the ENOENT this guard exists to prevent.
     expect(loadConfig(configPath).model.id).toBe("test-model");
 
-    // --dry-run agrees (one flag drives both branches).
+    // --dry-run agrees (one flag drives both branches), and its message names
+    // JUNCO_CONFIG rather than reading "already at <legacy path>" as though
+    // the legacy path were canonical.
     const out2: string[] = [];
     const code2 = await runDataMigrate(
       cfg,
@@ -718,7 +725,9 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
       { fetchFn: fetchDown(), printFn: (s) => out2.push(s), env },
     );
     expect(code2).toBe(0);
-    expect(out2.join("")).toContain(`config: no relocation needed (already at ${configPath})`);
+    expect(out2.join("")).toContain(
+      `config: no relocation — JUNCO_CONFIG explicitly names ${configPath}, which is never relocated`,
+    );
   });
 
   it("never overwrites an existing canonical config — receipted as a conflict, both files left untouched, exit 1", async () => {

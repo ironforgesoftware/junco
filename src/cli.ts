@@ -395,7 +395,16 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const env = deps.env ?? process.env;
   // Resolve the config path ONCE — a pure function of the environment (HOME /
   // XDG_CONFIG_HOME), never of cwd or argv (split-queue incident, 2026-08-01).
-  const configPath = resolveConfigPath({ existsFn, env });
+  // A relative JUNCO_CONFIG makes configPathOverride throw (config.ts) —
+  // caught here so a bad value is a one-line CLI error, not an unhandled
+  // stack trace out of the top-level catch at the bottom of this file.
+  let configPath: string;
+  try {
+    configPath = resolveConfigPath({ existsFn, env });
+  } catch (e) {
+    process.stderr.write(`junco: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
 
   if (values.config !== undefined) {
     process.stderr.write(

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, dirname, isAbsolute } from "node:path";
+import { join } from "node:path";
 import {
   loadConfig,
   queuePaths,
@@ -829,27 +829,28 @@ describe("resolveConfigPath / juncoHome / legacyConfigPath", () => {
     expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
   });
 
-  it("a relative JUNCO_CONFIG resolves to an absolute path — no launch-directory drift", () => {
-    // Pre-fix this was returned verbatim, so the config path (and with it
-    // dataDir, queueRoot and worker.lock) followed the launch directory —
-    // the cwd-dependence this module was rewritten to eliminate.
+  it("a relative JUNCO_CONFIG is rejected — resolving it would still depend on the launch directory", () => {
+    // Pre-fix this was silently resolve()d against cwd, which freezes rather
+    // than removes the launch-directory dependence: a launchd daemon (cwd
+    // "/") and an operator shell would still land on two different absolute
+    // paths (and two different worker.locks) from the same relative value.
+    // JUNCO_CONFIG is new enough on this branch that nothing depends on the
+    // old resolve-anyway behaviour, so it's now a hard error instead.
     const env = { HOME: "/h", JUNCO_CONFIG: "junco.json" };
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/one");
-    try {
-      const p = resolveConfigPath({ existsFn: () => false, env });
-      expect(isAbsolute(p)).toBe(true);
-      expect(p).toBe(join("/one", "junco.json"));
-      // Being already absolute is what makes the two spellings of the
-      // worker.lock derivation agree from ANY directory: `junco start` uses
-      // dirname(resolve(configPath)) (cli.ts) while `junco doctor` uses
-      // dirname(configPath) — on a relative value a launchd daemon (cwd "/")
-      // and an operator shell looked for the lock in two different places.
-      cwdSpy.mockReturnValue("/two");
-      expect(resolve(p)).toBe(p);
-      expect(dirname(resolve(p))).toBe(dirname(p));
-    } finally {
-      cwdSpy.mockRestore();
-    }
+    expect(() => configPathOverride(env)).toThrow(
+      'JUNCO_CONFIG must be an absolute path (a leading "~" is fine) — got "junco.json"',
+    );
+    // resolveConfigPath delegates to configPathOverride, so it throws too.
+    expect(() => resolveConfigPath({ existsFn: () => false, env })).toThrow(/JUNCO_CONFIG/);
+  });
+
+  it("a JUNCO_CONFIG that isn't a recognized tilde form is still relative and is rejected", () => {
+    // expandHome only special-cases exactly "~" and "~/...". "~foo" is left
+    // alone by expandHome and is not an absolute path either, so it takes the
+    // same relative-value error path as any other relative value.
+    expect(() => configPathOverride({ HOME: "/h", JUNCO_CONFIG: "~foo/cfg.json" })).toThrow(
+      /JUNCO_CONFIG must be an absolute path/,
+    );
   });
 
   it("an absolute JUNCO_CONFIG is normalized and never depends on process.cwd()", () => {
