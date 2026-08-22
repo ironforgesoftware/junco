@@ -1904,6 +1904,163 @@ describe("runDataMigrate — data-root move conflicts", () => {
   });
 });
 
+/**
+ * Item 6 (#281): the resumed-migration shape where BOTH roots still hold the
+ * same flat-named pair. `dataRootPairs` used to drop the legacy candidate
+ * outright, so run 1 exited 0 having never planned/moved/journaled/reported it
+ * and run 2 failed on the same pair. Both are planned now — and the loser is a
+ * REPORTED conflict, never a second move: the winner's destination here is
+ * deliberately recursively empty (ensureDataTree-style scaffolding), which is
+ * the one shape `moveDataRootPair` would happily repair-delete and rename onto
+ * — merging two data roots into one destination behind an incoherent
+ * "moved ... moved" receipt (the Critical-2 `claimedByEarlierPhase` bug class).
+ */
+describe("runDataMigrate — both data roots pend the same target (item 6, #281)", () => {
+  let originalHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    tmpHome = trackRoot(freshRoot("junco-dmc-contended-home-"));
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+  });
+
+  it("moves the dataDir source, reports the legacy straggler as a conflict, merges nothing, and is stable on re-run", async () => {
+    const root = trackRoot(freshRoot());
+    const targetRoot = join(tmpHome, ".junco");
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    // An uncontested pending pair — proves ordinary pairs still migrate.
+    mkdirSync(join(targetRoot, "transcripts"), { recursive: true });
+    writeFileSync(join(targetRoot, "transcripts", "t.jsonl"), "{}\n", "utf8");
+    // The contended pair: the winner is bare scaffolding (recursively empty).
+    mkdirSync(join(targetRoot, "outbox"), { recursive: true });
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true });
+    writeFileSync(join(legacyRoot, "outbox", "straggler.json"), "straggler\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg1 = loadConfig(configPath);
+    expect(cfg1.dataDir).toBe(targetRoot); // resolution already flipped
+    expect(cfg1.legacy.dataRoot).toBe(false);
+
+    const out1: string[] = [];
+    const code1 = await runDataMigrate(
+      cfg1,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out1.push(s) },
+    );
+
+    // The uncontested pair migrated normally.
+    expect(existsSync(join(targetRoot, "data", "transcripts", "t.jsonl"))).toBe(true);
+    // The winner took the slot; the straggler was NOT merged onto it, and its
+    // own source is untouched — nothing deleted on either side.
+    expect(existsSync(join(targetRoot, "data", "outbox"))).toBe(true);
+    expect(existsSync(join(targetRoot, "data", "outbox", "straggler.json"))).toBe(false);
+    expect(readFileSync(join(legacyRoot, "outbox", "straggler.json"), "utf8")).toBe("straggler\n");
+    expect(existsSync(legacyRoot)).toBe(true); // still holds outbox/ — not removed
+
+    // Run 1 reports it rather than exiting 0 in silence, and names BOTH sides.
+    expect(code1).toBe(1);
+    expect(out1.join("")).toMatch(/skipped-conflict/);
+    expect(out1.join("")).toContain(join(legacyRoot, "outbox"));
+    expect(out1.join("")).toContain(join(targetRoot, "outbox"));
+
+    // Re-run: the winner's source is gone, so the straggler is the sole,
+    // uncontested candidate for that destination and the ORDINARY rules take
+    // over — here the destination is the winner's empty scaffolding, so
+    // `moveDataRootPair`'s recursively-empty repair path completes the move
+    // (that judgement belongs to the mover, which can see the destination;
+    // run 1's guard only refused to CHOOSE between two live sources).
+    const cfg2 = loadConfig(configPath);
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      cfg2,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(0);
+    expect(readFileSync(join(targetRoot, "data", "outbox", "straggler.json"), "utf8")).toBe(
+      "straggler\n",
+    );
+    expect(existsSync(join(legacyRoot, "outbox"))).toBe(false);
+  });
+
+  it("a winner holding real data makes the straggler a stable conflict on every run — never merged, never deleted", async () => {
+    const root = trackRoot(freshRoot());
+    const targetRoot = join(tmpHome, ".junco");
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(join(targetRoot, "transcripts"), { recursive: true });
+    mkdirSync(join(targetRoot, "outbox"), { recursive: true });
+    writeFileSync(join(targetRoot, "outbox", "mine.json"), "mine\n", "utf8");
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true });
+    writeFileSync(join(legacyRoot, "outbox", "straggler.json"), "straggler\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const out1: string[] = [];
+    const code1 = await runDataMigrate(
+      loadConfig(configPath),
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out1.push(s) },
+    );
+    expect(code1).toBe(1);
+    expect(out1.join("")).toContain("both data roots hold this pair");
+    expect(readFileSync(join(targetRoot, "data", "outbox", "mine.json"), "utf8")).toBe("mine\n");
+    expect(readFileSync(join(legacyRoot, "outbox", "straggler.json"), "utf8")).toBe("straggler\n");
+    expect(existsSync(join(targetRoot, "data", "outbox", "straggler.json"))).toBe(false);
+
+    // Run 2 is the ordinary non-empty-destination conflict — still exit 1,
+    // still nothing merged or deleted on either side.
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      loadConfig(configPath),
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(1);
+    expect(out2.join("")).toMatch(/skipped-conflict/);
+    expect(readFileSync(join(targetRoot, "data", "outbox", "mine.json"), "utf8")).toBe("mine\n");
+    expect(readFileSync(join(legacyRoot, "outbox", "straggler.json"), "utf8")).toBe("straggler\n");
+  });
+
+  it("the dry-run names the contended pair instead of silently planning one of the two", async () => {
+    const root = trackRoot(freshRoot());
+    const targetRoot = join(tmpHome, ".junco");
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(join(targetRoot, "transcripts"), { recursive: true });
+    mkdirSync(join(targetRoot, "outbox"), { recursive: true });
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true });
+    writeFileSync(join(legacyRoot, "outbox", "straggler.json"), "straggler\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      loadConfig(configPath),
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0); // a dry-run never fails on a conflict it only forecasts
+    const text = out.join("");
+    expect(text).toContain(
+      `${join(legacyRoot, "outbox")} -> ${join(targetRoot, "data", "outbox")} (contended — ` +
+        `${join(targetRoot, "outbox")} holds this pair too and takes the destination; ` +
+        `will be reported as a conflict, never merged)`,
+    );
+  });
+});
+
 describe("runDataMigrate — gh-creds conflicts get their own heading (item 1, #281)", () => {
   it("a non-empty gh-creds destination is reported under 'gh config conflicts:', not lumped into 'data-root conflicts:'", async () => {
     const root = trackRoot(freshRoot());

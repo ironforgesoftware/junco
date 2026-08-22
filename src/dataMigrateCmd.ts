@@ -849,9 +849,14 @@ export async function runDataMigrate(
           qSteps.some((s) => s.pending) && p.to === vaultQueueTarget && p.pending;
         const suffix = isVaultQueueCollision
           ? " (stray — the vaultRoot queue move owns this destination; will be reported as a conflict, never merged)"
-          : p.pending
-            ? ""
-            : " (nothing to move)";
+          : // Item 6 (#281): the other data root holds this pair too. Same
+            // shape of promise as the vaultRoot collision above — the acting
+            // run reports it, it never moves.
+            p.contendedBy !== undefined
+            ? ` (contended — ${p.contendedBy} holds this pair too and takes the destination; will be reported as a conflict, never merged)`
+            : p.pending
+              ? ""
+              : " (nothing to move)";
         print(`  ${p.from} -> ${p.to}${suffix}\n`);
       }
       // Item 4 (#281): gated on `existsFn`, matching phase 7's own acting-run
@@ -1047,6 +1052,27 @@ export async function runDataMigrate(
             `${pair.from} -> ${pair.to}: destination already relocated by this run's vaultRoot queue move`,
           );
           dataRootReceipt.push(`${pair.from} -> ${pair.to}: skipped-conflict`);
+          dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
+          continue;
+        }
+        if (pair.contendedBy !== undefined) {
+          // Item 6 (#281): the SAME rule as Critical 2 one branch up, for the
+          // other way a destination gets claimed twice in one run — an earlier
+          // pending pair from the other data root (`dataRootPairs` marks the
+          // loser rather than dropping it). Merging them is not an option:
+          // `moveDataRootPair` would repair-delete a recursively-empty winner
+          // and rename this source onto it, silently fusing two data roots
+          // behind a receipt claiming both "moved". Report, touch nothing.
+          // Marked at plan time and honoured even if the winner's source
+          // vanished under the lock (a concurrent migrate) — that direction
+          // fails safe: a conflict is reported, nothing is destroyed, and the
+          // next run finds the pair uncontested.
+          dataRootConflicts.push(
+            `${pair.from} -> ${pair.to}: both data roots hold this pair — ${pair.contendedBy} took ` +
+              `the destination this run and nothing was merged. Reconcile the two sources by hand ` +
+              `(move or remove one), then re-run.`,
+          );
+          dataRootReceipt.push(`${pair.from} -> ${pair.to}: skipped-conflict (contended source)`);
           dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
           continue;
         }

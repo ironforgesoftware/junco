@@ -175,6 +175,15 @@ export interface DataRootPair {
   from: string;
   to: string;
   pending: boolean;
+  /** Item 6 (#281): set ONLY on a pending pair whose destination is already
+   * owned, this same run, by an earlier pending pair from a DIFFERENT source
+   * root — the value is that winner's `from`. Two roots holding the same
+   * flat-named directory is a genuine conflict, not a dedupe: merging them
+   * into one destination is the `claimedByEarlierPhase` class of bug
+   * (`dataMigrateCmd.ts`'s Critical 2), so the mover reports a marked pair
+   * rather than moving it, and never touches either side. Absent (undefined)
+   * on every pair of an ordinary single-source machine. */
+  contendedBy?: string;
 }
 
 /** The flat→v2 data-root pairs whose source currently exists, probed from
@@ -184,10 +193,21 @@ export interface DataRootPair {
  * `cfg.legacy.dataRoot` says, since that flag can no longer see stragglers
  * once resolution has flipped away from the legacy root (the resumed-
  * migration case). Pairs from different source roots that land on the SAME
- * target are deduped, preferring whichever source actually has something
- * pending (the rare case where both somehow do is left for
- * `moveDataRootPair`'s own `existsFn(to)` conflict check to catch safely, in
- * `dataMigrateCmd.ts`). Exported (moved from `dataMigrateCmd.ts`, 2026-08-05
+ * target are deduped ONLY while at most one of them is pending — an inert
+ * candidate is dropped in favour of the pending one (or, if neither is
+ * pending, the first probed is kept), so an ordinary machine still gets
+ * exactly one pair per target. When BOTH are pending, NEITHER is dropped
+ * (item 6, #281): the first-probed source (`cfg.dataDir`) keeps the slot and
+ * every further pending source for that target is returned too, after all the
+ * winners and marked `contendedBy` the winner's `from`. Dropping it — the
+ * behaviour this replaced — meant run 1 exited 0 having never planned, moved,
+ * journaled or reported the straggler, and run 2 (slot now uncontested) hit a
+ * populated destination and reported `skipped-conflict` with exit 1: no data
+ * lost, but a spurious success followed by a spurious failure. A marked pair
+ * is a plan-time conflict, NOT a second move — `dataMigrateCmd.ts` reports it
+ * and leaves both sides alone, because merging two roots into one destination
+ * is exactly the `claimedByEarlierPhase` bug class (Critical 2) that module
+ * already guards against. Exported (moved from `dataMigrateCmd.ts`, 2026-08-05
  * task-6 review — see `pendingMigrations` below) so the actual mover and the
  * read-only reporter share one source-existence implementation instead of
  * two that can silently drift: this is purely existence-driven, with NO
@@ -205,16 +225,27 @@ export function dataRootPairs(
   const sourceRoots =
     legacyRoot !== null && legacyRoot !== cfg.dataDir ? [cfg.dataDir, legacyRoot] : [cfg.dataDir];
   const byTarget = new Map<string, DataRootPair>();
+  // Pending losers, kept out of the map (whose keys ARE the targets) and
+  // appended after every winner: `dataMigrateCmd.ts`'s move loop walks this
+  // array in order, so a contended pair must never precede the winner whose
+  // claim makes it a conflict.
+  const contended: DataRootPair[] = [];
   for (const sourceRoot of sourceRoots) {
     for (const pair of flatToV2Pairs(sourceRoot, targetRoot)) {
       const pending = existsFn(pair.from);
       const existing = byTarget.get(pair.to);
-      if (!existing || (pending && !existing.pending)) {
+      if (!existing) {
         byTarget.set(pair.to, { ...pair, pending });
+      } else if (!pending) {
+        continue; // inert duplicate — still deduped away
+      } else if (!existing.pending) {
+        byTarget.set(pair.to, { ...pair, pending }); // pending beats inert
+      } else {
+        contended.push({ ...pair, pending, contendedBy: existing.from });
       }
     }
   }
-  return [...byTarget.values()];
+  return [...byTarget.values(), ...contended];
 }
 
 /** Just the state-tree portion of `pendingMigrations` — old-name dirs whose

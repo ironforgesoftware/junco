@@ -23,6 +23,7 @@ import {
   stateTreeMigrations,
   flatToV2Pairs,
   migrationTargetRoot,
+  dataRootPairs,
 } from "../src/dataMigrate.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 import { dataTreePaths } from "../src/dataTree.js";
@@ -607,5 +608,84 @@ describe("pendingMigrations — single-root layout pairs (2026-08-03 plan)", () 
       from: join(fixedLegacy, "outbox"),
       to: join(targetRoot, "data", "outbox"),
     });
+  });
+});
+
+/**
+ * Item 6 (#281): when BOTH source roots hold the same flat-named pair, the
+ * old dedupe let `cfg.dataDir` take the target slot and dropped the legacy
+ * candidate from the returned array entirely — so run 1 exited 0 having never
+ * planned, moved, journaled or reported the straggler, and run 2 (the slot now
+ * uncontested) hit a populated destination and reported `skipped-conflict`
+ * with exit 1. Both pending sources must now be represented, with the loser
+ * marked `contendedBy` so the mover reports it as a plan-time conflict instead
+ * of merging two roots onto one destination.
+ */
+describe("dataRootPairs — both roots pend the same target (item 6, #281)", () => {
+  const env = { HOME: "/sbxroot/home" };
+  const targetRoot = join("/sbxroot/home", ".junco");
+  const fixedLegacy = join("/sbxroot/home", ".local", "state", "junco");
+  const cfg = makeConfig({
+    dataDir: targetRoot, // resolution already flipped to the canonical root
+    queueRoot: join(targetRoot, "queue"),
+    dataLayout: "flat",
+  });
+
+  it("keeps BOTH pending sources and marks the loser contendedBy the winner", () => {
+    const contested = new Set([join(targetRoot, "outbox"), join(fixedLegacy, "outbox")]);
+    const pairs = dataRootPairs(cfg, targetRoot, fixedLegacy, (p) => contested.has(p));
+    const forTarget = pairs.filter((p) => p.to === join(targetRoot, "data", "outbox"));
+    expect(forTarget).toHaveLength(2);
+    // The winner is the dataDir source (probed first) — unmarked.
+    expect(forTarget[0]).toEqual({
+      from: join(targetRoot, "outbox"),
+      to: join(targetRoot, "data", "outbox"),
+      pending: true,
+    });
+    // The legacy straggler survives, explicitly marked as contended.
+    const loser = forTarget.find((p) => p.from === join(fixedLegacy, "outbox"));
+    expect(loser).toBeDefined();
+    expect(loser?.pending).toBe(true);
+    expect(loser?.contendedBy).toBe(join(targetRoot, "outbox"));
+    // Winners precede their contended partner — the mover's guard depends on
+    // seeing the claim before the loser comes round.
+    expect(pairs.indexOf(forTarget[0])).toBeLessThan(pairs.indexOf(loser!));
+  });
+
+  it("pendingMigrations (doctor / junco data --json) reports both stragglers, not one", () => {
+    const contested = new Set([join(targetRoot, "outbox"), join(fixedLegacy, "outbox")]);
+    const pending = pendingMigrations(cfg, (p) => contested.has(p), env);
+    expect(pending).toContainEqual({
+      from: join(targetRoot, "outbox"),
+      to: join(targetRoot, "data", "outbox"),
+    });
+    expect(pending).toContainEqual({
+      from: join(fixedLegacy, "outbox"),
+      to: join(targetRoot, "data", "outbox"),
+    });
+  });
+
+  it("an ordinary machine (one source pending) still gets exactly one, unmarked pair per target", () => {
+    // Only the legacy root holds the pair — the inert dataDir candidate is
+    // still deduped away, so no duplicate 'nothing to move' lines appear.
+    const pairs = dataRootPairs(cfg, targetRoot, fixedLegacy, (p) =>
+      p.startsWith(join(fixedLegacy, "")),
+    );
+    const forTarget = pairs.filter((p) => p.to === join(targetRoot, "data", "outbox"));
+    expect(forTarget).toHaveLength(1);
+    expect(forTarget[0].from).toBe(join(fixedLegacy, "outbox"));
+    expect(forTarget[0].contendedBy).toBeUndefined();
+    // And nothing anywhere in the list is marked when nothing is contested.
+    expect(pairs.every((p) => p.contendedBy === undefined)).toBe(true);
+    // Single-source machine (no legacy root at all): one pair per target.
+    const single = dataRootPairs(cfg, targetRoot, null, () => true);
+    expect(new Set(single.map((p) => p.to)).size).toBe(single.length);
+    expect(single.every((p) => p.contendedBy === undefined)).toBe(true);
+  });
+
+  it("neither source pending: still one inert pair per target, unmarked", () => {
+    const pairs = dataRootPairs(cfg, targetRoot, fixedLegacy, () => false);
+    expect(new Set(pairs.map((p) => p.to)).size).toBe(pairs.length);
+    expect(pairs.every((p) => !p.pending && p.contendedBy === undefined)).toBe(true);
   });
 });
