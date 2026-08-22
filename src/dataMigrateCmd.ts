@@ -98,6 +98,7 @@ import {
   rmSync,
   rmdirSync,
   statSync,
+  lstatSync,
   readdirSync,
   openSync,
   fsyncSync,
@@ -129,6 +130,12 @@ import {
   type MigrationStep,
   type DataRootPair,
 } from "./dataMigrate.js";
+import {
+  buildPrefixMap,
+  dedupeSteps,
+  rewriteStoredPaths,
+  type RewriteReport,
+} from "./migratePathRewrite.js";
 import { acquirePidfileLock, readPidfileHolder, type PidfileLock } from "./pidfileLock.js";
 
 const QUEUE_DIR_KEYS: (keyof Paths)[] = ["inbox", "processing", "done", "failed"];
@@ -144,9 +151,23 @@ export interface DataMigrateDeps {
   fetchFn?: typeof fetch;
   /** Existence probe (plan computation + pendingMigrations). Default: fs.existsSync. */
   existsFn?: (p: string) => boolean;
+  /** lstat that does NOT follow the link — the only way to identify the
+   * `<root>/skills` symlink mount, since `existsFn` follows links and a
+   * migrated mount's target is the old package dir (so it reads as absent).
+   * Throws ENOENT when the path does not exist, same contract as
+   * `fs.lstatSync`. Default: the real lstatSync. */
+  lstatFn?: (p: string) => { isSymbolicLink(): boolean };
   /** Rename primitive — used for the queue-dir moves, the data-root/gh-creds
    * moves, and the config.json atomic tmp+rename write. Default: fs.renameSync. */
   renameFn?: (from: string, to: string) => void;
+  // NOTE (fix-wave review #283 Minor 2): these two do NOT cover the
+  // watchlist. The path-rewrite phase's `rewriteWatchlistFile`
+  // (migratePathRewrite.ts) reads/writes it via watchlist.ts's
+  // `readWatchlist`/`writeWatchlist`, which hard-code the real `node:fs`
+  // rather than accepting an injectable deps object — see `RewriteDeps`'s
+  // doc comment in migratePathRewrite.ts for the full reasoning. A test
+  // stubbing `readFileFn`/`writeFileFn` here will NOT intercept watchlist
+  // I/O; only ticket/JSON-record I/O goes through this seam.
   readFileFn?: (p: string) => string;
   writeFileFn?: (p: string, s: string) => void;
   printFn?: (s: string) => void;
@@ -165,6 +186,12 @@ export interface DataMigrateDeps {
    * and the fixed legacy-path probe). Default: process.env — same DI seam as
    * resolveBotGhConfigDir's callers. */
   env?: Record<string, string | undefined>;
+  /** Directory listing (filenames only, not recursive) — used solely by the
+   * post-move path-rewrite phase (migratePathRewrite.ts) to list a queue
+   * dir's `*.md` tickets. No other phase needs directory listing exposed as
+   * a seam (moves/copies work on whole dirs via renameFn/copyDirFn). Default:
+   * fs.readdirSync. */
+  readdirFn?: (p: string) => string[];
 }
 
 interface QueueStep {
@@ -412,7 +439,11 @@ function rewriteConfig(
  * runDataMigrate). `configMoveReceipt` (I-2) is separate from `configReceipt`
  * — the former is the config FILE's relocation (legacy XDG -> canonical
  * ~/.junco/config.json), the latter is the content rewrite at whatever path
- * it currently lives. */
+ * it currently lives. `rewriteReport` (task-2, #283) is printed right after
+ * gh config — it always holds the ZERO value ({rewritten:0, ...}) on a run
+ * that never reached that phase (an earlier throw), so "nothing rewritten"
+ * is honest rather than a lie by omission, same discipline every other
+ * section here follows. */
 function printReceipt(
   print: (s: string) => void,
   queueReceipt: string[],
@@ -420,6 +451,7 @@ function printReceipt(
   dataRootReceipt: string[],
   dataRootConflicts: string[],
   ghReceipt: string[],
+  rewriteReport: RewriteReport,
   configReceipt: string[] | null,
   configMoveReceipt: string[],
   stateTreeJournalFile: string,
@@ -462,6 +494,16 @@ function printReceipt(
       ? `\ngh config:\n${ghReceipt.map((l) => `  ${l}`).join("\n")}\n`
       : "\ngh config: nothing to move\n",
   );
+  print(
+    rewriteReport.rewritten > 0
+      ? `\npath rewrite:\n  ${rewriteReport.rewritten} path(s) rewritten across ${rewriteReport.files.length} file(s)\n` +
+          rewriteReport.files.map((f) => `  ${f}`).join("\n") +
+          "\n"
+      : "\npath rewrite: nothing to rewrite\n",
+  );
+  if (rewriteReport.warnings.length > 0) {
+    print(`\npath-rewrite warnings:\n${rewriteReport.warnings.map((w) => `  ${w}`).join("\n")}\n`);
+  }
   if (configReceipt === null) {
     print("\nconfig.json: not rewritten (error)\n");
   } else {
@@ -487,6 +529,7 @@ export async function runDataMigrate(
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const fetchFn = deps.fetchFn ?? fetch;
   const existsFn = deps.existsFn ?? existsSync;
+  const lstatFn = deps.lstatFn ?? lstatSync;
   const renameFn = deps.renameFn ?? renameSync;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
@@ -507,6 +550,7 @@ export async function runDataMigrate(
     });
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
   const env = deps.env ?? process.env;
+  const readdirFn = deps.readdirFn ?? ((p: string) => readdirSync(p));
 
   // The single-root move target (see the module doc comment). Computed once
   // and threaded through every phase below, along with the fixed legacy path
@@ -674,6 +718,10 @@ export async function runDataMigrate(
   // separate from configReceipt (the content-rewrite phase above it).
   const configMoveReceipt: string[] = [];
   let configMoveConflict = false;
+  // task-2 (#283): the path-rewrite phase's receipt — stays the zero value
+  // (honest "nothing to rewrite") if an earlier phase throws before this one
+  // is ever reached.
+  let rewriteReport: RewriteReport = { rewritten: 0, files: [], warnings: [] };
 
   try {
     // 3. Queue move (legacy vaultRoot only). Re-probe existence under the
@@ -683,6 +731,12 @@ export async function runDataMigrate(
     // merge onto it (Critical 2).
     const claimedByEarlierPhase = new Set<string>();
     const toMove = qSteps.filter((s) => existsFn(s.from));
+    // MigrationStep-shaped record of what this phase actually moved — feeds
+    // the path-rewrite phase's prefix map (task-2, #283) alongside
+    // dataRootJournalSteps below. Always "renamed" regardless of whether the
+    // move used a plain rename or the EXDEV copy+delete fallback, same
+    // convention dataRootJournalSteps already uses for its own "copied" case.
+    const queueJournalSteps: MigrationStep[] = [];
     if (toMove.length > 0) {
       mkdirSync(vaultQueueTarget, { recursive: true });
       claimedByEarlierPhase.add(vaultQueueTarget);
@@ -690,6 +744,7 @@ export async function runDataMigrate(
         try {
           renameFn(s.from, s.to);
           queueReceipt.push(`queue/${s.key}: moved ${s.from} -> ${s.to}`);
+          queueJournalSteps.push({ from: s.from, to: s.to, action: "renamed" });
         } catch (e) {
           if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
             copyDirFn(s.from, s.to);
@@ -697,6 +752,7 @@ export async function runDataMigrate(
             fsyncCopied(s.to, syncPathFn); // #196: durable before deleting source
             rmSync(s.from, { recursive: true, force: true });
             queueReceipt.push(`queue/${s.key}: copied (cross-device) ${s.from} -> ${s.to}`);
+            queueJournalSteps.push({ from: s.from, to: s.to, action: "renamed" });
           } else {
             throw e;
           }
@@ -815,6 +871,101 @@ export async function runDataMigrate(
       }
     }
 
+    // 6.5. Path rewrite (task-2, #283): the watchlist and any queue tickets
+    // still hold absolute paths recorded before this run's renames — the
+    // symptom that made `junco doctor` report every watched repo as "not a
+    // git clone" after a migrate. Inserted HERE — after every phase above has
+    // landed at targetRoot, BEFORE the legacy-root removal below — so the map
+    // reflects this run's FINAL destinations. Built from THIS run's own
+    // renames (queueJournalSteps + dataRootJournalSteps) UNIONED with the
+    // DURABLE on-disk journal's historical "renamed" steps (fix-wave review,
+    // #283 Important 2) — buildPrefixMap further filters the union to
+    // `action === "renamed"`, dropping any skipped-conflict pair either
+    // source contributes: a candidate pair that never moved must never be
+    // treated as a rewrite target (design rule 1, migratePathRewrite.ts).
+    // The historical union matters because a run that renamed a tree — and
+    // journaled it in this SAME `finally` above, or in an earlier run — but
+    // died before reaching THIS phase leaves nothing for a resumed run's OWN
+    // step arrays to rebuild that prefix from: the tree has already moved,
+    // so re-running the mover produces no NEW "renamed" step, and the stale
+    // paths inside the watchlist/tickets/records would stay wrong FOREVER
+    // without this. Re-applying a historical prefix is provably safe: an
+    // already-rewritten value matches no old prefix (`rewritePath` returns
+    // `null`) and is left untouched — idempotence rule 4 above, unchanged.
+    // `readJournal` never throws (missing/corrupt journal → empty steps);
+    // `dedupeSteps` handles the overlap between `dataRootJournalSteps`
+    // (already flushed to `migratedFile` above, in this same run) and what
+    // `readJournal` reads back here.
+    // Does NOT exclude migrateStateTree's own same-directory renames (phase
+    // 4) — a prior comment here claimed it did; that was false (fix-wave
+    // review #283 Critical 1). The phase-5 merge branch above
+    // (`pair.to === migratedFile`) reads the LEGACY state-tree journal and
+    // appends ITS "renamed" steps into `migratedFile` — inside this SAME
+    // loop, which always runs BEFORE `readJournal(migratedFile, ...)` below.
+    // So `historicalRenameSteps` DOES include phase 4's same-directory
+    // renames whenever a pre-unification tree's legacy journal was merged
+    // in this run, or in an earlier one. That is correct and necessary: a
+    // stored value can legitimately match a phase-4 step first (e.g. a
+    // watchlist/ticket path under the pre-normalization `<root>/repos`),
+    // and `buildPrefixMap` now transitively resolves such a chain to its
+    // TRUE final destination — through any later root-level move of the
+    // renamed tree's new parent — rather than stopping at that intermediate
+    // hop (which a plain single-hop map used to do: the rewritten value
+    // landed inside the legacy root this same run then deletes). See
+    // `buildPrefixMap`'s own doc comment in migratePathRewrite.ts.
+    const rewriteTargetQueue: Paths = {
+      inbox: join(vaultQueueTarget, "inbox"),
+      processing: join(vaultQueueTarget, "processing"),
+      done: join(vaultQueueTarget, "done"),
+      failed: join(vaultQueueTarget, "failed"),
+    };
+    const historicalRenameSteps = readJournal(migratedFile, readFileFn).steps;
+    const rewriteMapWarnings: string[] = [];
+    const rewriteMap = buildPrefixMap(
+      dedupeSteps([...historicalRenameSteps, ...queueJournalSteps, ...dataRootJournalSteps]),
+      rewriteMapWarnings,
+    );
+    rewriteReport = rewriteStoredPaths({ targetRoot, queuePaths: rewriteTargetQueue }, rewriteMap, {
+      readFileFn,
+      writeFileFn,
+      readdirFn,
+      existsFn,
+      renameFn,
+    });
+    // Surface a prefix-chain cycle (buildPrefixMap's own guard — a journal
+    // that in principle contained `A -> B` and `B -> A`) on the SAME receipt
+    // channel every other path-rewrite warning uses, rather than a separate
+    // silent-drop path.
+    rewriteReport.warnings.push(...rewriteMapWarnings);
+    if (rewriteReport.rewritten > 0) {
+      // One summary step for the whole phase, not one per rewritten value —
+      // "the result" the task brief asks to journal. readJournal/
+      // appendJournal both stay fully generic over MigrationStep.action
+      // (appendJournal only special-cases "skipped-conflict" for its dedup
+      // rule), so no changes were needed there for the new "rewrote" value.
+      try {
+        appendJournal(
+          migratedFile,
+          [{ from: targetRoot, to: targetRoot, action: "rewrote" }],
+          readFileFn,
+          writeFileFn,
+          renameFn,
+        );
+      } catch (journalErr) {
+        // Minor 4 (fix-wave review): same #197.1-style guard the data-root
+        // journal write above uses — a failure writing this cosmetic
+        // "rewrote" receipt must not turn into exit 1. Every store this
+        // phase touched was already written successfully on disk
+        // (rewriteReport.rewritten > 0 to even reach here); the failure is
+        // recorded through this phase's own warning channel instead of
+        // aborting the rest of the migration.
+        rewriteReport.warnings.push(
+          `path-rewrite journal write failed: ` +
+            `${journalErr instanceof Error ? journalErr.message : String(journalErr)}`,
+        );
+      }
+    }
+
     // 7. Legacy root removal — filesystem-driven (Critical 1), attempted
     // whenever the fixed legacy path still exists, not gated on
     // `cfg.legacy.dataRoot` (which flips to false the moment ANY marker
@@ -857,6 +1008,20 @@ export async function runDataMigrate(
             /* best-effort — rmdir below just reports it as a leftover */
           }
         }
+      }
+      // `<root>/skills` is a symlink mount that skillLinks.ts recreates at
+      // every daemon startup, so on any machine the daemon has run it is
+      // sitting in the legacy root with no pair to move it — and, exactly
+      // like the scaffolded .gitignore above, it makes the rmdir below fail
+      // ENOTEMPTY every time. Only a SYMLINK is unlinked here; a real
+      // directory or file at that path is left alone and reported as a
+      // leftover like anything else. The mount is regenerated at the new
+      // root by ensureSkillLinks on the next daemon start.
+      const legacySkills = join(legacyRoot, "skills");
+      try {
+        if (lstatFn(legacySkills).isSymbolicLink()) unlinkSync(legacySkills);
+      } catch {
+        /* absent or unreadable — rmdir below reports it as a leftover */
       }
       try {
         rmdirSync(legacyRoot);
@@ -925,6 +1090,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      rewriteReport,
       configReceipt,
       configMoveReceipt,
       stateTreeJournalFile,
@@ -945,6 +1111,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      rewriteReport,
       configReceipt,
       configMoveReceipt,
       stateTreeJournalFile,
