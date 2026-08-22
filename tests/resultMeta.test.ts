@@ -15,6 +15,7 @@ describe("parseResultMeta", () => {
       prUrl: "https://github.com/o/r/pull/7",
       dependencyFailed: null,
       superseded: null,
+      prQueued: false,
     });
   });
 
@@ -25,6 +26,7 @@ describe("parseResultMeta", () => {
       prUrl: null,
       dependencyFailed: null,
       superseded: null,
+      prQueued: false,
     });
   });
 
@@ -47,6 +49,7 @@ describe("parseResultMeta", () => {
       prUrl: null,
       dependencyFailed: null,
       superseded: null,
+      prQueued: false,
     });
     expect(parseResultMeta("<!-- junco-result\nstatus:")).toEqual({
       status: "",
@@ -54,6 +57,7 @@ describe("parseResultMeta", () => {
       prUrl: null,
       dependencyFailed: null,
       superseded: null,
+      prQueued: false,
     });
   });
 
@@ -61,5 +65,12 @@ describe("parseResultMeta", () => {
     expect(
       parseResultMeta(BLOCK("status: completed\nduration_seconds: soon")).durationSeconds,
     ).toBeNull();
+  });
+
+  it("parses pr_queued", () => {
+    expect(
+      parseResultMeta("<!-- junco-result\nstatus: completed\npr_queued: true\n-->").prQueued,
+    ).toBe(true);
+    expect(parseResultMeta("<!-- junco-result\nstatus: completed\n-->").prQueued).toBe(false);
   });
 });

@@ -109,6 +109,27 @@ describe("sweepDependencies — satisfaction stamping", () => {
     expect(t.depsSatisfied).toEqual(["parent"]);
   });
 
+  it("does not satisfy an edge whose dependency has a queued (not yet opened) offline PR", async () => {
+    writeFileSync(
+      join(paths.done, "parent.md"),
+      "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\npr_queued: true\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    const r = await sweepDependencies(cfg, { prStateFn: async () => "open" });
+    expect(r.stamped).toBe(0);
+    expect(existsSync(join(paths.inbox, "child.md"))).toBe(true);
+  });
+
+  it("still satisfies an edge whose dependency finished with no PR at all (Q&A ticket)", async () => {
+    writeFileSync(
+      join(paths.done, "parent.md"),
+      "---\nid: parent\n---\nB\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(paths.inbox, "child.md"), "---\nid: child\ndepends_on: [parent]\n---\n");
+    const r = await sweepDependencies(cfg, { prStateFn: async () => "open" });
+    expect(r.stamped).toBe(1);
+  });
+
   it("parent with pr_url → merged stamps, open waits", async () => {
     writeFileSync(
       join(paths.done, "parent.md"),

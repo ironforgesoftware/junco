@@ -283,6 +283,9 @@ describe("finalizePr offline note", () => {
     expect(text).toContain(
       "PR queued for offline push — junco will open it automatically when GitHub is reachable.",
     );
+    // Machine-readable twin (#298): the dependency sweep reads this marker to
+    // know a PR is coming but does not exist yet.
+    expect(text).toMatch(/^pr_queued: true$/m);
   });
 
   it("omits the note on a normal PR finalize", () => {
@@ -293,7 +296,9 @@ describe("finalizePr offline note", () => {
       outcome({ prUrl: "https://github.com/owner/repo/pull/1", pushed: true }),
       { dirs: { done, failed } },
     );
-    expect(readFileSync(dst, "utf8")).not.toContain("PR queued for offline push");
+    const text = readFileSync(dst, "utf8");
+    expect(text).not.toContain("PR queued for offline push");
+    expect(text).not.toContain("pr_queued: true");
   });
 
   // Issue #50: an offline AMEND parks only the push (the PR URL is already

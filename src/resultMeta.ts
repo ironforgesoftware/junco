@@ -15,6 +15,12 @@ export interface ResultMeta {
    * the plan revision that pre-empted this ticket before it ever ran. Null =
    * not a superseded ticket (an ordinary failure, or done/still-queued). */
   superseded: string | null;
+  /** Offline PR endgame marker (finalize.ts renderPrResult): the ticket
+   * finalized DONE with its push→PR sequence parked in the outbox, so the PR
+   * does not exist yet and `prUrl` is null. The dependency sweep must WAIT on
+   * such an edge rather than treating "no PR" as "no PR was ever coming"
+   * (#298). Cleared when the outbox flush upserts the real pr_url. */
+  prQueued: boolean;
 }
 
 const BLOCK_RE = /<!-- junco-result\n([\s\S]*?)(?:-->|$)/g;
@@ -29,6 +35,7 @@ export function parseResultMeta(content: string): ResultMeta {
       prUrl: null,
       dependencyFailed: null,
       superseded: null,
+      prQueued: false,
     };
   const field = (key: string): string | null => {
     const m = new RegExp(`^${key}: ?(.*)$`, "m").exec(last as string);
@@ -42,5 +49,6 @@ export function parseResultMeta(content: string): ResultMeta {
     prUrl: field("pr_url"),
     dependencyFailed: field("dependency_failed"),
     superseded: field("superseded"),
+    prQueued: field("pr_queued") === "true",
   };
 }

@@ -118,6 +118,10 @@ function renderPrResult(
   if (prOutcome.baseBranch) fm.push(`base_branch: ${prOutcome.baseBranch}`);
   if (prOutcome.commits.length > 0) fm.push(`commit_count: ${prOutcome.commits.length}`);
   fm.push(`pushed: ${prOutcome.pushed}`);
+  // Machine-readable twin of the human "PR queued for offline push" line below
+  // — the dependency sweep reads this to know the PR is coming but absent
+  // (#298). Only emitted while the URL is genuinely unknown.
+  if (prOutcome.prQueued && !prOutcome.prUrl) fm.push("pr_queued: true");
   if (prOutcome.amendedPrNumber !== null) fm.push(`amended_pr: ${prOutcome.amendedPrNumber}`);
   const fmBlock = fm.length > 0 ? "\n" + fm.join("\n") : "";
 
