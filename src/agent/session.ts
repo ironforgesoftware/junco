@@ -523,6 +523,19 @@ const NOOP_MODELS_STORE = {
  * `allowModelNetwork` defaults to false and is left alone. Junco's three
  * cascade paths are all static, so skipping the refresh costs nothing.
  */
+// The four option names below (credentials/modelsPath/refreshOnCreate/modelsStore)
+// are intentionally UNCHECKED against the SDK's real `CreateModelRuntimeOptions`:
+// narrowing `ModelRuntimeStatic.create`'s parameter to a literal type naming
+// them was tried and rejected by tsc — `credentials: unknown` (required here,
+// since this module stays SDK-free) isn't assignable to the real
+// `credentials?: CredentialStore`, in either bivariant-check direction, so the
+// real `ModelRuntime` no longer satisfies the narrowed signature. A typo in one
+// of these four keys therefore compiles silently; `make()` below is the only
+// caller, so a typo is one function to audit, and the runtime guard at the
+// `makePiSessionFactory` call site (`if (!modelRuntime) throw …`) catches the
+// production consequence (a lost inline provider / file-backed fallback) even
+// though it wouldn't catch a typo'd key landing among genuinely-optional SDK
+// fields.
 function sdkRegistryOps(
   ModelRuntimeStatic: { create(options: Record<string, unknown>): Promise<unknown> },
   credentials: unknown,
@@ -668,6 +681,12 @@ export function makePiSessionFactory(
     // The SAME runtime resolution ran on — an inline provider registered
     // during the cascade lives on this object, so the session must use it.
     const modelRuntime = resolvedModel.registry.backing as any;
+    if (!modelRuntime) {
+      throw new Error(
+        "internal: resolved registry carries no SDK runtime handle — createAgentSession would " +
+          "fall back to a file-backed ModelRuntime under ~/.pi and lose the inline provider.",
+      );
+    }
 
     // Sandbox (on by default): replace built-in tools with sandboxed operations
     // and freeze ambient extension loading. Inert when sandbox.enabled is false —

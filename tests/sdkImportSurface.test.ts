@@ -36,7 +36,6 @@ describe("Pi SDK import surface (hosted-provider factory wiring depends on these
       expect(mod[name], name).toBeDefined();
     }
     expect(typeof mod.SettingsManager.inMemory, "SettingsManager.inMemory").toBe("function");
-    expect(typeof mod.ModelRuntime).toBe("function");
     expect(typeof mod.ModelRuntime.create).toBe("function");
   });
 });

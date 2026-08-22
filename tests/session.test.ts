@@ -777,11 +777,37 @@ describe("models.json file path — SDK resolution", () => {
         credentials: inMemoryCredentialStore(),
         modelsPath: p,
         refreshOnCreate: false,
+        // No-op store, matching production (sdkRegistryOps' NOOP_MODELS_STORE) —
+        // without it the SDK builds a FileModelsStore next to `p`.
+        modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
       });
-      expect(runtime.getModel("omlx", "my-model")).toBeTruthy();
+      const model = runtime.getModel("omlx", "my-model");
+      expect(model).toBeTruthy();
+      expect(model!.contextWindow).toBe(200000);
+      expect(model!.maxTokens).toBe(8192);
+      expect(model!.reasoning).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Important #1(b): makePiSessionFactory hands `resolvedModel.registry.backing`
+  // (the SDK ModelRuntime instance itself) to createAgentSession as `modelRuntime`
+  // — if that handoff ever silently loses the runtime (e.g. `backing` comes back
+  // undefined), createAgentSession falls back to a FILE-BACKED ModelRuntime under
+  // ~/.pi (sdk.js: `options.modelRuntime ?? await ModelRuntime.create({authPath,
+  // modelsPath})`), touching the operator's real auth.json/models.json and losing
+  // any inline-registered provider. This pins that the runtime `sdkRegistryOps`
+  // constructs is a real, usable ModelRuntime — the same shape `.backing` carries.
+  it("the SDK runtime usable as `backing` exposes getModel (createAgentSession needs that exact runtime)", async () => {
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+    const runtime = await ModelRuntime.create({
+      credentials: inMemoryCredentialStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+      modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
+    });
+    expect(typeof (runtime as { getModel?: unknown }).getModel).toBe("function");
   });
 });
 
