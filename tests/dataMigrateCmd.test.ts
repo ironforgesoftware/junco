@@ -14,6 +14,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -537,6 +538,59 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     expect(readFileSync(join(legacyRoot, ".gitignore"), "utf8")).toBe("*.local\n");
     expect(existsSync(legacyRoot)).toBe(true);
     expect(out.join("")).toMatch(/not removed — still contains: \.gitignore/);
+  });
+
+  it("N3: unlinks a leftover skills symlink mount before the rmdir, so the legacy root is actually removed", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    mkdirSync(legacyRoot, { recursive: true });
+    // skillLinks.ts recreates <root>/skills as a symlink at every daemon
+    // startup. A migrated mount's target is the old package dir — its
+    // existence is irrelevant here, since existsFn (which follows links)
+    // must never be what identifies it; only lstat can.
+    symlinkSync(join(root, "nonexistent-skills-target"), join(legacyRoot, "skills"));
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(legacyRoot)).toBe(false);
+    expect(out.join("")).toMatch(/removed legacy root/);
+  });
+
+  it("N3: a real directory (not a symlink) at the legacy skills path is left alone and reported as a leftover", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    // NOT a symlink — an actual directory sitting at that path, holding a
+    // real file. Must never be unlinked.
+    mkdirSync(join(legacyRoot, "skills"), { recursive: true });
+    writeFileSync(join(legacyRoot, "skills", "real-file.txt"), "hi", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(join(legacyRoot, "skills", "real-file.txt"))).toBe(true);
+    expect(existsSync(legacyRoot)).toBe(true);
+    expect(out.join("")).toMatch(/not removed — still contains: skills/);
   });
 
   it("--dry-run prints the cross-root plan and moves nothing", async () => {

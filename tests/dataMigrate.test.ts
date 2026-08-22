@@ -366,6 +366,33 @@ describe("flatToV2Pairs", () => {
     expect(cross).toContainEqual({ from: "/old/watchlist.json", to: "/new/watchlist.json" });
     expect(cross).toContainEqual({ from: "/old/migrated.json", to: "/new/migrated.json" });
   });
+
+  it("moves the plan-set records tree", () => {
+    const pairs = flatToV2Pairs("/from", "/to");
+    expect(pairs).toContainEqual({ from: join("/from", "plans"), to: join("/to", "data/plans") });
+  });
+
+  it("covers every layout key (guards against a forgotten tree)", () => {
+    // A new LAYOUTS entry with no pair here is silently left behind by a
+    // cross-root migrate AND blocks the legacy-root rmdir. Keep this list in
+    // sync deliberately rather than discovering the gap in production.
+    const pairs = flatToV2Pairs("/from", "/to").map((p) => p.from);
+    for (const key of [
+      "queue",
+      "review",
+      "outbox",
+      "assess-history",
+      "history",
+      "transcripts",
+      "plans",
+      "clones",
+      "worktrees",
+      "github-cache",
+      "mirror",
+    ]) {
+      expect(pairs, `missing pair for ${key}`).toContain(join("/from", key));
+    }
+  });
 });
 
 describe("pendingMigrations", () => {

@@ -98,6 +98,7 @@ import {
   rmSync,
   rmdirSync,
   statSync,
+  lstatSync,
   readdirSync,
   openSync,
   fsyncSync,
@@ -144,6 +145,12 @@ export interface DataMigrateDeps {
   fetchFn?: typeof fetch;
   /** Existence probe (plan computation + pendingMigrations). Default: fs.existsSync. */
   existsFn?: (p: string) => boolean;
+  /** lstat that does NOT follow the link — the only way to identify the
+   * `<root>/skills` symlink mount, since `existsFn` follows links and a
+   * migrated mount's target is the old package dir (so it reads as absent).
+   * Throws ENOENT when the path does not exist, same contract as
+   * `fs.lstatSync`. Default: the real lstatSync. */
+  lstatFn?: (p: string) => { isSymbolicLink(): boolean };
   /** Rename primitive — used for the queue-dir moves, the data-root/gh-creds
    * moves, and the config.json atomic tmp+rename write. Default: fs.renameSync. */
   renameFn?: (from: string, to: string) => void;
@@ -487,6 +494,7 @@ export async function runDataMigrate(
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const fetchFn = deps.fetchFn ?? fetch;
   const existsFn = deps.existsFn ?? existsSync;
+  const lstatFn = deps.lstatFn ?? lstatSync;
   const renameFn = deps.renameFn ?? renameSync;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
@@ -857,6 +865,20 @@ export async function runDataMigrate(
             /* best-effort — rmdir below just reports it as a leftover */
           }
         }
+      }
+      // `<root>/skills` is a symlink mount that skillLinks.ts recreates at
+      // every daemon startup, so on any machine the daemon has run it is
+      // sitting in the legacy root with no pair to move it — and, exactly
+      // like the scaffolded .gitignore above, it makes the rmdir below fail
+      // ENOTEMPTY every time. Only a SYMLINK is unlinked here; a real
+      // directory or file at that path is left alone and reported as a
+      // leftover like anything else. The mount is regenerated at the new
+      // root by ensureSkillLinks on the next daemon start.
+      const legacySkills = join(legacyRoot, "skills");
+      try {
+        if (lstatFn(legacySkills).isSymbolicLink()) unlinkSync(legacySkills);
+      } catch {
+        /* absent or unreadable — rmdir below reports it as a leftover */
       }
       try {
         rmdirSync(legacyRoot);

@@ -106,6 +106,7 @@ export function flatToV2Pairs(
     ["assess-history", "data/assess-history"],
     ["history", "data/history"],
     ["transcripts", "data/transcripts"],
+    ["plans", "data/plans"],
     ["spend.json", "data/spend.json"],
     ["metrics.json", "data/metrics.json"],
     ["clones", "cache/clones"],
