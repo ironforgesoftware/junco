@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { sep } from "node:path";
 import { type SandboxPolicy, readRules } from "./policy.js";
 import { orderRules, type ReadRule } from "./precedence.js";
 
@@ -84,31 +85,87 @@ export const seatbeltBackend: SandboxBackend = {
 
 // ---- Linux bubblewrap ----------------------------------------------------
 
-/** bwrap args: read-only root, rw-bind writable roots, tmpfs-mask denied
- *  read dirs, /dev/null-mask denied files, private /dev+/proc+/tmp, unshare
- *  net when denied. Deny mounts are emitted only for paths that EXIST
- *  (`existsFn` injectable for tests): bwrap cannot create a mountpoint under
- *  the read-only root bind, so a mount aimed at a missing path (e.g. a
- *  github-cache/ nobody has populated, or an absent ~/.gnupg) would abort
- *  the whole spawn — and a path that does not exist cannot be read anyway
- *  (the JS path-jail still denies it by name if it appears later). Mounts
- *  apply in argv order, which is why the denies come AFTER the writable-root
- *  binds and why the deny list must never contain an ancestor of a writable
- *  root (policy.ts denies the data root's sensitive SUBTREES, not the root):
- *  a later tmpfs over an ancestor would shadow the bind entirely. */
+/** True when `abs` is `root` or lies inside it, matched on path boundaries.
+ *  Same shape as precedence.ts's private `isUnder` / pathJail.ts:24-27. */
+function isUnder(abs: string, root: string): boolean {
+  return abs === root || abs.startsWith(root + sep);
+}
+
+/** bwrap mounts for one read rule. Destinations are newroot paths; bind
+ *  sources come from bwrap's pristine view of the host, so an allow-back
+ *  re-exposes real content even through a tmpfs mounted over its ancestor.
+ *  Only the combinations `readRules` produces are mapped (allow/subtree,
+ *  deny/subtree, deny/file) — see policy.ts's `readRules`. */
+function readRuleMounts(rule: ReadRule, writable: boolean): string[] {
+  if (rule.effect === "allow") {
+    return writable ? ["--bind", rule.path, rule.path] : ["--ro-bind", rule.path, rule.path];
+  }
+  // tmpfs needs a directory; an existing file is masked by binding /dev/null
+  // over it (reads see empty content, the data is protected).
+  return rule.kind === "file" ? ["--ro-bind", "/dev/null", rule.path] : ["--tmpfs", rule.path];
+}
+
+/** The order bwrap's mounts must be emitted in: `orderRules` specificity
+ *  order (least specific first), with the writable-root binds hoisted as late
+ *  as that ordering permits — after every rule that does not lie inside them,
+ *  but still before the (necessarily deeper) rules that do. Each entry carries
+ *  whether it is a writable root, because `readRules` maps writable roots and
+ *  read allow-backs to the same allow/subtree rule and only the former binds
+ *  read-write. */
+function mountOrder(policy: SandboxPolicy): { rule: ReadRule; writable: boolean }[] {
+  const writableRoots = new Set(policy.writableRoots);
+  const entries = orderRules(readRules(policy)).map((rule) => ({
+    rule,
+    writable: rule.effect === "allow" && writableRoots.has(rule.path),
+  }));
+  const bucket = (e: { rule: ReadRule; writable: boolean }): number => {
+    if (e.writable) return 1;
+    return policy.writableRoots.some((w) => isUnder(e.rule.path, w)) ? 2 : 0;
+  };
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => bucket(a.entry) - bucket(b.entry) || a.index - b.index)
+    .map(({ entry }) => entry);
+}
+
+/** bwrap args: read-only root, private /dev+/proc+/tmp, then one mount per
+ *  read rule (tmpfs-mask a denied dir, /dev/null-mask a denied file, ro-bind
+ *  an allow-back, rw-bind a writable root), then unshare net when denied.
+ *
+ *  Mounts apply in argv ORDER and later mounts are destructive, so order is
+ *  meaning. Rules are emitted via `mountOrder`, i.e. `orderRules` order (see
+ *  precedence.ts) — least specific first, so a rule nested inside a broader
+ *  one always lands later and wins, matching what `resolveRead` computes for
+ *  the JS path-jail and what the seatbelt profile emits. Concretely, for a
+ *  wholesale data-root deny (#277): tmpfs over the root, then the cache/
+ *  allow-back ro-bound back on top of it, then a tmpfs over cache/mirror
+ *  nested inside that, then the worktree rw-bound LAST so nothing shadows it.
+ *  Writable roots go as late as the specificity ordering permits, but a deny
+ *  *inside* a writable root (an operator's extra_deny_read in their own
+ *  worktree) is deeper still and stays after that bind — otherwise re-binding
+ *  the pristine host subtree would silently un-deny it.
+ *
+ *  Mounts are emitted only for paths that EXIST (`existsFn` injectable for
+ *  tests), with one exception. A deny needs its target present because bwrap
+ *  cannot create a mountpoint under the read-only root bind (nor under an
+ *  allow-back's ro-bind), so a mount aimed at a missing path — an unpopulated
+ *  github-cache/, an absent ~/.gnupg — would abort the whole spawn, and a path
+ *  that does not exist cannot be read anyway (the JS path-jail still denies it
+ *  by name if it appears later). An allow-back needs its SOURCE present for
+ *  the same fatal reason: `--ro-bind` of a missing source aborts the spawn,
+ *  and re-allowing a path that does not exist grants nothing. Writable roots
+ *  are the exception and are never guarded: the caller creates the worktree
+ *  and scratch dir before spawning, and a missing one must abort loudly rather
+ *  than be silently dropped, which would leave the agent's own worktree masked
+ *  by whatever deny sits above it. */
 export function bwrapArgs(
   policy: SandboxPolicy,
   existsFn: (p: string) => boolean = existsSync,
 ): string[] {
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
-  for (const r of policy.writableRoots) args.push("--bind", r, r);
-  for (const d of policy.readDenyPaths) {
-    if (existsFn(d)) args.push("--tmpfs", d);
-  }
-  for (const f of policy.readDenyFiles) {
-    // tmpfs needs a directory; an existing file is masked by binding
-    // /dev/null over it (reads see empty content, the data is protected).
-    if (existsFn(f)) args.push("--ro-bind", "/dev/null", f);
+  for (const { rule, writable } of mountOrder(policy)) {
+    if (!writable && !existsFn(rule.path)) continue;
+    args.push(...readRuleMounts(rule, writable));
   }
   args.push("--unshare-pid");
   if (!policy.network) args.push("--unshare-net");

@@ -45,6 +45,43 @@ const dataPolicy: SandboxPolicy = {
   scratchDir: "/sbxroot/scratch",
 };
 
+// The armed #277 shape (Task 7): the worktree lives UNDER a wholesale-denied
+// data root, with cache/ allowed back and mirror/ re-denied inside it.
+const armedPolicy: SandboxPolicy = {
+  writableRoots: ["/sbxroot/.junco/cache/worktrees/tkt-1", "/sbxroot/scratch"],
+  readDenyPaths: ["/sbxroot/.junco", "/sbxroot/.junco/cache/mirror"],
+  readDenyFiles: ["/sbxroot/.junco/watchlist.json"],
+  readAllowPaths: ["/sbxroot/.junco/cache"],
+  network: false,
+  scratchDir: "/sbxroot/scratch",
+};
+
+// An operator's extra_deny_read INSIDE their own worktree: a deny deeper than
+// a writable root still wins (policy.ts's readRules pins that deliberately).
+const denyInsideWorktree: SandboxPolicy = {
+  writableRoots: ["/sbxroot/wt"],
+  readDenyPaths: ["/sbxroot/wt/secrets"],
+  readDenyFiles: ["/sbxroot/wt/.env"],
+  readAllowPaths: [],
+  network: false,
+  scratchDir: "/sbxroot/scratch",
+};
+
+/** argv index where the mount op `tokens` starts, or -1. bwrap mounts apply in
+ *  argv order and later mounts are destructive, so index IS meaning here. */
+function opAt(args: string[], tokens: string[]): number {
+  return args.findIndex((_, i) => tokens.every((t, k) => args[i + k] === t));
+}
+
+/** Start index of every read-deny mount the policy asks for (tmpfs for a
+ *  subtree, /dev/null ro-bind for a file). */
+function denyMountIndices(args: string[], policy: SandboxPolicy): number[] {
+  return [
+    ...policy.readDenyPaths.map((d) => opAt(args, ["--tmpfs", d])),
+    ...policy.readDenyFiles.map((f) => opAt(args, ["--ro-bind", "/dev/null", f])),
+  ];
+}
+
 describe("seatbeltProfile", () => {
   it("denies default, allows writes only under the roots, and denies network", () => {
     const p = seatbeltProfile(denyNet);
@@ -120,12 +157,13 @@ describe("bwrapArgs", () => {
   it("does not unshare net when network is allowed", () => {
     expect(bwrapArgs(allowNet, () => true).join(" ")).not.toContain("--unshare-net");
   });
-  it("never tmpfs-masks the data root — the worktree bind must not be shadowed", () => {
+  it("masks only the sensitive data subtrees, never the data root, for today's policy", () => {
     const args = bwrapArgs(dataPolicy, () => true);
     const a = args.join(" ");
-    // The worktree stays rw-bound and NO tmpfs mounts over it or any of its
-    // ancestors (mounts apply in argv order — a later tmpfs of an ancestor
-    // would mount OVER the bind and the worktree would appear empty).
+    // Today's dataTree policy denies SUBTREES of the data root, not the root
+    // itself (#277 Task 7 changes that), so no tmpfs targets the root or any
+    // ancestor of the worktree. The worktree stays rw-bound either way: its
+    // bind is emitted after every deny mount it does not contain.
     expect(a).toContain(`--bind ${dataDir}/worktrees/tkt-1 ${dataDir}/worktrees/tkt-1`);
     const tmpfsTargets = args.flatMap((v, i) => (args[i - 1] === "--tmpfs" ? [v] : []));
     expect(tmpfsTargets).not.toContain(dataDir);
@@ -145,6 +183,106 @@ describe("bwrapArgs", () => {
     // be read anyway (the JS jail still denies it by name).
     expect(a).not.toContain(`--tmpfs ${dataDir}/review`);
     expect(a).toContain(`--tmpfs ${dataDir}/queue`);
+  });
+
+  // Every assertion above is `toContain` on a joined string — order-blind by
+  // construction. bwrap mounts apply in argv ORDER and later mounts are
+  // destructive, so only indexOf-style assertions can catch a reordering bug,
+  // and a reordering bug here reads as harmless while widening access.
+  describe("mount order (allow-over-deny, #277)", () => {
+    it("binds the cache allow-back AFTER the junco deny and BEFORE the nested mirror deny", () => {
+      const args = bwrapArgs(nestedPolicy, () => true);
+      const denyRoot = opAt(args, ["--tmpfs", "/sbxroot/.junco"]);
+      const allowCache = opAt(args, [
+        "--ro-bind",
+        "/sbxroot/.junco/cache",
+        "/sbxroot/.junco/cache",
+      ]);
+      const denyMirror = opAt(args, ["--tmpfs", "/sbxroot/.junco/cache/mirror"]);
+      expect(denyRoot).toBeGreaterThanOrEqual(0);
+      // The allow-back must land after the tmpfs that masks its ancestor,
+      // otherwise the tmpfs shadows it and cache/ is invisible...
+      expect(allowCache).toBeGreaterThan(denyRoot);
+      // ...and the nested deny must land after the allow-back, otherwise the
+      // allow-back re-exposes mirror/. This is the #277 over-permission bug.
+      expect(denyMirror).toBeGreaterThan(allowCache);
+    });
+
+    it("keeps the base mounts first, with the least-specific deny right after", () => {
+      const args = bwrapArgs(nestedPolicy, () => true);
+      expect(args.slice(0, 9)).toEqual([
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+      ]);
+      expect(opAt(args, ["--tmpfs", "/sbxroot/.junco"])).toBe(9);
+    });
+
+    for (const [name, policy] of [
+      ["the #277 nested shape", nestedPolicy],
+      ["the armed shape (worktree under a denied root)", armedPolicy],
+      ["today's data-tree shape", dataPolicy],
+      ["a plain policy", denyNet],
+    ] as const) {
+      it(`binds every writable root after every deny mount — ${name}`, () => {
+        const args = bwrapArgs(policy, () => true);
+        const denies = denyMountIndices(args, policy);
+        const writes = policy.writableRoots.map((w) => opAt(args, ["--bind", w, w]));
+        for (const i of [...denies, ...writes]) expect(i).toBeGreaterThanOrEqual(0);
+        expect(Math.min(...writes)).toBeGreaterThan(Math.max(...denies));
+      });
+    }
+
+    it("rw-binds a worktree nested under a wholesale-denied root, after the tmpfs", () => {
+      // The full armed (#277 Task 7) chain, in one strictly increasing run:
+      // mask the root → re-expose cache/ → re-mask mirror/ → bind the worktree.
+      const args = bwrapArgs(armedPolicy, () => true);
+      const wt = "/sbxroot/.junco/cache/worktrees/tkt-1";
+      const chain = [
+        opAt(args, ["--tmpfs", "/sbxroot/.junco"]),
+        opAt(args, ["--ro-bind", "/sbxroot/.junco/cache", "/sbxroot/.junco/cache"]),
+        opAt(args, ["--tmpfs", "/sbxroot/.junco/cache/mirror"]),
+        opAt(args, ["--bind", wt, wt]),
+      ];
+      for (const i of chain) expect(i).toBeGreaterThanOrEqual(0);
+      expect(chain).toEqual([...chain].sort((a, b) => a - b));
+      // A writable root is bound rw, never merely ro-bound back.
+      expect(opAt(args, ["--ro-bind", wt, wt])).toBe(-1);
+    });
+
+    it("keeps a deny nested INSIDE a writable root after that root's bind", () => {
+      // A writable bind emitted after this deny would restore the pristine
+      // host subtree over the mask and un-deny it — the OS layer would then
+      // disagree with resolveRead and with the seatbelt profile.
+      const args = bwrapArgs(denyInsideWorktree, () => true);
+      const bind = opAt(args, ["--bind", "/sbxroot/wt", "/sbxroot/wt"]);
+      expect(bind).toBeGreaterThanOrEqual(0);
+      expect(opAt(args, ["--tmpfs", "/sbxroot/wt/secrets"])).toBeGreaterThan(bind);
+      expect(opAt(args, ["--ro-bind", "/dev/null", "/sbxroot/wt/.env"])).toBeGreaterThan(bind);
+    });
+  });
+
+  describe("existence guard", () => {
+    it("skips an allow-back whose source is missing (a bind needs its source)", () => {
+      const missingCache = (p: string): boolean => p !== "/sbxroot/.junco/cache";
+      const args = bwrapArgs(nestedPolicy, missingCache);
+      expect(opAt(args, ["--ro-bind", "/sbxroot/.junco/cache", "/sbxroot/.junco/cache"])).toBe(-1);
+      // The deny it would have overridden still applies.
+      expect(opAt(args, ["--tmpfs", "/sbxroot/.junco"])).toBeGreaterThanOrEqual(0);
+    });
+
+    it("never guards a writable-root bind: a missing worktree must fail loudly", () => {
+      const args = bwrapArgs(denyNet, () => false).join(" ");
+      expect(args).toContain("--bind /work/tree /work/tree");
+      expect(args).toContain("--bind /tmp/scratch /tmp/scratch");
+      expect(args).not.toContain("--tmpfs /home/x/.ssh");
+    });
   });
 });
 
