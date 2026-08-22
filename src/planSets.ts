@@ -55,6 +55,13 @@ export interface PlanSetRecord {
    * hash) or the check never re-fires. Additive, same tolerance as
    * `lastDashboard`. */
   lastFailedHash?: string;
+  /** Ticket ids whose submit THREW during a supersede fan-out (not ids that
+   * were legitimately skipped as already-landed). The fresh record carries the
+   * new hash, so trySupersede's gate would otherwise block any re-trigger and
+   * — since the child never landed — there is no failed/ file for `junco
+   * retry` either, stranding it until the human edits the plan again (#298).
+   * The next sweep retries these before the gate. Additive: absent = none. */
+  pendingFanout?: string[];
 }
 
 export function plansDir(cfg: Config): string {

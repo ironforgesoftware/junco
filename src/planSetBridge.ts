@@ -6,7 +6,7 @@
  * below), and THIS code — never model text — builds every byte of child
  * frontmatter via the pure compiler.
  */
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config, GithubRepoMapping } from "./types.js";
@@ -34,6 +34,7 @@ import {
   writePlanSetRecord,
   resolveSetState,
   renderDashboard,
+  plansDir,
   type PlanSetRecord,
   type SetState,
 } from "./planSets.js";
@@ -348,6 +349,89 @@ async function removeApprovedLabel(
 }
 
 /**
+ * Drain any `pendingFanout` left by a PRIOR sweep's supersede fan-out (a
+ * child whose `submitTicket` threw — see the field's doc comment on
+ * `PlanSetRecord`). Runs unconditionally ahead of trySupersede's hash gate:
+ * a stranded child's ticket never landed, so it has no failed/ file for
+ * `junco retry` either, and the fresh record already carries the NEW hash —
+ * without this, the gate reads "no edit, nothing to do" forever.
+ *
+ * The record stores only `{id, ticketId, dependsOn}` — never the compiled
+ * body — so recovery means re-reading the materialized plan markdown
+ * (`materializePlanSet` writes `plansDir(cfg)/<planId>.md`) and re-running
+ * `parsePlanSet` + `compilePlan` with the record's OWN compile context
+ * (`hash`/`repoPath`/`github`) — the same context that produced these
+ * children originally, not whatever candidate is on GitHub right now.
+ *
+ * Guarded belt-and-braces against TRAP 1 (skipped ≠ stranded): only ids
+ * still `absent` are (re)submitted through the injected `submitFn` seam; an
+ * id no longer `absent` (landed some other way since) is just dropped, never
+ * resubmitted. A child whose submit throws again stays listed for the next
+ * sweep. If the materialized plan can't be read, or no longer compiles,
+ * nothing can recover the bodies — warn and clear the list; retrying forever
+ * is worse than a logged give-up.
+ */
+async function drainPendingFanout(
+  cfg: Config,
+  record: PlanSetRecord,
+  g: { nwo: string; issue: number },
+  submitFn: typeof submitTicket,
+): Promise<void> {
+  const pending = record.pendingFanout;
+  if (!pending || pending.length === 0) return;
+
+  let planText: string;
+  try {
+    planText = readFileSync(join(plansDir(cfg), `${record.planId}.md`), "utf8");
+  } catch (e) {
+    log.warn(
+      "plan-set supersede: materialized plan unreadable; giving up on stranded fan-out children",
+      { planId: record.planId, ids: pending, error: errMsg(e) },
+    );
+    record.pendingFanout = [];
+    writePlanSetRecord(cfg, record);
+    return;
+  }
+  const parsed = parsePlanSet(planText, { maxTasks: cfg.planSets.maxTasks });
+  if (!parsed.ok) {
+    log.warn(
+      "plan-set supersede: materialized plan no longer compiles; giving up on stranded fan-out children",
+      { planId: record.planId, ids: pending, errors: parsed.errors },
+    );
+    record.pendingFanout = [];
+    writePlanSetRecord(cfg, record);
+    return;
+  }
+  const children = compilePlan(parsed.plan, {
+    planId: record.planId,
+    repoPath: record.repoPath,
+    hash: record.hash,
+    github: g,
+  });
+
+  const paths = queuePaths(cfg);
+  const stillPending: string[] = [];
+  for (const id of pending) {
+    const child = children.find((c) => c.ticketId === id);
+    // No longer in the compiled plan, or no longer absent (landed some other
+    // way since) — TRAP 1 guard: drop it, never resubmit.
+    if (!child || ticketState(paths, id) !== "absent") continue;
+    try {
+      submitFn(cfg, child.content, { idHint: id });
+    } catch (e) {
+      log.warn("plan-set supersede: retry of a stranded child's submit failed again", {
+        planId: record.planId,
+        ticketId: id,
+        error: errMsg(e),
+      });
+      stillPending.push(id);
+    }
+  }
+  record.pendingFanout = stillPending;
+  writePlanSetRecord(cfg, record);
+}
+
+/**
  * Detect and apply an edited-and-re-approved plan comment for one record
  * (numbered steps below match the design's supersede behavior 1-8):
  *
@@ -413,6 +497,15 @@ async function trySupersede(
   const candidate = extractPlanSetBody(comment.body);
   if (candidate === null) return { kind: "unchanged" }; // 2. no complete fence
   const newHash = hashPlan(candidate);
+
+  // A previous fan-out left children un-submitted (their submit threw). The
+  // hash gate below would return "unchanged" and strand them forever, so
+  // drain them first. The record stores ids only, so re-read the materialized
+  // plan and re-compile to recover their bodies. Orthogonal to the supersede
+  // decision below: this runs whether or not the candidate turns out to be
+  // an edit at all.
+  await drainPendingFanout(cfg, record, g, submitFn);
+
   if (newHash === record.hash) return { kind: "unchanged" }; // 2. no edit
   if (newHash === record.lastFailedHash) return { kind: "unchanged" }; // 2. already-failed edit, unfixed
 
@@ -542,6 +635,12 @@ async function trySupersede(
   const paths = queuePaths(cfg);
   const submitted: string[] = [];
   const skipped: string[] = [];
+  // Ids whose submit THREW (as opposed to being legitimately skipped as
+  // already-landed) — TRAP 1: `skipped` conflates three causes (already
+  // done, already in inbox/processing, submit threw), but ONLY the throw
+  // case is stranded and belongs on `pendingFanout` below. Fed exclusively
+  // by the catch branch.
+  const stranded: string[] = [];
   for (const c of children) {
     const st = ticketState(paths, c.ticketId);
     if (st === "done") {
@@ -567,9 +666,10 @@ async function trySupersede(
         error: errMsg(e),
       });
       skipped.push(c.ticketId);
+      stranded.push(c.ticketId);
     }
   }
-  log.info("plan set supersede fan-out", { planId: record.planId, submitted, skipped });
+  log.info("plan set supersede fan-out", { planId: record.planId, submitted, skipped, stranded });
 
   // New hash, same planId, keep statusCommentId and lastLabel (the
   // dashboard/label steps below re-derive lastLabel from fresh queue
@@ -589,6 +689,7 @@ async function trySupersede(
     degradedPosted: false,
     lastLabel: record.lastLabel,
     closed: false,
+    pendingFanout: stranded.length > 0 ? stranded : undefined,
   };
   materializePlanSet(cfg, fresh, candidate);
 

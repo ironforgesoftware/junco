@@ -749,6 +749,60 @@ tasks:
     warnSpy.mockRestore();
   });
 
+  // TRAP: a `skipped` child (already done, or already landed) is a normal
+  // no-op — only a child whose submit THREW is stranded, and only a stranded
+  // child belongs on `pendingFanout`. The fresh record's new hash would
+  // otherwise block trySupersede's gate forever, and since the child never
+  // landed there is no failed/ file for `junco retry` either — recovery
+  // requires draining `pendingFanout` BEFORE the hash gate, even on a sweep
+  // where nothing changed.
+  it("retries a child stranded by a fan-out failure on the next sweep, even though the hash is unchanged", async () => {
+    const rec = baseRecord({
+      hash: "orig-hash",
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:done",
+      closed: true, // a finished set — supersede must reopen it
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(qp.inbox, "p1-b.md"), "---\nid: p1-b\n---\nOld B body\n");
+
+    writeFakeGh(root, approvedSupersedeGhOpts(EDITED_FENCE));
+
+    // EDITED_FENCE compiles to a/b/c. Sweep 1: "c"'s submit throws (like a
+    // transient disk-full error, not a collision) — contained per-child, so
+    // it must not abort the rest of the fan-out or the record write.
+    let failFor: string | null = "p1-c";
+    const submitFn: typeof submitTicket = (c, content, opts, deps) => {
+      if (opts?.idHint === failFor) throw new Error("disk full");
+      return submitTicket(c, content, opts, deps);
+    };
+    await maintainPlanSets(cfg, { submitFn });
+
+    expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(false);
+    const afterFirst = readPlanSetRecord(cfg, "p1");
+    expect(afterFirst?.pendingFanout).toEqual(["p1-c"]);
+    // Only the thrower is stranded — "b" (a normal, successful recompile
+    // submit) must NOT also appear on pendingFanout.
+    expect(afterFirst?.pendingFanout).not.toContain("p1-b");
+
+    // Sweep 2: the fake gh still reports the SAME edited fence — the hash
+    // gate would normally read "unchanged" and do nothing. The stranded
+    // child must still be drained and submitted.
+    failFor = null;
+    await maintainPlanSets(cfg, { submitFn });
+
+    expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(true);
+    expect(readFileSync(join(qp.inbox, "p1-c.md"), "utf8")).toContain("T C");
+    expect(readPlanSetRecord(cfg, "p1")?.pendingFanout ?? []).toEqual([]);
+  });
+
   it("supersede defers while a child is processing, but ordinary maintenance still runs (#298)", async () => {
     const rec = baseRecord({
       hash: "orig-hash",
