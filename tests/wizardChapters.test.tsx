@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import React from "react";
 import { Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
@@ -248,6 +250,7 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
       configPath: "/tmp/config.json",
       queueRoot: "/tmp/q",
       changes: [],
+      skillLinkFailures: [],
     }),
     flightCheck: async () => [],
     effectiveDataDir: "/sbx/home/.junco",
@@ -1030,6 +1033,28 @@ describe("Skills chapter", () => {
     expect(codexLine).toContain("[ ]");
   });
 
+  it("rerun with mixed spellings: a tilde-registry harness whose config holds the expanded form still renders checked (#292)", async () => {
+    // detectedHarnesses carries the raw registry spelling (tilde) the way
+    // detectInstalledHarnesses really emits it; loadConfig expands
+    // skills.harnessDirs on every read, so the config side is always
+    // absolute. Raw string equality would miss this and render unchecked.
+    const TILDE_HARNESSES = [{ name: "claude", dir: "~/.claude/skills" }];
+    const EXPANDED_DIR = join(homedir(), ".claude/skills");
+    const answers = { ...defaultAnswers(), harnessDirs: [EXPANDED_DIR] };
+    const { lastFrame } = render(
+      <Skills
+        {...noopChapter}
+        answers={answers}
+        io={fakeIo()}
+        detectedHarnesses={TILDE_HARNESSES}
+        onNext={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("claude"));
+    const claudeLine = (lastFrame() ?? "").split("\n").find((l) => l.includes("claude")) ?? "";
+    expect(claudeLine).toContain("[x]");
+  });
+
   it("rerun on a machine missing a previously-consented harness: submit keeps the undetected dir (never silently drops it)", async () => {
     // Regression: the option list is only the DETECTED set. A bare
     // patch({ harnessDirs: vals }) would replace the whole answer with the
@@ -1192,7 +1217,13 @@ describe("Finale", () => {
     });
     const { lastFrame, stdin } = render(
       <Finale
-        result={{ written: true, configPath: "/tmp/c.json", queueRoot: "/tmp/q", changes: [] }}
+        result={{
+          written: true,
+          configPath: "/tmp/c.json",
+          queueRoot: "/tmp/q",
+          changes: [],
+          skillLinkFailures: [],
+        }}
         io={io}
         onDone={() => {
           done = true;
@@ -1211,7 +1242,13 @@ describe("Finale", () => {
   it("zero-diff rerun says the config was untouched", async () => {
     const { lastFrame } = render(
       <Finale
-        result={{ written: false, configPath: "/tmp/c.json", queueRoot: "/tmp/q", changes: [] }}
+        result={{
+          written: false,
+          configPath: "/tmp/c.json",
+          queueRoot: "/tmp/q",
+          changes: [],
+          skillLinkFailures: [],
+        }}
         io={fakeIo()}
         onDone={() => {}}
         revealMs={0}
@@ -1225,7 +1262,13 @@ describe("Finale", () => {
     const r = render(
       <MouseProvider>
         <Finale
-          result={{ written: true, configPath: "/tmp/c.json", queueRoot: "/tmp/q", changes: [] }}
+          result={{
+            written: true,
+            configPath: "/tmp/c.json",
+            queueRoot: "/tmp/q",
+            changes: [],
+            skillLinkFailures: [],
+          }}
           io={fakeIo()}
           onDone={onDone}
           revealMs={0}
@@ -1236,6 +1279,56 @@ describe("Finale", () => {
     await until(() => (r.lastFrame() ?? "").includes("enter to finish"));
     r.stdin.write(mousePress(2, 1));
     await until(() => onDone.mock.calls.length === 1);
+  });
+
+  // Important 1 (final review): a skill-link failure must reach the
+  // operator through the one screen they're already looking at, not a
+  // logger nobody reads. Pins what's actually on screen, not merely that
+  // something was logged.
+  it("renders skill-link failures from the write result, not the whole report", async () => {
+    const { lastFrame } = render(
+      <Finale
+        result={{
+          written: true,
+          configPath: "/tmp/c.json",
+          queueRoot: "/tmp/q",
+          changes: [],
+          skillLinkFailures: [
+            {
+              path: "/h/.claude/skills/junco-dispatch",
+              kind: "symlink-failed",
+              harnessDir: "/h/.claude/skills",
+              detail: "EPERM: operation not permitted",
+            },
+          ],
+        }}
+        io={fakeIo()}
+        onDone={() => {}}
+        revealMs={0}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("Skill links"));
+    expect(lastFrame()).toContain("/h/.claude/skills/junco-dispatch: symlink failed");
+    expect(lastFrame()).toContain("EPERM: operation not permitted");
+  });
+
+  it("shows no Skill links section when the write result has no failures", async () => {
+    const { lastFrame } = render(
+      <Finale
+        result={{
+          written: true,
+          configPath: "/tmp/c.json",
+          queueRoot: "/tmp/q",
+          changes: [],
+          skillLinkFailures: [],
+        }}
+        io={fakeIo()}
+        onDone={() => {}}
+        revealMs={0}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("✓ Wrote config"));
+    expect(lastFrame()).not.toContain("Skill links");
   });
 });
 

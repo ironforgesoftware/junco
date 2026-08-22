@@ -847,6 +847,7 @@ export async function pollGithubInbox(
                   issue.number,
                   setBody,
                   new Date().toISOString(),
+                  { submitFn },
                 );
                 if (!dr.ok) {
                   const errList = dr.errors.map((e) => `- ${e}`).join("\n");
@@ -909,6 +910,35 @@ export async function pollGithubInbox(
                     failId,
                     { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
                     () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
+                  );
+                  continue;
+                }
+                // I3 (#298 review round 2): a per-child submit throw is now
+                // CONTAINED inside dispatchPlanSet/submitPlanSet rather than
+                // propagating. dispatchPlanSet ALSO seeds the record's
+                // `pendingFanout` from `stranded` (fix wave C, item 1) — THAT
+                // is the actual recovery: the next `maintainPlanSets` sweep's
+                // `drainPendingFanout` resubmits straight from the record,
+                // independent of what labels stand on this issue. Still leave
+                // `plan-ready` (and, in requireApproval mode, `approved`)
+                // standing rather than swapping to `junco:queued` here — this
+                // is belt-and-suspenders, not load-bearing: it only keeps this
+                // door itself from reporting the set as cleanly dispatched
+                // while a child hasn't actually landed yet. (A prior version
+                // of this comment claimed leaving `plan-ready` standing was
+                // BY ITSELF sufficient to guarantee a retry — it is not: the
+                // SAME sweep's `maintainPlanSets` unconditionally sets a
+                // lifecycle label on the fresh record regardless of what this
+                // branch does, so by the NEXT sweep the "already dispatched"
+                // branch above would see `plan-ready` next to a lifecycle
+                // label, strip both, and `continue` — never re-dispatching.
+                // Before `pendingFanout` was seeded on this door, nothing else
+                // would have resubmitted the child either — it was lost for
+                // good.)
+                if (dr.stranded.length > 0) {
+                  log.warn(
+                    "github bridge: plan set dispatch stranded child submit(s); leaving plan-ready for retry",
+                    { nwo: repo.nwo, issue: issue.number, stranded: dr.stranded },
                   );
                   continue;
                 }
@@ -1023,11 +1053,85 @@ export async function pollGithubInbox(
             continue;
           }
           const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);
-          const parent = isAsk ? null : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
+          // junco-plan fence: a multi-task set dispatches through the plan-set
+          // compiler, mirroring the approval-comment door. Checked before the
+          // single-ticket fence, same precedence as the comment path. Gated on
+          // planSets.enabled exactly like that path — disabled, the fence is
+          // invisible and the issue falls through to the planner.
+          const fenceSet =
+            isAsk || !cfg.planSets.enabled ? null : extractPlanSetBody(issue.body ?? "");
+          if (fenceSet !== null) {
+            const dr = dispatchPlanSet(cfg, repo, issue.number, fenceSet, new Date().toISOString());
+            if (!dr.ok) {
+              const errList = dr.errors.map((e) => `- ${e}`).join("\n");
+              const failureComment =
+                `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
+                `_Remove the \`${ll.failed}\` label and re-apply the \`${cfg.github.triggerLabel}\` label to retry._\n`;
+              const failId = `${repo.nwo}#${issue.number}`;
+              await guardOrQueue(
+                cfg,
+                "issue plan set failure labels",
+                failId,
+                {
+                  kind: "labels",
+                  nwo: repo.nwo,
+                  issue: issue.number,
+                  add: [ll.failed],
+                  remove: [],
+                },
+                async () => {
+                  await ghFn(
+                    cfg,
+                    [
+                      "issue",
+                      "edit",
+                      String(issue.number),
+                      "--repo",
+                      repo.nwo,
+                      "--add-label",
+                      ll.failed,
+                    ],
+                    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+                  );
+                },
+              );
+              await guardOrQueue(
+                cfg,
+                "issue plan set failure comment",
+                failId,
+                { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
+                () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
+              );
+              continue;
+            }
+            await ghFn(
+              cfg,
+              ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.queued],
+              { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+            );
+            bridged++;
+            log.info("github bridge: issue-body plan set dispatched", {
+              nwo: repo.nwo,
+              issue: issue.number,
+            });
+            continue;
+          }
+          // Issue-as-inbox door (spec 2026-08-21): a vouched body carrying a
+          // junco-ticket fence queues verbatim — the planner is only the fence
+          // PRODUCER for issues that arrive without one. Ask wins over a fence
+          // (ask rails are prose-in, read-only). The edited-after-label guard
+          // above vouches the body this fence is read from.
+          const fenceTicket = isAsk ? null : extractPlanBody(issue.body ?? "");
+          const parent =
+            isAsk || fenceTicket !== null
+              ? null
+              : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
           const t = isAsk
             ? issueToTicket(issue, repo, cfg, null)
-            : buildPlanningTicket(issue, repo, cfg, parent);
-          const stateLabel = isAsk ? ll.queued : ll.planning;
+            : fenceTicket !== null
+              ? buildExecutionTicket(issue.number, repo, fenceTicket)
+              : buildPlanningTicket(issue, repo, cfg, parent);
+          const stateLabel = isAsk || fenceTicket !== null ? ll.queued : ll.planning;
           // Same in-flight guard as the execution path: a prior sweep may have
           // submitted this ticket and then lost the label add (crash, or a
           // non-network gh failure swallowed by the per-issue catch). Once the
@@ -1054,7 +1158,7 @@ export async function pollGithubInbox(
             nwo: repo.nwo,
             issue: issue.number,
             id: t.id,
-            kind: isAsk ? "ask" : "plan",
+            kind: isAsk ? "ask" : fenceTicket !== null ? "fence" : "plan",
           });
         } catch (e) {
           log.warn("github bridge: issue skipped", {

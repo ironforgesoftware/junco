@@ -6,7 +6,7 @@
  * below), and THIS code — never model text — builds every byte of child
  * frontmatter via the pure compiler.
  */
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config, GithubRepoMapping } from "./types.js";
@@ -24,8 +24,6 @@ import {
 } from "./githubInbox.js";
 import { parsePlanSet, compilePlan, hashPlan } from "./planCompiler.js";
 import { submitTicket } from "./dispatch.js";
-import { ticketState } from "./ticketDeps.js";
-import { queuePaths } from "./config.js";
 import {
   materializePlanSet,
   submitPlanSet,
@@ -34,6 +32,7 @@ import {
   writePlanSetRecord,
   resolveSetState,
   renderDashboard,
+  plansDir,
   type PlanSetRecord,
   type SetState,
 } from "./planSets.js";
@@ -53,8 +52,16 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 const PLAN_SET_COLD_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type DispatchResult =
-  | { ok: true; submitted: string[]; skipped: string[] }
+  | { ok: true; submitted: string[]; skipped: string[]; stranded: string[] }
   | { ok: false; errors: string[] };
+
+/** Injectable side effects (tests only; production callers omit this).
+ * `submitFn` is typed against the real `submitTicket`, not `BridgeDeps`'s
+ * looser structural signature — see githubInbox.ts's BridgeDeps.submitFn,
+ * which pollGithubInbox resolves once and passes down here. */
+export interface DispatchPlanSetDeps {
+  submitFn?: typeof submitTicket;
+}
 
 export function dispatchPlanSet(
   cfg: Config,
@@ -62,6 +69,7 @@ export function dispatchPlanSet(
   issueNumber: number,
   fenceBody: string,
   nowIso: string,
+  deps: DispatchPlanSetDeps = {},
 ): DispatchResult {
   const parsed = parsePlanSet(fenceBody, { maxTasks: cfg.planSets.maxTasks });
   if (!parsed.ok) return { ok: false, errors: parsed.errors };
@@ -90,13 +98,48 @@ export function dispatchPlanSet(
   // recovery key on; a record without children self-heals (next dispatch
   // resubmits), children without a record would be an untracked set.
   materializePlanSet(cfg, record, fenceBody);
-  const r = submitPlanSet(cfg, children);
+  const r = submitPlanSet(cfg, children, { submitFn: deps.submitFn });
   log.info("plan set dispatched", {
     planId,
     submitted: r.submitted.length,
     skipped: r.skipped.length,
+    stranded: r.stranded.length,
   });
-  return { ok: true, ...r };
+  // Seed `pendingFanout` from any child whose submit THREW (fix wave C, item
+  // 1) so the next `maintainPlanSets` sweep's `drainPendingFanout` resubmits
+  // it straight from the record — see the comment on DispatchResult's
+  // `stranded` below for why this, and not merely the caller leaving
+  // `plan-ready` standing, is what actually recovers a child stranded at
+  // INITIAL dispatch (as opposed to a supersede fan-out, which already seeds
+  // this field itself — see trySupersede).
+  if (r.stranded.length > 0) {
+    record.pendingFanout = r.stranded;
+    writePlanSetRecord(cfg, record);
+  }
+  // DispatchResult keeps the pre-existing `submitted: string[]` (ticketId-only)
+  // shape — the bridge has no destination path to report to GitHub, unlike
+  // the CLI door, which now prints submitPlanSet's real `dst` (#298).
+  // `stranded` (I3, #298 review round 2): a per-child submit throw is
+  // CONTAINED inside `submitPlanSet` rather than propagating, so this
+  // function reports it back on `stranded` instead of the caller's dispatch
+  // simply throwing. The ACTUAL recovery is the `pendingFanout` seeding just
+  // above: `drainPendingFanout` resubmits from the record on the next sweep,
+  // independent of whatever labels stand on the GitHub issue. (An earlier
+  // version of this comment claimed that the caller — githubInbox.ts — merely
+  // leaving `plan-ready` standing was sufficient on its own to guarantee a
+  // retry. It is not: that same sweep's `maintainPlanSets` unconditionally
+  // sets a lifecycle label on the fresh record materialized above regardless
+  // of what the caller does with `plan-ready`, so by the NEXT sweep the
+  // "already dispatched" branch in githubInbox.ts would see `plan-ready` next
+  // to a lifecycle label, strip both `plan-ready`/`approved`, and `continue`
+  // — never re-dispatching. Before `pendingFanout` was seeded here, nothing
+  // else picked the child back up either; it was permanently lost.)
+  return {
+    ok: true,
+    submitted: r.submitted.map((s) => s.ticketId),
+    skipped: r.skipped,
+    stranded: r.stranded,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +156,9 @@ export interface MaintainPlanSetsDeps {
    * (see trySupersede). Defaults to `new Date().toISOString()` — injectable
    * so tests can pin it instead of reaching for `Date.now()` directly. */
   nowIso?: string;
+  /** Used by trySupersede's fan-out loop in place of the hard `submitTicket`
+   * import. Defaults to the real `submitTicket`. */
+  submitFn?: typeof submitTicket;
 }
 
 /** Outbox-aware guard: on a network-shaped failure, `fn`'s side effect is
@@ -276,10 +322,23 @@ function buildDegradedComment(record: PlanSetRecord, state: SetState): string {
 }
 
 /** Desired set-level lifecycle label from the current set state (priority
- * order: allDone > allTerminal&&anyFailed > anyProcessing > else queued). */
+ * order: allDone > allTerminal > anyProcessing > else queued).
+ *
+ * `allTerminal && !allDone` covers BOTH an ordinary execution failure
+ * (`anyFailed`) AND a set left with `superseded` children — a disposed child
+ * (rendered as `superseded`, not `failed` — see resolveSetState) is terminal
+ * but not done, and every non-done terminal task is one or the other; there
+ * is no third case. Before I4 (#298 review round 2), the fallthrough only
+ * checked `anyFailed`, so an all-terminal set made up entirely of done +
+ * superseded children (e.g. a compile-failed supersede that already disposed
+ * its unclaimed children — see the `!record.lastFailedHash` close guard in
+ * maintainPlanSets below) fell through to `ll.queued`, closing a broken set
+ * under a label that reads as "still queued". Mapping it to `ll.failed`
+ * instead is the closest fit among the four labels this bridge has: the set
+ * did not complete, and nothing here is still queued or running. */
 function desiredSetLabel(state: SetState, ll: ReturnType<typeof lifecycleLabels>): string {
   if (state.allDone) return ll.done;
-  if (state.allTerminal && state.anyFailed) return ll.failed;
+  if (state.allTerminal) return ll.failed;
   if (state.anyProcessing) return ll.working;
   return ll.queued;
 }
@@ -336,6 +395,90 @@ async function removeApprovedLabel(
 }
 
 /**
+ * Drain any `pendingFanout` left by a PRIOR sweep's fan-out (a child whose
+ * `submitTicket` threw — see the field's doc comment on `PlanSetRecord`).
+ * Called from `maintainPlanSets` for every open record, BEFORE trySupersede
+ * runs — orthogonal to the supersede decision (it needs only `record` and
+ * `g`, never the plan comment), so a comment that's since been deleted or
+ * gone permanently unparseable no longer blocks recovery the way it did when
+ * this ran from inside trySupersede, downstream of `findOwnPlanComment` (#298
+ * review round 2). A stranded child's ticket never landed, so it has no
+ * failed/ file for `junco retry` either, and a record superseded since then
+ * already carries a NEW hash — without this, a hash-gated check would read
+ * "no edit, nothing to do" forever.
+ *
+ * The record stores only `{id, ticketId, dependsOn}` — never the compiled
+ * body — so recovery means re-reading the materialized plan markdown
+ * (`materializePlanSet` writes `plansDir(cfg)/<planId>.md`) and re-running
+ * `parsePlanSet` + `compilePlan` with the record's OWN compile context
+ * (`hash`/`repoPath`/`github`) — the same context that produced these
+ * children originally, not whatever candidate is on GitHub right now.
+ *
+ * Retried through the shared `submitPlanSet` helper under its LOOSE
+ * (`resubmitFailed: true`) policy — not a hand-rolled absent-only loop (C1,
+ * #298 review round 2): a child stranded by a contained fan-out failure can
+ * land in `failed/`, not just stay `absent` — e.g. `supersedeUnclaimed`
+ * disposes it (superseded marker) in the SAME fan-out pass whose submit then
+ * throws for it, or an unrelated prior revision already failed it for real.
+ * An absent-only guard drops that child forever: `failed/` isn't `absent`, so
+ * it never resubmits, the set closes (fresh record, all-terminal) with no
+ * failure signal, and `junco retry --all` skips a superseded-marked file too
+ * — no recovery path left. The loose policy's done/inbox/processing-skip is
+ * what preserves the "landed some other way since" guard this loop used to
+ * implement by hand: only a submit that ACTUALLY throws again stays listed
+ * (`stranded`, always a subset of `skipped`) for the next sweep. If the
+ * materialized plan can't be read, or no longer compiles, nothing can recover
+ * the bodies — warn and clear the list; retrying forever is worse than a
+ * logged give-up.
+ */
+async function drainPendingFanout(
+  cfg: Config,
+  record: PlanSetRecord,
+  g: { nwo: string; issue: number },
+  submitFn: typeof submitTicket,
+): Promise<void> {
+  const pending = record.pendingFanout;
+  if (!pending || pending.length === 0) return;
+
+  let planText: string;
+  try {
+    planText = readFileSync(join(plansDir(cfg), `${record.planId}.md`), "utf8");
+  } catch (e) {
+    log.warn(
+      "plan-set fan-out: materialized plan unreadable; giving up on stranded fan-out children",
+      { planId: record.planId, ids: pending, error: errMsg(e) },
+    );
+    record.pendingFanout = [];
+    writePlanSetRecord(cfg, record);
+    return;
+  }
+  const parsed = parsePlanSet(planText, { maxTasks: cfg.planSets.maxTasks });
+  if (!parsed.ok) {
+    log.warn(
+      "plan-set fan-out: materialized plan no longer compiles; giving up on stranded fan-out children",
+      { planId: record.planId, ids: pending, errors: parsed.errors },
+    );
+    record.pendingFanout = [];
+    writePlanSetRecord(cfg, record);
+    return;
+  }
+  const children = compilePlan(parsed.plan, {
+    planId: record.planId,
+    repoPath: record.repoPath,
+    hash: record.hash,
+    github: g,
+  });
+
+  // Only the still-pending ids — a child no longer in the compiled plan (an
+  // even later edit dropped it) is simply absent from `retryChildren` and
+  // therefore never resubmitted either.
+  const retryChildren = children.filter((c) => pending.includes(c.ticketId));
+  const r = submitPlanSet(cfg, retryChildren, { submitFn, resubmitFailed: true });
+  record.pendingFanout = r.stranded;
+  writePlanSetRecord(cfg, record);
+}
+
+/**
  * Detect and apply an edited-and-re-approved plan comment for one record
  * (numbered steps below match the design's supersede behavior 1-8):
  *
@@ -383,6 +526,7 @@ async function trySupersede(
   ll: ReturnType<typeof lifecycleLabels>,
   getLogin: () => Promise<string>,
   nowIso: string,
+  submitFn: typeof submitTicket,
 ): Promise<SupersedeOutcome> {
   let comment: { body: string; createdAtMs: number; updatedAtMs: number } | null;
   try {
@@ -400,6 +544,7 @@ async function trySupersede(
   const candidate = extractPlanSetBody(comment.body);
   if (candidate === null) return { kind: "unchanged" }; // 2. no complete fence
   const newHash = hashPlan(candidate);
+
   if (newHash === record.hash) return { kind: "unchanged" }; // 2. no edit
   if (newHash === record.lastFailedHash) return { kind: "unchanged" }; // 2. already-failed edit, unfixed
 
@@ -502,68 +647,31 @@ async function trySupersede(
   // case it was written for.
   //
   // Per-child fan-out rule (spec: "task id is task identity across plan
-  // versions" — only a DONE ticket skips on recompile):
-  //   done                → skip (its work already happened)
-  //   inbox / processing  → already landed — an earlier, crashed pass of
-  //                         THIS SAME supersede resubmitted it (or, on a
-  //                         first pass, this shouldn't occur at all, since
-  //                         unclaimed siblings were just disposed above and
-  //                         quiescence already refused to proceed while
-  //                         anything was processing) — skip either way,
-  //                         never double-submit.
-  //   absent / failed     → submit the fresh copy unconditionally. `failed`
-  //                         covers BOTH our own just-disposed superseded
-  //                         marker AND an unrelated prior execution failure
-  //                         (#293-critical-2: silently skipping the latter
-  //                         stranded its dependents, since a stale failed/
-  //                         ticket is not "absent"). The old failed/ copy is
-  //                         left as audit; ticketState's inbox > failed
-  //                         precedence means any dependent's edge resolves
-  //                         against the FRESH copy, never the stale one.
-  //   submit throws       → (e.g. an inbox-slug collision) contained per
-  //                         child so one bad submit never aborts the rest of
-  //                         the fan-out or the record materialization below —
-  //                         logged and left "absent"; a future sweep's
-  //                         supersede (if the plan is edited again) or a
-  //                         manual retry is what recovers it.
-  const paths = queuePaths(cfg);
-  const submitted: string[] = [];
-  const skipped: string[] = [];
-  for (const c of children) {
-    const st = ticketState(paths, c.ticketId);
-    if (st === "done") {
-      skipped.push(c.ticketId);
-      continue;
-    }
-    if (st === "inbox" || st === "processing") {
-      log.warn("plan-set supersede: child already landed at fan-out; skipping", {
-        planId: record.planId,
-        ticketId: c.ticketId,
-        state: st,
-      });
-      skipped.push(c.ticketId);
-      continue;
-    }
-    try {
-      submitTicket(cfg, c.content, { idHint: c.ticketId });
-      submitted.push(c.ticketId);
-    } catch (e) {
-      log.warn("plan-set supersede: child submit failed at fan-out; skipping", {
-        planId: record.planId,
-        ticketId: c.ticketId,
-        error: errMsg(e),
-      });
-      skipped.push(c.ticketId);
-    }
-  }
-  log.info("plan set supersede fan-out", { planId: record.planId, submitted, skipped });
+  // versions" — only a DONE ticket skips on recompile) is now the shared
+  // `submitPlanSet` helper's loose (`resubmitFailed: true`) policy: done/
+  // inbox/processing skip, absent/failed submit (`failed` covers BOTH our
+  // own just-disposed superseded marker AND an unrelated prior execution
+  // failure — #293-critical-2: silently skipping the latter stranded its
+  // dependents), and a per-child submit throw is contained on `stranded`
+  // rather than aborting the rest of the fan-out or the record
+  // materialization below (TRAP 1: `skipped` conflates three causes —
+  // already done, already landed, submit threw — only the throw case
+  // belongs on `pendingFanout`).
+  const r = submitPlanSet(cfg, children, { submitFn, resubmitFailed: true });
+  log.info("plan set supersede fan-out", {
+    planId: record.planId,
+    submitted: r.submitted.map((s) => s.ticketId),
+    skipped: r.skipped,
+    stranded: r.stranded,
+  });
 
   // New hash, same planId, keep statusCommentId and lastLabel (the
   // dashboard/label steps below re-derive lastLabel from fresh queue
-  // reality), reset degradedPosted/closed/lastFailedHash, and drop
-  // lastDashboard so the next render is treated as a change (the dashboard
-  // repaints). Materialized only now that fan-out has run — see the ordering
-  // note above.
+  // reality), reset degradedPosted/closed/lastFailedHash/staleSince (fix wave
+  // C, item 3: a set that just successfully superseded is by definition no
+  // longer stuck), and drop lastDashboard so the next render is treated as a
+  // change (the dashboard repaints). Materialized only now that fan-out has
+  // run — see the ordering note above.
   const fresh: PlanSetRecord = {
     v: 1,
     planId: record.planId,
@@ -576,6 +684,7 @@ async function trySupersede(
     degradedPosted: false,
     lastLabel: record.lastLabel,
     closed: false,
+    pendingFanout: r.stranded.length > 0 ? r.stranded : undefined,
   };
   materializePlanSet(cfg, fresh, candidate);
 
@@ -600,6 +709,7 @@ export async function maintainPlanSets(
   deps: MaintainPlanSetsDeps = {},
 ): Promise<void> {
   const ghFn = deps.ghFn ?? gh;
+  const submitFn = deps.submitFn ?? submitTicket;
   const ll = lifecycleLabels(cfg.github.triggerLabel);
   const nowIso = deps.nowIso ?? new Date().toISOString();
   // Memoized across the whole sweep — every candidate record needs the same
@@ -629,8 +739,37 @@ export async function maintainPlanSets(
       if (Number.isFinite(age) && age > PLAN_SET_COLD_MS) continue;
     }
 
-    const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso);
-    if (outcome.kind === "deferred" || outcome.kind === "compile-failed") continue;
+    // Cold, part 2 (fix wave C, item 3): a record that can never CLOSE at
+    // all — every task terminal, but step 5's `!record.lastFailedHash` guard
+    // holds it open forever because the human never fixes (or defeats
+    // entirely by deleting) the failed edit — has no `closedAt` to ever
+    // engage the cold window above, so it would otherwise pay the SAME
+    // paginated `gh api …/comments` probe every sweep, indefinitely: exactly
+    // the cost `closedAt` was added to bound (#298). `staleSince` (stamped
+    // below, in step 5, the first sweep the gate holds the record open) gets
+    // the identical treatment, reusing `PLAN_SET_COLD_MS` rather than a
+    // second constant — past the window, the sweep stops noticing a further
+    // edit to this stuck set, same limitation as a genuinely cold closed one.
+    if (storedRecord.staleSince) {
+      const age = Date.parse(nowIso) - Date.parse(storedRecord.staleSince);
+      if (Number.isFinite(age) && age > PLAN_SET_COLD_MS) continue;
+    }
+
+    // Drain any children stranded by a PRIOR sweep's fan-out BEFORE
+    // trySupersede — orthogonal to the supersede decision (see
+    // drainPendingFanout's doc comment), and this ordering means it no
+    // longer depends on trySupersede's own-comment fetch succeeding: a plan
+    // comment that's since been deleted or gone permanently unparseable used
+    // to leave `pendingFanout` un-drained forever (#298 review round 2).
+    await drainPendingFanout(cfg, storedRecord, g, submitFn);
+
+    const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso, submitFn);
+    // `deferred` (a child is mid-flight) and `compile-failed` (the edit does
+    // not compile) skip only the SUPERSEDE — not this record's maintenance.
+    // Skipping the whole pass froze the dashboard for the entire duration of
+    // a long-running child and suppressed the degraded comment for failures
+    // that appeared in that window (#298). The record selection below already
+    // falls back to storedRecord for both outcomes.
     const record = outcome.kind === "superseded" ? outcome.record : storedRecord;
 
     if (record.closed) {
@@ -710,11 +849,41 @@ export async function maintainPlanSets(
     }
 
     // 5. Close: maintenance stops here; a supersede (see trySupersede, above)
-    // reopens with a fresh record on a later sweep.
-    if (state.allTerminal && !record.closed) {
+    // reopens with a fresh record on a later sweep. `!record.lastFailedHash`
+    // (I4, #298 review round 2): a set must NOT close while it carries an
+    // UNRESOLVED compile-failed edit. trySupersede's step 5 disposes unclaimed
+    // children before step 6's compile check — so a plan edit that disposes
+    // every remaining unclaimed child and then fails to compile can make an
+    // otherwise still-in-flight set read as `allTerminal` for the first time,
+    // purely as a side effect of the botched edit, not because the set
+    // actually finished. Closing here would be doubly wrong: it reads as
+    // "done" when the set is actually stuck awaiting a human fix, and once
+    // `closedAt` ages past `PLAN_SET_COLD_MS` the sweep stops probing the
+    // plan comment at all — silently losing the only mechanism (a further
+    // edit) that could ever resolve it. `lastFailedHash` is cleared the
+    // moment a later edit compiles successfully (the fresh record built by
+    // trySupersede's "superseded" outcome never carries it forward), so a
+    // set that genuinely IS done/failed on its own merits — independent of
+    // any edit attempt — closes exactly as before.
+    if (state.allTerminal && !record.closed && !record.lastFailedHash) {
       record.closed = true;
       record.closedAt = nowIso;
       changed = true;
+    } else if (state.allTerminal && !record.closed && record.lastFailedHash) {
+      // Fix wave C, item 3: this record WOULD close (every task terminal)
+      // except the guard just above holds it open. Stamp `staleSince` the
+      // FIRST sweep that happens — not on every sweep it keeps happening —
+      // so the cold-window skip near the top of this function eventually
+      // bounds the per-sweep gh probe a permanently-stuck record (the human
+      // never fixes the edit, or defeats the retry entirely by deleting the
+      // plan comment) would otherwise pay forever. A record that later DOES
+      // get fixed is replaced wholesale by trySupersede's fresh record (which
+      // never carries `staleSince` forward — same as `lastFailedHash`), so
+      // no explicit clearing is needed here.
+      if (!record.staleSince) {
+        record.staleSince = nowIso;
+        changed = true;
+      }
     }
 
     // 6. Persist once per iteration.

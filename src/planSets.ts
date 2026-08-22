@@ -9,12 +9,13 @@ import { join, basename } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
 import { queuePaths } from "./config.js";
-import { ticketState, findTicketFile } from "./ticketDeps.js";
+import { ticketState, findTicketFile, findAllTicketFiles } from "./ticketDeps.js";
 import { uniqueDestPath } from "./uniqueDest.js";
 import { parseResultMeta } from "./resultMeta.js";
 import { parseTicket } from "./ticket.js";
 import { submitTicket } from "./dispatch.js";
 import type { CompiledChild } from "./planCompiler.js";
+import { log } from "./logging.js";
 
 export interface PlanSetRecord {
   v: 1;
@@ -55,6 +56,36 @@ export interface PlanSetRecord {
    * hash) or the check never re-fires. Additive, same tolerance as
    * `lastDashboard`. */
   lastFailedHash?: string;
+  /** Ticket ids whose submit THREW during a fan-out — either the INITIAL
+   * dispatch (`dispatchPlanSet`) or a supersede recompile (`trySupersede`);
+   * not ids that were legitimately skipped as already-landed (fix wave C,
+   * item 1: dispatchPlanSet used to leave this unset, so a child stranded at
+   * initial dispatch had no recovery path at all — the drain below only ever
+   * saw what supersede seeded). After a supersede, the fresh record carries a
+   * new hash, so trySupersede's gate would otherwise block any re-trigger and
+   * — since the child never landed — there is no failed/ file for `junco
+   * retry` either, stranding it until the human edits the plan again (#298).
+   * The next sweep retries these before the gate. Additive: absent = none. */
+  pendingFanout?: string[];
+  /** ISO timestamp of the first sweep the close gate (`maintainPlanSets`
+   * step 5, planSetBridge.ts) held this record open despite every task being
+   * terminal — i.e. `state.allTerminal && record.lastFailedHash`: a set stuck
+   * behind an unresolved compile-failed edit that a human either never fixes,
+   * or defeats entirely by deleting the plan comment (the lookup then returns
+   * null, `trySupersede` reads `unchanged`, and `lastFailedHash` never gets a
+   * chance to clear — fix wave C, item 3). Such a record can never acquire
+   * `closedAt`, so without this field the cold window above never engages for
+   * it either, and it pays the SAME paginated `gh api …/comments` probe every
+   * sweep, forever — re-opening the exact per-sweep cost `closedAt` was added
+   * to bound (#298). `staleSince` gets the identical treatment, reusing
+   * `PLAN_SET_COLD_MS` (see maintainPlanSets) rather than a second constant.
+   * Cleared whenever the gate stops holding the record open: a successful
+   * supersede replaces the record with an entirely fresh object that never
+   * carries this field forward (same discipline as `lastFailedHash` itself —
+   * see trySupersede's "superseded" outcome). Additive, same tolerance as
+   * `closedAt`/`pendingFanout`: absent = never stuck (or a record from before
+   * this field existed) = warm. */
+  staleSince?: string;
 }
 
 export function plansDir(cfg: Config): string {
@@ -104,13 +135,23 @@ export function materializePlanSet(cfg: Config, record: PlanSetRecord, fenceBody
 }
 
 export const PLAN_STATUS_MARKER = "<!-- junco:plan-status -->";
-export type TaskRunState = "queued" | "waiting" | "processing" | "done" | "failed" | "absent";
+export type TaskRunState =
+  | "queued"
+  | "waiting"
+  | "processing"
+  | "done"
+  | "failed"
+  | "superseded"
+  | "absent";
 export interface TaskStatus {
   id: string;
   ticketId: string;
   state: TaskRunState;
   prUrl: string | null;
   dependencyFailed: string | null;
+  /** The plan revision that pre-empted this child before it ran (from the
+   * result block's `superseded:` marker). Null for every other state. */
+  superseded: string | null;
 }
 export interface SetState {
   tasks: TaskStatus[];
@@ -118,6 +159,29 @@ export interface SetState {
   allDone: boolean;
   anyFailed: boolean;
   anyProcessing: boolean;
+}
+
+/** Disambiguate a ticket id with MULTIPLE files in `failed/` (I5, #298
+ * review round 2): a disposed supersede copy and a later fresh copy's
+ * genuine execution failure share the same id and both land in `failed/`, so
+ * `findTicketFile`'s first-match contract is `readdirSync`-order-dependent —
+ * and can silently report a REAL failure as "superseded" when the disposed
+ * copy happens to sort first. Priority: (1) a file with NO superseded marker
+ * — a genuine failure always outranks a disposed copy's stale history; (2)
+ * among marker-bearing files, the one whose marker matches `currentHash` —
+ * the disposal THIS record generation itself performed; (3) otherwise the
+ * first match, same as the single-file case (a residual ambiguity between
+ * markers of two DIFFERENT prior revisions is cosmetic only — both report
+ * "superseded" either way, so it can never misreport a genuine failure). */
+function pickFailedTicketFile(dir: string, id: string, currentHash: string): string | null {
+  const files = findAllTicketFiles(dir, id);
+  if (files.length <= 1) return files[0] ?? null;
+  const withMeta = files.map((f) => ({ f, meta: parseResultMeta(readFileSync(f, "utf8")) }));
+  const noMarker = withMeta.find((x) => x.meta.superseded === null);
+  if (noMarker) return noMarker.f;
+  const currentMatch = withMeta.find((x) => x.meta.superseded === currentHash);
+  if (currentMatch) return currentMatch.f;
+  return files[0];
 }
 
 /** Recompute a set's task states from queue reality — the single source the
@@ -130,13 +194,24 @@ export function resolveSetState(cfg: Config, record: PlanSetRecord): SetState {
     let state: TaskRunState;
     let prUrl: string | null = null;
     let dependencyFailed: string | null = null;
+    let superseded: string | null = null;
     if (st === "done" || st === "failed") {
       state = st;
-      const f = findTicketFile(st === "done" ? paths.done : paths.failed, t.ticketId);
+      const f =
+        st === "done"
+          ? findTicketFile(paths.done, t.ticketId)
+          : pickFailedTicketFile(paths.failed, t.ticketId, record.hash);
       if (f) {
         const meta = parseResultMeta(readFileSync(f, "utf8"));
         prUrl = meta.prUrl;
         dependencyFailed = meta.dependencyFailed;
+        superseded = meta.superseded;
+        // A disposed child was pre-empted by a plan edit — it never ran, so it
+        // is NOT a failure: counting it would trip the degraded comment and
+        // the set-level junco:failed label for what is ordinary set
+        // re-cycling (#298). It IS terminal, though — see the widened
+        // terminal() below.
+        if (st === "failed" && superseded !== null) state = "superseded";
       }
     } else if (st === "processing") {
       state = "processing";
@@ -155,9 +230,10 @@ export function resolveSetState(cfg: Config, record: PlanSetRecord): SetState {
     } else {
       state = "absent";
     }
-    return { id: t.id, ticketId: t.ticketId, state, prUrl, dependencyFailed };
+    return { id: t.id, ticketId: t.ticketId, state, prUrl, dependencyFailed, superseded };
   });
-  const terminal = (s: TaskRunState): boolean => s === "done" || s === "failed";
+  const terminal = (s: TaskRunState): boolean =>
+    s === "done" || s === "failed" || s === "superseded";
   return {
     tasks,
     allTerminal: tasks.every((t) => terminal(t.state)),
@@ -181,6 +257,8 @@ export function renderDashboard(record: PlanSetRecord, state: SetState): string 
       detail = t.dependencyFailed
         ? `failed — dependency \`${t.dependencyFailed}\` failed`
         : "failed";
+    if (t.state === "superseded")
+      detail = t.superseded ? `superseded — pre-empted by rev \`${t.superseded}\`` : "superseded";
     if (t.state === "waiting") {
       const deps = record.tasks.find((r) => r.id === t.id)?.dependsOn ?? [];
       detail = `waiting on: ${deps.map((d) => `\`${d}\``).join(", ")}`;
@@ -191,28 +269,82 @@ export function renderDashboard(record: PlanSetRecord, state: SetState): string 
   return lines.join("\n") + "\n";
 }
 
-/** Idempotent fan-out: a child whose id exists ANYWHERE in the queue —
- * done/ and failed/ included — is skipped, never re-run. This is deliberately
- * stricter than the bridge's single-ticket ticketInFlight guard (inbox+
- * processing only): a set child that finished between a crash and the
- * re-sweep must not execute twice; set re-cycling goes through supersede,
- * not the remove-label gesture. */
+/** Injectable side effects (tests only; production callers omit this — see
+ * SubmitTicketDeps/AnalyzeCmdDeps for the same optional-and-defaults-to-real
+ * shape). `submitFn` is typed against the real `submitTicket`, not
+ * `BridgeDeps`'s looser structural signature, so a signature change to
+ * `submitTicket` is caught here at compile time. */
+export interface SubmitPlanSetDeps {
+  submitFn?: typeof submitTicket;
+  /** Fan-out policy. Default false: the ordinary idempotent-dispatch /
+   * crash-recovery guard — only `absent` is submit-eligible; done/inbox/
+   * processing/failed all skip, so a genuinely-failed child is never
+   * silently resubmitted by a bare re-dispatch (e.g. the bridge's
+   * remove-label gesture) — set re-cycling requires an actual plan edit.
+   * Set true for a caller driving its OWN supersede (trySupersede, the
+   * CLI's `submit --plan` re-run door): a `failed` child then ALSO
+   * submits — `failed` covers BOTH a child this same call's
+   * `supersedeUnclaimed` just disposed AND an unrelated prior execution
+   * failure from an earlier revision (#293-critical-2 / #298 review round
+   * 1: silently skipping the latter stranded its dependents). done/inbox/
+   * processing still skip either way — task id is task identity across
+   * plan revisions. */
+  resubmitFailed?: boolean;
+}
+
+/** Idempotent fan-out, in EITHER of two policies (see `resubmitFailed` on
+ * `SubmitPlanSetDeps`): the strict default used by a bare dispatch/crash-
+ * recovery re-run, or the loose supersede policy used by a caller that just
+ * disposed the prior revision's unclaimed children itself. `submitted`
+ * carries the real destination `submitFn` returned (#298) — callers must not
+ * reconstruct it themselves, since a future uniqueDest-style rename would
+ * make a reconstructed path print one that doesn't exist. A per-child submit
+ * throw is CONTAINED here — logged and recorded on `stranded` (always a
+ * subset of `skipped`) rather than propagating — so one bad submit (e.g. an
+ * inbox-slug collision) never aborts the rest of the fan-out; a supersede
+ * caller feeds `stranded` into its own retry bookkeeping (the bridge's
+ * `pendingFanout`). */
 export function submitPlanSet(
   cfg: Config,
   children: CompiledChild[],
-): { submitted: string[]; skipped: string[] } {
+  deps: SubmitPlanSetDeps = {},
+): {
+  submitted: { ticketId: string; dst: string }[];
+  skipped: string[];
+  stranded: string[];
+} {
+  const submitFn = deps.submitFn ?? submitTicket;
+  const resubmitFailed = deps.resubmitFailed === true;
   const paths = queuePaths(cfg);
-  const submitted: string[] = [];
+  const submitted: { ticketId: string; dst: string }[] = [];
   const skipped: string[] = [];
+  const stranded: string[] = [];
   for (const c of children) {
-    if (ticketState(paths, c.ticketId) !== "absent") {
+    const st = ticketState(paths, c.ticketId);
+    const eligible = st === "absent" || (resubmitFailed && st === "failed");
+    if (!eligible) {
+      if (resubmitFailed && (st === "inbox" || st === "processing")) {
+        log.warn("plan-set fan-out: child already landed; skipping", {
+          ticketId: c.ticketId,
+          state: st,
+        });
+      }
       skipped.push(c.ticketId);
       continue;
     }
-    submitTicket(cfg, c.content, { idHint: c.ticketId });
-    submitted.push(c.ticketId);
+    try {
+      const dst = submitFn(cfg, c.content, { idHint: c.ticketId });
+      submitted.push({ ticketId: c.ticketId, dst });
+    } catch (e) {
+      log.warn("plan-set fan-out: child submit failed; skipping", {
+        ticketId: c.ticketId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      skipped.push(c.ticketId);
+      stranded.push(c.ticketId);
+    }
   }
-  return { submitted, skipped };
+  return { submitted, skipped, stranded };
 }
 
 /** Dispose every UNCLAIMED (still in inbox/) child of `record` ahead of a
