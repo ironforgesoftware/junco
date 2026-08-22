@@ -125,3 +125,16 @@ export function detectInstalledHarnesses(
     .filter(([, dir]) => existsFn(dirname(expandHome(dir))))
     .map(([name, dir]) => ({ name, dir }));
 }
+
+/**
+ * True when two spellings denote the same harness directory. Both sides are
+ * expandHome'd because the two forms genuinely coexist: the registry (and so
+ * `detectInstalledHarnesses`) emits the tilde form, `junco skill install
+ * --harness <path>` stores whatever the operator typed, and `loadConfig`
+ * expands `skills.harnessDirs` on every read. Comparing raw strings makes an
+ * already-consented harness render unchecked on a wizard rerun and then
+ * writes a two-spelling duplicate (#292).
+ */
+export function sameHarnessDir(a: string, b: string): boolean {
+  return expandHome(a) === expandHome(b);
+}

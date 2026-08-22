@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import React from "react";
 import { Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
@@ -1028,6 +1030,28 @@ describe("Skills chapter", () => {
     const codexLine = lines.find((l) => l.includes("codex")) ?? "";
     expect(claudeLine).toContain("[x]");
     expect(codexLine).toContain("[ ]");
+  });
+
+  it("rerun with mixed spellings: a tilde-registry harness whose config holds the expanded form still renders checked (#292)", async () => {
+    // detectedHarnesses carries the raw registry spelling (tilde) the way
+    // detectInstalledHarnesses really emits it; loadConfig expands
+    // skills.harnessDirs on every read, so the config side is always
+    // absolute. Raw string equality would miss this and render unchecked.
+    const TILDE_HARNESSES = [{ name: "claude", dir: "~/.claude/skills" }];
+    const EXPANDED_DIR = join(homedir(), ".claude/skills");
+    const answers = { ...defaultAnswers(), harnessDirs: [EXPANDED_DIR] };
+    const { lastFrame } = render(
+      <Skills
+        {...noopChapter}
+        answers={answers}
+        io={fakeIo()}
+        detectedHarnesses={TILDE_HARNESSES}
+        onNext={() => {}}
+      />,
+    );
+    await until(() => (lastFrame() ?? "").includes("claude"));
+    const claudeLine = (lastFrame() ?? "").split("\n").find((l) => l.includes("claude")) ?? "";
+    expect(claudeLine).toContain("[x]");
   });
 
   it("rerun on a machine missing a previously-consented harness: submit keeps the undetected dir (never silently drops it)", async () => {

@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import {
   ensureSkillLinks,
   detectInstalledHarnesses,
+  sameHarnessDir,
   HARNESS_REGISTRY,
   SKILL_DIR_NAME,
   type SkillLinksDeps,
@@ -161,5 +163,17 @@ describe("detectInstalledHarnesses", () => {
     const found = detectInstalledHarnesses(existsFn);
     expect(found.map((f) => f.name).sort()).toEqual(["claude", "omp"]);
     expect(found.find((f) => f.name === "claude")?.dir).toBe(HARNESS_REGISTRY.claude);
+  });
+});
+
+describe("sameHarnessDir", () => {
+  it("matches a tilde spelling against its expanded form", () => {
+    expect(sameHarnessDir("~/.claude/skills", join(homedir(), ".claude/skills"))).toBe(true);
+  });
+  it("matches identical spellings", () => {
+    expect(sameHarnessDir("~/.claude/skills", "~/.claude/skills")).toBe(true);
+  });
+  it("does not match different directories", () => {
+    expect(sameHarnessDir("~/.claude/skills", "~/.codex/skills")).toBe(false);
   });
 });

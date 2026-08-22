@@ -14,6 +14,7 @@ import { expandHome, loadConfig } from "./config.js";
 import { getAtPath, setAtPath } from "./configLevers.js";
 import {
   ensureSkillLinks,
+  sameHarnessDir,
   HARNESS_REGISTRY,
   SKILL_DIR_NAME,
   type SkillLinksReport,
@@ -76,15 +77,15 @@ export async function runSkillInstallCommand(
       return 1;
     }
     const existing = (getAtPath(raw, "skills.harnessDirs") as string[] | undefined) ?? [];
-    const known = new Set(existing.map((d) => expandHome(d)));
-    // First occurrence wins on expandHome-normalized form — this also
-    // collapses within-invocation repeats (`--harness claude --harness
-    // claude`), not just dedupe against what's already in the config.
+    // First occurrence wins via sameHarnessDir (the expandHome-normalized
+    // rule shared with the wizard, #292) — this also collapses
+    // within-invocation repeats (`--harness claude --harness claude`), not
+    // just dedupe against what's already in the config.
+    const known: string[] = [...existing];
     const additions: string[] = [];
     for (const d of requested) {
-      const norm = expandHome(d);
-      if (known.has(norm)) continue;
-      known.add(norm);
+      if (known.some((k) => sameHarnessDir(k, d))) continue;
+      known.push(d);
       additions.push(d);
     }
     if (additions.length > 0) {

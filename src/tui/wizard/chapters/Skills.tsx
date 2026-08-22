@@ -7,6 +7,20 @@ import { Box, Text } from "ink";
 import { Tip, MultiSelect, type ChapterProps } from "../controls.js";
 import { TIPS } from "../../../wizard/tips.js";
 import { useGuardedInput } from "../../useGuardedInput.js";
+import { sameHarnessDir } from "../../../skillLinks.js";
+
+/** First-occurrence-wins dedupe on sameHarnessDir — a config can already
+ * hold both spellings of one harness dir (a pre-#292 double-write, or a
+ * hand-edit), and the undetected-union filter below only strips entries
+ * that match a DETECTED harness, so a same-dir duplicate among undetected
+ * entries would otherwise be written straight back out. */
+function dedupeHarnessDirs(dirs: string[]): string[] {
+  const out: string[] = [];
+  for (const d of dirs) {
+    if (!out.some((o) => sameHarnessDir(o, d))) out.push(d);
+  }
+  return out;
+}
 
 export function Skills({
   answers,
@@ -46,7 +60,14 @@ export function Skills({
             label: `${h.name}  (${h.dir})`,
             // Pre-check: already-consented dirs on rerun; everything detected
             // on a fresh run (the operator still confirms with enter).
-            checked: answers.harnessDirs.length > 0 ? answers.harnessDirs.includes(h.dir) : true,
+            // sameHarnessDir, not raw equality: the registry emits the tilde
+            // spelling while loadConfig expands skills.harnessDirs, so a
+            // config holding the absolute form of a detected tilde dir must
+            // still pre-check (#292).
+            checked:
+              answers.harnessDirs.length > 0
+                ? answers.harnessDirs.some((d) => sameHarnessDir(d, h.dir))
+                : true,
           }))}
           onFocusChange={() => {}}
           onSubmit={(vals) => {
@@ -57,10 +78,16 @@ export function Skills({
             // uninstalled harness is a silent skip there, never a removal.
             // Revoking a DETECTED dir still works (uncheck it); an
             // undetected dir can only be removed by hand-editing config.
+            // sameHarnessDir keeps this in step with the checked pre-check
+            // above (#292).
             const undetected = answers.harnessDirs.filter(
-              (d) => !detectedHarnesses.some((h) => h.dir === d),
+              (d) => !detectedHarnesses.some((h) => sameHarnessDir(h.dir, d)),
             );
-            patch({ harnessDirs: [...vals, ...undetected] });
+            // Dedupe: sameHarnessDir in the filter above stops a NEW
+            // duplicate from arriving via the union, but a config that
+            // already holds both spellings of one dir must still collapse
+            // to one on write, not be carried through doubled.
+            patch({ harnessDirs: dedupeHarnessDirs([...vals, ...undetected]) });
             onNext();
           }}
         />
