@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId, defaultTranscriptSink } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
 import { inMemoryCredentialStore } from "../src/agent/credentialStore.js";
+import { resolveModelViaRegistries, type RegistryOps } from "../src/agent/modelSetup.js";
+import { makeConfig } from "./helpers/config.js";
 
 // Overridable createWriteStream so the transcript stream can be stubbed
 // (issue #26: fs.createWriteStream opens ASYNCHRONOUSLY — open/write failures
@@ -837,6 +839,85 @@ describe("models.json file path — SDK resolution", () => {
       else process.env.HOME = prevHome;
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  // Pins the migration's central design claim: seeding the credentials store
+  // up front (rather than the async setRuntimeApiKey) is what makes the
+  // operator's key resolve at request time. Nothing else in the suite proves
+  // this — if the credential shape were wrong the rest of the suite (all
+  // fakes) would stay green and every real ticket would fail at its first
+  // inference call. Drives junco's real cascade (resolveModelViaRegistries)
+  // with an inline-endpoint config, exactly as makePiSessionFactory does, then
+  // asks the real SDK ModelRuntime to resolve request auth for the resolved
+  // model — offline (no network; getAuth only reads the in-memory credential).
+  // `sdkRegistryOps` itself is module-private in session.ts, so this rebuilds
+  // its exact four-option `ModelRuntime.create` bridge locally rather than
+  // widening session.ts's export surface for the test.
+  it("the seeded credential resolves into request auth on the inline path", async () => {
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+    const NOOP_MODELS_STORE = {
+      read: async () => undefined,
+      write: async () => {},
+      delete: async () => {},
+    };
+    const credentials = inMemoryCredentialStore({ test: "sk-inline-secret" });
+    const make = async (modelsPath: string | null) => {
+      const runtime = await ModelRuntime.create({
+        credentials,
+        modelsPath,
+        refreshOnCreate: false,
+        modelsStore: NOOP_MODELS_STORE,
+      });
+      return {
+        find: (provider: string, modelId: string) => runtime.getModel(provider, modelId),
+        registerProvider: (name: string, config: Record<string, unknown>) =>
+          runtime.registerProvider(name, config),
+        backing: runtime,
+      };
+    };
+    const ops: RegistryOps = { fromFile: (p) => make(p), inMemory: () => make(null) };
+
+    const cfg = makeConfig(
+      {
+        dataDir: "/sbxroot/data",
+        queueRoot: "/sbxroot/data/queue",
+        worktreeRoot: "/sbxroot/worktrees",
+        tools: [],
+        criticEnabled: false,
+        planLintEnabled: false,
+        verifyEnabled: false,
+        supervisorEnabled: false,
+        healthEnabled: false,
+        removeWorktreeOnSuccess: true,
+      },
+      {
+        model: {
+          id: "test/model",
+          source: "inline",
+          baseUrlExplicit: true,
+          retry: { maxRetries: null, baseDelayMs: null },
+          modelsJson: null,
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:1234/v1",
+          apiKey: "sk-inline-secret",
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 131072,
+          maxTokens: 49152,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          thinkingLevel: "medium",
+          compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+        },
+      },
+    );
+
+    const out = await resolveModelViaRegistries(cfg, ops);
+    expect(out.path).toBe("inline");
+
+    const rt = out.registry.backing as {
+      getAuth(model: unknown): Promise<{ auth: { apiKey?: string } } | undefined>;
+    };
+    expect((await rt.getAuth(out.model))?.auth.apiKey).toBe("sk-inline-secret");
   });
 });
 

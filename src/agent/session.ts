@@ -1,7 +1,7 @@
 import { mkdirSync, createWriteStream, mkdtempSync, type WriteStream } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, CreateModelRuntimeOptions } from "@earendil-works/pi-coding-agent";
 import type { Config, RunResult, ModelCost } from "../types.js";
 import { RunAccumulator } from "./runResult.js";
 import { GuardManager, type GuardDecision } from "./guardManager.js";
@@ -12,7 +12,7 @@ import {
   type RegistryLike,
   type RegistryOps,
 } from "./modelSetup.js";
-import { inMemoryCredentialStore } from "./credentialStore.js";
+import { inMemoryCredentialStore, type InMemoryCredentialStore } from "./credentialStore.js";
 import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
 import { sandboxDenyPaths } from "../dataTree.js";
 import {
@@ -531,22 +531,28 @@ const NOOP_MODELS_STORE = {
  * `allowModelNetwork` defaults to false and is left alone. Junco's three
  * cascade paths are all static, so skipping the refresh costs nothing.
  */
-// The four option names below (credentials/modelsPath/refreshOnCreate/modelsStore)
-// are intentionally UNCHECKED against the SDK's real `CreateModelRuntimeOptions`:
-// narrowing `ModelRuntimeStatic.create`'s parameter to a literal type naming
-// them was tried and rejected by tsc — `credentials: unknown` (required here,
-// since this module stays SDK-free) isn't assignable to the real
-// `credentials?: CredentialStore`, in either bivariant-check direction, so the
-// real `ModelRuntime` no longer satisfies the narrowed signature. A typo in one
-// of these four keys therefore compiles silently; `make()` below is the only
-// caller, so a typo is one function to audit, and the runtime guard at the
-// `makePiSessionFactory` call site (`if (!modelRuntime) throw …`) catches the
-// production consequence (a lost inline provider / file-backed fallback) even
-// though it wouldn't catch a typo'd key landing among genuinely-optional SDK
-// fields.
+// `ModelRuntimeStatic.create`'s PARAMETER itself cannot be narrowed to a literal
+// type naming these four options: that was tried and rejected by tsc, because
+// narrowing a function's parameter type is a contravariant position — the real
+// `ModelRuntime.create(options?: CreateModelRuntimeOptions)` would no longer
+// satisfy a signature that requires a narrower `options` shape (a real
+// `ModelRuntimeStatic` value is not assignable to the narrowed local type in
+// either bivariant-check direction), so `ModelRuntimeStatic` above stays typed
+// with the loose `Record<string, unknown>` parameter.
+//
+// The OBJECT LITERAL passed to `create()` below is annotated instead (`satisfies
+// CreateModelRuntimeOptions`, imported type-only from the SDK root, which
+// root-exports it — `dist/index.d.ts`). That gets excess-property checking on
+// the four option NAMES: a typo (e.g. `modelPath` for `modelsPath`) is TS2561
+// ("Did you mean to write 'modelsPath'?"), not a silent miss. `credentials`
+// needed no separate cast — `InMemoryCredentialStore` satisfies the SDK's
+// `CredentialStore` here because `modify` is declared with method-shorthand
+// syntax on both interfaces, which tsc checks bivariantly regardless of
+// `strictFunctionTypes` (a different, covariant position from the parameter
+// narrowing above, which is why that one still fails).
 function sdkRegistryOps(
   ModelRuntimeStatic: { create(options: Record<string, unknown>): Promise<unknown> },
-  credentials: unknown,
+  credentials: InMemoryCredentialStore,
 ): RegistryOps {
   const make = async (modelsPath: string | null): Promise<RegistryLike> => {
     const runtime = (await ModelRuntimeStatic.create({
@@ -554,7 +560,7 @@ function sdkRegistryOps(
       modelsPath,
       refreshOnCreate: false,
       modelsStore: NOOP_MODELS_STORE,
-    })) as SdkModelRuntime;
+    } satisfies CreateModelRuntimeOptions)) as SdkModelRuntime;
     return {
       find: (provider, modelId) => runtime.getModel(provider, modelId),
       registerProvider: (name, config) => runtime.registerProvider(name, config),

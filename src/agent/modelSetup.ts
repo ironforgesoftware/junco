@@ -1,6 +1,6 @@
 /**
  * Model + provider resolution — turns the resolved `cfg.model` config into the
- * inputs the Pi SDK's ModelRegistry needs, WITHOUT importing the SDK (so this
+ * inputs the Pi SDK's ModelRuntime needs, WITHOUT importing the SDK (so this
  * stays pure and unit-testable). `session.ts` consumes these; `health.ts` uses
  * `resolveProbeBaseUrl` for its reachability probe.
  */
@@ -65,7 +65,8 @@ export interface InlineProviderConfig {
   provider: string;
   modelId: string;
   /** Shape matches Pi's ProviderConfigInput; typed loosely so this file needs
-   * no SDK import. session.ts casts it at the registerProvider call. */
+   * no SDK import. The cast (`as SdkModelRuntime`) happens in `sdkRegistryOps`
+   * in session.ts, at the `ModelRuntime.create(...)` call site. */
   providerConfig: Record<string, unknown>;
 }
 

@@ -8,9 +8,15 @@
  * here touches the filesystem; the Map dies with the process.
  *
  * Typed structurally against `@earendil-works/pi-ai`'s `CredentialStore`
- * (`dist/auth/types.d.ts:57-77`, verified against 0.84.2) rather than by
- * importing it: this module stays SDK-free so it is unit-testable, and the
- * cast to the SDK type happens at the single boundary in session.ts.
+ * (`dist/auth/types.d.ts:57-79`, verified against 0.84.2) rather than by
+ * importing it: this module stays SDK-free so it is unit-testable. No cast to
+ * the SDK's `CredentialStore` type exists anywhere in this codebase.
+ * Conformance is checked twice at `sdkRegistryOps` (session.ts): its
+ * parameter is narrowed to this module's own `InMemoryCredentialStore` (see
+ * that function's doc comment), and the `satisfies CreateModelRuntimeOptions`
+ * annotation on the `ModelRuntime.create(...)` options literal there
+ * additionally resolves `credentials` against the SDK's real `CredentialStore`
+ * — with no cast needed, since this store is structurally assignable to it.
  */
 
 /** Mirrors pi-ai's `ApiKeyCredential` (`dist/auth/types.d.ts:15-19`). */
