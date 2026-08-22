@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Sandbox: plan-set records (`plans/`, `data/plans`) and `migrate.lock` are now denied to the agent sandbox. The plan-set records directory joined the data tree with the plan-sets work but was never added to the sandbox deny list, leaving control-plane state (repo paths, issue numbers, task ids) agent-readable. A new classification test fails if a future data-tree entry is added without being denied or explicitly exempted.
+
 ## [0.11.0] - 2026-08-19
 
 ### Added
