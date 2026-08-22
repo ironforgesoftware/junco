@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `JUNCO_CONFIG` names the config file explicitly, for scripted, CI and sandbox contexts. It overrides the canonical `~/.junco/config.json` (a leading `~` expands; an empty value is ignored), and the daemon's `worker.lock` follows it — so two configs mean two independent instances. Config resolution otherwise remains a pure function of the environment, never the working directory.
+- The daemon now writes `data/metrics.json` — the counters `junco status` and the dashboard read over `/health`, persisted for out-of-process readers. Written atomically, debounced, and stamped at startup and shutdown; a write failure is logged and never interrupts the worker.
+
 ### Changed
 
 - Upgraded `@earendil-works/pi-coding-agent` to 0.84.2. Session creation migrated from the removed `authStorage`/`modelRegistry` options to the SDK's async `ModelRuntime`, with the operator's API key supplied through a junco-owned in-memory credential store — it still never reaches disk or the agent's environment. Operator `models.json` files using `compat.sendSessionIdHeader` must switch to `sessionAffinityFormat` (removed upstream in 0.80.7).

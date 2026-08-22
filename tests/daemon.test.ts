@@ -213,6 +213,10 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // Most tests don't care about spend at all; override with fakeSpend() (or
     // `undefined` to exercise mainLoop's own default-ledger construction).
     spend: fakeSpend(),
+    // Most tests don't care about metrics.json at all; override with a fake
+    // { write, flush } spy pair (or `undefined` to exercise mainLoop's own
+    // default-writer construction, Task 3).
+    metricsWriter: { write: vi.fn(), flush: vi.fn() },
     ...overrides,
   };
   return { deps };
@@ -1749,6 +1753,84 @@ describe("mainLoop — observability", () => {
     expect(seenModelIds).toEqual([startCfg.model.id, "model-v2"]);
     expect(seenQueueRoots).toEqual([startCfg.queueRoot, startCfg.queueRoot]);
   });
+
+  it("writes metrics at startup and flushes on shutdown", async () => {
+    const cfg = makeConfig();
+    const stop = new StopFlag();
+    const metricsWriter = { write: vi.fn(), flush: vi.fn() };
+    const { deps } = makeDeps({
+      metricsWriter,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    // Once right after metrics.markStarted() at startup, once again in the
+    // shutdown finally — the two unconditional flush points (Task 3).
+    expect(metricsWriter.flush.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Every call carries a real snapshot (the daemon passes metrics.snapshot(),
+    // never the singleton itself).
+    for (const [snap] of metricsWriter.flush.mock.calls) {
+      expect(snap).toMatchObject({ pid: process.pid });
+    }
+  });
+
+  it("writes metrics on the poll tick", async () => {
+    const cfg = makeConfig();
+    const stop = new StopFlag();
+    const metricsWriter = { write: vi.fn(), flush: vi.fn() };
+    const { deps } = makeDeps({
+      metricsWriter,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+
+    await mainLoop(cfg, stop, {}, deps);
+
+    expect(metricsWriter.write).toHaveBeenCalled();
+    expect(metricsWriter.write.mock.calls[0]![0]).toMatchObject({ pid: process.pid });
+  });
+
+  it("binds the writer to the frozen config's data dir, not a reloaded one", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-daemon-metrics-frozen-"));
+    const stateDir = join(root, "state");
+    const reloadedDir = join(root, "reloaded");
+    const startCfg = makeConfig({ dataDir: stateDir, pollIntervalSeconds: 1 });
+    const holder = makeConfigHolder(startCfg);
+    const stop = new StopFlag();
+    let n = 0;
+    const runOnceFn = async () => {
+      if (n === 0) {
+        // dataDir is restart-kind — this live edit must NOT move the metrics
+        // file mid-run (see overlayFrozenRestartFields).
+        holder.current = { ...holder.current, dataDir: reloadedDir };
+      }
+      if (++n >= 2) stop.requestStop();
+      return true; // handled → loop continues without sleeping to idle
+    };
+    const { deps } = makeDeps({
+      metricsWriter: undefined, // mainLoop builds a REAL makeMetricsWriter(cfg.dataDir)
+      runOnceFn,
+      sleep: vi.fn(async () => {
+        await new Promise((r) => setTimeout(r, 1));
+      }),
+    });
+
+    await mainLoop(startCfg, stop, {}, { ...deps, configHolder: holder });
+
+    // Startup flush + shutdown flush both land in the FROZEN stateDir.
+    const metricsPath = join(stateDir, "metrics.json");
+    expect(existsSync(metricsPath)).toBe(true);
+    const snap = JSON.parse(readFileSync(metricsPath, "utf8")) as { pid: number };
+    expect(snap.pid).toBe(process.pid);
+    // Never at the reloaded dataDir.
+    expect(existsSync(join(reloadedDir, "metrics.json"))).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2019,6 +2101,19 @@ describe("runScheduler", () => {
     await runScheduler(cfg, stop, {}, { executeFn, sleep: stopAfterFirstPoll });
     expect(executed).toEqual(["free"]); // the blocked child was never dispatched
     expect(readdirSync(join(j, "inbox"))).toEqual(["blocked.md"]); // still parked, unclaimed
+  });
+
+  it("writes metrics on the poll tick (Task 3, scheduler's own poll site)", async () => {
+    const cfg = makeConfig({ maxConcurrent: 2, pollIntervalSeconds: 0.001 });
+    const stop = new StopFlag();
+    const metricsWriter = { write: vi.fn() };
+    const claimFn = async () => {
+      stop.requestStop();
+      return null;
+    };
+    await runScheduler(cfg, stop, {}, { claimFn, sleep: tickSleep, metricsWriter });
+    expect(metricsWriter.write).toHaveBeenCalled();
+    expect(metricsWriter.write.mock.calls[0]![0]).toMatchObject({ pid: process.pid });
   });
 });
 
