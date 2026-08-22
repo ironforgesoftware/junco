@@ -56,7 +56,7 @@ describe("runSkillInstallCommand", () => {
         renamed = [a, b];
       },
       loadConfigFn: () => makeConfig(seams, { skills: { harnessDirs } }),
-      ensureFn: (): SkillLinksReport => ({ created: [], repaired: [], skipped: [], warnings: [] }),
+      ensureFn: (): SkillLinksReport => ({ entries: [] }),
     };
     return { out, writes, deps, renamedRef: () => renamed };
   }
@@ -134,7 +134,7 @@ describe("runSkillInstallCommand", () => {
     const h = harness({});
     h.deps.ensureFn = () => {
       ensured++;
-      return { created: [], repaired: [], skipped: [], warnings: [] };
+      return { entries: [] };
     };
     const code = await runSkillInstallCommand(
       "/sbxroot/config.json",
@@ -145,20 +145,17 @@ describe("runSkillInstallCommand", () => {
     expect(ensured).toBe(0);
   });
 
-  // report.skipped mixes two different meanings (skillLinks.ts): a genuine
-  // already-valid link (nothing to do, truly "ok") and a harness whose parent
-  // dir doesn't exist here — never linked at all, tagged "(harness not
-  // installed)". Printing both under "ok:" misleads for the latter.
+  // "ok" and "harness-not-installed" are the two "nothing to do" kinds
+  // (skillLinks.ts): a genuine already-valid link (nothing to do, truly "ok")
+  // and a harness whose parent dir doesn't exist here — never linked at all.
+  // Printing both under "ok:" misleads for the latter.
   it("prints a genuine valid link as 'ok:' but an uninstalled-harness skip as 'skipped:' — exit code unchanged", async () => {
     const h = harness({});
     h.deps.ensureFn = () => ({
-      created: [],
-      repaired: [],
-      skipped: [
-        "/sbxroot/home/.claude/skills/junco-dispatch",
-        "/sbxroot/home/.codex/skills (harness not installed)",
+      entries: [
+        { path: "/sbxroot/home/.claude/skills/junco-dispatch", kind: "ok" },
+        { path: "/sbxroot/home/.codex/skills", kind: "harness-not-installed" },
       ],
-      warnings: [],
     });
     const code = await runSkillInstallCommand("/sbxroot/config.json", { harness: [] }, h.deps);
     expect(code).toBe(0); // roaming consent: uninstalled harness stays exit 0 by design
@@ -169,21 +166,90 @@ describe("runSkillInstallCommand", () => {
     );
   });
 
-  it("exit 1 when an explicitly requested link ends in a warning", async () => {
-    const h = harness({}, ["/sbxroot/home/.claude/skills"]);
+  it("exit 1 when an explicitly requested harness's link fails", async () => {
+    const dir = "/sbxroot/home/.claude/skills";
+    const h = harness({}, [dir]);
     h.deps.ensureFn = () => ({
-      created: [],
-      repaired: [],
-      skipped: [],
-      warnings: [
-        join("/sbxroot/home/.claude/skills", "junco-dispatch") + ": symlink failed (EPERM)",
+      entries: [
+        {
+          path: join(dir, "junco-dispatch"),
+          kind: "symlink-failed",
+          harnessDir: dir,
+          detail: "EPERM",
+        },
+      ],
+    });
+    const code = await runSkillInstallCommand("/sbxroot/config.json", { harness: [dir] }, h.deps);
+    expect(code).toBe(1);
+  });
+
+  // The old exit-code decision prefix-matched the rendered warning string
+  // against the requested link path AND its dirname (the dirname arm existed
+  // only because mkdir-failed is keyed on the harness dir, not the link
+  // path). Structured entries replace both with one rule: does the entry's
+  // own `harnessDir` match a requested harness (sameHarnessDir)? A failure on
+  // some OTHER harness the user never asked about must stay exit 0.
+  it("exit 0 when a failing entry's harnessDir does not match any requested harness", async () => {
+    const requested = "/sbxroot/home/.claude/skills";
+    const otherHarness = "/sbxroot/home/.codex/skills";
+    const h = harness({}, [requested]);
+    h.deps.ensureFn = () => ({
+      entries: [
+        {
+          path: join(otherHarness, "junco-dispatch"),
+          kind: "symlink-failed",
+          harnessDir: otherHarness,
+          detail: "EPERM",
+        },
       ],
     });
     const code = await runSkillInstallCommand(
       "/sbxroot/config.json",
-      { harness: ["/sbxroot/home/.claude/skills"] },
+      { harness: [requested] },
       h.deps,
     );
+    expect(code).toBe(0);
+  });
+
+  // mkdir-failed is keyed on the harness DIR itself, not a link path — this
+  // is exactly the case the old `dirname` arm existed to catch. A structured
+  // `harnessDir` matches it directly, no path arithmetic required.
+  it("exit 1 on a mkdir-failed entry for a requested harness (the old dirname-arm case)", async () => {
+    const dir = "/sbxroot/home/.claude/skills";
+    const h = harness({}, [dir]);
+    h.deps.ensureFn = () => ({
+      entries: [{ path: dir, kind: "mkdir-failed", harnessDir: dir, detail: "EACCES" }],
+    });
+    const code = await runSkillInstallCommand("/sbxroot/config.json", { harness: [dir] }, h.deps);
     expect(code).toBe(1);
+  });
+
+  // Falsifies the original fragility directly: rewording a failing entry's
+  // `detail` text must change neither the exit code nor the printed prefix
+  // ("warning:") — only structured fields (kind, harnessDir) may drive those
+  // decisions now. The old code decided both by matching against the
+  // rendered prose itself.
+  it("rewording an entry's detail text changes neither the exit code nor the print prefix", async () => {
+    const dir = "/sbxroot/home/.claude/skills";
+    const runWithDetail = async (detail: string) => {
+      const h = harness({}, [dir]);
+      h.deps.ensureFn = () => ({
+        entries: [
+          { path: join(dir, "junco-dispatch"), kind: "symlink-failed", harnessDir: dir, detail },
+        ],
+      });
+      const code = await runSkillInstallCommand("/sbxroot/config.json", { harness: [dir] }, h.deps);
+      return { code, out: h.out };
+    };
+    const original = await runWithDetail("EPERM: operation not permitted");
+    const reworded = await runWithDetail("permission denied by the OS");
+    expect(original.code).toBe(1);
+    expect(reworded.code).toBe(1);
+    const originalWarning = original.out.find((l) => l.startsWith("warning:  "));
+    const rewordedWarning = reworded.out.find((l) => l.startsWith("warning:  "));
+    expect(originalWarning).toBeDefined();
+    expect(rewordedWarning).toBeDefined();
+    // The rendered detail text itself DOES change — only the decisions don't.
+    expect(originalWarning).not.toBe(rewordedWarning);
   });
 });

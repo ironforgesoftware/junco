@@ -40,7 +40,14 @@ import { listCatalogProviders, type CatalogEntry } from "./agent/session.js";
 import { NEXT_STEPS } from "./wizard/tips.js";
 import { getAtPath } from "./configLevers.js";
 import { detectBotLogin, runGhLogin } from "./ghAuth.js";
-import { detectInstalledHarnesses, ensureSkillLinks, type SkillLinksReport } from "./skillLinks.js";
+import {
+  detectInstalledHarnesses,
+  ensureSkillLinks,
+  isSkillLinkFailure,
+  renderSkillLinkEntry,
+  type SkillLinksReport,
+} from "./skillLinks.js";
+import { log } from "./logging.js";
 
 export interface WizardDeps {
   detectDeps?: DetectDeps;
@@ -198,8 +205,13 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
       const queueRoot = ensureDirs(loadConfigFn(resolved));
       // Skill links ride config-init: consent was just written (or confirmed)
       // by the Skills chapter, so materialize it now rather than at first
-      // daemon start. Warnings are non-fatal by ensureSkillLinks contract.
-      (deps.ensureSkillLinksFn ?? ensureSkillLinks)(loadConfigFn(resolved));
+      // daemon start. Failures are non-fatal by ensureSkillLinks contract —
+      // this call must never throw — but are no longer silently discarded
+      // (#294): log them so a failure here is visible somewhere.
+      const linkReport = (deps.ensureSkillLinksFn ?? ensureSkillLinks)(loadConfigFn(resolved));
+      for (const e of linkReport.entries.filter((e) => isSkillLinkFailure(e.kind))) {
+        log.warn("skill link failed", { detail: renderSkillLinkEntry(e) });
+      }
       return { written, configPath: resolved, queueRoot, changes };
     },
     flightCheck: () => flightChecks(loadConfigFn(resolved), deps.detectDeps),

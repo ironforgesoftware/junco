@@ -675,12 +675,15 @@ export async function mainLoop(
   // throws — failures land as warnings in the report. An all-quiet run (the
   // common case once links are established) logs nothing.
   const linkReport = ensureSkillLinksFn(cfg);
-  if (linkReport.created.length + linkReport.repaired.length + linkReport.warnings.length > 0) {
-    log.info("skill links ensured", {
-      created: linkReport.created,
-      repaired: linkReport.repaired,
-      warnings: linkReport.warnings,
-    });
+  // All-quiet contract: "ok" (already a valid link) and "harness-not-installed"
+  // (never linked here, by design) are the steady-state outcomes once links
+  // are established — log nothing for those. Anything else (created/repaired/
+  // any failure kind) is news worth a line.
+  const noisy = linkReport.entries.filter(
+    (e) => e.kind !== "ok" && e.kind !== "harness-not-installed",
+  );
+  if (noisy.length > 0) {
+    log.info("skill links ensured", { entries: noisy });
   }
   // Stamp the start time once the queue dirs exist; the health server reports
   // uptime off this. Idempotent — first call wins.

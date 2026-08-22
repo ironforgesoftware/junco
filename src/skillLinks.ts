@@ -27,11 +27,70 @@ export const HARNESS_REGISTRY: Record<string, string> = {
 
 export const SKILL_DIR_NAME = "junco-dispatch";
 
+/** Every outcome a single ensure step can land on. `ok` and
+ * `harness-not-installed` are both "nothing to do" — kept distinct so a
+ * caller can never mistake "never linked here" for "already linked". The
+ * rest are failures (see `isSkillLinkFailure`). */
+export type SkillLinkKind =
+  | "created"
+  | "repaired"
+  | "ok"
+  | "harness-not-installed"
+  | "target-missing"
+  | "symlink-failed"
+  | "occupied"
+  | "repair-failed"
+  | "mkdir-failed";
+
+export interface SkillLinkEntry {
+  /** The link path, or the harness directory for harness-not-installed / mkdir-failed. */
+  path: string;
+  kind: SkillLinkKind;
+  /** The harness directory this entry belongs to, when it has one. Lets a
+   * caller decide "did MY requested harness fail?" without path arithmetic. */
+  harnessDir?: string;
+  /** Human detail — an error message, or the missing target. */
+  detail?: string;
+}
+
 export interface SkillLinksReport {
-  created: string[];
-  repaired: string[];
-  skipped: string[];
-  warnings: string[];
+  entries: SkillLinkEntry[];
+}
+
+/** True for every kind that represents a failure ensureSkillLinks could not
+ * resolve on its own (the old "warnings" bucket). */
+export function isSkillLinkFailure(kind: SkillLinkKind): boolean {
+  return (
+    kind === "target-missing" ||
+    kind === "symlink-failed" ||
+    kind === "occupied" ||
+    kind === "repair-failed" ||
+    kind === "mkdir-failed"
+  );
+}
+
+/** Renders one entry's human-readable detail text — the prose that used to
+ * be baked into the producer's strings. Shared by every consumer so a
+ * reword happens in exactly one place. */
+export function renderSkillLinkEntry(e: SkillLinkEntry): string {
+  switch (e.kind) {
+    case "created":
+    case "repaired":
+    case "ok":
+      return e.path;
+    case "harness-not-installed":
+      return `${e.path} (harness not installed)`;
+    case "target-missing":
+      return `${e.path}: target missing (${e.detail})`;
+    case "symlink-failed":
+      return `${e.path}: symlink failed (${e.detail})`;
+    case "occupied":
+      return `${e.path}: occupied by a non-symlink — not touching it`;
+    case "repair-failed":
+      return `${e.path}: repair failed (${e.detail})`;
+    case "mkdir-failed":
+      return `${e.path}: mkdir failed (${e.detail})`;
+  }
 }
 
 export interface SkillLinksDeps {
@@ -51,12 +110,12 @@ export function ensureSkillLinks(cfg: Config, deps: SkillLinksDeps = {}): SkillL
   const symlinkFn = deps.symlinkFn ?? ((t: string, p: string) => symlinkSync(t, p));
   const unlinkFn = deps.unlinkFn ?? unlinkSync;
   const mkdirFn = deps.mkdirFn ?? ((p: string) => mkdirSync(p, { recursive: true }));
-  const report: SkillLinksReport = { created: [], repaired: [], skipped: [], warnings: [] };
+  const entries: SkillLinkEntry[] = [];
   const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-  const ensureLink = (path: string, target: string): void => {
+  const ensureLink = (path: string, target: string, harnessDir?: string): void => {
     if (!existsFn(target)) {
-      report.warnings.push(`${path}: target missing (${target})`);
+      entries.push({ path, kind: "target-missing", harnessDir, detail: target });
       return;
     }
     let st: { isSymbolicLink(): boolean } | null;
@@ -68,29 +127,29 @@ export function ensureSkillLinks(cfg: Config, deps: SkillLinksDeps = {}): SkillL
     if (st === null) {
       try {
         symlinkFn(target, path);
-        report.created.push(path);
+        entries.push({ path, kind: "created", harnessDir });
       } catch (e) {
-        report.warnings.push(`${path}: symlink failed (${msg(e)})`);
+        entries.push({ path, kind: "symlink-failed", harnessDir, detail: msg(e) });
       }
       return;
     }
     if (!st.isSymbolicLink()) {
-      report.warnings.push(`${path}: occupied by a non-symlink — not touching it`);
+      entries.push({ path, kind: "occupied", harnessDir });
       return;
     }
     // A LIVE symlink is left alone even when it points elsewhere: an
     // operator's deliberate checkout-targeted mount must survive runs of the
     // npm-installed daemon. Only a broken link (dead target) gets repointed.
     if (existsFn(path)) {
-      report.skipped.push(path);
+      entries.push({ path, kind: "ok", harnessDir });
       return;
     }
     try {
       unlinkFn(path);
       symlinkFn(target, path);
-      report.repaired.push(path);
+      entries.push({ path, kind: "repaired", harnessDir });
     } catch (e) {
-      report.warnings.push(`${path}: repair failed (${msg(e)})`);
+      entries.push({ path, kind: "repair-failed", harnessDir, detail: msg(e) });
     }
   };
 
@@ -102,18 +161,18 @@ export function ensureSkillLinks(cfg: Config, deps: SkillLinksDeps = {}): SkillL
     // on a fresh harness and is safe to mkdir. An uninstalled harness is a
     // silent skip, never a warning — configs roam between machines.
     if (!existsFn(dirname(dir))) {
-      report.skipped.push(`${dir} (harness not installed)`);
+      entries.push({ path: dir, kind: "harness-not-installed", harnessDir: dir });
       continue;
     }
     try {
       mkdirFn(dir);
     } catch (e) {
-      report.warnings.push(`${dir}: mkdir failed (${msg(e)})`);
+      entries.push({ path: dir, kind: "mkdir-failed", harnessDir: dir, detail: msg(e) });
       continue;
     }
-    ensureLink(join(dir, SKILL_DIR_NAME), join(mount, SKILL_DIR_NAME));
+    ensureLink(join(dir, SKILL_DIR_NAME), join(mount, SKILL_DIR_NAME), dir);
   }
-  return report;
+  return { entries };
 }
 
 /** Registry entries whose harness appears installed (parent of the skills

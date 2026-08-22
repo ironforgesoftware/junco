@@ -10,13 +10,14 @@
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./types.js";
-import { expandHome, loadConfig } from "./config.js";
+import { loadConfig } from "./config.js";
 import { getAtPath, setAtPath } from "./configLevers.js";
 import {
   ensureSkillLinks,
   sameHarnessDir,
+  isSkillLinkFailure,
+  renderSkillLinkEntry,
   HARNESS_REGISTRY,
-  SKILL_DIR_NAME,
   type SkillLinksReport,
 } from "./skillLinks.js";
 
@@ -100,22 +101,38 @@ export async function runSkillInstallCommand(
 
   const cfg = loadConfigFn(configPath);
   const report = ensureFn(cfg);
-  for (const c of report.created) print(`created:  ${c}\n`);
-  for (const r of report.repaired) print(`repaired: ${r}\n`);
-  // report.skipped mixes two meanings (skillLinks.ts): a genuinely valid,
-  // already-linked path ("ok") and a harness whose parent dir doesn't exist
-  // here — never linked at all, suffixed "(harness not installed)". The
-  // latter under "ok:" would misleadingly imply it was linked.
-  for (const s of report.skipped) {
-    print(s.endsWith("(harness not installed)") ? `skipped:  ${s}\n` : `ok:       ${s}\n`);
+  for (const entry of report.entries.filter((e) => e.kind === "created")) {
+    print(`created:  ${renderSkillLinkEntry(entry)}\n`);
   }
-  for (const w of report.warnings) print(`warning:  ${w}\n`);
+  for (const entry of report.entries.filter((e) => e.kind === "repaired")) {
+    print(`repaired: ${renderSkillLinkEntry(entry)}\n`);
+  }
+  // "ok" and "harness-not-installed" mix two meanings (skillLinks.ts): a
+  // genuinely valid, already-linked path ("ok") and a harness whose parent
+  // dir doesn't exist here — never linked at all. The latter under "ok:"
+  // would misleadingly imply it was linked.
+  for (const entry of report.entries.filter(
+    (e) => e.kind === "ok" || e.kind === "harness-not-installed",
+  )) {
+    print(
+      entry.kind === "harness-not-installed"
+        ? `skipped:  ${renderSkillLinkEntry(entry)}\n`
+        : `ok:       ${renderSkillLinkEntry(entry)}\n`,
+    );
+  }
+  for (const entry of report.entries.filter((e) => isSkillLinkFailure(e.kind))) {
+    print(`warning:  ${renderSkillLinkEntry(entry)}\n`);
+  }
 
-  // Explicitly requested links must land; config-driven warnings are daemon
-  // parity (exit 0). Compare on expanded paths — the report is post-expansion.
-  const requestedLinks = requested.map((d) => join(expandHome(d), SKILL_DIR_NAME));
-  const failedRequested = report.warnings.some((w) =>
-    requestedLinks.some((p) => w.startsWith(p) || w.startsWith(dirname(p))),
+  // Explicitly requested links must land; config-driven failures are daemon
+  // parity (exit 0). Compare harness directories with the normalized rule
+  // (sameHarnessDir, #292) — each failing entry already carries the harness
+  // dir it belongs to, so no path/dirname arithmetic is needed here.
+  const failedRequested = report.entries.some(
+    (e) =>
+      isSkillLinkFailure(e.kind) &&
+      e.harnessDir !== undefined &&
+      requested.some((d) => sameHarnessDir(d, e.harnessDir as string)),
   );
   return failedRequested ? 1 : 0;
 }

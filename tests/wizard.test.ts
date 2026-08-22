@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,7 +14,7 @@ import type { SkillLinksReport } from "../src/skillLinks.js";
 // ~/.junco — same trap the effectiveDataDir tests already guard against for
 // ensureDirs's mkdirFn). Tests exercising the skill-link wiring itself
 // override this.
-const NOOP_SKILL_LINKS: SkillLinksReport = { created: [], repaired: [], skipped: [], warnings: [] };
+const NOOP_SKILL_LINKS: SkillLinksReport = { entries: [] };
 const noopEnsureSkillLinksFn = (): SkillLinksReport => NOOP_SKILL_LINKS;
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), "wiz-"));
@@ -92,6 +92,63 @@ describe("buildWizardIO", () => {
     expect(order.length).toBeGreaterThan(1);
     expect(order.at(-1)).toBe("links");
     expect(order.filter((s) => s === "links")).toEqual(["links"]);
+  });
+
+  // #294's silent-failure hole, closed from the wizard side: `write` used to
+  // discard the ensureSkillLinks report entirely, so a failing link never
+  // surfaced anywhere. Now a failure kind gets logged.
+  it("logs a skill-link failure instead of discarding it", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const dir = tmp();
+      const cp = join(dir, "config.json");
+      const r = buildWizardIO(cp, {
+        existsFn: () => false,
+        ensureSkillLinksFn: () => ({
+          entries: [
+            {
+              path: "/h/.claude/skills/junco-dispatch",
+              kind: "symlink-failed",
+              harnessDir: "/h/.claude/skills",
+              detail: "EPERM: operation not permitted",
+            },
+          ],
+        }),
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) throw new Error("expected ok:true");
+      r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [msg, fields] = warnSpy.mock.calls[0] ?? [];
+      expect(msg).toBe("skill link failed");
+      expect(String((fields as { detail?: unknown } | undefined)?.detail)).toContain(
+        "symlink failed",
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs nothing when the skill-link report is all-quiet", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const dir = tmp();
+      const cp = join(dir, "config.json");
+      const r = buildWizardIO(cp, {
+        existsFn: () => false,
+        ensureSkillLinksFn: noopEnsureSkillLinksFn,
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) throw new Error("expected ok:true");
+      r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("rerun mode reads the existing raw config into initialAnswers", () => {
