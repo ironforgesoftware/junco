@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `junco submit --as-issue <file>` (`--as-issue --plan <file> --repo <path>` for a plan-set fence) files a locally-authored ticket as a **parked, unlabeled** GitHub issue instead of dropping it in the inbox — bot-authored (requires `botAccount.enabled`), refused unless the target repo is owned, bridge-watched, and GitHub integration is enabled. No labels are applied; a human's own trigger label is what launches it later. The GitHub bridge's labeled-issue sweep gained a matching precedence door: a vouched issue body carrying a `junco-ticket` fence (or, with `planSets.enabled`, a `junco-plan` fence, checked first) now queues verbatim — skipping the planning session entirely — while ask still wins over any fence and a fenceless body still falls through to the planner unchanged. Zero new config keys: the planner remains the fence _producer_ for issues that arrive without one, not a route. The `junco-dispatch` skill's preview gate offers this as an explicit destination choice ("park it on github" / "junco as issue: …" / "dispatch as issue"), alongside the existing inbox default.
+
 ### Changed
 
 - Upgraded `@earendil-works/pi-coding-agent` to 0.84.2. Session creation migrated from the removed `authStorage`/`modelRegistry` options to the SDK's async `ModelRuntime`, with the operator's API key supplied through a junco-owned in-memory credential store — it still never reaches disk or the agent's environment. Operator `models.json` files using `compat.sendSessionIdHeader` must switch to `sessionAffinityFormat` (removed upstream in 0.80.7).
