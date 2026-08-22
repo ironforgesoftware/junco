@@ -482,6 +482,56 @@ describe("runDoctor — deprecations + pending migrations (Unified Data Root spe
     expect(text).toContain("junco data migrate");
   });
 
+  // Rollback divergence (#280): a pre-0.10 binary run after 'junco data
+  // migrate' recreates the legacy root from its hardcoded default, so BOTH
+  // the canonical and legacy roots hold a tree — exactly the dirs 2b above
+  // would otherwise flag with "run 'junco data migrate' to unify", advice
+  // that is actively wrong in this state (re-running it would merge or
+  // conflict against live data). cfg.dataDir is set to juncoHome(env) here
+  // (rather than okConfig's synthetic default) so fixedLegacyRoot recognizes
+  // it as the canonical target and computes the fixed legacy root from it.
+  it("warns when both the canonical and legacy data roots hold a tree", async () => {
+    const out: string[] = [];
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      "/sbxroot/home/.junco/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home" },
+        existsFn: (p: string) =>
+          p.startsWith("/sbxroot/home/.junco/queue") ||
+          p.startsWith("/sbxroot/home/.local/state/junco/queue") ||
+          p.endsWith("/skills"),
+      }),
+    );
+    const text = out.join("");
+    expect(text).toMatch(/both data roots/i);
+    expect(text).toContain("/sbxroot/home/.local/state/junco");
+    // 2b's own "unmigrated data dirs" advice is wrong in this state (it would
+    // tell the operator to re-run a migrate that would merge/conflict against
+    // live data) — it must be suppressed, not shown alongside the new warning.
+    expect(text).not.toMatch(/unmigrated data dirs/);
+    expect(code).toBe(0); // a warning, never a failure
+  });
+
+  it("does not warn when only one root holds a tree", async () => {
+    const out: string[] = [];
+    const cfg = { ...okConfig, dataDir: "/sbxroot/home/.junco" } as unknown as Config;
+    const code = await runDoctor(
+      "/sbxroot/home/.junco/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        printFn: (s) => out.push(s),
+        env: { HOME: "/sbxroot/home" },
+        existsFn: (p: string) =>
+          p.startsWith("/sbxroot/home/.junco/queue") || p.endsWith("/skills"),
+      }),
+    );
+    expect(out.join("")).not.toMatch(/both data roots/i);
+    expect(code).toBe(0);
+  });
+
   it("legacy worktreeRoot dir with leftovers → info-level (✓) hint, itself not a warning", async () => {
     const lines: string[] = [];
     // legacy.worktreeRoot:true also trips the "deprecated config keys" WARN

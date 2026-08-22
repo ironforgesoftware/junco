@@ -13,8 +13,9 @@ import {
   queuePaths,
   isLoopbackHost,
   configDeprecations,
+  dataRootHasTree,
 } from "./config.js";
-import { pendingMigrations } from "./dataMigrate.js";
+import { pendingMigrations, migrationTargetRoot, fixedLegacyRoot } from "./dataMigrate.js";
 import { dataTreePaths } from "./dataTree.js";
 import { SKILL_DIR_NAME } from "./skillLinks.js";
 import { endpointReachable, probePolicy } from "./health.js";
@@ -215,10 +216,42 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // plan) when `cfg.legacy.dataRoot` — `env` threads through so the
     // computed target root is hermetically testable, same seam as every
     // other env-driven check in this file.
+    //
+    // targetRoot/legacyRoot/bothRootsHaveTrees are computed here (rather than
+    // inline below, where 2b-bis's own comment lives) so THIS check can be
+    // gated on them: when both roots already hold a tree (#280 — a pre-0.10
+    // binary run after 'junco data migrate' recreates the legacy root from
+    // its hardcoded default), 2b's "run 'junco data migrate' to unify" advice
+    // is actively wrong — re-running migrate would merge or conflict against
+    // live data — so 2b-bis below suppresses it in favor of its own warning.
+    const targetRoot = migrationTargetRoot(cfg, env);
+    const legacyRoot = fixedLegacyRoot(targetRoot, env);
+    const bothRootsHaveTrees =
+      legacyRoot !== null &&
+      dataRootHasTree(targetRoot, existsFn) &&
+      dataRootHasTree(legacyRoot, existsFn);
     const pending = pendingMigrations(cfg, existsFn, env);
-    if (pending.length > 0) {
+    if (pending.length > 0 && !bothRootsHaveTrees) {
       const list = pending.map((m) => `${m.from} -> ${m.to}`).join(", ");
       report("warn", "unmigrated data dirs", `${list} — run 'junco data migrate' to unify`);
+    }
+
+    // 2b-bis. Rollback divergence (#280): a pre-0.10 binary run after a
+    // migrate recreates the legacy root from its hardcoded default, so BOTH
+    // roots hold a tree — the split-state the single-root work eliminated.
+    // Deliberately a warn: nothing is broken, but the operator is now
+    // writing to whichever root the running binary picks.
+    //
+    // This SUPPRESSES 2b above, whose "run 'junco data migrate'" advice is
+    // actively wrong here — re-running migrate would merge or conflict
+    // against live data. Inspect and remove the stale tree instead.
+    if (bothRootsHaveTrees) {
+      report(
+        "warn",
+        "both data roots hold a tree",
+        `${targetRoot} and ${legacyRoot} — a pre-0.10 binary was probably run after 'junco data migrate'. ` +
+          `Check which one the daemon is using ('junco data'), then remove the stale tree by hand. Do NOT re-run migrate.`,
+      );
     }
 
     // 2c. legacy worktree-root override (spec §7): while git.worktreeRoot is
