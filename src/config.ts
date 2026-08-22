@@ -163,10 +163,12 @@ export interface ResolveConfigDeps {
  *
  * JUNCO_CONFIG (#275), when set to a non-empty value, wins outright — checked
  * before the canonical path. `junco start` derives the daemon-singleton
- * worker.lock as `dirname(resolveConfigPath())/worker.lock` (four other
- * modules re-derive the same path), so an override relocates the lock right
- * along with the config: two named configs are, by design, two independent
- * daemon instances.
+ * worker.lock as `dirname(resolveConfigPath())/worker.lock`; several other
+ * modules (ensureDaemon, cli, restartCmd, dataMigrateCmd, updateCmd, and
+ * doctor via the equivalent `dirname(configPath)`, no `resolve()`) re-derive
+ * the same path independently rather than importing a shared helper, so an
+ * override relocates the lock right along with the config everywhere: two
+ * named configs are, by design, two independent daemon instances.
  */
 export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
   const existsFn = deps.existsFn ?? existsSync;

@@ -1796,7 +1796,17 @@ describe("mainLoop — observability", () => {
     expect(metricsWriter.write.mock.calls[0]![0]).toMatchObject({ pid: process.pid });
   });
 
-  it("binds the writer to the frozen config's data dir, not a reloaded one", async () => {
+  it("never follows a live dataDir reload to a different metrics file", async () => {
+    // NOTE: this does NOT discriminate binding the writer to the frozen `cfg`
+    // vs. to `activeCfg()` — activeCfg() itself runs the live holder value
+    // through overlayFrozenRestartFields, which unconditionally pins dataDir
+    // (and dataLayout) back to the frozen value, so activeCfg().dataDir
+    // always equals cfg.dataDir inside mainLoop. On top of that,
+    // MetricsWriter bakes its path into a closure at construction, so a
+    // single construction site can't move mid-run regardless of which cfg
+    // it reads. What this guards is the regression shape where a writer is
+    // (re)constructed from a raw, un-pinned deps.configHolder.current.dataDir
+    // read that bypasses overlayFrozenRestartFields entirely.
     const root = mkdtempSync(join(tmpdir(), "junco-daemon-metrics-frozen-"));
     const stateDir = join(root, "state");
     const reloadedDir = join(root, "reloaded");

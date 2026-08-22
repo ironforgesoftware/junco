@@ -399,8 +399,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   if (values.config !== undefined) {
     process.stderr.write(
-      "junco: --config is deprecated and ignored — the config always lives at " +
-        `~/.junco/config.json (resolved: ${configPath}). See docs/configuration.md.\n`,
+      "junco: --config is deprecated and ignored — the config location is resolved " +
+        `automatically (resolved: ${configPath}). See docs/configuration.md.\n`,
     );
   }
 
