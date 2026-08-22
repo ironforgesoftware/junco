@@ -220,6 +220,14 @@ export function sandboxDenyPaths(
       p.outbox,
       p.mirror,
       p.transcripts,
+      // Plan-set records (control-plane state: repoPath, issue nwo/number,
+      // task ids, statusCommentId). Added to the data tree by the plan-sets
+      // work; it was missing from this list until 2026-08-21 — the drift this
+      // enumeration is prone to, and the reason for the classification test in
+      // tests/dataTree.test.ts. Never an ancestor of a writable root: `plans`
+      // is `plans/` (flat) / `data/plans` (v2), and nothing writable is nested
+      // under either.
+      p.plans,
       // Legacy TUI cache (tui/ghClient.ts still owns it; mirror/ replaces it
       // in PR 2).
       p.githubCache,
@@ -236,6 +244,7 @@ export function sandboxDenyPaths(
       p.metricsFile,
       p.logFile,
       p.migratedFile,
+      p.migrateLockFile, // daemon-owned, sibling of migrated.json above
       defaultUserConfigPath(env), // may hold model.apiKey — see doc comment above
       legacyConfigPath(env), // I-3: the ACTIVE config on an un-migrated machine
     ],

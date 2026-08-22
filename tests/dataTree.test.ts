@@ -151,11 +151,13 @@ describe("sandboxDenyPaths", () => {
     expect(deny.dirs).toContain("/sbxroot/data/history");
     expect(deny.dirs).toContain("/sbxroot/data/transcripts");
     expect(deny.dirs).toContain("/sbxroot/data/github-cache");
+    expect(deny.dirs).toContain("/sbxroot/data/plans");
     expect(deny.files).toContain("/sbxroot/data/watchlist.json");
     expect(deny.files).toContain("/sbxroot/data/spend.json");
     expect(deny.files).toContain("/sbxroot/data/metrics.json");
     expect(deny.files).toContain("/sbxroot/data/worker.log");
     expect(deny.files).toContain("/sbxroot/data/migrated.json");
+    expect(deny.files).toContain("/sbxroot/data/migrate.lock");
     // The agent's own execution roots stay readable: never the dataDir root,
     // never worktrees/ (the agent's cwd lives there), never clones/.
     const all = [...deny.dirs, ...deny.files];
@@ -193,12 +195,14 @@ describe("sandboxDenyPaths", () => {
         "/sbxroot/home/.junco/review",
         "/sbxroot/home/.junco/data/outbox",
         "/sbxroot/home/.junco/data/transcripts",
+        "/sbxroot/home/.junco/data/plans",
         "/sbxroot/home/.junco/cache/github-cache",
         "/sbxroot/home/.junco/cache/mirror",
         "/sbxroot/home/.junco/logs",
       ]),
     );
     expect(deny.files).toContain("/sbxroot/home/.junco/config.json");
+    expect(deny.files).toContain("/sbxroot/home/.junco/migrate.lock");
     // I-3 (final review 2026-08-05): the legacy XDG config path is denied
     // too, since an un-migrated machine's daemon actually reads it — the
     // ACTIVE config, not the canonical one, may hold model.apiKey.
