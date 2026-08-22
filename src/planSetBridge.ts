@@ -644,7 +644,12 @@ export async function maintainPlanSets(
     }
 
     const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso, submitFn);
-    if (outcome.kind === "deferred" || outcome.kind === "compile-failed") continue;
+    // `deferred` (a child is mid-flight) and `compile-failed` (the edit does
+    // not compile) skip only the SUPERSEDE — not this record's maintenance.
+    // Skipping the whole pass froze the dashboard for the entire duration of
+    // a long-running child and suppressed the degraded comment for failures
+    // that appeared in that window (#298). The record selection below already
+    // falls back to storedRecord for both outcomes.
     const record = outcome.kind === "superseded" ? outcome.record : storedRecord;
 
     if (record.closed) {

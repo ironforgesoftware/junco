@@ -749,7 +749,7 @@ tasks:
     warnSpy.mockRestore();
   });
 
-  it("supersede defers while a child is processing", async () => {
+  it("supersede defers while a child is processing, but ordinary maintenance still runs (#298)", async () => {
     const rec = baseRecord({
       hash: "orig-hash",
       tasks: [
@@ -766,10 +766,12 @@ tasks:
     writeFakeGh(root, approvedSupersedeGhOpts(EDITED_FENCE));
     await maintainPlanSets(cfg);
 
-    // Deferred: nothing disposed, nothing fanned out, the record untouched.
-    // The whole per-record sweep is skipped this pass (not just the
-    // supersede attempt) — the ordinary dashboard/label maintenance for this
-    // record catches up on a later, quiescent sweep instead.
+    // Deferred: nothing disposed, nothing fanned out — only the SUPERSEDE is
+    // skipped. The record's ordinary maintenance (dashboard sync here) still
+    // runs this same sweep instead of freezing for as long as "b" stays
+    // in flight (#298). The desired label ("working") already matches
+    // lastLabel, so no label swap fires — that is NOT evidence maintenance
+    // was skipped, just that it had nothing to change.
     expect(existsSync(join(qp.processing, "p1-b.md"))).toBe(true); // untouched
     expect(existsSync(join(qp.inbox, "p1-a.md"))).toBe(true); // untouched, no c
     expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(false);
@@ -778,13 +780,15 @@ tasks:
     const persisted = readPlanSetRecord(cfg, "p1");
     expect(persisted?.hash).toBe("orig-hash"); // unchanged — no supersede happened
     expect(persisted?.tasks.map((t) => t.id)).toEqual(["a", "b"]); // old task list
-    expect(persisted?.lastLabel).toBe("junco:working"); // ordinary maintenance never ran
-    expect(persisted?.statusCommentId).toBeNull(); // no dashboard call this sweep
+    expect(persisted?.lastLabel).toBe("junco:working"); // desired label already matched
+    expect(persisted?.statusCommentId).toBe(555); // dashboard still synced this sweep
 
     const blocks = readLog();
     expect(blocks.find((b) => b.argv.includes("--remove-label junco:approved"))).toBeUndefined();
     expect(blocks.find((b) => b.argv.startsWith("issue edit"))).toBeUndefined();
-    expect(blocks.find((b) => b.argv.includes("--jq .id"))).toBeUndefined(); // no dashboard create
+    const dashboardCreate = blocks.find((b) => b.argv.includes("--jq .id"));
+    expect(dashboardCreate).toBeDefined(); // dashboard IS created despite the deferred supersede
+    expect(dashboardCreate?.body).toContain("junco:plan-status");
   });
 
   const BAD_FENCE = `version: 1
@@ -794,9 +798,10 @@ tasks: []
   it("supersede compile failure is bounded: exactly one failure comment across two sweeps", async () => {
     // Task "a" is left fully absent (never seeded in any queue dir) so the
     // sweep-1 dispose pass (which runs BEFORE the compile check, per step 5)
-    // is a no-op — isolating this test to the bounded-re-entry behavior under
-    // test, not the (separate, expected) ordinary dashboard/label maintenance
-    // that runs on sweep 2 once trySupersede returns "unchanged".
+    // is a no-op — isolating this test to the bounded re-entry behavior under
+    // test (one failure comment, one label read, one approved-label removal —
+    // ever), independent of the ordinary dashboard/label maintenance that now
+    // runs every sweep (including sweep 1) alongside it (#298).
     const rec = baseRecord({
       hash: "orig-hash",
       tasks: [{ id: "a", ticketId: "p1-a", dependsOn: [] }],
