@@ -21,16 +21,18 @@ describe("inMemoryCredentialStore", () => {
 
   it("modify writes through and delete removes", async () => {
     const store = inMemoryCredentialStore();
-    await store.modify("omlx", async () => ({ type: "api_key", key: "k1" }));
+    const returned = await store.modify("omlx", async () => ({ type: "api_key", key: "k1" }));
+    expect(returned).toEqual({ type: "api_key", key: "k1" });
     expect(await store.read("omlx")).toEqual({ type: "api_key", key: "k1" });
     await store.delete("omlx");
     expect(await store.read("omlx")).toBeUndefined();
   });
 
-  it("modify returning undefined clears the entry", async () => {
+  it("modify returning undefined leaves the entry unchanged and resolves with the current credential", async () => {
     const store = inMemoryCredentialStore({ omlx: "k1" });
-    await store.modify("omlx", async () => undefined);
-    expect(await store.read("omlx")).toBeUndefined();
+    const returned = await store.modify("omlx", async () => undefined);
+    expect(returned).toEqual({ type: "api_key", key: "k1" });
+    expect(await store.read("omlx")).toEqual({ type: "api_key", key: "k1" });
   });
 
   it("starts empty when no seed is given", async () => {

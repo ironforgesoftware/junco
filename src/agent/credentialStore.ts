@@ -52,10 +52,13 @@ export function inMemoryCredentialStore(
     list: async () =>
       [...creds.keys()].map((providerId) => ({ providerId, type: "api_key" as const })),
     modify: async (providerId, fn) => {
-      const next = await fn(creds.get(providerId));
-      if (next === undefined) creds.delete(providerId);
-      else creds.set(providerId, next);
-      return next;
+      const current = creds.get(providerId);
+      const next = await fn(current);
+      // Per the SDK contract, `undefined` leaves the entry UNCHANGED (it does
+      // not delete — that is `delete`'s job) and the call resolves with the
+      // post-write credential. Mirrors pi-ai's own InMemoryCredentialStore.
+      if (next !== undefined) creds.set(providerId, next);
+      return next ?? current;
     },
     delete: async (providerId) => {
       creds.delete(providerId);
