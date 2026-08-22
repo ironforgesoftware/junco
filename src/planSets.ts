@@ -212,6 +212,15 @@ export function renderDashboard(record: PlanSetRecord, state: SetState): string 
   return lines.join("\n") + "\n";
 }
 
+/** Injectable side effects (tests only; production callers omit this — see
+ * SubmitTicketDeps/AnalyzeCmdDeps for the same optional-and-defaults-to-real
+ * shape). `submitFn` is typed against the real `submitTicket`, not
+ * `BridgeDeps`'s looser structural signature, so a signature change to
+ * `submitTicket` is caught here at compile time. */
+export interface SubmitPlanSetDeps {
+  submitFn?: typeof submitTicket;
+}
+
 /** Idempotent fan-out: a child whose id exists ANYWHERE in the queue —
  * done/ and failed/ included — is skipped, never re-run. This is deliberately
  * stricter than the bridge's single-ticket ticketInFlight guard (inbox+
@@ -221,7 +230,9 @@ export function renderDashboard(record: PlanSetRecord, state: SetState): string 
 export function submitPlanSet(
   cfg: Config,
   children: CompiledChild[],
+  deps: SubmitPlanSetDeps = {},
 ): { submitted: string[]; skipped: string[] } {
+  const submitFn = deps.submitFn ?? submitTicket;
   const paths = queuePaths(cfg);
   const submitted: string[] = [];
   const skipped: string[] = [];
@@ -230,7 +241,7 @@ export function submitPlanSet(
       skipped.push(c.ticketId);
       continue;
     }
-    submitTicket(cfg, c.content, { idHint: c.ticketId });
+    submitFn(cfg, c.content, { idHint: c.ticketId });
     submitted.push(c.ticketId);
   }
   return { submitted, skipped };

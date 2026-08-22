@@ -851,11 +851,14 @@ tasks:
           });
           const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
           expect(n).toBe(1);
-          // dispatchPlanSet fans out via the real submitTicket, not the
-          // injected submitFn — the single-ticket path never runs.
-          expect(f.submitted).toHaveLength(0);
-          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(true);
-          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(true);
+          // dispatchPlanSet now fans out through the SAME injected submitFn as
+          // the single-ticket path (the BridgeDeps.submitFn seam threaded down
+          // from pollGithubInbox) — both children are submitted through it, so
+          // the real submitTicket never writes to the inbox here.
+          expect(f.submitted).toHaveLength(2);
+          expect(f.submitted.map((s) => s.idHint).sort()).toEqual([`${EXEC_ID}-a`, `${EXEC_ID}-b`]);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(false);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(false);
           const edit = f.calls.find((c) => c[1] === "edit");
           expect(edit).toEqual(
             expect.arrayContaining([

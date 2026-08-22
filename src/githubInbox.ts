@@ -847,6 +847,7 @@ export async function pollGithubInbox(
                   issue.number,
                   setBody,
                   new Date().toISOString(),
+                  { submitFn },
                 );
                 if (!dr.ok) {
                   const errList = dr.errors.map((e) => `- ${e}`).join("\n");

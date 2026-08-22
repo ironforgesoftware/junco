@@ -41,26 +41,9 @@ import { dispatchPlanSet, maintainPlanSets } from "../src/planSetBridge.js";
 import { PLAN_COMMENT_MARKER, PLAN_SET_FENCE, extractPlanSetBody } from "../src/githubInbox.js";
 import { hashPlan } from "../src/planCompiler.js";
 import { sweepDependencies } from "../src/ticketDeps.js";
+import { submitTicket } from "../src/dispatch.js";
 import { log } from "../src/logging.js";
 import { makeConfig } from "./helpers/config.js";
-
-// Boxed passthrough (mirrors tests/daemon.test.ts's runOnceBox pattern): every
-// test gets the REAL submitTicket unless it overrides `.current` for its own
-// duration. Needed only by the crash-window test below — a genuine per-child
-// linkSync EEXIST race can't be forced from a test: whatever file we'd place
-// to collide is exactly what ticketState's own pre-check would already read
-// as "already landed" and skip BEFORE ever reaching submitTicket.
-const submitTicketBox = vi.hoisted(() => ({
-  current: null as unknown as (...a: unknown[]) => unknown,
-}));
-vi.mock("../src/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/dispatch.js")>();
-  submitTicketBox.current = actual.submitTicket as unknown as (...a: unknown[]) => unknown;
-  return {
-    ...actual,
-    submitTicket: (...args: unknown[]) => submitTicketBox.current(...args),
-  };
-});
 
 const NOW = "2026-08-20T12:00:00.000Z";
 
@@ -135,6 +118,20 @@ describe("dispatchPlanSet", () => {
     const again = dispatchPlanSet(cfg, { nwo: "acme/api", path: "/p" }, 9, FENCE, NOW);
     expect(again.ok && again.submitted).toEqual([`${planId}-b`]);
     expect(again.ok && again.skipped).toEqual([`${planId}-a`]);
+  });
+
+  it("submits set children through the injected submitFn", () => {
+    const calls: string[] = [];
+    const r = dispatchPlanSet(cfg, { nwo: "acme/api", path: "/p" }, 9, FENCE, NOW, {
+      submitFn: (_cfg, _content, opts) => {
+        calls.push(opts?.idHint ?? "?");
+        return "/fake/dst.md";
+      },
+    });
+    expect(r.ok).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+    // The real submitTicket never ran, so nothing landed on disk.
+    expect(readdirSync(qp.inbox)).toEqual([]);
   });
 });
 
@@ -719,20 +716,15 @@ tasks:
     // EDITED_FENCE compiles to tasks a/b/c — make ONLY "c"'s submit throw,
     // exactly like a genuine inbox-slug collision (dispatch.ts's "ticket
     // already queued" error), while "b" (a real recompile) still goes
-    // through the real submitTicket.
-    const realSubmitTicket = submitTicketBox.current;
-    submitTicketBox.current = (...args: unknown[]) => {
-      const opts = args[2] as { idHint?: string } | undefined;
+    // through the real submitTicket. Injected via maintainPlanSets's
+    // submitFn seam (no whole-module mock needed).
+    const throwingSubmit: typeof submitTicket = (c, content, opts, deps) => {
       if (opts?.idHint === "p1-c") {
         throw new Error("ticket already queued: /sbxroot/queue/inbox/p1-c.md");
       }
-      return realSubmitTicket(...args);
+      return submitTicket(c, content, opts, deps);
     };
-    try {
-      await maintainPlanSets(cfg);
-    } finally {
-      submitTicketBox.current = realSubmitTicket;
-    }
+    await maintainPlanSets(cfg, { submitFn: throwingSubmit });
 
     // "b" (the edited recompile) landed normally; "c" did not — its submit
     // threw and was contained, not fatal to the rest of the fan-out.

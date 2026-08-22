@@ -56,12 +56,21 @@ export type DispatchResult =
   | { ok: true; submitted: string[]; skipped: string[] }
   | { ok: false; errors: string[] };
 
+/** Injectable side effects (tests only; production callers omit this).
+ * `submitFn` is typed against the real `submitTicket`, not `BridgeDeps`'s
+ * looser structural signature — see githubInbox.ts's BridgeDeps.submitFn,
+ * which pollGithubInbox resolves once and passes down here. */
+export interface DispatchPlanSetDeps {
+  submitFn?: typeof submitTicket;
+}
+
 export function dispatchPlanSet(
   cfg: Config,
   repo: GithubRepoMapping,
   issueNumber: number,
   fenceBody: string,
   nowIso: string,
+  deps: DispatchPlanSetDeps = {},
 ): DispatchResult {
   const parsed = parsePlanSet(fenceBody, { maxTasks: cfg.planSets.maxTasks });
   if (!parsed.ok) return { ok: false, errors: parsed.errors };
@@ -90,7 +99,7 @@ export function dispatchPlanSet(
   // recovery key on; a record without children self-heals (next dispatch
   // resubmits), children without a record would be an untracked set.
   materializePlanSet(cfg, record, fenceBody);
-  const r = submitPlanSet(cfg, children);
+  const r = submitPlanSet(cfg, children, { submitFn: deps.submitFn });
   log.info("plan set dispatched", {
     planId,
     submitted: r.submitted.length,
@@ -113,6 +122,9 @@ export interface MaintainPlanSetsDeps {
    * (see trySupersede). Defaults to `new Date().toISOString()` — injectable
    * so tests can pin it instead of reaching for `Date.now()` directly. */
   nowIso?: string;
+  /** Used by trySupersede's fan-out loop in place of the hard `submitTicket`
+   * import. Defaults to the real `submitTicket`. */
+  submitFn?: typeof submitTicket;
 }
 
 /** Outbox-aware guard: on a network-shaped failure, `fn`'s side effect is
@@ -383,6 +395,7 @@ async function trySupersede(
   ll: ReturnType<typeof lifecycleLabels>,
   getLogin: () => Promise<string>,
   nowIso: string,
+  submitFn: typeof submitTicket,
 ): Promise<SupersedeOutcome> {
   let comment: { body: string; createdAtMs: number; updatedAtMs: number } | null;
   try {
@@ -545,7 +558,7 @@ async function trySupersede(
       continue;
     }
     try {
-      submitTicket(cfg, c.content, { idHint: c.ticketId });
+      submitFn(cfg, c.content, { idHint: c.ticketId });
       submitted.push(c.ticketId);
     } catch (e) {
       log.warn("plan-set supersede: child submit failed at fan-out; skipping", {
@@ -600,6 +613,7 @@ export async function maintainPlanSets(
   deps: MaintainPlanSetsDeps = {},
 ): Promise<void> {
   const ghFn = deps.ghFn ?? gh;
+  const submitFn = deps.submitFn ?? submitTicket;
   const ll = lifecycleLabels(cfg.github.triggerLabel);
   const nowIso = deps.nowIso ?? new Date().toISOString();
   // Memoized across the whole sweep — every candidate record needs the same
@@ -629,7 +643,7 @@ export async function maintainPlanSets(
       if (Number.isFinite(age) && age > PLAN_SET_COLD_MS) continue;
     }
 
-    const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso);
+    const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso, submitFn);
     if (outcome.kind === "deferred" || outcome.kind === "compile-failed") continue;
     const record = outcome.kind === "superseded" ? outcome.record : storedRecord;
 
