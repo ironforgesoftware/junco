@@ -645,15 +645,24 @@ export async function mainLoop(
   const detectSplitQueueFn = deps.detectSplitQueueFn ?? ((c: Config) => detectSplitQueue(c));
 
   // Split-queue guard (#274) — FIRST piece of startup work, ahead of the
-  // migrate lock, mkdirs, and both destructive recovery steps. Two independent
-  // reasons it has to be here and nowhere later:
-  //   1. `mkdirs` (ensureDataTree) CREATES the resolved queue. Run this check
-  //      after it and the finding degrades from "your tickets are in the other
-  //      root" to "you have no tickets yet" — still true, operationally
-  //      useless. The detector must see the resolved inbox as the operator
-  //      left it.
-  //   2. recoverOrphans + pruneStaleWorktrees are destructive; the operator
-  //      must see the mismatch BEFORE the daemon acts on the wrong root.
+  // migrate lock, mkdirs, and both destructive recovery steps. The reason it
+  // has to be here and nowhere later: recoverOrphans + pruneStaleWorktrees are
+  // destructive, and the operator must see the mismatch BEFORE the daemon acts
+  // on the wrong root. Sitting ahead of waitForEndpointFn (which can block for
+  // a long time) is a second, smaller win: the warning lands immediately
+  // instead of after the wait.
+  //
+  // NOT a reason, though it reads like one: "mkdirs (ensureDataTree) creates
+  // the resolved queue, so checking after it would degrade the finding to 'you
+  // have no tickets yet'." It would not — `discoverTasks` (src/queue.ts)
+  // returns [] for ENOENT and [] for an existing-empty directory alike, so a
+  // check run after mkdirs produces a byte-identical finding. Recorded here
+  // because that false argument used to lead this comment: a maintainer who
+  // checks it, finds it inert, and concludes the whole ordering constraint is
+  // folklore would move the guard below recoverOrphans and silently kill the
+  // feature. The destructive-steps reason above is the real one and is pinned
+  // by an invocationCallOrder assertion in tests/daemon.test.ts.
+  //
   // Safe ahead of migrateFn: the startup migration only renames state-tree
   // pairs INSIDE cfg.dataDir (stateTreeMigrations, src/dataMigrate.ts), never
   // the cross-root `queue` move — that one lives in dataRootPairs and only

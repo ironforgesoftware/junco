@@ -821,7 +821,11 @@ describe("queuePaths", () => {
 });
 
 describe("knownQueueRoots (split-queue startup guards, #274/#273)", () => {
-  it("enumerates canonical, legacy data root, and vault, flagging the resolved one", () => {
+  // No vault case here, and there is none to write: a vaultRoot queue is
+  // folded into cfg.queueRoot by assembleConfig and never retained separately,
+  // so it is enumerable only when it IS the resolved root — which is the
+  // "matches no known shape" case two tests below.
+  it("enumerates the canonical root and the legacy data root, flagging the resolved one", () => {
     const roots = knownQueueRoots({ queueRoot: "/h/.junco/queue" }, { HOME: "/h" });
     expect(roots.map((r) => r.root)).toContain("/h/.junco/queue");
     expect(roots.find((r) => r.root === "/h/.junco/queue")?.resolved).toBe(true);

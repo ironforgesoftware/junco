@@ -548,7 +548,13 @@ describe("run([]) — the fresh setup walkthrough refuses against a live junco (
     // Not a dead end: the resolved config path plus concrete next steps.
     expect(err).toContain("/nonexistent/junco-ftue-home/.junco/config.json");
     expect(err).toContain("junco doctor");
-    expect(err).toContain("junco status");
+    // ...and NOT `junco status`, or any other config-loading command. This
+    // refusal only prints when there is no file at the resolved path, and
+    // `status` calls loadConfig unconditionally (parseConfigFile rethrows the
+    // ENOENT) — advising it hands the operator a guaranteed second crash. Only
+    // `doctor` survives a missing config, by catching the load failure and
+    // reporting it as a finding.
+    expect(err).not.toContain("junco status");
   });
 
   it("(a2) refuses on the worker.lock holder alone (a health-disabled daemon)", async () => {
@@ -595,6 +601,8 @@ describe("run([]) — the fresh setup walkthrough refuses against a live junco (
     expect(err).toContain(DATA_ROOT); // names the populated root
     expect(err).toContain("/nonexistent/junco-ftue-home/.junco/config.json");
     expect(err).toContain("junco doctor");
+    expect(err).toContain("junco config init"); // this message's own escape hatch
+    expect(err).not.toContain("junco status"); // see (a): it crashes in this state
     // A distinct message from the live-daemon refusal — not one generic wall.
     expect(err).not.toMatch(/daemon is already running/i);
   });

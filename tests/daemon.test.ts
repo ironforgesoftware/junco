@@ -1120,11 +1120,14 @@ describe("mainLoop — split-queue startup warning", () => {
       expect(advice).toContain("/h/.junco/queue");
       expect(advice).toContain("/h/.local/state/junco/queue");
 
-      // ORDERING is the whole point. Presence alone would still pass if the
-      // warning drifted below ensureDataTree — which CREATES the resolved
-      // queue, degrading the signal from "your tickets are in the other root"
-      // to "you have no tickets yet" — or below the destructive
-      // recoverOrphans/pruneStaleWorktrees steps.
+      // ORDERING is the whole point, and the load-bearing bound is the
+      // DESTRUCTIVE one: presence alone would still pass if the warning
+      // drifted below recoverOrphans/pruneStaleWorktrees, which is exactly
+      // where the operator stops seeing the mismatch before the daemon acts on
+      // the wrong root. The migrateLock/mkdirs bounds below are ordering
+      // hygiene, not signal-preservation — running after ensureDataTree would
+      // produce an identical finding, because discoverTasks returns [] for a
+      // missing directory and [] for an empty one alike.
       const warnAt = orderOf(warnSpy.mock.invocationCallOrder, i, "log.warn");
       expect(warnAt).toBeLessThan(
         orderOf(migrateLockFn.mock.invocationCallOrder, 0, "migrateLock"),
@@ -1827,24 +1830,18 @@ describe("mainLoop — observability", () => {
       if (++n >= 2) stop.requestStop();
       return true; // handled → loop continues without sleeping to idle
     };
-    await mainLoop(
-      holder.current,
-      stop,
-      {},
-      {
-        configHolder: holder,
-        runOnceFn,
-        sleep: async () => {
-          await new Promise((r) => setTimeout(r, 1));
-        },
-        recoverOrphansFn: () => {},
-        pruneFn: () => {},
-        waitForEndpointFn: async () => {},
-        migrateFn: () => ({ steps: [], conflicts: [] }),
-        mkdirs: () => {},
-        startHealthServerFn: async () => null as unknown as HealthServerHandle,
+    // Through makeDeps, never a bare literal: a literal silently inherits
+    // mainLoop's REAL defaults for every seam it forgets — detectSplitQueueFn
+    // reaching the maintainer's live ~/.junco/queue, ensureSkillLinks writing
+    // symlinks, acquirePidfileLock creating a lock file. See makeDeps.
+    const { deps } = makeDeps({
+      configHolder: holder,
+      runOnceFn,
+      sleep: async () => {
+        await new Promise((r) => setTimeout(r, 1));
       },
-    );
+    });
+    await mainLoop(holder.current, stop, {}, deps);
     expect(seen).toEqual([1, 99]);
   });
 
@@ -1873,27 +1870,18 @@ describe("mainLoop — observability", () => {
       if (++n >= 2) stop.requestStop();
       return true; // handled → loop continues without sleeping to idle
     };
-    await mainLoop(
-      startCfg,
-      stop,
-      {},
-      {
-        configHolder: holder,
-        runOnceFn,
-        // Real macrotask tick — an instant-resolve fake sleep starves the
-        // scheduler's setTimeout-based waits in other suites; mirrored here
-        // for consistency even though this loop never reaches idle sleep.
-        sleep: async () => {
-          await new Promise((r) => setTimeout(r, 1));
-        },
-        recoverOrphansFn: () => {},
-        pruneFn: () => {},
-        waitForEndpointFn: async () => {},
-        migrateFn: () => ({ steps: [], conflicts: [] }),
-        mkdirs: () => {},
-        startHealthServerFn: async () => null as unknown as HealthServerHandle,
+    // makeDeps, not a literal — see the note in the previous test.
+    const { deps } = makeDeps({
+      configHolder: holder,
+      runOnceFn,
+      // Real macrotask tick — an instant-resolve fake sleep starves the
+      // scheduler's setTimeout-based waits in other suites; mirrored here
+      // for consistency even though this loop never reaches idle sleep.
+      sleep: async () => {
+        await new Promise((r) => setTimeout(r, 1));
       },
-    );
+    });
+    await mainLoop(startCfg, stop, {}, deps);
     expect(seenModelIds).toEqual([startCfg.model.id, "model-v2"]);
     expect(seenQueueRoots).toEqual([startCfg.queueRoot, startCfg.queueRoot]);
   });

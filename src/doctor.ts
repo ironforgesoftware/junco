@@ -555,11 +555,22 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // fail doctor."
     try {
       const listInboxFn = (dir: string): string[] => {
+        // ENOENT is genuinely "empty" — a root that was never created holds no
+        // tickets. Anything else is NOT: swallowing EACCES/ENOTDIR to [] would
+        // make doctor print "✓ queue roots — no other known queue root holds
+        // pending tickets", an affirmative claim about a directory it could
+        // not read, in the one tool an operator reaches for when something
+        // feels wrong (an abandoned root on a wrong-permissions mount can hold
+        // stranded tickets). Rethrowing with the path attached routes it to
+        // the outer catch's warn, which is also what makes the throw→warn
+        // asymmetry documented above reachable in production at all: existsFn
+        // (fs.existsSync) never throws and knownQueueRoots is pure string
+        // joins, so the lister is the only real source of one.
         if (!existsFn(dir)) return [];
         try {
           return readdirFn(dir).filter((n) => n.endsWith(".md"));
-        } catch {
-          return [];
+        } catch (e) {
+          throw new Error(`${dir} is unreadable: ${e instanceof Error ? e.message : String(e)}`);
         }
       };
       const split = detectSplitQueue(cfg, env, { listInbox: listInboxFn });

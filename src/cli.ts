@@ -410,12 +410,25 @@ async function ftueRefusal(configPath: string, deps: FtueGateDeps): Promise<stri
   const resolved = resolve(configPath);
   // Every refusal ends here — a guard that only says "no" moves the confusion
   // instead of resolving it, so both messages name the path they expected and
-  // the two commands that explain the machine's actual state.
+  // a command that actually runs in this state.
   const where = `  expected config: ${resolved}  (no file there)\n`;
+  // `junco doctor` and NOTHING that loads the config. Both refusals only ever
+  // print when there is no file at the resolved path, and every other
+  // diagnostic (`status`, `list`, `inbox-path`, …) calls loadConfig
+  // unconditionally — parseConfigFile rethrows the ENOENT, so the advised
+  // command would be guaranteed to die with a fatal stack and exit 1, leaving
+  // the operator with two errors instead of one. `doctor` is config-free by
+  // construction: it catches the load failure and reports it as a finding
+  // (doctor.ts, "config" check). Verified by execution against a HOME with no
+  // config before this line was written: `doctor` prints
+  // `✗ config — <resolved path>: ENOENT …` and a NOT-ready verdict (exit 1 is
+  // its finding, not a crash), while `status` dies with a fatal stack and
+  // prints nothing an operator can use. The wording below matches what doctor
+  // actually shows in THIS state — it stops at the config check, so promising
+  // "data and queue paths" here would be its own small over-claim.
   const steps =
     `\nWhat to do:\n` +
-    `  junco doctor   — the resolved config, data and queue paths, and what is wrong\n` +
-    `  junco status   — which daemon is live and which queue it is polling\n`;
+    `  junco doctor   — names the config path it resolved and what is wrong with it\n`;
 
   // Signal 1 — a live daemon. Cheapest, config-free probe first: the
   // single-instance pidfile beside the config (same derivation as `start`), no
@@ -437,6 +450,13 @@ async function ftueRefusal(configPath: string, deps: FtueGateDeps): Promise<stri
     }
   }
   if (daemon !== null) {
+    // Deliberately does NOT offer `junco config init` (the populated-tree
+    // refusal below does). `config init` is ungated — no daemon check, no tree
+    // check (configCmd.ts) — and writes a default config resolving under THIS
+    // process's HOME. In the moved-HOME shape this branch exists to catch,
+    // that is precisely the competing config of the 2026-08-01 incident,
+    // recreated by the remediation advice of the guard built to prevent it.
+    // Do not "reconcile" this with the other message.
     return (
       `junco: refusing to open the setup walkthrough — a junco daemon is already running.\n\n` +
       `  daemon:          ${daemon}\n` +

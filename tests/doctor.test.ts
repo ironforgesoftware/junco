@@ -426,6 +426,38 @@ describe("runDoctor split queue check (7-bis, #274)", () => {
     expect(out).not.toMatch(/⚠ queue roots/);
   });
 
+  it("an UNREADABLE other root warns instead of passing — no affirmative claim on evidence it could not gather", async () => {
+    // The production-reachable shape of the throw path (the existsFn-throws
+    // test below is synthetic: fs.existsSync never throws). An abandoned root
+    // on a wrong-permissions mount can hold stranded tickets; swallowing the
+    // EACCES to [] would print "✓ queue roots — no other known queue root
+    // holds pending tickets" — false reassurance in the one tool an operator
+    // reaches for when something feels wrong.
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        env: { HOME: "/sbxroot/home" },
+        existsFn: (p: string) => p === canonicalInbox || p.endsWith("/skills"),
+        readdirFn: (d: string) => {
+          if (d === canonicalInbox) {
+            throw Object.assign(new Error(`EACCES: permission denied, scandir '${d}'`), {
+              code: "EACCES",
+            });
+          }
+          return [];
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(code).toBe(0); // still warn-only
+    expect(out).toMatch(/⚠ queue roots/);
+    expect(out).not.toMatch(/✓ queue roots/);
+    expect(out).toContain(canonicalInbox); // names the root it could not read
+    expect(out).toContain("EACCES");
+  });
+
   it("a detector throw is reported as a warn, not a crash, and does not move the exit code", async () => {
     const lines: string[] = [];
     const code = await runDoctor(
