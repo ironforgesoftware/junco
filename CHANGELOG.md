@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Sandbox reads are now deny-by-default across the junco data tree. The three sandbox backends gained allow-overrides-deny precedence (longest-prefix-wins, shared by the Seatbelt profile, the bwrap mount list, and the in-process path jail), and the data root (`~/.junco`) is denied wholesale instead of by a hand-maintained enumeration of its sensitive subtrees. Only the agent's execution roots are allowed back — `cache/` under the v2 layout, `worktrees/` and `clones/` under the flat one — with `cache/mirror`, `cache/github-cache`, and the root receipt files re-denied inside them. Everything else the daemon owns (tickets, review queues, outbox ops, transcripts, plan-set records, task history, logs, `config.json`) is now unreadable to the agent by containment rather than by remembering to list it, closing the class of gap that left `plans/` agent-readable until 2026-08-21. `<dataDir>/skills` — a symlink mount for external harnesses that the sandboxed agent never reads — is denied along with the rest of the root.
 - Cleared 9 Dependabot alerts (4 high, 5 moderate). They were unfixable downstream: the SDK's own `npm-shrinkwrap.json` pinned vulnerable `undici`, `protobufjs`, and `brace-expansion`, which root-level `overrides` cannot reach. 0.84.2's shrinkwrap ships patched pins; `npm audit` now reports 0 vulnerabilities.
 
 ## [0.11.0] - 2026-08-19

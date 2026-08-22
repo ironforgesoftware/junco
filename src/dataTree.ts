@@ -57,6 +57,11 @@ const LAYOUTS = {
     spend: "spend.json",
     metrics: "metrics.json",
     logs: ".",
+    /** #277: no cache/ tier in the 0.9 shape — daemon state and the agent's
+     * execution roots are siblings directly at the root, so the wholesale
+     * sandbox deny of the root has to allow worktrees/ and clones/ back
+     * one by one instead. See sandboxDenyPaths. */
+    cacheRoot: null,
   },
   v2: {
     outbox: "data/outbox",
@@ -71,6 +76,11 @@ const LAYOUTS = {
     spend: "data/spend.json",
     metrics: "data/metrics.json",
     logs: "logs",
+    /** #277: the rm -rf-safe tier the wholesale sandbox deny of the root
+     * allows back — the worktrees and clone gitdirs the agent must read live
+     * under it. Only its named sensitive subtrees (mirror, github-cache) and
+     * update-check.json are re-denied inside it. See sandboxDenyPaths. */
+    cacheRoot: "cache",
   },
 } as const;
 
@@ -179,70 +189,97 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
 }
 
 /**
- * The data-tree paths the agent sandbox must not read (threaded into
- * `buildPolicy` by `agent/session.ts`): daemon-owned state — tickets, review
- * queues, outbox ops, transcripts, the GitHub mirror/cache, logs, the
- * canonical config file, and the root receipt files. Split dirs/files
- * because the backends enforce them differently (Seatbelt subpath vs
- * literal; bwrap tmpfs vs /dev/null bind). `queueRoot` is used as-is so a
- * legacy vaultRoot queue is denied wherever it lives.
+ * What the agent sandbox may and may not read inside the data tree (threaded
+ * into `buildPolicy` by `agent/session.ts`, which passes `dirs`/`files` as the
+ * deny lists and `allowDirs` as `dataAllowPaths`). Split dirs/files because the
+ * backends enforce them differently (Seatbelt subpath vs literal; bwrap tmpfs
+ * vs /dev/null bind).
  *
- * CRITICAL invariant: never deny an ancestor of the agent's writable roots.
- * Deliberately NOT the dataDir root, and (v2 layout) NOT `cache/` itself:
- * the default layout puts `worktrees/`/`cache/worktrees` (the agent's own
- * cwd) and `clones/`/`cache/clones` (gitdirs the agent's git reads) under
- * them, so a root- or cache-level deny would wall the agent out of its own
- * working tree — only cache/'s named subtrees (mirror, github-cache) are
- * denied, never cache/ itself.
+ * #277: this is DENY-BY-DEFAULT. The whole data root is denied wholesale and
+ * the agent's execution roots are allowed back — it is no longer a
+ * hand-maintained enumeration of the sensitive subtrees, which drifted (`plans`
+ * joined the tree with the plan-sets work and stayed agent-readable until
+ * 2026-08-21). Precedence is longest-prefix-wins over the composed rule set
+ * (`agent/sandbox/precedence.ts`), never list order, so a deny, an allow-back
+ * inside it, and a re-deny inside THAT all coexist:
  *
- * `skills` is exempt for a different reason: it is a SYMLINK to the installed
- * package's `skills/` dir (skillLinks.ts:97-98), so `canonicalize()` would
- * resolve a deny here onto the junco installation rather than the data tree —
- * denying the wrong target to protect public packaged content. The full list
- * of exemptions, each with its reason, is asserted in tests/dataTree.test.ts
- * ("classifies every data-tree entry as denied or deliberately exempt").
+ *   v2:    deny <root>  >  allow <root>/cache  >  deny cache/{mirror,github-cache}
+ *                                               + deny cache/update-check.json (a `files` entry)
+ *   flat:  deny <root>  >  allow worktrees/ and clones/   (no cache/ tier exists)
+ *
+ * Denying an ancestor of the agent's writable roots is safe BECAUSE the writable
+ * roots are themselves allow rules at their own depth (`policy.readRules`) — the
+ * session's cwd out-specifies the root deny. The old "never deny an ancestor of
+ * a writable root" convention is gone with the enumeration it protected.
+ *
+ * `queueRoot` stays denied explicitly even though it normally sits inside the
+ * root: a legacy vaultRoot queue lives outside it, and tickets are sensitive
+ * wherever they are. `worktrees`/`clonesExternal` are allowed back explicitly in
+ * both layouts for the mirror-image reason — both are legacy-overridable and an
+ * operator can park them anywhere, including inside the root but outside the
+ * tier that would otherwise cover them.
+ *
+ * `skills` is now DENIED (it is `<root>/skills`, under the wholesale deny) and
+ * needs no exemption: nothing here names it, so the old hazard — it is a SYMLINK
+ * to the installed package's `skills/` dir (skillLinks.ts), and `canonicalize()`
+ * would have resolved a deny ON it onto the junco installation, protecting
+ * public packaged content instead of the data tree — cannot arise. It is a
+ * distribution mount for external harnesses, never read by the sandboxed agent.
+ * Every entry's resolved effect is asserted in tests/dataTree.test.ts
+ * ("classifies every data-tree entry as denied or deliberately readable").
+ *
+ * The root receipt files stay enumerated in `files`. Most are redundant under
+ * the root deny, but they are what keeps a receipt denied when a layout puts one
+ * INSIDE an allow-back — v2's `cache/update-check.json` is exactly that case
+ * today, and it is only denied because it is listed here.
  *
  * `env` resolves the canonical config file location (`defaultUserConfigPath`)
- * — it may hold `model.apiKey`; before the single-root move the config lived
- * outside the data root and escaped this deny list entirely, so folding it
- * in here closes that gap. `legacyConfigPath(env)` is denied too (I-3, final
- * review 2026-08-05): on an un-migrated machine the daemon actually reads
- * the legacy XDG path, not the canonical one — denying only the canonical
- * path would leave the ACTIVE config (and its possible `model.apiKey`)
- * agent-readable until `junco data migrate` runs. A nonexistent deny file is
- * already the norm in this list (`metricsFile` is writer-less today), so
- * both sandbox backends tolerate a legacy path that doesn't exist.
+ * — it may hold `model.apiKey`; the config can live outside the data root
+ * (legacy stateDir), so it is denied by name rather than by containment.
+ * `legacyConfigPath(env)` is denied too (I-3, final review 2026-08-05): on an
+ * un-migrated machine the daemon actually reads the legacy XDG path, not the
+ * canonical one — denying only the canonical path would leave the ACTIVE config
+ * (and its possible `model.apiKey`) agent-readable until `junco data migrate`
+ * runs. A nonexistent deny file is already the norm in this list (`metricsFile`
+ * is writer-less today), so both sandbox backends tolerate a legacy path that
+ * doesn't exist.
  */
 export function sandboxDenyPaths(
   cfg: Config,
   env: Record<string, string | undefined> = process.env,
-): { dirs: string[]; files: string[] } {
+): { dirs: string[]; files: string[]; allowDirs: string[] } {
   const p = dataTreePaths(cfg);
+  // See the LAYOUTS comment above for why the fallback is "flat", not "v2".
+  const cacheRoot = LAYOUTS[cfg.dataLayout ?? "flat"].cacheRoot;
   return {
     dirs: [
+      // The whole tree, wholesale (#277). Everything daemon-owned — tickets,
+      // review queues, outbox ops, transcripts, plan-set records, history,
+      // logs, receipts — is denied by containment, so none of them can be
+      // forgotten here again.
+      p.root,
+      // Kept as-is: a legacy vaultRoot queue lives OUTSIDE the root.
       cfg.queueRoot,
-      dirname(p.reviewAssess), // <dataDir>/review (assess + comments)
-      p.assessHistory, // daemon-owned audit history; agent has no reason to read it
-      p.history, // daemon-owned task-history ledger
-      p.outbox,
+      // Re-denied inside the cache/ allow-back below (v2). Under flat both sit
+      // directly at the root with no allow-back over them, so these two entries
+      // are redundant there — listing them unconditionally keeps one code path
+      // and one obvious reading: these are never agent-readable in any layout.
       p.mirror,
-      p.transcripts,
-      // Plan-set records (control-plane state: repoPath, issue nwo/number,
-      // task ids, statusCommentId). Added to the data tree by the plan-sets
-      // work; it was missing from this list until 2026-08-21 — the drift this
-      // enumeration is prone to, and the reason for the classification test in
-      // tests/dataTree.test.ts. Never an ancestor of a writable root: `plans`
-      // is `plans/` (flat) / `data/plans` (v2), and nothing writable is nested
-      // under either.
-      p.plans,
-      // Legacy TUI cache (tui/ghClient.ts still owns it; mirror/ replaces it
-      // in PR 2).
-      p.githubCache,
-      // logsDir is a genuine subtree only under v2 (<root>/logs); under flat
-      // it EQUALS the root itself (dataTreePaths: join(root, ".")) — denying
-      // it there would violate the CRITICAL invariant above, so it's only
-      // ever added when it's a proper subtree.
-      ...(p.logsDir !== p.root ? [p.logsDir] : []),
+      p.githubCache, // legacy TUI cache (tui/ghClient.ts still owns it)
+    ],
+    allowDirs: [
+      // The tier the agent actually executes in. v2 puts worktrees and clone
+      // gitdirs under cache/; flat has no cache/ tier at all, so its clones
+      // root is allowed back directly (its worktrees root is covered by the
+      // unconditional p.worktrees entry below).
+      ...(cacheRoot ? [join(p.root, cacheRoot)] : [dirname(p.clonesWatched)]),
+      // Both are legacy-overridable (git.worktreeRoot / github.externalReposRoot)
+      // and can be relocated inside the denied root but outside the tier above,
+      // which the wholesale deny would silently wall the agent out of. Allowing
+      // them by name in BOTH layouts is a no-op when they sit where the layout
+      // puts them, and the fix when they don't.
+      p.worktrees,
+      p.clonesExternal,
     ],
     files: [
       p.watchlistFile,

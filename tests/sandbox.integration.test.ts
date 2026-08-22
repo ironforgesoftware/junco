@@ -74,9 +74,11 @@ async function run(
     extraDeny?: string[];
     /** dataTree-shaped denied subtrees; defaults to an (absent) scratch state dir. */
     dataDenyDirs?: string[];
-    /** Subtrees that allow-back territory inside a broader deny (#277). Passed
-     *  explicitly here because `dataTree.sandboxDenyPaths` does not supply one
-     *  yet — arming that is Task 7. */
+    /** Subtrees that allow-back territory inside a broader deny (#277). Stated
+     *  literally here rather than derived from `dataTree.sandboxDenyPaths`, so
+     *  these cases pin the BACKENDS' enforcement of the shape (root deny >
+     *  cache allow > mirror re-deny) independently of which paths dataTree
+     *  currently feeds it. */
     dataAllowPaths?: string[];
   },
 ): Promise<{ code: number | null; out: string }> {

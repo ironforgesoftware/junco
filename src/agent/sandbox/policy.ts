@@ -42,15 +42,16 @@ export function buildPolicy(opts: {
   cwd: string;
   scratchDir: string;
   home: string;
-  /** Sensitive data-tree paths (from dataTree.sandboxDenyPaths) — the
-   *  SUBTREES/files to deny, never the dataDir root itself: the default
-   *  layout puts the worktree (cwd) and the clone gitdirs under that root. */
+  /** Paths to deny reads on (from dataTree.sandboxDenyPaths) — since #277 this
+   *  INCLUDES the dataDir root itself, denied wholesale. That is safe because
+   *  `dataAllowPaths` and the writable roots below out-specify it; see
+   *  readRules and precedence.ts. */
   dataDenyPaths: { dirs: string[]; files: string[] };
-  /** Subtrees that allow-back territory inside a broader deny above (e.g.
-   *  dataTree's future cache/ allow-back inside a wholesale ~/.junco deny —
-   *  #277 Task 7). Optional and empty today: nothing populates it yet, so
-   *  readAllowPaths stays [] and observable behavior is unchanged until that
-   *  task wires a real source in. */
+  /** Subtrees that allow-back territory inside a broader deny above — the
+   *  agent's execution roots inside the wholesale data-root deny
+   *  (dataTree.sandboxDenyPaths().allowDirs: `cache/` under v2, `worktrees/`
+   *  and `clones/` under flat). Optional: callers that deny nothing broad
+   *  (tests, degraded fixtures) leave readAllowPaths empty. */
   dataAllowPaths?: string[];
   network: boolean;
   botGhConfigDir?: string;
@@ -91,8 +92,9 @@ export function buildPolicy(opts: {
  *  here doesn't matter: orderRules sorts by specificity, not list position.
  *  Writable roots are included as allow/subtree rules — a root the agent may
  *  write but not read is incoherent, and this is what makes denying a
- *  writable root's ancestor (e.g. the whole data root, #277 Task 7) safe: the
- *  writable root out-specifies the ancestor deny. It is NOT an unconditional
+ *  writable root's ancestor (the whole data root, as dataTree does since #277)
+ *  safe: the writable root out-specifies the ancestor deny. It is NOT an
+ *  unconditional
  *  override — a deny deeper than a writable root (an operator's
  *  extra_deny_read inside their own worktree) still wins. */
 export function readRules(policy: SandboxPolicy): ReadRule[] {

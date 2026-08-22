@@ -9,7 +9,9 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { dataTreePaths, ensureDataTree, sandboxDenyPaths } from "../src/dataTree.js";
-import { legacyConfigPath } from "../src/config.js";
+import { defaultUserConfigPath, legacyConfigPath } from "../src/config.js";
+import { buildPolicy, readRules } from "../src/agent/sandbox/policy.js";
+import { resolveRead } from "../src/agent/sandbox/precedence.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
 /** Full-Config fixture (same shape as tests/daemon.test.ts's makeConfig) —
@@ -134,36 +136,82 @@ describe("dataTreePaths", () => {
   });
 });
 
+/** The same tree in both layouts, plus the agent's cwd inside it. `flat` is the
+ *  0.9 shape (daemon state and the execution roots are siblings at the root, no
+ *  cache/ tier); `v2` is the single-root shape. */
+const LAYOUT_FIXTURES = {
+  flat: {
+    root: "/sbxroot/data",
+    cwd: "/sbxroot/data/worktrees/tkt-1",
+    cfg: (): Config =>
+      makeConfig({
+        dataDir: "/sbxroot/data",
+        queueRoot: "/sbxroot/data/queue",
+        worktreeRoot: "/sbxroot/data/worktrees",
+        dataLayout: "flat",
+        github: { ...makeConfig().github, externalReposRoot: "/sbxroot/data/clones/external" },
+      }),
+  },
+  v2: {
+    root: "/sbxroot/home/.junco",
+    cwd: "/sbxroot/home/.junco/cache/worktrees/tkt-1",
+    cfg: (): Config =>
+      makeConfig({
+        dataDir: "/sbxroot/home/.junco",
+        queueRoot: "/sbxroot/home/.junco/queue",
+        worktreeRoot: "/sbxroot/home/.junco/cache/worktrees",
+        dataLayout: "v2",
+        github: {
+          ...makeConfig().github,
+          externalReposRoot: "/sbxroot/home/.junco/cache/clones/external",
+        },
+      }),
+  },
+} as const;
+
+/** The read rules the AGENT actually experiences: dataTree's deny + allow-back
+ *  lists threaded through buildPolicy exactly the way agent/session.ts does it.
+ *  Asserting at this level (rather than on the raw deny list) is the point of
+ *  #277 — a deny list that merely *looks* stricter can still widen access once
+ *  longest-prefix precedence resolves it. */
+function agentReadRules(cfg: Config, cwd: string) {
+  const data = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
+  return readRules(
+    buildPolicy({
+      cfg: cfg.sandbox,
+      cwd,
+      scratchDir: "/sbxroot/scratch",
+      home: "/sbxroot/home",
+      dataDenyPaths: data,
+      dataAllowPaths: data.allowDirs,
+      network: false,
+    }),
+  );
+}
+
 describe("sandboxDenyPaths", () => {
-  it("denies the daemon-state subtrees and root receipt files, never worktrees/ or clones/", () => {
-    const cfg = makeConfig({
-      dataDir: "/sbxroot/data",
-      queueRoot: "/sbxroot/data/queue",
-      worktreeRoot: "/sbxroot/data/worktrees",
-      github: { ...makeConfig().github, externalReposRoot: "/sbxroot/data/clones/external" },
-    });
+  it("denies the data root wholesale and allows the execution roots back (flat: no cache tier)", () => {
+    const cfg = LAYOUT_FIXTURES.flat.cfg();
     const deny = sandboxDenyPaths(cfg);
+    // #277: the root itself, not a hand-maintained enumeration of its subtrees.
+    expect(deny.dirs).toContain("/sbxroot/data");
+    // queueRoot stays denied as-is — a legacy vaultRoot queue lives outside the root.
     expect(deny.dirs).toContain("/sbxroot/data/queue");
-    expect(deny.dirs).toContain("/sbxroot/data/review");
-    expect(deny.dirs).toContain("/sbxroot/data/outbox");
-    expect(deny.dirs).toContain("/sbxroot/data/mirror");
-    expect(deny.dirs).toContain("/sbxroot/data/assess-history");
-    expect(deny.dirs).toContain("/sbxroot/data/history");
-    expect(deny.dirs).toContain("/sbxroot/data/transcripts");
-    expect(deny.dirs).toContain("/sbxroot/data/github-cache");
-    expect(deny.dirs).toContain("/sbxroot/data/plans");
+    // The flat shape has no cache/ tier: worktrees/ and clones/ are allowed back
+    // individually, and there is nothing to re-deny inside them.
+    expect(deny.allowDirs).toContain("/sbxroot/data/worktrees");
+    expect(deny.allowDirs).toContain("/sbxroot/data/clones");
+    expect(deny.allowDirs).toContain("/sbxroot/data/clones/external");
+    expect(deny.allowDirs).not.toContain("/sbxroot/data/cache");
+    // The root receipt files stay enumerated: redundant under the root deny
+    // today, but they are the guard for any layout that moves one INTO an
+    // allow-back (v2 already does exactly that with cache/update-check.json).
     expect(deny.files).toContain("/sbxroot/data/watchlist.json");
     expect(deny.files).toContain("/sbxroot/data/spend.json");
     expect(deny.files).toContain("/sbxroot/data/metrics.json");
     expect(deny.files).toContain("/sbxroot/data/worker.log");
     expect(deny.files).toContain("/sbxroot/data/migrated.json");
     expect(deny.files).toContain("/sbxroot/data/migrate.lock");
-    // The agent's own execution roots stay readable: never the dataDir root,
-    // never worktrees/ (the agent's cwd lives there), never clones/.
-    const all = [...deny.dirs, ...deny.files];
-    expect(all).not.toContain("/sbxroot/data");
-    expect(all.some((p) => p.startsWith("/sbxroot/data/worktrees"))).toBe(false);
-    expect(all.some((p) => p.startsWith("/sbxroot/data/clones"))).toBe(false);
   });
 
   it("denies the legacy vault queue root when vaultRoot is set (tickets are sensitive wherever they live)", () => {
@@ -182,116 +230,125 @@ describe("sandboxDenyPaths", () => {
     expect(sandboxDenyPaths(cfg).dirs).toContain("/sbxroot/vault/Junco");
   });
 
-  it("denies the daemon-private subtrees, the config file, and logs — never cache/ or the root", () => {
-    const cfg = makeConfig({
-      dataDir: "/sbxroot/home/.junco",
-      queueRoot: "/sbxroot/home/.junco/queue",
-      dataLayout: "v2",
-    });
+  it("v2: denies the root, allows cache/ back, then re-denies mirror and github-cache", () => {
+    const cfg = LAYOUT_FIXTURES.v2.cfg();
     const deny = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
     expect(deny.dirs).toEqual(
       expect.arrayContaining([
+        "/sbxroot/home/.junco", // wholesale
         "/sbxroot/home/.junco/queue",
-        "/sbxroot/home/.junco/review",
-        "/sbxroot/home/.junco/data/outbox",
-        "/sbxroot/home/.junco/data/transcripts",
-        "/sbxroot/home/.junco/data/plans",
+        "/sbxroot/home/.junco/cache/mirror", // re-denied INSIDE the allow-back
         "/sbxroot/home/.junco/cache/github-cache",
-        "/sbxroot/home/.junco/cache/mirror",
-        "/sbxroot/home/.junco/logs",
       ]),
     );
+    expect(deny.allowDirs).toContain("/sbxroot/home/.junco/cache");
+    // The enumerated daemon-state subtrees are gone — the root deny covers them.
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/data/outbox");
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/data/transcripts");
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/review");
+    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/logs");
     expect(deny.files).toContain("/sbxroot/home/.junco/config.json");
     expect(deny.files).toContain("/sbxroot/home/.junco/migrate.lock");
     // I-3 (final review 2026-08-05): the legacy XDG config path is denied
     // too, since an un-migrated machine's daemon actually reads it — the
     // ACTIVE config, not the canonical one, may hold model.apiKey.
     expect(deny.files).toContain(legacyConfigPath({ HOME: "/sbxroot/home" }));
-    // never an ancestor of the agent's writable roots (backend.ts:66-77 invariant):
-    for (const d of deny.dirs) {
-      expect("/sbxroot/home/.junco/cache/worktrees".startsWith(d + "/")).toBe(false);
-      expect("/sbxroot/home/.junco/cache/clones".startsWith(d + "/")).toBe(false);
-    }
-    expect(deny.dirs).not.toContain("/sbxroot/home/.junco");
-    expect(deny.dirs).not.toContain("/sbxroot/home/.junco/cache");
   });
 
-  // Drift guard (#277): sandboxDenyPaths is a hand-maintained enumeration —
-  // it cannot simply deny the root, because the agent's own cwd
-  // (cache/worktrees) and git object reads (cache/clones) live under it. That
-  // makes it prone to silent omission: `plans` joined the data tree with the
-  // plan-sets work and stayed agent-readable until 2026-08-21. This test fails
-  // when a NEW DataTreePaths field is neither denied nor listed as exempt, so
-  // the choice has to be made deliberately rather than forgotten. Runs the
-  // classification over BOTH layouts — a guard pinned to only one (v2) would
-  // never catch a field that is unclassified specifically under the other; see
-  // the `logsDir` exemption below for exactly that flat-only case.
-  it("classifies every data-tree entry as denied or deliberately exempt", () => {
-    for (const dataLayout of ["flat", "v2"] as const) {
-      const cfg =
-        dataLayout === "flat"
-          ? makeConfig({
-              dataDir: "/sbxroot/data",
-              queueRoot: "/sbxroot/data/queue",
-              worktreeRoot: "/sbxroot/data/worktrees",
-              dataLayout,
-              github: {
-                ...makeConfig().github,
-                externalReposRoot: "/sbxroot/data/clones/external",
-              },
-            })
-          : makeConfig({
-              dataDir: "/sbxroot/home/.junco",
-              queueRoot: "/sbxroot/home/.junco/queue",
-              worktreeRoot: "/sbxroot/home/.junco/cache/worktrees",
-              dataLayout,
-              github: {
-                ...makeConfig().github,
-                externalReposRoot: "/sbxroot/home/.junco/cache/clones/external",
-              },
-            });
-      const paths = dataTreePaths(cfg);
-      const deny = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
-      const denied = [...deny.dirs, ...deny.files];
+  // The security claims of #277, asserted where the agent experiences them:
+  // through resolveRead() over the policy's full rule set, not over the raw
+  // deny list. Built for BOTH layouts because they put the same content in
+  // different places (flat has no cache/ tier at all).
+  it("end-to-end: daemon state is unreadable while the agent's worktree and gitdirs stay readable", () => {
+    for (const layout of ["flat", "v2"] as const) {
+      const f = LAYOUT_FIXTURES[layout];
+      const cfg = f.cfg();
+      const p = dataTreePaths(cfg);
+      const rules = agentReadRules(cfg, f.cwd);
+      const effect = (path: string) => resolveRead(path, rules);
 
-      // Each entry must stay agent-READABLE, with the reason it has to.
-      const EXEMPT: Record<string, string> = {
-        root: "CRITICAL invariant: ancestor of the agent's writable roots",
-        queue: "not a path (Paths object) — denied via cfg.queueRoot",
-        worktrees: "the agent's own cwd",
+      const DENIED: [string, string][] = [
+        [
+          "canonical config.json (may hold model.apiKey)",
+          defaultUserConfigPath({ HOME: "/sbxroot/home" }),
+        ],
+        ["legacy XDG config", legacyConfigPath({ HOME: "/sbxroot/home" })],
+        ["config.json inside the data root", join(f.root, "config.json")],
+        ["mirror", join(p.mirror, "gh/owner/repo.git/HEAD")],
+        ["github-cache", join(p.githubCache, "owner__repo/issues.json")],
+        ["transcripts", join(p.transcripts, "tkt-1.jsonl")],
+        ["queue inbox ticket", join(p.queue.inbox, "tkt-1.md")],
+        ["queue processing ticket", join(p.queue.processing, "tkt-1.md")],
+        ["outbox op", join(p.outbox, "op-1.json")],
+        ["review", join(p.reviewAssess, "owner__repo.json")],
+        ["plan-set record", join(p.plans, "set-1.json")],
+        ["task history", join(p.history, "tasks-2026-08.jsonl")],
+        ["assess history", join(p.assessHistory, "owner__repo.json")],
+        ["update-check cache", p.updateCheckFile],
+        ["worker.log", p.logFile],
+        ["watchlist", p.watchlistFile],
+      ];
+      for (const [what, path] of DENIED) {
+        expect(effect(path), `[${layout}] ${what} must be DENIED (${path})`).toBe("deny");
+      }
+
+      const ALLOWED: [string, string][] = [
+        ["the agent's own worktree", join(f.cwd, "src/index.ts")],
+        ["the worktree's .git pointer", join(f.cwd, ".git")],
+        ["the watched clone gitdir", join(p.clonesWatched, "owner__repo.git/objects/pack/x.pack")],
+        [
+          "the watched clone's linked-worktree gitdir",
+          join(p.clonesWatched, "owner__repo.git/worktrees/tkt-1/commondir"),
+        ],
+        ["the external clone gitdir", join(p.clonesExternal, "owner__repo.git/HEAD")],
+      ];
+      for (const [what, path] of ALLOWED) {
+        expect(effect(path), `[${layout}] ${what} must be READABLE (${path})`).toBe("allow");
+      }
+    }
+  });
+
+  // Drift guard (#277): the deny list is no longer a hand-maintained
+  // enumeration of subtrees — it denies the data root wholesale and allows the
+  // agent's execution roots back. That kills the old drift mode (`plans` joined
+  // the data tree with the plan-sets work and stayed agent-readable until
+  // 2026-08-21), but it creates a new one: a field placed OUTSIDE the root, or
+  // INSIDE an allow-back, is readable again. So the guard now asserts each
+  // field's resolved effect through the real precedence resolver, with DENY as
+  // the default expectation — anything that must stay readable has to be listed
+  // in READABLE with the reason. It also pins the change itself: drop the root
+  // deny and every denied field below flips to "allow".
+  it("classifies every data-tree entry as denied or deliberately readable", () => {
+    for (const layout of ["flat", "v2"] as const) {
+      const f = LAYOUT_FIXTURES[layout];
+      const cfg = f.cfg();
+      const paths = dataTreePaths(cfg);
+      const rules = agentReadRules(cfg, f.cwd);
+
+      // Entries that MUST stay agent-readable, with the reason they have to.
+      const READABLE: Record<string, string> = {
+        worktrees: "the agent's own cwd lives under it",
         clonesWatched: "git object reads from the watched clone",
         clonesExternal: "git object reads from external clones",
-        skills:
-          "symlink to the INSTALLED PACKAGE's public skills/ dir — canonicalize() " +
-          "realpaths it, so a deny here would land on the junco install, not the data tree",
-        // Flat layout ONLY: dataTreePaths builds logsDir as join(root, "."),
-        // so it equals root there (v2 gives it a genuine <root>/logs
-        // subtree). sandboxDenyPaths deliberately omits it in that case —
-        // denying it would deny the root itself, violating the CRITICAL
-        // invariant above. Exempt it here for exactly that reason, and only
-        // when it actually degenerates to root, so a future layout that
-        // gives logsDir its own subtree stays covered by the real deny check.
-        ...(paths.logsDir === paths.root
-          ? {
-              logsDir:
-                'flat layout only: logsDir === root (dataTreePaths: join(root, ".")); ' +
-                "denying it would deny the root itself, violating the CRITICAL invariant above",
-            }
-          : {}),
       };
 
-      const covered = (v: string) => denied.some((d) => v === d || v.startsWith(d + "/"));
+      // `queue` is a Paths object, not a string — assert its four dirs directly
+      // instead of exempting the field (the old guard skipped it entirely).
+      for (const [name, dir] of Object.entries(paths.queue)) {
+        expect(resolveRead(dir, rules), `[${layout}] queue.${name} must be denied`).toBe("deny");
+      }
 
       for (const [field, value] of Object.entries(paths)) {
-        if (field in EXEMPT) continue;
+        if (field === "queue") continue;
         expect(
           typeof value,
-          `[${dataLayout}] DataTreePaths.${field} is new and unclassified: deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
+          `[${layout}] DataTreePaths.${field} is new and unclassified: it must resolve "deny" under the wholesale root deny, or be listed in READABLE with the reason it must stay agent-readable`,
         ).toBe("string");
+        const want = field in READABLE ? "allow" : "deny";
         expect(
-          covered(value as string),
-          `[${dataLayout}] DataTreePaths.${field} (${String(value)}) is neither denied nor exempt — deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
-        ).toBe(true);
+          resolveRead(value as string, rules),
+          `[${layout}] DataTreePaths.${field} (${String(value)}) must resolve "${want}": either it escaped the wholesale root deny (deny it, or list it in READABLE with a reason), or an allow-back no longer covers it`,
+        ).toBe(want);
       }
     }
   });
