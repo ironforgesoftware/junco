@@ -1220,6 +1220,82 @@ describe("run(['submit', '--plan', ...]) — plan-set CLI door", () => {
       "plan set plan-dup-plan: all 1 tickets already in the queue",
     );
   });
+
+  // #298: planId is derived from the FILENAME, so a re-run with an edited
+  // plan always collides with the previous record. Without a supersede, the
+  // record gets clobbered to the new hash while the v1 child stays queued
+  // under the identical ticket id — and submitPlanSet's absent-only guard
+  // then silently skips it, so the record's rev advertises a revision the
+  // queue does not actually contain.
+  it("re-submitting an edited plan supersedes the unclaimed old children", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "p.md");
+    const repoDir = join(vaultRoot, "repo");
+    const fenceV1 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV1), "utf8");
+
+    const first = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: () => {},
+      env: { HOME: vaultRoot },
+    });
+    expect(first).toBe(0);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const failedDir = join(vaultRoot, "Junco", "failed");
+    expect(existsSync(join(inboxDir, "plan-p-a.md"))).toBe(true);
+
+    // Edit the plan: same task id "a" (same ticketId), different body (a
+    // different hash) — the v1 child never ran, so it must be disposed.
+    const fenceV2 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A better., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV2), "utf8");
+
+    const captured: string[] = [];
+    const second = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(second).toBe(0);
+    expect(captured.join("")).toContain("superseded 1 unclaimed ticket(s)");
+
+    // The v1 child that never ran is now in failed/ with a superseded marker.
+    const failedFiles = existsSync(failedDir) ? readdirSync(failedDir) : [];
+    expect(failedFiles.length).toBe(1);
+    expect(readFileSync(join(failedDir, failedFiles[0]), "utf8")).toMatch(/superseded:/);
+
+    // The v2 child is queued under the same ticket id.
+    expect(existsSync(join(inboxDir, "plan-p-a.md"))).toBe(true);
+  });
+
+  // #298: the printed path was reconstructed as `<inbox>/<id>.md` rather than
+  // the real destination `submitTicket` returned — a uniqueDest rename would
+  // print a path that doesn't exist.
+  it("prints the real destination path returned by submitTicket", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "my-plan.md");
+    writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+    const captured: string[] = [];
+    const code = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(code).toBe(0);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const expectedA = join(inboxDir, "plan-my-plan-a.md");
+    const expectedB = join(inboxDir, "plan-my-plan-b.md");
+    const out = captured.join("");
+    expect(out).toContain(`submitted: ${expectedA}\n`);
+    expect(out).toContain(`submitted: ${expectedB}\n`);
+    expect(existsSync(expectedA)).toBe(true);
+    expect(existsSync(expectedB)).toBe(true);
+  });
 });
 
 // --- init (removed — dashboard FTUE is the interactive path, `config init`

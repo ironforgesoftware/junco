@@ -233,23 +233,29 @@ export interface SubmitPlanSetDeps {
  * stricter than the bridge's single-ticket ticketInFlight guard (inbox+
  * processing only): a set child that finished between a crash and the
  * re-sweep must not execute twice; set re-cycling goes through supersede,
- * not the remove-label gesture. */
+ * not the remove-label gesture. `submitted` carries the real destination
+ * `submitFn` returned (#298) — callers must not reconstruct it themselves,
+ * since a future uniqueDest-style rename would make a reconstructed path
+ * print one that doesn't exist. A caller driving its OWN supersede (the CLI
+ * door, the bridge's trySupersede) must resubmit a just-disposed id directly
+ * instead of routing it through this guard: the disposed file now sits in
+ * failed/, which this function correctly treats as not-absent. */
 export function submitPlanSet(
   cfg: Config,
   children: CompiledChild[],
   deps: SubmitPlanSetDeps = {},
-): { submitted: string[]; skipped: string[] } {
+): { submitted: { ticketId: string; dst: string }[]; skipped: string[] } {
   const submitFn = deps.submitFn ?? submitTicket;
   const paths = queuePaths(cfg);
-  const submitted: string[] = [];
+  const submitted: { ticketId: string; dst: string }[] = [];
   const skipped: string[] = [];
   for (const c of children) {
     if (ticketState(paths, c.ticketId) !== "absent") {
       skipped.push(c.ticketId);
       continue;
     }
-    submitFn(cfg, c.content, { idHint: c.ticketId });
-    submitted.push(c.ticketId);
+    const dst = submitFn(cfg, c.content, { idHint: c.ticketId });
+    submitted.push({ ticketId: c.ticketId, dst });
   }
   return { submitted, skipped };
 }

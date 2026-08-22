@@ -203,7 +203,9 @@ describe("plan-set store", () => {
       writeFileSync(join(qp.inbox, "p1-b.md"), "x");
       const r = submitPlanSet(cfg, [kid("p1-a"), kid("p1-b"), kid("p1-c")]);
       expect(r.skipped.sort()).toEqual(["p1-a", "p1-b"]);
-      expect(r.submitted).toEqual(["p1-c"]);
+      expect(r.submitted).toHaveLength(1);
+      expect(r.submitted[0].ticketId).toBe("p1-c");
+      expect(r.submitted[0].dst).toBe(join(qp.inbox, "p1-c.md"));
       expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(true);
     });
   });

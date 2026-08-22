@@ -106,7 +106,10 @@ export function dispatchPlanSet(
     submitted: r.submitted.length,
     skipped: r.skipped.length,
   });
-  return { ok: true, ...r };
+  // DispatchResult keeps the pre-existing `submitted: string[]` (ticketId-only)
+  // shape — the bridge has no destination path to report to GitHub, unlike
+  // the CLI door, which now prints submitPlanSet's real `dst` (#298).
+  return { ok: true, submitted: r.submitted.map((s) => s.ticketId), skipped: r.skipped };
 }
 
 // ---------------------------------------------------------------------------

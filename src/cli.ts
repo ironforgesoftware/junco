@@ -65,7 +65,12 @@ import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { extractPlanSetBody } from "./githubInbox.js";
 import { parsePlanSet, compilePlan, hashPlan } from "./planCompiler.js";
-import { materializePlanSet, submitPlanSet } from "./planSets.js";
+import {
+  materializePlanSet,
+  submitPlanSet,
+  readPlanSetRecord,
+  supersedeUnclaimed,
+} from "./planSets.js";
 import { slugifyId } from "./slug.js";
 import { describeTicketSchema } from "./ticketSchema.js";
 import { runStatusCommand } from "./statusCmd.js";
@@ -1055,6 +1060,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       const hash = hashPlan(fence);
       const repoPath = resolve(expandHome(repoFlag));
       const children = compilePlan(parsed.plan, { planId, repoPath, hash, github: null });
+      // A re-run with an edited plan reuses the SAME planId (it is derived
+      // from the filename), so without this the old children stay queued
+      // under identical ids and submitPlanSet skips every one — the record's
+      // rev would advertise a revision the queue does not contain (#298).
+      // Mirrors the bridge's supersede: dispose only the UNCLAIMED ones.
+      const prior = readPlanSetRecord(cfg, planId);
+      let disposed: string[] = [];
+      if (prior !== null && prior.hash !== hash) {
+        disposed = supersedeUnclaimed(cfg, prior, hash).disposed;
+        if (disposed.length > 0) {
+          printFn(`plan set ${planId}: superseded ${disposed.length} unclaimed ticket(s)\n`);
+        }
+      }
       materializePlanSet(
         cfg,
         {
@@ -1076,13 +1094,29 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         },
         fence,
       );
-      const r = submitPlanSet(cfg, children);
+      // supersedeUnclaimed just moved every disposed id into failed/ (with a
+      // superseded marker) — submitPlanSet's "anywhere in the queue" guard
+      // would then (correctly, for the ordinary crash-recovery case) treat
+      // that failed/ file as not-absent and skip it. For a JUST-disposed id
+      // that is exactly backwards: it is precisely what must be resubmitted
+      // under the new revision. Force those directly, and route only the
+      // rest through submitPlanSet's idempotent guard (#298).
+      const disposedSet = new Set(disposed);
+      const forced: { ticketId: string; dst: string }[] = [];
+      for (const id of disposedSet) {
+        const child = children.find((c) => c.ticketId === id);
+        if (!child) continue; // the edit dropped this task — nothing to resubmit
+        forced.push({ ticketId: id, dst: submitTicket(cfg, child.content, { idHint: id }) });
+      }
+      const remaining = children.filter((c) => !disposedSet.has(c.ticketId));
+      const r = submitPlanSet(cfg, remaining);
+      const submitted = [...forced, ...r.submitted];
       printFn(`plan set ${planId} (${children.length} tasks, rev ${hash})\n`);
-      if (r.submitted.length === 0) {
+      if (submitted.length === 0) {
         printFn(`plan set ${planId}: all ${children.length} tickets already in the queue\n`);
         return 0;
       }
-      for (const id of r.submitted) printFn(`submitted: ${join(inboxPath(cfg), `${id}.md`)}\n`);
+      for (const s of submitted) printFn(`submitted: ${s.dst}\n`);
       return 0;
     }
 
