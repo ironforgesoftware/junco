@@ -96,6 +96,11 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     if (id) seen.add(id);
     const title = typeof m.title === "string" && m.title.trim() !== "" ? m.title.trim() : null;
     if (title === null) errors.push(`${at}: missing/empty title`);
+    if (title !== null && SMUGGLED_FM_RE.test(title)) {
+      errors.push(
+        `${at}: title contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
+      );
+    }
     const dependsOn = strArr(m.depends_on ?? []) ?? null;
     if (dependsOn === null) errors.push(`${at}: depends_on must be a list of task ids`);
     const description =
@@ -105,7 +110,17 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     if (description === null) errors.push(`${at}: missing/empty description`);
     const acceptance = strArr(m.acceptance) ?? [];
     if (acceptance.length === 0) errors.push(`${at}: missing/empty acceptance list`);
+    if (acceptance.some((a) => SMUGGLED_FM_RE.test(a))) {
+      errors.push(
+        `${at}: acceptance contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
+      );
+    }
     const prohibitions = strArr(m.prohibitions ?? []) ?? [];
+    if (prohibitions.some((p) => SMUGGLED_FM_RE.test(p))) {
+      errors.push(
+        `${at}: prohibitions contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
+      );
+    }
     const verification =
       typeof m.verification === "string" && m.verification.trim() !== ""
         ? m.verification.trim()
@@ -113,6 +128,22 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     if (description !== null && SMUGGLED_FM_RE.test(description)) {
       errors.push(
         `${at}: description contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
+      );
+    }
+    if (verification !== null && SMUGGLED_FM_RE.test(verification)) {
+      errors.push(
+        `${at}: verification contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
+      );
+    }
+    // `verification` is emitted RAW between literal ```bash fences in
+    // compilePlan, so a triple backtick inside it closes the fence early: the
+    // remainder lands in the child body as prose, and verify.ts's global
+    // ```bash matcher will execute a second block if the smuggled text opens
+    // one. Refuse rather than escape — the fence is model-authored and the
+    // human approving the plan should see the attempt (#298).
+    if (verification !== null && verification.includes("```")) {
+      errors.push(
+        `${at}: verification contains a code fence (\`\`\`) — it is emitted inside a bash fence and would escape it`,
       );
     }
     tasks.push({

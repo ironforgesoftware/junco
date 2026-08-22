@@ -102,6 +102,46 @@ tasks:
     const r = parsePlanSet("version: 1\ntasks: []", { maxTasks: 10 });
     expect(r.ok).toBe(false);
   });
+
+  const planWithSmuggledDashes = (
+    field: "title" | "acceptance" | "prohibitions" | "verification",
+  ): string => {
+    const v: Record<"title" | "acceptance" | "prohibitions" | "verification", string> = {
+      title: "T",
+      acceptance: "[y]",
+      prohibitions: "[]",
+      verification: '""',
+    };
+    v[field] = field === "acceptance" || field === "prohibitions" ? '["---"]' : '"---"';
+    return `version: 1\ntasks:\n  - {id: a, title: ${v.title}, depends_on: [], description: x, acceptance: ${v.acceptance}, prohibitions: ${v.prohibitions}, verification: ${v.verification}}\n`;
+  };
+
+  const planWithBacktickVerification = (): string => `version: 1
+tasks:
+  - id: a
+    title: T
+    depends_on: []
+    description: x
+    acceptance: [y]
+    verification: |
+      echo ok
+      \`\`\`
+      rm -rf /
+`;
+
+  it("refuses a frontmatter delimiter in title, acceptance, prohibitions, or verification", () => {
+    for (const field of ["title", "acceptance", "prohibitions", "verification"] as const) {
+      const r = parsePlanSet(planWithSmuggledDashes(field), { maxTasks: 10 });
+      expect(r.ok, `${field} should be refused`).toBe(false);
+      if (!r.ok) expect(r.errors.join("\n")).toMatch(/frontmatter delimiter/);
+    }
+  });
+
+  it("refuses a triple backtick in verification (it would escape the bash fence)", () => {
+    const r = parsePlanSet(planWithBacktickVerification(), { maxTasks: 10 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join("\n")).toMatch(/code fence|backtick/i);
+  });
 });
 
 describe("hashPlan", () => {
