@@ -15,6 +15,12 @@ import { makeConfig as baseConfig } from "./helpers/config.js";
 
 const tmpDirs: string[] = [];
 
+/** The resolved config path every pre-existing case passes: deliberately
+ * neither the canonical `~/.junco/config.json` nor the legacy XDG path, so the
+ * item-11 config-relocation report (added 2026-08-22) stays silent for them.
+ * The cases that DO exercise it build their own paths from an injected env. */
+const CFG_PATH = "/sbxroot/somewhere/config.json";
+
 function freshRoot(prefix = "junco-dc-"): string {
   const d = mkdtempSync(join(tmpdir(), prefix));
   tmpDirs.push(d);
@@ -165,7 +171,7 @@ describe("runData — text mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    const code = runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const code = runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(code).toBe(0);
     expect(out).toContain("inbox 2");
@@ -179,7 +185,7 @@ describe("runData — text mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("assess    1 pending · 1 filed");
     expect(out).toContain("comments  0 pending · 0 posted · 0 discarded");
@@ -191,7 +197,7 @@ describe("runData — text mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("dead 1");
     expect(out).toContain("ops 0");
@@ -203,7 +209,7 @@ describe("runData — text mode", () => {
     expect(existsSync(join(root, "mirror"))).toBe(false);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toMatch(/mirror\s+\(absent\)/);
   });
@@ -224,7 +230,7 @@ describe("runData — text mode", () => {
       },
     });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain(" ← legacy override: vaultRoot  [deprecated]");
   });
@@ -245,7 +251,7 @@ describe("runData — text mode", () => {
       },
     });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toMatch(/^junco data — root: .*\(legacy — run 'junco data migrate'\)/m);
   });
@@ -255,7 +261,7 @@ describe("runData — text mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).not.toContain("legacy — run");
   });
@@ -272,7 +278,7 @@ describe("runData — text mode", () => {
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     expect(cfg.legacy.dataRoot).toBe(false);
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain(
       `⚠ unmigrated: ${join(root, "outbox")} → ${join(root, "data", "outbox")} (run 'junco data migrate')`,
@@ -287,7 +293,7 @@ describe("runData — text mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).not.toContain("legacy override");
   });
@@ -297,7 +303,7 @@ describe("runData — text mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain(
       `⚠ unmigrated: ${join(root, "assess-review")} → ${join(root, "review", "assess")} ` +
@@ -311,7 +317,7 @@ describe("runData — text mode", () => {
     mkdirSync(join(root, "queue", "inbox"), { recursive: true });
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).not.toContain("⚠ unmigrated");
   });
@@ -332,7 +338,7 @@ describe("runData — text mode", () => {
       },
     });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("deprecations:");
     expect(out).toContain("vaultRoot/juncoSubdir are deprecated");
@@ -344,7 +350,7 @@ describe("runData — text mode", () => {
     expect(existsSync(join(root, "history"))).toBe(false);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("\nhistory (absent)");
   });
@@ -357,7 +363,7 @@ describe("runData — text mode", () => {
     writeFileSync(join(root, "history", "tasks-2026-06.jsonl"), '{"kind":"task"}\n');
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("history 2 shards");
   });
@@ -370,7 +376,7 @@ describe("runData — text mode", () => {
     writeFileSync(join(root, "transcripts", "t2.jsonl"), "x".repeat(500));
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("2 files · 1000 B");
   });
@@ -382,7 +388,7 @@ describe("runData — text mode", () => {
     writeFileSync(join(root, "spend.json"), JSON.stringify({ date: localDateFrom(NOW), usd: 3.5 }));
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s), nowFn: () => NOW });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s), nowFn: () => NOW });
     const out = captured.join("");
     expect(out).toContain("$3.50 today");
   });
@@ -392,7 +398,7 @@ describe("runData — text mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("update-check.json");
   });
@@ -405,7 +411,7 @@ describe("runData — text mode", () => {
     writeFileSync(join(root, "spend.json"), JSON.stringify({ date: "2020-01-01", usd: 42 }));
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     const out = captured.join("");
     expect(out).toContain("$0.00 today");
     expect(out).not.toContain("$42.00");
@@ -422,7 +428,7 @@ describe("runData — --json mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    const code = runData(cfg, { json: true }, { printFn: (s) => captured.push(s) });
+    const code = runData(cfg, CFG_PATH, { json: true }, { printFn: (s) => captured.push(s) });
     expect(code).toBe(0);
     const parsed = JSON.parse(captured.join("")) as {
       root: string;
@@ -463,7 +469,7 @@ describe("runData — --json mode", () => {
     buildFixtureTree(root);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue"), dataLayout: "v2" });
     const captured: string[] = [];
-    const code = runData(cfg, { json: true }, { printFn: (s) => captured.push(s) });
+    const code = runData(cfg, CFG_PATH, { json: true }, { printFn: (s) => captured.push(s) });
     expect(code).toBe(0);
     const parsed = JSON.parse(captured.join("")) as { layout: string };
     expect(parsed.layout).toBe("v2");
@@ -477,13 +483,13 @@ describe("runData — --json mode", () => {
     const NOW = new Date(2026, 5, 15, 12, 0, 0, 0).getTime(); // fixed noon, no rollover
     writeFileSync(join(root, "spend.json"), JSON.stringify({ date: localDateFrom(NOW), usd: 3.5 }));
     const fresh: string[] = [];
-    runData(cfg, { json: true }, { printFn: (s) => fresh.push(s), nowFn: () => NOW });
+    runData(cfg, CFG_PATH, { json: true }, { printFn: (s) => fresh.push(s), nowFn: () => NOW });
     const freshParsed = JSON.parse(fresh.join("")) as { counts: { spendFile: { usd: number } } };
     expect(freshParsed.counts.spendFile.usd).toBe(3.5);
 
     writeFileSync(join(root, "spend.json"), JSON.stringify({ date: "2020-01-01", usd: 42 }));
     const stale: string[] = [];
-    runData(cfg, { json: true }, { printFn: (s) => stale.push(s) });
+    runData(cfg, CFG_PATH, { json: true }, { printFn: (s) => stale.push(s) });
     const staleParsed = JSON.parse(stale.join("")) as { counts: { spendFile: { usd: number } } };
     expect(staleParsed.counts.spendFile.usd).toBe(0);
   });
@@ -499,7 +505,7 @@ describe("runData — --json mode", () => {
     writeFileSync(join(root, "clones", "watched", "README"), "x");
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    runData(cfg, { json: true }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: true }, { printFn: (s) => captured.push(s) });
     const parsed = JSON.parse(captured.join("")) as {
       counts: { clonesWatched: { repos: number }; clonesExternal: { repos: number } };
     };
@@ -523,13 +529,102 @@ describe("runData — --json mode", () => {
       },
     });
     const captured: string[] = [];
-    runData(cfg, { json: true }, { printFn: (s) => captured.push(s) });
+    runData(cfg, CFG_PATH, { json: true }, { printFn: (s) => captured.push(s) });
     const parsed = JSON.parse(captured.join("")) as {
       legacy: { vaultRoot: boolean };
       deprecations: string[];
     };
     expect(parsed.legacy.vaultRoot).toBe(true);
     expect(parsed.deprecations.some((d) => d.includes("vaultRoot/juncoSubdir"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pending config relocation (item 11, #281)
+// ---------------------------------------------------------------------------
+
+/**
+ * `junco data` surfaced pending DATA pairs but said nothing about the config
+ * FILE still sitting at the legacy XDG path — so it reported parity it did not
+ * have, telling the operator the migration was complete while `junco data
+ * migrate` still had a phase-9 relocation to perform.
+ *
+ * `pendingConfigRelocation` is `--json`'s own key, NOT another entry in
+ * `pendingMigrations`: that array is shared verbatim with doctor's "unmigrated
+ * data dirs" line, and a config.json listed among data directories would be
+ * wrong in both places.
+ */
+describe("runData — pending config relocation (item 11, #281)", () => {
+  const env = { HOME: "/sbxroot/home" };
+  const legacyCfg = join("/sbxroot/home", ".config", "junco", "config.json");
+  const canonicalCfg = join("/sbxroot/home", ".junco", "config.json");
+
+  it("text view names the pending config move with the migrate hint", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    const code = runData(
+      cfg,
+      legacyCfg,
+      { json: false },
+      { printFn: (s) => captured.push(s), env },
+    );
+    expect(code).toBe(0);
+    const out = captured.join("");
+    expect(out).toContain(legacyCfg);
+    expect(out).toContain(canonicalCfg);
+    expect(out).toMatch(/config not relocated/);
+    expect(out).toContain("junco data migrate");
+  });
+
+  it("--json carries it as pendingConfigRelocation: {from,to}", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    runData(cfg, legacyCfg, { json: true }, { printFn: (s) => captured.push(s), env });
+    const parsed = JSON.parse(captured.join("")) as {
+      pendingConfigRelocation: { from: string; to: string } | null;
+      pendingMigrations: Array<{ from: string; to: string }>;
+    };
+    expect(parsed.pendingConfigRelocation).toEqual({ from: legacyCfg, to: canonicalCfg });
+    // Never folded into the data-dir array doctor also renders.
+    expect(parsed.pendingMigrations.some((m) => m.from === legacyCfg)).toBe(false);
+  });
+
+  // #307's guard, reused rather than re-spelled: an explicitly-named config is
+  // deliberately never relocated, so reporting it pending would be a warning
+  // `junco data migrate` correctly refuses to clear — on every future run.
+  it("stays silent, in both views, when JUNCO_CONFIG explicitly names that legacy path", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const overrideEnv = { ...env, JUNCO_CONFIG: legacyCfg };
+
+    const text: string[] = [];
+    runData(cfg, legacyCfg, { json: false }, { printFn: (s) => text.push(s), env: overrideEnv });
+    expect(text.join("")).not.toMatch(/config not relocated/);
+
+    const json: string[] = [];
+    runData(cfg, legacyCfg, { json: true }, { printFn: (s) => json.push(s), env: overrideEnv });
+    const parsed = JSON.parse(json.join("")) as {
+      pendingConfigRelocation: { from: string; to: string } | null;
+    };
+    expect(parsed.pendingConfigRelocation).toBeNull();
+  });
+
+  it("--json reports null (the key is always present) for a canonical config", () => {
+    const root = freshRoot();
+    buildFixtureTree(root);
+    const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
+    const captured: string[] = [];
+    runData(cfg, canonicalCfg, { json: true }, { printFn: (s) => captured.push(s), env });
+    const parsed = JSON.parse(captured.join("")) as {
+      pendingConfigRelocation: { from: string; to: string } | null;
+    };
+    expect(parsed).toHaveProperty("pendingConfigRelocation");
+    expect(parsed.pendingConfigRelocation).toBeNull();
   });
 });
 
@@ -544,7 +639,7 @@ describe("runData — never mutates", () => {
     expect(existsSync(root)).toBe(false);
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
     const captured: string[] = [];
-    const code = runData(cfg, { json: false }, { printFn: (s) => captured.push(s) });
+    const code = runData(cfg, CFG_PATH, { json: false }, { printFn: (s) => captured.push(s) });
     expect(code).toBe(0);
     // The root itself, and every subtree, must still be absent afterward.
     expect(existsSync(root)).toBe(false);
@@ -555,8 +650,8 @@ describe("runData — never mutates", () => {
     buildFixtureTree(root);
     const before = readdirSync(join(root, "review", "assess")).sort();
     const cfg = makeConfig({ dataDir: root, queueRoot: join(root, "queue") });
-    runData(cfg, { json: false }, { printFn: () => {} });
-    runData(cfg, { json: true }, { printFn: () => {} });
+    runData(cfg, CFG_PATH, { json: false }, { printFn: () => {} });
+    runData(cfg, CFG_PATH, { json: true }, { printFn: () => {} });
     const after = readdirSync(join(root, "review", "assess")).sort();
     expect(after).toEqual(before);
   });
