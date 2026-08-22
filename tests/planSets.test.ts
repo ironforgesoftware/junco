@@ -203,10 +203,50 @@ describe("plan-set store", () => {
       writeFileSync(join(qp.inbox, "p1-b.md"), "x");
       const r = submitPlanSet(cfg, [kid("p1-a"), kid("p1-b"), kid("p1-c")]);
       expect(r.skipped.sort()).toEqual(["p1-a", "p1-b"]);
+      expect(r.stranded).toEqual([]);
       expect(r.submitted).toHaveLength(1);
       expect(r.submitted[0].ticketId).toBe("p1-c");
       expect(r.submitted[0].dst).toBe(join(qp.inbox, "p1-c.md"));
       expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(true);
+    });
+
+    // #298 review round 1: the strict default (resubmitFailed unset) must
+    // keep skipping a failed/ child — this is the crash-recovery / remove-
+    // label-gesture guarantee dispatchPlanSet relies on. Set true, the SAME
+    // failed/ child becomes submit-eligible — this is what a caller doing
+    // its OWN supersede (trySupersede, the CLI's `submit --plan` re-run
+    // door) needs, since done/inbox/processing must still skip either way.
+    it("resubmitFailed: true also submits a `failed` child; done/inbox/processing still skip", () => {
+      writeFileSync(join(qp.done, "2026-08-20T1200Z__p1-a.md"), "x");
+      writeFileSync(join(qp.inbox, "p1-b.md"), "x");
+      writeFileSync(join(qp.failed, "p1-c.md"), "---\nid: p1-c\n---\nOld\n");
+
+      const strict = submitPlanSet(cfg, [kid("p1-a"), kid("p1-b"), kid("p1-c")]);
+      expect(strict.skipped.sort()).toEqual(["p1-a", "p1-b", "p1-c"]);
+      expect(strict.submitted).toEqual([]);
+
+      const loose = submitPlanSet(cfg, [kid("p1-a"), kid("p1-b"), kid("p1-c")], {
+        resubmitFailed: true,
+      });
+      expect(loose.skipped.sort()).toEqual(["p1-a", "p1-b"]);
+      expect(loose.submitted).toHaveLength(1);
+      expect(loose.submitted[0].ticketId).toBe("p1-c");
+      expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(true);
+      // The old failed/ copy is left as audit, untouched.
+      expect(readFileSync(join(qp.failed, "p1-c.md"), "utf8")).toContain("Old");
+    });
+
+    it("resubmitFailed: true contains a per-child submit throw on `stranded`", () => {
+      const throwing: CompiledChild = kid("p1-x");
+      const r = submitPlanSet(cfg, [throwing], {
+        resubmitFailed: true,
+        submitFn: () => {
+          throw new Error("disk full");
+        },
+      });
+      expect(r.submitted).toEqual([]);
+      expect(r.skipped).toEqual(["p1-x"]);
+      expect(r.stranded).toEqual(["p1-x"]);
     });
   });
 

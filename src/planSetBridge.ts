@@ -611,68 +611,23 @@ async function trySupersede(
   // case it was written for.
   //
   // Per-child fan-out rule (spec: "task id is task identity across plan
-  // versions" — only a DONE ticket skips on recompile):
-  //   done                → skip (its work already happened)
-  //   inbox / processing  → already landed — an earlier, crashed pass of
-  //                         THIS SAME supersede resubmitted it (or, on a
-  //                         first pass, this shouldn't occur at all, since
-  //                         unclaimed siblings were just disposed above and
-  //                         quiescence already refused to proceed while
-  //                         anything was processing) — skip either way,
-  //                         never double-submit.
-  //   absent / failed     → submit the fresh copy unconditionally. `failed`
-  //                         covers BOTH our own just-disposed superseded
-  //                         marker AND an unrelated prior execution failure
-  //                         (#293-critical-2: silently skipping the latter
-  //                         stranded its dependents, since a stale failed/
-  //                         ticket is not "absent"). The old failed/ copy is
-  //                         left as audit; ticketState's inbox > failed
-  //                         precedence means any dependent's edge resolves
-  //                         against the FRESH copy, never the stale one.
-  //   submit throws       → (e.g. an inbox-slug collision) contained per
-  //                         child so one bad submit never aborts the rest of
-  //                         the fan-out or the record materialization below —
-  //                         logged and left "absent"; a future sweep's
-  //                         supersede (if the plan is edited again) or a
-  //                         manual retry is what recovers it.
-  const paths = queuePaths(cfg);
-  const submitted: string[] = [];
-  const skipped: string[] = [];
-  // Ids whose submit THREW (as opposed to being legitimately skipped as
-  // already-landed) — TRAP 1: `skipped` conflates three causes (already
-  // done, already in inbox/processing, submit threw), but ONLY the throw
-  // case is stranded and belongs on `pendingFanout` below. Fed exclusively
-  // by the catch branch.
-  const stranded: string[] = [];
-  for (const c of children) {
-    const st = ticketState(paths, c.ticketId);
-    if (st === "done") {
-      skipped.push(c.ticketId);
-      continue;
-    }
-    if (st === "inbox" || st === "processing") {
-      log.warn("plan-set supersede: child already landed at fan-out; skipping", {
-        planId: record.planId,
-        ticketId: c.ticketId,
-        state: st,
-      });
-      skipped.push(c.ticketId);
-      continue;
-    }
-    try {
-      submitFn(cfg, c.content, { idHint: c.ticketId });
-      submitted.push(c.ticketId);
-    } catch (e) {
-      log.warn("plan-set supersede: child submit failed at fan-out; skipping", {
-        planId: record.planId,
-        ticketId: c.ticketId,
-        error: errMsg(e),
-      });
-      skipped.push(c.ticketId);
-      stranded.push(c.ticketId);
-    }
-  }
-  log.info("plan set supersede fan-out", { planId: record.planId, submitted, skipped, stranded });
+  // versions" — only a DONE ticket skips on recompile) is now the shared
+  // `submitPlanSet` helper's loose (`resubmitFailed: true`) policy: done/
+  // inbox/processing skip, absent/failed submit (`failed` covers BOTH our
+  // own just-disposed superseded marker AND an unrelated prior execution
+  // failure — #293-critical-2: silently skipping the latter stranded its
+  // dependents), and a per-child submit throw is contained on `stranded`
+  // rather than aborting the rest of the fan-out or the record
+  // materialization below (TRAP 1: `skipped` conflates three causes —
+  // already done, already landed, submit threw — only the throw case
+  // belongs on `pendingFanout`).
+  const r = submitPlanSet(cfg, children, { submitFn, resubmitFailed: true });
+  log.info("plan set supersede fan-out", {
+    planId: record.planId,
+    submitted: r.submitted.map((s) => s.ticketId),
+    skipped: r.skipped,
+    stranded: r.stranded,
+  });
 
   // New hash, same planId, keep statusCommentId and lastLabel (the
   // dashboard/label steps below re-derive lastLabel from fresh queue
@@ -692,7 +647,7 @@ async function trySupersede(
     degradedPosted: false,
     lastLabel: record.lastLabel,
     closed: false,
-    pendingFanout: stranded.length > 0 ? stranded : undefined,
+    pendingFanout: r.stranded.length > 0 ? r.stranded : undefined,
   };
   materializePlanSet(cfg, fresh, candidate);
 

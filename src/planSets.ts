@@ -15,6 +15,7 @@ import { parseResultMeta } from "./resultMeta.js";
 import { parseTicket } from "./ticket.js";
 import { submitTicket } from "./dispatch.js";
 import type { CompiledChild } from "./planCompiler.js";
+import { log } from "./logging.js";
 
 export interface PlanSetRecord {
   v: 1;
@@ -226,38 +227,75 @@ export function renderDashboard(record: PlanSetRecord, state: SetState): string 
  * `submitTicket` is caught here at compile time. */
 export interface SubmitPlanSetDeps {
   submitFn?: typeof submitTicket;
+  /** Fan-out policy. Default false: the ordinary idempotent-dispatch /
+   * crash-recovery guard — only `absent` is submit-eligible; done/inbox/
+   * processing/failed all skip, so a genuinely-failed child is never
+   * silently resubmitted by a bare re-dispatch (e.g. the bridge's
+   * remove-label gesture) — set re-cycling requires an actual plan edit.
+   * Set true for a caller driving its OWN supersede (trySupersede, the
+   * CLI's `submit --plan` re-run door): a `failed` child then ALSO
+   * submits — `failed` covers BOTH a child this same call's
+   * `supersedeUnclaimed` just disposed AND an unrelated prior execution
+   * failure from an earlier revision (#293-critical-2 / #298 review round
+   * 1: silently skipping the latter stranded its dependents). done/inbox/
+   * processing still skip either way — task id is task identity across
+   * plan revisions. */
+  resubmitFailed?: boolean;
 }
 
-/** Idempotent fan-out: a child whose id exists ANYWHERE in the queue —
- * done/ and failed/ included — is skipped, never re-run. This is deliberately
- * stricter than the bridge's single-ticket ticketInFlight guard (inbox+
- * processing only): a set child that finished between a crash and the
- * re-sweep must not execute twice; set re-cycling goes through supersede,
- * not the remove-label gesture. `submitted` carries the real destination
- * `submitFn` returned (#298) — callers must not reconstruct it themselves,
- * since a future uniqueDest-style rename would make a reconstructed path
- * print one that doesn't exist. A caller driving its OWN supersede (the CLI
- * door, the bridge's trySupersede) must resubmit a just-disposed id directly
- * instead of routing it through this guard: the disposed file now sits in
- * failed/, which this function correctly treats as not-absent. */
+/** Idempotent fan-out, in EITHER of two policies (see `resubmitFailed` on
+ * `SubmitPlanSetDeps`): the strict default used by a bare dispatch/crash-
+ * recovery re-run, or the loose supersede policy used by a caller that just
+ * disposed the prior revision's unclaimed children itself. `submitted`
+ * carries the real destination `submitFn` returned (#298) — callers must not
+ * reconstruct it themselves, since a future uniqueDest-style rename would
+ * make a reconstructed path print one that doesn't exist. A per-child submit
+ * throw is CONTAINED here — logged and recorded on `stranded` (always a
+ * subset of `skipped`) rather than propagating — so one bad submit (e.g. an
+ * inbox-slug collision) never aborts the rest of the fan-out; a supersede
+ * caller feeds `stranded` into its own retry bookkeeping (the bridge's
+ * `pendingFanout`). */
 export function submitPlanSet(
   cfg: Config,
   children: CompiledChild[],
   deps: SubmitPlanSetDeps = {},
-): { submitted: { ticketId: string; dst: string }[]; skipped: string[] } {
+): {
+  submitted: { ticketId: string; dst: string }[];
+  skipped: string[];
+  stranded: string[];
+} {
   const submitFn = deps.submitFn ?? submitTicket;
+  const resubmitFailed = deps.resubmitFailed === true;
   const paths = queuePaths(cfg);
   const submitted: { ticketId: string; dst: string }[] = [];
   const skipped: string[] = [];
+  const stranded: string[] = [];
   for (const c of children) {
-    if (ticketState(paths, c.ticketId) !== "absent") {
+    const st = ticketState(paths, c.ticketId);
+    const eligible = st === "absent" || (resubmitFailed && st === "failed");
+    if (!eligible) {
+      if (resubmitFailed && (st === "inbox" || st === "processing")) {
+        log.warn("plan-set supersede: child already landed at fan-out; skipping", {
+          ticketId: c.ticketId,
+          state: st,
+        });
+      }
       skipped.push(c.ticketId);
       continue;
     }
-    const dst = submitFn(cfg, c.content, { idHint: c.ticketId });
-    submitted.push({ ticketId: c.ticketId, dst });
+    try {
+      const dst = submitFn(cfg, c.content, { idHint: c.ticketId });
+      submitted.push({ ticketId: c.ticketId, dst });
+    } catch (e) {
+      log.warn("plan-set supersede: child submit failed at fan-out; skipping", {
+        ticketId: c.ticketId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      skipped.push(c.ticketId);
+      stranded.push(c.ticketId);
+    }
   }
-  return { submitted, skipped };
+  return { submitted, skipped, stranded };
 }
 
 /** Dispose every UNCLAIMED (still in inbox/) child of `record` ahead of a

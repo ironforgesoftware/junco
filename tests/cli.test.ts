@@ -1272,6 +1272,78 @@ describe("run(['submit', '--plan', ...]) — plan-set CLI door", () => {
     expect(existsSync(join(inboxDir, "plan-p-a.md"))).toBe(true);
   });
 
+  // #298 review round 1 — Important #1: a sibling that genuinely FAILED (as
+  // opposed to one this call's own supersedeUnclaimed disposed) must ALSO
+  // resubmit on a hash-changing re-run. Reachable without any crash: v1 fans
+  // out a+b; "a" runs and fails for real; "b" never claims. Before this fix,
+  // only the ids `supersedeUnclaimed` happened to dispose were force-
+  // resubmitted — a genuinely-failed sibling (never in that array, since
+  // supersedeUnclaimed only touches inbox/) stayed skipped, so the record
+  // advertised a revision the queue never actually received.
+  it("a genuinely failed sibling (not merely disposed) is resubmitted on a hash-changing re-run", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "q.md");
+    const repoDir = join(vaultRoot, "repo");
+    const fenceV1 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}\n" +
+      "  - {id: b, title: T B, depends_on: [], description: Build B., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV1), "utf8");
+
+    const first = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: () => {},
+      env: { HOME: vaultRoot },
+    });
+    expect(first).toBe(0);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const failedDir = join(vaultRoot, "Junco", "failed");
+    const aPath = join(inboxDir, "plan-q-a.md");
+    const bPath = join(inboxDir, "plan-q-b.md");
+    expect(existsSync(aPath)).toBe(true);
+    expect(existsSync(bPath)).toBe(true);
+
+    // "a" runs and genuinely fails (an ordinary execution failure, no
+    // `superseded:` marker) — "b" never claims and stays untouched in inbox.
+    mkdirSync(failedDir, { recursive: true });
+    const aContent = readFileSync(aPath, "utf8");
+    writeFileSync(
+      join(failedDir, "plan-q-a.md"),
+      `${aContent.trimEnd()}\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\n\n> boom\n`,
+      "utf8",
+    );
+    rmSync(aPath);
+
+    // Edit the plan (v2: different body → different hash, same task ids).
+    const fenceV2 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A better., acceptance: [works]}\n" +
+      "  - {id: b, title: T B, depends_on: [], description: Build B better., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV2), "utf8");
+
+    const captured: string[] = [];
+    const second = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(second).toBe(0);
+
+    // Both the genuinely-failed "a" AND the disposed-unclaimed "b" resubmit
+    // under the new revision — this is the bug reproduced via `failed` state
+    // instead of `inbox` state.
+    expect(existsSync(aPath)).toBe(true);
+    expect(existsSync(bPath)).toBe(true);
+    expect(readFileSync(aPath, "utf8")).toContain("Build A better.");
+    expect(readFileSync(bPath, "utf8")).toContain("Build B better.");
+    expect((captured.join("").match(/^submitted:/gm) ?? []).length).toBe(2);
+
+    // The old genuine-failure record is left as audit, untouched.
+    expect(existsSync(join(failedDir, "plan-q-a.md"))).toBe(true);
+    expect(readFileSync(join(failedDir, "plan-q-a.md"), "utf8")).not.toContain("superseded:");
+  });
+
   // #298: the printed path was reconstructed as `<inbox>/<id>.md` rather than
   // the real destination `submitTicket` returned — a uniqueDest rename would
   // print a path that doesn't exist.
