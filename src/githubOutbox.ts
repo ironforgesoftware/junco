@@ -692,7 +692,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
                 } else {
                   // Normal: the ticket may have been retried, archived, or
                   // moved by hand since it finalized. Nothing to update.
-                  log.warn("outbox: done ticket not found for pr_url write-back", {
+                  log.info("outbox: done ticket not found for pr_url write-back", {
                     ticket: op.ticketId,
                   });
                 }

@@ -97,4 +97,15 @@ describe("upsertResultPrUrl", () => {
   it("leaves content with no block untouched", () => {
     expect(upsertResultPrUrl("no block here\n", "https://x/1")).toBe("no block here\n");
   });
+
+  it("replaces an existing pr_url with the new one, leaving exactly one occurrence", () => {
+    const before =
+      "body\n<!-- junco-result\nstatus: completed\npr_url: https://github.com/o/r/pull/7\npushed: true\n-->\n";
+    const after = upsertResultPrUrl(before, "https://github.com/o/r/pull/9");
+    const occurrences = after.match(/^pr_url:/gm) ?? [];
+    expect(occurrences).toHaveLength(1);
+    expect(parseResultMeta(after).prUrl).toBe("https://github.com/o/r/pull/9");
+    expect(after).toContain("status: completed");
+    expect(after).toContain("pushed: true");
+  });
 });
