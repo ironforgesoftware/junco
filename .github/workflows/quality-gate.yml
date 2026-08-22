@@ -40,6 +40,13 @@ jobs:
       - run: |
           git config --global user.email "ci@example.invalid"
           git config --global user.name "junco-ci"
+      # bubblewrap is the Linux sandbox backend. Without it, every case in
+      # tests/sandbox.integration.test.ts skips and this leg reports green
+      # while exercising no real bwrap enforcement (#277). macOS needs no
+      # install — sandbox-exec ships with the OS.
+      - name: bubblewrap (linux sandbox backend for the integration tests)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
       - name: node 22.19.0 (engines floor, exact)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
