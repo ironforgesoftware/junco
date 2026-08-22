@@ -68,6 +68,32 @@ describe("buildWizardIO", () => {
     expect(read(cp).skills).toEqual({ harnessDirs: ["~/.claude/skills"] });
   });
 
+  it("fresh mode: write creates the data dirs BEFORE ensuring skill links", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const order: string[] = [];
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      mkdirFn: () => {
+        order.push("mkdir");
+      },
+      ensureSkillLinksFn: () => {
+        order.push("links");
+        return NOOP_SKILL_LINKS;
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+
+    // ensureSkillLinks symlinks <dataDir>/skills; if it ran before the dirs
+    // existed, symlinkSync would fail into a warning ensureSkillLinks never
+    // throws and wizard.ts discards — an invisible regression. Pin the order.
+    expect(order.length).toBeGreaterThan(1);
+    expect(order.at(-1)).toBe("links");
+    expect(order.filter((s) => s === "links")).toEqual(["links"]);
+  });
+
   it("rerun mode reads the existing raw config into initialAnswers", () => {
     const dir = tmp();
     const cp = join(dir, "config.json");
