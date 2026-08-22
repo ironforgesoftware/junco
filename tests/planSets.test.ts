@@ -140,6 +140,7 @@ describe("plan-set store", () => {
             state: "done",
             prUrl: "https://x/pr/1",
             dependencyFailed: null,
+            superseded: null,
           },
         ],
         allTerminal: true,
@@ -150,6 +151,42 @@ describe("plan-set store", () => {
       expect(md).toContain(PLAN_STATUS_MARKER);
       expect(md).toContain("- [x] `a` — done — https://x/pr/1");
       expect(md).toContain(rec.hash);
+    });
+
+    it("reports a disposed child as superseded, not failed", () => {
+      const rec = record({ tasks: [{ id: "a", ticketId: "p1-a", dependsOn: [] }] });
+      writeFileSync(
+        join(qp.failed, "p1-a.md"),
+        "---\nid: p1-a\n---\nBody\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: abc123\n-->\n",
+      );
+      const s = resolveSetState(cfg, rec);
+      expect(s.tasks[0].state).toBe("superseded");
+      expect(s.tasks[0].superseded).toBe("abc123");
+      expect(s.anyFailed).toBe(false);
+      expect(s.allTerminal).toBe(true);
+    });
+
+    it("still reports an ordinary failure as failed", () => {
+      const rec = record({ tasks: [{ id: "a", ticketId: "p1-a", dependsOn: [] }] });
+      writeFileSync(
+        join(qp.failed, "p1-a.md"),
+        "---\nid: p1-a\n---\nBody\n\n---\n<!-- junco-result\nstatus: failed\n-->\n",
+      );
+      const s = resolveSetState(cfg, rec);
+      expect(s.tasks[0].state).toBe("failed");
+      expect(s.tasks[0].superseded).toBeNull();
+      expect(s.anyFailed).toBe(true);
+    });
+
+    it("renders a superseded row distinctly", () => {
+      const rec = record({ tasks: [{ id: "a", ticketId: "p1-a", dependsOn: [] }] });
+      writeFileSync(
+        join(qp.failed, "p1-a.md"),
+        "---\nid: p1-a\n---\nBody\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: abc123\n-->\n",
+      );
+      const out = renderDashboard(rec, resolveSetState(cfg, rec));
+      expect(out).toMatch(/superseded — pre-empted by rev `abc123`/);
+      expect(out).not.toMatch(/`a` — failed/);
     });
   });
 

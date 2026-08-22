@@ -104,13 +104,23 @@ export function materializePlanSet(cfg: Config, record: PlanSetRecord, fenceBody
 }
 
 export const PLAN_STATUS_MARKER = "<!-- junco:plan-status -->";
-export type TaskRunState = "queued" | "waiting" | "processing" | "done" | "failed" | "absent";
+export type TaskRunState =
+  | "queued"
+  | "waiting"
+  | "processing"
+  | "done"
+  | "failed"
+  | "superseded"
+  | "absent";
 export interface TaskStatus {
   id: string;
   ticketId: string;
   state: TaskRunState;
   prUrl: string | null;
   dependencyFailed: string | null;
+  /** The plan revision that pre-empted this child before it ran (from the
+   * result block's `superseded:` marker). Null for every other state. */
+  superseded: string | null;
 }
 export interface SetState {
   tasks: TaskStatus[];
@@ -130,6 +140,7 @@ export function resolveSetState(cfg: Config, record: PlanSetRecord): SetState {
     let state: TaskRunState;
     let prUrl: string | null = null;
     let dependencyFailed: string | null = null;
+    let superseded: string | null = null;
     if (st === "done" || st === "failed") {
       state = st;
       const f = findTicketFile(st === "done" ? paths.done : paths.failed, t.ticketId);
@@ -137,6 +148,13 @@ export function resolveSetState(cfg: Config, record: PlanSetRecord): SetState {
         const meta = parseResultMeta(readFileSync(f, "utf8"));
         prUrl = meta.prUrl;
         dependencyFailed = meta.dependencyFailed;
+        superseded = meta.superseded;
+        // A disposed child was pre-empted by a plan edit — it never ran, so it
+        // is NOT a failure: counting it would trip the degraded comment and
+        // the set-level junco:failed label for what is ordinary set
+        // re-cycling (#298). It IS terminal, though — see the widened
+        // terminal() below.
+        if (st === "failed" && superseded !== null) state = "superseded";
       }
     } else if (st === "processing") {
       state = "processing";
@@ -155,9 +173,10 @@ export function resolveSetState(cfg: Config, record: PlanSetRecord): SetState {
     } else {
       state = "absent";
     }
-    return { id: t.id, ticketId: t.ticketId, state, prUrl, dependencyFailed };
+    return { id: t.id, ticketId: t.ticketId, state, prUrl, dependencyFailed, superseded };
   });
-  const terminal = (s: TaskRunState): boolean => s === "done" || s === "failed";
+  const terminal = (s: TaskRunState): boolean =>
+    s === "done" || s === "failed" || s === "superseded";
   return {
     tasks,
     allTerminal: tasks.every((t) => terminal(t.state)),
@@ -181,6 +200,8 @@ export function renderDashboard(record: PlanSetRecord, state: SetState): string 
       detail = t.dependencyFailed
         ? `failed — dependency \`${t.dependencyFailed}\` failed`
         : "failed";
+    if (t.state === "superseded")
+      detail = t.superseded ? `superseded — pre-empted by rev \`${t.superseded}\`` : "superseded";
     if (t.state === "waiting") {
       const deps = record.tasks.find((r) => r.id === t.id)?.dependsOn ?? [];
       detail = `waiting on: ${deps.map((d) => `\`${d}\``).join(", ")}`;
