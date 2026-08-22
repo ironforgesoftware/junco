@@ -1,6 +1,6 @@
 ---
 name: junco-dispatch
-description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
+description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox — or, on request, as a parked GitHub issue — for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
 ---
 
 # Junco dispatch
@@ -203,7 +203,7 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 
 ### Batch mode (no preview, headless harness)
 
-Triggered when the user prompt starts with `junco-batch:`. Identical to interactive mode EXCEPT step 2 and step 5 are skipped:
+Triggered when the user prompt starts with `junco-batch:`. Identical to interactive mode except the preview gate and the monitor offer are skipped. Batch mode is inbox-only — its own Submit step hardcodes `junco submit <tempfile>`, so an "as issue" phrase in a `junco-batch:` prompt is not supported; route that case through interactive mode instead:
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body). Same template, same rules.
 2. **(SKIPPED)** No `AskUserQuestion` preview gate. The ask tool is unavailable in a headless harness and would throw `ToolAbortError`.
