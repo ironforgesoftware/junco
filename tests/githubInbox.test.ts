@@ -979,6 +979,59 @@ tasks:
           rmSync(root, { recursive: true, force: true });
         }
       });
+
+      // I3 (#298 review round 2): a per-child submit throw is now CONTAINED
+      // inside dispatchPlanSet/submitPlanSet — it no longer propagates and
+      // aborts this door's dispatch. Before this branch the throw propagated,
+      // so the label swap below never ran and the next sweep naturally
+      // re-dispatched and resubmitted the missing child. This door must
+      // check `stranded` itself to keep that same guarantee: it must NOT
+      // swap `plan-ready` for `junco:queued` when a child is stranded, or the
+      // "already dispatched" branch treats the issue as done and nothing
+      // ever retries the missing child.
+      it("a stranded child submit leaves plan-ready standing (no premature queued swap)", async () => {
+        const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+        try {
+          const localCfg = {
+            ...bridgeCfg,
+            dataDir: join(root, "data"),
+            queueRoot: join(root, "tickets"),
+            planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+          } as Config;
+          const f = makeFakes({
+            issues: [readyIssue],
+            events: approvedAfter,
+            permission: "write",
+            comments: [planComment(mixedFenceComment)],
+          });
+          const throwingSubmit = (c: unknown, content: string, o?: { idHint?: string }): string => {
+            if (o?.idHint === `${EXEC_ID}-b`) throw new Error("disk full");
+            return f.submitFn(c, content, o);
+          };
+          const n = await pollGithubInbox(localCfg, newBridgeState(), {
+            ghFn: f.ghFn,
+            gitFn: f.gitFn,
+            submitFn: throwingSubmit,
+          } as never);
+          expect(n).toBe(0); // not counted as bridged — never reaches the label swap
+          // "a" landed through the contained fan-out; "b" did not.
+          expect(f.submitted.map((s) => s.idHint)).toEqual([`${EXEC_ID}-a`]);
+          // `plan-ready` (and `approved`) are left standing — the dispatch
+          // branch's OWN queued-swap (`--remove-label junco:plan-ready`) must
+          // NOT fire, so the next sweep retries the whole dispatch. (The same
+          // sweep's UNRELATED `maintainPlanSets` pass — which runs on every
+          // sweep regardless, against the record dispatchPlanSet already
+          // materialized — legitimately issues its own first label swap for
+          // this now-open set; that is independent of the bug under test
+          // here, so this only asserts the SPECIFIC swap I3 prevents.)
+          const dispatchLabelSwap = f.calls.find(
+            (c) => c[0] === "issue" && c[1] === "edit" && c.includes("junco:plan-ready"),
+          );
+          expect(dispatchLabelSwap).toBeUndefined();
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
     });
   });
 

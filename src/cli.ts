@@ -157,6 +157,11 @@ export interface CliDeps {
   ensureDaemonFn?: (configPath: string) => Promise<import("./ensureDaemon.js").EnsureResult>;
   /** Interactivity probe gating the bare pre-flight. Default: stdout+stdin both TTY. */
   isTTYFn?: () => boolean;
+  /** submitTicket injection for `submit --plan`'s fan-out only (tests only —
+   * production callers omit this; default the real submitTicket via
+   * submitPlanSet's own default). Scoped to the plan-set door; the
+   * single-ticket `submit` path is unaffected. */
+  submitPlanFn?: typeof submitTicket;
 }
 
 /**
@@ -1083,7 +1088,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       // leaves the OLD record on disk, so a later run re-derives from queue
       // reality instead of wedging on a record that advertises a revision
       // the queue never actually received.
-      const r = submitPlanSet(cfg, children, { resubmitFailed: supersede });
+      const r = submitPlanSet(cfg, children, {
+        resubmitFailed: supersede,
+        submitFn: deps.submitPlanFn,
+      });
       materializePlanSet(
         cfg,
         {
@@ -1106,11 +1114,25 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         fence,
       );
       printFn(`plan set ${planId} (${children.length} tasks, rev ${hash})\n`);
-      if (r.submitted.length === 0) {
+      if (r.submitted.length === 0 && r.stranded.length === 0) {
         printFn(`plan set ${planId}: all ${children.length} tickets already in the queue\n`);
         return 0;
       }
       for (const s of r.submitted) printFn(`submitted: ${s.dst}\n`);
+      // I3 (#298 review round 2): a per-child submit throw is CONTAINED
+      // inside submitPlanSet, not propagated — before this branch it threw
+      // and this command exited 1 with a fatal message. Surface the same
+      // signal here instead of silently returning 0, or the operator has no
+      // way to notice a stranded child short of re-reading the daemon log.
+      // The record above was still materialized (mirrors the bridge: a
+      // stranded child stays `absent`, so a later re-run of this same
+      // command with an unchanged hash retries it under the strict policy).
+      if (r.stranded.length > 0) {
+        for (const id of r.stranded) {
+          process.stderr.write(`junco submit: plan set ${planId}: failed to submit ${id}\n`);
+        }
+        return 1;
+      }
       return 0;
     }
 

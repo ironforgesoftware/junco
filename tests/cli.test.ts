@@ -22,6 +22,7 @@ import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
 import { run } from "../src/cli.js";
 import type { CliDeps } from "../src/cli.js";
+import { submitTicket } from "../src/dispatch.js";
 import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
@@ -1219,6 +1220,48 @@ describe("run(['submit', '--plan', ...]) — plan-set CLI door", () => {
     expect(captured.join("")).toContain(
       "plan set plan-dup-plan: all 1 tickets already in the queue",
     );
+  });
+
+  // I3 (#298 review round 2): before this branch, a per-child submit throw
+  // was fatal — uncaught, exit 1, nothing else dispatched. This branch
+  // CONTAINS the throw inside submitPlanSet (so siblings still land), but
+  // silently returning 0 afterward would hide the failure from an operator
+  // (and from any script checking the exit code) with no signal short of
+  // re-reading the daemon log.
+  it("submit --plan surfaces a stranded child on stderr and exits nonzero, but still lands its siblings", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "stranded-plan.md");
+    writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+    const captured: string[] = [];
+    const errLines: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+        printFn: (s) => captured.push(s),
+        env: { HOME: vaultRoot },
+        submitPlanFn: (c, content, opts, submitDeps) => {
+          if (opts?.idHint === "plan-stranded-plan-b") throw new Error("disk full");
+          return submitTicket(c, content, opts, submitDeps);
+        },
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(code).toBe(1);
+    expect(errLines.join("")).toContain(
+      "junco submit: plan set plan-stranded-plan: failed to submit plan-stranded-plan-b",
+    );
+
+    // Contained, not aborted: "a" still landed despite "b"'s submit throwing.
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(join(inboxDir, "plan-stranded-plan-a.md"))).toBe(true);
+    expect(existsSync(join(inboxDir, "plan-stranded-plan-b.md"))).toBe(false);
+    expect(captured.join("")).toContain("submitted:");
   });
 
   // #298: planId is derived from the FILENAME, so a re-run with an edited

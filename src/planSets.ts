@@ -9,7 +9,7 @@ import { join, basename } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
 import { queuePaths } from "./config.js";
-import { ticketState, findTicketFile } from "./ticketDeps.js";
+import { ticketState, findTicketFile, findAllTicketFiles } from "./ticketDeps.js";
 import { uniqueDestPath } from "./uniqueDest.js";
 import { parseResultMeta } from "./resultMeta.js";
 import { parseTicket } from "./ticket.js";
@@ -138,6 +138,29 @@ export interface SetState {
   anyProcessing: boolean;
 }
 
+/** Disambiguate a ticket id with MULTIPLE files in `failed/` (I5, #298
+ * review round 2): a disposed supersede copy and a later fresh copy's
+ * genuine execution failure share the same id and both land in `failed/`, so
+ * `findTicketFile`'s first-match contract is `readdirSync`-order-dependent —
+ * and can silently report a REAL failure as "superseded" when the disposed
+ * copy happens to sort first. Priority: (1) a file with NO superseded marker
+ * — a genuine failure always outranks a disposed copy's stale history; (2)
+ * among marker-bearing files, the one whose marker matches `currentHash` —
+ * the disposal THIS record generation itself performed; (3) otherwise the
+ * first match, same as the single-file case (a residual ambiguity between
+ * markers of two DIFFERENT prior revisions is cosmetic only — both report
+ * "superseded" either way, so it can never misreport a genuine failure). */
+function pickFailedTicketFile(dir: string, id: string, currentHash: string): string | null {
+  const files = findAllTicketFiles(dir, id);
+  if (files.length <= 1) return files[0] ?? null;
+  const withMeta = files.map((f) => ({ f, meta: parseResultMeta(readFileSync(f, "utf8")) }));
+  const noMarker = withMeta.find((x) => x.meta.superseded === null);
+  if (noMarker) return noMarker.f;
+  const currentMatch = withMeta.find((x) => x.meta.superseded === currentHash);
+  if (currentMatch) return currentMatch.f;
+  return files[0];
+}
+
 /** Recompute a set's task states from queue reality — the single source the
  * dashboard/labels derive from. Sweep-driven on purpose: cascaded children
  * never pass through the reporter, so event-driven state would go stale. */
@@ -151,7 +174,10 @@ export function resolveSetState(cfg: Config, record: PlanSetRecord): SetState {
     let superseded: string | null = null;
     if (st === "done" || st === "failed") {
       state = st;
-      const f = findTicketFile(st === "done" ? paths.done : paths.failed, t.ticketId);
+      const f =
+        st === "done"
+          ? findTicketFile(paths.done, t.ticketId)
+          : pickFailedTicketFile(paths.failed, t.ticketId, record.hash);
       if (f) {
         const meta = parseResultMeta(readFileSync(f, "utf8"));
         prUrl = meta.prUrl;
@@ -275,7 +301,7 @@ export function submitPlanSet(
     const eligible = st === "absent" || (resubmitFailed && st === "failed");
     if (!eligible) {
       if (resubmitFailed && (st === "inbox" || st === "processing")) {
-        log.warn("plan-set supersede: child already landed at fan-out; skipping", {
+        log.warn("plan-set fan-out: child already landed; skipping", {
           ticketId: c.ticketId,
           state: st,
         });
@@ -287,7 +313,7 @@ export function submitPlanSet(
       const dst = submitFn(cfg, c.content, { idHint: c.ticketId });
       submitted.push({ ticketId: c.ticketId, dst });
     } catch (e) {
-      log.warn("plan-set supersede: child submit failed at fan-out; skipping", {
+      log.warn("plan-set fan-out: child submit failed; skipping", {
         ticketId: c.ticketId,
         error: e instanceof Error ? e.message : String(e),
       });

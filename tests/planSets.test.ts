@@ -8,7 +8,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
 import type { Config, Paths } from "../src/types.js";
 import { queuePaths } from "../src/config.js";
 import type { CompiledChild } from "../src/planCompiler.js";
@@ -176,6 +183,79 @@ describe("plan-set store", () => {
       expect(s.tasks[0].state).toBe("failed");
       expect(s.tasks[0].superseded).toBeNull();
       expect(s.anyFailed).toBe(true);
+    });
+
+    // I5 (#298 review round 2): after a supersede there are normally TWO
+    // files in failed/ for one ticket id — the disposed copy (superseded
+    // marker) and, later, the fresh copy's own genuine failure —
+    // findTicketFile's first-match contract used to pick whichever
+    // `readdirSync` happened to return first, which is NOT guaranteed. Both
+    // tests below use the SAME two logical roles (a marker file and a
+    // no-marker genuine failure) but SWAP which physical filename holds
+    // which role, so that on this filesystem's (empirically stable) readdir
+    // order — the suffixed name always sorts before the bare one — one test
+    // exercises the order the OLD first-match code got right by luck, and
+    // the other exercises the order it got WRONG (reporting a real failure
+    // as "superseded", suppressing the degraded comment and the failed
+    // label). The fix must return "failed" in BOTH orders.
+    it("a genuine (no-marker) failure wins over a disposed copy when it sorts FIRST in readdir order", () => {
+      const rec = record({ tasks: [{ id: "b", ticketId: "p1-b", dependsOn: [] }] });
+      // marker = base name; no-marker (genuine failure) = suffixed.
+      writeFileSync(
+        join(qp.failed, "p1-b.md"),
+        "---\nid: p1-b\n---\nDisposed\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: rev1\n-->\n",
+      );
+      writeFileSync(
+        join(qp.failed, "p1-b-2.md"),
+        "---\nid: p1-b\n---\nReal run\n\n---\n<!-- junco-result\nstatus: failed\n-->\n",
+      );
+      // Documents this filesystem's order for this pair: the suffixed file
+      // (the no-marker one, here) sorts first — the OLD code would ALSO get
+      // this case right, by luck.
+      expect(readdirSync(qp.failed)).toEqual(["p1-b-2.md", "p1-b.md"]);
+      const s = resolveSetState(cfg, rec);
+      expect(s.tasks[0].state).toBe("failed");
+      expect(s.anyFailed).toBe(true);
+    });
+
+    it("a genuine (no-marker) failure wins over a disposed copy even when it sorts SECOND in readdir order", () => {
+      const rec = record({ tasks: [{ id: "b", ticketId: "p1-b", dependsOn: [] }] });
+      // Swap the roles: marker = suffixed; no-marker (genuine failure) =
+      // base. On this filesystem the suffixed name still sorts first — so
+      // here it is the MARKER file that findTicketFile's old first-match
+      // would have picked, wrongly reporting "superseded" for what is
+      // actually a real failure.
+      writeFileSync(
+        join(qp.failed, "p1-b-2.md"),
+        "---\nid: p1-b\n---\nDisposed\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: rev1\n-->\n",
+      );
+      writeFileSync(
+        join(qp.failed, "p1-b.md"),
+        "---\nid: p1-b\n---\nReal run\n\n---\n<!-- junco-result\nstatus: failed\n-->\n",
+      );
+      const s = resolveSetState(cfg, rec);
+      expect(s.tasks[0].state).toBe("failed"); // must NOT read "superseded"
+      expect(s.tasks[0].superseded).toBeNull();
+      expect(s.anyFailed).toBe(true);
+    });
+
+    it("when every failed/ match carries a superseded marker, the one matching the record's CURRENT hash wins", () => {
+      const rec = record({
+        hash: "rev2hash",
+        tasks: [{ id: "b", ticketId: "p1-b", dependsOn: [] }],
+      });
+      writeFileSync(
+        join(qp.failed, "p1-b.md"),
+        "---\nid: p1-b\n---\nRound 1\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: rev1hash\n-->\n",
+      );
+      writeFileSync(
+        join(qp.failed, "p1-b-2.md"),
+        "---\nid: p1-b\n---\nRound 2\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: rev2hash\n-->\n",
+      );
+      const s = resolveSetState(cfg, rec);
+      expect(s.tasks[0].state).toBe("superseded");
+      // The CURRENT record's own disposal — not a stale earlier round.
+      expect(s.tasks[0].superseded).toBe("rev2hash");
     });
 
     it("renders a superseded row distinctly", () => {

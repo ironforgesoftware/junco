@@ -913,6 +913,26 @@ export async function pollGithubInbox(
                   );
                   continue;
                 }
+                // I3 (#298 review round 2): a per-child submit throw is now
+                // CONTAINED inside dispatchPlanSet/submitPlanSet rather than
+                // propagating — so this door must check `stranded` itself to
+                // keep the pre-existing recovery guarantee (before this
+                // branch, the throw propagated, the label swap below never
+                // ran, and the next sweep naturally re-dispatched and
+                // resubmitted the missing child). Leave `plan-ready` (and, in
+                // requireApproval mode, `approved`) standing — swapping to
+                // `junco:queued` here would make the "already dispatched"
+                // branch above treat this issue as done and never retry, and
+                // `pendingFanout` (the bridge's OTHER stranded-child recovery
+                // path) is never set on this first-dispatch door, so nothing
+                // else would resubmit it either.
+                if (dr.stranded.length > 0) {
+                  log.warn(
+                    "github bridge: plan set dispatch stranded child submit(s); leaving plan-ready for retry",
+                    { nwo: repo.nwo, issue: issue.number, stranded: dr.stranded },
+                  );
+                  continue;
+                }
                 // Same submit-before-label ordering as the single path.
                 const setArgs = [
                   "issue",
