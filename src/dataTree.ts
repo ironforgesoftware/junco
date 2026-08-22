@@ -210,8 +210,11 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * the legacy XDG path, not the canonical one — denying only the canonical
  * path would leave the ACTIVE config (and its possible `model.apiKey`)
  * agent-readable until `junco data migrate` runs. A nonexistent deny file is
- * already the norm in this list (`metricsFile` is writer-less today), so
- * both sandbox backends tolerate a legacy path that doesn't exist.
+ * already the norm in this list — every receipt file here is absent until its
+ * first write — and both backends tolerate that by construction: Seatbelt
+ * denies by name whether or not the path exists, and `bwrapArgs` emits deny
+ * mounts only for paths that pass its `existsFn` guard. So a legacy path that
+ * doesn't exist costs nothing.
  */
 export function sandboxDenyPaths(
   cfg: Config,
