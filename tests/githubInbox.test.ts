@@ -358,6 +358,73 @@ describe("pollGithubInbox", () => {
     });
   });
 
+  describe("junco-ticket fence door (2026-08-21)", () => {
+    const fenceBody = "# Do the thing\n\n## Tasks\n\n- do it\n";
+    const fencedBody = "Parked ticket.\n\n```junco-ticket\n" + fenceBody + "```\n";
+
+    it("queues a junco-ticket fence from the issue body verbatim, skipping the planner", async () => {
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: fencedBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      const t = f.submitted[0];
+      // Execution ticket, not a planning ticket: body is the fence content verbatim.
+      expect(t.content).toContain("# Do the thing");
+      expect(t.content).not.toContain("# Junco ticket template"); // planner-prompt marker absent
+      expect(t.content).toContain("kind: pr");
+      expect(t.idHint).toBe(EXEC_ID);
+      // State label is queued, not planning.
+      const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+      expect(edit).toContain("junco:queued");
+      expect(edit).not.toContain("junco:planning");
+    });
+
+    it("ask label wins over a junco-ticket fence (prose ask ticket, fence not extracted)", async () => {
+      const body = "Please explain X.\n\n```junco-ticket\n# Sneaky\n```\n";
+      const askIssue = { ...rawIssue, body, labels: [{ name: "junco" }, { name: "junco:ask" }] };
+      const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].idHint).toBe(EXEC_ID);
+      expect(f.submitted[0].content).toContain("Please explain X.");
+      expect(f.submitted[0].content).toContain("workdir:"); // ask rails, not repo:
+      expect(f.submitted[0].content).toContain("kind: ask");
+      const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+      expect(edit).toContain("junco:queued");
+    });
+
+    it("no fence still routes to the planner (regression)", async () => {
+      const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].idHint).toBe(PLAN_ID);
+      expect(f.submitted[0].content).toContain("kind: plan");
+      const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
+      expect(edit).toContain("junco:planning");
+      expect(edit).not.toContain("junco:queued");
+    });
+
+    it("refuses a fence body edited after the trigger label (re-vouch guard covers the fence door)", async () => {
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: fencedBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "2026-07-06T01:00:00Z", // edited an hour AFTER labeling
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(0);
+      expect(f.submitted).toHaveLength(0);
+      expect(f.calls.find((c) => c[0] === "issue" && c[1] === "edit")).toBeUndefined();
+    });
+  });
+
   it("fail-closed: no labeled event found → no submit, no label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: "", permission: "write" });
     const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);

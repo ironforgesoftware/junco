@@ -1023,11 +1023,22 @@ export async function pollGithubInbox(
             continue;
           }
           const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);
-          const parent = isAsk ? null : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
+          // Issue-as-inbox door (spec 2026-08-21): a vouched body carrying a
+          // junco-ticket fence queues verbatim — the planner is only the fence
+          // PRODUCER for issues that arrive without one. Ask wins over a fence
+          // (ask rails are prose-in, read-only). The edited-after-label guard
+          // above vouches the body this fence is read from.
+          const fenceTicket = isAsk ? null : extractPlanBody(issue.body ?? "");
+          const parent =
+            isAsk || fenceTicket !== null
+              ? null
+              : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
           const t = isAsk
             ? issueToTicket(issue, repo, cfg, null)
-            : buildPlanningTicket(issue, repo, cfg, parent);
-          const stateLabel = isAsk ? ll.queued : ll.planning;
+            : fenceTicket !== null
+              ? buildExecutionTicket(issue.number, repo, fenceTicket)
+              : buildPlanningTicket(issue, repo, cfg, parent);
+          const stateLabel = isAsk || fenceTicket !== null ? ll.queued : ll.planning;
           // Same in-flight guard as the execution path: a prior sweep may have
           // submitted this ticket and then lost the label add (crash, or a
           // non-network gh failure swallowed by the per-issue catch). Once the
@@ -1054,7 +1065,7 @@ export async function pollGithubInbox(
             nwo: repo.nwo,
             issue: issue.number,
             id: t.id,
-            kind: isAsk ? "ask" : "plan",
+            kind: isAsk ? "ask" : fenceTicket !== null ? "fence" : "plan",
           });
         } catch (e) {
           log.warn("github bridge: issue skipped", {
