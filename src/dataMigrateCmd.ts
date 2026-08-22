@@ -517,6 +517,14 @@ export async function runDataMigrate(
   const legacyRoot = fixedLegacyRoot(targetRoot, env);
   // I-2: whether THIS run's config lives at the legacy XDG path — decoupled
   // from targetRoot/legacyRoot (data-root state), see the module doc comment.
+  //
+  // Under a JUNCO_CONFIG override (#275) `configPath` is neither this nor
+  // `canonicalConfigPath` — it's some explicitly-named third path — so this
+  // equality is false and the relocation phase below never fires. That is
+  // correct (an operator who named a config explicitly does not want it
+  // silently moved), but it's incidental: this check was never written with
+  // JUNCO_CONFIG in mind. Do not "fix" it into something that would relocate
+  // a deliberately-placed config.
   const canonicalConfigPath = defaultUserConfigPath(env);
   const configPathIsLegacy = configPath === legacyConfigPath(env);
 

@@ -160,10 +160,28 @@ export interface ResolveConfigDeps {
  * ~/.junco/config.json, falling back to the legacy XDG path only while the
  * canonical file does not exist. The returned path may not exist — first-run
  * detection checks that separately.
+ *
+ * JUNCO_CONFIG (#275), when set to a non-empty value, wins outright — checked
+ * before the canonical path. `junco start` derives the daemon-singleton
+ * worker.lock as `dirname(resolveConfigPath())/worker.lock` (four other
+ * modules re-derive the same path), so an override relocates the lock right
+ * along with the config: two named configs are, by design, two independent
+ * daemon instances.
  */
 export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
   const existsFn = deps.existsFn ?? existsSync;
   const env = deps.env ?? process.env;
+  // An explicit JUNCO_CONFIG wins outright — above the canonical path, not
+  // below it. Below, the variable would be useless on exactly the machines it
+  // exists for (any machine with a real ~/.junco/config.json would ignore
+  // it). A non-existent value still wins: the contract already allows the
+  // returned path not to exist, and an explicit instruction should not be
+  // silently overridden — this also lets a script name the config it is about
+  // to create. Empty/whitespace is treated as unset, matching homeOf and
+  // legacyConfigPath. Still a pure function of the environment: no cwd, no
+  // argv (#275, and the split-queue incident this module was rewritten for).
+  const override = env.JUNCO_CONFIG;
+  if (override && override.trim() !== "") return expandHome(override.trim());
   const canonical = defaultUserConfigPath(env);
   if (existsFn(canonical)) return canonical;
   const legacy = legacyConfigPath(env);

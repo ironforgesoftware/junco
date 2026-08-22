@@ -802,6 +802,32 @@ describe("resolveConfigPath / juncoHome / legacyConfigPath", () => {
     expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
   });
 
+  it("JUNCO_CONFIG overrides the canonical path even when the canonical file exists", () => {
+    expect(
+      resolveConfigPath({ existsFn: () => true, env: { HOME: "/h", JUNCO_CONFIG: "/w/cfg.json" } }),
+    ).toBe("/w/cfg.json");
+  });
+
+  it("JUNCO_CONFIG wins even when the file does not exist (an explicit instruction)", () => {
+    expect(
+      resolveConfigPath({
+        existsFn: () => false,
+        env: { HOME: "/h", JUNCO_CONFIG: "/w/cfg.json" },
+      }),
+    ).toBe("/w/cfg.json");
+  });
+
+  it("JUNCO_CONFIG expands a leading ~", () => {
+    expect(
+      resolveConfigPath({ existsFn: () => false, env: { HOME: "/h", JUNCO_CONFIG: "~/cfg.json" } }),
+    ).toBe(join(homedir(), "cfg.json"));
+  });
+
+  it("an empty or whitespace JUNCO_CONFIG is ignored", () => {
+    const env = { HOME: "/h", JUNCO_CONFIG: "   " };
+    expect(resolveConfigPath({ existsFn: () => false, env })).toBe("/h/.junco/config.json");
+  });
+
   it("legacyConfigPath honors XDG_CONFIG_HOME and falls back to ~/.config", () => {
     expect(legacyConfigPath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/junco/config.json");
     expect(legacyConfigPath({})).toBe(join(homedir(), ".config/junco/config.json"));

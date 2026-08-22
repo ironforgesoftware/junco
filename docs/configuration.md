@@ -2,6 +2,8 @@
 
 Junco is configured via a single JSON file: `~/.junco/config.json` (pre-0.10 installs are still read from the legacy `~/.config/junco/config.json`, which respects `XDG_CONFIG_HOME`, until the canonical file exists). Every field is optional; anything you omit falls back to its default. The guided way to produce (or tune) this file is `junco dashboard` (or bare `junco` on a first run) — a walkthrough of the settings that matter, with safe defaults for the rest, re-runnable anytime from the command palette ("setup"). For a headless, non-interactive scaffold (scripting, CI), use `junco config init`.
 
+Set `JUNCO_CONFIG` to point junco at a specific config file, bypassing the canonical/legacy resolution above entirely — it wins even when a real `~/.junco/config.json` exists, and even when the named file doesn't exist yet (so a script can name the config it's about to create). A leading `~` expands to the home directory; empty or whitespace-only is treated as unset. Config resolution stays a pure function of the environment either way — never the working directory, never argv. Because `worker.lock` (see below) is derived from the resolved config's directory, this also relocates the daemon-singleton lock: two processes started with two different `JUNCO_CONFIG` values run as two fully independent junco instances, not one daemon disagreeing with itself — the intended behavior, since a different config is a different instance.
+
 [← back to the README](../README.md)
 
 ## Minimal example
@@ -69,7 +71,7 @@ That's also the default — the very directory `config.json` itself lives in, so
 
 Every directory above except `clones/external/`, `worktrees/`, and `github-cache/` is created eagerly at daemon startup, so nothing is invisible-until-first-use. The first two are the exception because a legacy override (see below) can point them outside `dataDir` entirely, so a mkdir here could fabricate a stray empty directory nobody asked for; `github-cache/` is the exception because it's the legacy TUI issue/PR cache (`tui/ghClient.ts` still owns it), created lazily on first fetch and excluded from `junco data`'s report below — it's slated for replacement by `mirror/` in a follow-up release, which is why `mirror/` itself stays empty until then. The root also gets a self-`.gitignore` (contents `*`, written only when no file is already there), so pointing `dataDir` at a path inside a git checkout — including Junco's own — can never dirty a commit.
 
-`config.json`, the single-instance `worker.lock` next to it, and the bot account's isolated gh config dir (`gh/`, default `~/.junco/gh` — see [bot-account.md](bot-account.md)) all resolve independently of `dataDir`, off `config.json`'s own home — but by default that home is this same `~/.junco` directory, so they sit right alongside the tree above. None of the three are part of it, or of `junco data`'s report.
+`config.json`, the single-instance `worker.lock` next to it, and the bot account's isolated gh config dir (`gh/`, default `~/.junco/gh` — see [bot-account.md](bot-account.md)) all resolve independently of `dataDir`, off `config.json`'s own home — but by default that home is this same `~/.junco` directory, so they sit right alongside the tree above. None of the three are part of it, or of `junco data`'s report. `JUNCO_CONFIG` (above) moves `config.json`'s home, and `worker.lock` follows it there.
 
 ### Legacy per-subtree overrides
 
