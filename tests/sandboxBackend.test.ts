@@ -14,6 +14,7 @@ const denyNet: SandboxPolicy = {
   writableRoots: ["/work/tree", "/tmp/scratch"],
   readDenyPaths: ["/home/x/.ssh"],
   readDenyFiles: [],
+  readAllowPaths: [],
   network: false,
   scratchDir: "/tmp/scratch",
 };
@@ -26,6 +27,7 @@ const dataPolicy: SandboxPolicy = {
   writableRoots: [`${dataDir}/worktrees/tkt-1`, "/sbxroot/scratch"],
   readDenyPaths: [`${dataDir}/queue`, `${dataDir}/review`, `${dataDir}/transcripts`],
   readDenyFiles: [`${dataDir}/watchlist.json`],
+  readAllowPaths: [],
   network: false,
   scratchDir: "/sbxroot/scratch",
 };

@@ -14,6 +14,7 @@ const policy: SandboxPolicy = {
   writableRoots: ["/sbxroot/work/tree", "/sbxroot/scratch"],
   readDenyPaths: ["/sbxroot/home/x/.ssh", "/sbxroot/data/queue"],
   readDenyFiles: ["/sbxroot/data/watchlist.json"],
+  readAllowPaths: [],
   network: false,
   scratchDir: "/sbxroot/scratch",
 };

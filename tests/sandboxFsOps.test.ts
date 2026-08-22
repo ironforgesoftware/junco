@@ -27,6 +27,7 @@ function policyFor(work: string, deny: string[] = []): SandboxPolicy {
     writableRoots: [work],
     readDenyPaths: deny,
     readDenyFiles: [],
+    readAllowPaths: [],
     network: false,
     scratchDir: work,
   };

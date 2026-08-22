@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { SandboxConfig } from "../../types.js";
 import { canonicalize } from "./canonicalize.js";
+import type { ReadRule } from "./precedence.js";
 
 /** Absolute paths whose reads are always denied inside the sandbox. Not
  *  operator-removable (extra_deny_read only adds). */
@@ -25,6 +26,11 @@ export interface SandboxPolicy {
    *  readDenyPaths because the OS backends enforce files differently
    *  (Seatbelt literal vs subpath; bwrap /dev/null bind vs tmpfs). */
   readDenyFiles: string[];
+  /** Absolute subtrees that override a broader deny (e.g. cache/ inside a
+   *  denied ~/.junco). Precedence between this, readDenyPaths, readDenyFiles
+   *  and writableRoots is by specificity (see readRules/precedence.ts),
+   *  never by list order — a deny deeper than an entry here still wins. */
+  readAllowPaths: string[];
   /** true = network egress permitted; false = denied. */
   network: boolean;
   /** Per-session scratch dir (also the redirected TMPDIR). */
@@ -40,10 +46,17 @@ export function buildPolicy(opts: {
    *  SUBTREES/files to deny, never the dataDir root itself: the default
    *  layout puts the worktree (cwd) and the clone gitdirs under that root. */
   dataDenyPaths: { dirs: string[]; files: string[] };
+  /** Subtrees that allow-back territory inside a broader deny above (e.g.
+   *  dataTree's future cache/ allow-back inside a wholesale ~/.junco deny —
+   *  #277 Task 7). Optional and empty today: nothing populates it yet, so
+   *  readAllowPaths stays [] and observable behavior is unchanged until that
+   *  task wires a real source in. */
+  dataAllowPaths?: string[];
   network: boolean;
   botGhConfigDir?: string;
 }): SandboxPolicy {
-  const { cfg, cwd, scratchDir, home, dataDenyPaths, network, botGhConfigDir } = opts;
+  const { cfg, cwd, scratchDir, home, dataDenyPaths, dataAllowPaths, network, botGhConfigDir } =
+    opts;
   // Canonicalize so the OS-sandbox profile and the JS jail agree with the
   // kernel's symlink-resolved view (macOS /var→/private/var, /tmp→/private/tmp).
   const writableRoots = [
@@ -58,11 +71,35 @@ export function buildPolicy(opts: {
     ...cfg.extraDenyRead.map(canonicalize),
   ];
   const readDenyFiles = dataDenyPaths.files.map(canonicalize);
+  // Same canonicalization as the deny lists above — otherwise precedence
+  // would compare a canonicalized deny against a raw allow and a
+  // /tmp-vs-/private/tmp-style mismatch would silently flip the answer.
+  const readAllowPaths = (dataAllowPaths ?? []).map(canonicalize);
   return {
     writableRoots,
     readDenyPaths,
     readDenyFiles,
+    readAllowPaths,
     network,
     scratchDir: canonicalize(scratchDir),
   };
+}
+
+/** The policy's read rules as one ordered-by-specificity-agnostic list — the
+ *  single source both the OS profiles (Tasks 4-5) and the JS jail (Task 3)
+ *  are generated from. Composition order here doesn't matter: orderRules
+ *  sorts by specificity, not list position. Writable roots are included as
+ *  allow/subtree rules — a root the agent may write but not read is
+ *  incoherent, and this is what makes denying a writable root's ancestor
+ *  (e.g. the whole data root, #277 Task 7) safe: the writable root
+ *  out-specifies the ancestor deny. It is NOT an unconditional override — a
+ *  deny deeper than a writable root (an operator's extra_deny_read inside
+ *  their own worktree) still wins. */
+export function readRules(policy: SandboxPolicy): ReadRule[] {
+  return [
+    ...policy.readDenyPaths.map((path): ReadRule => ({ path, effect: "deny", kind: "subtree" })),
+    ...policy.readDenyFiles.map((path): ReadRule => ({ path, effect: "deny", kind: "file" })),
+    ...policy.readAllowPaths.map((path): ReadRule => ({ path, effect: "allow", kind: "subtree" })),
+    ...policy.writableRoots.map((path): ReadRule => ({ path, effect: "allow", kind: "subtree" })),
+  ];
 }

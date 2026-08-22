@@ -8,6 +8,7 @@ const policy: SandboxPolicy = {
   writableRoots: ["/work/tree"],
   readDenyPaths: [],
   readDenyFiles: [],
+  readAllowPaths: [],
   network: false,
   scratchDir: "/tmp/scratch",
 };
