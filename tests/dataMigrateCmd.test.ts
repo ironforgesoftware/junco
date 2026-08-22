@@ -514,6 +514,97 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     expect(out2.join("")).toMatch(/queue: nothing to move/);
   });
 
+  it("#283: rewrites the watchlist entry and the queue ticket's repo:/workdir: to point at the relocated clone, receipted under 'path rewrite:'", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    const targetRoot = join(tmpHome, ".junco");
+
+    // A watched clone under the flat root's "clones" name — relocates to
+    // <targetRoot>/cache/clones via flatToV2Pairs' single `clones` pair, same
+    // move exercised by the "relocates the legacy flat tree" test above.
+    const legacyClone = join(legacyRoot, "clones", "watched", "acme", "repo");
+    mkdirSync(legacyClone, { recursive: true });
+    writeFileSync(join(legacyClone, "marker.txt"), "hi", "utf8");
+
+    // The dynamic watchlist points at that clone by absolute path.
+    mkdirSync(legacyRoot, { recursive: true });
+    writeFileSync(
+      join(legacyRoot, "watchlist.json"),
+      JSON.stringify([{ nwo: "acme/repo", path: legacyClone }], null, 2) + "\n",
+      "utf8",
+    );
+
+    // A live queue ticket referencing the same clone via repo:/workdir: —
+    // exact emitter quoting style (repo: ${JSON.stringify(path)}).
+    mkdirSync(join(legacyRoot, "queue", "inbox"), { recursive: true });
+    const ticketRaw =
+      "---\n" +
+      "id: t1\n" +
+      `repo: ${JSON.stringify(legacyClone)}\n` +
+      `workdir: ${JSON.stringify(legacyClone)}\n` +
+      "---\n" +
+      "Fix the thing.\n";
+    writeFileSync(join(legacyRoot, "queue", "inbox", "t1.md"), ticketRaw, "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+    expect(cfg.legacy.dataRoot).toBe(true);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+    expect(code).toBe(0);
+
+    const newClone = join(targetRoot, "cache", "clones", "watched", "acme", "repo");
+    expect(existsSync(join(newClone, "marker.txt"))).toBe(true);
+
+    // Watchlist rewritten in place at its new location.
+    const watchlist = JSON.parse(
+      readFileSync(join(targetRoot, "watchlist.json"), "utf8"),
+    ) as Array<{
+      nwo: string;
+      path: string;
+    }>;
+    expect(watchlist).toEqual([{ nwo: "acme/repo", path: newClone }]);
+
+    // Ticket rewritten in place at its new location — both repo: and
+    // workdir:, byte-identical elsewhere (id:, delimiters, body).
+    const ticketPath = join(targetRoot, "queue", "inbox", "t1.md");
+    expect(existsSync(ticketPath)).toBe(true);
+    const ticketOut = readFileSync(ticketPath, "utf8");
+    expect(ticketOut).toBe(
+      "---\n" +
+        "id: t1\n" +
+        `repo: ${JSON.stringify(newClone)}\n` +
+        `workdir: ${JSON.stringify(newClone)}\n` +
+        "---\n" +
+        "Fix the thing.\n",
+    );
+
+    // 3 paths: the watchlist entry, plus repo: and workdir: in the ticket —
+    // across 2 files (the watchlist and the ticket).
+    expect(out.join("")).toMatch(/path rewrite:\n\s+3 path\(s\) rewritten across 2 file\(s\)/);
+
+    // A second run is a no-op: nothing left to move, so the map is empty and
+    // the rewrite phase reports nothing to rewrite (idempotent).
+    const reloaded = loadConfig(configPath);
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      reloaded,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out2.push(s) },
+    );
+    expect(code2).toBe(0);
+    expect(out2.join("")).toMatch(/path rewrite: nothing to rewrite/);
+    expect(readFileSync(ticketPath, "utf8")).toBe(ticketOut);
+  });
+
   it("I-1: leaves an operator-customized legacy-root .gitignore in place and reports it as a leftover, rather than removing it", async () => {
     const root = trackRoot(freshRoot());
     const legacyRoot = join(tmpHome, ".local", "state", "junco");

@@ -130,6 +130,7 @@ import {
   type MigrationStep,
   type DataRootPair,
 } from "./dataMigrate.js";
+import { buildPrefixMap, rewriteStoredPaths, type RewriteReport } from "./migratePathRewrite.js";
 import { acquirePidfileLock, readPidfileHolder, type PidfileLock } from "./pidfileLock.js";
 
 const QUEUE_DIR_KEYS: (keyof Paths)[] = ["inbox", "processing", "done", "failed"];
@@ -172,6 +173,12 @@ export interface DataMigrateDeps {
    * and the fixed legacy-path probe). Default: process.env — same DI seam as
    * resolveBotGhConfigDir's callers. */
   env?: Record<string, string | undefined>;
+  /** Directory listing (filenames only, not recursive) — used solely by the
+   * post-move path-rewrite phase (migratePathRewrite.ts) to list a queue
+   * dir's `*.md` tickets. No other phase needs directory listing exposed as
+   * a seam (moves/copies work on whole dirs via renameFn/copyDirFn). Default:
+   * fs.readdirSync. */
+  readdirFn?: (p: string) => string[];
 }
 
 interface QueueStep {
@@ -419,7 +426,11 @@ function rewriteConfig(
  * runDataMigrate). `configMoveReceipt` (I-2) is separate from `configReceipt`
  * — the former is the config FILE's relocation (legacy XDG -> canonical
  * ~/.junco/config.json), the latter is the content rewrite at whatever path
- * it currently lives. */
+ * it currently lives. `rewriteReport` (task-2, #283) is printed right after
+ * gh config — it always holds the ZERO value ({rewritten:0, ...}) on a run
+ * that never reached that phase (an earlier throw), so "nothing rewritten"
+ * is honest rather than a lie by omission, same discipline every other
+ * section here follows. */
 function printReceipt(
   print: (s: string) => void,
   queueReceipt: string[],
@@ -427,6 +438,7 @@ function printReceipt(
   dataRootReceipt: string[],
   dataRootConflicts: string[],
   ghReceipt: string[],
+  rewriteReport: RewriteReport,
   configReceipt: string[] | null,
   configMoveReceipt: string[],
   stateTreeJournalFile: string,
@@ -469,6 +481,16 @@ function printReceipt(
       ? `\ngh config:\n${ghReceipt.map((l) => `  ${l}`).join("\n")}\n`
       : "\ngh config: nothing to move\n",
   );
+  print(
+    rewriteReport.rewritten > 0
+      ? `\npath rewrite:\n  ${rewriteReport.rewritten} path(s) rewritten across ${rewriteReport.files.length} file(s)\n` +
+          rewriteReport.files.map((f) => `  ${f}`).join("\n") +
+          "\n"
+      : "\npath rewrite: nothing to rewrite\n",
+  );
+  if (rewriteReport.warnings.length > 0) {
+    print(`\npath-rewrite warnings:\n${rewriteReport.warnings.map((w) => `  ${w}`).join("\n")}\n`);
+  }
   if (configReceipt === null) {
     print("\nconfig.json: not rewritten (error)\n");
   } else {
@@ -515,6 +537,7 @@ export async function runDataMigrate(
     });
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
   const env = deps.env ?? process.env;
+  const readdirFn = deps.readdirFn ?? ((p: string) => readdirSync(p));
 
   // The single-root move target (see the module doc comment). Computed once
   // and threaded through every phase below, along with the fixed legacy path
@@ -682,6 +705,10 @@ export async function runDataMigrate(
   // separate from configReceipt (the content-rewrite phase above it).
   const configMoveReceipt: string[] = [];
   let configMoveConflict = false;
+  // task-2 (#283): the path-rewrite phase's receipt — stays the zero value
+  // (honest "nothing to rewrite") if an earlier phase throws before this one
+  // is ever reached.
+  let rewriteReport: RewriteReport = { rewritten: 0, files: [], warnings: [] };
 
   try {
     // 3. Queue move (legacy vaultRoot only). Re-probe existence under the
@@ -691,6 +718,12 @@ export async function runDataMigrate(
     // merge onto it (Critical 2).
     const claimedByEarlierPhase = new Set<string>();
     const toMove = qSteps.filter((s) => existsFn(s.from));
+    // MigrationStep-shaped record of what this phase actually moved — feeds
+    // the path-rewrite phase's prefix map (task-2, #283) alongside
+    // dataRootJournalSteps below. Always "renamed" regardless of whether the
+    // move used a plain rename or the EXDEV copy+delete fallback, same
+    // convention dataRootJournalSteps already uses for its own "copied" case.
+    const queueJournalSteps: MigrationStep[] = [];
     if (toMove.length > 0) {
       mkdirSync(vaultQueueTarget, { recursive: true });
       claimedByEarlierPhase.add(vaultQueueTarget);
@@ -698,6 +731,7 @@ export async function runDataMigrate(
         try {
           renameFn(s.from, s.to);
           queueReceipt.push(`queue/${s.key}: moved ${s.from} -> ${s.to}`);
+          queueJournalSteps.push({ from: s.from, to: s.to, action: "renamed" });
         } catch (e) {
           if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
             copyDirFn(s.from, s.to);
@@ -705,6 +739,7 @@ export async function runDataMigrate(
             fsyncCopied(s.to, syncPathFn); // #196: durable before deleting source
             rmSync(s.from, { recursive: true, force: true });
             queueReceipt.push(`queue/${s.key}: copied (cross-device) ${s.from} -> ${s.to}`);
+            queueJournalSteps.push({ from: s.from, to: s.to, action: "renamed" });
           } else {
             throw e;
           }
@@ -821,6 +856,52 @@ export async function runDataMigrate(
           );
         }
       }
+    }
+
+    // 6.5. Path rewrite (task-2, #283): the watchlist and any queue tickets
+    // still hold absolute paths recorded before this run's renames — the
+    // symptom that made `junco doctor` report every watched repo as "not a
+    // git clone" after a migrate. Inserted HERE — after every phase above has
+    // landed at targetRoot, BEFORE the legacy-root removal below — so the map
+    // reflects this run's FINAL destinations. Built ONLY from what THIS run
+    // actually renamed (queueJournalSteps + dataRootJournalSteps —
+    // buildPrefixMap further filters to `action === "renamed"`, dropping any
+    // skipped-conflict pair): a candidate pair that never moved must never be
+    // treated as a rewrite target (design rule 1, migratePathRewrite.ts).
+    // Deliberately excludes migrateStateTree's own same-directory renames
+    // (phase 4) — those normalize pre-unification names in place at
+    // cfg.dataDir and are a separate, pre-existing concern from the ROOT
+    // relocation #283 is about; a real tree has almost always already been
+    // normalized by an earlier daemon startup by the time an operator runs
+    // this command. Idempotent by construction: a resumed run's OWN
+    // "renamed" step lists are empty once nothing is left to move, so the
+    // map is empty and rewriteStoredPaths is a no-op.
+    const rewriteTargetQueue: Paths = {
+      inbox: join(vaultQueueTarget, "inbox"),
+      processing: join(vaultQueueTarget, "processing"),
+      done: join(vaultQueueTarget, "done"),
+      failed: join(vaultQueueTarget, "failed"),
+    };
+    const rewriteMap = buildPrefixMap([...queueJournalSteps, ...dataRootJournalSteps]);
+    rewriteReport = rewriteStoredPaths({ targetRoot, queuePaths: rewriteTargetQueue }, rewriteMap, {
+      readFileFn,
+      writeFileFn,
+      readdirFn,
+      existsFn,
+    });
+    if (rewriteReport.rewritten > 0) {
+      // One summary step for the whole phase, not one per rewritten value —
+      // "the result" the task brief asks to journal. readJournal/
+      // appendJournal both stay fully generic over MigrationStep.action
+      // (appendJournal only special-cases "skipped-conflict" for its dedup
+      // rule), so no changes were needed there for the new "rewrote" value.
+      appendJournal(
+        migratedFile,
+        [{ from: targetRoot, to: targetRoot, action: "rewrote" }],
+        readFileFn,
+        writeFileFn,
+        renameFn,
+      );
     }
 
     // 7. Legacy root removal — filesystem-driven (Critical 1), attempted
@@ -947,6 +1028,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      rewriteReport,
       configReceipt,
       configMoveReceipt,
       stateTreeJournalFile,
@@ -967,6 +1049,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      rewriteReport,
       configReceipt,
       configMoveReceipt,
       stateTreeJournalFile,
