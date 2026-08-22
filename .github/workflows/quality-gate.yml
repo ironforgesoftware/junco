@@ -44,9 +44,20 @@ jobs:
       # tests/sandbox.integration.test.ts skips and this leg reports green
       # while exercising no real bwrap enforcement (#277). macOS needs no
       # install — sandbox-exec ships with the OS.
+      #
+      # Installing the package is NOT sufficient on ubuntu-24.04: it defaults
+      # to kernel.apparmor_restrict_unprivileged_userns=1, which blocks an
+      # unprivileged bwrap from creating a user namespace, so `isAvailable`
+      # fails and all 10 cases skip while the leg still reports green. That is
+      # exactly what the first run of this job did. The sysctl lifts it for the
+      # runner VM only. The final probe is the real point: it fails the job if
+      # bwrap still cannot run, so this can never silently regress to skipping.
       - name: bubblewrap (linux sandbox backend for the integration tests)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --unshare-net /usr/bin/true
 
       - name: node 22.19.0 (engines floor, exact)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
