@@ -22,6 +22,7 @@ import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
 import { run } from "../src/cli.js";
 import type { CliDeps } from "../src/cli.js";
+import { submitTicket } from "../src/dispatch.js";
 import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
@@ -1219,6 +1220,287 @@ describe("run(['submit', '--plan', ...]) — plan-set CLI door", () => {
     expect(captured.join("")).toContain(
       "plan set plan-dup-plan: all 1 tickets already in the queue",
     );
+  });
+
+  // I3 (#298 review round 2): before this branch, a per-child submit throw
+  // was fatal — uncaught, exit 1, nothing else dispatched. This branch
+  // CONTAINS the throw inside submitPlanSet (so siblings still land), but
+  // silently returning 0 afterward would hide the failure from an operator
+  // (and from any script checking the exit code) with no signal short of
+  // re-reading the daemon log.
+  it("submit --plan surfaces a stranded child on stderr and exits nonzero, but still lands its siblings", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "stranded-plan.md");
+    writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+    const captured: string[] = [];
+    const errLines: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+        printFn: (s) => captured.push(s),
+        env: { HOME: vaultRoot },
+        submitPlanFn: (c, content, opts, submitDeps) => {
+          if (opts?.idHint === "plan-stranded-plan-b") throw new Error("disk full");
+          return submitTicket(c, content, opts, submitDeps);
+        },
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(code).toBe(1);
+    expect(errLines.join("")).toContain(
+      "junco submit: plan set plan-stranded-plan: failed to submit plan-stranded-plan-b",
+    );
+
+    // Contained, not aborted: "a" still landed despite "b"'s submit throwing.
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(join(inboxDir, "plan-stranded-plan-a.md"))).toBe(true);
+    expect(existsSync(join(inboxDir, "plan-stranded-plan-b.md"))).toBe(false);
+    expect(captured.join("")).toContain("submitted:");
+  });
+
+  // Fix wave C, item 2: the PRECEDING test strands "b" on the supersede run
+  // itself (exit 1 — the operator sees it immediately). This test covers the
+  // NEXT thing an operator naturally tries: re-running the SAME (unedited)
+  // file again. Before this fix that re-run reported
+  // "all 2 tickets already in the queue" and exited 0 — while "b" sat
+  // unrecoverable in failed/ with a `superseded:` marker (supersedeUnclaimed
+  // already disposed it; `junco retry --all` skips superseded-marked files
+  // too) and the strict policy (no edit ⇒ no supersede) never resubmits a
+  // `failed` child on its own.
+  it("an unchanged re-run after a supersede-then-stranded child does NOT report success — it surfaces the stranded child and exits nonzero", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "cross-plan.md");
+    writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+
+    // Run 1: v1 fans out "a" and "b" cleanly.
+    const first = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: () => {},
+      env: { HOME: vaultRoot },
+    });
+    expect(first).toBe(0);
+
+    // Edit the plan (v2: different body → different hash, same task ids).
+    const editedFence =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A v2., acceptance: [works]}\n" +
+      "  - {id: b, title: T B, depends_on: [a], description: Build B v2., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(editedFence), "utf8");
+
+    // Run 2: supersedes — disposes both unclaimed v1 children into failed/
+    // with a `superseded:` marker, then fans out v2. "a" lands; "b"'s submit
+    // throws (a transient error, contained per-child) and is left stranded.
+    const errLines2: string[] = [];
+    const errSpy2 = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines2.push(String(s));
+      return true;
+    });
+    let second: number;
+    try {
+      second = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+        printFn: () => {},
+        env: { HOME: vaultRoot },
+        submitPlanFn: (c, content, opts, submitDeps) => {
+          if (opts?.idHint === "plan-cross-plan-b") throw new Error("disk full");
+          return submitTicket(c, content, opts, submitDeps);
+        },
+      });
+    } finally {
+      errSpy2.mockRestore();
+    }
+    expect(second).toBe(1);
+    expect(errLines2.join("")).toContain("failed to submit plan-cross-plan-b");
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const failedDir = join(vaultRoot, "Junco", "failed");
+    expect(existsSync(join(inboxDir, "plan-cross-plan-a.md"))).toBe(true);
+    expect(existsSync(join(inboxDir, "plan-cross-plan-b.md"))).toBe(false);
+    const strandedFailed = readdirSync(failedDir).filter((f) => f.includes("plan-cross-plan-b"));
+    expect(strandedFailed.length).toBe(1);
+    expect(readFileSync(join(failedDir, strandedFailed[0]), "utf8")).toMatch(/superseded:/);
+
+    // Run 3: the SAME (unedited) file — hash is unchanged, so `supersede` is
+    // false and the strict policy applies. "b" is skipped (it's `failed`, not
+    // `absent`), so `submitted`/`stranded` are both empty. This must NOT read
+    // as a clean no-op: "b" is genuinely stuck.
+    const captured3: string[] = [];
+    const errLines3: string[] = [];
+    const errSpy3 = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines3.push(String(s));
+      return true;
+    });
+    let third: number;
+    try {
+      third = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+        printFn: (s) => captured3.push(s),
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      errSpy3.mockRestore();
+    }
+    expect(third).toBe(1);
+    expect(captured3.join("")).not.toContain("already in the queue");
+    expect(errLines3.join("")).toContain("plan-cross-plan-b is stranded");
+    expect(errLines3.join("")).toContain(planFile); // names the remedy: edit this file and re-run
+
+    // "b" is still exactly where it was — no phantom resubmit, no silent drop.
+    expect(existsSync(join(inboxDir, "plan-cross-plan-b.md"))).toBe(false);
+    expect(readdirSync(failedDir).filter((f) => f.includes("plan-cross-plan-b")).length).toBe(1);
+  });
+
+  // #298: planId is derived from the FILENAME, so a re-run with an edited
+  // plan always collides with the previous record. Without a supersede, the
+  // record gets clobbered to the new hash while the v1 child stays queued
+  // under the identical ticket id — and submitPlanSet's absent-only guard
+  // then silently skips it, so the record's rev advertises a revision the
+  // queue does not actually contain.
+  it("re-submitting an edited plan supersedes the unclaimed old children", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "p.md");
+    const repoDir = join(vaultRoot, "repo");
+    const fenceV1 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV1), "utf8");
+
+    const first = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: () => {},
+      env: { HOME: vaultRoot },
+    });
+    expect(first).toBe(0);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const failedDir = join(vaultRoot, "Junco", "failed");
+    expect(existsSync(join(inboxDir, "plan-p-a.md"))).toBe(true);
+
+    // Edit the plan: same task id "a" (same ticketId), different body (a
+    // different hash) — the v1 child never ran, so it must be disposed.
+    const fenceV2 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A better., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV2), "utf8");
+
+    const captured: string[] = [];
+    const second = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(second).toBe(0);
+    expect(captured.join("")).toContain("superseded 1 unclaimed ticket(s)");
+
+    // The v1 child that never ran is now in failed/ with a superseded marker.
+    const failedFiles = existsSync(failedDir) ? readdirSync(failedDir) : [];
+    expect(failedFiles.length).toBe(1);
+    expect(readFileSync(join(failedDir, failedFiles[0]), "utf8")).toMatch(/superseded:/);
+
+    // The v2 child is queued under the same ticket id.
+    expect(existsSync(join(inboxDir, "plan-p-a.md"))).toBe(true);
+  });
+
+  // #298 review round 1 — Important #1: a sibling that genuinely FAILED (as
+  // opposed to one this call's own supersedeUnclaimed disposed) must ALSO
+  // resubmit on a hash-changing re-run. Reachable without any crash: v1 fans
+  // out a+b; "a" runs and fails for real; "b" never claims. Before this fix,
+  // only the ids `supersedeUnclaimed` happened to dispose were force-
+  // resubmitted — a genuinely-failed sibling (never in that array, since
+  // supersedeUnclaimed only touches inbox/) stayed skipped, so the record
+  // advertised a revision the queue never actually received.
+  it("a genuinely failed sibling (not merely disposed) is resubmitted on a hash-changing re-run", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "q.md");
+    const repoDir = join(vaultRoot, "repo");
+    const fenceV1 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}\n" +
+      "  - {id: b, title: T B, depends_on: [], description: Build B., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV1), "utf8");
+
+    const first = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: () => {},
+      env: { HOME: vaultRoot },
+    });
+    expect(first).toBe(0);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const failedDir = join(vaultRoot, "Junco", "failed");
+    const aPath = join(inboxDir, "plan-q-a.md");
+    const bPath = join(inboxDir, "plan-q-b.md");
+    expect(existsSync(aPath)).toBe(true);
+    expect(existsSync(bPath)).toBe(true);
+
+    // "a" runs and genuinely fails (an ordinary execution failure, no
+    // `superseded:` marker) — "b" never claims and stays untouched in inbox.
+    mkdirSync(failedDir, { recursive: true });
+    const aContent = readFileSync(aPath, "utf8");
+    writeFileSync(
+      join(failedDir, "plan-q-a.md"),
+      `${aContent.trimEnd()}\n\n---\n<!-- junco-result\nstatus: failed\n-->\n\n## Result\n\n> boom\n`,
+      "utf8",
+    );
+    rmSync(aPath);
+
+    // Edit the plan (v2: different body → different hash, same task ids).
+    const fenceV2 =
+      "version: 1\n" +
+      "tasks:\n" +
+      "  - {id: a, title: T A, depends_on: [], description: Build A better., acceptance: [works]}\n" +
+      "  - {id: b, title: T B, depends_on: [], description: Build B better., acceptance: [works]}\n";
+    writeFileSync(planFile, wrapFence(fenceV2), "utf8");
+
+    const captured: string[] = [];
+    const second = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(second).toBe(0);
+
+    // Both the genuinely-failed "a" AND the disposed-unclaimed "b" resubmit
+    // under the new revision — this is the bug reproduced via `failed` state
+    // instead of `inbox` state.
+    expect(existsSync(aPath)).toBe(true);
+    expect(existsSync(bPath)).toBe(true);
+    expect(readFileSync(aPath, "utf8")).toContain("Build A better.");
+    expect(readFileSync(bPath, "utf8")).toContain("Build B better.");
+    expect((captured.join("").match(/^submitted:/gm) ?? []).length).toBe(2);
+
+    // The old genuine-failure record is left as audit, untouched.
+    expect(existsSync(join(failedDir, "plan-q-a.md"))).toBe(true);
+    expect(readFileSync(join(failedDir, "plan-q-a.md"), "utf8")).not.toContain("superseded:");
+  });
+
+  // #298: the printed path was reconstructed as `<inbox>/<id>.md` rather than
+  // the real destination `submitTicket` returned — a uniqueDest rename would
+  // print a path that doesn't exist.
+  it("prints the real destination path returned by submitTicket", async () => {
+    const { vaultRoot } = freshDispatchVault({ planSets: { enabled: true, maxTasks: 10 } });
+    const planFile = join(vaultRoot, "my-plan.md");
+    writeFileSync(planFile, wrapFence(TWO_TASK_FENCE), "utf8");
+    const repoDir = join(vaultRoot, "repo");
+    const captured: string[] = [];
+    const code = await run(["submit", "--plan", planFile, "--repo", repoDir], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(code).toBe(0);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const expectedA = join(inboxDir, "plan-my-plan-a.md");
+    const expectedB = join(inboxDir, "plan-my-plan-b.md");
+    const out = captured.join("");
+    expect(out).toContain(`submitted: ${expectedA}\n`);
+    expect(out).toContain(`submitted: ${expectedB}\n`);
+    expect(existsSync(expectedA)).toBe(true);
+    expect(existsSync(expectedB)).toBe(true);
   });
 });
 

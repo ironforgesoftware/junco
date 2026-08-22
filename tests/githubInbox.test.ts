@@ -1059,11 +1059,14 @@ tasks:
           });
           const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
           expect(n).toBe(1);
-          // dispatchPlanSet fans out via the real submitTicket, not the
-          // injected submitFn — the single-ticket path never runs.
-          expect(f.submitted).toHaveLength(0);
-          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(true);
-          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(true);
+          // dispatchPlanSet now fans out through the SAME injected submitFn as
+          // the single-ticket path (the BridgeDeps.submitFn seam threaded down
+          // from pollGithubInbox) — both children are submitted through it, so
+          // the real submitTicket never writes to the inbox here.
+          expect(f.submitted).toHaveLength(2);
+          expect(f.submitted.map((s) => s.idHint).sort()).toEqual([`${EXEC_ID}-a`, `${EXEC_ID}-b`]);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-a.md`))).toBe(false);
+          expect(existsSync(join(root, "tickets", "inbox", `${EXEC_ID}-b.md`))).toBe(false);
           const edit = f.calls.find((c) => c[1] === "edit");
           expect(edit).toEqual(
             expect.arrayContaining([
@@ -1180,6 +1183,73 @@ tasks:
           // Outbox idempotency marker embedded in the posted body — a lost-ack
           // replay dedups against this instead of double-posting (#132).
           expect(commentBody).toContain(OUTBOX_MARKER_PREFIX);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      // I3 (#298 review round 2): a per-child submit throw is now CONTAINED
+      // inside dispatchPlanSet/submitPlanSet — it no longer propagates and
+      // aborts this door's dispatch. This door must NOT swap `plan-ready` for
+      // `junco:queued` when a child is stranded — that much still stands as a
+      // belt-and-suspenders guard — but merely leaving `plan-ready` standing
+      // does NOT by itself guarantee a retry (fix wave C, item 1): this same
+      // sweep's `maintainPlanSets` unconditionally sets a lifecycle label on
+      // the fresh record regardless, so a later sweep's "already dispatched"
+      // branch sees `plan-ready` next to that label and cleans both up
+      // without ever re-dispatching. The actual recovery is that
+      // dispatchPlanSet now seeds the record's `pendingFanout` from
+      // `stranded`, so `maintainPlanSets`'s `drainPendingFanout` resubmits
+      // the stranded child straight from the record — see
+      // planSetBridge.test.ts's "retries a child stranded by a fan-out
+      // failure ... INITIAL DISPATCH" for that recovery proven end to end.
+      it("a stranded child submit leaves plan-ready standing (no premature queued swap)", async () => {
+        const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
+        try {
+          const localCfg = {
+            ...bridgeCfg,
+            dataDir: join(root, "data"),
+            queueRoot: join(root, "tickets"),
+            planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+          } as Config;
+          const f = makeFakes({
+            issues: [readyIssue],
+            events: approvedAfter,
+            permission: "write",
+            comments: [planComment(mixedFenceComment)],
+          });
+          const throwingSubmit = (c: unknown, content: string, o?: { idHint?: string }): string => {
+            if (o?.idHint === `${EXEC_ID}-b`) throw new Error("disk full");
+            return f.submitFn(c, content, o);
+          };
+          const n = await pollGithubInbox(localCfg, newBridgeState(), {
+            ghFn: f.ghFn,
+            gitFn: f.gitFn,
+            submitFn: throwingSubmit,
+          } as never);
+          expect(n).toBe(0); // not counted as bridged — never reaches the label swap
+          // "a" landed through the contained fan-out via THIS door's injected
+          // `submitFn`; "b" did not — its throw is what stranded it.
+          expect(f.submitted.map((s) => s.idHint)).toEqual([`${EXEC_ID}-a`]);
+          // `plan-ready` (and `approved`) are left standing — belt-and-
+          // suspenders (the dispatch branch's OWN queued-swap
+          // (`--remove-label junco:plan-ready`) must NOT fire), but NOT what
+          // actually recovers "b" (fix wave C, item 1: see the comment at the
+          // `dr.stranded` check in githubInbox.ts). Recovery is
+          // dispatchPlanSet seeding the record's `pendingFanout` with "b"'s
+          // ticket id: this SAME sweep's UNRELATED `maintainPlanSets` pass —
+          // which runs on every sweep regardless, against the record
+          // dispatchPlanSet already materialized — drains it via the REAL
+          // `submitTicket` (that call site does not forward this door's
+          // injected `submitFn`, which is why `f.submitted` above stays
+          // `[EXEC_ID-a]` even though "b" does land) and also issues its own
+          // first label swap for this now-open set; that maintenance pass is
+          // independent of the bug under test here, so this only asserts the
+          // SPECIFIC swap I3 prevents.)
+          const dispatchLabelSwap = f.calls.find(
+            (c) => c[0] === "issue" && c[1] === "edit" && c.includes("junco:plan-ready"),
+          );
+          expect(dispatchLabelSwap).toBeUndefined();
         } finally {
           rmSync(root, { recursive: true, force: true });
         }

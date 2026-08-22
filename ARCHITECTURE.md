@@ -399,31 +399,60 @@ Every subsequent bridge sweep also runs `maintainPlanSets`, which recomputes
 each open record's state from queue reality and owns ALL set-level GitHub
 traffic for it — individual children never post their own comments or flip
 labels (`githubReport.ts` suppresses per-child reporter traffic for any ticket
-carrying both `plan` and `github`). The sweep maintains one `junco:plan-status`
-dashboard comment (create-or-PATCH; a byte-identical render skips the `gh`
-call), swaps a single set-level lifecycle label (queued → working →
-done/failed), posts one degraded comment the first sweep a task fails, and
-closes maintenance once every task is terminal — stamping `closedAt` at that
-moment (or, for a record that was already closed before this stamp existed,
-on the first sweep to see it, so nothing closed pre-upgrade is warm forever).
-A closed record with no `closedAt` is always treated as warm (never silently
-skipped); once `closedAt` is more than 30 days old (`PLAN_SET_COLD_MS`), the
-sweep stops probing that record's plan comment at all — no supersede check,
-no dashboard/label/degraded work, just a `continue`. The operator-visible
-consequence: a set closed longer than that cold window can no longer be
-superseded by editing its plan comment (only a still-warm, recently-closed
-set can); reopening one after that point means dispatching a fresh set. An
-edited-and-re-approved plan
-comment supersedes the set in place — gated by the same approval temporal
-check as dispatch when `github.requireApproval` is on, or by the hash edit
-alone when it's off, and deferred (not skipped) for a sweep while any child is
-still processing: unclaimed (still-`inbox/`) children are disposed with a
-`superseded:` marker, the fence is recompiled under the SAME plan id, and
-every non-`done` task — the just-disposed ones and any unrelated prior
-failures alike — is resubmitted, so a dependent never waits on a stale failed
-copy. `junco submit --plan <file> --repo <path>` runs the same compiler behind
-the same `planSets.enabled` flag, but as a local CLI door — no GitHub issue,
-no approval gate, trusted exactly like any locally-authored ticket.
+carrying both `plan` and `github`). Per-task state includes a `superseded` row
+alongside `queued`/`waiting`/`processing`/`done`/`failed`: a child disposed
+ahead of a recompile (see below) reads as terminal but distinct from an actual
+execution failure, so it never trips the degraded comment or the failed label
+on its own. The sweep maintains one `junco:plan-status` dashboard comment
+(create-or-PATCH; a byte-identical render skips the `gh` call), swaps a single
+set-level lifecycle label (queued → working → done/failed — an all-terminal
+set that is not all-`done` maps to `failed` whether the non-done tasks are
+genuine failures, only-`superseded` ones, or a mix; there is no separate
+set-level label for "superseded"), posts one degraded comment the first sweep
+a task genuinely fails, and closes maintenance once every task is terminal —
+UNLESS the record carries an unresolved `lastFailedHash` (a supersede recompile
+that failed to compile, addressed below): closing then would misreport a set
+that is actually stuck awaiting a human fix as finished, and would eventually
+go cold and stop being probed for that fix at all. Closing stamps `closedAt` at
+that moment (or, for a record that was already closed before this stamp
+existed, on the first sweep to see it, so nothing closed pre-upgrade is warm
+forever). A closed record with no `closedAt` is always treated as warm (never
+silently skipped); once `closedAt` is more than 30 days old
+(`PLAN_SET_COLD_MS`), the sweep stops probing that record's plan comment at
+all — no supersede check, no dashboard/label/degraded work, just a `continue`.
+The operator-visible consequence: a set closed longer than that cold window
+can no longer be superseded by editing its plan comment (only a still-warm,
+recently-closed set can); reopening one after that point means dispatching a
+fresh set. An edited-and-re-approved plan comment supersedes the set in
+place — gated by the same approval temporal check as dispatch when
+`github.requireApproval` is on, or by the hash edit alone when it's off, and
+deferred (not skipped) for a sweep while any child is still processing:
+unclaimed (still-`inbox/`) children are disposed with a `superseded:` marker
+BEFORE the recompile is even attempted, the fence is recompiled under the SAME
+plan id, and — on a SUCCESSFUL recompile — every non-`done` task, the
+just-disposed ones and any unrelated prior failures alike, is resubmitted
+through the shared `submitPlanSet` fan-out under its loose policy, so a
+dependent never waits on a stale failed copy. A per-child submit failure
+during that fan-out is contained rather than fatal — it lands on the record's
+`pendingFanout` list and is drained (through the same loose `submitPlanSet`
+policy, so a child sitting in `failed/` from the disposal above is retried,
+not just one still `absent`) at the start of the next sweep for that record,
+before the supersede hash check even runs, so it is never silently dropped. A
+recompile that FAILS to compile leaves the already-disposed children disposed
+(the human edits again) and stamps `lastFailedHash` so the same failing
+candidate cannot re-trigger the failure comment on every subsequent sweep —
+see the closing caveat above for how this also holds the record open.
+`junco submit --plan <file> --repo <path>` runs the same compiler behind the
+same `planSets.enabled` flag, but as a local CLI door — no GitHub issue, no
+approval gate, trusted exactly like any locally-authored ticket. Because its
+plan id is derived from the filename, re-running it with an edited plan file
+reuses the same id: the CLI detects the hash change, runs the same
+dispose-unclaimed-then-loose-fan-out supersede shape inline (no GitHub comment
+or approval to gate it — the edited file on disk IS the re-approval), and
+prints a `superseded N unclaimed ticket(s)` line when it disposes anything. A
+per-child submit failure here is contained the same way and printed to stderr
+with a nonzero exit, rather than either crashing the process or silently
+reporting success.
 
 One known edge: an offline-queued parent PR (the outbox `pr` op's push/create
 replay parked while GitHub was unreachable) finalizes DONE with a `pr_queued:
