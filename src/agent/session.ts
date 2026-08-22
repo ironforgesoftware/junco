@@ -531,25 +531,17 @@ const NOOP_MODELS_STORE = {
  * `allowModelNetwork` defaults to false and is left alone. Junco's three
  * cascade paths are all static, so skipping the refresh costs nothing.
  */
-// `ModelRuntimeStatic.create`'s PARAMETER itself cannot be narrowed to a literal
-// type naming these four options: that was tried and rejected by tsc, because
-// narrowing a function's parameter type is a contravariant position — the real
-// `ModelRuntime.create(options?: CreateModelRuntimeOptions)` would no longer
-// satisfy a signature that requires a narrower `options` shape (a real
-// `ModelRuntimeStatic` value is not assignable to the narrowed local type in
-// either bivariant-check direction), so `ModelRuntimeStatic` above stays typed
-// with the loose `Record<string, unknown>` parameter.
-//
-// The OBJECT LITERAL passed to `create()` below is annotated instead (`satisfies
-// CreateModelRuntimeOptions`, imported type-only from the SDK root, which
+// The OBJECT LITERAL passed to `create()` below is annotated with `satisfies
+// CreateModelRuntimeOptions` (imported type-only from the SDK root, which
 // root-exports it — `dist/index.d.ts`). That gets excess-property checking on
 // the four option NAMES: a typo (e.g. `modelPath` for `modelsPath`) is TS2561
-// ("Did you mean to write 'modelsPath'?"), not a silent miss. `credentials`
-// needed no separate cast — `InMemoryCredentialStore` satisfies the SDK's
+// ("Did you mean to write 'modelsPath'?"), not a silent miss — verified by
+// injecting that exact typo and confirming `npm run typecheck` names
+// `modelsPath` as the intended key, then reverting. `credentials` needed no
+// separate cast — `InMemoryCredentialStore` satisfies the SDK's
 // `CredentialStore` here because `modify` is declared with method-shorthand
 // syntax on both interfaces, which tsc checks bivariantly regardless of
-// `strictFunctionTypes` (a different, covariant position from the parameter
-// narrowing above, which is why that one still fails).
+// `strictFunctionTypes`.
 function sdkRegistryOps(
   ModelRuntimeStatic: { create(options: Record<string, unknown>): Promise<unknown> },
   credentials: InMemoryCredentialStore,
