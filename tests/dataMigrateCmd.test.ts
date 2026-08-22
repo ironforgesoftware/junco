@@ -158,6 +158,79 @@ describe("runDataMigrate — dry-run", () => {
     expect(out.join("")).toMatch(/dry-run/);
     expect(existsSync(dataDir)).toBe(false);
   });
+
+  // Item 4 (#281): the acting run only attempts the legacy-root removal (and
+  // only receipts it) when the fixed legacy candidate actually `existsFn`s
+  // (phase 7) — the dry-run's "(legacy root ... would be removed once empty)"
+  // hint used to print unconditionally off `legacyRoot !== null`, which is
+  // true whenever the TARGET happens to resolve to the canonical `~/.junco`
+  // (see `fixedLegacyRoot`) regardless of whether anything is actually sitting
+  // at that fixed path. That is a real dry-run/act divergence: the dry-run
+  // promised work the acting run would silently skip.
+  it("does not promise legacy-root removal when the fixed legacy candidate doesn't exist on disk (item 4, #281)", async () => {
+    const root = trackRoot(freshRoot());
+    const fakeHome = join(root, "fake-home");
+    const dataDir = join(fakeHome, ".junco"); // already at the canonical location
+    // A flat-named marker under dataDir itself — a genuine in-place restructure
+    // is pending, so the "data root:" section's `else` branch (which nests the
+    // legacy-root hint) is exercised at all.
+    mkdirSync(join(dataDir, "transcripts"), { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(dataDir, "queue"),
+      dataLayout: "flat",
+    });
+
+    // The fixed legacy candidate (`<HOME>/.local/state/junco`) genuinely does
+    // not exist on this machine.
+    expect(existsSync(join(fakeHome, ".local", "state", "junco"))).toBe(false);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s), env: { HOME: fakeHome } },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/data root:/); // the pending in-place pair IS reported
+    expect(out.join("")).not.toMatch(/would be removed once empty/);
+  });
+
+  // Companion case: when the legacy root genuinely DOES exist, the hint must
+  // still appear — the fix gates on `existsFn`, it does not remove the hint
+  // outright.
+  it("still promises legacy-root removal in dry-run when the legacy root genuinely exists", async () => {
+    const root = trackRoot(freshRoot());
+    const fakeHome = join(root, "fake-home");
+    const dataDir = join(fakeHome, ".junco");
+    mkdirSync(dataDir, { recursive: true });
+    const legacyRoot = join(fakeHome, ".local", "state", "junco");
+    mkdirSync(join(legacyRoot, "outbox"), { recursive: true }); // a real leftover pair
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(dataDir, "queue"),
+      dataLayout: "v2",
+    });
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s), env: { HOME: fakeHome } },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/would be removed once empty/);
+  });
 });
 
 describe("runDataMigrate — daemon-up refusal", () => {
@@ -1308,6 +1381,41 @@ describe("runDataMigrate — config relocation (I-2, final review 2026-08-05)", 
     expect(existsSync(configPath)).toBe(true);
     expect(existsSync(join(tmpHome, ".junco"))).toBe(false); // dry-run never mkdirs
   });
+
+  // Item 5 (#281): this branch (the dry-run preview of the config move's own
+  // skipped-conflict) had no test at all — the string never appeared anywhere
+  // under tests/.
+  it("--dry-run reports a skipped-conflict preview when the canonical config already exists (item 5, #281)", async () => {
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "legacy-model" } }), "utf8");
+
+    const canonicalDir = join(tmpHome, ".junco");
+    mkdirSync(canonicalDir, { recursive: true });
+    const canonical = join(canonicalDir, "config.json");
+    writeFileSync(canonical, JSON.stringify({ model: { id: "canonical-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: true, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    // A dry-run never fails, even when it foresees a conflict.
+    expect(code).toBe(0);
+    expect(out.join("")).toContain(
+      `config: ${configPath} -> ${canonical} ` +
+        `(canonical path already exists — would be a skipped-conflict, never overwritten)`,
+    );
+    // Untouched — it's a preview.
+    expect(JSON.parse(readFileSync(configPath, "utf8")).model).toEqual({ id: "legacy-model" });
+    expect(JSON.parse(readFileSync(canonical, "utf8")).model).toEqual({ id: "canonical-model" });
+  });
 });
 
 describe("runDataMigrate — resume after interruption or conflict (Critical 1)", () => {
@@ -1793,6 +1901,66 @@ describe("runDataMigrate — data-root move conflicts", () => {
     expect(out.join("")).toMatch(/conflict/i);
     expect(existsSync(join(dataDir, "outbox", "old.json"))).toBe(true);
     expect(existsSync(join(dataDir, "data", "outbox", "new.json"))).toBe(true);
+  });
+});
+
+describe("runDataMigrate — gh-creds conflicts get their own heading (item 1, #281)", () => {
+  it("a non-empty gh-creds destination is reported under 'gh config conflicts:', not lumped into 'data-root conflicts:'", async () => {
+    const root = trackRoot(freshRoot());
+    // No data-root pairs are pending at all here (dataDir is untouched) — the
+    // ONLY conflict this run produces is the gh-creds one, so any appearance
+    // of a "data-root conflicts:" heading below would prove the gh conflict
+    // leaked into the wrong section.
+    const dataDir = join(root, "mydata");
+    const fakeHome = join(root, "fake-home");
+    const legacyGh = join(root, "legacy-gh");
+    mkdirSync(legacyGh, { recursive: true });
+    writeFileSync(join(legacyGh, "hosts.yml"), "github.com:\n  oauth_token: legacy\n", "utf8");
+
+    // The canonical gh-creds destination already holds a real file — a
+    // conflict, not repairable scaffolding.
+    const targetGh = join(fakeHome, ".junco", "gh");
+    mkdirSync(targetGh, { recursive: true });
+    writeFileSync(join(targetGh, "hosts.yml"), "github.com:\n  oauth_token: canonical\n", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = makeConfig({
+      dataDir,
+      queueRoot: join(dataDir, "queue"),
+      legacy: {
+        vaultRoot: false,
+        stateDir: false,
+        worktreeRoot: false,
+        externalReposRoot: false,
+        dataRoot: false,
+        ghConfigDir: true,
+      },
+      botAccount: { enabled: false, configDir: legacyGh },
+    });
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: (s) => out.push(s), env: { HOME: fakeHome } },
+    );
+    const printed = out.join("");
+
+    expect(code).toBe(1);
+    // Both sides left untouched, exactly like any other skipped-conflict.
+    expect(existsSync(join(legacyGh, "hosts.yml"))).toBe(true);
+    expect(existsSync(join(targetGh, "hosts.yml"))).toBe(true);
+    expect(printed).toContain(
+      `gh config conflicts:\n  ${legacyGh} -> ${targetGh}: destination already exists and is not empty`,
+    );
+    // The whole point of item 1: this must NOT print under the data-root
+    // heading — there are zero data-root pairs pending in this fixture, so
+    // that heading must not appear at all.
+    expect(printed).not.toMatch(/data-root conflicts:/);
+    expect(printed).toMatch(/conflict/i);
   });
 });
 

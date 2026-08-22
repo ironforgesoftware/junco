@@ -508,6 +508,7 @@ function printReceipt(
   dataRootReceipt: string[],
   dataRootConflicts: string[],
   ghReceipt: string[],
+  ghConflicts: string[],
   rewriteReport: RewriteReport,
   configReceipt: string[] | null,
   configMoveReceipt: string[],
@@ -552,6 +553,13 @@ function printReceipt(
       ? `\ngh config:\n${ghReceipt.map((l) => `  ${l}`).join("\n")}\n`
       : "\ngh config: nothing to move\n",
   );
+  if (ghConflicts.length > 0) {
+    // Item 1 (#281): its own heading — a gh-creds conflict is a different
+    // subsystem from a data-root one, and used to print under
+    // "data-root conflicts:" above, which told the operator the wrong thing
+    // conflicted.
+    print(`\ngh config conflicts:\n${ghConflicts.map((c) => `  ${c}`).join("\n")}\n`);
+  }
   print(
     rewriteReport.rewritten > 0
       ? `\npath rewrite:\n  ${rewriteReport.rewritten} path(s) rewritten across ${rewriteReport.files.length} file(s)\n` +
@@ -724,6 +732,19 @@ export async function runDataMigrate(
       print("\nstate tree: nothing pending\n");
     } else {
       print("\nstate tree:\n");
+      // Item 4 (#281) investigation: unlike `flatToV2Pairs` (dataMigrate.ts:127
+      // filters `p.from !== p.to`), `stateTreeMigrations` carries no identity
+      // filter of its own — but it does not need one. Every one of its six
+      // pairs hardcodes a DIFFERENT literal old-name and v2-shaped subpath
+      // (e.g. "github-outbox" -> outbox's `L.outbox` ["outbox"|"data/outbox"],
+      // "repos" -> clonesWatched's ["clones/watched"|"cache/clones/watched"]),
+      // so `from === to` is not just untriggered by today's fixtures, it is
+      // structurally unreachable for ANY Config: no combination of
+      // `cfg.dataLayout`/`cfg.github`/`cfg.legacy` can make an old flat name
+      // collide with its own v2 destination string. Confirmed by exhaustive
+      // reading of `stateTreeMigrations` (dataMigrate.ts) and `dataTreePaths`
+      // (dataTree.ts) — an `x -> x` identity arrow here is dead code, so none
+      // is added to guard against it.
       for (const p of pending) print(`  ${p.from} -> ${p.to}\n`);
     }
     if (!dataRootAll.some((p) => p.pending)) {
@@ -740,7 +761,14 @@ export async function runDataMigrate(
             : " (nothing to move)";
         print(`  ${p.from} -> ${p.to}${suffix}\n`);
       }
-      if (legacyRoot !== null) {
+      // Item 4 (#281): gated on `existsFn`, matching phase 7's own acting-run
+      // condition (`legacyRoot !== null && existsFn(legacyRoot)`) below —
+      // `legacyRoot !== null` alone only says the TARGET resolves to the
+      // canonical `~/.junco` (see `fixedLegacyRoot`), which says nothing about
+      // whether anything is actually sitting at the fixed legacy path. Without
+      // this gate the dry-run promised a removal the acting run would
+      // silently skip.
+      if (legacyRoot !== null && existsFn(legacyRoot)) {
         print(`  (legacy root ${legacyRoot} would be removed once empty)\n`);
       }
     }
@@ -804,6 +832,13 @@ export async function runDataMigrate(
   const dataRootReceipt: string[] = [];
   const dataRootConflicts: string[] = [];
   const ghReceipt: string[] = [];
+  // Item 1 (#281): the gh-creds pair's own conflict tracking, kept separate
+  // from `dataRootConflicts` — the two subsystems are otherwise unrelated
+  // (an operator resolving a data-root conflict gains nothing from a gh-creds
+  // one printed under the same heading, and vice versa), so each earns its
+  // own receipt heading below rather than sharing one that only names one of
+  // the two.
+  const ghConflicts: string[] = [];
   // Phase trackers for an honest catch-path receipt: "not-run" = the phase
   // was never reached; "interrupted" = migrateFn threw mid-run (its completed
   // pairs are journaled durably); null configReceipt = rewrite never completed.
@@ -934,9 +969,9 @@ export async function runDataMigrate(
       if (gh !== null && existsFn(gh.from)) {
         const action = moveDataRootPair(gh.from, gh.to, fs);
         if (action === "skipped-conflict") {
-          dataRootConflicts.push(
-            `${gh.from} -> ${gh.to}: destination already exists and is not empty`,
-          );
+          // Item 1 (#281): its own array/heading, not `dataRootConflicts` —
+          // see the declaration above.
+          ghConflicts.push(`${gh.from} -> ${gh.to}: destination already exists and is not empty`);
           ghReceipt.push(`${gh.from} -> ${gh.to}: skipped-conflict`);
           dataRootJournalSteps.push({ from: gh.from, to: gh.to, action: "skipped-conflict" });
         } else {
@@ -1204,6 +1239,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      ghConflicts,
       rewriteReport,
       configReceipt,
       configMoveReceipt,
@@ -1212,7 +1248,8 @@ export async function runDataMigrate(
     );
 
     const stateConflicts = typeof stateOutcome === "string" ? 0 : stateOutcome.conflicts.length;
-    const totalConflicts = stateConflicts + dataRootConflicts.length + (configMoveConflict ? 1 : 0);
+    const totalConflicts =
+      stateConflicts + dataRootConflicts.length + ghConflicts.length + (configMoveConflict ? 1 : 0);
     if (totalConflicts > 0) {
       print(`\njunco data migrate: ${totalConflicts} conflict(s) — resolve manually and re-run\n`);
       return 1;
@@ -1226,6 +1263,7 @@ export async function runDataMigrate(
       dataRootReceipt,
       dataRootConflicts,
       ghReceipt,
+      ghConflicts,
       rewriteReport,
       configReceipt,
       configMoveReceipt,
