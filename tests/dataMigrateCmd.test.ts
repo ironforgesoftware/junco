@@ -605,6 +605,197 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     expect(readFileSync(ticketPath, "utf8")).toBe(ticketOut);
   });
 
+  it("task-3: rewrites repoPath in pending assess/comment records, plan-set records, and push/pr outbox ops (dead/ included), leaving labels ops untouched", async () => {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    const targetRoot = join(tmpHome, ".junco");
+
+    const legacyClone = join(legacyRoot, "clones", "watched", "acme", "repo");
+    mkdirSync(legacyClone, { recursive: true });
+    writeFileSync(join(legacyClone, "marker.txt"), "hi", "utf8");
+
+    // Pending assess batch — review/assess is identity-named under v2, so
+    // only the root changes.
+    mkdirSync(join(legacyRoot, "review", "assess"), { recursive: true });
+    const assessBatch = {
+      id: "assess-acme-repo-1",
+      nwo: "acme/repo",
+      external: false,
+      autoPlan: false,
+      repoPath: legacyClone,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      findings: [],
+    };
+    writeFileSync(
+      join(legacyRoot, "review", "assess", "assess-acme-repo-1.json"),
+      JSON.stringify(assessBatch, null, 2) + "\n",
+      "utf8",
+    );
+
+    // Pending comment draft — review/comments, same identity-named root.
+    mkdirSync(join(legacyRoot, "review", "comments"), { recursive: true });
+    const commentDraft = {
+      id: "analyze-acme-repo-1",
+      nwo: "acme/repo",
+      issue: 9,
+      issueTitle: "Something",
+      external: false,
+      repoPath: legacyClone,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draft: "body",
+      footer: true,
+    };
+    writeFileSync(
+      join(legacyRoot, "review", "comments", "analyze-acme-repo-1.json"),
+      JSON.stringify(commentDraft, null, 2) + "\n",
+      "utf8",
+    );
+
+    // Plan-set record — plans/ (flat) -> data/plans (v2).
+    mkdirSync(join(legacyRoot, "plans"), { recursive: true });
+    const planRecord = {
+      v: 1,
+      planId: "plan1",
+      hash: "h1",
+      repoPath: legacyClone,
+      github: { nwo: "acme/repo", issue: 5 },
+      tasks: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      statusCommentId: null,
+      degradedPosted: false,
+      lastLabel: null,
+      closed: false,
+    };
+    writeFileSync(
+      join(legacyRoot, "plans", "plan1.json"),
+      JSON.stringify(planRecord, null, 2) + "\n",
+      "utf8",
+    );
+
+    // Outbox ops — outbox/ (flat) -> data/outbox (v2); a push op, a pr op, a
+    // labels op (no path — must stay untouched), and a dead-lettered push op.
+    mkdirSync(join(legacyRoot, "outbox", "dead"), { recursive: true });
+    const pushOp = {
+      id: "1-0000-aaaa-push",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: null,
+      attempts: 0,
+      lastError: null,
+      op: { kind: "push", repoPath: legacyClone, branch: "feat/x" },
+    };
+    writeFileSync(
+      join(legacyRoot, "outbox", "1-0000-aaaa-push.json"),
+      JSON.stringify(pushOp, null, 2),
+      "utf8",
+    );
+    const prOp = {
+      id: "2-0000-bbbb-pr",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: "acme/repo#3",
+      attempts: 0,
+      lastError: null,
+      op: {
+        kind: "pr",
+        repoPath: legacyClone,
+        branch: "feat/x",
+        nwo: "acme/repo",
+        issue: 3,
+        base: "main",
+        title: "t",
+        bodyText: "b",
+        draft: false,
+        labels: [],
+        reviewers: [],
+        finalize: null,
+        pushed: false,
+        prUrl: null,
+      },
+    };
+    writeFileSync(
+      join(legacyRoot, "outbox", "2-0000-bbbb-pr.json"),
+      JSON.stringify(prOp, null, 2),
+      "utf8",
+    );
+    const labelsOp = {
+      id: "3-0000-cccc-labels",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "dashboard",
+      issueKey: "acme/repo#4",
+      attempts: 0,
+      lastError: null,
+      op: { kind: "labels", nwo: "acme/repo", issue: 4, add: ["x"], remove: [] },
+    };
+    const labelsRaw = JSON.stringify(labelsOp, null, 2);
+    writeFileSync(join(legacyRoot, "outbox", "3-0000-cccc-labels.json"), labelsRaw, "utf8");
+    const deadOp = {
+      id: "4-0000-dddd-push",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: null,
+      attempts: 3,
+      lastError: "boom",
+      op: { kind: "push", repoPath: legacyClone, branch: "feat/y" },
+    };
+    writeFileSync(
+      join(legacyRoot, "outbox", "dead", "4-0000-dddd-push.json"),
+      JSON.stringify(deadOp, null, 2),
+      "utf8",
+    );
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = loadConfig(configPath);
+    expect(cfg.legacy.dataRoot).toBe(true);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+    expect(code).toBe(0);
+
+    const newClone = join(targetRoot, "cache", "clones", "watched", "acme", "repo");
+
+    const assessOut = JSON.parse(
+      readFileSync(join(targetRoot, "review", "assess", "assess-acme-repo-1.json"), "utf8"),
+    ) as typeof assessBatch;
+    expect(assessOut).toEqual({ ...assessBatch, repoPath: newClone });
+
+    const commentOut = JSON.parse(
+      readFileSync(join(targetRoot, "review", "comments", "analyze-acme-repo-1.json"), "utf8"),
+    ) as typeof commentDraft;
+    expect(commentOut).toEqual({ ...commentDraft, repoPath: newClone });
+
+    const planOut = JSON.parse(
+      readFileSync(join(targetRoot, "data", "plans", "plan1.json"), "utf8"),
+    ) as typeof planRecord;
+    expect(planOut).toEqual({ ...planRecord, repoPath: newClone });
+
+    const pushFile = join(targetRoot, "data", "outbox", "1-0000-aaaa-push.json");
+    const pushOut = JSON.parse(readFileSync(pushFile, "utf8")) as typeof pushOp;
+    expect(pushOut).toEqual({ ...pushOp, op: { ...pushOp.op, repoPath: newClone } });
+
+    const prFile = join(targetRoot, "data", "outbox", "2-0000-bbbb-pr.json");
+    const prOut = JSON.parse(readFileSync(prFile, "utf8")) as typeof prOp;
+    expect(prOut).toEqual({ ...prOp, op: { ...prOp.op, repoPath: newClone } });
+
+    const deadFile = join(targetRoot, "data", "outbox", "dead", "4-0000-dddd-push.json");
+    const deadOut = JSON.parse(readFileSync(deadFile, "utf8")) as typeof deadOp;
+    expect(deadOut).toEqual({ ...deadOp, op: { ...deadOp.op, repoPath: newClone } });
+
+    // The labels op carries no path — byte-identical, not even touched.
+    expect(
+      readFileSync(join(targetRoot, "data", "outbox", "3-0000-cccc-labels.json"), "utf8"),
+    ).toBe(labelsRaw);
+
+    // 6 paths rewritten (assess, comment, plan, push, pr, dead push) across 6 files.
+    expect(out.join("")).toMatch(/path rewrite:\n\s+6 path\(s\) rewritten across 6 file\(s\)/);
+  });
+
   it("I-1: leaves an operator-customized legacy-root .gitignore in place and reports it as a leftover, rather than removing it", async () => {
     const root = trackRoot(freshRoot());
     const legacyRoot = join(tmpHome, ".local", "state", "junco");

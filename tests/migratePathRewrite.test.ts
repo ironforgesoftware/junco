@@ -268,4 +268,300 @@ describe("rewriteStoredPaths", () => {
     );
     expect(report).toEqual({ rewritten: 0, files: [], warnings: [] });
   });
+
+  const emptyQueuePaths = {
+    inbox: "/nope1",
+    processing: "/nope2",
+    done: "/nope3",
+    failed: "/nope4",
+  };
+
+  it("rewrites a pending assess batch's repoPath under review/assess, preserving every other field", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const dir = join(root, "review", "assess");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "batch1.json");
+    const oldRepo = "/old/clones/watched/acme/repo";
+    const batch = {
+      id: "assess-acme-repo-1",
+      nwo: "acme/repo",
+      external: false,
+      autoPlan: false,
+      repoPath: oldRepo,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      findings: [{ title: "x" }],
+    };
+    writeFileSync(file, JSON.stringify(batch, null, 2) + "\n", "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      { targetRoot: root, queuePaths: emptyQueuePaths },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(1);
+    expect(report.files).toEqual([file]);
+    expect(report.warnings).toEqual([]);
+
+    const newRepo = join(root, "cache", "clones", "watched", "acme", "repo");
+    expect(readFileSync(file, "utf8")).toBe(
+      JSON.stringify({ ...batch, repoPath: newRepo }, null, 2) + "\n",
+    );
+  });
+
+  it("rewrites a pending comment draft's repoPath under review/comments", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const dir = join(root, "review", "comments");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "draft1.json");
+    const oldRepo = "/old/clones/watched/acme/repo";
+    const draft = {
+      id: "analyze-acme-repo-1",
+      nwo: "acme/repo",
+      issue: 42,
+      issueTitle: "Something",
+      external: false,
+      repoPath: oldRepo,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draft: "body text",
+      footer: true,
+    };
+    writeFileSync(file, JSON.stringify(draft, null, 2) + "\n", "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      { targetRoot: root, queuePaths: emptyQueuePaths },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(1);
+    expect(report.files).toEqual([file]);
+    const newRepo = join(root, "cache", "clones", "watched", "acme", "repo");
+    expect(readFileSync(file, "utf8")).toBe(
+      JSON.stringify({ ...draft, repoPath: newRepo }, null, 2) + "\n",
+    );
+  });
+
+  it("rewrites a plan-set record's repoPath under data/plans, leaving its sibling .md file alone", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const dir = join(root, "data", "plans");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "plan1.json");
+    const oldRepo = "/old/clones/watched/acme/repo";
+    const record = {
+      v: 1,
+      planId: "plan1",
+      hash: "abc123",
+      repoPath: oldRepo,
+      github: { nwo: "acme/repo", issue: 7 },
+      tasks: [{ id: "t1", ticketId: "plan1-t1", dependsOn: [] }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      statusCommentId: null,
+      degradedPosted: false,
+      lastLabel: null,
+      closed: false,
+    };
+    writeFileSync(file, JSON.stringify(record, null, 2) + "\n", "utf8");
+    const mdFile = join(dir, "plan1.md");
+    writeFileSync(mdFile, "# plan body\n", "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      { targetRoot: root, queuePaths: emptyQueuePaths },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(1);
+    expect(report.files).toEqual([file]);
+    const newRepo = join(root, "cache", "clones", "watched", "acme", "repo");
+    expect(readFileSync(file, "utf8")).toBe(
+      JSON.stringify({ ...record, repoPath: newRepo }, null, 2) + "\n",
+    );
+    expect(readFileSync(mdFile, "utf8")).toBe("# plan body\n");
+  });
+
+  it("rewrites push/pr outbox ops' repoPath, leaves labels/comment/issue-create untouched, and scans dead/ too", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const dir = join(root, "data", "outbox");
+    const deadDir = join(dir, "dead");
+    mkdirSync(deadDir, { recursive: true });
+    const oldRepo = "/old/clones/watched/acme/repo";
+
+    const pushOp = {
+      id: "1-0000-aaaa-push",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: null,
+      attempts: 0,
+      lastError: null,
+      op: { kind: "push", repoPath: oldRepo, branch: "feat/x" },
+    };
+    const pushFile = join(dir, "1-0000-aaaa-push.json");
+    // Outbox ops serialize WITHOUT a trailing newline (enqueueOp/flushOutbox).
+    writeFileSync(pushFile, JSON.stringify(pushOp, null, 2), "utf8");
+
+    const prOp = {
+      id: "2-0000-bbbb-pr",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: "acme/repo#3",
+      attempts: 0,
+      lastError: null,
+      op: {
+        kind: "pr",
+        repoPath: oldRepo,
+        branch: "feat/x",
+        nwo: "acme/repo",
+        issue: 3,
+        base: "main",
+        title: "t",
+        bodyText: "b",
+        draft: false,
+        labels: [],
+        reviewers: [],
+        finalize: null,
+        pushed: false,
+        prUrl: null,
+      },
+    };
+    const prFile = join(dir, "2-0000-bbbb-pr.json");
+    writeFileSync(prFile, JSON.stringify(prOp, null, 2), "utf8");
+
+    const labelsOp = {
+      id: "3-0000-cccc-labels",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "dashboard",
+      issueKey: "acme/repo#4",
+      attempts: 0,
+      lastError: null,
+      op: { kind: "labels", nwo: "acme/repo", issue: 4, add: ["x"], remove: [] },
+    };
+    const labelsFile = join(dir, "3-0000-cccc-labels.json");
+    const labelsRaw = JSON.stringify(labelsOp, null, 2);
+    writeFileSync(labelsFile, labelsRaw, "utf8");
+
+    const deadOp = {
+      id: "4-0000-dddd-push",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: null,
+      attempts: 3,
+      lastError: "boom",
+      op: { kind: "push", repoPath: oldRepo, branch: "feat/y" },
+    };
+    const deadFile = join(deadDir, "4-0000-dddd-push.json");
+    writeFileSync(deadFile, JSON.stringify(deadOp, null, 2), "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      { targetRoot: root, queuePaths: emptyQueuePaths },
+      map,
+      realDeps(),
+    );
+
+    const newRepo = join(root, "cache", "clones", "watched", "acme", "repo");
+    expect(report.rewritten).toBe(3); // push, pr, dead push — not labels
+    expect(report.files.sort()).toEqual([deadFile, prFile, pushFile].sort());
+    expect(report.warnings).toEqual([]);
+
+    // No trailing newline on the rewritten files either — matches every
+    // outbox writer's own serialisation.
+    expect(readFileSync(pushFile, "utf8")).toBe(
+      JSON.stringify({ ...pushOp, op: { ...pushOp.op, repoPath: newRepo } }, null, 2),
+    );
+    expect(readFileSync(prFile, "utf8")).toBe(
+      JSON.stringify({ ...prOp, op: { ...prOp.op, repoPath: newRepo } }, null, 2),
+    );
+    expect(readFileSync(deadFile, "utf8")).toBe(
+      JSON.stringify({ ...deadOp, op: { ...deadOp.op, repoPath: newRepo } }, null, 2),
+    );
+    // labels op is byte-identical — untouched, not even rewritten.
+    expect(readFileSync(labelsFile, "utf8")).toBe(labelsRaw);
+  });
+
+  it("leaves a record's repoPath alone when it points somewhere junco never moved (guard)", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const assessDir = join(root, "review", "assess");
+    mkdirSync(assessDir, { recursive: true });
+    const batchFile = join(assessDir, "batch1.json");
+    const untouchedRepo = "/home/me/dev/foo";
+    const batch = {
+      id: "assess-foo-1",
+      nwo: "me/foo",
+      external: true,
+      autoPlan: false,
+      repoPath: untouchedRepo,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      findings: [],
+    };
+    const batchRaw = JSON.stringify(batch, null, 2) + "\n";
+    writeFileSync(batchFile, batchRaw, "utf8");
+
+    const outboxDir = join(root, "data", "outbox");
+    mkdirSync(outboxDir, { recursive: true });
+    const pushFile = join(outboxDir, "1-0000-aaaa-push.json");
+    const pushOp = {
+      id: "1-0000-aaaa-push",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      origin: "prflow",
+      issueKey: null,
+      attempts: 0,
+      lastError: null,
+      op: { kind: "push", repoPath: untouchedRepo, branch: "feat/x" },
+    };
+    const pushRaw = JSON.stringify(pushOp, null, 2);
+    writeFileSync(pushFile, pushRaw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      { targetRoot: root, queuePaths: emptyQueuePaths },
+      map,
+      realDeps(),
+    );
+
+    expect(report).toEqual({ rewritten: 0, files: [], warnings: [] });
+    expect(readFileSync(batchFile, "utf8")).toBe(batchRaw);
+    expect(readFileSync(pushFile, "utf8")).toBe(pushRaw);
+  });
+
+  it("warns on a corrupt plan-set record and leaves it untouched, continuing the migration", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const dir = join(root, "data", "plans");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "bad.json");
+    writeFileSync(file, "{ not json", "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      { targetRoot: root, queuePaths: emptyQueuePaths },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(0);
+    expect(report.warnings.length).toBe(1);
+    expect(report.warnings[0]).toMatch(/bad\.json/);
+    expect(readFileSync(file, "utf8")).toBe("{ not json");
+  });
+
+  it("skips review/assess, review/comments, data/plans, and data/outbox dirs that don't exist yet, without warning", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      { targetRoot: root, queuePaths: emptyQueuePaths },
+      map,
+      realDeps(),
+    );
+    expect(report).toEqual({ rewritten: 0, files: [], warnings: [] });
+  });
 });

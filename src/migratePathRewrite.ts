@@ -1,11 +1,30 @@
 /**
- * Rewrites absolute paths recorded INSIDE the watchlist and queue tickets
- * after `junco data migrate` has relocated the files that hold them (#283).
- * `junco data migrate` moves the tree correctly, but `repo:`/`workdir:`
- * frontmatter and watchlist `path` entries are opaque strings to every phase
- * that came before this one — they still point at the pre-migration root,
- * so `junco doctor` reports every watched repo as "not a git clone" the
- * moment the legacy root is gone.
+ * Rewrites absolute paths recorded INSIDE the watchlist, queue tickets, and
+ * four more JSON stores after `junco data migrate` has relocated the files
+ * that hold them (#283). `junco data migrate` moves the tree correctly, but
+ * `repo:`/`workdir:` frontmatter, watchlist `path` entries, and every store
+ * below are opaque strings to every phase that came before this one — they
+ * still point at the pre-migration root, so `junco doctor` reports every
+ * watched repo as "not a git clone" the moment the legacy root is gone.
+ *
+ * The four additional stores, each verified (task-3 brief) to hold exactly
+ * one absolute path field:
+ *   - Pending assess batches (`PendingAssess.repoPath`, assessReview.ts) —
+ *     one JSON file per batch under `review/assess` (identity-named under
+ *     v2 too — flatToV2Pairs' `["review", "review"]` pair — so only the
+ *     root changes).
+ *   - Pending comment drafts (`PendingComment.repoPath`, commentReview.ts) —
+ *     same shape, under `review/comments`.
+ *   - Outbox ops (`op.repoPath`, githubOutbox.ts) — but ONLY the `push`/`pr`
+ *     variants; `labels`/`comment`/`issue-create` carry no path. Walked in
+ *     both the outbox dir and its `dead/` subdir. `StoredOp.path` is
+ *     DERIVED at read time from the directory listing and stripped before
+ *     writing (`Omit<StoredOp, "path">`) — never present on disk, never
+ *     rewritten here.
+ *   - Plan-set records (`PlanSetRecord.repoPath`, planSets.ts) — one JSON
+ *     file per record under `plans/` (flat) / `data/plans` (v2 — the shape
+ *     this phase always finds it in, since it runs after the data-root
+ *     move has already restructured the target to v2).
  *
  * Four design rules, all load-bearing (see the task brief):
  *
@@ -38,7 +57,18 @@ import { sep, join } from "node:path";
 import type { Paths } from "./types.js";
 import type { MigrationStep } from "./dataMigrate.js";
 import { readWatchlist, writeWatchlist } from "./watchlist.js";
-import { WATCHLIST_FILENAME } from "./dataTree.js";
+import { WATCHLIST_FILENAME, REVIEW_ASSESS_SUBDIR, REVIEW_COMMENTS_SUBDIR } from "./dataTree.js";
+
+// Outbox and plan-set records are NOT identity-named under v2 (unlike
+// review/, which flatToV2Pairs maps "review" -> "review"): dataMigrate.ts's
+// flatToV2Pairs maps "outbox" -> "data/outbox" and "plans" -> "data/plans".
+// This phase runs after the data-root move has already landed the target at
+// its v2 shape (dataMigrateCmd.ts inserts it post-move, pre-legacy-removal),
+// so these are the only shapes it ever needs to look under — no LAYOUTS
+// lookup required. Not exported from dataTree.ts today (only the flat names
+// are), so mirrored here rather than added as a dependency for two literals.
+const OUTBOX_V2_SUBDIR = "data/outbox";
+const PLANS_V2_SUBDIR = "data/plans";
 
 export interface PathPrefix {
   from: string;
@@ -124,6 +154,14 @@ export function rewriteStoredPaths(
     rewriteTicketsInDir(dir, map, deps, report);
   }
 
+  rewriteJsonRepoPathRecords(join(ctx.targetRoot, REVIEW_ASSESS_SUBDIR), map, deps, report);
+  rewriteJsonRepoPathRecords(join(ctx.targetRoot, REVIEW_COMMENTS_SUBDIR), map, deps, report);
+  rewriteJsonRepoPathRecords(join(ctx.targetRoot, PLANS_V2_SUBDIR), map, deps, report);
+
+  const outboxDir = join(ctx.targetRoot, OUTBOX_V2_SUBDIR);
+  rewriteOutboxOpsInDir(outboxDir, map, deps, report);
+  rewriteOutboxOpsInDir(join(outboxDir, "dead"), map, deps, report);
+
   return report;
 }
 
@@ -161,6 +199,171 @@ function rewriteWatchlistFile(file: string, map: PathPrefix[], report: RewriteRe
   }
   report.rewritten += count;
   report.files.push(file);
+}
+
+/** Structural subset shared by `PendingAssess` (assessReview.ts),
+ * `PendingComment` (commentReview.ts), and `PlanSetRecord` (planSets.ts) —
+ * each store's real type carries many more fields, but this phase only ever
+ * touches the one `repoPath` string; every other field round-trips through
+ * `JSON.parse`/`{ ...rec }`/`JSON.stringify` untouched. No import of the
+ * concrete types needed (or wanted — this module stays independent of
+ * assessReview.ts/commentReview.ts/planSets.ts). */
+interface RecordWithRepoPath {
+  repoPath: string;
+}
+
+function hasStringRepoPath(v: unknown): v is RecordWithRepoPath {
+  return (
+    v !== null &&
+    typeof v === "object" &&
+    typeof (v as { repoPath?: unknown }).repoPath === "string"
+  );
+}
+
+/** Shared walk for the three stores that hold exactly one absolute path
+ * under a top-level `repoPath` field, one JSON file per record, directly
+ * contained (not recursive — same flat-dir shape as the queue dirs).
+ * Serialized as `JSON.stringify(x, null, 2) + "\n"` on write — the exact
+ * shape reviewStore.ts's `write()` and planSets.ts's
+ * `writePlanSetRecord`/`materializePlanSet` all use, so this stays a
+ * byte-identical round-trip for every untouched field. A missing dir (e.g.
+ * no batches/drafts/records ever written) is silently skipped, not a
+ * warning — same precedent as `rewriteTicketsInDir`'s missing queue dir. A
+ * readdir failure on an EXISTING dir, and any per-file read/parse/write
+ * failure, is a warning and that ONE file is left untouched — never a
+ * throw (design rule 4). A parsed file missing a string `repoPath` (an
+ * unrecognized/malformed shape) is quietly skipped rather than warned:
+ * every real record in these dirs has one, so this only guards against
+ * something this phase has no business touching. */
+function rewriteJsonRepoPathRecords(
+  dir: string,
+  map: PathPrefix[],
+  deps: RewriteDeps,
+  report: RewriteReport,
+): void {
+  if (!deps.existsFn(dir)) return;
+  let names: string[];
+  try {
+    names = deps.readdirFn(dir);
+  } catch (e) {
+    report.warnings.push(`record dir ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const file = join(dir, name);
+    let raw: string;
+    try {
+      raw = deps.readFileFn(file);
+    } catch (e) {
+      report.warnings.push(`record ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      report.warnings.push(`record ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    if (!hasStringRepoPath(parsed)) continue;
+
+    const to = rewritePath(parsed.repoPath, map);
+    if (to === null) continue;
+
+    try {
+      deps.writeFileFn(file, JSON.stringify({ ...parsed, repoPath: to }, null, 2) + "\n");
+    } catch (e) {
+      report.warnings.push(
+        `record ${file}: write failed — ${e instanceof Error ? e.message : String(e)}`,
+      );
+      continue;
+    }
+    report.rewritten += 1;
+    report.files.push(file);
+  }
+}
+
+/** Structural subset of `StoredOp` (githubOutbox.ts) needed to discriminate
+ * and rewrite — see the `OutboxOp` union there for the full shape. Only the
+ * `push`/`pr` variants carry `repoPath`; `labels`/`comment`/`issue-create`
+ * do not, and must be left completely untouched. */
+interface StoredOpShape {
+  op?: { kind?: string; repoPath?: unknown };
+}
+
+/** Outbox ops: same JSON-per-file, flat-dir walk as
+ * `rewriteJsonRepoPathRecords`, but `repoPath` is nested one level down
+ * (`op.repoPath`, not a top-level field) and carried only by the `push`/
+ * `pr` variants — every other variant is skipped untouched. The on-disk
+ * shape has NO trailing newline (`enqueueOp` and `flushOutbox`'s own
+ * rewrite both write `JSON.stringify(x, null, 2)` with no `+ "\n"`, unlike
+ * every other store this phase touches) — matched here so an untouched op
+ * stays byte-identical and a rewritten one matches every other outbox
+ * writer. `StoredOp.path` is DERIVED at read time from the directory
+ * listing and stripped before writing (`Omit<StoredOp, "path">`) — it is
+ * never present in the parsed JSON here, so there is nothing to strip or
+ * rewrite for it. Called once for the outbox dir and once for its `dead/`
+ * subdir (a dead-lettered op still carries a path) — each call is its own
+ * flat, non-recursive walk, so the outer call's `readdirFn` on the outbox
+ * dir simply sees `dead` as a directory entry that fails the `.json` suffix
+ * check and is skipped, same as any other non-op file. */
+function rewriteOutboxOpsInDir(
+  dir: string,
+  map: PathPrefix[],
+  deps: RewriteDeps,
+  report: RewriteReport,
+): void {
+  if (!deps.existsFn(dir)) return;
+  let names: string[];
+  try {
+    names = deps.readdirFn(dir);
+  } catch (e) {
+    report.warnings.push(`outbox dir ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const file = join(dir, name);
+    let raw: string;
+    try {
+      raw = deps.readFileFn(file);
+    } catch (e) {
+      report.warnings.push(`outbox op ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      report.warnings.push(`outbox op ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const stored = parsed as StoredOpShape;
+    const op = stored.op;
+    if (!op || (op.kind !== "push" && op.kind !== "pr") || typeof op.repoPath !== "string") {
+      continue;
+    }
+
+    const to = rewritePath(op.repoPath, map);
+    if (to === null) continue;
+
+    try {
+      deps.writeFileFn(file, JSON.stringify({ ...stored, op: { ...op, repoPath: to } }, null, 2));
+    } catch (e) {
+      report.warnings.push(
+        `outbox op ${file}: write failed — ${e instanceof Error ? e.message : String(e)}`,
+      );
+      continue;
+    }
+    report.rewritten += 1;
+    report.files.push(file);
+  }
 }
 
 /** Directly-contained `*.md` tickets only — queue dirs are flat. A missing
