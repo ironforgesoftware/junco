@@ -83,6 +83,11 @@ function makeDeps(
     // would throw reading `.enabled` off undefined. Default to a no-op
     // pass-through; tests that care about bot-auth wiring override it.
     withBotAuthFn: vi.fn(async (c: Config) => c),
+    // FTUE gate (#273): both liveness probes default to "nothing running" so
+    // no test ever reads the real ~/.junco/worker.lock or fetches the real
+    // 127.0.0.1:8787 — on the maintainer's own machine both answer.
+    readLockHolderFn: vi.fn(() => null),
+    fetchHealthFn: vi.fn(async () => null),
     ...overrides,
   };
 }
@@ -481,6 +486,168 @@ describe("run([]) — bare invocation ensures the daemon, then dashboard", () =>
     expect(await run(["dashboard"], deps)).toBe(0);
     expect(ensure).not.toHaveBeenCalled();
     expect(dash).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FTUE gate (#273) — the FRESH setup walkthrough refuses to run when this
+// machine already has a junco (a live daemon, or a populated data tree with no
+// config at the resolved path). The 2026-08-01 split-queue incident was the
+// walkthrough writing a competing config against a daemon with four days of
+// uptime. The RE-RUN path is deliberately never gated: it reads and writes
+// back the SAME file, so it cannot create a competing config, and it is the
+// only door an operator has for fixing a broken one (there is no
+// `junco setup`).
+// ---------------------------------------------------------------------------
+
+describe("run([]) — the fresh setup walkthrough refuses against a live junco (#273)", () => {
+  /** A machine with nothing on disk: no config, no data tree. */
+  const FRESH_ENV = { HOME: "/nonexistent/junco-ftue-home" };
+  const LOCK_PATH = "/nonexistent/junco-ftue-home/.junco/worker.lock";
+  const DATA_ROOT = "/nonexistent/junco-ftue-home/.junco";
+
+  /** Capture stderr around a run() (the :409 / auth-login precedent). */
+  async function runCapturingStderr(
+    argv: string[],
+    deps: CliDeps,
+  ): Promise<{ code: number; err: string }> {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      lines.push(String(s));
+      return true;
+    });
+    try {
+      const code = await run(argv, deps);
+      return { code, err: lines.join("") };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("(a) refuses with exit 1 and names the live daemon when /health answers", async () => {
+    const dash = vi.fn(async () => 0);
+    const ensure = vi.fn(async (): Promise<EnsureResult> => ({ state: "running", pid: 1 }));
+    const { code, err } = await runCapturingStderr(
+      [],
+      makeDeps({
+        env: FRESH_ENV,
+        existsFn: () => false, // no config, no data tree
+        isTTYFn: () => true,
+        runDashboardFn: dash,
+        ensureDaemonFn: ensure,
+        readLockHolderFn: () => null, // lock lives elsewhere (HOME moved)
+        fetchHealthFn: async () => ({ metrics: { pid: 4242, uptimeSeconds: 372_000 } }),
+      }),
+    );
+    expect(code).toBe(1); // 1, never 130 — 130 means the user cancelled
+    expect(dash).not.toHaveBeenCalled();
+    expect(ensure).not.toHaveBeenCalled();
+    expect(err).toContain("4242"); // names the daemon
+    expect(err).toContain("103h20m"); // ...and its uptime
+    expect(err).toContain("127.0.0.1:8787");
+    // Not a dead end: the resolved config path plus concrete next steps.
+    expect(err).toContain("/nonexistent/junco-ftue-home/.junco/config.json");
+    expect(err).toContain("junco doctor");
+    expect(err).toContain("junco status");
+  });
+
+  it("(a2) refuses on the worker.lock holder alone (a health-disabled daemon)", async () => {
+    const dash = vi.fn(async () => 0);
+    const health = vi.fn(async () => null);
+    const { code, err } = await runCapturingStderr(
+      [],
+      makeDeps({
+        env: FRESH_ENV,
+        existsFn: () => false,
+        isTTYFn: () => true,
+        runDashboardFn: dash,
+        readLockHolderFn: (p: string) => (p === LOCK_PATH ? 777 : null),
+        fetchHealthFn: health,
+      }),
+    );
+    expect(code).toBe(1);
+    expect(dash).not.toHaveBeenCalled();
+    expect(err).toContain("777");
+    expect(err).toContain(LOCK_PATH);
+    // The pidfile is the cheaper, config-free probe — it must short-circuit
+    // the 1500 ms health fetch, not run alongside it.
+    expect(health).not.toHaveBeenCalled();
+  });
+
+  it("(b) refuses and names the populated data root when no daemon is live", async () => {
+    const dash = vi.fn(async () => 0);
+    // The moved-HOME / typo'd-config shape: no config at the resolved path,
+    // but the data tree beside it is populated.
+    const existsFn = (p: string): boolean => p === join(DATA_ROOT, "queue");
+    const { code, err } = await runCapturingStderr(
+      [],
+      makeDeps({
+        env: FRESH_ENV,
+        existsFn,
+        isTTYFn: () => true,
+        runDashboardFn: dash,
+        readLockHolderFn: () => null,
+        fetchHealthFn: async () => null,
+      }),
+    );
+    expect(code).toBe(1);
+    expect(dash).not.toHaveBeenCalled();
+    expect(err).toContain(DATA_ROOT); // names the populated root
+    expect(err).toContain("/nonexistent/junco-ftue-home/.junco/config.json");
+    expect(err).toContain("junco doctor");
+    // A distinct message from the live-daemon refusal — not one generic wall.
+    expect(err).not.toMatch(/daemon is already running/i);
+  });
+
+  it("(c) a genuinely fresh machine still opens the walkthrough", async () => {
+    const dash = vi.fn(async () => 0);
+    const { code, err } = await runCapturingStderr(
+      [],
+      makeDeps({
+        env: FRESH_ENV,
+        existsFn: () => false,
+        isTTYFn: () => true,
+        runDashboardFn: dash,
+        readLockHolderFn: () => null,
+        fetchHealthFn: async () => null,
+      }),
+    );
+    expect(code).toBe(0);
+    expect(dash).toHaveBeenCalledWith(null, expect.any(String));
+    expect(err).not.toMatch(/refusing/i);
+  });
+
+  it("(d) the RE-RUN path is never gated — a live daemon does not block editing an existing config", async () => {
+    // THE critical negative test. Re-run mode rewrites the SAME file it read
+    // (wizard.ts), so it cannot split the queue; and it is the only tool an
+    // operator has for repairing a config. Gating it would lock them out.
+    const { cfg } = freshDispatchVault();
+    for (const argv of [[], ["dashboard"]]) {
+      const dash = vi.fn(async (_c: Config | null, _p: string) => 0);
+      const { code, err } = await runCapturingStderr(
+        argv,
+        makeDeps({
+          env: FRESH_ENV,
+          existsFn: () => true, // config on disk → re-run mode
+          isTTYFn: () => true,
+          loadConfigFn: () => cfg,
+          runDashboardFn: dash,
+          ensureDaemonFn: vi.fn(
+            async (): Promise<EnsureResult> => ({
+              state: "running",
+              pid: 4242,
+            }),
+          ),
+          // A very live daemon, on both probes.
+          readLockHolderFn: () => 4242,
+          fetchHealthFn: async () => ({ metrics: { pid: 4242, uptimeSeconds: 372_000 } }),
+        }),
+      );
+      expect(code).toBe(0);
+      expect(dash).toHaveBeenCalledTimes(1);
+      expect(dash.mock.calls[0][0]).not.toBeNull(); // the loaded config, not the FTUE null
+      expect(err).not.toMatch(/refusing/i);
+    }
   });
 });
 
@@ -1578,6 +1745,10 @@ describe("run(['dashboard']) — routing", () => {
     const code = await run(["dashboard"], {
       env: { HOME: "/x" },
       existsFn: () => false, // no config → dashboard hosts the wizard
+      // FTUE gate (#273): "nothing is running" — never touch the real lock
+      // file or the real health port from a unit test.
+      readLockHolderFn: () => null,
+      fetchHealthFn: async () => null,
       loadConfigFn: () => {
         throw new Error("config must not be loaded on the FTUE path");
       },
