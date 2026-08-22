@@ -101,6 +101,9 @@ export function buildInlineProviderConfig(cfg: Config): InlineProviderConfig {
           },
           contextWindow: m.contextWindow,
           maxTokens: m.maxTokens,
+          // The SDK reads thinkingLevelMap from the MODEL spec (not compat) —
+          // without it, effort names reach the chat template unmapped.
+          thinkingLevelMap: m.thinkingLevelMap,
           // compat is per-MODEL in the programmatic API (the on-disk models.json
           // splits it provider/model). maxTokensField is load-bearing — some
           // servers (oMLX) reject the auto-detected `max_completion_tokens`.

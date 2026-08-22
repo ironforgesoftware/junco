@@ -230,6 +230,21 @@ export const LEVERS: Lever[] = [
     description: "Worker default reasoning/thinking level.",
   },
   {
+    path: "model.thinkingLevelMap",
+    type: "structured",
+    default: {
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "xhigh",
+      xhigh: "xhigh",
+    },
+    editable: false,
+    reload: "live",
+    description:
+      "Thinking-level → chat-template effort-vocabulary translation; an override replaces the default map wholesale.",
+  },
+  {
     path: "model.compat",
     type: "structured",
     default: {},

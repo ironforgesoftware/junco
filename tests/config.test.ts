@@ -136,7 +136,35 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.model.maxTokens).toBe(49152);
     expect(cfg.model.thinkingLevel).toBe("medium");
     expect(cfg.model.compat.maxTokensField).toBe("max_tokens");
-    expect(cfg.model.compat.thinkingFormat).toBe("qwen-chat-template");
+    // "chat-template" + declared kwargs, NOT the SDK's fixed "qwen-chat-template"
+    // branch: that branch never forwards reasoning_effort, so on Qwen 3.8+
+    // templates every thinkingLevel silently ran at the template default (xhigh).
+    expect(cfg.model.compat.thinkingFormat).toBe("chat-template");
+    expect(cfg.model.compat.chatTemplateKwargs).toEqual({
+      enable_thinking: { $var: "thinking.enabled" },
+      preserve_thinking: true,
+      reasoning_effort: { omitWhenOff: true },
+    });
+    // Collapse of junco's six levels onto the template's three-value effort
+    // vocabulary (low/medium/xhigh); "off" needs no entry — enable_thinking
+    // carries it and omitWhenOff drops the effort kwarg.
+    expect(cfg.model.thinkingLevelMap).toEqual({
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "xhigh",
+      xhigh: "xhigh",
+    });
+  });
+
+  it("[model] thinkingLevelMap override replaces the default map wholesale", () => {
+    const cfg = loadConfig(
+      writeJson({
+        vaultRoot: "/tmp/vault",
+        model: { thinkingLevelMap: { medium: "deep" } },
+      }),
+    );
+    expect(cfg.model.thinkingLevelMap).toEqual({ medium: "deep" });
   });
 
   it("[model] fields override the defaults; compat keys pass through verbatim", () => {
