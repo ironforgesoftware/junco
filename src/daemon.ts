@@ -32,6 +32,7 @@ import { ensureSkillLinks, type SkillLinksReport } from "./skillLinks.js";
 import { metrics } from "./metrics.js";
 import { ProviderGate, type GateStateKind } from "./providerGate.js";
 import { makeSpendLedger, type SpendLedger } from "./spendLedger.js";
+import { makeMetricsWriter, type MetricsWriter } from "./metricsWriter.js";
 import {
   startHealthServer,
   type HealthServerHandle,
@@ -305,6 +306,18 @@ export interface MainLoopDeps {
    * `nextMidnightMs` (Phase-3 Task 5) are consulted by gatedReady itself,
    * ahead of the claim gate check — see gatedReady below. */
   spend?: Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">;
+  /** Out-of-process metrics.json writer (Task 3), constructed next to `spend`:
+   * absent → mainLoop builds its own via
+   * `makeMetricsWriter(dataTreePaths(cfg).metricsFile)`. `cfg` here is always
+   * the FROZEN startup config (dataDir is restart-kind — see
+   * overlayFrozenRestartFields), exactly like the gate, the spend ledger, and
+   * the health server bind. `flush`ed once right after metrics.markStarted()
+   * so the file exists with the new pid immediately, `write`n (debounced) on
+   * every poll tick — both the serial loop's and the scheduler's own (peer of
+   * `spend` in SchedulerDeps below) — and `flush`ed again in the shutdown
+   * finally so the last snapshot is durable even when the loop throws. A
+   * write failure never surfaces here — metricsWriter.ts swallows it. */
+  metricsWriter?: Pick<MetricsWriter, "write" | "flush">;
 }
 
 /**
@@ -355,6 +368,12 @@ export interface SchedulerDeps {
    * executeClaimed call (peer of `gate`) — absent preserves pre-ledger
    * scheduler behavior exactly. mainLoop passes its own ledger through here. */
   spend?: Pick<SpendLedger, "recordUsd">;
+  /** Out-of-process metrics.json writer (Task 3), threaded from mainLoop's own
+   * instance (peer of `gate`/`spend`) — written (debounced) once per poll
+   * tick, right next to the metrics singleton's own recordPoll(). Absent (a
+   * direct runScheduler test, or a caller that doesn't care) simply skips the
+   * per-poll write — no default is built here. */
+  metricsWriter?: Pick<MetricsWriter, "write">;
 }
 
 /**
@@ -399,6 +418,7 @@ export async function runScheduler(
   try {
     while (!stopFlag.requested && !breakAfterDrain) {
       metrics.recordPoll();
+      deps.metricsWriter?.write(metrics.snapshot());
       if (deps.maybeBridgeSweepFn) await deps.maybeBridgeSweepFn();
       let claimedThisPoll = 0;
       // maxConcurrent is restart-kind (Task 6/Fix C): read the FROZEN `cfg`
@@ -562,6 +582,10 @@ export async function mainLoop(
   // activeCfg() — dataDir is restart-kind (same freeze as the gate above and
   // the health server's host/port bind; see overlayFrozenRestartFields).
   const spend = deps.spend ?? makeSpendLedger(dataTreePaths(cfg).spendFile);
+  // Out-of-process metrics.json writer (Task 3): same frozen-cfg bind as spend
+  // just above — dataDir is restart-kind, so a live reload must never move
+  // the file mid-run (see overlayFrozenRestartFields).
+  const metricsWriter = deps.metricsWriter ?? makeMetricsWriter(dataTreePaths(cfg).metricsFile);
   // Single TTL-cached probe shared by the claim gate and the health server so
   // neither multiplies upstream endpoint-probe traffic. Wraps the *call* —
   // activeCfg() is read fresh on every uncached probe — so a hot-reloaded
@@ -689,6 +713,10 @@ export async function mainLoop(
   // Stamp the start time once the queue dirs exist; the health server reports
   // uptime off this. Idempotent — first call wins.
   metrics.markStarted();
+  // Unconditional (Task 3): the file exists with the new pid immediately,
+  // rather than waiting up to METRICS_WRITE_INTERVAL_MS for the first
+  // debounced poll-tick write.
+  metricsWriter.flush(metrics.snapshot());
   recoverOrphansFn(cfg);
   pruneFn(cfg.worktreeRoot);
   await waitForEndpointFn(cfg, stopFlag);
@@ -742,11 +770,13 @@ export async function mainLoop(
         reporter,
         gate,
         spend,
+        metricsWriter,
       });
     } else {
       let idleAnnounced = false;
       while (!stopFlag.requested) {
         metrics.recordPoll();
+        metricsWriter.write(metrics.snapshot());
         await maybeBridgeSweep();
         await maybeOutboxDrain();
         await maybeDepSweep();
@@ -775,6 +805,11 @@ export async function mainLoop(
     // the loop exits), but a mid-loop throw must not leak the bound port to an
     // embedded/test caller — we don't rely on process exit to free it.
     if (health) await health.close();
+    // Unconditional (Task 3): the finally runs even on a mid-loop throw, which
+    // is exactly when an out-of-process reader most wants the last known
+    // state — a debounced write() could otherwise sit inside the window and
+    // never land.
+    metricsWriter.flush(metrics.snapshot());
   }
 
   log.info("worker exiting cleanly");

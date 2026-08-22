@@ -116,6 +116,7 @@ import {
   juncoHome,
   legacyConfigPath,
   defaultUserConfigPath,
+  configPathOverride,
 } from "./config.js";
 import {
   migrateStateTree,
@@ -439,11 +440,15 @@ function rewriteConfig(
  * runDataMigrate). `configMoveReceipt` (I-2) is separate from `configReceipt`
  * — the former is the config FILE's relocation (legacy XDG -> canonical
  * ~/.junco/config.json), the latter is the content rewrite at whatever path
- * it currently lives. `rewriteReport` (task-2, #283) is printed right after
- * gh config — it always holds the ZERO value ({rewritten:0, ...}) on a run
- * that never reached that phase (an earlier throw), so "nothing rewritten"
- * is honest rather than a lie by omission, same discipline every other
- * section here follows. */
+ * it currently lives. `explicitlyNamedLegacyConfigPath` (non-null only when
+ * JUNCO_CONFIG names exactly the legacy path — see runDataMigrate) makes the
+ * empty-configMoveReceipt case say WHY nothing moved instead of the bare
+ * "nothing to relocate", which would otherwise read as though the legacy path
+ * it's still sitting at were canonical. `rewriteReport` (task-2, #283) is
+ * printed right after gh config — it always holds the ZERO value
+ * ({rewritten:0, ...}) on a run that never reached that phase (an earlier
+ * throw), so "nothing rewritten" is honest rather than a lie by omission,
+ * same discipline every other section here follows. */
 function printReceipt(
   print: (s: string) => void,
   queueReceipt: string[],
@@ -454,6 +459,7 @@ function printReceipt(
   rewriteReport: RewriteReport,
   configReceipt: string[] | null,
   configMoveReceipt: string[],
+  explicitlyNamedLegacyConfigPath: string | null,
   stateTreeJournalFile: string,
 ): void {
   print("junco data migrate: receipt\n");
@@ -516,7 +522,10 @@ function printReceipt(
   print(
     configMoveReceipt.length > 0
       ? `\nconfig:\n${configMoveReceipt.map((l) => `  ${l}`).join("\n")}\n`
-      : "\nconfig: nothing to relocate\n",
+      : explicitlyNamedLegacyConfigPath !== null
+        ? `\nconfig: nothing to relocate — JUNCO_CONFIG explicitly names ` +
+          `${explicitlyNamedLegacyConfigPath}, which is never relocated\n`
+        : "\nconfig: nothing to relocate\n",
   );
 }
 
@@ -561,8 +570,28 @@ export async function runDataMigrate(
   const legacyRoot = fixedLegacyRoot(targetRoot, env);
   // I-2: whether THIS run's config lives at the legacy XDG path — decoupled
   // from targetRoot/legacyRoot (data-root state), see the module doc comment.
+  //
+  // An EXPLICITLY-NAMED config (JUNCO_CONFIG, #275) is never relocated: an
+  // operator who named a config does not want it silently moved, and moving
+  // it would break every subsequent command in that same environment (ENOENT
+  // on the named path; bare `junco` would open the setup wizard instead). The
+  // override check is the guard, and it is NOT redundant with the equality
+  // below: JUNCO_CONFIG accepts any value, including exactly the legacy path,
+  // so `JUNCO_CONFIG=~/.config/junco/config.json junco data migrate` on a
+  // pre-0.10 install would otherwise make `configPathIsLegacy` true and fire
+  // the relocation phase. Do not drop it, and do not "fix" the equality into
+  // something that relocates a deliberately-placed config.
+  const configIsExplicitlyNamed = configPathOverride(env) !== undefined;
   const canonicalConfigPath = defaultUserConfigPath(env);
-  const configPathIsLegacy = configPath === legacyConfigPath(env);
+  const configPathIsLegacy = !configIsExplicitlyNamed && configPath === legacyConfigPath(env);
+  // The confusing case the guard above creates: JUNCO_CONFIG names a path
+  // that happens to equal the legacy one, so configPathIsLegacy is (correctly)
+  // false — but "no relocation needed (already at <legacy path>)" would then
+  // read as though the legacy path were canonical, with no hint that
+  // JUNCO_CONFIG is why. Both receipt sites (dry-run below, and printReceipt's
+  // acting-phase summary) branch on this to say so explicitly.
+  const configIsExplicitlyNamedLegacy =
+    configIsExplicitlyNamed && configPath === legacyConfigPath(env);
 
   // 1a. Daemon-up refusal — both signals skipped entirely by --force.
   if (!opts.force) {
@@ -667,6 +696,10 @@ export async function runDataMigrate(
           ? `\nconfig: ${configPath} -> ${canonicalConfigPath} ` +
               `(canonical path already exists — would be a skipped-conflict, never overwritten)\n`
           : `\nconfig: ${configPath} -> ${canonicalConfigPath}\n`,
+      );
+    } else if (configIsExplicitlyNamedLegacy) {
+      print(
+        `\nconfig: no relocation — JUNCO_CONFIG explicitly names ${configPath}, which is never relocated\n`,
       );
     } else {
       print(`\nconfig: no relocation needed (already at ${configPath})\n`);
@@ -1093,6 +1126,7 @@ export async function runDataMigrate(
       rewriteReport,
       configReceipt,
       configMoveReceipt,
+      configIsExplicitlyNamedLegacy ? configPath : null,
       stateTreeJournalFile,
     );
 
@@ -1114,6 +1148,7 @@ export async function runDataMigrate(
       rewriteReport,
       configReceipt,
       configMoveReceipt,
+      configIsExplicitlyNamedLegacy ? configPath : null,
       stateTreeJournalFile,
     );
     print(`\njunco data migrate: ${e instanceof Error ? e.message : String(e)}\n`);
