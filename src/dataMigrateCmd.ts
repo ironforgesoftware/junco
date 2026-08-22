@@ -377,6 +377,88 @@ function fsyncCopiedPath(to: string, fs: MoveFsDeps): void {
   fs.syncPathFn(dirname(to));
 }
 
+/**
+ * Item 2 (#281) — raised when the EXDEV fallback dies anywhere between the
+ * first copied byte and the last fsync. The distinction it carries is the
+ * whole point: in THIS window the source has provably not been touched (the
+ * only statement that removes it runs after, and only after, a verified and
+ * fsynced copy), while the destination may hold anything from nothing to a
+ * complete-but-unflushed tree. Both facts are what the caller needs to say
+ * something true, so they travel with the error rather than being re-derived.
+ *
+ * Deliberately NOT raised for a failure of the source delete that follows:
+ * there the destination is a COMPLETE, verified copy and the source is the
+ * half-removed side, so the operator's correct response is the exact opposite
+ * (keep the destination, clear the source remnant). Calling both "a partial
+ * copy" would send them to delete the wrong side of a move.
+ */
+class PartialCopyError extends Error {
+  constructor(
+    readonly from: string,
+    readonly to: string,
+    readonly reason: unknown,
+  ) {
+    super(
+      `cross-device copy ${from} -> ${to} failed partway — a partial copy may ` +
+        `remain at ${to}; ${from} was left untouched: ${describeError(reason)}`,
+    );
+    this.name = "PartialCopyError";
+  }
+}
+
+function describeError(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** The receipt line for a pair whose cross-device copy was interrupted —
+ * pushed BEFORE the error propagates (the same receipt-then-journal order the
+ * data-root loop and phase 9 use), because the catch-path receipt is the
+ * operator's record of a run that never reached its end. `hint` is the
+ * caller's site-specific next step: the two sides of an interrupted copy are
+ * not interchangeable, so what to remove has to be named. */
+function partialCopyReceiptLine(e: PartialCopyError, hint: string): string {
+  return (
+    `${e.from} -> ${e.to}: cross-device copy INTERRUPTED — a partial copy may ` +
+    `remain at ${e.to}; the source at ${e.from} was NOT touched. ${hint} ` +
+    `(${describeError(e.reason)})`
+  );
+}
+
+/** Does the durable journal say THIS destination is an earlier run's partial
+ * copy rather than genuine pre-existing data (item 2, #281)? The two produce
+ * the same `skipped-conflict` from `moveDataRootPair` — it only sees a
+ * non-empty destination — but demand opposite responses from the operator, so
+ * the difference has to come from the record of what actually happened.
+ *
+ * A later "renamed" for the same pair SUPERSEDES the partial-copy record: once
+ * the pair has genuinely moved (operator cleared the wreckage, re-ran, it
+ * landed), any FUTURE conflict at that destination is a new, ordinary one and
+ * must not inherit the old story. Repeated `skipped-conflict` steps — which
+ * run 2 itself journals — are ignored on purpose, so the hint survives every
+ * re-run until the move actually completes. */
+function destinationHoldsPartialCopy(steps: MigrationStep[], from: string, to: string): boolean {
+  let partial = false;
+  for (const s of steps) {
+    if (s.from !== from || s.to !== to) continue;
+    if (s.action === "partial-copy") partial = true;
+    else if (s.action === "renamed") partial = false;
+  }
+  return partial;
+}
+
+/** The conflict line for a destination that exists and is not empty. Says
+ * WHICH kind of obstruction it is when the journal knows (item 2, #281): a
+ * partial copy means the source is the authoritative side and the destination
+ * is junco's own wreckage; the ordinary case means real data sits at both ends
+ * and only the operator can decide. */
+function conflictLine(from: string, to: string, partial: boolean, journalFile: string): string {
+  return partial
+    ? `${from} -> ${to}: destination holds a partial copy from an interrupted ` +
+        `cross-device move (recorded in ${journalFile}) — the source at ${from} ` +
+        `is intact; remove the partial destination, then re-run`
+    : `${from} -> ${to}: destination already exists and is not empty`;
+}
+
 /** Move one flat→v2 (or gh-creds) pair, reusing the queue move's EXDEV
  * copy+verify+fsync fallback and `migrateStateTree`'s `isRecursivelyEmptyDir`
  * conflict semantics: a destination that doesn't exist is taken outright; one
@@ -414,9 +496,20 @@ function moveDataRootPair(
     return "moved";
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === "EXDEV") {
-      fs.copyDirFn(from, to);
-      verifyCopyPath(from, to, fs);
-      fsyncCopiedPath(to, fs); // #196: durable before deleting source
+      // The partial-copy window (item 2, #281). A throw anywhere in these
+      // three statements leaves whatever landed at `to` sitting there, and the
+      // caller's generic error handling could only report the raw fs error —
+      // so the pair never reached the receipt OR the journal, and every LATER
+      // run saw nothing but a populated destination it had no way to explain.
+      // Wrapping tells the caller what state it is in; the source delete
+      // BELOW is deliberately outside the window (see PartialCopyError).
+      try {
+        fs.copyDirFn(from, to);
+        verifyCopyPath(from, to, fs);
+        fsyncCopiedPath(to, fs); // #196: durable before deleting source
+      } catch (copyErr) {
+        throw new PartialCopyError(from, to, copyErr);
+      }
       fs.rmFn(from, { recursive: true, force: true });
       return "copied";
     }
@@ -847,6 +940,12 @@ export async function runDataMigrate(
   // of targetRoot — phase 4 runs before the data-root move could ever
   // relocate it, so "interrupted" must point here, not at the target.
   const stateTreeJournalFile = join(cfg.dataDir, "migrated.json");
+  // Item 2 (#281): what EARLIER runs recorded at the target root, read ONCE
+  // here — before this run appends anything of its own — so a conflict below
+  // can be told apart from an earlier interrupted cross-device copy's leftover
+  // destination. `readJournal` never throws (missing/corrupt → no steps), so a
+  // machine with no journal simply gets today's generic message.
+  const priorJournalSteps = readJournal(migratedFile, readFileFn).steps;
   let configReceipt: string[] | null = null;
   // I-2: the config-relocation phase's own receipt/conflict tracking —
   // separate from configReceipt (the content-rewrite phase above it).
@@ -951,12 +1050,32 @@ export async function runDataMigrate(
           dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
           continue;
         }
-        const action = moveDataRootPair(pair.from, pair.to, fs);
+        let action: "moved" | "copied" | "skipped-conflict";
+        try {
+          action = moveDataRootPair(pair.from, pair.to, fs);
+        } catch (e) {
+          if (e instanceof PartialCopyError) {
+            // Item 2 (#281): receipt first, then the record — the `finally`
+            // below writes `dataRootJournalSteps` even on this throw, so the
+            // partial destination is both named to THIS operator and left
+            // self-describing for the next run. Without it, the pair appeared
+            // in neither: run 1 said "data root: nothing to move" over a
+            // half-copied tree, and run 2 could only call it a generic
+            // conflict.
+            dataRootReceipt.push(
+              partialCopyReceiptLine(e, "Remove the partial destination, then re-run."),
+            );
+            dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "partial-copy" });
+          }
+          throw e;
+        }
         if (action === "skipped-conflict") {
-          dataRootConflicts.push(
-            `${pair.from} -> ${pair.to}: destination already exists and is not empty`,
+          const partial = destinationHoldsPartialCopy(priorJournalSteps, pair.from, pair.to);
+          dataRootConflicts.push(conflictLine(pair.from, pair.to, partial, migratedFile));
+          dataRootReceipt.push(
+            `${pair.from} -> ${pair.to}: skipped-conflict` +
+              (partial ? " (partial copy from an interrupted run)" : ""),
           );
-          dataRootReceipt.push(`${pair.from} -> ${pair.to}: skipped-conflict`);
           dataRootJournalSteps.push({ from: pair.from, to: pair.to, action: "skipped-conflict" });
         } else {
           dataRootReceipt.push(
@@ -967,11 +1086,33 @@ export async function runDataMigrate(
       }
 
       if (gh !== null && existsFn(gh.from)) {
-        const action = moveDataRootPair(gh.from, gh.to, fs);
+        // The gh pair runs the SAME mover, so it has the same partial-copy
+        // window (item 2, #281) — its own legacy path and target can sit on
+        // different filesystems just as easily. Handled identically, onto its
+        // own receipt/conflict arrays (item 1).
+        let action: "moved" | "copied" | "skipped-conflict";
+        try {
+          action = moveDataRootPair(gh.from, gh.to, fs);
+        } catch (e) {
+          if (e instanceof PartialCopyError) {
+            ghReceipt.push(
+              partialCopyReceiptLine(e, "Remove the partial destination, then re-run."),
+            );
+            dataRootJournalSteps.push({ from: gh.from, to: gh.to, action: "partial-copy" });
+          }
+          throw e;
+        }
         if (action === "skipped-conflict") {
           // Item 1 (#281): its own array/heading, not `dataRootConflicts` —
           // see the declaration above.
-          ghConflicts.push(`${gh.from} -> ${gh.to}: destination already exists and is not empty`);
+          ghConflicts.push(
+            conflictLine(
+              gh.from,
+              gh.to,
+              destinationHoldsPartialCopy(priorJournalSteps, gh.from, gh.to),
+              migratedFile,
+            ),
+          );
           ghReceipt.push(`${gh.from} -> ${gh.to}: skipped-conflict`);
           dataRootJournalSteps.push({ from: gh.from, to: gh.to, action: "skipped-conflict" });
         } else {
@@ -1182,7 +1323,55 @@ export async function runDataMigrate(
     // already relocated, resolveConfigPath now finds it) sees nothing left
     // to do here.
     if (configPathIsLegacy) {
-      const action = moveDataRootPair(configPath, canonicalConfigPath, fs);
+      let action: "moved" | "copied" | "skipped-conflict";
+      try {
+        action = moveDataRootPair(configPath, canonicalConfigPath, fs);
+      } catch (e) {
+        if (e instanceof PartialCopyError) {
+          // Item 2 (#281) at the SECOND call site. Same defect as the
+          // data-root loop's — a throw here left `configMoveReceipt` empty, so
+          // the receipt printed "config: nothing to relocate" over a partial
+          // config file at the canonical path — and the same fix, receipt then
+          // record. What differs is the RE-RUN: `resolveConfigPath` (config.ts)
+          // prefers the canonical path the moment it EXISTS, so once a partial
+          // copy has landed there, the next run resolves to that partial file
+          // and `configPathIsLegacy` is false — this phase is never re-entered
+          // and there is no later conflict message to improve (a genuine
+          // pre-existing canonical config still reaches the branch below,
+          // unchanged). That makes this receipt line and the journal entry the
+          // operator's entire record, and makes clearing the partial file
+          // urgent rather than optional — so the hint says so.
+          configMoveReceipt.push(
+            partialCopyReceiptLine(
+              e,
+              `Your config is still whole at ${configPath} — remove the partial ` +
+                `${canonicalConfigPath} before running junco again, since config ` +
+                `resolution prefers the canonical path the moment it exists.`,
+            ),
+          );
+          try {
+            appendJournal(
+              migratedFile,
+              [{ from: configPath, to: canonicalConfigPath, action: "partial-copy" }],
+              readFileFn,
+              writeFileFn,
+              renameFn,
+            );
+          } catch (journalErr) {
+            // #197.1, in the direction the successful-relocation guard below
+            // does NOT take: there the journal failure is the only thing that
+            // went wrong, so it propagates. Here a real copy failure is
+            // already in flight and is the more important error, so the
+            // journal failure is reported on its own line and the ORIGINAL is
+            // re-thrown — never masked by a bookkeeping error.
+            print(
+              `\njunco data migrate: journal write failed after an interrupted ` +
+                `config relocation: ${describeError(journalErr)}\n`,
+            );
+          }
+        }
+        throw e;
+      }
       // Receipt BEFORE the journal (item 9, #281), the same order the
       // data-root loop above uses and the order printReceipt's own doc comment
       // promises ("built incrementally by the caller (pushed as each pair

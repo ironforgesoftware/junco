@@ -42,7 +42,18 @@ export interface MigrationStep {
   // both generic over this field (appendJournal only special-cases
   // "skipped-conflict" for its dedup rule; every other action, "rewrote"
   // included, always appends) — neither needed a change for this addition.
-  action: "renamed" | "skipped-conflict" | "noop" | "rewrote";
+  //
+  // "partial-copy" (item 2, #281): dataMigrateCmd.ts's EXDEV fallback died
+  // between the first copied byte and the fsync, so `to` may hold an
+  // INCOMPLETE copy and `from` was never touched. Written only when that
+  // failure is actually observed, and superseded by a later "renamed" step
+  // for the same pair — the two together are what let a LATER run tell an
+  // interrupted run's own wreckage from genuine pre-existing data at the
+  // destination (they need opposite operator responses). Never a rewrite
+  // source: buildPrefixMap filters on `action === "renamed"`, so a pair that
+  // only ever half-moved can't drag path rewrites onto a destination that
+  // does not hold the data.
+  action: "renamed" | "skipped-conflict" | "noop" | "rewrote" | "partial-copy";
 }
 
 export interface MigrateResult {

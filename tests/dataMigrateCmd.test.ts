@@ -2432,6 +2432,297 @@ describe("runDataMigrate — moveDataRootPair destructive-fs seam", () => {
   });
 });
 
+/**
+ * #281 item 2: the EXDEV fallback copies, verifies, fsyncs and only THEN
+ * deletes the source — so a copy that dies partway leaves a partial
+ * destination behind with the source still whole. Run 1 always printed the
+ * raw error, but the pair never reached the receipt or the journal, so run 2
+ * and every run after saw only the generic "destination already exists and is
+ * not empty": indistinguishable from real pre-existing data at the target, and
+ * permanently stuck. These tests are about the LATER run — what an operator is
+ * told when they come back and retry.
+ */
+describe("runDataMigrate — an interrupted cross-device copy (item 2, #281)", () => {
+  it("names the partial destination on run 1 and again on run 2, without relabelling a genuine conflict", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    // Pair A — the one whose cross-device copy dies partway.
+    const srcOutbox = join(dataDir, "outbox");
+    const dstOutbox = join(dataDir, "data", "outbox");
+    mkdirSync(srcOutbox, { recursive: true });
+    writeFileSync(join(srcOutbox, "a.json"), "aaa", "utf8");
+    writeFileSync(join(srcOutbox, "b.json"), "bbb", "utf8");
+    // Pair B — a destination that genuinely holds pre-existing data, planned
+    // AFTER pair A (flatToV2Pairs order), so run 1 never reaches it and run 2
+    // reports both in one receipt. It must keep the ordinary conflict message:
+    // the fix must not make every populated destination read as junco's own
+    // wreckage, because the two need opposite operator responses.
+    const srcHistory = join(dataDir, "history");
+    const dstHistory = join(dataDir, "data", "history");
+    mkdirSync(srcHistory, { recursive: true });
+    writeFileSync(join(srcHistory, "h.json"), "h", "utf8");
+    mkdirSync(dstHistory, { recursive: true });
+    writeFileSync(join(dstHistory, "real.json"), "real", "utf8");
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    // Run 1: outbox's rename crosses a device boundary, and the copy fails
+    // after the first of its two files has landed — exactly the half-copied
+    // state the issue describes.
+    const out1: string[] = [];
+    const code1 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: (s) => out1.push(s),
+        renameFn: (from, to) => {
+          if (from === srcOutbox) {
+            const e = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+            e.code = "EXDEV";
+            throw e;
+          }
+          renameSync(from, to);
+        },
+        copyDirFn: (from, to) => {
+          mkdirSync(to, { recursive: true });
+          writeFileSync(join(to, "a.json"), readFileSync(join(from, "a.json"), "utf8"), "utf8");
+          throw new Error("SIMULATED EIO mid-copy");
+        },
+      },
+    );
+    const printed1 = out1.join("");
+
+    expect(code1).toBe(1);
+    // The source is untouched: the fallback deletes it only after a verified,
+    // fsynced copy, and it never got that far.
+    expect(existsSync(join(srcOutbox, "a.json"))).toBe(true);
+    expect(existsSync(join(srcOutbox, "b.json"))).toBe(true);
+    // ...and half a copy really is sitting at the destination.
+    expect(existsSync(join(dstOutbox, "a.json"))).toBe(true);
+    expect(existsSync(join(dstOutbox, "b.json"))).toBe(false);
+    // Run 1's receipt names the pair, the partial destination and the intact
+    // source. Before the fix the pair was absent from the receipt entirely —
+    // only the raw error at the bottom hinted that anything had happened.
+    expect(printed1).toContain(`${srcOutbox} -> ${dstOutbox}: cross-device copy INTERRUPTED`);
+    expect(printed1).toContain(`the source at ${srcOutbox} was NOT touched`);
+    expect(printed1).toContain("SIMULATED EIO mid-copy");
+    // ...and it is recorded durably, which is what lets run 2 speak at all.
+    const journal = JSON.parse(readFileSync(join(dataDir, "migrated.json"), "utf8")) as {
+      steps: Array<{ from: string; to: string; action: string }>;
+    };
+    expect(journal.steps).toContainEqual({
+      from: srcOutbox,
+      to: dstOutbox,
+      action: "partial-copy",
+    });
+
+    // Run 2 — no faults at all: a plain re-run, the way an operator retries.
+    const out2: string[] = [];
+    const code2 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: (s) => out2.push(s) },
+    );
+    const printed2 = out2.join("");
+
+    // Still a conflict — the exit-code contract is unchanged.
+    expect(code2).toBe(1);
+    // THE POINT OF THE TASK: run 2 says WHICH kind of obstruction this is and
+    // which side is authoritative.
+    expect(printed2).toContain(
+      `${srcOutbox} -> ${dstOutbox}: destination holds a partial copy from an interrupted cross-device move`,
+    );
+    expect(printed2).toContain(`the source at ${srcOutbox} is intact`);
+    // The genuine conflict in the SAME run is untouched by that.
+    expect(printed2).toContain(
+      `${srcHistory} -> ${dstHistory}: destination already exists and is not empty`,
+    );
+    expect(printed2).not.toContain(
+      `${srcHistory} -> ${dstHistory}: destination holds a partial copy`,
+    );
+    // Nothing moved on either side of either pair.
+    expect(existsSync(join(srcOutbox, "b.json"))).toBe(true);
+    expect(existsSync(join(srcHistory, "h.json"))).toBe(true);
+    expect(existsSync(join(dstHistory, "real.json"))).toBe(true);
+  });
+
+  it("stops claiming a partial copy once the pair has actually moved", async () => {
+    // The record is durable, so it has to expire on its own or it becomes a
+    // lie: after the operator clears the wreckage and the move lands, a LATER
+    // conflict at that same destination is an ordinary one and must read as
+    // such. A "renamed" step supersedes the "partial-copy" one.
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "mydata");
+    const src = join(dataDir, "outbox");
+    const dst = join(dataDir, "data", "outbox");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "a.json"), "aaa", "utf8");
+    writeFileSync(join(src, "b.json"), "bbb", "utf8");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const exdev = (from: string, to: string): void => {
+      if (from === src) {
+        const e = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+        e.code = "EXDEV";
+        throw e;
+      }
+      renameSync(from, to);
+    };
+
+    // Run 1 — the interrupted copy, journaled as "partial-copy".
+    const code1 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      {
+        printFn: () => {},
+        renameFn: exdev,
+        copyDirFn: (from, to) => {
+          mkdirSync(to, { recursive: true });
+          writeFileSync(join(to, "a.json"), readFileSync(join(from, "a.json"), "utf8"), "utf8");
+          throw new Error("SIMULATED EIO mid-copy");
+        },
+      },
+    );
+    expect(code1).toBe(1);
+
+    // Run 2 — the operator does what the receipt told them: clear the partial
+    // destination and re-run. This time the copy completes.
+    rmSync(dst, { recursive: true, force: true });
+    const code2 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: () => {}, renameFn: exdev },
+    );
+    expect(code2).toBe(0);
+    expect(existsSync(join(dst, "b.json"))).toBe(true);
+    expect(existsSync(src)).toBe(false);
+
+    // Run 3 — a genuinely NEW obstruction at the same destination (the
+    // journal's own comment names the case: an operator restores a backup at
+    // the old path). The stale partial-copy record must not colour it.
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "restored.json"), "restored", "utf8");
+    const out3: string[] = [];
+    const code3 = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: true },
+      { printFn: (s) => out3.push(s) },
+    );
+    const printed3 = out3.join("");
+
+    expect(code3).toBe(1);
+    expect(printed3).toContain(`${src} -> ${dst}: destination already exists and is not empty`);
+    expect(printed3).not.toContain("partial copy");
+  });
+});
+
+/**
+ * The same defect at the SECOND `moveDataRootPair` call site — phase 9's
+ * config relocation (carried finding from item 9's task): a throw inside the
+ * EXDEV fallback there left `configMoveReceipt` empty, so the receipt printed
+ * "config: nothing to relocate" over a partial config file sitting at the
+ * canonical path.
+ */
+describe("runDataMigrate — an interrupted cross-device config relocation (item 2, #281)", () => {
+  let originalHome: string | undefined;
+  let originalXdgConfigHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    tmpHome = freshRoot("junco-dmc-cfgpartial-");
+    process.env.HOME = tmpHome;
+    delete process.env.XDG_CONFIG_HOME; // hermetic: pin legacyConfigPath to $HOME/.config
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it("receipts and journals the partial canonical config instead of printing 'nothing to relocate'", async () => {
+    const legacyConfigDir = join(tmpHome, ".config", "junco");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    const configPath = join(legacyConfigDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    const canonical = join(tmpHome, ".junco", "config.json");
+    const journalFile = join(tmpHome, ".junco", "migrated.json");
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        // Scoped to `from === configPath` so rewriteConfig's own tmp+rename and
+        // appendJournal's are untouched (same shape as the item-9 test).
+        renameFn: (from, to) => {
+          if (from === configPath) {
+            const e = new Error("SIMULATED EXDEV") as NodeJS.ErrnoException;
+            e.code = "EXDEV";
+            throw e;
+          }
+          renameSync(from, to);
+        },
+        // A TRUNCATED copy — the realistic shape of a cross-device copy dying
+        // on a full or failing target. verifyCopyPath's size check catches it.
+        copyDirFn: (_from, to) => {
+          writeFileSync(to, "{", "utf8");
+        },
+      },
+    );
+    const printed = out.join("");
+
+    expect(code).toBe(1);
+    // The operator's real config is still whole at the legacy path...
+    expect(existsSync(configPath)).toBe(true);
+    expect(loadConfig(configPath).model.id).toBe("test-model");
+    // ...and a partial one really is sitting at the canonical path.
+    expect(readFileSync(canonical, "utf8")).toBe("{");
+
+    // The receipt must not claim there was nothing to do here.
+    expect(printed).not.toContain("config: nothing to relocate");
+    expect(printed).toContain(`${configPath} -> ${canonical}: cross-device copy INTERRUPTED`);
+    // It names the intact side and tells the operator to clear the partial one
+    // BEFORE running junco again — config resolution prefers the canonical
+    // path the moment it exists, which is what makes this urgent.
+    expect(printed).toContain(`Your config is still whole at ${configPath}`);
+    expect(printed).toContain("size mismatch"); // the underlying cause survives
+
+    // Durably recorded at the target root, like every other pair.
+    const journal = JSON.parse(readFileSync(journalFile, "utf8")) as {
+      steps: Array<{ from: string; to: string; action: string }>;
+    };
+    expect(journal.steps).toContainEqual({
+      from: configPath,
+      to: canonical,
+      action: "partial-copy",
+    });
+
+    // Why this phase has no "run 2" of its own: the partial file now IS what
+    // resolveConfigPath returns, so a re-run never re-enters phase 9. The
+    // receipt line and the journal entry above are the operator's whole record.
+    const { resolveConfigPath } = await import("../src/config.js");
+    expect(resolveConfigPath({ env: { HOME: tmpHome } })).toBe(canonical);
+  });
+});
+
 describe("runDataMigrate — unreadable config.json", () => {
   it("reports a friendly error and exits 1 rather than crashing", async () => {
     const root = trackRoot(freshRoot());
