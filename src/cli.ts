@@ -38,6 +38,9 @@ import {
   assembleConfig,
   configDeprecations,
   expandHome,
+  ConfigSchema,
+  resolveDataRoot,
+  dataRootHasTree,
 } from "./config.js";
 import type { ConfigParsed } from "./config.js";
 import { parseTicket } from "./ticket.js";
@@ -76,7 +79,7 @@ import {
 } from "./planSets.js";
 import { slugifyId } from "./slug.js";
 import { describeTicketSchema } from "./ticketSchema.js";
-import { runStatusCommand } from "./statusCmd.js";
+import { runStatusCommand, fmtUptime } from "./statusCmd.js";
 import { runListCommand } from "./listCmd.js";
 import { runRetryCommand } from "./retryCmd.js";
 import { runRmCommand } from "./rmCmd.js";
@@ -87,6 +90,14 @@ import { dataTreePaths } from "./dataTree.js";
 // ---------------------------------------------------------------------------
 // Dependency injection interface
 // ---------------------------------------------------------------------------
+
+/** The only part of a /health body the FTUE gate reads. A structural SUBSET of
+ *  tui/healthBody.ts's `HealthBody`, so the real `fetchHealthBody` satisfies it
+ *  without this module importing (or a test having to fabricate) the full
+ *  MetricsSnapshot. */
+export interface FtueHealthProbe {
+  metrics: { pid: number; uptimeSeconds: number };
+}
 
 export interface CliDeps {
   loadConfigFn?: (path: string) => Config;
@@ -160,6 +171,15 @@ export interface CliDeps {
   ensureDaemonFn?: (configPath: string) => Promise<import("./ensureDaemon.js").EnsureResult>;
   /** Interactivity probe gating the bare pre-flight. Default: stdout+stdin both TTY. */
   isTTYFn?: () => boolean;
+  /** FTUE gate (#273): who holds the single-instance pidfile beside the
+   *  config. Default: the real readLockHolder. Injected so a unit test never
+   *  reads the developer's own live `~/.junco/worker.lock`. */
+  readLockHolderFn?: (lockPath: string) => number | null;
+  /** FTUE gate (#273): the /health probe used when no pidfile sits beside the
+   *  resolved config path (exactly what a moved HOME looks like). Default:
+   *  lazily imports tui/healthBody.js. Injected so a unit test never fetches
+   *  the developer's own live health port. */
+  fetchHealthFn?: (cfg: Config) => Promise<FtueHealthProbe | null>;
   /** submitTicket injection for `submit --plan`'s fan-out only (tests only —
    * production callers omit this; default the real submitTicket via
    * submitPlanSet's own default). Scoped to the plan-set door; the
@@ -353,6 +373,126 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
     });
     return () => {};
   }
+}
+
+// ---------------------------------------------------------------------------
+// FTUE gate (#273)
+// ---------------------------------------------------------------------------
+
+/** Collaborators for `ftueRefusal` — every one of them a side effect. */
+interface FtueGateDeps {
+  existsFn: (p: string) => boolean;
+  env: Record<string, string | undefined>;
+  readLockHolderFn: (lockPath: string) => number | null;
+  fetchHealthFn: (cfg: Config) => Promise<FtueHealthProbe | null>;
+}
+
+/**
+ * Should the FRESH setup walkthrough refuse to run? Returns the operator-facing
+ * refusal text, or null to proceed.
+ *
+ * Why this exists: on 2026-08-01 the walkthrough ran against a daemon with four
+ * days of uptime and scaffolded a COMPETING config — the dashboard then wrote
+ * tickets to one queue root while the worker polled another, and both sides
+ * reported healthy (#273, #274). Two cheap, authoritative "this machine already
+ * has a junco" signals were available at that moment and neither was consulted:
+ * the health endpoint answered, and the resolved data tree was already populated.
+ *
+ * Scope — FRESH ONLY. The caller must apply this to the `cfg === null` door and
+ * nowhere else. Re-run mode reads and writes back the SAME file (wizard.ts
+ * buildWizardIO's `mode === "rerun"` branch), so it is structurally incapable of
+ * creating a competing config; and with no `junco setup` subcommand the
+ * walkthrough is the ONLY door an operator has for repairing a broken config.
+ * Gating the re-run path would lock them out of the one tool that fixes their
+ * problem. tests/cli.test.ts case (d) pins this.
+ */
+async function ftueRefusal(configPath: string, deps: FtueGateDeps): Promise<string | null> {
+  const resolved = resolve(configPath);
+  // Every refusal ends here — a guard that only says "no" moves the confusion
+  // instead of resolving it, so both messages name the path they expected and
+  // a command that actually runs in this state.
+  const where = `  expected config: ${resolved}  (no file there)\n`;
+  // `junco doctor` and NOTHING that loads the config. Both refusals only ever
+  // print when there is no file at the resolved path, and every other
+  // diagnostic (`status`, `list`, `inbox-path`, …) calls loadConfig
+  // unconditionally — parseConfigFile rethrows the ENOENT, so the advised
+  // command would be guaranteed to die with a fatal stack and exit 1, leaving
+  // the operator with two errors instead of one. `doctor` is config-free by
+  // construction: it catches the load failure and reports it as a finding
+  // (doctor.ts, "config" check). Verified by execution against a HOME with no
+  // config before this line was written: `doctor` prints
+  // `✗ config — <resolved path>: ENOENT …` and a NOT-ready verdict (exit 1 is
+  // its finding, not a crash), while `status` dies with a fatal stack and
+  // prints nothing an operator can use. The wording below matches what doctor
+  // actually shows in THIS state — it stops at the config check, so promising
+  // "data and queue paths" here would be its own small over-claim.
+  const steps =
+    `\nWhat to do:\n` +
+    `  junco doctor   — names the config path it resolved and what is wrong with it\n`;
+
+  // Signal 1 — a live daemon. Cheapest, config-free probe first: the
+  // single-instance pidfile beside the config (same derivation as `start`), no
+  // network and no 1500 ms timeout. `readLockHolder` is liveness-checked — a
+  // stale pidfile from a dead daemon reads as null, not as a refusal.
+  const lockPath = join(dirname(resolved), "worker.lock");
+  const holder = deps.readLockHolderFn(lockPath);
+  let daemon: string | null = holder !== null ? `pid ${holder} holds ${lockPath}` : null;
+  if (daemon === null) {
+    // No pidfile beside THIS config path — which is exactly what a moved HOME
+    // looks like, so ask the endpoint directly. There is no config to read
+    // here, so assemble one from schema defaults (127.0.0.1:8787).
+    const defaults = assembleConfig(ConfigSchema.parse({}), deps.env, { existsFn: deps.existsFn });
+    const body = await deps.fetchHealthFn(defaults);
+    if (body !== null) {
+      daemon =
+        `pid ${body.metrics.pid}, up ${fmtUptime(body.metrics.uptimeSeconds)} ` +
+        `(http://${defaults.healthHost}:${defaults.healthPort}/health answered)`;
+    }
+  }
+  if (daemon !== null) {
+    // Deliberately does NOT offer `junco config init` (the populated-tree
+    // refusal below does). `config init` is ungated — no daemon check, no tree
+    // check (configCmd.ts) — and writes a default config resolving under THIS
+    // process's HOME. In the moved-HOME shape this branch exists to catch,
+    // that is precisely the competing config of the 2026-08-01 incident,
+    // recreated by the remediation advice of the guard built to prevent it.
+    // Do not "reconcile" this with the other message.
+    return (
+      `junco: refusing to open the setup walkthrough — a junco daemon is already running.\n\n` +
+      `  daemon:          ${daemon}\n` +
+      where +
+      `\nA daemon is live, so this machine is already configured — but no config exists\n` +
+      `at the path above, so the walkthrough would scaffold a SECOND one. That is the\n` +
+      `2026-08-01 split-queue incident: the dashboard wrote tickets to one queue root\n` +
+      `while the worker polled another, and both sides reported healthy.\n` +
+      `Most likely HOME or XDG_CONFIG_HOME differs from the daemon's, or the config\n` +
+      `was moved or deleted. Put it back at the path above (or run from the daemon's\n` +
+      `HOME) and \`junco\` reopens the walkthrough in edit mode on that same file.\n` +
+      steps
+    );
+  }
+
+  // Signal 2 — a populated data tree with no config at the resolved path. Also
+  // the shape a mis-set HOME/XDG_CONFIG_HOME takes: bare `junco` silently
+  // routes into the FTUE because no file exists at the (wrong) path. Refusing
+  // turns a silent competing-config into a readable error.
+  const { dataDir } = resolveDataRoot(undefined, deps.env, deps.existsFn);
+  if (dataRootHasTree(dataDir, deps.existsFn)) {
+    return (
+      `junco: refusing to open the setup walkthrough — this machine already has junco data.\n\n` +
+      `  data root:       ${dataDir}  (populated)\n` +
+      where +
+      `\nA populated data tree with no config beside it means the config moved or was\n` +
+      `deleted, or this process resolved a different HOME/XDG_CONFIG_HOME than the one\n` +
+      `that created the tree. Scaffolding a fresh config over live data is how a queue\n` +
+      `gets split (2026-08-01). Restore the config at the path above — or run\n` +
+      `\`junco config init\` to scaffold one there deliberately — then \`junco\` reopens\n` +
+      `the walkthrough in edit mode.\n` +
+      steps
+    );
+  }
+
+  return null; // a genuinely fresh machine
 }
 
 // ---------------------------------------------------------------------------
@@ -896,6 +1036,24 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     if (!existsFn(resolve(configPath))) {
       // FTUE: the dashboard hosts the setup walkthrough (spec §4) — no config
       // to load yet, so pass null and let the Ink Root open the wizard first.
+      //
+      // ...unless this machine already has a junco (#273). The gate lives HERE,
+      // on the fresh door only — never on the re-run path below, which rewrites
+      // the config it read and is the only tool for repairing a broken one.
+      const refusal = await ftueRefusal(configPath, {
+        existsFn,
+        env,
+        readLockHolderFn: deps.readLockHolderFn ?? readLockHolder,
+        fetchHealthFn:
+          deps.fetchHealthFn ??
+          (async (c: Config) => (await import("./tui/healthBody.js")).fetchHealthBody(c)),
+      });
+      if (refusal !== null) {
+        process.stderr.write(refusal);
+        // 1, not 130: 130 is "the user cancelled" (dashboardCmd.ts). A refusal
+        // is not a cancellation.
+        return 1;
+      }
       return runDashboardFn(null, configPath);
     }
     const cfg = loadConfigFn(configPath);

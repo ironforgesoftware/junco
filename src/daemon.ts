@@ -13,6 +13,7 @@
  * cadence (sleepInterruptible) and the loop guard.
  */
 
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import type { ConfigHolder } from "./configWatcher.js";
 import { ensureDataTree, dataTreePaths } from "./dataTree.js";
@@ -43,6 +44,7 @@ import { makeGithubReporter } from "./githubReport.js";
 import type { TicketReporter } from "./reporter.js";
 import { outboxDepth, flushOutbox, type FlushResult } from "./githubOutbox.js";
 import { sweepDependencies } from "./ticketDeps.js";
+import { detectSplitQueue, type SplitQueueFinding } from "./splitQueue.js";
 
 // ---------------------------------------------------------------------------
 // StopFlag
@@ -266,6 +268,14 @@ export interface MainLoopDeps {
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
   startHealthServerFn?: (opts: HealthServerOpts) => Promise<HealthServerHandle>;
+  /** Split-queue guard (#274): reports when the resolved queue's inbox is
+   * empty while another known queue root's inbox is not — the 2026-08-01
+   * incident, where the dispatcher wrote to one root and the worker polled
+   * another for four days while both sides reported healthy. Pure
+   * observability: it never gates startup (see the try/catch at its call
+   * site). Defaults to the real detectSplitQueue, which reads the filesystem
+   * and takes env from process.env. */
+  detectSplitQueueFn?: (cfg: Config) => SplitQueueFinding | null;
   /** Bridge sweep override (tests). Only consulted when cfg.github.enabled. */
   bridgeSweepFn?: (cfg: Config) => Promise<number>;
   /** Standalone outbox drain override (tests). Only consulted when
@@ -656,6 +666,59 @@ export async function mainLoop(
   const mkdirs = deps.mkdirs ?? defaultMkdirs;
   const ensureSkillLinksFn = deps.ensureSkillLinksFn ?? ensureSkillLinks;
   const startHealthServerFn = deps.startHealthServerFn ?? startHealthServer;
+  const detectSplitQueueFn = deps.detectSplitQueueFn ?? ((c: Config) => detectSplitQueue(c));
+
+  // Split-queue guard (#274) — FIRST piece of startup work, ahead of the
+  // migrate lock, mkdirs, and both destructive recovery steps. The reason it
+  // has to be here and nowhere later: recoverOrphans + pruneStaleWorktrees are
+  // destructive, and the operator must see the mismatch BEFORE the daemon acts
+  // on the wrong root. Sitting ahead of waitForEndpointFn (which can block for
+  // a long time) is a second, smaller win: the warning lands immediately
+  // instead of after the wait.
+  //
+  // NOT a reason, though it reads like one: "mkdirs (ensureDataTree) creates
+  // the resolved queue, so checking after it would degrade the finding to 'you
+  // have no tickets yet'." It would not — `discoverTasks` (src/queue.ts)
+  // returns [] for ENOENT and [] for an existing-empty directory alike, so a
+  // check run after mkdirs produces a byte-identical finding. Recorded here
+  // because that false argument used to lead this comment: a maintainer who
+  // checks it, finds it inert, and concludes the whole ordering constraint is
+  // folklore would move the guard below recoverOrphans and silently kill the
+  // feature. The destructive-steps reason above is the real one and is pinned
+  // by an invocationCallOrder assertion in tests/daemon.test.ts.
+  //
+  // Safe ahead of migrateFn: the startup migration only renames state-tree
+  // pairs INSIDE cfg.dataDir (stateTreeMigrations, src/dataMigrate.ts), never
+  // the cross-root `queue` move — that one lives in dataRootPairs and only
+  // `junco data migrate` performs it — so this can't fire on tickets the
+  // daemon itself is about to relocate.
+  // A detector failure must never take the daemon down: this is observability
+  // with no consumer that a startup abort would help. It also has an
+  // interactive twin — `junco doctor` runs the same check — so the evidence
+  // isn't lost, and a warn here would spend the operator's attention budget on
+  // every single start for something like an unreadable abandoned root. Debug
+  // keeps it recoverable in worker.log without training anyone to ignore the
+  // real warning below.
+  try {
+    const split = detectSplitQueueFn(cfg);
+    if (split) {
+      const otherRoots = split.others.map((o) => o.root).join(", ");
+      log.warn(
+        "the resolved queue's inbox is empty but another known queue root holds tickets — this worker will sit idle while they wait",
+        {
+          resolvedQueueRoot: split.resolvedRoot,
+          otherQueueRoots: split.others.map((o) => `${o.root} (${o.label}, ${o.pending} pending)`),
+          advice:
+            `tickets are being filed into ${otherRoots} but this worker only claims from ` +
+            `${join(split.resolvedRoot, "inbox")} — point whatever files tickets at the resolved ` +
+            `root, or move them there (\`junco data migrate\` for a legacy root), then restart; ` +
+            `\`junco doctor\` prints the resolved paths`,
+        },
+      );
+    }
+  } catch (err) {
+    log.debug("split-queue check skipped", { error: String(err) });
+  }
 
   // Migrate BEFORE mkdirs: ensureDataTree mkdir-p's the whole new tree, so if
   // it ran first every old-name pair's destination would already exist (as an
