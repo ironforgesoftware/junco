@@ -195,6 +195,13 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * working tree — only cache/'s named subtrees (mirror, github-cache) are
  * denied, never cache/ itself.
  *
+ * `skills` is exempt for a different reason: it is a SYMLINK to the installed
+ * package's `skills/` dir (skillLinks.ts:97-98), so `canonicalize()` would
+ * resolve a deny here onto the junco installation rather than the data tree —
+ * denying the wrong target to protect public packaged content. The full list
+ * of exemptions, each with its reason, is asserted in tests/dataTree.test.ts
+ * ("classifies every data-tree entry as denied or deliberately exempt").
+ *
  * `env` resolves the canonical config file location (`defaultUserConfigPath`)
  * — it may hold `model.apiKey`; before the single-root move the config lived
  * outside the data root and escaped this deny list entirely, so folding it
@@ -220,6 +227,14 @@ export function sandboxDenyPaths(
       p.outbox,
       p.mirror,
       p.transcripts,
+      // Plan-set records (control-plane state: repoPath, issue nwo/number,
+      // task ids, statusCommentId). Added to the data tree by the plan-sets
+      // work; it was missing from this list until 2026-08-21 — the drift this
+      // enumeration is prone to, and the reason for the classification test in
+      // tests/dataTree.test.ts. Never an ancestor of a writable root: `plans`
+      // is `plans/` (flat) / `data/plans` (v2), and nothing writable is nested
+      // under either.
+      p.plans,
       // Legacy TUI cache (tui/ghClient.ts still owns it; mirror/ replaces it
       // in PR 2).
       p.githubCache,
@@ -236,6 +251,7 @@ export function sandboxDenyPaths(
       p.metricsFile,
       p.logFile,
       p.migratedFile,
+      p.migrateLockFile, // daemon-owned, sibling of migrated.json above
       defaultUserConfigPath(env), // may hold model.apiKey — see doc comment above
       legacyConfigPath(env), // I-3: the ACTIVE config on an un-migrated machine
     ],
