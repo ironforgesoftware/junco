@@ -482,15 +482,20 @@ export async function resolveSandbox(
   }
   const network = overrides?.network ?? cfg.sandbox.network === "allow";
   const scratchDir = makeScratch();
+  // #277: the data tree is denied WHOLESALE and its execution roots (the
+  // worktrees and the clone gitdirs this session's git reads) are allowed
+  // back. Both halves must be threaded in — the denies alone would wall the
+  // agent out of its own worktree; the allows alone would leave the queue
+  // readable. Precedence between them is by specificity, not list order (see
+  // sandbox/precedence.ts).
+  const dataPaths = sandboxDenyPaths(cfg);
   const policy = buildPolicy({
     cfg: cfg.sandbox,
     cwd,
     scratchDir,
     home,
-    // Sensitive data-tree subtrees/files only — never the dataDir root: the
-    // default layout puts the worktree (this session's cwd) and the clone
-    // gitdirs under it (see dataTree.sandboxDenyPaths).
-    dataDenyPaths: sandboxDenyPaths(cfg),
+    dataDenyPaths: dataPaths,
+    dataAllowPaths: dataPaths.allowDirs,
     network,
     botGhConfigDir: cfg.botAccount.configDir,
   });

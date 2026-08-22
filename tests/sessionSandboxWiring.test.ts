@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { resolveSandbox } from "../src/agent/session.js";
 import { SandboxUnavailableError } from "../src/agent/sandbox/index.js";
+import { readRules } from "../src/agent/sandbox/policy.js";
+import { resolveRead } from "../src/agent/sandbox/precedence.js";
 import type { Config } from "../src/types.js";
 
 function cfgWith(sandbox: Partial<Config["sandbox"]>): Config {
@@ -66,18 +68,30 @@ describe("resolveSandbox", () => {
     expect(r?.policy.readDenyPaths).toContain("/sbxroot/junco-gh");
   });
 
-  it("denies the sensitive data subtrees but NOT the data root (worktrees/clones live under it)", async () => {
+  // #277: session.ts must thread BOTH halves of dataTree's answer into
+  // buildPolicy — the wholesale root deny AND the allow-backs. Passing only the
+  // denies would wall the agent out of its own worktree; passing only the
+  // allows would leave the queue readable.
+  it("denies the data root wholesale and threads the allow-backs into the policy", async () => {
     const r = await resolveSandbox(
       cfgWith({ backend: "none" }),
       "/sbxroot/state/worktrees/tkt-1",
       undefined,
       okDeps,
     );
-    expect(r?.policy.readDenyPaths).toContain("/sbxroot/state/queue");
-    expect(r?.policy.readDenyPaths).toContain("/sbxroot/state/review");
-    expect(r?.policy.readDenyPaths).toContain("/sbxroot/state/transcripts");
-    expect(r?.policy.readDenyFiles).toContain("/sbxroot/state/watchlist.json");
-    expect(r?.policy.readDenyPaths).not.toContain("/sbxroot/state");
+    const policy = r?.policy;
+    if (!policy) throw new Error("expected a sandbox policy");
+    expect(policy.readDenyPaths).toContain("/sbxroot/state");
+    expect(policy.readDenyPaths).toContain("/sbxroot/state/queue");
+    expect(policy.readDenyFiles).toContain("/sbxroot/state/watchlist.json");
+    expect(policy.readAllowPaths).toContain("/sbxroot/state/worktrees");
+    expect(policy.readAllowPaths).toContain("/sbxroot/state/clones");
+    // …and they resolve the way the agent experiences them (flat layout).
+    const rules = readRules(policy);
+    expect(resolveRead("/sbxroot/state/transcripts/tkt-1.jsonl", rules)).toBe("deny");
+    expect(resolveRead("/sbxroot/state/review/assess/o__r.json", rules)).toBe("deny");
+    expect(resolveRead("/sbxroot/state/worktrees/tkt-1/src/a.ts", rules)).toBe("allow");
+    expect(resolveRead("/sbxroot/state/clones/watched/o__r.git/HEAD", rules)).toBe("allow");
   });
 
   it("per-ticket network override widens egress", async () => {

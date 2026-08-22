@@ -535,10 +535,12 @@ describe("overlayFrozenRestartFields", () => {
     const frozen = makeConfig({
       dataDir: "/frozen/legacy-junco",
       dataLayout: "flat",
+      worktreeRoot: "/frozen/legacy-junco/worktrees", // the flat derived default
     });
     const live = makeConfig({
       dataDir: "/frozen/legacy-junco", // same root — only the resolved layout differs
       dataLayout: "v2",
+      worktreeRoot: "/frozen/legacy-junco/cache/worktrees",
     });
 
     const result = overlayFrozenRestartFields(frozen, live);
@@ -556,13 +558,20 @@ describe("overlayFrozenRestartFields", () => {
     expect(paths.outbox).not.toContain("/data/");
     expect(paths.logFile).not.toContain("/logs/");
 
-    // The sandbox deny list (also layout-derived, read per-run off this same
-    // overlaid config — src/agent/session.ts) still denies the REAL flat
-    // paths rather than nonexistent v2 ones, so containment doesn't silently
-    // widen.
+    // The sandbox lists (also layout-derived, read per-run off this same
+    // overlaid config — src/agent/session.ts) still describe the REAL flat
+    // tree rather than a nonexistent v2 one, so containment doesn't silently
+    // widen. Since #277 the deny side is the root wholesale, and the
+    // layout-specific part is the ALLOW-BACK: flat allows worktrees/ and
+    // clones/ back, v2 would have allowed a `cache/` tier that does not exist
+    // in this 0.9 tree — allowing it here would have opened nothing, but
+    // failing to allow the flat roots would wall the agent out of its worktree.
     const deny = sandboxDenyPaths(result);
-    expect(deny.dirs).toContain("/frozen/legacy-junco/transcripts");
+    expect(deny.dirs).toContain("/frozen/legacy-junco");
     expect(deny.files).toContain("/frozen/legacy-junco/worker.log");
+    expect(deny.allowDirs).toContain("/frozen/legacy-junco/worktrees");
+    expect(deny.allowDirs).toContain("/frozen/legacy-junco/clones");
+    expect(deny.allowDirs).not.toContain("/frozen/legacy-junco/cache");
   });
 
   it("an explicitly-set legacy override keeps its own live-reload semantics", () => {

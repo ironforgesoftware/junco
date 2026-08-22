@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { builtinDenyReadPaths, buildPolicy } from "../src/agent/sandbox/policy.js";
+import { builtinDenyReadPaths, buildPolicy, readRules } from "../src/agent/sandbox/policy.js";
+import { resolveRead } from "../src/agent/sandbox/precedence.js";
 import {
   assertReadAllowed,
   assertWriteAllowed,
@@ -54,8 +55,17 @@ describe("buildPolicy", () => {
     expect(pol.readDenyPaths).toContain("/sbxroot/data/review");
     expect(pol.readDenyPaths).toContain("/sbxroot/extra/secret");
     expect(pol.readDenyFiles).toEqual(["/sbxroot/data/watchlist.json"]);
-    // Never the data root itself — worktrees/ and clones/ live under it.
+    // Callers still never pass the data root itself as a deny — that hasn't
+    // changed. But this is no longer a correctness REQUIREMENT: readRules()
+    // makes an ancestor deny safe by construction (longest-prefix-wins), so
+    // this is now just documenting what today's caller happens to do, not
+    // the thing standing between the agent and a walled-out worktree.
     expect(pol.readDenyPaths).not.toContain("/sbxroot/data");
+    // Proof of the mechanism: even if a deny DID sit above the writable
+    // root, the writable-root allow rule out-specifies it and the worktree
+    // still resolves readable.
+    const withAncestorDeny = { ...pol, readDenyPaths: [...pol.readDenyPaths, "/sbxroot/work"] };
+    expect(resolveRead(pol.writableRoots[0]!, readRules(withAncestorDeny))).toBe("allow");
   });
 
   it("threads the network flag through", () => {
@@ -92,6 +102,10 @@ describe("buildPolicy", () => {
 // and the watched-clone gitdirs live UNDER dataDir — a policy that denied the
 // whole root made every in-worktree read a SandboxViolation. Sensitive
 // subtrees stay denied; the execution roots must stay readable/writable.
+//
+// pathJail's assertReadAllowed consumes readRules()'s precedence directly
+// (see pathJail.ts) — these assertions exercise that same longest-prefix
+// resolution through the real buildPolicy() output.
 describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
   const dataDir = "/sbxroot/home/x/.local/state/junco";
   const cwd = `${dataDir}/worktrees/tkt-1`;
@@ -144,5 +158,92 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
     expect(() => assertReadAllowed(`${dataDir}/watchlist.json`, cwd, policy)).toThrow(
       SandboxViolation,
     );
+  });
+
+  // The mechanism this whole plan (#277) is building toward: denying dataDir
+  // WHOLESALE (Task 7 arms this for real, in dataTree.ts — out of scope
+  // here) is only safe because the writable root is an allow rule that
+  // out-specifies the ancestor deny. Proven here directly at the
+  // readRules/resolveRead level, independent of pathJail's and the OS
+  // backends' respective consumption of that same resolver.
+  it("would survive a wholesale dataDir deny: the worktree stays allowed, siblings stay denied", () => {
+    const wholesale = { ...policy, readDenyPaths: [...policy.readDenyPaths, dataDir] };
+    const rules = readRules(wholesale);
+    // The writable root (the worktree) out-specifies the root-level deny.
+    expect(resolveRead(cwd, rules)).toBe("allow");
+    // Territory under the same root that ISN'T a writable root or an
+    // explicit allow-back stays denied — the override is not unconditional.
+    expect(resolveRead(`${dataDir}/queue/inbox/x.md`, rules)).toBe("deny");
+    expect(resolveRead(`${dataDir}/mirror/repo.git`, rules)).toBe("deny");
+  });
+});
+
+describe("readRules — allow-over-deny precedence (#277)", () => {
+  it("exposes writable roots as read-allow rules so a denied ancestor cannot wall the agent out", () => {
+    const p = buildPolicy({
+      cfg: {
+        enabled: true,
+        backend: "auto" as const,
+        network: "deny" as const,
+        extraDenyRead: [],
+        extraAllowWrite: [],
+      },
+      cwd: "/sbxroot/root/worktrees/wt1",
+      scratchDir: "/sbxroot/nowhere/scratch1",
+      home: "/sbxroot/home/x",
+      // Ancestor of the writable root is denied wholesale.
+      dataDenyPaths: { dirs: ["/sbxroot/root"], files: [] },
+      network: false,
+    });
+    expect(resolveRead(p.writableRoots[0]!, readRules(p))).toBe("allow");
+    // Sibling territory under the same denied ancestor stays denied — this
+    // is not an unconditional "writable wins" rule.
+    expect(resolveRead("/sbxroot/root/queue/x.md", readRules(p))).toBe("deny");
+  });
+
+  it("lets an operator deny a path INSIDE a writable root", () => {
+    const p = buildPolicy({
+      cfg: {
+        enabled: true,
+        backend: "auto" as const,
+        network: "deny" as const,
+        extraDenyRead: ["/sbxroot/wt/.env"],
+        extraAllowWrite: [],
+      },
+      cwd: "/sbxroot/wt",
+      scratchDir: "/sbxroot/nowhere/scratch1",
+      home: "/sbxroot/home/x",
+      dataDenyPaths: { dirs: [], files: [] },
+      network: false,
+    });
+    expect(resolveRead("/sbxroot/wt/src/a.ts", readRules(p))).toBe("allow");
+    // A deny deeper than the writable root still wins: the writable-root
+    // allow is not an unconditional override.
+    expect(resolveRead("/sbxroot/wt/.env", readRules(p))).toBe("deny");
+  });
+
+  it("canonicalizes allow paths the same way as deny paths", () => {
+    const p = buildPolicy({
+      cfg: {
+        enabled: true,
+        backend: "auto" as const,
+        network: "deny" as const,
+        extraDenyRead: [],
+        extraAllowWrite: [],
+      },
+      cwd: "/sbxroot/wt",
+      scratchDir: "/sbxroot/nowhere/scratch1",
+      home: "/sbxroot/home/x",
+      dataDenyPaths: { dirs: [], files: [] },
+      // A raw, un-normalized allow path (mirrors how deny paths are passed
+      // un-normalized too, e.g. extraDenyRead) — canonicalize() must resolve
+      // the `..` the same way it does for readDenyPaths, or precedence would
+      // compare a canonicalized deny against a raw allow and silently
+      // disagree on a /tmp-vs-/private/tmp-style mismatch.
+      dataAllowPaths: ["/sbxroot/data/../data/cache"],
+      network: false,
+    });
+    expect(p.readAllowPaths).toEqual(["/sbxroot/data/cache"]);
+    expect(resolveRead("/sbxroot/data/cache/worktrees/t1", readRules(p))).toBe("allow");
   });
 });
