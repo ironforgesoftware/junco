@@ -30,6 +30,7 @@ import { migrateStateTree } from "../src/dataMigrate.js";
 import { ProviderGate, type GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { makeSpendLedger } from "../src/spendLedger.js";
+import type { SplitQueueFinding } from "../src/splitQueue.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -201,6 +202,10 @@ function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
     // test in this file (see "logs the skill-link report..." for the
     // non-quiet case).
     ensureSkillLinksFn: vi.fn(() => ({ entries: [] })),
+    // Never reports a split by default — the all-quiet outcome for every
+    // OTHER test in this file (see the "split-queue startup warning" describe
+    // for the firing case). The real detector reads the filesystem.
+    detectSplitQueueFn: vi.fn(() => null),
     // Default fake — never binds a real port. Tests that exercise the health
     // lifecycle pass their own spy + a healthEnabled:true config.
     startHealthServerFn: vi.fn(async () => makeFakeHealthHandle()),
@@ -1043,6 +1048,157 @@ describe("mainLoop", () => {
       expect(linkLogs).toHaveLength(0);
     } finally {
       infoSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mainLoop — split-queue startup warning (#274)
+// ---------------------------------------------------------------------------
+
+describe("mainLoop — split-queue startup warning", () => {
+  /** The finding a real detectSplitQueue would return for the 2026-08-01
+   * incident shape: the worker polls the canonical root while the dispatcher
+   * keeps filing into the legacy one. */
+  const finding: SplitQueueFinding = {
+    resolvedRoot: "/h/.junco/queue",
+    others: [{ root: "/h/.local/state/junco/queue", label: "legacy data root", pending: 3 }],
+  };
+  /** Stable substring of the one warn this feature emits — the assertions must
+   * not depend on the exact prose. */
+  const WARN_MATCH = "another known queue root holds tickets";
+
+  /** invocationCallOrder is a monotonically increasing global counter across
+   * ALL vitest spies, which is what makes cross-spy ordering assertable.
+   * Throws (rather than returning undefined) so a never-called spy fails with
+   * a readable message instead of a confusing NaN comparison. */
+  function orderOf(orders: number[], i: number, what: string): number {
+    const v = orders[i];
+    if (v === undefined) throw new Error(`${what}: no invocation at index ${i}`);
+    return v;
+  }
+
+  it("warns before the migrate lock, ensureDataTree, and recoverOrphans — naming both roots and a remedy", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const detectSplitQueueFn = vi.fn(() => finding);
+      const migrateLockFn = vi.fn(() => ({ release: vi.fn() }));
+      const mkdirs = vi.fn(() => {});
+      const recoverOrphansFn = vi.fn(() => {});
+      const pruneFn = vi.fn(() => {});
+      // Stop inside waitForEndpoint: every startup collaborator still runs,
+      // and the poll loop never starts (no fake-sleep spin).
+      const waitForEndpointFn = vi.fn(async () => {
+        stop.requestStop();
+      });
+      const { deps } = makeDeps({
+        detectSplitQueueFn,
+        migrateLockFn,
+        mkdirs,
+        recoverOrphansFn,
+        pruneFn,
+        waitForEndpointFn,
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(detectSplitQueueFn).toHaveBeenCalledTimes(1);
+      expect(detectSplitQueueFn).toHaveBeenCalledWith(cfg);
+
+      const i = warnSpy.mock.calls.findIndex((c) => String(c[0]).includes(WARN_MATCH));
+      expect(i).toBeGreaterThanOrEqual(0);
+      const fields = (warnSpy.mock.calls[i]?.[1] ?? {}) as Record<string, unknown>;
+      // Both paths must be in the entry, and the advice must say what to DO —
+      // a warning that only says "something is off" gets routed to /dev/null.
+      const rendered = JSON.stringify(fields);
+      expect(rendered).toContain("/h/.junco/queue");
+      expect(rendered).toContain("/h/.local/state/junco/queue");
+      const advice = String(fields.advice ?? "");
+      expect(advice).toContain("/h/.junco/queue");
+      expect(advice).toContain("/h/.local/state/junco/queue");
+
+      // ORDERING is the whole point. Presence alone would still pass if the
+      // warning drifted below ensureDataTree — which CREATES the resolved
+      // queue, degrading the signal from "your tickets are in the other root"
+      // to "you have no tickets yet" — or below the destructive
+      // recoverOrphans/pruneStaleWorktrees steps.
+      const warnAt = orderOf(warnSpy.mock.invocationCallOrder, i, "log.warn");
+      expect(warnAt).toBeLessThan(
+        orderOf(migrateLockFn.mock.invocationCallOrder, 0, "migrateLock"),
+      );
+      expect(warnAt).toBeLessThan(orderOf(mkdirs.mock.invocationCallOrder, 0, "mkdirs"));
+      expect(warnAt).toBeLessThan(
+        orderOf(recoverOrphansFn.mock.invocationCallOrder, 0, "recoverOrphans"),
+      );
+      expect(warnAt).toBeLessThan(orderOf(pruneFn.mock.invocationCallOrder, 0, "prune"));
+      expect(warnAt).toBeLessThan(
+        orderOf(waitForEndpointFn.mock.invocationCallOrder, 0, "waitForEndpoint"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs nothing when the detector reports no split (a normal single-root install)", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const detectSplitQueueFn = vi.fn(() => null);
+      const recoverOrphansFn = vi.fn(() => {});
+      const { deps } = makeDeps({
+        detectSplitQueueFn,
+        recoverOrphansFn,
+        waitForEndpointFn: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await mainLoop(cfg, stop, {}, deps);
+
+      expect(detectSplitQueueFn).toHaveBeenCalledTimes(1);
+      expect(warnSpy).not.toHaveBeenCalled();
+      // Startup still completed normally.
+      expect(recoverOrphansFn).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a throwing detector never takes the daemon down — startup continues, no operator-facing warn", async () => {
+    const { log } = await import("../src/logging.js");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
+    try {
+      const cfg = makeConfig();
+      const stop = new StopFlag();
+      const detectSplitQueueFn = vi.fn(() => {
+        throw new Error("EACCES: permission denied, scandir '/h/.local/state/junco/queue/inbox'");
+      });
+      const recoverOrphansFn = vi.fn(() => {});
+      const { deps } = makeDeps({
+        detectSplitQueueFn,
+        recoverOrphansFn,
+        waitForEndpointFn: vi.fn(async () => {
+          stop.requestStop();
+        }),
+      });
+
+      await expect(mainLoop(cfg, stop, {}, deps)).resolves.toBeUndefined();
+
+      // The daemon came up: the check is observability, never a startup gate.
+      expect(recoverOrphansFn).toHaveBeenCalledTimes(1);
+      expect(warnSpy).not.toHaveBeenCalled();
+      const dbg = debugSpy.mock.calls.find((c) => String(c[0]).includes("split-queue check"));
+      expect(dbg).toBeDefined();
+      expect(JSON.stringify(dbg?.[1])).toContain("EACCES");
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 });
