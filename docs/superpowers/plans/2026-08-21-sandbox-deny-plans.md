@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript strict/ESM, vitest. `tests/dataTree.test.ts` is a pure, zero-fs suite using synthetic `/sbxroot/...` paths so `canonicalize()` is a no-op (CLAUDE.md sandbox testing rule).
 
-**Spec:** `docs/superpowers/plans/2026-08-21-open-issues-roadmap.md` § WS-1, and issue #277 for the invariant this must not violate.
+**Spec:** WS-1 — the open-issues roadmap's workstream to close the plan-set deny-list gap and add a drift guard against future omissions — and issue #277 ("Sandbox: allow-over-deny support so ~/.junco can be denied wholesale") for the CRITICAL invariant this must not violate and the eventual allow-over-deny redesign.
 
 ## Global Constraints
 

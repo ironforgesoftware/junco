@@ -222,46 +222,77 @@ describe("sandboxDenyPaths", () => {
   // makes it prone to silent omission: `plans` joined the data tree with the
   // plan-sets work and stayed agent-readable until 2026-08-21. This test fails
   // when a NEW DataTreePaths field is neither denied nor listed as exempt, so
-  // the choice has to be made deliberately rather than forgotten.
+  // the choice has to be made deliberately rather than forgotten. Runs the
+  // classification over BOTH layouts — a guard pinned to only one (v2) would
+  // never catch a field that is unclassified specifically under the other; see
+  // the `logsDir` exemption below for exactly that flat-only case.
   it("classifies every data-tree entry as denied or deliberately exempt", () => {
-    const cfg = makeConfig({
-      dataDir: "/sbxroot/home/.junco",
-      queueRoot: "/sbxroot/home/.junco/queue",
-      worktreeRoot: "/sbxroot/home/.junco/cache/worktrees",
-      dataLayout: "v2",
-      github: {
-        ...makeConfig().github,
-        externalReposRoot: "/sbxroot/home/.junco/cache/clones/external",
-      },
-    });
-    const paths = dataTreePaths(cfg);
-    const deny = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
-    const denied = [...deny.dirs, ...deny.files];
+    for (const dataLayout of ["flat", "v2"] as const) {
+      const cfg =
+        dataLayout === "flat"
+          ? makeConfig({
+              dataDir: "/sbxroot/data",
+              queueRoot: "/sbxroot/data/queue",
+              worktreeRoot: "/sbxroot/data/worktrees",
+              dataLayout,
+              github: {
+                ...makeConfig().github,
+                externalReposRoot: "/sbxroot/data/clones/external",
+              },
+            })
+          : makeConfig({
+              dataDir: "/sbxroot/home/.junco",
+              queueRoot: "/sbxroot/home/.junco/queue",
+              worktreeRoot: "/sbxroot/home/.junco/cache/worktrees",
+              dataLayout,
+              github: {
+                ...makeConfig().github,
+                externalReposRoot: "/sbxroot/home/.junco/cache/clones/external",
+              },
+            });
+      const paths = dataTreePaths(cfg);
+      const deny = sandboxDenyPaths(cfg, { HOME: "/sbxroot/home" });
+      const denied = [...deny.dirs, ...deny.files];
 
-    // Each entry must stay agent-READABLE, with the reason it has to.
-    const EXEMPT: Record<string, string> = {
-      root: "CRITICAL invariant: ancestor of the agent's writable roots",
-      queue: "not a path (Paths object) — denied via cfg.queueRoot",
-      worktrees: "the agent's own cwd",
-      clonesWatched: "git object reads from the watched clone",
-      clonesExternal: "git object reads from external clones",
-      skills:
-        "symlink to the INSTALLED PACKAGE's public skills/ dir — canonicalize() " +
-        "realpaths it, so a deny here would land on the junco install, not the data tree",
-    };
+      // Each entry must stay agent-READABLE, with the reason it has to.
+      const EXEMPT: Record<string, string> = {
+        root: "CRITICAL invariant: ancestor of the agent's writable roots",
+        queue: "not a path (Paths object) — denied via cfg.queueRoot",
+        worktrees: "the agent's own cwd",
+        clonesWatched: "git object reads from the watched clone",
+        clonesExternal: "git object reads from external clones",
+        skills:
+          "symlink to the INSTALLED PACKAGE's public skills/ dir — canonicalize() " +
+          "realpaths it, so a deny here would land on the junco install, not the data tree",
+        // Flat layout ONLY: dataTreePaths builds logsDir as join(root, "."),
+        // so it equals root there (v2 gives it a genuine <root>/logs
+        // subtree). sandboxDenyPaths deliberately omits it in that case —
+        // denying it would deny the root itself, violating the CRITICAL
+        // invariant above. Exempt it here for exactly that reason, and only
+        // when it actually degenerates to root, so a future layout that
+        // gives logsDir its own subtree stays covered by the real deny check.
+        ...(paths.logsDir === paths.root
+          ? {
+              logsDir:
+                'flat layout only: logsDir === root (dataTreePaths: join(root, ".")); ' +
+                "denying it would deny the root itself, violating the CRITICAL invariant above",
+            }
+          : {}),
+      };
 
-    const covered = (v: string) => denied.some((d) => v === d || v.startsWith(d + "/"));
+      const covered = (v: string) => denied.some((d) => v === d || v.startsWith(d + "/"));
 
-    for (const [field, value] of Object.entries(paths)) {
-      if (field in EXEMPT) continue;
-      expect(
-        typeof value,
-        `DataTreePaths.${field} is new and unclassified: deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
-      ).toBe("string");
-      expect(
-        covered(value as string),
-        `DataTreePaths.${field} (${String(value)}) is neither denied nor exempt — deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
-      ).toBe(true);
+      for (const [field, value] of Object.entries(paths)) {
+        if (field in EXEMPT) continue;
+        expect(
+          typeof value,
+          `[${dataLayout}] DataTreePaths.${field} is new and unclassified: deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
+        ).toBe("string");
+        expect(
+          covered(value as string),
+          `[${dataLayout}] DataTreePaths.${field} (${String(value)}) is neither denied nor exempt — deny it in sandboxDenyPaths, or add it to EXEMPT with the reason it must stay agent-readable`,
+        ).toBe(true);
+      }
     }
   });
 });
