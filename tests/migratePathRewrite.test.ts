@@ -7,9 +7,17 @@
  */
 
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  renameSync,
+} from "node:fs";
 import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import {
   buildPrefixMap,
@@ -36,6 +44,51 @@ describe("buildPrefixMap", () => {
       { from: "/old/clones", to: "/new/cache/clones", action: "renamed" },
     ]);
     expect(map[0].from).toBe("/old/clones");
+  });
+
+  it("fix-wave (#283 Critical 1): chains a same-directory state-tree rename into a later data-root move, resolving to the FINAL destination rather than the intermediate hop", () => {
+    // Reviewer's exact repro shape: the journal holds BOTH
+    // migrateStateTree's phase-4 same-directory normalization
+    // (/legacy/repos -> /legacy/clones/watched) and the phase-5/6
+    // data-root move of the renamed tree's new parent
+    // (/legacy/clones -> /target/cache/clones). A stored value under
+    // /legacy/repos matches the state-tree step FIRST; before this fix,
+    // rewritePath applied exactly that one hop and stopped, landing the
+    // value inside /legacy — the exact root this same run then deletes.
+    const map = buildPrefixMap([
+      { from: "/legacy/repos", to: "/legacy/clones/watched", action: "renamed" },
+      { from: "/legacy/clones", to: "/target/cache/clones", action: "renamed" },
+    ]);
+    const repos = map.find((p) => p.from === "/legacy/repos");
+    expect(repos?.to).toBe("/target/cache/clones/watched");
+
+    // And a single rewritePath call against the closed map now lands a
+    // stale value on the true final path in one hop — not the
+    // intermediate /legacy/clones/watched/acme/repo.
+    expect(rewritePath("/legacy/repos/acme/repo", map)).toBe(
+      "/target/cache/clones/watched/acme/repo",
+    );
+  });
+
+  it("bounds chain resolution and warns rather than looping when the journal contains a cycle", () => {
+    const warnings: string[] = [];
+    const map = buildPrefixMap(
+      [
+        { from: "/a", to: "/b", action: "renamed" },
+        { from: "/b", to: "/a", action: "renamed" },
+      ],
+      warnings,
+    );
+    // Resolution stops rather than looping forever or picking an arbitrary
+    // value — each entry is left at its own last non-cyclic (one-hop) value.
+    expect(map).toEqual(
+      expect.arrayContaining([
+        { from: "/a", to: "/b" },
+        { from: "/b", to: "/a" },
+      ]),
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings.some((w) => /cycle/i.test(w))).toBe(true);
   });
 });
 
@@ -100,6 +153,7 @@ function realDeps(): RewriteDeps {
     writeFileFn: (p, s) => writeFileSync(p, s, "utf8"),
     readdirFn: (d) => readdirSync(d),
     existsFn: (p) => existsSync(p),
+    renameFn: (from, to) => renameSync(from, to),
   };
 }
 
@@ -113,6 +167,60 @@ describe("rewriteStoredPaths", () => {
       realDeps(),
     );
     expect(report).toEqual({ rewritten: 0, files: [], warnings: [] });
+  });
+
+  it("fix-wave (#283 Critical 1): a watchlist entry AND ticket that predate state-tree normalization land on the FINAL destination, not the legacy root this run then removes", () => {
+    // Reviewer's real-filesystem repro, reproduced against the pure
+    // functions here: a value under the pre-unification `/legacy/repos`
+    // matches the state-tree same-directory step (journaled by phase 4)
+    // BEFORE the data-root move (/legacy/clones -> target). A one-hop
+    // rewrite (the pre-fix behaviour) would land it at
+    // /legacy/clones/watched/acme/repo — still inside /legacy, which the
+    // same migrate run then deletes — with the receipt still claiming
+    // success.
+    const root = freshRoot();
+    roots.push(root);
+    const watchlistFile = join(root, "watchlist.json");
+    const staleRepo = "/legacy/repos/acme/repo";
+    const entries: WatchlistEntry[] = [{ nwo: "acme/repo", path: staleRepo }];
+    writeFileSync(watchlistFile, JSON.stringify(entries, null, 2) + "\n", "utf8");
+
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    writeFileSync(
+      ticketPath,
+      "---\n" + "id: t1\n" + `repo: ${JSON.stringify(staleRepo)}\n` + "---\nbody\n",
+      "utf8",
+    );
+
+    const map = buildPrefixMap([
+      { from: "/legacy/repos", to: "/legacy/clones/watched", action: "renamed" },
+      { from: "/legacy/clones", to: join(root, "cache", "clones"), action: "renamed" },
+    ]);
+
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: { inbox, processing: "/nope1", done: "/nope2", failed: "/nope3" },
+      },
+      map,
+      realDeps(),
+    );
+
+    const finalRepo = join(root, "cache", "clones", "watched", "acme", "repo");
+    const intermediateHop = "/legacy/clones/watched/acme/repo";
+
+    expect(report.rewritten).toBe(2);
+    expect(report.warnings).toEqual([]);
+
+    const writtenWatchlist = JSON.parse(readFileSync(watchlistFile, "utf8")) as WatchlistEntry[];
+    expect(writtenWatchlist).toEqual([{ nwo: "acme/repo", path: finalRepo }]);
+    expect(writtenWatchlist[0].path).not.toBe(intermediateHop);
+
+    const writtenTicket = readFileSync(ticketPath, "utf8");
+    expect(writtenTicket).toContain(`repo: ${JSON.stringify(finalRepo)}`);
+    expect(writtenTicket).not.toContain(intermediateHop);
   });
 
   it("rewrites a watchlist entry's path under a moved prefix and writes it back", () => {
@@ -361,6 +469,227 @@ describe("rewriteStoredPaths", () => {
     const written = readFileSync(ticketPath, "utf8");
     expect(written).toContain(`workdir: ${newRepo}`);
     expect(written).toContain(`repo: "${oldRepo}`); // left untouched
+  });
+
+  it("fix-wave (#283 Minor 2): a bare repo: with no value is a YAML null, not a broken value — no warning", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const raw =
+      "---\n" + "id: t1\n" + "repo:\n" + `workdir: /old/clones/watched/a/b\n` + "---\nbody\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(1); // workdir: only
+    expect(report.warnings).toEqual([]); // bare repo: is silent, not a warning
+    const newRepo = join(root, "cache", "clones", "watched", "a", "b");
+    const written = readFileSync(ticketPath, "utf8");
+    expect(written).toContain("repo:\n"); // untouched
+    expect(written).toContain(`workdir: ${newRepo}`);
+  });
+
+  it("fix-wave (#283 Minor 3): expands a tilde repo: value (the shape junco's SHIPPED templates write) so it matches a moved prefix and rewrites to an absolute path", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const home = homedir();
+    const raw = "---\n" + "id: t1\n" + "repo: ~/code/example-app\n" + "---\nbody\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: join(home, "code"), to: join(root, "cache", "code") }];
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(1);
+    expect(report.warnings).toEqual([]);
+    const newRepo = join(root, "cache", "code", "example-app");
+    expect(readFileSync(ticketPath, "utf8")).toContain(`repo: ${newRepo}`);
+  });
+
+  it("fix-wave (#283 Minor 3): a tilde repo: value outside every moved prefix is left exactly as written (rule 2 — not this phase's business)", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const raw = "---\n" + "id: t1\n" + "repo: ~/dev/unrelated-project\n" + "---\nbody\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      realDeps(),
+    );
+
+    expect(report).toEqual({ rewritten: 0, files: [], warnings: [] });
+    expect(readFileSync(ticketPath, "utf8")).toBe(raw);
+  });
+
+  it("fix-wave (#283 Important I1): writes a rewritten ticket via tmp+rename, not a bare truncating write", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const oldRepo = "/old/clones/watched/a/b";
+    writeFileSync(ticketPath, "---\n" + "id: t1\n" + `repo: ${oldRepo}\n` + "---\nbody\n", "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const seenWrites: string[] = [];
+    const seenRenames: Array<[string, string]> = [];
+    const deps: RewriteDeps = {
+      ...realDeps(),
+      writeFileFn: (p, s) => {
+        seenWrites.push(p);
+        writeFileSync(p, s, "utf8");
+      },
+      renameFn: (from, to) => {
+        seenRenames.push([from, to]);
+        renameSync(from, to);
+      },
+    };
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      deps,
+    );
+
+    expect(report.rewritten).toBe(1);
+    // Written to a tmp path (not the ticket path itself), then renamed onto it.
+    expect(seenWrites).toEqual([expect.stringMatching(/\.t1\.md\.tmp-\d+$/)]);
+    expect(seenRenames).toEqual([[seenWrites[0], ticketPath]]);
+    expect(readFileSync(ticketPath, "utf8")).toContain(
+      `repo: ${join(root, "cache", "clones", "watched", "a", "b")}`,
+    );
+  });
+
+  it("fix-wave (#283 Important I1): a rewritten JSON record and outbox op are ALSO written via tmp+rename", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const oldRepo = "/old/clones/watched/acme/repo";
+
+    const assessDir = join(root, "review", "assess");
+    mkdirSync(assessDir, { recursive: true });
+    const batchFile = join(assessDir, "batch1.json");
+    writeFileSync(
+      batchFile,
+      JSON.stringify({ id: "b1", nwo: "acme/repo", repoPath: oldRepo }, null, 2) + "\n",
+      "utf8",
+    );
+
+    const outboxDir = join(root, "data", "outbox");
+    mkdirSync(outboxDir, { recursive: true });
+    const pushFile = join(outboxDir, "1-push.json");
+    writeFileSync(
+      pushFile,
+      JSON.stringify(
+        { id: "1-push", op: { kind: "push", repoPath: oldRepo, branch: "x" } },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const seenRenames: Array<[string, string]> = [];
+    const deps: RewriteDeps = {
+      ...realDeps(),
+      renameFn: (from, to) => {
+        seenRenames.push([from, to]);
+        renameSync(from, to);
+      },
+    };
+    const report = rewriteStoredPaths({ targetRoot: root, queuePaths: emptyQueuePaths }, map, deps);
+
+    expect(report.rewritten).toBe(2);
+    const renamedTo = seenRenames.map(([, to]) => to).sort();
+    expect(renamedTo).toEqual([batchFile, pushFile].sort());
+    for (const [from] of seenRenames) {
+      expect(from).toMatch(/\.tmp-\d+$/);
+    }
+  });
+
+  it("fix-wave (#283 Important I1): a rename failure surfaces as a receipt warning, not a throw", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const raw = "---\n" + "id: t1\n" + "repo: /old/clones/watched/a/b\n" + "---\nbody\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const deps: RewriteDeps = {
+      ...realDeps(),
+      renameFn: () => {
+        throw new Error("EIO: rename failed");
+      },
+    };
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      deps,
+    );
+
+    expect(report.rewritten).toBe(0);
+    expect(report.files).toEqual([]);
+    expect(report.warnings.length).toBe(1);
+    expect(report.warnings[0]).toMatch(/write failed/);
+    expect(readFileSync(ticketPath, "utf8")).toBe(raw); // never partially written
   });
 
   it("warns when readdirFn throws on an existing queue dir and continues rather than throwing", () => {

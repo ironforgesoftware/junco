@@ -896,12 +896,23 @@ export async function runDataMigrate(
     // `dedupeSteps` handles the overlap between `dataRootJournalSteps`
     // (already flushed to `migratedFile` above, in this same run) and what
     // `readJournal` reads back here.
-    // Deliberately excludes migrateStateTree's own same-directory renames
-    // (phase 4) — those normalize pre-unification names in place at
-    // cfg.dataDir and are a separate, pre-existing concern from the ROOT
-    // relocation #283 is about; a real tree has almost always already been
-    // normalized by an earlier daemon startup by the time an operator runs
-    // this command.
+    // Does NOT exclude migrateStateTree's own same-directory renames (phase
+    // 4) — a prior comment here claimed it did; that was false (fix-wave
+    // review #283 Critical 1). The phase-5 merge branch above
+    // (`pair.to === migratedFile`) reads the LEGACY state-tree journal and
+    // appends ITS "renamed" steps into `migratedFile` — inside this SAME
+    // loop, which always runs BEFORE `readJournal(migratedFile, ...)` below.
+    // So `historicalRenameSteps` DOES include phase 4's same-directory
+    // renames whenever a pre-unification tree's legacy journal was merged
+    // in this run, or in an earlier one. That is correct and necessary: a
+    // stored value can legitimately match a phase-4 step first (e.g. a
+    // watchlist/ticket path under the pre-normalization `<root>/repos`),
+    // and `buildPrefixMap` now transitively resolves such a chain to its
+    // TRUE final destination — through any later root-level move of the
+    // renamed tree's new parent — rather than stopping at that intermediate
+    // hop (which a plain single-hop map used to do: the rewritten value
+    // landed inside the legacy root this same run then deletes). See
+    // `buildPrefixMap`'s own doc comment in migratePathRewrite.ts.
     const rewriteTargetQueue: Paths = {
       inbox: join(vaultQueueTarget, "inbox"),
       processing: join(vaultQueueTarget, "processing"),
@@ -909,15 +920,23 @@ export async function runDataMigrate(
       failed: join(vaultQueueTarget, "failed"),
     };
     const historicalRenameSteps = readJournal(migratedFile, readFileFn).steps;
+    const rewriteMapWarnings: string[] = [];
     const rewriteMap = buildPrefixMap(
       dedupeSteps([...historicalRenameSteps, ...queueJournalSteps, ...dataRootJournalSteps]),
+      rewriteMapWarnings,
     );
     rewriteReport = rewriteStoredPaths({ targetRoot, queuePaths: rewriteTargetQueue }, rewriteMap, {
       readFileFn,
       writeFileFn,
       readdirFn,
       existsFn,
+      renameFn,
     });
+    // Surface a prefix-chain cycle (buildPrefixMap's own guard — a journal
+    // that in principle contained `A -> B` and `B -> A`) on the SAME receipt
+    // channel every other path-rewrite warning uses, rather than a separate
+    // silent-drop path.
+    rewriteReport.warnings.push(...rewriteMapWarnings);
     if (rewriteReport.rewritten > 0) {
       // One summary step for the whole phase, not one per rewritten value —
       // "the result" the task brief asks to journal. readJournal/

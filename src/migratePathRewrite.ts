@@ -34,6 +34,23 @@
  *      `skipped-conflict` pair did not move; treating it as a rewrite
  *      target would point live data at a path that was never created,
  *      which is worse than the bug being fixed.
+ *
+ *      `buildPrefixMap` also transitively CLOSES the map (fix-wave review
+ *      #283 Critical 1): the journal can legitimately contain a same-
+ *      directory rename (`migrateStateTree`'s phase-4 normalization) AND a
+ *      later root-level move of the renamed tree's new parent — e.g.
+ *      `<root>/repos -> <root>/clones/watched` followed by
+ *      `<root>/clones -> <target>/cache/clones`. `rewritePath` (below)
+ *      applies exactly ONE matching prefix per call, so a stored value that
+ *      matches the FIRST (same-directory) step would land on that
+ *      intermediate hop — a path this run then deletes when it removes the
+ *      legacy root — instead of the true final destination. `buildPrefixMap`
+ *      resolves each entry's `to` against the same step set until it stops
+ *      changing (bounded by the step count; a visited-value set stops and
+ *      warns rather than looping or picking an arbitrary intermediate value
+ *      if the journal ever contained a cycle), so by the time `rewritePath`
+ *      sees the map every entry's `to` is already the FINAL destination and
+ *      a single hop is always enough.
  *   2. Never touch paths outside those prefixes. A repo cloned at
  *      `~/dev/foo` (or anywhere else junco never owned) is left alone —
  *      `rewritePath` returns `null` the moment no prefix applies.
@@ -67,11 +84,12 @@
  * (double-quoted / single-quoted / plain scalar, and what still isn't
  * handled).
  */
-import { sep, join } from "node:path";
+import { sep, join, dirname, basename } from "node:path";
 import type { Paths } from "./types.js";
 import type { MigrationStep } from "./dataMigrate.js";
 import { readWatchlist, writeWatchlist } from "./watchlist.js";
 import { WATCHLIST_FILENAME, REVIEW_ASSESS_SUBDIR, REVIEW_COMMENTS_SUBDIR } from "./dataTree.js";
+import { expandHome } from "./config.js";
 
 // Outbox and plan-set records are NOT identity-named under v2 (unlike
 // review/, which flatToV2Pairs maps "review" -> "review"): dataMigrate.ts's
@@ -93,12 +111,47 @@ export interface PathPrefix {
  * The actually-relocated prefixes, longest-`from`-first so a nested pair
  * (e.g. `/old/clones`) is tried before its parent (`/old`) and wins.
  * Only `"renamed"` steps count — see design rule 1 above.
+ *
+ * Each entry's `to` is transitively resolved against the SAME step set
+ * before this returns (fix-wave review #283 Critical 1) — a `to` that
+ * itself falls under another step's `from` (a same-directory rename
+ * followed by a root-level move of its new parent) is chased to its final
+ * destination, never left on an intermediate hop. Resolution for one entry
+ * is bounded to at most `renamed.length` hops (it can never loop forever)
+ * and tracks every value it has already visited for that entry: if the
+ * next hop would repeat one, that is a cycle in the journal itself (e.g.
+ * `A -> B` and `B -> A`, nonsensical for real renames but the journal is
+ * on-disk, untrusted input) — resolution for that entry stops at its
+ * LAST non-cyclic value (never an arbitrary later one) and a warning is
+ * pushed onto the optional `warnings` sink rather than the caller silently
+ * getting a partially- or wrongly-resolved prefix.
  */
-export function buildPrefixMap(steps: MigrationStep[]): PathPrefix[] {
-  return steps
+export function buildPrefixMap(steps: MigrationStep[], warnings: string[] = []): PathPrefix[] {
+  const renamed = steps
     .filter((s) => s.action === "renamed")
     .map((s): PathPrefix => ({ from: s.from, to: s.to }))
     .sort((a, b) => b.from.length - a.from.length);
+
+  const resolved = renamed.map((p) => ({ ...p }));
+  for (const entry of resolved) {
+    const visited = new Set<string>([entry.from, entry.to]);
+    for (let i = 0; i < renamed.length; i++) {
+      const hop = renamed.find((o) => entry.to === o.from || entry.to.startsWith(o.from + sep));
+      if (!hop) break;
+      const next = hop.to + entry.to.slice(hop.from.length);
+      if (visited.has(next)) {
+        warnings.push(
+          `path rewrite: cycle detected resolving ${entry.from} — stopped at ` +
+            `${entry.to} (${hop.from} -> ${hop.to} would repeat a value already seen)`,
+        );
+        break;
+      }
+      visited.add(next);
+      entry.to = next;
+    }
+  }
+
+  return resolved;
 }
 
 /** De-duplicates a `MigrationStep` array before it feeds `buildPrefixMap` —
@@ -173,6 +226,35 @@ export interface RewriteDeps {
    * does not otherwise seam directory listing, so this is its own seam. */
   readdirFn: (dir: string) => string[];
   existsFn: (p: string) => boolean;
+  /** Fix-wave review #283 Important I1: every JSON-record/outbox-op/ticket
+   * write below goes through `atomicWriteFile` (tmp-file via `writeFileFn`,
+   * then `renameFn` onto the real path) instead of a bare `writeFileFn` call
+   * — the same tmp+rename shape `rewriteConfig` (dataMigrateCmd.ts) and every
+   * OTHER writer of these exact stores already uses (reviewStore.ts:79,
+   * planSets.ts's `atomicWrite`, githubOutbox.ts:143, and this phase's own
+   * `writeWatchlist` call). A bare `writeFileFn` (== `writeFileSync` in
+   * production) truncates first, so a crash mid-write would corrupt a live
+   * queue ticket or plan-set record — the wrong failure mode for a migration
+   * whose whole premise is crash-resumability. Default in `dataMigrateCmd.ts`
+   * is `fs.renameSync`, already used elsewhere in that file for the same
+   * purpose. */
+  renameFn: (from: string, to: string) => void;
+}
+
+/** Writes `content` to `file` via tmp-file-then-rename rather than a bare
+ * (truncate-first) write — see `RewriteDeps.renameFn`'s doc comment for why.
+ * Same tmp-name shape `rewriteConfig` (dataMigrateCmd.ts) uses for the same
+ * seam: a dotfile alongside the real file (same directory — required for
+ * `renameFn` to be atomic on the same filesystem), suffixed with this
+ * process's pid so two concurrent migrates never collide on the tmp name. */
+function atomicWriteFile(
+  file: string,
+  content: string,
+  deps: Pick<RewriteDeps, "writeFileFn" | "renameFn">,
+): void {
+  const tmp = join(dirname(file), `.${basename(file)}.tmp-${process.pid}`);
+  deps.writeFileFn(tmp, content);
+  deps.renameFn(tmp, file);
 }
 
 export interface RewriteReport {
@@ -190,7 +272,10 @@ export interface RewriteReport {
 /** Walks the watchlist and every queue dir's tickets, rewriting `path`/
  * `repo:`/`workdir:` values that fall under a moved prefix. A no-op
  * (returns the zero report without touching anything) when `map` is empty —
- * the common case on a resumed run once nothing is left to move. */
+ * which, post-journal-seeding (design rule 4 above), is essentially never
+ * the case on a resumed run once ANYTHING has ever been journaled; an empty
+ * map now means a genuinely fresh install that has never moved a tree, not
+ * "nothing left to move" (fix-wave review #283 Minor 1). */
 export function rewriteStoredPaths(
   ctx: RewriteCtx,
   map: PathPrefix[],
@@ -341,7 +426,7 @@ function rewriteJsonRepoPathRecords(
     if (to === null) continue;
 
     try {
-      deps.writeFileFn(file, JSON.stringify({ ...parsed, repoPath: to }, null, 2) + "\n");
+      atomicWriteFile(file, JSON.stringify({ ...parsed, repoPath: to }, null, 2) + "\n", deps);
     } catch (e) {
       report.warnings.push(
         `record ${file}: write failed — ${e instanceof Error ? e.message : String(e)}`,
@@ -421,7 +506,11 @@ function rewriteOutboxOpsInDir(
     if (to === null) continue;
 
     try {
-      deps.writeFileFn(file, JSON.stringify({ ...stored, op: { ...op, repoPath: to } }, null, 2));
+      atomicWriteFile(
+        file,
+        JSON.stringify({ ...stored, op: { ...op, repoPath: to } }, null, 2),
+        deps,
+      );
     } catch (e) {
       report.warnings.push(
         `outbox op ${file}: write failed — ${e instanceof Error ? e.message : String(e)}`,
@@ -475,7 +564,7 @@ function rewriteTicketsInDir(
     if (count === 0) continue;
 
     try {
-      deps.writeFileFn(file, content);
+      atomicWriteFile(file, content, deps);
     } catch (e) {
       report.warnings.push(
         `ticket ${file}: write failed — ${e instanceof Error ? e.message : String(e)}`,
@@ -546,14 +635,33 @@ function rewriteTicketContent(
  * further down the frontmatter block.
  *
  * Returns `{ text: null, unparseable: false }` when the key is absent
- * entirely (a Q&A ticket with no `repo:`, or a `workdir:`-less ticket) —
- * nothing to warn about. Returns `{ text: null, unparseable: true }` when
- * the key IS present but its value doesn't fit one of the three shapes
+ * entirely (a Q&A ticket with no `repo:`, or a `workdir:`-less ticket), OR
+ * when it is present with NO value at all (a bare `repo:` — a YAML null,
+ * fix-wave review #283 Minor 2: not a broken value, so not a warning either
+ * — same "nothing to do" outcome the empty-string quoted forms `repo: ""` /
+ * `repo: ''` already got). Returns `{ text: null, unparseable: true }` when
+ * the key IS present with a value that doesn't fit one of the three shapes
  * above — a YAML block scalar (`repo: |`/`repo: >`, value on following
- * lines), an empty value, or a malformed/unterminated quoted string. The
- * caller (`rewriteTicketContent`/`rewriteTicketsInDir`) turns that into a
- * warning naming the file rather than silently reporting nothing — silence
- * is the exact failure mode this fix closes. */
+ * lines) or a malformed/unterminated quoted string. The caller
+ * (`rewriteTicketContent`/`rewriteTicketsInDir`) turns that into a warning
+ * naming the file rather than silently reporting nothing — silence is the
+ * exact failure mode this fix closes.
+ *
+ * A `~`/`~/...` value is expanded (the local `resolve` helper below, via
+ * config.ts's `expandHome`) before it is checked against `map` (fix-wave
+ * review #283 Minor 3): `map` only ever holds absolute paths, but junco's own SHIPPED
+ * templates and dispatch skill write `repo: ~/...`
+ * (templates/task-code.md:7, skills/junco-dispatch/EXAMPLE.md:21) — no
+ * src/ emitter ever does. Without expansion that shape matched neither
+ * `map` nor the unparseable branch: silent `rewritten: 0, warnings: []`,
+ * the same silent-failure class the earlier fix-wave closed for plain
+ * scalars. `os.homedir()` (via `expandHome`) is this phase's own operator's
+ * real `$HOME` — the identical mechanism `config.ts`'s own path resolution
+ * uses everywhere else in the codebase, not a guess — so a real tilde value
+ * under a moved prefix is now correctly resolved and rewritten to its
+ * absolute final path (matching every other value this phase writes back);
+ * one that still matches nothing after expansion is left exactly as
+ * written, same as any other out-of-scope path (design rule 2). */
 function rewriteFrontmatterField(
   text: string,
   key: "repo" | "workdir",
@@ -561,6 +669,7 @@ function rewriteFrontmatterField(
 ): { text: string | null; unparseable: boolean } {
   const splice = (index: number, matchLen: number, replacement: string): string =>
     text.slice(0, index) + replacement + text.slice(index + matchLen);
+  const resolve = (value: string): string | null => rewritePath(expandHome(value), map);
 
   const dqRe = new RegExp(`^(${key}:[ \\t]*)"((?:[^"\\\\\r\n]|\\\\.)*)"`, "m");
   const dq = dqRe.exec(text);
@@ -571,7 +680,7 @@ function rewriteFrontmatterField(
     } catch {
       return { text: null, unparseable: true };
     }
-    const to = rewritePath(value, map);
+    const to = resolve(value);
     if (to === null) return { text: null, unparseable: false };
     return { text: splice(dq.index, dq[0].length, dq[1] + JSON.stringify(to)), unparseable: false };
   }
@@ -581,7 +690,7 @@ function rewriteFrontmatterField(
   const sq = sqRe.exec(text);
   if (sq) {
     const value = sq[2].replace(/''/g, "'");
-    const to = rewritePath(value, map);
+    const to = resolve(value);
     if (to === null) return { text: null, unparseable: false };
     const replacementValue = `'${to.replace(/'/g, "''")}'`;
     return { text: splice(sq.index, sq[0].length, sq[1] + replacementValue), unparseable: false };
@@ -596,21 +705,24 @@ function rewriteFrontmatterField(
 
   const trailingWs = /[ \t]*$/.exec(plain[2])?.[0] ?? "";
   const value = plain[2].slice(0, plain[2].length - trailingWs.length);
+  if (value === "") {
+    // A bare `key:` with nothing after it — a YAML null, not a broken
+    // value (fix-wave review #283 Minor 2): nothing to do, nothing to warn.
+    return { text: null, unparseable: false };
+  }
   if (
-    value === "" ||
     value.startsWith("|") ||
     value.startsWith(">") ||
     value.startsWith('"') ||
     value.startsWith("'")
   ) {
-    // Block scalar (value on following lines), a genuinely empty value, or
-    // an unterminated/malformed quote that didn't match above — never
-    // guessed at, same precedent this module has always set for
-    // "block-scalar, indented" shapes.
+    // Block scalar (value on following lines), or an unterminated/malformed
+    // quote that didn't match above — never guessed at, same precedent this
+    // module has always set for "block-scalar, indented" shapes.
     return { text: null, unparseable: true };
   }
 
-  const to = rewritePath(value, map);
+  const to = resolve(value);
   if (to === null) return { text: null, unparseable: false };
   return {
     text: splice(plain.index, plain[0].length, plain[1] + to + trailingWs),

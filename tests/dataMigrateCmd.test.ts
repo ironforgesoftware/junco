@@ -590,8 +590,11 @@ describe("runDataMigrate — happy path (real tmp dirs, default dataDir)", () =>
     // across 2 files (the watchlist and the ticket).
     expect(out.join("")).toMatch(/path rewrite:\n\s+3 path\(s\) rewritten across 2 file\(s\)/);
 
-    // A second run is a no-op: nothing left to move, so the map is empty and
-    // the rewrite phase reports nothing to rewrite (idempotent).
+    // A second run is a no-op: the map is seeded from the durable journal
+    // again (essentially never empty post-seeding), but every value it
+    // would touch has already been rewritten, so rewritePath matches
+    // nothing and the rewrite phase reports nothing to rewrite (idempotent
+    // via design rule 4, migratePathRewrite.ts).
     const reloaded = loadConfig(configPath);
     const out2: string[] = [];
     const code2 = await runDataMigrate(
