@@ -14,7 +14,7 @@ import type { SkillLinksReport } from "../src/skillLinks.js";
 // ~/.junco — same trap the effectiveDataDir tests already guard against for
 // ensureDirs's mkdirFn). Tests exercising the skill-link wiring itself
 // override this.
-const NOOP_SKILL_LINKS: SkillLinksReport = { created: [], repaired: [], skipped: [], warnings: [] };
+const NOOP_SKILL_LINKS: SkillLinksReport = { entries: [] };
 const noopEnsureSkillLinksFn = (): SkillLinksReport => NOOP_SKILL_LINKS;
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), "wiz-"));
@@ -66,6 +66,90 @@ describe("buildWizardIO", () => {
     expect(calls).toBe(1);
     expect(seen).toEqual([join(dir, "vault")]);
     expect(read(cp).skills).toEqual({ harnessDirs: ["~/.claude/skills"] });
+  });
+
+  it("fresh mode: write creates the data dirs BEFORE ensuring skill links", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const order: string[] = [];
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      mkdirFn: () => {
+        order.push("mkdir");
+      },
+      ensureSkillLinksFn: () => {
+        order.push("links");
+        return NOOP_SKILL_LINKS;
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+
+    // ensureSkillLinks symlinks <dataDir>/skills; if it ran before the dirs
+    // existed, symlinkSync would fail into a failure kind ensureSkillLinks
+    // itself never throws — it would surface as a spurious skill-link
+    // warning in the Finale view instead of pointing at the real bug. Pin
+    // the order.
+    expect(order.length).toBeGreaterThan(1);
+    expect(order.at(-1)).toBe("links");
+    expect(order.filter((s) => s === "links")).toEqual(["links"]);
+  });
+
+  // #294's silent-failure hole, closed from the wizard side: `write` used to
+  // discard the ensureSkillLinks report entirely, so a failing link never
+  // surfaced anywhere. Now the failure-kind entries ride out on
+  // WriteResult.skillLinkFailures — the ONLY entries, filtered from the full
+  // report — which the Finale view (write()'s only production consumer,
+  // WizardApp.tsx) renders where the operator is already looking. No
+  // log.warn: this module's write() runs inside ink's live alternate-screen
+  // frame, where a foreign stdout write would corrupt the frame and then be
+  // discarded at unmount anyway.
+  it("carries a skill-link failure out through the write result instead of discarding it", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      ensureSkillLinksFn: () => ({
+        entries: [
+          {
+            path: "/h/.claude/skills/junco-dispatch",
+            kind: "symlink-failed",
+            harnessDir: "/h/.claude/skills",
+            detail: "EPERM: operation not permitted",
+          },
+          // A non-failure entry in the same report must NOT ride along —
+          // skillLinkFailures is the failures only, never the whole report.
+          { path: "/h/.codex/skills/junco-dispatch", kind: "ok", harnessDir: "/h/.codex/skills" },
+        ],
+      }),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    const result = r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+
+    expect(result.skillLinkFailures).toEqual([
+      {
+        path: "/h/.claude/skills/junco-dispatch",
+        kind: "symlink-failed",
+        harnessDir: "/h/.claude/skills",
+        detail: "EPERM: operation not permitted",
+      },
+    ]);
+  });
+
+  it("write result carries no skill-link failures when the report is all-quiet", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      ensureSkillLinksFn: noopEnsureSkillLinksFn,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    const result = r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+
+    expect(result.skillLinkFailures).toEqual([]);
   });
 
   it("rerun mode reads the existing raw config into initialAnswers", () => {
