@@ -1,8 +1,12 @@
 /**
  * Classify a provider/session error string into an infrastructure failure
  * class. The SDK flattens HTTP status into display text (no structured codes
- * reach the event stream — verified against pi-coding-agent 0.80.3), so this
- * is deliberately text-pattern based, mirroring the SDK's own retry matcher.
+ * reach the event stream — verified against pi-coding-agent 0.84.2: pi-ai's
+ * `ProviderResponse.status` exists but is only ever handed to an opt-in
+ * `onResponse` callback junco never registers, and every error field on
+ * `AgentSessionEvent`/`AgentEvent` — `errorMessage`, `finalError`, a thrown
+ * Error's `.message` — is a plain string), so this is deliberately
+ * text-pattern based, mirroring the SDK's own retry matcher.
  * Order matters: quota errors ride a 429, so quota is checked before
  * rate_limit; model_not_found often carries a 404 that must not read as
  * outage. Outage is split into two regexes: human phrases match

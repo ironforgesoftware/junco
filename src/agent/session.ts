@@ -40,11 +40,11 @@ export type AgentEvent = AgentSessionEvent;
  * surface this small lets `runAgent` be exercised with a fake (see
  * tests/session.test.ts) and isolates the real SDK to `makePiSessionFactory`.
  *
- * Verified against the installed SDK (`dist/core/agent-session.d.ts`):
- *   - subscribe(listener): () => void   (line 240)
- *   - prompt(text, options?): Promise<void>  (line 326; resolves after the agent loop finishes)
- *   - dispose(): void   (line 256)
- *   - abort(): Promise<void>   (line 402)
+ * Verified against the installed SDK 0.84.2 (`dist/core/agent-session.d.ts`):
+ *   - subscribe(listener): () => void   (line 276)
+ *   - prompt(text, options?): Promise<void>  (line 355; resolves after the agent loop finishes)
+ *   - dispose(): void   (line 283)
+ *   - abort(): Promise<void>   (line 433)
  */
 export interface AgentSessionLike {
   subscribe(listener: (event: AgentEvent) => void): () => void;
@@ -381,15 +381,22 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * (./modelSetup.js): the three-way cascade — Pi `models.json` → the SDK's
  * builtin hosted catalog → an inline in-memory `registerProvider` — behind the
  * `RegistryLike`/`RegistryOps` seam so that logic is unit-testable without an
- * SDK import. This factory supplies the registry ops (`ModelRegistry.create`/
- * `.inMemory`, both bound to `authStorage`) and consumes the resolved
+ * SDK import. This factory supplies the registry ops via `sdkRegistryOps`
+ * (below), which bridges to the SDK's async `ModelRuntime.create` bound to
+ * junco's own `credentials` store, and consumes the resolved
  * `{ model, registry }`.
  *
- * Auth: `AuthStorage.inMemory()` never touches the operator's real
- * `~/.pi/agent/auth.json`. A resolved `cfg.model.apiKey` is injected via
- * `authStorage.setRuntimeApiKey(provider, cfg.model.apiKey)` (auth-storage.d.ts:63),
- * the HIGHEST-priority source in `getApiKey` (auth-storage.d.ts:124-134); a null
- * key defers to the SDK's own provider env-var fallback at request time.
+ * Auth: `credentials` is a junco-owned in-memory `CredentialStore`
+ * (`inMemoryCredentialStore`, ./credentialStore.js) seeded with the resolved
+ * `cfg.model.apiKey` under `provider` before `ModelRuntime.create` runs — it
+ * never touches the operator's real `~/.pi/agent/auth.json`. Passing
+ * `credentials` explicitly is load-bearing: `ModelRuntime.create`'s own
+ * default is a store file-backed at `authPath`, and that backend CREATES the
+ * file (`CreateModelRuntimeOptions.credentials`/`.authPath`, `dist/core/
+ * model-runtime.d.ts:4-6`, verified against 0.84.2 — `AuthStorage` itself is
+ * no longer exported from the SDK's root; only `readStoredCredential` is,
+ * per `dist/index.d.ts:4`). A null `cfg.model.apiKey` seeds nothing and
+ * defers to the SDK's own provider env-var fallback at request time.
  *
  * Settings: `SettingsManager.inMemory({ retry })` avoids reading
  * `~/.pi/agent/settings.json` or the target repo's `.pi/settings.json` (the
@@ -404,7 +411,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * Model id: `cfg.model.id` is provider-prefixed (e.g. "openai/gpt-4o-mini").
  * We split on the first "/" into provider + bare model id (`splitModelId`,
  * consumed by `resolveModelViaRegistries` for the models.json/catalog/inline
- * cascade); here the split instead feeds `setRuntimeApiKey(provider, ...)`.
+ * cascade); here the split instead feeds the `credentials` seed's key
+ * (`{ [provider]: cfg.model.apiKey }`).
  *
  * `overrides` lets a caller (e.g. the post-session critic) build a session with
  * NO tools (`tools: []`) and a different thinking level. When omitted the
@@ -557,10 +565,12 @@ function sdkRegistryOps(
 }
 
 /** The subset of the SDK's resolved `Model<Api>` fields `getResolvedModelInfo`
- * surfaces (verified against `dist/core/model-registry.d.ts` re-exported
- * `Model<Api>` in `@earendil-works/pi-ai/compat`'s `types.d.ts:567-591`: `id`,
- * `provider`, `baseUrl`, `api`, `cost` all present on every resolved model
- * regardless of cascade path). */
+ * surfaces (verified against the installed 0.84.2: `@earendil-works/pi-ai`
+ * resolves as a nested dependency of `pi-coding-agent`, not hoisted to the
+ * workspace root — `node_modules/@earendil-works/pi-coding-agent/node_modules/
+ * @earendil-works/pi-ai/dist/types.d.ts:670-691`: `id`, `provider`, `baseUrl`,
+ * `api`, `cost` all present on every resolved model regardless of cascade
+ * path). */
 interface SdkResolvedModelFields {
   provider: string;
   id: string;

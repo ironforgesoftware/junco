@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -808,6 +808,35 @@ describe("models.json file path — SDK resolution", () => {
       modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
     });
     expect(typeof (runtime as { getModel?: unknown }).getModel).toBe("function");
+  });
+
+  // The key-never-on-disk invariant (session.ts's sdkRegistryOps doc comment):
+  // ModelRuntime.create's own defaults are file-backed (`authPath` under
+  // ~/.pi/agent/auth.json, `modelsPath` under ~/.pi/agent/models.json) and the
+  // backend CREATES ~/.pi if it doesn't exist. Stating `credentials` and
+  // `modelsPath` explicitly is what prevents that. Nothing currently fails if
+  // a future SDK default starts writing there again — this pins it.
+  it("resolving through the real SDK never creates ~/.pi (key-never-on-disk invariant)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "junco-pi-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+      const runtime = await ModelRuntime.create({
+        credentials: inMemoryCredentialStore({ omlx: "sk-must-not-persist" }),
+        modelsPath: null,
+        refreshOnCreate: false,
+        modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
+      });
+      expect(runtime.getModels().length).toBeGreaterThan(0);
+      // The SDK's defaults would put auth.json and models.json under ~/.pi and
+      // CREATE them; stating credentials + modelsPath is what prevents it.
+      expect(existsSync(join(home, ".pi"))).toBe(false);
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
