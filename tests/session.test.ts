@@ -936,6 +936,9 @@ describe("models.json file path — SDK resolution", () => {
             maxTokens: 64000,
             cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
             thinkingLevel: "medium",
+            // Required on ModelConfig since the qwen38 template work (#301);
+            // mirrors the canonical default in tests/helpers/config.ts.
+            thinkingLevelMap: { medium: "medium", xhigh: "xhigh" },
             compat: {},
           },
         },
