@@ -64,6 +64,7 @@ import {
 import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { extractPlanSetBody } from "./githubInbox.js";
+import { submitAsIssue } from "./submitAsIssue.js";
 import { parsePlanSet, compilePlan, hashPlan } from "./planCompiler.js";
 import { materializePlanSet, submitPlanSet } from "./planSets.js";
 import { slugifyId } from "./slug.js";
@@ -230,6 +231,8 @@ Subcommands:
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
   submit --plan <file> --repo <path>  Compile an approved junco-plan fence
                   into its child tickets and submit them all
+  submit --as-issue <file>  File the ticket as a parked, unlabeled GitHub issue
+                  via the bot account — a human applies the trigger label to launch it
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
   skill install [--harness <name|path>]...  Link the junco-dispatch skill into
@@ -250,6 +253,8 @@ Options:
   --plan                (unwatch) Print what would be deleted as JSON; delete nothing;
                         (submit) Compile a junco-plan fence into child tickets
   --repo <path>        (submit --plan) Repo path stamped into the compiled tickets
+  --as-issue            (submit) File as a parked, unlabeled GitHub issue via the
+                        bot account instead of the local inbox
   --help, -h            Show this help message
   --version             Print junco's version and exit
 `;
@@ -293,6 +298,7 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       harness: { type: "string", multiple: true },
       plan: { type: "boolean", default: false },
       repo: { type: "string" },
+      "as-issue": { type: "boolean", default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -1015,6 +1021,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     const cfg = loadConfigFn(configPath);
     const idHint = fileArg !== "-" ? basename(fileArg).replace(/\.md$/, "") : undefined;
+
+    // submit --as-issue <file>: file the ticket as a parked, unlabeled GitHub
+    // issue via the bot account (src/submitAsIssue.ts) instead of the local
+    // inbox — a human applying the trigger label is what launches it. Checked
+    // ahead of --plan: `--as-issue --plan` is the plan-set door (Task 5), not
+    // this single-ticket path.
+    if (values["as-issue"] === true && values.plan !== true) {
+      if (fileArg === "-") {
+        process.stderr.write("Usage: junco submit --as-issue <file> (stdin not supported)\n");
+        return 2;
+      }
+      return await submitAsIssue(cfg, fileArg, content, { plan: false });
+    }
 
     // submit --plan <file> --repo <path>: compile an approved junco-plan
     // fence into its child tickets and fan them out. Local trust model — no

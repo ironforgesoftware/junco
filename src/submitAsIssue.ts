@@ -1,0 +1,143 @@
+/**
+ * `junco submit --as-issue` — file a locally-authored ticket as a PARKED,
+ * UNLABELED GitHub issue (spec docs/superpowers/specs/2026-08-21-issue-as-
+ * inbox-design.md). The bot authors; only a human's trigger label launches.
+ * Frontmatter is machine-owned at extraction time (buildExecutionTicket), so
+ * everything except id/repo/pr_title is discarded here — loudly.
+ */
+import type { Config } from "./types.js";
+import { parseTicket } from "./ticket.js";
+import { resolveWatchedRepos } from "./watchlist.js";
+import { withBotAuth } from "./ghAuth.js";
+import { createIssueLive } from "./assessFiling.js";
+import { gh } from "./git.js";
+import { expandHome } from "./config.js";
+import { canonPath } from "./unwatchCmd.js";
+
+const CARRIED_KEYS = new Set(["id", "repo", "pr_title"]);
+
+/** Wrap `body` in a fence longer than any backtick run inside it, so the
+ * bridge's extractFencedBlock (junco-ticket tag, githubInbox.ts) round-trips
+ * bodies that contain code fences of their own. */
+export function wrapInFence(tag: string, body: string): string {
+  const longest = Math.max(2, ...[...body.matchAll(/`+/g)].map((m) => m[0].length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${tag}\n${body.trimEnd()}\n${fence}`;
+}
+
+function firstHeading(body: string): string | null {
+  const m = /^#\s+(.+)$/m.exec(body);
+  return m ? m[1].trim() : null;
+}
+
+export interface SubmitAsIssueDeps {
+  ghFn?: typeof gh;
+  printFn?: (s: string) => void;
+  errFn?: (s: string) => void;
+  /** Resolve (and attach) the bot's GitHub auth context onto Config. Typed
+   * monomorphically over Config (mirrors cli.ts's withBotAuthFn: the real
+   * withBotAuth is generic over `C extends Pick<Config, "botAccount" |
+   * "ghBin">`, which this narrower shape still satisfies). Default: the real
+   * withBotAuth. */
+  withBotAuthFn?: (cfg: Config) => Promise<Config>;
+}
+
+/**
+ * File `content` (already-read ticket text for `fileArg`) as a parked,
+ * unlabeled issue on the ticket's `repo:` target — which must already be a
+ * bridge-watched repo, since an unwatched repo could never launch the parked
+ * issue. `opts.plan`/`opts.repoFlag` are reserved for the plan-set door
+ * (Task 5); this path only ever handles a single ticket.
+ */
+export async function submitAsIssue(
+  cfg: Config,
+  fileArg: string,
+  content: string,
+  opts: { plan: boolean; repoFlag?: string },
+  deps: SubmitAsIssueDeps = {},
+): Promise<number> {
+  const ghFn = deps.ghFn ?? gh;
+  const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
+  const err = deps.errFn ?? ((s: string) => process.stderr.write(s));
+  const withBotAuthFn = deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c));
+
+  if (!cfg.github.enabled) {
+    err("junco submit --as-issue: GitHub integration is disabled (github.enabled)\n");
+    return 1;
+  }
+  if (!cfg.botAccount.enabled) {
+    err(
+      "junco submit --as-issue: requires the bot account (botAccount.enabled) — " +
+        "the bot authors the parked issue; a human's trigger label launches it. Run: junco auth login\n",
+    );
+    return 1;
+  }
+
+  // parseTicket (src/ticket.ts) never throws — unparsable YAML degrades to an
+  // empty frontmatter record rather than raising. The try/catch is defensive
+  // only (forward-compatible if that contract ever tightens); the realistic
+  // "invalid ticket" refusal below is the missing repo: field check, which is
+  // what a frontmatter-less/malformed ticket actually falls through to.
+  let parsed: ReturnType<typeof parseTicket>;
+  try {
+    parsed = parseTicket(fileArg, content);
+  } catch (e) {
+    err(`junco submit --as-issue: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
+
+  const repoRaw = parsed.frontmatter.repo;
+  if (typeof repoRaw !== "string" || repoRaw === "") {
+    err("junco submit --as-issue: ticket needs a repo: frontmatter path\n");
+    return 1;
+  }
+
+  const target = canonPath(expandHome(repoRaw));
+  const watched = resolveWatchedRepos(cfg).find((r) => canonPath(r.path) === target);
+  if (!watched) {
+    err(
+      `junco submit --as-issue: ${repoRaw} is not a bridge-watched repo — the parked issue could ` +
+        "never launch. Watch the repo (github.repos / junco watch) or submit locally instead.\n",
+    );
+    return 1;
+  }
+
+  // Frontmatter is machine-owned on the issue route (buildExecutionTicket
+  // stamps it fresh when the bridge later extracts the fence) — everything
+  // beyond id/repo/pr_title is silently dropped by the round-trip, so warn
+  // loudly rather than let an operator believe e.g. timeout_minutes: survived.
+  const discarded = Object.keys(parsed.frontmatter).filter((k) => !CARRIED_KEYS.has(k));
+  if (discarded.length > 0) {
+    err(
+      "junco submit --as-issue: warning — frontmatter is machine-owned on the issue route; " +
+        `discarded: ${discarded.join(", ")}\n`,
+    );
+  }
+
+  const body = parsed.body.trim();
+  const title =
+    (typeof parsed.frontmatter.pr_title === "string" && parsed.frontmatter.pr_title) ||
+    firstHeading(body) ||
+    parsed.id;
+  const issueBody =
+    `_Parked junco ticket — apply the \`${cfg.github.triggerLabel}\` label to queue it._\n\n` +
+    wrapInFence("junco-ticket", body) +
+    "\n\n<!-- junco:as-issue -->\n";
+
+  let cfgBot: Config;
+  try {
+    cfgBot = await withBotAuthFn(cfg);
+  } catch (e) {
+    err(`junco submit --as-issue: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
+
+  const url = await createIssueLive(cfgBot, watched.nwo, title, issueBody, [], ghFn);
+  if (url === null) {
+    err("junco submit --as-issue: gh issue create failed (see log)\n");
+    return 1;
+  }
+  print(`parked as issue: ${url}\n`);
+  print(`apply label '${cfg.github.triggerLabel}' to queue\n`);
+  return 0;
+}
