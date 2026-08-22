@@ -44,10 +44,8 @@ import {
   detectInstalledHarnesses,
   ensureSkillLinks,
   isSkillLinkFailure,
-  renderSkillLinkEntry,
   type SkillLinksReport,
 } from "./skillLinks.js";
-import { log } from "./logging.js";
 
 export interface WizardDeps {
   detectDeps?: DetectDeps;
@@ -206,13 +204,20 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
       // Skill links ride config-init: consent was just written (or confirmed)
       // by the Skills chapter, so materialize it now rather than at first
       // daemon start. Failures are non-fatal by ensureSkillLinks contract —
-      // this call must never throw — but are no longer silently discarded
-      // (#294): log them so a failure here is visible somewhere.
+      // this call must never throw — and are no longer silently discarded
+      // (#294): the failure entries ride out on WriteResult.skillLinkFailures
+      // for the Finale view to render (the ONLY production caller of this
+      // write() is WizardApp.tsx, and Finale is what the operator is looking
+      // at right after it resolves). Deliberately no log.warn here: this
+      // module's only production consumer runs inside ink's alternate-screen
+      // frame (runDashboard, alternateScreen: true) with no worker.log sink
+      // wired up (the `dashboard` cli.ts branch never calls
+      // setupLogOutputs) — a stray process.stdout.write would corrupt the
+      // live frame and then be discarded at unmount, reaching nobody either
+      // way.
       const linkReport = (deps.ensureSkillLinksFn ?? ensureSkillLinks)(loadConfigFn(resolved));
-      for (const e of linkReport.entries.filter((e) => isSkillLinkFailure(e.kind))) {
-        log.warn("skill link failed", { detail: renderSkillLinkEntry(e) });
-      }
-      return { written, configPath: resolved, queueRoot, changes };
+      const skillLinkFailures = linkReport.entries.filter((e) => isSkillLinkFailure(e.kind));
+      return { written, configPath: resolved, queueRoot, changes, skillLinkFailures };
     },
     flightCheck: () => flightChecks(loadConfigFn(resolved), deps.detectDeps),
     effectiveDataDir,

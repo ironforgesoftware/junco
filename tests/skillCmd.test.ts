@@ -215,6 +215,29 @@ describe("runSkillInstallCommand", () => {
     expect(code).toBe(0);
   });
 
+  // The reviewer's live-sandbox find that actually motivated the refactor:
+  // the OLD exit rule (`w.startsWith(p) || w.startsWith(dirname(p))`) was a
+  // raw STRING prefix match against the rendered warning, so a failure on a
+  // SIBLING harness directory that merely shares a string PREFIX with the
+  // requested one — "skills-extra" starts with "skills" — produced a false
+  // exit 1. The `.codex`-vs-`.claude` test above does NOT cover this: those
+  // two strings share no prefix at all, so the old rule got that case right
+  // too. This is the case that actually changed behavior (CHANGELOG'd).
+  it("exit 0 when a failing entry's harnessDir is a sibling sharing a string prefix with the requested one", async () => {
+    const requested = "/sbxroot/home/.claude/skills";
+    const sibling = "/sbxroot/home/.claude/skills-extra"; // starts with `requested` as a raw string
+    const h = harness({}, [requested]);
+    h.deps.ensureFn = () => ({
+      entries: [{ path: join(sibling, "junco-dispatch"), kind: "occupied", harnessDir: sibling }],
+    });
+    const code = await runSkillInstallCommand(
+      "/sbxroot/config.json",
+      { harness: [requested] },
+      h.deps,
+    );
+    expect(code).toBe(0);
+  });
+
   // mkdir-failed is keyed on the harness DIR itself, not a link path — this
   // is exactly the case the old `dirname` arm existed to catch. A structured
   // `harnessDir` matches it directly, no path arithmetic required.

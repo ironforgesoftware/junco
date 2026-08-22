@@ -5,8 +5,9 @@
  * <dataDir>/skills/junco-dispatch. Idempotent + self-healing: absent links
  * are created, broken symlinks replaced, VALID symlinks left alone even when
  * they point elsewhere (an operator's checkout-targeted mount survives npm-
- * installed runs), and real files/dirs are never touched. All failures are
- * warnings — the daemon must never fail to start over skill links.
+ * installed runs), and real files/dirs are never touched. Every failure kind
+ * (isSkillLinkFailure) is non-fatal — the daemon must never fail to start
+ * over skill links.
  */
 import { lstatSync, existsSync, symlinkSync, unlinkSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -58,15 +59,29 @@ export interface SkillLinksReport {
 }
 
 /** True for every kind that represents a failure ensureSkillLinks could not
- * resolve on its own (the old "warnings" bucket). */
+ * resolve on its own (the old "warnings" bucket). A `switch` over every
+ * `SkillLinkKind` with a `never`-typed default: adding a new kind without
+ * classifying it here is a compile error, not a silently-false fall-through
+ * — skillCmd.ts's print filters exhaust the union by hand, so an
+ * unclassified kind would otherwise print nothing at all. */
 export function isSkillLinkFailure(kind: SkillLinkKind): boolean {
-  return (
-    kind === "target-missing" ||
-    kind === "symlink-failed" ||
-    kind === "occupied" ||
-    kind === "repair-failed" ||
-    kind === "mkdir-failed"
-  );
+  switch (kind) {
+    case "created":
+    case "repaired":
+    case "ok":
+    case "harness-not-installed":
+      return false;
+    case "target-missing":
+    case "symlink-failed":
+    case "occupied":
+    case "repair-failed":
+    case "mkdir-failed":
+      return true;
+    default: {
+      const exhaustive: never = kind;
+      throw new Error(`unclassified SkillLinkKind: ${String(exhaustive)}`);
+    }
+  }
 }
 
 /** Renders one entry's human-readable detail text — the prose that used to

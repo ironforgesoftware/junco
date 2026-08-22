@@ -259,8 +259,8 @@ export interface MainLoopDeps {
    * <dataDir>/skills and fans out per-harness junco-dispatch links (Task 2's
    * ensureSkillLinks). Runs immediately after the data-tree ensure so the
    * mount's parent always exists first. Idempotent + never throws — an
-   * all-quiet report (nothing created/repaired/warned) logs nothing.
-   * Defaults to the real ensureSkillLinks. */
+   * all-quiet report (every entry's kind is "ok" or "harness-not-installed")
+   * logs nothing. Defaults to the real ensureSkillLinks. */
   ensureSkillLinksFn?: (cfg: Config) => SkillLinksReport;
   // Injectable so tests never bind a real port. Defaults to the real
   // startHealthServer. The daemon shares the process-wide `metrics` singleton.
@@ -672,8 +672,9 @@ export async function mainLoop(
   // Skill links (Task 3): symlink the packaged skills/ dir into <dataDir>/skills
   // and fan out per-harness junco-dispatch links, right after the data tree
   // exists (the mount's parent) and before anything else touches it. Never
-  // throws — failures land as warnings in the report. An all-quiet run (the
-  // common case once links are established) logs nothing.
+  // throws — failures land as failure-kind entries in the report
+  // (isSkillLinkFailure), never exceptions. An all-quiet run (the common case
+  // once links are established) logs nothing.
   const linkReport = ensureSkillLinksFn(cfg);
   // All-quiet contract: "ok" (already a valid link) and "harness-not-installed"
   // (never linked here, by design) are the steady-state outcomes once links

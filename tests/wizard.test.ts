@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -87,8 +87,10 @@ describe("buildWizardIO", () => {
     r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
 
     // ensureSkillLinks symlinks <dataDir>/skills; if it ran before the dirs
-    // existed, symlinkSync would fail into a warning ensureSkillLinks never
-    // throws and wizard.ts discards — an invisible regression. Pin the order.
+    // existed, symlinkSync would fail into a failure kind ensureSkillLinks
+    // itself never throws — it would surface as a spurious skill-link
+    // warning in the Finale view instead of pointing at the real bug. Pin
+    // the order.
     expect(order.length).toBeGreaterThan(1);
     expect(order.at(-1)).toBe("links");
     expect(order.filter((s) => s === "links")).toEqual(["links"]);
@@ -96,59 +98,58 @@ describe("buildWizardIO", () => {
 
   // #294's silent-failure hole, closed from the wizard side: `write` used to
   // discard the ensureSkillLinks report entirely, so a failing link never
-  // surfaced anywhere. Now a failure kind gets logged.
-  it("logs a skill-link failure instead of discarding it", async () => {
-    const { log } = await import("../src/logging.js");
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const dir = tmp();
-      const cp = join(dir, "config.json");
-      const r = buildWizardIO(cp, {
-        existsFn: () => false,
-        ensureSkillLinksFn: () => ({
-          entries: [
-            {
-              path: "/h/.claude/skills/junco-dispatch",
-              kind: "symlink-failed",
-              harnessDir: "/h/.claude/skills",
-              detail: "EPERM: operation not permitted",
-            },
-          ],
-        }),
-      });
-      expect(r.ok).toBe(true);
-      if (!r.ok) throw new Error("expected ok:true");
-      r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+  // surfaced anywhere. Now the failure-kind entries ride out on
+  // WriteResult.skillLinkFailures — the ONLY entries, filtered from the full
+  // report — which the Finale view (write()'s only production consumer,
+  // WizardApp.tsx) renders where the operator is already looking. No
+  // log.warn: this module's write() runs inside ink's live alternate-screen
+  // frame, where a foreign stdout write would corrupt the frame and then be
+  // discarded at unmount anyway.
+  it("carries a skill-link failure out through the write result instead of discarding it", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      ensureSkillLinksFn: () => ({
+        entries: [
+          {
+            path: "/h/.claude/skills/junco-dispatch",
+            kind: "symlink-failed",
+            harnessDir: "/h/.claude/skills",
+            detail: "EPERM: operation not permitted",
+          },
+          // A non-failure entry in the same report must NOT ride along —
+          // skillLinkFailures is the failures only, never the whole report.
+          { path: "/h/.codex/skills/junco-dispatch", kind: "ok", harnessDir: "/h/.codex/skills" },
+        ],
+      }),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    const result = r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
 
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      const [msg, fields] = warnSpy.mock.calls[0] ?? [];
-      expect(msg).toBe("skill link failed");
-      expect(String((fields as { detail?: unknown } | undefined)?.detail)).toContain(
-        "symlink failed",
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(result.skillLinkFailures).toEqual([
+      {
+        path: "/h/.claude/skills/junco-dispatch",
+        kind: "symlink-failed",
+        harnessDir: "/h/.claude/skills",
+        detail: "EPERM: operation not permitted",
+      },
+    ]);
   });
 
-  it("logs nothing when the skill-link report is all-quiet", async () => {
-    const { log } = await import("../src/logging.js");
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const dir = tmp();
-      const cp = join(dir, "config.json");
-      const r = buildWizardIO(cp, {
-        existsFn: () => false,
-        ensureSkillLinksFn: noopEnsureSkillLinksFn,
-      });
-      expect(r.ok).toBe(true);
-      if (!r.ok) throw new Error("expected ok:true");
-      r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+  it("write result carries no skill-link failures when the report is all-quiet", () => {
+    const dir = tmp();
+    const cp = join(dir, "config.json");
+    const r = buildWizardIO(cp, {
+      existsFn: () => false,
+      ensureSkillLinksFn: noopEnsureSkillLinksFn,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok:true");
+    const result = r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
 
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(result.skillLinkFailures).toEqual([]);
   });
 
   it("rerun mode reads the existing raw config into initialAnswers", () => {
