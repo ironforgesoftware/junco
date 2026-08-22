@@ -372,7 +372,17 @@ carrying both `plan` and `github`). The sweep maintains one `junco:plan-status`
 dashboard comment (create-or-PATCH; a byte-identical render skips the `gh`
 call), swaps a single set-level lifecycle label (queued → working →
 done/failed), posts one degraded comment the first sweep a task fails, and
-closes maintenance once every task is terminal. An edited-and-re-approved plan
+closes maintenance once every task is terminal — stamping `closedAt` at that
+moment (or, for a record that was already closed before this stamp existed,
+on the first sweep to see it, so nothing closed pre-upgrade is warm forever).
+A closed record with no `closedAt` is always treated as warm (never silently
+skipped); once `closedAt` is more than 30 days old (`PLAN_SET_COLD_MS`), the
+sweep stops probing that record's plan comment at all — no supersede check,
+no dashboard/label/degraded work, just a `continue`. The operator-visible
+consequence: a set closed longer than that cold window can no longer be
+superseded by editing its plan comment (only a still-warm, recently-closed
+set can); reopening one after that point means dispatching a fresh set. An
+edited-and-re-approved plan
 comment supersedes the set in place — gated by the same approval temporal
 check as dispatch when `github.requireApproval` is on, or by the hash edit
 alone when it's off, and deferred (not skipped) for a sweep while any child is
@@ -384,12 +394,24 @@ copy. `junco submit --plan <file> --repo <path>` runs the same compiler behind
 the same `planSets.enabled` flag, but as a local CLI door — no GitHub issue,
 no approval gate, trusted exactly like any locally-authored ticket.
 
-Two known edges: an offline-queued parent PR (the outbox `pr` op's push/create
-replay parked while GitHub was unreachable) currently satisfies a dependent's
-`depends_on` edge at ticket-**done**, not at PR-merge — the finalized ticket
-file records no `pr_url` until the op replays, so a same-sweep dependent can
-claim before the real PR exists; a follow-up will close this window. And
-disabling `planSets.enabled` mid-set freezes that issue's set labels and
+One known edge: an offline-queued parent PR (the outbox `pr` op's push/create
+replay parked while GitHub was unreachable) finalizes DONE with a `pr_queued:
+true` marker and no `pr_url` (`finalize.ts`'s `renderPrResult`). The
+dependency sweep (`sweepDependencies`, `src/ticketDeps.ts`) treats that marker
+as WAIT, not satisfied — a same-sweep dependent can no longer claim before the
+real PR exists (#298). The outbox flush writes the real `pr_url` back onto the
+done ticket (`upsertResultPrUrl`, idempotent, re-run on every flush pass so a
+crash/exception/transiently-missing-file mid-write-back converges rather than
+stranding the edge) and the next sweep stamps the dependent once it probes
+that URL as merged. If the `pr` op instead dead-letters BEFORE ever creating
+the PR — a permanent, non-network failure (expired token, deleted base
+branch, lost repo write access) — no replay is ever coming to clear the
+marker, so the flush strips `pr_queued` itself on dead-letter and logs
+loudly: the dependent's edge stamps and it fails noisily on its own PR
+create, same as before #298. (Dead-letter here does not cascade the failure
+to the dependent — that is a larger semantic change and remains a possible
+follow-up.) And disabling `planSets.enabled` mid-set freezes that issue's set
+labels and
 dashboard comment at their last-synced state (`maintainPlanSets` short-
 circuits the whole sweep when the flag is off) — the children keep executing
 via the always-on Layer-1 machinery regardless; re-enabling the flag resumes

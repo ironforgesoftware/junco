@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Sandbox: plan-set records (`plans/`, `data/plans`) and `migrate.lock` are now denied to the agent sandbox. The plan-set records directory joined the data tree with the plan-sets work but was never added to the sandbox deny list, leaving control-plane state (repo paths, issue numbers, task ids) agent-readable. A new classification test fails if a future data-tree entry is added without being denied or explicitly exempted.
+- Plan sets: a dependent ticket no longer claims while its dependency's PR is still queued for offline delivery — the offline endgame now records a machine-readable `pr_queued` marker, the dependency sweep waits on it, and the outbox writes the real `pr_url` back onto the finalized ticket when the PR opens.
+- Plan sets: the maintenance sweep stops probing the plan comment of sets closed more than 30 days ago, so its per-sweep GitHub cost no longer grows with every set ever created.
 
 ### Security
 

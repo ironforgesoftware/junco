@@ -30,6 +30,9 @@ import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
 import { upgradeQueuedFiledRecord } from "./assessReview.js";
 import { dataTreePaths } from "./dataTree.js";
+import { queuePaths } from "./config.js";
+import { findTicketFile } from "./ticketDeps.js";
+import { upsertResultPrUrl, clearResultPrQueued } from "./resultMeta.js";
 
 export type OutboxOp =
   | { kind: "labels"; nwo: string; issue: number; add: string[]; remove: string[] }
@@ -52,6 +55,13 @@ export type OutboxOp =
       labels: string[];
       reviewers: string[];
       finalize: { ticketId: string; status: string; finalText: string } | null;
+      /** The finalized ticket this PR belongs to, so the flush can write the
+       * real pr_url back into its done file when the PR is finally opened
+       * (#298). Distinct from `finalize.ticketId`, which is deliberately null
+       * for external tickets and plan-set children — exactly the tickets
+       * `depends_on` cares about. Optional: ops queued by older builds parse
+       * without it and simply skip the upsert. */
+      ticketId?: string | null;
       pushed: boolean;
       prUrl: string | null;
       /** Set on the tail op re-enqueued when a created PR op dead-letters with
@@ -472,6 +482,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
   const rmFn = deps.rmFn ?? ((p: string) => rmSync(p, { force: true }));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
+  const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   const { dir, dead } = outboxPaths(cfg);
   const result: FlushResult = { sent: 0, dead: 0, remaining: 0, offline: false };
 
@@ -581,6 +592,50 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
       });
     };
 
+    // On dead-letter of a `pr` op that never even got as far as creating the
+    // PR (prUrl still null — the mirror-image case of preserveFinalizeTail,
+    // above) but carries a linked ticketId, the done ticket's `pr_queued`
+    // marker would otherwise strand every dependent waiting on it forever:
+    // sweepDependencies (src/ticketDeps.ts:262) treats `pr_queued` as "wait",
+    // with no cascade, no backoff, and no link back to the op that died
+    // (#298). A dead-lettered op here means every retry already exhausted a
+    // NON-network failure — an expired token, a deleted base branch, lost
+    // repo write access — so no future replay will ever come clear it.
+    // Stripping the marker restores exactly the pre-#298 behaviour: the
+    // dependent's edge stamps and it fails loudly on its own PR create,
+    // instead of waiting on a strand nothing will ever resolve. Deliberately
+    // does NOT cascade-fail the dependent itself — that's a larger semantic
+    // change (linking a dead outbox op to the tickets it blocks) and out of
+    // scope here.
+    const clearStrandedPrQueuedMarker = (s: StoredOp): void => {
+      const op = s.op;
+      if (op.kind !== "pr" || op.prUrl !== null || !op.ticketId) return;
+      const ticketId = op.ticketId;
+      try {
+        const doneFile = findTicketFile(queuePaths(cfg).done, ticketId);
+        if (!doneFile) {
+          log.error(
+            "PR outbox op dead-lettered before creating a PR — done ticket not found to clear pr_queued",
+            { id: s.id, ticket: ticketId, error: s.lastError },
+          );
+          return;
+        }
+        const before = readFileFn(doneFile);
+        const after = clearResultPrQueued(before);
+        if (after !== before) writeFileFn(doneFile, after);
+        log.error(
+          "PR outbox op dead-lettered before creating a PR — cleared pr_queued so dependents stop waiting on it",
+          { id: s.id, ticket: ticketId, error: s.lastError },
+        );
+      } catch (e) {
+        log.error("PR outbox op dead-lettered before creating a PR — failed to clear pr_queued", {
+          id: s.id,
+          ticket: ticketId,
+          error: describeError(e),
+        });
+      }
+    };
+
     const execute = async (s: StoredOp): Promise<void> => {
       const op = s.op;
       switch (op.kind) {
@@ -667,6 +722,48 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
               rmSync(dirname(bodyFile), { recursive: true, force: true });
             }
             rewrite(s);
+          }
+
+          // The ticket finalized to done/ before this PR existed (offline
+          // endgame). Write the real URL into its result block so the
+          // dependency sweep can probe it — dependents are parked waiting on
+          // exactly this (#298). Hoisted OUT of the `prUrl === null` branch
+          // (deliberately unconditional on ticketId+prUrl, not on whether the
+          // PR was just created this pass): `rewrite(s)` above checkpoints
+          // `op.prUrl` before this ever runs, so a crash/SIGTERM in that
+          // window, a write-back exception, or a transiently-missing done
+          // file all resume with `prUrl !== null` on the next flush — if this
+          // stayed gated on `prUrl === null` it would then be skipped
+          // forever. upsertResultPrUrl is idempotent (strips any existing
+          // pr_url before appending), so re-running costs nothing and turns
+          // this into a converging retry instead of a one-shot; it also gives
+          // the `finalizeOnly` tail op — which already carries both fields —
+          // a free second chance. Best-effort: a missing or unreadable done
+          // file must never fail the op, which has already succeeded.
+          if (op.ticketId && op.prUrl !== null) {
+            const ticketId = op.ticketId;
+            const prUrl = op.prUrl;
+            try {
+              const doneFile = findTicketFile(queuePaths(cfg).done, ticketId);
+              if (doneFile) {
+                writeFileFn(doneFile, upsertResultPrUrl(readFileFn(doneFile), prUrl));
+              } else {
+                // Legitimately unwritten, not a sign of trouble: the ticket
+                // was moved or removed by hand since it finalized (archived,
+                // manually deleted, …) — NOT retried. `junco retry` only ever
+                // reads failed/ (src/retryCmd.ts:49), and an offline-PR
+                // ticket always finalizes to done/, so retry can never be the
+                // cause here.
+                log.info("outbox: done ticket not found for pr_url write-back", {
+                  ticket: ticketId,
+                });
+              }
+            } catch (e) {
+              log.warn("outbox: could not record pr_url on the done ticket", {
+                ticket: ticketId,
+                error: describeError(e),
+              });
+            }
           }
           if (op.finalize !== null && op.issue !== null) {
             const body = prFlushComment(op.finalize, op.prUrl!);
@@ -810,6 +907,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           result.dead++;
           log.warn("outbox op dead-lettered", { id: s.id, error: s.lastError });
           preserveFinalizeTail(s);
+          clearStrandedPrQueuedMarker(s);
         } else {
           if (rewrite(s)) result.remaining++;
         }

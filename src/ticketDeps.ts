@@ -251,8 +251,15 @@ export async function sweepDependencies(
         }
         const doneFile = findTicketFile(paths.done, d);
         if (!doneFile) continue; // raced away between state check and read
-        const prUrl = parseResultMeta(readFileSync(doneFile, "utf8")).prUrl;
+        const meta = parseResultMeta(readFileSync(doneFile, "utf8"));
+        const prUrl = meta.prUrl;
         if (prUrl === null) {
+          // An offline endgame finalized DONE with its PR parked in the outbox:
+          // the PR is coming but does not exist yet, so the edge is NOT
+          // satisfiable — wait for the flush to upsert pr_url (Task 2). Without
+          // this, dependents claim and build against a base that has no PR
+          // (#298). A dependency that simply produced no PR (Q&A) still stamps.
+          if (meta.prQueued) continue;
           if (stampSatisfied(t, d)) {
             report.stamped++;
             changed = true;

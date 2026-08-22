@@ -44,6 +44,14 @@ import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.j
 const GH_TIMEOUT = 60_000;
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** How long after close a plan-set record keeps being probed for plan-comment
+ * edits. Past this, the sweep skips it entirely — the supersede path is for
+ * live work, and an unbounded per-sweep gh call per historical set is the
+ * cost #298 flagged. Generous on purpose: the probe is the only way a plan
+ * edit is noticed, so this trades a rare very-late supersede for a bounded
+ * steady-state cost. */
+const PLAN_SET_COLD_MS = 30 * 24 * 60 * 60 * 1000;
+
 export type DispatchResult =
   | { ok: true; submitted: string[]; skipped: string[] }
   | { ok: false; errors: string[] };
@@ -613,11 +621,35 @@ export async function maintainPlanSets(
     const g = storedRecord.github;
     if (g === null) continue;
 
+    // Cold: closed long enough ago that we stop paying a gh probe for it every
+    // sweep. `closedAt` absent (older record) counts as warm — never skip on
+    // missing data.
+    if (storedRecord.closed && storedRecord.closedAt) {
+      const age = Date.parse(nowIso) - Date.parse(storedRecord.closedAt);
+      if (Number.isFinite(age) && age > PLAN_SET_COLD_MS) continue;
+    }
+
     const outcome = await trySupersede(cfg, storedRecord, g, ghFn, ll, getLogin, nowIso);
     if (outcome.kind === "deferred" || outcome.kind === "compile-failed") continue;
     const record = outcome.kind === "superseded" ? outcome.record : storedRecord;
 
-    if (record.closed) continue;
+    if (record.closed) {
+      // A record closed before the cold-window upgrade (or by a build that
+      // predates `closedAt` entirely) never acquired the stamp — the
+      // warm-on-absent rule above (`storedRecord.closed && storedRecord.closedAt`)
+      // means such a record is warm FOREVER, so it keeps paying the paginated
+      // `gh api …/comments` probe every sweep, indefinitely: exactly the cost
+      // the cold window exists to bound (#298). Stamp it here — the one place
+      // that still runs for an already-closed record — so it goes cold after
+      // one more window, same as a record closed after the upgrade. No
+      // supersede is lost: trySupersede (above) already had its chance this
+      // sweep before this branch is reached.
+      if (!record.closedAt) {
+        record.closedAt = nowIso;
+        writePlanSetRecord(cfg, record);
+      }
+      continue;
+    }
     let changed = false;
 
     const state = resolveSetState(cfg, record);
@@ -681,6 +713,7 @@ export async function maintainPlanSets(
     // reopens with a fresh record on a later sweep.
     if (state.allTerminal && !record.closed) {
       record.closed = true;
+      record.closedAt = nowIso;
       changed = true;
     }
 
