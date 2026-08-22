@@ -28,7 +28,8 @@ const MODEL_DEFAULTS: ModelConfig = {
   maxTokens: 49152,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   thinkingLevel: "medium",
-  compat: { maxTokensField: "max_tokens", thinkingFormat: "qwen-chat-template" },
+  thinkingLevelMap: { medium: "medium", xhigh: "xhigh" },
+  compat: { maxTokensField: "max_tokens", thinkingFormat: "chat-template" },
 };
 
 function mkCfg(model: Partial<ModelConfig> = {}): Config {
@@ -63,8 +64,11 @@ describe("buildInlineProviderConfig", () => {
     expect(m.contextWindow).toBe(131072);
     expect(m.maxTokens).toBe(49152);
     expect(m.reasoning).toBe(true);
-    expect(m.compat.thinkingFormat).toBe("qwen-chat-template");
+    expect(m.compat.thinkingFormat).toBe("chat-template");
     expect(m.compat.maxTokensField).toBe("max_tokens");
+    // The SDK reads thinkingLevelMap from the MODEL spec (not compat) — it must
+    // be forwarded or effort names reach the chat template unmapped.
+    expect(m.thinkingLevelMap).toEqual({ medium: "medium", xhigh: "xhigh" });
   });
 
   it("flows configured overrides through (api, context window, compat)", () => {

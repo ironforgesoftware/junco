@@ -39,6 +39,10 @@ export interface ModelConfig {
   maxTokens: number;
   cost: ModelCost;
   thinkingLevel: string; // worker default thinking level
+  // Effort-name translation the SDK applies per request (model-spec field, not
+  // compat): junco level → the chat template's effort vocabulary. Replaced
+  // wholesale by a config override, never merged.
+  thinkingLevelMap: Record<string, string>;
   compat: ModelCompat;
 }
 /** One watched GitHub repo: name-with-owner and its local clone. */

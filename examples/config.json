@@ -23,8 +23,7 @@
     "maxTokens": 49152,
     "thinkingLevel": "medium",
     "compat": {
-      "maxTokensField": "max_tokens",
-      "thinkingFormat": "qwen-chat-template"
+      "maxTokensField": "max_tokens"
     }
   },
   "supervisor": {

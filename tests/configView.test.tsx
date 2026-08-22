@@ -287,7 +287,7 @@ describe("ConfigView", () => {
     expect(f).not.toMatch(/Subdirectory under vaultRoot holding inbox\/processing\/done\/failed\./);
   });
 
-  it("windows the right pane so a long section (model, 18 levers) doesn't overflow", async () => {
+  it("windows the right pane so a long section (model, 19 levers) doesn't overflow", async () => {
     const p = fixture({ vaultRoot: "/v" });
     const { lastFrame, stdin } = render(
       <ConfigView configPath={p} onExit={() => {}} visibleRows={4} />,
@@ -295,12 +295,12 @@ describe("ConfigView", () => {
     await until(() => /model/i.test(lastFrame() ?? ""));
     await press(stdin, RIGHT); // general → model
     await until(() => /id\s+local\/my-model/.test(lastFrame() ?? ""));
-    // The initial window covers only the first 4 of model's 18 levers
+    // The initial window covers only the first 4 of model's 19 levers
     // (id, source, modelsJson, api) — the rest is clipped, not overflowed.
     let f = lastFrame() ?? "";
     expect(f).toMatch(/id\s+local\/my-model/);
     expect(f).not.toMatch(/compat\s+\{\}/); // last lever, well past the window
-    expect(f).toMatch(/▼ 14 more/); // clipped-below indicator
+    expect(f).toMatch(/▼ 15 more/); // clipped-below indicator
 
     // Move focus 13 rows down, past the window bottom (id..api); the
     // window must scroll so the newly focused lever (index 13: cost.output)
