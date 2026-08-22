@@ -38,29 +38,17 @@ import {
   type PlanSetRecord,
 } from "../src/planSets.js";
 import { dispatchPlanSet, maintainPlanSets } from "../src/planSetBridge.js";
-import { PLAN_COMMENT_MARKER, PLAN_SET_FENCE, extractPlanSetBody } from "../src/githubInbox.js";
+import {
+  PLAN_COMMENT_MARKER,
+  PLAN_SET_FENCE,
+  extractPlanSetBody,
+  githubTicketId,
+} from "../src/githubInbox.js";
 import { hashPlan } from "../src/planCompiler.js";
 import { sweepDependencies } from "../src/ticketDeps.js";
+import { submitTicket } from "../src/dispatch.js";
 import { log } from "../src/logging.js";
 import { makeConfig } from "./helpers/config.js";
-
-// Boxed passthrough (mirrors tests/daemon.test.ts's runOnceBox pattern): every
-// test gets the REAL submitTicket unless it overrides `.current` for its own
-// duration. Needed only by the crash-window test below — a genuine per-child
-// linkSync EEXIST race can't be forced from a test: whatever file we'd place
-// to collide is exactly what ticketState's own pre-check would already read
-// as "already landed" and skip BEFORE ever reaching submitTicket.
-const submitTicketBox = vi.hoisted(() => ({
-  current: null as unknown as (...a: unknown[]) => unknown,
-}));
-vi.mock("../src/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/dispatch.js")>();
-  submitTicketBox.current = actual.submitTicket as unknown as (...a: unknown[]) => unknown;
-  return {
-    ...actual,
-    submitTicket: (...args: unknown[]) => submitTicketBox.current(...args),
-  };
-});
 
 const NOW = "2026-08-20T12:00:00.000Z";
 
@@ -135,6 +123,40 @@ describe("dispatchPlanSet", () => {
     const again = dispatchPlanSet(cfg, { nwo: "acme/api", path: "/p" }, 9, FENCE, NOW);
     expect(again.ok && again.submitted).toEqual([`${planId}-b`]);
     expect(again.ok && again.skipped).toEqual([`${planId}-a`]);
+  });
+
+  it("submits set children through the injected submitFn", () => {
+    const calls: string[] = [];
+    const r = dispatchPlanSet(cfg, { nwo: "acme/api", path: "/p" }, 9, FENCE, NOW, {
+      submitFn: (_cfg, _content, opts) => {
+        calls.push(opts?.idHint ?? "?");
+        return "/fake/dst.md";
+      },
+    });
+    expect(r.ok).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+    // The real submitTicket never ran, so nothing landed on disk.
+    expect(readdirSync(qp.inbox)).toEqual([]);
+  });
+
+  // Constraint check (#298 review round 2): the strict default must stay
+  // strict — an ordinary re-dispatch (e.g. the bridge's lingering-plan-ready
+  // cleanup re-attempt) must never resurrect a genuinely-failed child, only
+  // ever resubmit one still `absent`.
+  it("strict default never resurrects a genuinely-failed child on re-dispatch", () => {
+    const first = dispatchPlanSet(cfg, { nwo: "acme/api", path: "/p" }, 9, FENCE, NOW);
+    if (!first.ok) throw new Error("setup");
+    const planId = first.submitted[0].replace(/-a$/, "");
+    // "b" genuinely failed (ordinary execution failure — no superseded
+    // marker), moved out of inbox into failed/ by the worker.
+    renameSync(join(qp.inbox, `${planId}-b.md`), join(qp.failed, `${planId}-b.md`));
+
+    const again = dispatchPlanSet(cfg, { nwo: "acme/api", path: "/p" }, 9, FENCE, NOW);
+    expect(again.ok && again.submitted).toEqual([]);
+    expect(again.ok && again.skipped.sort()).toEqual([`${planId}-a`, `${planId}-b`]);
+    // Untouched — not resurrected into inbox.
+    expect(existsSync(join(qp.failed, `${planId}-b.md`))).toBe(true);
+    expect(existsSync(join(qp.inbox, `${planId}-b.md`))).toBe(false);
   });
 });
 
@@ -439,6 +461,78 @@ describe("maintainPlanSets", () => {
     expect(readLog().length).toBe(before);
   });
 
+  // Fix wave C, item 3: a record that can NEVER close (every task terminal,
+  // but the close gate's `!record.lastFailedHash` guard holds it open — see
+  // the compile-failed-supersede tests below) has no `closedAt` to ever
+  // engage the cold window above. `staleSince` gets the SAME bounded
+  // treatment. These two isolate that skip in the same direct-write style as
+  // the `closedAt` pair above; the end-to-end stamping (via an actual
+  // compile-failed supersede) is covered separately, further down.
+  it("does not probe a record stuck behind an unresolved compile-failed edit longer than the cold window", async () => {
+    writePlanSetRecord(
+      cfg,
+      baseRecord({
+        closed: false,
+        lastFailedHash: "some-failed-hash",
+        staleSince: "2020-01-01T00:00:00.000Z",
+      }),
+    );
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readLog().length).toBe(before);
+  });
+
+  it("still probes a recently-stuck record", async () => {
+    writePlanSetRecord(
+      cfg,
+      baseRecord({
+        closed: false,
+        lastFailedHash: "some-failed-hash",
+        staleSince: "2026-08-21T00:00:00.000Z",
+      }),
+    );
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    expect(readLog().length).toBeGreaterThan(before);
+  });
+
+  // I4 (#298 review round 2): isolates the label-mapping half of the bug from
+  // the closing-decision half (covered separately below, in the
+  // compile-failed supersede test) — this record has NO genuine failure at
+  // all, just a done task and a superseded one, and closes normally.
+  it("an all-terminal set with only superseded children (no genuine failure) labels failed, not queued, and posts no degraded comment", async () => {
+    const rec = baseRecord({
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:working",
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(
+      join(qp.failed, "p1-b.md"),
+      "---\nid: p1-b\n---\nB\n\n---\n<!-- junco-result\nstatus: failed\nsuperseded: newhash\n-->\n",
+    );
+
+    await maintainPlanSets(cfg);
+
+    const blocks = readLog();
+    const labelSwap = blocks.find((b) => b.argv.startsWith("issue edit"));
+    expect(labelSwap?.argv).toContain("--add-label junco:failed");
+
+    const persisted = readPlanSetRecord(cfg, "p1");
+    expect(persisted?.lastLabel).toBe("junco:failed"); // NOT junco:queued
+    expect(persisted?.closed).toBe(true); // a genuinely finished set still closes
+    // No genuine failure — the degraded comment (gated on anyFailed, not on
+    // allTerminal) must not fire.
+    expect(persisted?.degradedPosted).toBe(false);
+    expect(blocks.filter((b) => b.argv.startsWith("issue comment"))).toHaveLength(0);
+  });
+
   it("failure posts one degraded comment (once) and the failed label at all-terminal", async () => {
     // "a" done, "b" failed with a dependency-failure reason — this also
     // covers the carried-over gap: renderDashboard's
@@ -719,20 +813,15 @@ tasks:
     // EDITED_FENCE compiles to tasks a/b/c — make ONLY "c"'s submit throw,
     // exactly like a genuine inbox-slug collision (dispatch.ts's "ticket
     // already queued" error), while "b" (a real recompile) still goes
-    // through the real submitTicket.
-    const realSubmitTicket = submitTicketBox.current;
-    submitTicketBox.current = (...args: unknown[]) => {
-      const opts = args[2] as { idHint?: string } | undefined;
+    // through the real submitTicket. Injected via maintainPlanSets's
+    // submitFn seam (no whole-module mock needed).
+    const throwingSubmit: typeof submitTicket = (c, content, opts, deps) => {
       if (opts?.idHint === "p1-c") {
         throw new Error("ticket already queued: /sbxroot/queue/inbox/p1-c.md");
       }
-      return realSubmitTicket(...args);
+      return submitTicket(c, content, opts, deps);
     };
-    try {
-      await maintainPlanSets(cfg);
-    } finally {
-      submitTicketBox.current = realSubmitTicket;
-    }
+    await maintainPlanSets(cfg, { submitFn: throwingSubmit });
 
     // "b" (the edited recompile) landed normally; "c" did not — its submit
     // threw and was contained, not fatal to the rest of the fan-out.
@@ -751,13 +840,176 @@ tasks:
     expect(persisted?.tasks.map((t) => t.id).sort()).toEqual(["a", "b", "c"]);
 
     const warned = warnSpy.mock.calls.some(
-      (call) => typeof call[0] === "string" && call[0].includes("child submit failed at fan-out"),
+      (call) => typeof call[0] === "string" && call[0].includes("child submit failed"),
     );
     expect(warned).toBe(true);
     warnSpy.mockRestore();
   });
 
-  it("supersede defers while a child is processing", async () => {
+  // TRAP: a `skipped` child (already done, or already landed) is a normal
+  // no-op — only a child whose submit THREW is stranded, and only a stranded
+  // child belongs on `pendingFanout`. The fresh record's new hash would
+  // otherwise block trySupersede's gate forever, and since the child never
+  // landed there is no failed/ file for `junco retry` either — recovery
+  // requires draining `pendingFanout` BEFORE the hash gate, even on a sweep
+  // where nothing changed.
+  // Fix wave C, item 1: dispatchPlanSet (INITIAL dispatch — no prior record,
+  // no supersede) used to leave `pendingFanout` unset even when a child's
+  // submit threw, so the drain below had nothing to work with — a child
+  // stranded at first dispatch had NO recovery path at all, unlike a child
+  // stranded during a supersede fan-out (trySupersede already seeds this
+  // field — see the neighboring tests). This proves dispatchPlanSet now
+  // seeds it too, and that a later `maintainPlanSets` sweep's
+  // `drainPendingFanout` actually resubmits the child from it.
+  it("retries a child stranded at INITIAL DISPATCH (not supersede) on a later sweep's drain", async () => {
+    const repo = { nwo: "acme/api", path: "/sbxroot/repo" };
+    const planId = githubTicketId(repo.nwo, 9);
+
+    // Sweep 1 (dispatch): "b"'s submit throws — a transient error, contained
+    // per-child, so it must not abort "a"'s submit or the record write.
+    let failFor: string | null = `${planId}-b`;
+    const submitFn: typeof submitTicket = (c, content, opts, deps) => {
+      if (opts?.idHint === failFor) throw new Error("disk full");
+      return submitTicket(c, content, opts, deps);
+    };
+    const dr = dispatchPlanSet(cfg, repo, 9, FENCE, NOW, { submitFn });
+    expect(dr.ok).toBe(true);
+    if (!dr.ok) return;
+    expect(dr.submitted).toEqual([`${planId}-a`]);
+    expect(dr.stranded).toEqual([`${planId}-b`]);
+    expect(existsSync(join(qp.inbox, `${planId}-b.md`))).toBe(false);
+
+    const afterDispatch = readPlanSetRecord(cfg, planId);
+    expect(afterDispatch?.pendingFanout).toEqual([`${planId}-b`]);
+
+    // Sweep 2 (a later maintenance sweep): "b" no longer fails — the drain
+    // must resubmit it straight from the record, with no fresh dispatch and
+    // no supersede (the plan comment fixture defaults to none — see
+    // writeFakeGh's `comments` default of "").
+    failFor = null;
+    await maintainPlanSets(cfg, { submitFn });
+
+    expect(existsSync(join(qp.inbox, `${planId}-b.md`))).toBe(true);
+    expect(readFileSync(join(qp.inbox, `${planId}-b.md`), "utf8")).toContain("T B");
+    expect(readPlanSetRecord(cfg, planId)?.pendingFanout ?? []).toEqual([]);
+  });
+
+  it("retries a child stranded by a fan-out failure on the next sweep, even though the hash is unchanged", async () => {
+    const rec = baseRecord({
+      hash: "orig-hash",
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:done",
+      closed: true, // a finished set — supersede must reopen it
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(qp.inbox, "p1-b.md"), "---\nid: p1-b\n---\nOld B body\n");
+
+    writeFakeGh(root, approvedSupersedeGhOpts(EDITED_FENCE));
+
+    // EDITED_FENCE compiles to a/b/c. Sweep 1: "c"'s submit throws (like a
+    // transient disk-full error, not a collision) — contained per-child, so
+    // it must not abort the rest of the fan-out or the record write.
+    let failFor: string | null = "p1-c";
+    const submitFn: typeof submitTicket = (c, content, opts, deps) => {
+      if (opts?.idHint === failFor) throw new Error("disk full");
+      return submitTicket(c, content, opts, deps);
+    };
+    await maintainPlanSets(cfg, { submitFn });
+
+    expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(false);
+    const afterFirst = readPlanSetRecord(cfg, "p1");
+    expect(afterFirst?.pendingFanout).toEqual(["p1-c"]);
+    // Only the thrower is stranded — "b" (a normal, successful recompile
+    // submit) must NOT also appear on pendingFanout.
+    expect(afterFirst?.pendingFanout).not.toContain("p1-b");
+
+    // Sweep 2: the fake gh still reports the SAME edited fence — the hash
+    // gate would normally read "unchanged" and do nothing. The stranded
+    // child must still be drained and submitted.
+    failFor = null;
+    await maintainPlanSets(cfg, { submitFn });
+
+    expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(true);
+    expect(readFileSync(join(qp.inbox, "p1-c.md"), "utf8")).toContain("T C");
+    expect(readPlanSetRecord(cfg, "p1")?.pendingFanout ?? []).toEqual([]);
+  });
+
+  // C1 (#298 review round 2): the PRECEDING test strands "c" — a task the
+  // edited fence NEWLY ADDS. Such a task was never in the queue at all, so it
+  // stays `absent` when its submit throws — the one shape the OLD absent-only
+  // drain guard actually handled. The typical stranded child looks nothing
+  // like that: step 5 of trySupersede (`supersedeUnclaimed`) moves every
+  // unclaimed child — an ORDINARY task that was just sitting in inbox,
+  // edited in place — from inbox/ into failed/ (superseded marker) BEFORE the
+  // fan-out even runs. When THAT child's fresh-copy submit then throws, its
+  // ticketState is `failed`, not `absent` — the old guard
+  // (`ticketState(...) !== "absent"`) silently dropped it, never resubmitting,
+  // and the set would go on to close (fresh record, all-terminal) with no
+  // recovery path (`junco retry --all` also skips a superseded-marked file).
+  it("retries a child stranded by a fan-out failure when it was an ORDINARY EDITED task disposed from inbox, not a newly-added one (C1)", async () => {
+    const rec = baseRecord({
+      hash: "orig-hash",
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:done",
+      closed: true, // a finished set — supersede must reopen it
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(qp.inbox, "p1-b.md"), "---\nid: p1-b\n---\nOld B body\n");
+
+    // The edit touches ONLY "b" — same ids as the original set, no new task.
+    const EDITED_FENCE_SAME_IDS = `version: 1
+tasks:
+  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}
+  - {id: b, title: T B v2, depends_on: [], description: Build B v2., acceptance: [works]}
+`;
+    writeFakeGh(root, approvedSupersedeGhOpts(EDITED_FENCE_SAME_IDS));
+
+    // Sweep 1: step 5 disposes "b" (unclaimed, in inbox) into failed/ with a
+    // superseded marker BEFORE the fan-out — then the fresh recompiled "b"'s
+    // submit throws (a transient error, contained per-child).
+    let failFor: string | null = "p1-b";
+    const submitFn: typeof submitTicket = (c, content, opts, deps) => {
+      if (opts?.idHint === failFor) throw new Error("disk full");
+      return submitTicket(c, content, opts, deps);
+    };
+    await maintainPlanSets(cfg, { submitFn });
+
+    // "b" is disposed (superseded marker) — proving the stranded child here
+    // really is the "failed" shape, not "absent".
+    const disposedB = readFileSync(join(qp.failed, "p1-b.md"), "utf8");
+    expect(disposedB).toContain("status: failed");
+    expect(disposedB).toContain("superseded:");
+    expect(existsSync(join(qp.inbox, "p1-b.md"))).toBe(false); // fresh copy never landed
+
+    const afterFirst = readPlanSetRecord(cfg, "p1");
+    expect(afterFirst?.pendingFanout).toEqual(["p1-b"]);
+
+    // Sweep 2: hash is unchanged (same edited fence) — the stranded child
+    // must still be drained and resubmitted despite reading `failed`, not
+    // `absent`, in the queue.
+    failFor = null;
+    await maintainPlanSets(cfg, { submitFn });
+
+    expect(existsSync(join(qp.inbox, "p1-b.md"))).toBe(true);
+    expect(readFileSync(join(qp.inbox, "p1-b.md"), "utf8")).toContain("T B v2");
+    expect(readPlanSetRecord(cfg, "p1")?.pendingFanout ?? []).toEqual([]);
+  });
+
+  it("supersede defers while a child is processing, but ordinary maintenance still runs (#298)", async () => {
     const rec = baseRecord({
       hash: "orig-hash",
       tasks: [
@@ -774,10 +1026,12 @@ tasks:
     writeFakeGh(root, approvedSupersedeGhOpts(EDITED_FENCE));
     await maintainPlanSets(cfg);
 
-    // Deferred: nothing disposed, nothing fanned out, the record untouched.
-    // The whole per-record sweep is skipped this pass (not just the
-    // supersede attempt) — the ordinary dashboard/label maintenance for this
-    // record catches up on a later, quiescent sweep instead.
+    // Deferred: nothing disposed, nothing fanned out — only the SUPERSEDE is
+    // skipped. The record's ordinary maintenance (dashboard sync here) still
+    // runs this same sweep instead of freezing for as long as "b" stays
+    // in flight (#298). The desired label ("working") already matches
+    // lastLabel, so no label swap fires — that is NOT evidence maintenance
+    // was skipped, just that it had nothing to change.
     expect(existsSync(join(qp.processing, "p1-b.md"))).toBe(true); // untouched
     expect(existsSync(join(qp.inbox, "p1-a.md"))).toBe(true); // untouched, no c
     expect(existsSync(join(qp.inbox, "p1-c.md"))).toBe(false);
@@ -786,13 +1040,15 @@ tasks:
     const persisted = readPlanSetRecord(cfg, "p1");
     expect(persisted?.hash).toBe("orig-hash"); // unchanged — no supersede happened
     expect(persisted?.tasks.map((t) => t.id)).toEqual(["a", "b"]); // old task list
-    expect(persisted?.lastLabel).toBe("junco:working"); // ordinary maintenance never ran
-    expect(persisted?.statusCommentId).toBeNull(); // no dashboard call this sweep
+    expect(persisted?.lastLabel).toBe("junco:working"); // desired label already matched
+    expect(persisted?.statusCommentId).toBe(555); // dashboard still synced this sweep
 
     const blocks = readLog();
     expect(blocks.find((b) => b.argv.includes("--remove-label junco:approved"))).toBeUndefined();
     expect(blocks.find((b) => b.argv.startsWith("issue edit"))).toBeUndefined();
-    expect(blocks.find((b) => b.argv.includes("--jq .id"))).toBeUndefined(); // no dashboard create
+    const dashboardCreate = blocks.find((b) => b.argv.includes("--jq .id"));
+    expect(dashboardCreate).toBeDefined(); // dashboard IS created despite the deferred supersede
+    expect(dashboardCreate?.body).toContain("junco:plan-status");
   });
 
   const BAD_FENCE = `version: 1
@@ -802,9 +1058,10 @@ tasks: []
   it("supersede compile failure is bounded: exactly one failure comment across two sweeps", async () => {
     // Task "a" is left fully absent (never seeded in any queue dir) so the
     // sweep-1 dispose pass (which runs BEFORE the compile check, per step 5)
-    // is a no-op — isolating this test to the bounded-re-entry behavior under
-    // test, not the (separate, expected) ordinary dashboard/label maintenance
-    // that runs on sweep 2 once trySupersede returns "unchanged".
+    // is a no-op — isolating this test to the bounded re-entry behavior under
+    // test (one failure comment, one label read, one approved-label removal —
+    // ever), independent of the ordinary dashboard/label maintenance that now
+    // runs every sweep (including sweep 1) alongside it (#298).
     const rec = baseRecord({
       hash: "orig-hash",
       tasks: [{ id: "a", ticketId: "p1-a", dependsOn: [] }],
@@ -849,6 +1106,110 @@ tasks: []
     const afterSecond = readPlanSetRecord(cfg, "p1");
     expect(afterSecond?.hash).toBe("orig-hash");
     expect(afterSecond?.lastFailedHash).toBe(expectedFailedHash);
+  });
+
+  // I4 (#298 review round 2): unlike the PRECEDING test (task "a" left fully
+  // absent, deliberately isolating the bounded-re-entry behavior), here "b"
+  // is UNCLAIMED (in inbox) — step 5 of trySupersede disposes it (superseded
+  // marker) BEFORE the compile check in step 6, so a compile failure leaves
+  // the set reading `allTerminal` (a: done, b: superseded) for the FIRST
+  // time, purely as a side effect of the botched edit — not because the set
+  // actually finished.
+  it("a compile-failed supersede does not close the set (and labels it failed, not queued) even though disposal makes it read all-terminal", async () => {
+    const rec = baseRecord({
+      hash: "orig-hash",
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:working",
+      closed: false,
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(qp.inbox, "p1-b.md"), "---\nid: p1-b\n---\nOld B body\n");
+
+    // A candidate that fails to compile — duplicate task id.
+    const BAD_EDITED_FENCE = `version: 1
+tasks:
+  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}
+  - {id: a, title: T A2, depends_on: [], description: Build A again., acceptance: [works]}
+`;
+    writeFakeGh(root, approvedSupersedeGhOpts(BAD_EDITED_FENCE));
+
+    await maintainPlanSets(cfg);
+
+    // "b" was disposed before the compile check ran.
+    const disposedB = readFileSync(join(qp.failed, "p1-b.md"), "utf8");
+    expect(disposedB).toContain("superseded:");
+
+    const persisted = readPlanSetRecord(cfg, "p1");
+    expect(persisted?.lastFailedHash).toBeDefined();
+    // Must NOT close: the record is stuck awaiting a human fix, not finished
+    // — closing here would go cold after PLAN_SET_COLD_MS and stop ever
+    // being probed for that fix again.
+    expect(persisted?.closed).toBe(false);
+    // And the label must say the set did not complete — not "queued", which
+    // is what the pre-I4 fallthrough produced for an all-terminal set with
+    // no GENUINE failure (only a done task and a superseded one).
+    expect(persisted?.lastLabel).toBe("junco:failed");
+  });
+
+  // Fix wave C, item 3: the PRECEDING test proves the set stays open; this
+  // one proves `staleSince` gets stamped as a side effect — once, on the
+  // FIRST sweep it happens, not re-stamped on every later sweep the same
+  // unfixed edit keeps it stuck — and that far enough past the cold window
+  // the sweep stops probing it at all, the same bounded treatment a
+  // genuinely closed record gets from `closedAt`.
+  it("a set stuck behind an unresolved compile-failed edit gets staleSince stamped once, on the first sweep it reads all-terminal, then goes cold", async () => {
+    const rec = baseRecord({
+      hash: "orig-hash",
+      tasks: [
+        { id: "a", ticketId: "p1-a", dependsOn: [] },
+        { id: "b", ticketId: "p1-b", dependsOn: [] },
+      ],
+      lastLabel: "junco:working",
+      closed: false,
+    });
+    writePlanSetRecord(cfg, rec);
+    writeFileSync(
+      join(qp.done, "p1-a.md"),
+      "---\nid: p1-a\n---\nA\n\n---\n<!-- junco-result\nstatus: completed\n-->\n",
+    );
+    writeFileSync(join(qp.inbox, "p1-b.md"), "---\nid: p1-b\n---\nOld B body\n");
+
+    const BAD_EDITED_FENCE = `version: 1
+tasks:
+  - {id: a, title: T A, depends_on: [], description: Build A., acceptance: [works]}
+  - {id: a, title: T A2, depends_on: [], description: Build A again., acceptance: [works]}
+`;
+    writeFakeGh(root, approvedSupersedeGhOpts(BAD_EDITED_FENCE));
+
+    // Sweep 1: compile fails; disposing "b" makes the set read all-terminal
+    // for the first time — staleSince gets stamped.
+    await maintainPlanSets(cfg, { nowIso: "2026-08-22T00:00:00.000Z" });
+    const afterFirst = readPlanSetRecord(cfg, "p1");
+    expect(afterFirst?.lastFailedHash).toBeDefined();
+    expect(afterFirst?.closed).toBe(false);
+    expect(afterFirst?.staleSince).toBe("2026-08-22T00:00:00.000Z");
+
+    // Sweep 2: still stuck on the SAME unfixed edit (trySupersede
+    // short-circuits at the hash gate, same as the preceding test) —
+    // staleSince must NOT move to the later sweep's time; it marks when the
+    // set FIRST got stuck, not "still stuck as of."
+    await maintainPlanSets(cfg, { nowIso: "2026-08-23T00:00:00.000Z" });
+    const afterSecond = readPlanSetRecord(cfg, "p1");
+    expect(afterSecond?.staleSince).toBe("2026-08-22T00:00:00.000Z");
+    expect(afterSecond?.closed).toBe(false);
+
+    // One cold window later, the sweep stops probing it altogether — same
+    // bounded per-sweep cost a genuinely closed record gets from `closedAt`.
+    const before = readLog().length;
+    await maintainPlanSets(cfg, { nowIso: "2026-09-22T01:00:00.000Z" });
+    expect(readLog().length).toBe(before);
   });
 
   it("supersede resubmits an execution-failed old task (not just an unclaimed one); its dependent does not cascade", async () => {

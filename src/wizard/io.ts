@@ -4,6 +4,7 @@
 import type { WizardAnswers, AnswerDiff } from "./flow.js";
 import type { CheckResult } from "./detect.js";
 import type { CatalogEntry } from "../agent/session.js";
+import type { SkillLinkEntry } from "../skillLinks.js";
 
 export type WizardOutcome = "written" | "unchanged" | "cancelled";
 
@@ -12,6 +13,12 @@ export interface WriteResult {
   configPath: string;
   queueRoot: string; // dirname of the inbox
   changes: AnswerDiff[]; // empty in fresh mode
+  /** The failure-kind entries (isSkillLinkFailure) from this write's
+   * ensureSkillLinks pass — never the whole report, and never "ok"/
+   * "created"/"repaired"/"harness-not-installed". write() is the only
+   * production producer (wizard.ts); Finale (the only production consumer)
+   * renders these where the operator is already looking. */
+  skillLinkFailures: SkillLinkEntry[];
 }
 
 /** Everything the Ink app needs from the outside world. Built by

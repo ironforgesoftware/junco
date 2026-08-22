@@ -143,7 +143,13 @@ function fakeIo(over: Partial<WizardIO> = {}): WizardIO {
     listCatalogProviders: async () => [{ provider: "acme", ids: ["m-fast"] }],
     write: (a) => {
       written.push(a);
-      return { written: true, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };
+      return {
+        written: true,
+        configPath: "/tmp/config.json",
+        queueRoot: "/tmp/q",
+        changes: [],
+        skillLinkFailures: [],
+      };
     },
     flightCheck: async () => [{ verdict: "ok", label: "inference endpoint", detail: "up" }],
     effectiveDataDir: "/sbx/home/.junco",
@@ -168,7 +174,13 @@ describe("WizardApp", () => {
     const writes: WizardAnswers[] = [];
     io.write = (a) => {
       writes.push(a);
-      return { written: true, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };
+      return {
+        written: true,
+        configPath: "/tmp/config.json",
+        queueRoot: "/tmp/q",
+        changes: [],
+        skillLinkFailures: [],
+      };
     };
     const { lastFrame, stdin } = render(
       <WizardApp io={io} onOutcome={(o) => (outcome = o)} sizeOverride={SIZE} revealMs={0} />,
@@ -463,7 +475,13 @@ describe("WizardApp", () => {
       discoverModels: async () => ["m-big", "m-fast"],
       write: () => {
         writeCalls++;
-        return { written: false, configPath: "/tmp/config.json", queueRoot: "/tmp/q", changes: [] };
+        return {
+          written: false,
+          configPath: "/tmp/config.json",
+          queueRoot: "/tmp/q",
+          changes: [],
+          skillLinkFailures: [],
+        };
       },
     });
     const { lastFrame, stdin } = render(

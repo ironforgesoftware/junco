@@ -27,8 +27,21 @@ function stemMatches(stem: string, id: string): boolean {
   return /^r?\d+$/.test(stem.slice(id.length + 1));
 }
 
-/** First .md file in `dir` whose name (claim stamp stripped) resolves to `id`. */
+/** First .md file in `dir` whose name (claim stamp stripped) resolves to `id`.
+ * When more than one file matches (e.g. a plan-set supersede's disposed copy
+ * alongside a later fresh copy's genuine failure — both share the id and both
+ * land in the same directory), this returns whichever `readdirSync` happens
+ * to list first, which is NOT a guaranteed order across filesystems. A caller
+ * that must disambiguate deliberately between multiple matches (planSets.ts's
+ * resolveSetState — see I5) uses `findAllTicketFiles` instead. */
 export function findTicketFile(dir: string, id: string): string | null {
+  return findAllTicketFiles(dir, id)[0] ?? null;
+}
+
+/** Every .md file in `dir` whose name (claim stamp stripped) resolves to
+ * `id`, in whatever order `readdirSync` returns (not guaranteed — see
+ * `findTicketFile`). */
+export function findAllTicketFiles(dir: string, id: string): string[] {
   let names: string[] = [];
   try {
     names = readdirSync(dir).filter((n) => n.endsWith(".md"));
@@ -36,14 +49,12 @@ export function findTicketFile(dir: string, id: string): string | null {
     // A missing queue dir is normal (not created yet) → no match. Anything else
     // (EACCES, ENOTDIR, …) must surface — silently reading it as "absent" would
     // mask an operator misconfiguration (same stance as queue.ts discoverTasks).
-    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
     throw e;
   }
-  for (const n of names) {
-    const stem = n.replace(CLAIM_PREFIX_RE, "").replace(/\.md$/, "");
-    if (stemMatches(stem, id)) return join(dir, n);
-  }
-  return null;
+  return names
+    .filter((n) => stemMatches(n.replace(CLAIM_PREFIX_RE, "").replace(/\.md$/, ""), id))
+    .map((n) => join(dir, n));
 }
 
 /** Resolve a ticket id to its queue state. Precedence done > processing >
