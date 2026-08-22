@@ -381,6 +381,75 @@ describe("runDoctor", () => {
   });
 });
 
+describe("runDoctor split queue check (7-bis, #274)", () => {
+  // okConfig.queueRoot ("/sbxroot/junco-doc-vault") matches neither derivable
+  // knownQueueRoots shape, so it always comes back labeled "configured",
+  // resolved: true — the canonical root below (env.HOME-derived) is the one
+  // "other" root in play for these fixtures.
+  const resolvedInbox = join(okConfig.queueRoot, "inbox");
+  const canonicalInbox = join("/sbxroot/home", ".junco", "queue", "inbox");
+
+  it("reports a warn naming both roots when the resolved queue is empty but another known root holds tickets", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        env: { HOME: "/sbxroot/home" },
+        // Resolved inbox stays absent (existsFn false); the canonical root's
+        // inbox exists and lists one ticket.
+        existsFn: (p: string) => p === canonicalInbox || p.endsWith("/skills"),
+        readdirFn: (d: string) => (d === canonicalInbox ? ["a.md"] : []),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(code).toBe(0); // warn-only: a split queue never moves the exit code
+    expect(out).toMatch(/⚠ queue roots/);
+    expect(out).toContain(resolvedInbox);
+    expect(out).toContain("/sbxroot/home/.junco/queue");
+  });
+
+  it("reports pass when only the resolved root holds tickets (no split)", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        env: { HOME: "/sbxroot/home" },
+        existsFn: (p: string) => p === resolvedInbox || p.endsWith("/skills"),
+        readdirFn: (d: string) => (d === resolvedInbox ? ["a.md"] : []),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(code).toBe(0);
+    expect(out).toMatch(/✓ queue roots/);
+    expect(out).not.toMatch(/⚠ queue roots/);
+  });
+
+  it("a detector throw is reported as a warn, not a crash, and does not move the exit code", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        env: { HOME: "/sbxroot/home" },
+        // Only the inbox-path probes throw — every other check's existsFn
+        // call (deprecated-key/pending-migration probes, skill links, etc.)
+        // must keep behaving normally so this test isolates the split-queue
+        // check's own throw handling instead of tripping an unrelated one.
+        existsFn: (p: string) => {
+          if (p.endsWith("/inbox")) throw new Error("boom");
+          return p.endsWith("/skills");
+        },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(code).toBe(0);
+    expect(out).toMatch(/⚠ queue roots/);
+    expect(out).toMatch(/boom/);
+  });
+});
+
 describe("runDoctor — deprecations + pending migrations (Unified Data Root spec §5, §7)", () => {
   it("legacy-keyed cfg reports a 'deprecated config keys' warning listing vaultRoot", async () => {
     const lines: string[] = [];

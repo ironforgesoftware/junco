@@ -33,6 +33,7 @@ import { listHistory } from "./assessHistory.js";
 import { defaultExec, defaultAccessOk } from "./execProbe.js";
 import { SAML_MARKER } from "./botAccess.js";
 import { checkForUpdate, getSelfPackage, type UpdateInfo } from "./updateCheck.js";
+import { detectSplitQueue } from "./splitQueue.js";
 
 export interface DoctorDeps {
   loadConfigFn?: (p: string) => Config;
@@ -526,6 +527,62 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       ["data dir", cfg.dataDir],
     ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
+    }
+
+    // 7-bis. split queue (#274) — the interactive twin of the daemon startup
+    // warning (daemon.ts): the resolved queue's inbox is empty while another
+    // known root still holds pending tickets. Same detector, same finding,
+    // rephrased for a one-shot command. Warn only, never fail: a split queue
+    // is an operator decision about which root is "the" queue, not a broken
+    // install (see the exit-code tally at the end of this function — warns
+    // never move it).
+    //
+    // listInboxFn reuses existsFn/readdirFn (no new dep) rather than the
+    // detector's default `discoverTasks`, which calls fs.readdirSync
+    // directly and isn't hermetic; mirrors the existsFn-then-readdirFn
+    // pattern the 2c legacy-worktree-root check above already uses, and
+    // filters to .md the same way discoverTasks does, so "pending" here
+    // means the same thing it means to the worker.
+    //
+    // Detector-throw handling deliberately differs from the daemon's: the
+    // daemon swallows a throw at debug level because it's unattended
+    // background observability with no consumer an abort would help, and
+    // this same check runs again next start regardless. `doctor` is
+    // interactive and its entire job is reporting every check's status to an
+    // operator who is looking right now — silently skipping this one would
+    // be a blind spot they'd never learn about. So a throw here still
+    // surfaces, as a warn naming the error, consistent with "warns never
+    // fail doctor."
+    try {
+      const listInboxFn = (dir: string): string[] => {
+        if (!existsFn(dir)) return [];
+        try {
+          return readdirFn(dir).filter((n) => n.endsWith(".md"));
+        } catch {
+          return [];
+        }
+      };
+      const split = detectSplitQueue(cfg, env, { listInbox: listInboxFn });
+      if (split) {
+        const otherRoots = split.others
+          .map((o) => `${o.root} (${o.label}, ${o.pending} pending)`)
+          .join(", ");
+        report(
+          "warn",
+          "queue roots",
+          `resolved queue's inbox (${join(split.resolvedRoot, "inbox")}) is empty but ${otherRoots} ` +
+            `still holds pending tickets — point whatever files tickets at the resolved root, or run ` +
+            `'junco data migrate' for a legacy root, then restart the daemon`,
+        );
+      } else {
+        report("ok", "queue roots", "no other known queue root holds pending tickets");
+      }
+    } catch (e) {
+      report(
+        "warn",
+        "queue roots",
+        `split-queue check failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
 
     // 7a. health bind address — a non-loopback health_host exposes the
