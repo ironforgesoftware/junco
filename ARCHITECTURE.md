@@ -290,15 +290,45 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 
 ```
 GitHub issue         — trigger-labeled; bridge sweep verifies the labeler's
-  ↓  pollGithubInbox   permission, then branches on the ask label:
-                         junco:ask present → an ordinary Q&A ticket,
-                                             junco:queued (skips the plan hop)
-                         otherwise         → a PLANNING ticket (kind: plan,
-                                             read-only session at the mapped
-                                             clone; planPrompt.ts assembles
-                                             the prompt), junco:planning
+  ↓  pollGithubInbox   permission, re-vouches the body (edited after the
+                       label? refused — re-apply to re-vouch), then walks an
+                       ordered THREE-DOOR precedence list (spec 2026-08-21):
+                         1. junco:ask present  → an ordinary Q&A ticket,
+                                                  junco:queued (skips the
+                                                  plan hop) — wins even over
+                                                  a fenced body (ask rails
+                                                  are prose-in, read-only)
+                         2. a fence in the     → a junco-plan fence (checked
+                            vouched body          first, planSets.enabled
+                                                  only) compiles straight
+                                                  into a dependency-ordered
+                                                  ticket SET via
+                                                  dispatchPlanSet; otherwise
+                                                  a junco-ticket fence
+                                                  becomes ONE EXECUTION
+                                                  ticket verbatim
+                                                  (buildExecutionTicket) —
+                                                  junco:queued either way, no
+                                                  planning session spent
+                                                  re-authoring a document
+                                                  that already arrived
+                                                  plan-shaped
+                         3. no fence           → a PLANNING ticket (kind:
+                                                  plan, read-only session at
+                                                  the mapped clone;
+                                                  planPrompt.ts assembles the
+                                                  prompt), junco:planning —
+                                                  the planner is not a route,
+                                                  it is the fence PRODUCER
+                                                  for issues that arrive
+                                                  without one
        │  (planning ticket runs the claim/processing/finalize cycle below
-       │   like any Q&A ticket; reporter.onFinal is where the plan branches)
+       │   like any Q&A ticket; reporter.onFinal is where the plan branches.
+       │   Door 2 skips straight to inbox/ below instead — no plan-ready
+       │   stage and no requireApproval gate; the trigger label IS the
+       │   approval. `junco submit --as-issue [--plan]` files a locally-
+       │   authored ticket or plan-set fence as a parked, UNLABELED issue —
+       │   a human applying the trigger label is what launches door 2 for it.)
        ▼
   reporter.onFinal (kind: plan) — extracts the plan from the session's
     junco-ticket fence, posts it as ONE issue comment (<!-- junco:plan -->

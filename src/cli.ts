@@ -233,6 +233,8 @@ Subcommands:
                   into its child tickets and submit them all
   submit --as-issue <file>  File the ticket as a parked, unlabeled GitHub issue
                   via the bot account — a human applies the trigger label to launch it
+  submit --as-issue --plan <file> --repo <path>  Same, but parks a junco-plan
+                  fence issue instead of a single ticket — labeling compiles the set
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
   skill install [--harness <name|path>]...  Link the junco-dispatch skill into
