@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildPrefixMap,
+  dedupeSteps,
   rewritePath,
   rewriteStoredPaths,
   type RewriteDeps,
@@ -35,6 +36,28 @@ describe("buildPrefixMap", () => {
       { from: "/old/clones", to: "/new/cache/clones", action: "renamed" },
     ]);
     expect(map[0].from).toBe("/old/clones");
+  });
+});
+
+describe("dedupeSteps", () => {
+  it("drops an exact (from, to, action) repeat while keeping the first occurrence", () => {
+    const steps = [
+      { from: "/old/clones", to: "/new/cache/clones", action: "renamed" as const },
+      { from: "/old/clones", to: "/new/cache/clones", action: "renamed" as const },
+    ];
+    expect(dedupeSteps(steps)).toEqual([
+      { from: "/old/clones", to: "/new/cache/clones", action: "renamed" },
+    ]);
+  });
+
+  it("keeps steps that differ in any one of from/to/action", () => {
+    const steps = [
+      { from: "/old/a", to: "/new/a", action: "renamed" as const },
+      { from: "/old/a", to: "/new/a", action: "skipped-conflict" as const },
+      { from: "/old/b", to: "/new/a", action: "renamed" as const },
+      { from: "/old/a", to: "/new/b", action: "renamed" as const },
+    ];
+    expect(dedupeSteps(steps)).toHaveLength(4);
   });
 });
 
@@ -184,6 +207,191 @@ describe("rewriteStoredPaths", () => {
         "---\n" +
         "# Ticket body\n\nThis body mentions repo: casually, not as frontmatter.\n",
     );
+  });
+
+  it("fix-wave (#283 Important 1a): rewrites unquoted repo:/workdir: — the shape junco's own SHIPPED templates and dispatch skill actually write (templates/task-code.md, skills/junco-dispatch/TEMPLATE.md, examples/*.md)", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const oldRepo = "/old/clones/watched/a/b";
+    const raw =
+      "---\n" +
+      "id: t1\n" +
+      `repo: ${oldRepo}\n` +
+      `workdir: ${oldRepo}\n` +
+      "priority: normal\n" +
+      "---\n" +
+      "Fix the thing.\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(2);
+    expect(report.warnings).toEqual([]);
+    const newRepo = join(root, "cache", "clones", "watched", "a", "b");
+    expect(readFileSync(ticketPath, "utf8")).toBe(
+      "---\n" +
+        "id: t1\n" +
+        `repo: ${newRepo}\n` +
+        `workdir: ${newRepo}\n` +
+        "priority: normal\n" +
+        "---\n" +
+        "Fix the thing.\n",
+    );
+  });
+
+  it("fix-wave (#283 Important 1a): rewrites single-quoted repo:/workdir:, preserving the quoting style", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const oldRepo = "/old/clones/watched/a/b";
+    const raw =
+      "---\n" + "id: t1\n" + `repo: '${oldRepo}'\n` + `workdir: '${oldRepo}'\n` + "---\nbody\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(2);
+    expect(report.warnings).toEqual([]);
+    const newRepo = join(root, "cache", "clones", "watched", "a", "b");
+    expect(readFileSync(ticketPath, "utf8")).toBe(
+      "---\n" + "id: t1\n" + `repo: '${newRepo}'\n` + `workdir: '${newRepo}'\n` + "---\nbody\n",
+    );
+  });
+
+  it("fix-wave (#283 Important 1b): warns (naming the file) on a genuinely unparseable value instead of silently reporting nothing", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    // Unterminated double-quote — junco's own emitters never write this, but
+    // a hand-edited or corrupted ticket might. Before this fix, this exact
+    // shape yielded `rewritten: 0` AND `warnings: []`: total silence on a
+    // destructive migration.
+    const raw = "---\n" + "id: t1\n" + `repo: "/old/clones/watched/a/b\n` + "---\nbody\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(0);
+    expect(report.warnings.length).toBe(1);
+    expect(report.warnings[0]).toMatch(/t1\.md/);
+    expect(report.warnings[0]).toMatch(/repo/);
+    expect(readFileSync(ticketPath, "utf8")).toBe(raw); // never guessed at
+  });
+
+  it("fix-wave (#283 Important 1b): rewrites the parseable field and warns for the unparseable one, in the same ticket", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true });
+    const ticketPath = join(inbox, "t1.md");
+    const oldRepo = "/old/clones/watched/a/b";
+    const raw =
+      "---\n" +
+      "id: t1\n" +
+      `repo: "${oldRepo}\n` + // malformed: unterminated double quote
+      `workdir: ${oldRepo}\n` + // plain — parseable, should rewrite
+      "---\nbody\n";
+    writeFileSync(ticketPath, raw, "utf8");
+
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      realDeps(),
+    );
+
+    expect(report.rewritten).toBe(1); // only workdir:
+    expect(report.warnings.length).toBe(1);
+    expect(report.warnings[0]).toMatch(/repo/);
+    const newRepo = join(root, "cache", "clones", "watched", "a", "b");
+    const written = readFileSync(ticketPath, "utf8");
+    expect(written).toContain(`workdir: ${newRepo}`);
+    expect(written).toContain(`repo: "${oldRepo}`); // left untouched
+  });
+
+  it("warns when readdirFn throws on an existing queue dir and continues rather than throwing", () => {
+    const root = freshRoot();
+    roots.push(root);
+    const inbox = join(root, "queue", "inbox");
+    mkdirSync(inbox, { recursive: true }); // exists — readdirFn will be called
+    const map = [{ from: "/old/clones", to: join(root, "cache", "clones") }];
+    const deps: RewriteDeps = {
+      ...realDeps(),
+      readdirFn: () => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    const report = rewriteStoredPaths(
+      {
+        targetRoot: root,
+        queuePaths: {
+          inbox,
+          processing: join(root, "nope1"),
+          done: join(root, "nope2"),
+          failed: join(root, "nope3"),
+        },
+      },
+      map,
+      deps,
+    );
+
+    expect(report.rewritten).toBe(0);
+    expect(report.warnings.length).toBe(1);
+    expect(report.warnings[0]).toMatch(/inbox/);
   });
 
   it("is idempotent — rewriting an already-rewritten ticket a second time is a no-op", () => {

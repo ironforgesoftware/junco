@@ -43,15 +43,29 @@
  *   4. Idempotent. An already-rewritten path (its prefix is now the NEW
  *      root, not the old one) matches nothing in the map and is returned
  *      unchanged — a resumed or re-run migrate is a no-op here, exactly
- *      like every other phase's journal-driven resume story. This falls
- *      out of rule 1 for free: a second run's OWN "renamed" step list is
- *      empty (nothing left to move), so the map itself is empty and
- *      `rewriteStoredPaths` does nothing.
+ *      like every other phase's journal-driven resume story. On a run with
+ *      nothing left of ITS OWN to move, this now falls out of rule 2 rather
+ *      than an empty map: `dataMigrateCmd.ts` seeds `buildPrefixMap`'s input
+ *      from the durable on-disk journal (`readJournal` + `dedupeSteps`,
+ *      fix-wave review #283 Important 2) in ADDITION to this run's own
+ *      steps, so a resumed run whose PRIOR run already renamed a tree (and
+ *      journaled it in a `finally`) but died before reaching this phase can
+ *      still rebuild that prefix — the map is not necessarily empty, but
+ *      every value under it has already been rewritten, so `rewritePath`
+ *      returns `null` for all of them and nothing changes twice.
  *
- * A read/parse failure on any ONE file (unreadable ticket, corrupt
- * watchlist) is appended to the caller's `RewriteReport.warnings` and the
- * phase moves on — it must never abort the migration these files already
- * survived.
+ * Two more failure modes, both warn-and-continue, never abort (a read/parse
+ * failure on any ONE file — unreadable ticket, corrupt watchlist — or a
+ * `repo:`/`workdir:` value present but not in a shape this phase can
+ * rewrite, e.g. a YAML block scalar): appended to the caller's
+ * `RewriteReport.warnings`, phase moves on. The second case (fix-wave
+ * review #283 Important 1) matters exactly as much as the first: before it,
+ * an unrewritable-but-present field was silently skipped with NO warning at
+ * all — a destructive migration reporting clean success while leaving part
+ * of the operator's live queue pointed at a root that no longer exists.
+ * `rewriteFrontmatterField`'s own doc comment has the full shape inventory
+ * (double-quoted / single-quoted / plain scalar, and what still isn't
+ * handled).
  */
 import { sep, join } from "node:path";
 import type { Paths } from "./types.js";
@@ -87,6 +101,32 @@ export function buildPrefixMap(steps: MigrationStep[]): PathPrefix[] {
     .sort((a, b) => b.from.length - a.from.length);
 }
 
+/** De-duplicates a `MigrationStep` array before it feeds `buildPrefixMap` —
+ * exported for `dataMigrateCmd.ts`'s resumability fix (fix-wave review,
+ * #283 Important 2): the prefix map is unioned from this run's OWN steps
+ * plus the durable on-disk journal's historical steps (a run that died
+ * after the data-root move — already journaled in a `finally` — but before
+ * reaching this phase would otherwise have no "renamed" step to rebuild
+ * that prefix from on a resumed run, since the tree has already moved and
+ * a re-run of the mover produces nothing new to rename). Two sources can
+ * legitimately overlap (this run's own steps get appended to the SAME
+ * journal file earlier in the same call), so the union needs de-duping,
+ * not just concatenation. Two steps are the same when `from`, `to`, AND
+ * `action` are all identical — generic over every action rather than just
+ * "renamed" so callers never have to reason about which ones matter
+ * (`buildPrefixMap` already filters those out on its own). */
+export function dedupeSteps(steps: MigrationStep[]): MigrationStep[] {
+  const seen = new Set<string>();
+  const out: MigrationStep[] = [];
+  for (const s of steps) {
+    const key = JSON.stringify([s.from, s.to, s.action]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
 /**
  * Rewrites `p` under the first (longest, per `buildPrefixMap`'s ordering)
  * matching prefix, or returns `null` when no prefix applies — either
@@ -115,6 +155,17 @@ export interface RewriteCtx {
 }
 
 export interface RewriteDeps {
+  // NOTE (fix-wave review #283 Minor 2): `readFileFn`/`writeFileFn` do NOT
+  // cover the watchlist. `rewriteWatchlistFile` below reads/writes it via
+  // `readWatchlist`/`writeWatchlist` (watchlist.ts), which hard-code the
+  // real `node:fs` — those two functions take a bare file path, not an
+  // injectable deps object, so there is no seam to route through without
+  // changing watchlist.ts itself (out of this phase's scope: it is shared
+  // by the dashboard and the bridge sweep, not owned here). Harmless in
+  // production (both paths hit the same real filesystem either way), but a
+  // TEST that stubs `readFileFn`/`writeFileFn` to intercept reads/writes
+  // will NOT see the watchlist file through them — only ticket/JSON-record
+  // I/O goes through this seam.
   readFileFn: (p: string) => string;
   writeFileFn: (p: string, s: string) => void;
   /** Filenames directly under a queue dir (not recursive — queue dirs are
@@ -166,12 +217,28 @@ export function rewriteStoredPaths(
 }
 
 /** Reads/writes via `readWatchlist`/`writeWatchlist` directly — both take a
- * bare file path (no `Config` needed here). A read error (corrupt/invalid
- * JSON) is warned and the file is left untouched entirely, same "leave it
- * alone" precedent `unwatchCmd.ts` uses for a watchlist gone corrupt
- * mid-operation — never clobber a file we can't fully trust we parsed. A
- * missing file (`error: null`, empty entries) is not a warning: no watchlist
- * is a normal, unwatched-repo config. */
+ * bare file path (no `Config` needed here), and both hard-code the real
+ * `node:fs` rather than accepting injectable deps, so this bypasses
+ * `RewriteDeps.readFileFn`/`writeFileFn` by necessity — see the doc comment
+ * on those two fields for why, and for what that means for a test stubbing
+ * them (fix-wave review #283 Minor 2).
+ *
+ * `error` is non-null for TWO distinct cases `readWatchlist` conflates under
+ * one string, and BOTH are warned with the file left untouched entirely —
+ * never just the corrupt-JSON one (fix-wave review #283 Minor 3, widening
+ * this comment after it undersold the second case):
+ *   - the file is corrupt/unparseable JSON — `entries` is `[]`.
+ *   - the file parsed fine but held one or more entries that failed shape
+ *     validation ("N invalid entries ignored") — `entries` THEN holds the
+ *     valid remainder, not `[]`.
+ * Writing back only that valid remainder in the second case would silently
+ * DROP the invalid entries from disk — worse than leaving a stale path
+ * unrewritten — so "leave the whole file alone and warn" is correct for
+ * both, same "leave it alone" precedent `unwatchCmd.ts` uses for a
+ * watchlist gone corrupt mid-operation; never clobber a file we can't fully
+ * trust we parsed completely. A missing file (`error: null`, empty
+ * entries) is not a warning: no watchlist is a normal, unwatched-repo
+ * config. */
 function rewriteWatchlistFile(file: string, map: PathPrefix[], report: RewriteReport): void {
   const { entries, error } = readWatchlist(file);
   if (error) {
@@ -395,7 +462,16 @@ function rewriteTicketsInDir(
       continue;
     }
 
-    const { content, count } = rewriteTicketContent(raw, map);
+    const { content, count, unparseableFields } = rewriteTicketContent(raw, map);
+    // Important 1(b) (#283 fix-wave review): pushed regardless of `count` —
+    // a ticket can have one rewritable field and one unparseable one, and
+    // both outcomes must be visible on the receipt.
+    for (const key of unparseableFields) {
+      report.warnings.push(
+        `ticket ${file}: ${key}: value present but not in a rewritable shape ` +
+          `(expected a quoted or plain scalar)`,
+      );
+    }
     if (count === 0) continue;
 
     try {
@@ -422,50 +498,122 @@ const TICKET_FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/d;
  * body — a ticket's instructions may well contain the literal text
  * "repo:" and must never be touched). Returns the original `raw` unchanged
  * (count 0) when there is no frontmatter block, or neither field matches a
- * moved prefix. */
-function rewriteTicketContent(raw: string, map: PathPrefix[]): { content: string; count: number } {
+ * moved prefix. `unparseableFields` names every field that WAS present but
+ * whose value doesn't fit a shape this phase can rewrite (fix-wave review,
+ * #283 Important 1(b)) — populated independently of `count`, so a ticket
+ * with one rewritable field and one malformed one still reports both. */
+function rewriteTicketContent(
+  raw: string,
+  map: PathPrefix[],
+): { content: string; count: number; unparseableFields: Array<"repo" | "workdir"> } {
   const m = TICKET_FRONTMATTER_RE.exec(raw);
-  if (!m || !m.indices) return { content: raw, count: 0 };
+  if (!m || !m.indices) return { content: raw, count: 0, unparseableFields: [] };
   const [fmStart, fmEnd] = m.indices[1];
   let fm = raw.slice(fmStart, fmEnd);
 
   let count = 0;
+  const unparseableFields: Array<"repo" | "workdir"> = [];
   for (const key of ["repo", "workdir"] as const) {
-    const rewritten = rewriteFrontmatterField(fm, key, map);
-    if (rewritten !== null) {
-      fm = rewritten;
+    const result = rewriteFrontmatterField(fm, key, map);
+    if (result.unparseable) unparseableFields.push(key);
+    if (result.text !== null) {
+      fm = result.text;
       count++;
     }
   }
-  if (count === 0) return { content: raw, count: 0 };
-  return { content: raw.slice(0, fmStart) + fm + raw.slice(fmEnd), count };
+  if (count === 0) return { content: raw, count: 0, unparseableFields };
+  return { content: raw.slice(0, fmStart) + fm + raw.slice(fmEnd), count, unparseableFields };
 }
 
-/** Matches emitters' `<key>: ${JSON.stringify(path)}` style exactly
- * (planCompiler.ts, analyzeCmd.ts, assessCmd.ts, githubInbox.ts,
- * externalDispatch.ts all write it this way) — a top-level, unindented,
- * JSON-double-quoted scalar. Replaces only the quoted VALUE substring in
- * place, so the key, its spacing, and everything else on the line (there is
- * nothing else on the line, but the principle holds) survive untouched.
- * Anything not in that exact shape (unquoted, block-scalar, indented) is
- * left alone rather than guessed at — no ticket emitter in this codebase
- * writes it any other way. */
+/** Matches a `<key>: <value>` frontmatter line in any of the three scalar
+ * shapes real tickets carry: JSON-double-quoted (`repo: "/path"` — junco's
+ * own src/ emitters: planCompiler.ts, analyzeCmd.ts, assessCmd.ts,
+ * githubInbox.ts, externalDispatch.ts), YAML single-quoted (`repo:
+ * '/path'`), and plain/unquoted (`repo: /path`). The plain form is what
+ * junco's own SHIPPED templates and dispatch skill actually write —
+ * templates/task-code.md, templates/plain/task-code.md,
+ * skills/junco-dispatch/TEMPLATE.md, examples/*.md — and was missed
+ * entirely before this fix, the exact silent-failure gap the fix-wave
+ * review (#283 Important 1) caught: a real operator's ticket matching that
+ * shape under a moved prefix used to yield `rewritten: 0` AND
+ * `warnings: []` — no signal at all. Every branch replaces ONLY the value
+ * substring and re-serializes in the SAME style it was found in — an
+ * unquoted value stays unquoted, a single-quoted one stays single-quoted —
+ * so every other byte on the line, and in the file, is untouched. The
+ * quoted-value character classes are bounded to a single line
+ * (`[^"\\\r\n]` / `[^'\r\n]`, not just `[^"\\]`) so an unterminated quote
+ * can never accidentally span past its own line into a LATER quoted field
+ * further down the frontmatter block.
+ *
+ * Returns `{ text: null, unparseable: false }` when the key is absent
+ * entirely (a Q&A ticket with no `repo:`, or a `workdir:`-less ticket) —
+ * nothing to warn about. Returns `{ text: null, unparseable: true }` when
+ * the key IS present but its value doesn't fit one of the three shapes
+ * above — a YAML block scalar (`repo: |`/`repo: >`, value on following
+ * lines), an empty value, or a malformed/unterminated quoted string. The
+ * caller (`rewriteTicketContent`/`rewriteTicketsInDir`) turns that into a
+ * warning naming the file rather than silently reporting nothing — silence
+ * is the exact failure mode this fix closes. */
 function rewriteFrontmatterField(
   text: string,
   key: "repo" | "workdir",
   map: PathPrefix[],
-): string | null {
-  const re = new RegExp(`^(${key}:[ \\t]*)"((?:[^"\\\\]|\\\\.)*)"`, "m");
-  const m = re.exec(text);
-  if (!m) return null;
-  let value: string;
-  try {
-    value = JSON.parse(`"${m[2]}"`) as string;
-  } catch {
-    return null;
+): { text: string | null; unparseable: boolean } {
+  const splice = (index: number, matchLen: number, replacement: string): string =>
+    text.slice(0, index) + replacement + text.slice(index + matchLen);
+
+  const dqRe = new RegExp(`^(${key}:[ \\t]*)"((?:[^"\\\\\r\n]|\\\\.)*)"`, "m");
+  const dq = dqRe.exec(text);
+  if (dq) {
+    let value: string;
+    try {
+      value = JSON.parse(`"${dq[2]}"`) as string;
+    } catch {
+      return { text: null, unparseable: true };
+    }
+    const to = rewritePath(value, map);
+    if (to === null) return { text: null, unparseable: false };
+    return { text: splice(dq.index, dq[0].length, dq[1] + JSON.stringify(to)), unparseable: false };
   }
+
+  // Single-quoted — YAML doubles an embedded `'` (`''` == a literal `'`).
+  const sqRe = new RegExp(`^(${key}:[ \\t]*)'((?:[^'\r\n]|'')*)'`, "m");
+  const sq = sqRe.exec(text);
+  if (sq) {
+    const value = sq[2].replace(/''/g, "'");
+    const to = rewritePath(value, map);
+    if (to === null) return { text: null, unparseable: false };
+    const replacementValue = `'${to.replace(/'/g, "''")}'`;
+    return { text: splice(sq.index, sq[0].length, sq[1] + replacementValue), unparseable: false };
+  }
+
+  // Neither quote form matched. The key may still be a plain/unquoted
+  // scalar (the common real-world case — see the doc comment above) or a
+  // shape this phase refuses to guess at.
+  const plainRe = new RegExp(`^(${key}:[ \\t]*)([^\r\n]*)$`, "m");
+  const plain = plainRe.exec(text);
+  if (!plain) return { text: null, unparseable: false }; // key absent entirely
+
+  const trailingWs = /[ \t]*$/.exec(plain[2])?.[0] ?? "";
+  const value = plain[2].slice(0, plain[2].length - trailingWs.length);
+  if (
+    value === "" ||
+    value.startsWith("|") ||
+    value.startsWith(">") ||
+    value.startsWith('"') ||
+    value.startsWith("'")
+  ) {
+    // Block scalar (value on following lines), a genuinely empty value, or
+    // an unterminated/malformed quote that didn't match above — never
+    // guessed at, same precedent this module has always set for
+    // "block-scalar, indented" shapes.
+    return { text: null, unparseable: true };
+  }
+
   const to = rewritePath(value, map);
-  if (to === null) return null;
-  const replacement = m[1] + JSON.stringify(to);
-  return text.slice(0, m.index) + replacement + text.slice(m.index + m[0].length);
+  if (to === null) return { text: null, unparseable: false };
+  return {
+    text: splice(plain.index, plain[0].length, plain[1] + to + trailingWs),
+    unparseable: false,
+  };
 }

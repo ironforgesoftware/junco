@@ -25,6 +25,8 @@ import {
   migrationTargetRoot,
 } from "../src/dataMigrate.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
+import { dataTreePaths } from "../src/dataTree.js";
+import { rewritePath } from "../src/migratePathRewrite.js";
 
 function freshRoot(): string {
   return mkdtempSync(join(tmpdir(), "junco-dm-"));
@@ -393,7 +395,82 @@ describe("flatToV2Pairs", () => {
       expect(pairs, `missing pair for ${key}`).toContain(join("/from", key));
     }
   });
+
+  it("derived completeness guard (fix-wave review Minor 1): every dataTreePaths field that differs between layouts is reachable through a flatToV2Pairs entry", () => {
+    // The list above restates LAYOUTS' key names by hand — exactly the
+    // failure mode that let the "plans" gap through before #283's fix-wave
+    // review (a brand-new LAYOUTS entry is only caught here if someone
+    // remembers to add it to this list too). This guard DERIVES the key set
+    // instead: build dataTreePaths for a flat and a v2 config sharing the
+    // same root/queueRoot/external-repos-root/worktreeRoot, diff every
+    // resolved string field, and assert each flat-layout value the diff
+    // surfaces is reachable through SOME flatToV2Pairs entry — reusing
+    // `rewritePath` (the exact path-boundary matching logic the real
+    // rewrite phase runs, migratePathRewrite.ts) rather than a second
+    // hand-rolled "startsWith" check. Holding root/queueRoot/external/
+    // worktree constant across both fixtures isolates exactly the fields
+    // LAYOUTS actually drives — everything else (root itself, queue.*,
+    // clonesExternal, worktrees, watchlistFile, migratedFile, skills,
+    // reviewAssess/reviewComments — the last two identity-named across
+    // layouts, only the root changes) is IDENTICAL between the two configs
+    // and so never appears in the diff, which is correct: those either
+    // don't move at all, or their "only the root changes" pairing is
+    // already covered by the dedicated test above.
+    const root = "/sbxroot/data";
+    const shared = { dataDir: root, queueRoot: join(root, "queue") };
+    const flatPaths = dataTreePaths(makeConfig({ ...shared, dataLayout: "flat" }));
+    const v2Paths = dataTreePaths(makeConfig({ ...shared, dataLayout: "v2" }));
+    const pairs = flatToV2Pairs(root, "/sbxroot/target");
+
+    const diffs = diffStringFields(
+      flatPaths as unknown as Record<string, unknown>,
+      v2Paths as unknown as Record<string, unknown>,
+    ).filter(
+      // logsDir aliases the bare root in the flat layout (LAYOUTS.flat.logs
+      // is "." — there is no distinct logs/ directory pre-migration), so it
+      // has no flatToV2Pairs entry BY DESIGN — nothing to rename because it
+      // was never a distinct subdirectory to begin with. logFile (the actual
+      // file that DOES move, join(root, "worker.log") -> .../logs/worker.log)
+      // is still covered by the loop below.
+      ([field]) => field !== "logsDir",
+    );
+
+    // Sanity: the diff actually found the layout-driven fields — an empty
+    // diff would make the loop below vacuous.
+    expect(diffs.length).toBeGreaterThanOrEqual(10);
+
+    for (const [field, flatValue] of diffs) {
+      expect(
+        rewritePath(flatValue, pairs),
+        `dataTreePaths.${field} = ${flatValue} is not covered by any flatToV2Pairs entry`,
+      ).not.toBeNull();
+    }
+  });
 });
+
+/** Recursively diffs two same-shaped plain-object/string trees, collecting
+ * `[dotted.path, aValue]` for every leaf where the two disagree. Used only by
+ * the derived completeness guard above. */
+function diffStringFields(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  prefix = "",
+): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (const key of Object.keys(a)) {
+    const av = a[key];
+    const bv = b[key];
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (typeof av === "string" && typeof bv === "string") {
+      if (av !== bv) out.push([path, av]);
+    } else if (av && bv && typeof av === "object" && typeof bv === "object") {
+      out.push(
+        ...diffStringFields(av as Record<string, unknown>, bv as Record<string, unknown>, path),
+      );
+    }
+  }
+  return out;
+}
 
 describe("pendingMigrations", () => {
   it("filters to only pairs whose source currently exists", () => {

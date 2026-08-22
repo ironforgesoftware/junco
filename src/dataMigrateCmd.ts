@@ -130,7 +130,12 @@ import {
   type MigrationStep,
   type DataRootPair,
 } from "./dataMigrate.js";
-import { buildPrefixMap, rewriteStoredPaths, type RewriteReport } from "./migratePathRewrite.js";
+import {
+  buildPrefixMap,
+  dedupeSteps,
+  rewriteStoredPaths,
+  type RewriteReport,
+} from "./migratePathRewrite.js";
 import { acquirePidfileLock, readPidfileHolder, type PidfileLock } from "./pidfileLock.js";
 
 const QUEUE_DIR_KEYS: (keyof Paths)[] = ["inbox", "processing", "done", "failed"];
@@ -155,6 +160,14 @@ export interface DataMigrateDeps {
   /** Rename primitive — used for the queue-dir moves, the data-root/gh-creds
    * moves, and the config.json atomic tmp+rename write. Default: fs.renameSync. */
   renameFn?: (from: string, to: string) => void;
+  // NOTE (fix-wave review #283 Minor 2): these two do NOT cover the
+  // watchlist. The path-rewrite phase's `rewriteWatchlistFile`
+  // (migratePathRewrite.ts) reads/writes it via watchlist.ts's
+  // `readWatchlist`/`writeWatchlist`, which hard-code the real `node:fs`
+  // rather than accepting an injectable deps object — see `RewriteDeps`'s
+  // doc comment in migratePathRewrite.ts for the full reasoning. A test
+  // stubbing `readFileFn`/`writeFileFn` here will NOT intercept watchlist
+  // I/O; only ticket/JSON-record I/O goes through this seam.
   readFileFn?: (p: string) => string;
   writeFileFn?: (p: string, s: string) => void;
   printFn?: (s: string) => void;
@@ -863,26 +876,42 @@ export async function runDataMigrate(
     // symptom that made `junco doctor` report every watched repo as "not a
     // git clone" after a migrate. Inserted HERE — after every phase above has
     // landed at targetRoot, BEFORE the legacy-root removal below — so the map
-    // reflects this run's FINAL destinations. Built ONLY from what THIS run
-    // actually renamed (queueJournalSteps + dataRootJournalSteps —
-    // buildPrefixMap further filters to `action === "renamed"`, dropping any
-    // skipped-conflict pair): a candidate pair that never moved must never be
+    // reflects this run's FINAL destinations. Built from THIS run's own
+    // renames (queueJournalSteps + dataRootJournalSteps) UNIONED with the
+    // DURABLE on-disk journal's historical "renamed" steps (fix-wave review,
+    // #283 Important 2) — buildPrefixMap further filters the union to
+    // `action === "renamed"`, dropping any skipped-conflict pair either
+    // source contributes: a candidate pair that never moved must never be
     // treated as a rewrite target (design rule 1, migratePathRewrite.ts).
+    // The historical union matters because a run that renamed a tree — and
+    // journaled it in this SAME `finally` above, or in an earlier run — but
+    // died before reaching THIS phase leaves nothing for a resumed run's OWN
+    // step arrays to rebuild that prefix from: the tree has already moved,
+    // so re-running the mover produces no NEW "renamed" step, and the stale
+    // paths inside the watchlist/tickets/records would stay wrong FOREVER
+    // without this. Re-applying a historical prefix is provably safe: an
+    // already-rewritten value matches no old prefix (`rewritePath` returns
+    // `null`) and is left untouched — idempotence rule 4 above, unchanged.
+    // `readJournal` never throws (missing/corrupt journal → empty steps);
+    // `dedupeSteps` handles the overlap between `dataRootJournalSteps`
+    // (already flushed to `migratedFile` above, in this same run) and what
+    // `readJournal` reads back here.
     // Deliberately excludes migrateStateTree's own same-directory renames
     // (phase 4) — those normalize pre-unification names in place at
     // cfg.dataDir and are a separate, pre-existing concern from the ROOT
     // relocation #283 is about; a real tree has almost always already been
     // normalized by an earlier daemon startup by the time an operator runs
-    // this command. Idempotent by construction: a resumed run's OWN
-    // "renamed" step lists are empty once nothing is left to move, so the
-    // map is empty and rewriteStoredPaths is a no-op.
+    // this command.
     const rewriteTargetQueue: Paths = {
       inbox: join(vaultQueueTarget, "inbox"),
       processing: join(vaultQueueTarget, "processing"),
       done: join(vaultQueueTarget, "done"),
       failed: join(vaultQueueTarget, "failed"),
     };
-    const rewriteMap = buildPrefixMap([...queueJournalSteps, ...dataRootJournalSteps]);
+    const historicalRenameSteps = readJournal(migratedFile, readFileFn).steps;
+    const rewriteMap = buildPrefixMap(
+      dedupeSteps([...historicalRenameSteps, ...queueJournalSteps, ...dataRootJournalSteps]),
+    );
     rewriteReport = rewriteStoredPaths({ targetRoot, queuePaths: rewriteTargetQueue }, rewriteMap, {
       readFileFn,
       writeFileFn,
@@ -895,13 +924,27 @@ export async function runDataMigrate(
       // appendJournal both stay fully generic over MigrationStep.action
       // (appendJournal only special-cases "skipped-conflict" for its dedup
       // rule), so no changes were needed there for the new "rewrote" value.
-      appendJournal(
-        migratedFile,
-        [{ from: targetRoot, to: targetRoot, action: "rewrote" }],
-        readFileFn,
-        writeFileFn,
-        renameFn,
-      );
+      try {
+        appendJournal(
+          migratedFile,
+          [{ from: targetRoot, to: targetRoot, action: "rewrote" }],
+          readFileFn,
+          writeFileFn,
+          renameFn,
+        );
+      } catch (journalErr) {
+        // Minor 4 (fix-wave review): same #197.1-style guard the data-root
+        // journal write above uses — a failure writing this cosmetic
+        // "rewrote" receipt must not turn into exit 1. Every store this
+        // phase touched was already written successfully on disk
+        // (rewriteReport.rewritten > 0 to even reach here); the failure is
+        // recorded through this phase's own warning channel instead of
+        // aborting the rest of the migration.
+        rewriteReport.warnings.push(
+          `path-rewrite journal write failed: ` +
+            `${journalErr instanceof Error ? journalErr.message : String(journalErr)}`,
+        );
+      }
     }
 
     // 7. Legacy root removal — filesystem-driven (Critical 1), attempted
