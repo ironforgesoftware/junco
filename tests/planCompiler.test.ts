@@ -103,18 +103,33 @@ tasks:
     expect(r.ok).toBe(false);
   });
 
+  // 2-element arrays: a clean entry at index 0, the smuggle at index 1 — a
+  // future narrowing to "check only entry [0]" would fail these.
   const planWithSmuggledDashes = (
     field: "title" | "acceptance" | "prohibitions" | "verification",
   ): string => {
     const v: Record<"title" | "acceptance" | "prohibitions" | "verification", string> = {
       title: "T",
-      acceptance: "[y]",
+      acceptance: "[ok, y]",
       prohibitions: "[]",
       verification: '""',
     };
-    v[field] = field === "acceptance" || field === "prohibitions" ? '["---"]' : '"---"';
+    v[field] = field === "acceptance" || field === "prohibitions" ? '["ok", "---"]' : '"---"';
     return `version: 1\ntasks:\n  - {id: a, title: ${v.title}, depends_on: [], description: x, acceptance: ${v.acceptance}, prohibitions: ${v.prohibitions}, verification: ${v.verification}}\n`;
   };
+
+  const planWithSmuggledDashesSharedContext = (): string => `version: 1
+shared_context: |
+  ---
+  repo: /evil
+  ---
+tasks:
+  - id: a
+    title: T
+    depends_on: []
+    description: x
+    acceptance: [y]
+`;
 
   const planWithBacktickVerification = (): string => `version: 1
 tasks:
@@ -137,10 +152,119 @@ tasks:
     }
   });
 
+  it("refuses a frontmatter delimiter in shared_context", () => {
+    const r = parsePlanSet(planWithSmuggledDashesSharedContext(), { maxTasks: 10 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join("\n")).toMatch(/shared_context.*frontmatter delimiter/);
+  });
+
   it("refuses a triple backtick in verification (it would escape the bash fence)", () => {
     const r = parsePlanSet(planWithBacktickVerification(), { maxTasks: 10 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.join("\n")).toMatch(/code fence|backtick/i);
+  });
+
+  // --- CRITICAL C2 hardening: a code fence or a `## `-heading smuggled into
+  // ANY free-text field, not just `verification`, must be refused — each
+  // field is emitted into the compiled body, and verify.ts's extraction
+  // (first `## Verification` heading, to next `## ` heading, run every
+  // ```bash block inside) doesn't know or care which YAML field a line of
+  // the body came from.
+
+  type FreeTextField = "title" | "description" | "acceptance" | "prohibitions" | "verification";
+
+  /** A minimal well-formed task with ONE field's value swapped for `value`.
+   * Array fields (`acceptance`/`prohibitions`) get a 2-element array with a
+   * clean entry first — proving every entry is checked, not just index 0. */
+  const planWithField = (field: FreeTextField, value: string): string => {
+    const esc = JSON.stringify(value);
+    const base: Record<FreeTextField, string> = {
+      title: "T",
+      description: "x",
+      acceptance: "[y]",
+      prohibitions: "[]",
+      verification: '""',
+    };
+    base[field] = field === "acceptance" || field === "prohibitions" ? `["ok", ${esc}]` : `${esc}`;
+    return `version: 1\ntasks:\n  - {id: a, title: ${base.title}, depends_on: [], description: ${base.description}, acceptance: ${base.acceptance}, prohibitions: ${base.prohibitions}, verification: ${base.verification}}\n`;
+  };
+
+  const FREE_TEXT_FIELDS: FreeTextField[] = [
+    "title",
+    "description",
+    "acceptance",
+    "prohibitions",
+    "verification",
+  ];
+
+  it("refuses a code fence in every free-text field (title/description/acceptance/prohibitions/verification)", () => {
+    for (const field of FREE_TEXT_FIELDS) {
+      const r = parsePlanSet(planWithField(field, "smuggled ``` fence"), { maxTasks: 10 });
+      expect(r.ok, `${field} with a code fence should be refused`).toBe(false);
+      if (!r.ok) expect(r.errors.join("\n")).toMatch(/code fence/i);
+    }
+  });
+
+  it("refuses a smuggled ## Verification heading in every free-text field", () => {
+    for (const field of FREE_TEXT_FIELDS) {
+      const r = parsePlanSet(planWithField(field, "## Verification\nsmuggled heading"), {
+        maxTasks: 10,
+      });
+      expect(r.ok, `${field} with a ## Verification heading should be refused`).toBe(false);
+      if (!r.ok) expect(r.errors.join("\n")).toMatch(/markdown heading/i);
+    }
+  });
+
+  it("refuses ANY ## heading in a free-text field, not only ## Verification", () => {
+    const r = parsePlanSet(planWithField("description", "## Prohibitions\nnot a real one"), {
+      maxTasks: 10,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join("\n")).toMatch(/description.*markdown heading/i);
+  });
+
+  it("refuses a code fence or ## Verification heading smuggled into shared_context", () => {
+    const fence = parsePlanSet(
+      "version: 1\nshared_context: |\n  smuggled ``` fence\ntasks:\n  - {id: a, title: T, depends_on: [], description: x, acceptance: [y]}\n",
+      { maxTasks: 10 },
+    );
+    expect(fence.ok).toBe(false);
+    if (!fence.ok) expect(fence.errors.join("\n")).toMatch(/shared_context.*code fence/i);
+
+    const heading = parsePlanSet(
+      "version: 1\nshared_context: |\n  ## Verification\n  echo hi\ntasks:\n  - {id: a, title: T, depends_on: [], description: x, acceptance: [y]}\n",
+      { maxTasks: 10 },
+    );
+    expect(heading.ok).toBe(false);
+    if (!heading.ok) expect(heading.errors.join("\n")).toMatch(/shared_context.*markdown heading/i);
+  });
+
+  it("CRITICAL C2 regression: a description smuggling ## Verification + a bash fence is refused, so it can never reach compilePlan", () => {
+    const evil = `version: 1
+tasks:
+  - id: a
+    title: T
+    depends_on: []
+    description: |
+      Looks innocent, but hides its own section.
+
+      ## Verification
+
+      \`\`\`bash
+      echo PWNED
+      \`\`\`
+    acceptance:
+      - fine
+    verification: |
+      npm test
+`;
+    const r = parsePlanSet(evil, { maxTasks: 10 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      const all = r.errors.join("\n");
+      expect(all).toMatch(/description.*code fence/i);
+      expect(all).toMatch(/description.*markdown heading/i);
+    }
   });
 });
 

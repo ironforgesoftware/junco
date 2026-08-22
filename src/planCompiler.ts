@@ -39,6 +39,36 @@ const SUFFIX_COLLISION_RE = /^r?\d+$/;
 // smuggle attempt from the human who approves the plan.
 const SMUGGLED_FM_RE = /^---\s*$/m;
 
+// compilePlan concatenates every free-text field (title, description, each
+// acceptance/prohibitions entry, verification, shared_context) into ONE
+// markdown body that src/verify.ts re-parses with two regexes that know
+// nothing about YAML field boundaries: extractVerificationBlocks finds the
+// FIRST `^## Verification` heading anywhere in the compiled body, then runs
+// every ```bash fenced block up to the NEXT `^##\s` heading (or end of
+// body). `description` lands near the top of the body — well before the
+// compiler's own `## Verification` section — so a `description` that
+// smuggles its own `## Verification` heading plus a ```bash fence becomes
+// the block junco executes, and the real `verification:` block never runs
+// (spec review CRITICAL C2: proven against this code — `blocks =
+// ["echo PWNED"]` where `["npm test"]` was expected). The same applies to
+// title/acceptance/prohibitions/shared_context: every one of them is
+// emitted before or interleaved with the real `## Verification` section.
+//
+// Refuse a code fence (```) AND a `## ` heading in every free-text field,
+// independently of each other, so neither check has to rely on the other or
+// on today's field ordering in compilePlan to hold as a security boundary.
+// We refuse EVERY `^##\s` heading — not only `^##\s+Verification` — for two
+// reasons: (1) it keeps working if compilePlan's body order or heading text
+// ever changes, instead of re-deriving a matching allowlist each time, and
+// (2) it stops a field from spoofing any of the OTHER compiler-built
+// sections (## Behavior, ## Prohibitions, ## Shared context) in front of
+// the human approving the plan, not just ## Verification. A heading can
+// also corrupt verify.ts's OWN section even without a paired fence: its
+// end-of-section boundary is "next `^##\s`", not "next `## Verification`",
+// so a heading smuggled inside `verification` itself truncates the real
+// section and silently drops the block instead of running it.
+const SMUGGLED_HEADING_RE = /^##\s/m;
+
 const strArr = (v: unknown): string[] | null =>
   Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : null;
 
@@ -63,6 +93,16 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
   if (sharedContext !== null && SMUGGLED_FM_RE.test(sharedContext)) {
     errors.push(
       "shared_context contains a frontmatter delimiter (---) — frontmatter is machine-owned",
+    );
+  }
+  if (sharedContext !== null && sharedContext.includes("```")) {
+    errors.push(
+      "shared_context contains a code fence (```) — bash fences may only appear in the compiler-built ## Verification section",
+    );
+  }
+  if (sharedContext !== null && SMUGGLED_HEADING_RE.test(sharedContext)) {
+    errors.push(
+      "shared_context contains a markdown heading (##) — headings may only appear in the compiler-built body sections",
     );
   }
   const tasksRaw = Array.isArray(doc.tasks) ? doc.tasks : null;
@@ -101,6 +141,16 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
         `${at}: title contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
       );
     }
+    if (title !== null && title.includes("```")) {
+      errors.push(
+        `${at}: title contains a code fence (\`\`\`) — bash fences may only appear in the compiler-built ## Verification section`,
+      );
+    }
+    if (title !== null && SMUGGLED_HEADING_RE.test(title)) {
+      errors.push(
+        `${at}: title contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+      );
+    }
     const dependsOn = strArr(m.depends_on ?? []) ?? null;
     if (dependsOn === null) errors.push(`${at}: depends_on must be a list of task ids`);
     const description =
@@ -108,11 +158,36 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
         ? m.description.trim()
         : null;
     if (description === null) errors.push(`${at}: missing/empty description`);
+    if (description !== null && SMUGGLED_FM_RE.test(description)) {
+      errors.push(
+        `${at}: description contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
+      );
+    }
+    if (description !== null && description.includes("```")) {
+      errors.push(
+        `${at}: description contains a code fence (\`\`\`) — bash fences may only appear in the compiler-built ## Verification section`,
+      );
+    }
+    if (description !== null && SMUGGLED_HEADING_RE.test(description)) {
+      errors.push(
+        `${at}: description contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+      );
+    }
     const acceptance = strArr(m.acceptance) ?? [];
     if (acceptance.length === 0) errors.push(`${at}: missing/empty acceptance list`);
     if (acceptance.some((a) => SMUGGLED_FM_RE.test(a))) {
       errors.push(
         `${at}: acceptance contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
+      );
+    }
+    if (acceptance.some((a) => a.includes("```"))) {
+      errors.push(
+        `${at}: acceptance contains a code fence (\`\`\`) — bash fences may only appear in the compiler-built ## Verification section`,
+      );
+    }
+    if (acceptance.some((a) => SMUGGLED_HEADING_RE.test(a))) {
+      errors.push(
+        `${at}: acceptance contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
       );
     }
     const prohibitions = strArr(m.prohibitions ?? []) ?? [];
@@ -121,15 +196,20 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
         `${at}: prohibitions contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
       );
     }
+    if (prohibitions.some((p) => p.includes("```"))) {
+      errors.push(
+        `${at}: prohibitions contains a code fence (\`\`\`) — bash fences may only appear in the compiler-built ## Verification section`,
+      );
+    }
+    if (prohibitions.some((p) => SMUGGLED_HEADING_RE.test(p))) {
+      errors.push(
+        `${at}: prohibitions contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
+      );
+    }
     const verification =
       typeof m.verification === "string" && m.verification.trim() !== ""
         ? m.verification.trim()
         : null;
-    if (description !== null && SMUGGLED_FM_RE.test(description)) {
-      errors.push(
-        `${at}: description contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
-      );
-    }
     if (verification !== null && SMUGGLED_FM_RE.test(verification)) {
       errors.push(
         `${at}: verification contains a frontmatter delimiter (---) — frontmatter is machine-owned`,
@@ -144,6 +224,18 @@ export function parsePlanSet(fenceBody: string, opts: { maxTasks: number }): Pla
     if (verification !== null && verification.includes("```")) {
       errors.push(
         `${at}: verification contains a code fence (\`\`\`) — it is emitted inside a bash fence and would escape it`,
+      );
+    }
+    // A heading inside verification's OWN content can't hijack a section
+    // upstream of it (the real ## Verification heading is always first in
+    // the compiled body), but it CAN truncate the compiler's own section:
+    // extractVerificationBlocks's end-of-section boundary is "next
+    // `^##\s`", not "next `## Verification`" — so a heading smuggled here
+    // silently drops the real block (and anything emitted after it) instead
+    // of running it.
+    if (verification !== null && SMUGGLED_HEADING_RE.test(verification)) {
+      errors.push(
+        `${at}: verification contains a markdown heading (##) — headings may only appear in the compiler-built body sections`,
       );
     }
     tasks.push({
