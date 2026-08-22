@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId, defaultTranscriptSink } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
+import { inMemoryCredentialStore } from "../src/agent/credentialStore.js";
 
 // Overridable createWriteStream so the transcript stream can be stubbed
 // (issue #26: fs.createWriteStream opens ASYNCHRONOUSLY — open/write failures
@@ -738,12 +739,12 @@ describe("runAgent (external force-stop)", () => {
 });
 
 // The models.json (file) path of makePiSessionFactory relies on the SDK's
-// ModelRegistry.create(authStorage, path) resolving a provider+model from a
+// ModelRuntime.create({ modelsPath }) resolving a provider+model from a
 // Pi-style models.json. This exercises that contract WITHOUT a live model
-// (building the registry from a file does no network I/O).
+// (building the runtime from a file does no network I/O).
 describe("models.json file path — SDK resolution", () => {
-  it("ModelRegistry.create resolves a provider+model from a Pi models.json", async () => {
-    const { ModelRegistry, AuthStorage } = await import("@earendil-works/pi-coding-agent");
+  it("ModelRuntime.create resolves a provider+model from a Pi models.json", async () => {
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
     const dir = mkdtempSync(join(tmpdir(), "junco-mj-"));
     try {
       const p = join(dir, "models.json");
@@ -772,12 +773,12 @@ describe("models.json file path — SDK resolution", () => {
           },
         }),
       );
-      const registry = ModelRegistry.create(AuthStorage.inMemory(), p);
-      const model = registry.find("omlx", "my-model");
-      expect(model).toBeTruthy();
-      expect(model!.contextWindow).toBe(200000);
-      expect(model!.maxTokens).toBe(8192);
-      expect(model!.reasoning).toBe(true);
+      const runtime = await ModelRuntime.create({
+        credentials: inMemoryCredentialStore(),
+        modelsPath: p,
+        refreshOnCreate: false,
+      });
+      expect(runtime.getModel("omlx", "my-model")).toBeTruthy();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

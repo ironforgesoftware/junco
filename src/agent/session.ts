@@ -12,6 +12,7 @@ import {
   type RegistryLike,
   type RegistryOps,
 } from "./modelSetup.js";
+import { inMemoryCredentialStore } from "./credentialStore.js";
 import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
 import { sandboxDenyPaths } from "../dataTree.js";
 import {
@@ -488,25 +489,58 @@ export async function resolveSandbox(
   return { backend, policy };
 }
 
+/** The `ModelRuntime` surface junco uses, kept narrow so the cast at this
+ * boundary is auditable (verified against 0.84.2 `dist/core/model-runtime.d.ts`:
+ * `getModel`/`getModels`/`registerProvider`). */
+interface SdkModelRuntime {
+  getModel(providerId: string, modelId: string): unknown;
+  getModels(providerId?: string): readonly unknown[];
+  registerProvider(providerId: string, config: Record<string, unknown>): void;
+}
+
 /**
- * Bridge from the SDK's `ModelRegistry` static (create/inMemory, both bound to
- * an `authStorage`) to `resolveModelViaRegistries`' SDK-free `RegistryOps`
- * seam. Shared by `makePiSessionFactory`, `getResolvedModelInfo`, and
- * `listCatalogProviders` so the cast-through-`unknown` bridge — `RegistryLike`
- * is a structural subset of the real `ModelRegistry`, kept narrow so
- * `modelSetup.ts` needs no SDK import — lives in exactly one place.
+ * A models store that never touches disk. `ModelRuntime.create` otherwise
+ * defaults to a `FileModelsStore` writing `models-store.json` NEXT TO the
+ * operator's models.json — junco must not write there.
+ */
+const NOOP_MODELS_STORE = {
+  read: async () => undefined,
+  write: async () => {},
+  delete: async () => {},
+};
+
+/**
+ * Bridge from the SDK's async `ModelRuntime.create` to
+ * `resolveModelViaRegistries`' SDK-free `RegistryOps` seam. Shared by
+ * `makePiSessionFactory`, `getResolvedModelInfo`, and `listCatalogProviders`
+ * so the cast-through-`unknown` lives in exactly one place.
+ *
+ * Every option here is load-bearing for the key-never-on-disk invariant:
+ * `credentials` (default is file-backed `~/.pi/agent/auth.json`, and the
+ * backend CREATES it), `modelsPath` stated explicitly (default is
+ * `~/.pi/agent/models.json`), `refreshOnCreate: false` plus `modelsStore` (the
+ * default file store can write beside the operator's models.json).
+ * `allowModelNetwork` defaults to false and is left alone. Junco's three
+ * cascade paths are all static, so skipping the refresh costs nothing.
  */
 function sdkRegistryOps(
-  ModelRegistryStatic: {
-    create(authStorage: unknown, modelsJsonPath?: string): unknown;
-    inMemory(authStorage: unknown): unknown;
-  },
-  authStorage: unknown,
+  ModelRuntimeStatic: { create(options: Record<string, unknown>): Promise<unknown> },
+  credentials: unknown,
 ): RegistryOps {
-  return {
-    fromFile: async (p) => ModelRegistryStatic.create(authStorage, p) as unknown as RegistryLike,
-    inMemory: async () => ModelRegistryStatic.inMemory(authStorage) as unknown as RegistryLike,
+  const make = async (modelsPath: string | null): Promise<RegistryLike> => {
+    const runtime = (await ModelRuntimeStatic.create({
+      credentials,
+      modelsPath,
+      refreshOnCreate: false,
+      modelsStore: NOOP_MODELS_STORE,
+    })) as SdkModelRuntime;
+    return {
+      find: (provider, modelId) => runtime.getModel(provider, modelId),
+      registerProvider: (name, config) => runtime.registerProvider(name, config),
+      backing: runtime,
+    };
   };
+  return { fromFile: (p) => make(p), inMemory: () => make(null) };
 }
 
 /** The subset of the SDK's resolved `Model<Api>` fields `getResolvedModelInfo`
@@ -550,23 +584,20 @@ export async function getResolvedModelInfo(
   cfg: Config,
   modelId?: string,
 ): Promise<ResolvedModelInfo> {
-  const { AuthStorage, ModelRegistry } = await import("@earendil-works/pi-coding-agent");
+  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
 
   const model = modelId !== undefined ? { ...cfg.model, id: modelId } : cfg.model;
   const effectiveCfg: Config = modelId !== undefined ? { ...cfg, model } : cfg;
 
-  // Ephemeral in-memory auth, exactly like the real factory — never touches
-  // ~/.pi/agent/auth.json. Not required for resolution to succeed (find/
-  // registerProvider don't consult it), but kept for parity with the real
-  // session path in case a future SDK version validates auth during resolve.
-  const authStorage = AuthStorage.inMemory();
-  if (model.apiKey !== null) {
-    authStorage.setRuntimeApiKey(splitModelId(model.id).provider, model.apiKey);
-  }
+  // Ephemeral in-memory credentials, exactly like the real factory — never
+  // touches ~/.pi/agent/auth.json. See credentialStore.ts for the invariant.
+  const credentials = inMemoryCredentialStore(
+    model.apiKey !== null ? { [splitModelId(model.id).provider]: model.apiKey } : {},
+  );
 
   const resolved = await resolveModelViaRegistries(
     effectiveCfg,
-    sdkRegistryOps(ModelRegistry, authStorage),
+    sdkRegistryOps(ModelRuntime, credentials),
   );
   const m = resolved.model as SdkResolvedModelFields;
   return {
@@ -587,14 +618,14 @@ export interface CatalogEntry {
 /**
  * Enumerate the SDK's built-in hosted-model catalog, grouped by provider — the
  * COMPLETE list (no filtering/favorites), for the config wizard's provider
- * picker. `ModelRegistry.inMemory(...)` has no models.json backing it, so
- * `.getAll()` (built-in + custom, `model-registry.d.ts:52`) returns exactly
- * the built-in catalog here. Embedded data — no network call.
+ * picker. A `ModelRuntime` built with `modelsPath: null` has no models.json
+ * backing it, so `.getModels()` (`model-runtime.d.ts:64`) returns exactly the
+ * built-in catalog here. Embedded data — no network call.
  */
 export async function listCatalogProviders(): Promise<CatalogEntry[]> {
-  const { AuthStorage, ModelRegistry } = await import("@earendil-works/pi-coding-agent");
-  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
-  const models = registry.getAll() as SdkResolvedModelFields[];
+  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+  const registry = await sdkRegistryOps(ModelRuntime, inMemoryCredentialStore()).inMemory();
+  const models = (registry.backing as SdkModelRuntime).getModels() as SdkResolvedModelFields[];
 
   const idsByProvider = new Map<string, string[]>();
   for (const m of models) {
@@ -613,28 +644,30 @@ export function makePiSessionFactory(
   overrides?: SessionOverrides,
 ): () => Promise<AgentSessionLike> {
   return async () => {
-    const { createAgentSession, AuthStorage, ModelRegistry, SessionManager, SettingsManager } =
+    const { createAgentSession, ModelRuntime, SessionManager, SettingsManager } =
       await import("@earendil-works/pi-coding-agent");
 
     const { provider } = splitModelId(cfg.model.id);
 
-    // In-memory auth: AuthStorage.create() file-backs onto the operator's real
-    // ~/.pi/agent/auth.json (creating it if absent) — junco must never touch it.
-    const authStorage = AuthStorage.inMemory();
-    // A null key defers to the SDK's request-time provider env-var fallback
-    // (ANTHROPIC_API_KEY, OPENAI_API_KEY, … — see resolveApiKey in config.ts).
-    if (cfg.model.apiKey !== null) {
-      authStorage.setRuntimeApiKey(provider, cfg.model.apiKey);
-    }
+    // In-memory credentials: the SDK's default store file-backs onto the
+    // operator's real ~/.pi/agent/auth.json (creating it if absent) — junco
+    // must never touch it. A null key seeds nothing and defers to the SDK's
+    // request-time provider env-var fallback (ANTHROPIC_API_KEY, … — see
+    // resolveApiKey in config.ts).
+    const credentials = inMemoryCredentialStore(
+      cfg.model.apiKey !== null ? { [provider]: cfg.model.apiKey } : {},
+    );
 
     // models.json → builtin catalog → inline (see resolveModelViaRegistries).
     const resolvedModel = await resolveModelViaRegistries(
       cfg,
-      sdkRegistryOps(ModelRegistry, authStorage),
+      sdkRegistryOps(ModelRuntime, credentials),
       (msg, meta) => log.warn(msg, meta),
     );
     const model = resolvedModel.model as any;
-    const modelRegistry = resolvedModel.registry as any;
+    // The SAME runtime resolution ran on — an inline provider registered
+    // during the cascade lives on this object, so the session must use it.
+    const modelRuntime = resolvedModel.registry.backing as any;
 
     // Sandbox (on by default): replace built-in tools with sandboxed operations
     // and freeze ambient extension loading. Inert when sandbox.enabled is false —
@@ -664,8 +697,7 @@ export function makePiSessionFactory(
       model,
       // Worker default from config; the critic overrides this (cfg.criticThinking).
       thinkingLevel: (overrides?.thinkingLevel ?? cfg.model.thinkingLevel) as ThinkingLevel,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       // The critic passes `[]` (no tools — diff-vs-spec review needs none);
       // default is the configured worker allowlist.
       tools: overrides?.tools ?? cfg.tools,
