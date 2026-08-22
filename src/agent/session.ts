@@ -504,8 +504,8 @@ function sdkRegistryOps(
   authStorage: unknown,
 ): RegistryOps {
   return {
-    fromFile: (p) => ModelRegistryStatic.create(authStorage, p) as unknown as RegistryLike,
-    inMemory: () => ModelRegistryStatic.inMemory(authStorage) as unknown as RegistryLike,
+    fromFile: async (p) => ModelRegistryStatic.create(authStorage, p) as unknown as RegistryLike,
+    inMemory: async () => ModelRegistryStatic.inMemory(authStorage) as unknown as RegistryLike,
   };
 }
 
@@ -564,7 +564,7 @@ export async function getResolvedModelInfo(
     authStorage.setRuntimeApiKey(splitModelId(model.id).provider, model.apiKey);
   }
 
-  const resolved = resolveModelViaRegistries(
+  const resolved = await resolveModelViaRegistries(
     effectiveCfg,
     sdkRegistryOps(ModelRegistry, authStorage),
   );
@@ -628,7 +628,7 @@ export function makePiSessionFactory(
     }
 
     // models.json → builtin catalog → inline (see resolveModelViaRegistries).
-    const resolvedModel = resolveModelViaRegistries(
+    const resolvedModel = await resolveModelViaRegistries(
       cfg,
       sdkRegistryOps(ModelRegistry, authStorage),
       (msg, meta) => log.warn(msg, meta),
