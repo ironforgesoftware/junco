@@ -5,7 +5,7 @@
  * predated tests/helpers/ and were never retrofitted (repo, pr, worktree,
  * critic, prFlow, and forkHarness itself). This is the single source.
  *
- * `cloneHarness` exists for cost: building the tree runs 10 git subprocesses
+ * `cloneHarness` exists for cost: building the tree runs 12 git subprocesses
  * (~142ms measured), while cpSync-ing a prebuilt one is ~7ms. The template is
  * built lazily, at most once per worker process. tests/gitHarness.test.ts pins
  * the property that makes this legal — a COPIED bare remote still accepts a
@@ -40,14 +40,30 @@ export interface GitHarness {
   work: string;
 }
 
-/** Build the harness from scratch under `root` (~142ms: 10 git subprocesses). */
+/** Build the harness from scratch under `root` (~142ms: 12 git subprocesses).
+ *
+ * `gc.auto 0` on BOTH repos is a flake mitigation for a SUSPECTED cause, not a
+ * diagnosed one (#313): `tests/repo.test.ts` failed once on ubuntu with an
+ * ENOENT out of `cloneHarness`'s `cpSync`, and `git gc --auto` — which git fires
+ * on ordinary operations, detached, and which rewrites/removes loose objects and
+ * pack files — is the only mutation that could plausibly run under that copy.
+ * The push in this function is exactly such a trigger, and a gc it spawns on the
+ * bare remote can still be running when `cloneHarness` copies the template
+ * moments later. It is set BEFORE the first commit/push so nothing can trigger
+ * a gc ahead of the setting, and it lands in each repo's own `config`, so the
+ * copies `cloneHarness` makes inherit it (as do worktrees of `work`).
+ *
+ * If the ENOENT recurs, the hypothesis was wrong and the harness needs real
+ * instrumentation instead. */
 export function setupGitHarness(root: string): GitHarness {
   const remote = join(root, "remote.git");
   const work = join(root, "work");
   mkdirSync(root, { recursive: true });
 
   run(["git", "init", "--bare", "-b", "main", remote]);
+  run(["git", "-C", remote, "config", "gc.auto", "0"]);
   run(["git", "init", "-b", "main", work]);
+  run(["git", "-C", work, "config", "gc.auto", "0"]);
   run(["git", "-C", work, "config", "user.email", "ci@example.com"]);
   run(["git", "-C", work, "config", "user.name", "CI"]);
   run(["git", "-C", work, "config", "commit.gpgsign", "false"]);

@@ -28,17 +28,25 @@ import { cloneHarness, run as gitRun } from "./helpers/gitHarness.js";
 // backend-less run as PASSING — indistinguishable from genuine enforcement
 // coverage, which is exactly how a CI leg can read green while testing nothing.
 const backend = selectBackend("auto", process.platform);
-const available = backend.name !== "none" && (await backend.isAvailable(defaultExecProbe));
+const availability =
+  backend.name === "none"
+    ? { available: false, reason: undefined }
+    : await backend.checkAvailability(defaultExecProbe);
+const available = backend.name !== "none" && availability.available;
 
 /** Why the real-enforcement cases are not running here. Named in every skip so
- *  a skipped leg is never mistaken for a passing one. */
+ *  a skipped leg is never mistaken for a passing one. The backend's OWN words
+ *  come first when it had any (#312) — this is the CI leg where "unavailable"
+ *  alone once cost a diagnosis (#308: an installed bwrap refused by
+ *  ubuntu-24.04's kernel.apparmor_restrict_unprivileged_userns=1). */
 const skipReason =
   backend.name === "none"
     ? `NO OS SANDBOX BACKEND: selectBackend("auto", "${process.platform}") → "none"; real sandbox enforcement was NOT exercised`
     : `SANDBOX BACKEND "${backend.name}" UNAVAILABLE on this host (${
-        backend.name === "bwrap"
+        availability.reason ??
+        (backend.name === "bwrap"
           ? "bwrap binary missing, or user namespaces disabled"
-          : "sandbox-exec probe failed"
+          : "sandbox-exec probe failed")
       }); real sandbox enforcement was NOT exercised`;
 
 if (!available) {

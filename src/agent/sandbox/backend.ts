@@ -4,22 +4,72 @@ import { sep } from "node:path";
 import { type SandboxPolicy, readRules, traversalMetadataPaths } from "./policy.js";
 import { orderRules, type ReadRule } from "./precedence.js";
 
-export type ExecProbe = (cmd: string, args: string[]) => Promise<{ code: number }>;
+export interface ProbeResult {
+  /** Exit status — 127 for a missing binary (mirrors doctor.ts). */
+  code: number;
+  /** Whatever the child said on stderr. DIAGNOSTIC ONLY: `code` remains the
+   *  sole decision input (see `availabilityFrom`); this exists so a refusal the
+   *  child explained is not thrown away (#312). Optional — a probe that has
+   *  nothing to add simply omits it. */
+  stderr?: string;
+}
+
+export type ExecProbe = (cmd: string, args: string[]) => Promise<ProbeResult>;
+
+/** A backend's availability plus, when the probe failed and the child said
+ *  something, WHY. `reason` is never set when `available` is true. */
+export interface BackendAvailability {
+  available: boolean;
+  reason?: string;
+}
+
+/** Max characters of probe stderr kept as a `reason`. A backend's refusal is one
+ *  line; a runaway child must not push a megabyte into one log entry. */
+export const PROBE_STDERR_LIMIT = 400;
+
+/** Collapse a child's stderr into a bounded single-line diagnostic, or
+ *  `undefined` when it said nothing worth repeating. */
+export function summarizeProbeStderr(raw: string | undefined): string | undefined {
+  const line = (raw ?? "").replace(/\s+/g, " ").trim();
+  if (line === "") return undefined;
+  return line.length > PROBE_STDERR_LIMIT ? `${line.slice(0, PROBE_STDERR_LIMIT)}…` : line;
+}
+
+/** The one place a probe result becomes an availability verdict: `code === 0`
+ *  decides, stderr only explains a failure. */
+function availabilityFrom(r: ProbeResult): BackendAvailability {
+  if (r.code === 0) return { available: true };
+  const reason = summarizeProbeStderr(r.stderr);
+  return reason === undefined ? { available: false } : { available: false, reason };
+}
 
 export interface SandboxBackend {
   name: "seatbelt" | "bwrap" | "none";
   /** Full argv (binary + args) that runs `command` under the sandbox. */
   spawnArgv(command: string, policy: SandboxPolicy): string[];
-  /** Whether the backend can actually run here (binary present + functional). */
-  isAvailable(exec: ExecProbe): Promise<boolean>;
+  /** Whether the backend can actually run here (binary present + functional),
+   *  and — when it cannot and the probe's child explained itself — why. */
+  checkAvailability(exec: ExecProbe): Promise<BackendAvailability>;
 }
 
-/** Default probe: run a binary, treat ENOENT as code 127 (mirrors doctor.ts). */
+/** Default probe: run a binary, treat ENOENT as code 127 (mirrors doctor.ts),
+ *  and keep the child's stderr for diagnostics (#312). Without it a backend
+ *  that refuses for a REASON — an installed bwrap blocked from creating a user
+ *  namespace by `kernel.apparmor_restrict_unprivileged_userns=1`, say — is
+ *  indistinguishable from one that is not installed at all. */
 export const defaultExecProbe: ExecProbe = (cmd, args) =>
   new Promise((res) => {
-    execFile(cmd, args, { timeout: 10_000 }, (err) => {
-      const code = err ? ((err as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1) : 0;
-      res({ code });
+    execFile(cmd, args, { timeout: 10_000 }, (err, _stdout, stderr) => {
+      const errno = err as NodeJS.ErrnoException | null;
+      const code = errno ? (errno.code === "ENOENT" ? 127 : 1) : 0;
+      // A spawn failure (ENOENT/EACCES — a string `code`) produces no child and
+      // therefore no stderr, so its message IS the diagnosis. For a non-zero
+      // EXIT, Node's message is "Command failed: <argv>" with the same stderr
+      // appended, so preferring stderr avoids echoing the argv back.
+      const detail =
+        summarizeProbeStderr(stderr) ??
+        (typeof errno?.code === "string" ? summarizeProbeStderr(errno.message) : undefined);
+      res(detail === undefined ? { code } : { code, stderr: detail });
     });
   });
 
@@ -87,10 +137,11 @@ export const seatbeltBackend: SandboxBackend = {
   spawnArgv(command, policy) {
     return ["sandbox-exec", "-p", seatbeltProfile(policy), "/bin/bash", "-c", command];
   },
-  async isAvailable(exec) {
+  async checkAvailability(exec) {
     // A trivial allow-all profile that must run `true` successfully.
-    const r = await exec("sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"]);
-    return r.code === 0;
+    return availabilityFrom(
+      await exec("sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"]),
+    );
   },
 };
 
@@ -216,9 +267,10 @@ export const bwrapBackend: SandboxBackend = {
   spawnArgv(command, policy) {
     return ["bwrap", ...bwrapArgs(policy), "/bin/bash", "-c", command];
   },
-  async isAvailable(exec) {
-    const r = await exec("bwrap", ["--ro-bind", "/", "/", "--unshare-net", "/usr/bin/true"]);
-    return r.code === 0;
+  async checkAvailability(exec) {
+    return availabilityFrom(
+      await exec("bwrap", ["--ro-bind", "/", "/", "--unshare-net", "/usr/bin/true"]),
+    );
   },
 };
 
@@ -229,8 +281,8 @@ export const noneBackend: SandboxBackend = {
   spawnArgv(command) {
     return ["/bin/bash", "-c", command];
   },
-  async isAvailable() {
-    return true;
+  async checkAvailability() {
+    return { available: true };
   },
 };
 

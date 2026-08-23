@@ -358,6 +358,30 @@ describe("runDoctor", () => {
     expect(lines.join("")).toMatch(/degrading to none/);
   });
 
+  // #312: an unavailable backend used to report only "install bubblewrap",
+  // which is misleading when bubblewrap IS installed and the kernel refused.
+  it("names the probe's own refusal in the sandbox check", async () => {
+    const lines: string[] = [];
+    const cfg = sandboxConfig();
+    await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        env: sandboxEnv,
+        execFn: async (cmd: string) =>
+          cmd === "bwrap"
+            ? {
+                code: 1,
+                stdout: "",
+                stderr: "bwrap: Creating new namespace failed: Operation not permitted\n",
+              }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(lines.join("")).toMatch(/Creating new namespace failed: Operation not permitted/);
+  });
+
   it("missing gh is a warning, not a failure (Q&A-only setups are valid)", async () => {
     const lines: string[] = [];
     const code = await runDoctor(

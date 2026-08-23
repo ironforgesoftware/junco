@@ -21,6 +21,7 @@ import {
   noneBackend,
   defaultExecProbe,
   type SandboxBackend,
+  type BackendAvailability,
   type ExecProbe,
 } from "./sandbox/backend.js";
 import { buildSandbox, SandboxUnavailableError, type SdkToolFactories } from "./sandbox/index.js";
@@ -458,13 +459,20 @@ export async function resolveSandbox(
   const makeScratch = deps.makeScratch ?? (() => mkdtempSync(join(tmpdir(), "junco-sbx-")));
 
   let backend = selectBackend(cfg.sandbox.backend, platform);
-  const available = backend.name === "none" ? true : await backend.isAvailable(probe);
-  const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, available);
+  const availability: BackendAvailability =
+    backend.name === "none" ? { available: true } : await backend.checkAvailability(probe);
+  const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, availability.available);
+  // #312: the probe's own words, when it had any. "Install bubblewrap" is
+  // actively misleading when bubblewrap IS installed and the kernel refused
+  // (ubuntu-24.04's kernel.apparmor_restrict_unprivileged_userns=1), so the
+  // refusal is quoted verbatim ahead of the install hint. Diagnostic only —
+  // `outcome` above is already decided.
+  const why = availability.reason === undefined ? "" : ` Probe said: ${availability.reason}.`;
   if (outcome === "fail-closed") {
     // Explicit backend the operator demanded is unavailable — never silently
     // run less-sandboxed than they asked. (auto degrades instead; see below.)
     throw new SandboxUnavailableError(
-      `sandbox backend "${backend.name}" unavailable (binary missing or non-functional). ` +
+      `sandbox backend "${backend.name}" unavailable (binary missing or non-functional).${why} ` +
         `Install it, or set sandbox.backend="none" / sandbox.enabled=false.`,
     );
   }
@@ -474,9 +482,13 @@ export async function resolveSandbox(
     // OS-confined — reads/network unrestricted) rather than failing the ticket.
     log.warn(
       `sandbox: no OS backend available (${backend.name}); degrading to backend=none — ` +
-        `env scrub + filesystem tool-jail still apply, but agent bash is not OS-confined. ` +
+        `env scrub + filesystem tool-jail still apply, but agent bash is not OS-confined.${why} ` +
         `Install the backend (e.g. bubblewrap on Linux) for full isolation.`,
-      { platform, configured: cfg.sandbox.backend },
+      {
+        platform,
+        configured: cfg.sandbox.backend,
+        ...(availability.reason === undefined ? {} : { probe: availability.reason }),
+      },
     );
     backend = noneBackend;
   }
