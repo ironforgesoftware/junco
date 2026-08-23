@@ -81,6 +81,7 @@ function makeDeps(
 ): NonNullable<Parameters<typeof run>[1]> {
   const fakeLock = makeFakeLock();
   const fakeTreeLock = makeFakeLock();
+  const fakeQueueLock = makeFakeLock();
   const uninstallSpy = vi.fn();
   return {
     loadConfigFn: vi.fn(() => stubConfig()),
@@ -89,6 +90,9 @@ function makeDeps(
     // own machine the default dataDir is their live ~/.junco, and a real
     // pidfile there would collide with (or be stolen from) their daemon.
     acquireTreeLockFn: vi.fn(() => fakeTreeLock),
+    // Same, for the queue root — and a DISTINCT fake, so a test asserting one
+    // claim's release() count can never be satisfied by the other's.
+    acquireQueueLockFn: vi.fn(() => fakeQueueLock),
     installSignalHandlersFn: vi.fn(() => uninstallSpy),
     mainLoopFn: vi.fn(async () => {}),
     runOnceFn: vi.fn(async () => true),
@@ -493,6 +497,198 @@ describe("run(['start']) — data-root claim (#310)", () => {
       // Both pidfiles were distinct AND both were released on shutdown.
       expect(existsSync(join(dataDir, "worker.lock"))).toBe(false);
       expect(existsSync(join(dataDir, "daemon-tree.lock"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// start — the queue-root claim (#310)
+//
+// The data-root claim alone misses the shape that actually loses work. A legacy
+// `vaultRoot` puts `queueRoot` OUTSIDE `dataDir`, so two configs with two
+// DIFFERENT data roots can still name one shared vault queue: neither
+// worker.lock (keyed to the config dir) nor the data-root claim collides, and
+// both daemons poll the same inbox, claim the same tickets and finalize over
+// each other. The queue root gets its own claim for exactly that shape.
+// ---------------------------------------------------------------------------
+
+describe("run(['start']) — queue-root claim (#310)", () => {
+  it("a normal single-instance start still succeeds, claiming <queueRoot>/daemon-queue.lock", async () => {
+    const acquireQueueLockFn = vi.fn(() => makeFakeLock());
+    const deps = makeDeps({ acquireQueueLockFn });
+
+    expect(await run(["start"], deps)).toBe(0);
+    expect(acquireQueueLockFn).toHaveBeenCalledTimes(1);
+    expect(acquireQueueLockFn).toHaveBeenCalledWith(
+      join("/sbxroot/data/queue", "daemon-queue.lock"),
+    );
+    expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("the vault shape: refuses a second start with a different config AND a different dataDir but the SAME queueRoot", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-queue-claim-"));
+    try {
+      // The legacy-vaultRoot shape: two independent data roots, one shared
+      // queue. `daemon-tree.lock` cannot see this — the two data roots differ.
+      const sharedQueue = join(root, "vault", "junco");
+      const dataDirA = join(root, "data-a");
+      const dataDirB = join(root, "data-b");
+      const configA = join(root, "a", "config.json");
+      const configB = join(root, "b", "config.json");
+      const cfgA = { ...stubConfig(), dataDir: dataDirA, queueRoot: sharedQueue } as Config;
+      const cfgB = { ...stubConfig(), dataDir: dataDirB, queueRoot: sharedQueue } as Config;
+
+      // The real primitive, against a tmp tree we own — HOME, dataDir and
+      // queueRoot are all injected, so nothing can reach the maintainer's
+      // ~/.junco or their real queue.
+      const realClaim = (p: string) => acquirePidfileLock(p);
+
+      let secondCode = -1;
+      const stderrLines: string[] = [];
+
+      const first = makeDeps({
+        env: { HOME: root, JUNCO_CONFIG: configA },
+        loadConfigFn: vi.fn(() => cfgA),
+        acquireTreeLockFn: realClaim,
+        acquireQueueLockFn: realClaim,
+        // The second daemon starts WHILE the first still holds the claim.
+        mainLoopFn: vi.fn(async () => {
+          const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+            stderrLines.push(String(s));
+            return true;
+          });
+          try {
+            secondCode = await run(
+              ["start"],
+              makeDeps({
+                env: { HOME: root, JUNCO_CONFIG: configB },
+                loadConfigFn: vi.fn(() => cfgB),
+                acquireTreeLockFn: realClaim,
+                acquireQueueLockFn: realClaim,
+                readLockHolderFn: (p: string) => readLockHolder(p),
+              }),
+            );
+          } finally {
+            spy.mockRestore();
+          }
+        }),
+      });
+
+      expect(await run(["start"], first)).toBe(0);
+
+      expect(secondCode).toBe(1);
+      const msg = stderrLines.join("");
+      expect(msg).toMatch(/refusing to start/i);
+      expect(msg).toContain(`pid ${process.pid}`);
+      expect(msg).toContain(sharedQueue);
+      expect(msg).toContain(configB);
+      // The loser's OWN data-root claim (which it did take — the data roots
+      // differ) is handed back, not leaked for the next start to steal.
+      expect(existsSync(join(dataDirB, "daemon-tree.lock"))).toBe(false);
+      // …and the winner released everything on its way out.
+      expect(existsSync(join(sharedQueue, "daemon-queue.lock"))).toBe(false);
+      expect(existsSync(join(dataDirA, "daemon-tree.lock"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the refusal never reaches mainLoop and hands back BOTH claims it already took", async () => {
+    const workerLock = makeFakeLock();
+    const treeLock = makeFakeLock();
+    const deps = makeDeps({
+      acquireLockFn: vi.fn(() => workerLock),
+      acquireTreeLockFn: vi.fn(() => treeLock),
+      acquireQueueLockFn: vi.fn(() => null),
+      readLockHolderFn: vi.fn(() => 7171),
+    });
+    const stderrLines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+      stderrLines.push(String(s));
+      return true;
+    });
+    try {
+      expect(await run(["start"], deps)).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(deps.mainLoopFn).not.toHaveBeenCalled();
+    expect(deps.installSignalHandlersFn).not.toHaveBeenCalled();
+    expect(treeLock.release).toHaveBeenCalledTimes(1);
+    expect(workerLock.release).toHaveBeenCalledTimes(1);
+    expect(stderrLines.join("")).toContain("pid 7171");
+  });
+
+  it("releases the queue claim after mainLoop returns", async () => {
+    const queueLock = makeFakeLock();
+    const deps = makeDeps({ acquireQueueLockFn: vi.fn(() => queueLock) });
+    await run(["start"], deps);
+    expect(queueLock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("STILL releases the queue claim when mainLoop throws", async () => {
+    const queueLock = makeFakeLock();
+    const deps = makeDeps({
+      acquireQueueLockFn: vi.fn(() => queueLock),
+      mainLoopFn: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    expect(await run(["start"], deps)).toBe(1);
+    expect(queueLock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("STILL releases all three claims on a MID-STARTUP throw (after the claims, before mainLoop)", async () => {
+    const workerLock = makeFakeLock();
+    const treeLock = makeFakeLock();
+    const queueLock = makeFakeLock();
+    const deps = makeDeps({
+      acquireLockFn: vi.fn(() => workerLock),
+      acquireTreeLockFn: vi.fn(() => treeLock),
+      acquireQueueLockFn: vi.fn(() => queueLock),
+      installSignalHandlersFn: vi.fn(() => {
+        throw new Error("mid-startup boom");
+      }),
+    });
+    await expect(run(["start"], deps)).rejects.toThrow("mid-startup boom");
+    expect(queueLock.release).toHaveBeenCalledTimes(1);
+    expect(treeLock.release).toHaveBeenCalledTimes(1);
+    expect(workerLock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("a lock-losing start never claims the queue root either", async () => {
+    const acquireQueueLockFn = vi.fn(() => makeFakeLock());
+    const deps = makeDeps({ acquireLockFn: vi.fn(() => null), acquireQueueLockFn });
+    await run(["start"], deps);
+    expect(acquireQueueLockFn).not.toHaveBeenCalled();
+  });
+
+  it("a DEFAULT install claims three DISTINCT files and cleans up all three", async () => {
+    const home = mkdtempSync(join(tmpdir(), "junco-default-queue-"));
+    try {
+      // The default layout: config at <home>/.junco/config.json (so
+      // dirname(configPath) IS dataDir) and queueRoot at <dataDir>/queue. The
+      // three claims must be three different files — a shared basename would
+      // make the daemon contend with itself and refuse to start.
+      const dataDir = join(home, ".junco");
+      const queueRoot = join(dataDir, "queue");
+      const cfg = { ...stubConfig(), dataDir, queueRoot } as Config;
+      const deps = makeDeps({
+        env: { HOME: home },
+        loadConfigFn: vi.fn(() => cfg),
+        acquireLockFn: (p: string) => acquireSingletonLock(p), // REAL
+        acquireTreeLockFn: (p: string) => acquirePidfileLock(p), // REAL
+        acquireQueueLockFn: (p: string) => acquirePidfileLock(p), // REAL
+        readLockHolderFn: (p: string) => readLockHolder(p),
+      });
+
+      expect(await run(["start"], deps)).toBe(0);
+      expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
+      expect(existsSync(join(dataDir, "worker.lock"))).toBe(false);
+      expect(existsSync(join(dataDir, "daemon-tree.lock"))).toBe(false);
+      expect(existsSync(join(queueRoot, "daemon-queue.lock"))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

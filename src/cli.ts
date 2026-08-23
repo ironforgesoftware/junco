@@ -114,6 +114,15 @@ export interface CliDeps {
    *  two claims independently — and so a fake worker lock is never released
    *  twice. */
   acquireTreeLockFn?: (lockPath: string) => PidfileLock | null;
+  /** The queue-root claim `start` takes alongside the data-root one (#310).
+   *  Its own root because a legacy `vaultRoot` puts `queueRoot` OUTSIDE
+   *  `dataDir`: two configs with two different data roots can still name one
+   *  shared vault queue, which neither worker.lock nor the data-root claim can
+   *  see — and the queue is the shared state whose corruption actually loses
+   *  work. Default: the real acquirePidfileLock. Its own seam rather than
+   *  acquireTreeLockFn's so a test can drive the two claims independently and
+   *  no fake is ever released twice. */
+  acquireQueueLockFn?: (lockPath: string) => PidfileLock | null;
   installSignalHandlersFn?: (stopFlag: StopFlag) => () => void;
   mainLoopFn?: (
     cfg: Config,
@@ -390,9 +399,35 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
   }
 }
 
+/** The two shared roots `start` claims, and the wording each one needs. Keyed
+ *  by the label that names the root in the headline AND in the field column,
+ *  so the two can never drift apart. */
+const SHARED_ROOT_REFUSALS = {
+  "data root": {
+    why:
+      `That daemon resolved a DIFFERENT config file, so its worker.lock sits beside\n` +
+      `its own config and this process can never see it — but both configs resolve to\n` +
+      `the same data root, so both daemons would poll one queue, claim the same\n` +
+      `tickets and write the same worktrees. Two config files are not two junco\n` +
+      `installs: the data root is what makes them one.\n`,
+    remedy: `give this config a data root of its own\n(\`dataDir\`), then start again.`,
+  },
+  "queue root": {
+    why:
+      `That daemon resolved a DIFFERENT config file, so its worker.lock sits beside\n` +
+      `its own config and this process can never see it — and its data root can differ\n` +
+      `from this one, so the data-root claim does not collide either. What the two\n` +
+      `configs share is the QUEUE: both daemons would poll one inbox, claim the same\n` +
+      `tickets and finalize over each other's work. A legacy \`vaultRoot\` queue lives\n` +
+      `outside the data root, which is exactly how two otherwise-separate installs end\n` +
+      `up on one queue.\n`,
+    remedy: `give this config a queue of its own\n(\`vaultRoot\`, or a data root that owns its queue), then start again.`,
+  },
+} as const;
+
 /**
- * Operator-facing refusal when another daemon already claims this data root
- * (#310).
+ * Operator-facing refusal when another daemon already claims one of the shared
+ * roots this one resolved (#310).
  *
  * The whole difficulty of this failure is that it looks impossible from the
  * operator's chair: two config files, two `junco start`s, two `worker.lock`s
@@ -400,38 +435,40 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
  * does not just say "already running"; it names the shared root, the claim
  * file, and THIS config, and states the reason the two are not independent.
  *
+ * One builder for both roots so the two refusals are the same shape by
+ * construction — an operator who has seen one can read the other.
+ *
  * `holderPid` is null when the claim was taken but its owner could not be
  * identified (it was released between the failed acquire and the read, or the
  * pidfile is unreadable). Never print "pid null" — say the pid is unavailable
  * and keep the rest of the diagnosis, which is still correct.
  */
-function dataRootClaimRefusal(args: {
-  dataRoot: string;
+function sharedRootClaimRefusal(args: {
+  kind: keyof typeof SHARED_ROOT_REFUSALS;
+  root: string;
   claimPath: string;
   configPath: string;
   holderPid: number | null;
 }): string {
-  const { dataRoot, claimPath, configPath, holderPid } = args;
+  const { kind, root, claimPath, configPath, holderPid } = args;
+  const { why, remedy } = SHARED_ROOT_REFUSALS[kind];
   const heldBy = holderPid === null ? "another live process (pid unavailable)" : `pid ${holderPid}`;
   const stopIt =
     holderPid === null
       ? "Stop the daemon holding the claim"
       : `Stop that daemon (pid ${holderPid})`;
+  // Field labels share one column (14) so both refusals line up identically.
+  const field = (label: string, value: string): string => `  ${`${label}:`.padEnd(14)}${value}\n`;
   return (
-    `junco: refusing to start — another junco daemon already claims this data root.\n\n` +
-    `  data root:    ${dataRoot}\n` +
-    `  claimed by:   ${heldBy}\n` +
-    `  this config:  ${configPath}\n` +
-    `  claim file:   ${claimPath}\n` +
-    `\nThat daemon resolved a DIFFERENT config file, so its worker.lock sits beside\n` +
-    `its own config and this process can never see it — but both configs resolve to\n` +
-    `the same data root, so both daemons would poll one queue, claim the same\n` +
-    `tickets and write the same worktrees. Two config files are not two junco\n` +
-    `installs: the data root is what makes them one.\n` +
-    // Kept on its own line so the advice stays inside 80 columns however many
-    // digits the pid has.
-    `\n${stopIt}, or give this config a data root of its own\n` +
-    `(\`dataDir\`), then start again.\n`
+    `junco: refusing to start — another junco daemon already claims this ${kind}.\n\n` +
+    field(kind, root) +
+    field("claimed by", heldBy) +
+    field("this config", configPath) +
+    field("claim file", claimPath) +
+    `\n${why}` +
+    // The remedy starts on its own line so the advice stays inside 80 columns
+    // however many digits the pid has.
+    `\n${stopIt}, or ${remedy}\n`
   );
 }
 
@@ -566,6 +603,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // The shared-tree claim (#310) — the same pidfile primitive migrate.lock
   // takes, addressed at the resolved data root instead of the config dir.
   const acquireTreeLockFn = deps.acquireTreeLockFn ?? ((p: string) => acquirePidfileLock(p));
+  const acquireQueueLockFn = deps.acquireQueueLockFn ?? ((p: string) => acquirePidfileLock(p));
   const installSignalHandlersFn = deps.installSignalHandlersFn ?? installSignalHandlers;
   const mainLoopFn = deps.mainLoopFn ?? mainLoop;
   const watchConfigFn = deps.watchConfigFn ?? watchConfig;
@@ -775,6 +813,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return 0;
     }
 
+    // Both shared-root refusals below name the holder's pid; resolved once so
+    // the two read the same way and the same injected probe answers for both.
+    const readHolderFn = deps.readLockHolderFn ?? readLockHolder;
+
     // The data-root claim (#310) — taken IMMEDIATELY after worker.lock and
     // before the log sink, because a peer holding this claim resolved the same
     // dataDir and is therefore writing the very worker.log we would rotate.
@@ -785,11 +827,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       // Hand back the daemon slot we just took — this process is not starting.
       lock.release();
       process.stderr.write(
-        dataRootClaimRefusal({
-          dataRoot: dirname(lockPaths.dataTree),
+        sharedRootClaimRefusal({
+          kind: "data root",
+          root: dirname(lockPaths.dataTree),
           claimPath: lockPaths.dataTree,
           configPath,
-          holderPid: (deps.readLockHolderFn ?? readLockHolder)(lockPaths.dataTree),
+          holderPid: readHolderFn(lockPaths.dataTree),
         }),
       );
       // Exit 1, unlike the worker.lock case above: that one is a benign race
@@ -798,9 +841,32 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return 1;
     }
 
-    // Both claims are held from here on: every exit path below — return, throw,
-    // or fatal — runs the outer finally that hands them back. A claim that
-    // outlives its process is a stale pidfile the next start has to steal.
+    // The queue-root claim (#310) — a SEPARATE root, not a formality. A legacy
+    // `vaultRoot` puts queueRoot outside dataDir, so two configs with two
+    // different data roots can still name one shared vault queue: worker.lock
+    // misses it (config-dir keyed), the data-root claim misses it (the roots
+    // differ), and both daemons then poll one inbox. The two claims can never
+    // be the same file — `daemon-tree.lock` vs `daemon-queue.lock` (lock.ts) —
+    // so there is nothing to dedupe even when queueRoot IS dataDir.
+    const queueLock = acquireQueueLockFn(lockPaths.queue);
+    if (queueLock === null) {
+      treeLock.release();
+      lock.release();
+      process.stderr.write(
+        sharedRootClaimRefusal({
+          kind: "queue root",
+          root: dirname(lockPaths.queue),
+          claimPath: lockPaths.queue,
+          configPath,
+          holderPid: readHolderFn(lockPaths.queue),
+        }),
+      );
+      return 1;
+    }
+
+    // All three claims are held from here on: every exit path below — return,
+    // throw, or fatal — runs the outer finally that hands them back. A claim
+    // that outlives its process is a stale pidfile the next start has to steal.
     try {
       // Set up the rotating worker.log sink now that we own the daemon slot —
       // rotation is the lock holder's exclusive job (#76).
@@ -887,11 +953,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         teardownLogs();
       }
     } finally {
-      // ONE finally for both claims (#310), and the only place either is
-      // released — so a throw anywhere in startup (a signal-handler install,
-      // a log sink, the provider gate) hands them both back instead of
+      // ONE finally for all three claims (#310), and the only place any of
+      // them is released — so a throw anywhere in startup (a signal-handler
+      // install, a log sink, the provider gate) hands them all back instead of
       // leaving a stale pidfile for the next start to steal. Order mirrors
       // acquisition, innermost first.
+      queueLock.release();
       treeLock.release();
       lock.release();
     }
