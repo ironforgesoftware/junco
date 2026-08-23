@@ -8,7 +8,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { selectBackend, defaultExecProbe } from "../src/agent/sandbox/backend.js";
 import { buildPolicy, type SandboxPolicy } from "../src/agent/sandbox/policy.js";
@@ -195,6 +195,17 @@ describe("sandbox integration (real OS enforcement)", () => {
 //    `git diff` all died with "fatal: Invalid path '<root>': Operation not
 //    permitted" while `cat` kept working. Reading files is not enough to prove
 //    the agent can work in there.
+//
+// And one the ubuntu leg of #316 forced, on the first real bwrap run of the
+// retargeted block: the denied-root case asserts a CONTENT-and-enumeration
+// boundary that both backends can hold, not an exit code only one of them can
+// produce. `ls <root>` fails under Seatbelt (a denied permission) and succeeds
+// under bwrap (a tmpfs mask is a different directory, and bwrap re-creates a
+// mountpoint in it for every deeper mount) — but neither may show a host child
+// of that root or read a byte through it, and that is what is asserted. The
+// old shape asserted only the exit code, over a directory whose every entry was
+// itself a policy path, so it could not tell a mask that held from one that
+// never applied. See policy.ts's `traversalMetadataPaths` for the full note.
 // ---------------------------------------------------------------------------
 
 interface ShippedTree {
@@ -292,6 +303,38 @@ function shippedTree(layout: "v2" | "flat"): ShippedTree {
   return { root, worktree, mirror, denyFiles, legacyConfig, policy, home };
 }
 
+/**
+ * The names that may legitimately appear in a listing of `root` — the first path
+ * segment under it of every path the policy mounts (deny dirs, deny files,
+ * allow-backs, writable roots).
+ *
+ * Why this is the right upper bound, and why it is backend-agnostic. bwrap
+ * renders the wholesale root deny as `--tmpfs <root>` and then has to CREATE a
+ * mountpoint inside that fresh tmpfs for every deeper mount the policy asks for
+ * — so `ls <root>` under bwrap prints exactly this stub skeleton (empty dirs,
+ * /dev/null-masked files, and the ro/rw binds), never the host's own children.
+ * Seatbelt prints nothing at all. Neither may ever print a name that is not in
+ * here: that would be host content showing through a mask that did not apply.
+ *
+ * Note the deliberate direction — SUBSET, not equality. `bwrapArgs` skips a deny
+ * mount whose target does not exist, so the skeleton is a subset of this set,
+ * and a fixture that materializes less than the policy names must not fail.
+ */
+function policyMountStubs(policy: SandboxPolicy, root: string): Set<string> {
+  const names = new Set<string>();
+  const mounted = [
+    ...policy.readDenyPaths,
+    ...policy.readDenyFiles,
+    ...policy.readAllowPaths,
+    ...policy.writableRoots,
+  ];
+  for (const p of mounted) {
+    if (!p.startsWith(root + sep)) continue;
+    names.add(relative(root, p).split(sep)[0]);
+  }
+  return names;
+}
+
 /** Run one command under the real backend with an already-built policy. HOME is
  *  the tree's private home (it survives `scrubEnv`'s allowlist), so the git
  *  inside the sandbox reads no global config of the developer's. */
@@ -338,14 +381,55 @@ describe.each(["v2", "flat"] as const)(
       expect(out).toContain("untracked.txt");
     });
 
-    it("keeps stat() on the denied ancestors from becoming a listing", async (ctx) => {
+    it("never turns the denied root into a window on its real contents", async (ctx) => {
       requireBackend(ctx);
       const t = shippedTree(layout);
-      // The F1 repair grants file-read-metadata on the denied path components,
-      // and nothing else. If it ever widened to file-read*, `ls <root>` would
-      // start working and the whole tree would be enumerable.
-      const out = await runShipped(`ls -a "${t.root}" 2>&1; echo "ls=$?"`, t);
-      expect(out).toMatch(/ls=[^0]/);
+      // A host file inside the denied root that NO policy rule names. It is the
+      // discriminator the predecessor of this case lacked: every OTHER entry in
+      // that root is a path the policy itself mounts, so a listing of them is
+      // ambiguous between "the mask held" and "the mask never applied", while
+      // this one can only appear if the root is genuinely unmasked.
+      const canary = "canary-not-in-policy.txt";
+      writeFileSync(join(t.root, canary), "SECRET_CANARY_VALUE");
+      const out = await runShipped(
+        `ls -a "${t.root}" 2>/dev/null; echo "ls=$?"; ` +
+          `cat "${t.root}/${canary}" 2>/dev/null; echo "cat=$?"`,
+        t,
+      );
+
+      // 1. Content: denied on every backend, by whichever mechanism.
+      expect(out).not.toContain("SECRET_CANARY_VALUE");
+      expect(out).toMatch(/cat=[^0]/);
+
+      // 2. Enumeration: whatever `ls` managed to print, every name in it must be
+      //    one the policy already mounts. On Seatbelt the listing is empty (the
+      //    F1 repair grants file-read-METADATA on the denied path components and
+      //    nothing else). On bwrap the deny renders as `--tmpfs <root>`, and
+      //    bwrap re-creates a mountpoint inside that fresh tmpfs for every
+      //    deeper mount, so the listing is that stub skeleton — names the policy
+      //    names, all of them empty dirs, /dev/null files, or the allow-backs.
+      //    Either way the canary must not be in it.
+      const stubs = policyMountStubs(t.policy, t.root);
+      expect(
+        [...stubs],
+        "the canary must not be a policy path, or this case is vacuous",
+      ).not.toContain(canary);
+      const lines = out.split("\n");
+      const lsEnd = lines.findIndex((l) => l.startsWith("ls="));
+      const listed = lines
+        .slice(0, lsEnd === -1 ? 0 : lsEnd)
+        .map((l) => l.trim())
+        .filter((l) => l !== "" && l !== "." && l !== "..");
+      for (const entry of listed)
+        expect([...stubs], `"${entry}" was listed inside the denied root`).toContain(entry);
+
+      // 3. Seatbelt keeps the stronger property, and this pins it: if the F1
+      //    repair ever widened from `file-read-metadata` to `file-read*`,
+      //    `ls <root>` would start succeeding on macOS and the whole tree would
+      //    be enumerable. bwrap has no such carve-out to widen — its mask is a
+      //    replacement directory, not a permission — so requiring a failure
+      //    there would be asserting an expectation the mechanism cannot meet.
+      if (backend.name === "seatbelt") expect(out).toMatch(/ls=[^0]/);
     });
 
     it("denies every receipt, the mirror and the legacy config from that same worktree", async (ctx) => {

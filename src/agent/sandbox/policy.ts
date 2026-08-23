@@ -306,7 +306,33 @@ export function readRules(policy: SandboxPolicy): ReadRule[] {
  *    with an empty directory rather than blocking access to it. The node still
  *    exists and stats fine, and the allow-back is then `--ro-bind`ed at a
  *    destination inside it, so traversal never fails. (This is also why the
- *    outage was macOS-only.)
+ *    outage was macOS-only.) Confirmed on a real bwrap by CI, PR #316.
+ *
+ *    That replacement is not free, and the difference is deliberate rather than
+ *    overlooked (found by PR #316's ubuntu leg, which is the first real bwrap
+ *    run of this shape). A tmpfs mask is a different DIRECTORY, not a denied
+ *    permission, so it is listable: `ls <denied dir>` fails on Seatbelt and
+ *    SUCCEEDS on bwrap. What it prints is the mountpoint skeleton bwrap itself
+ *    creates for the deeper mounts the policy asks for — the policy's own path
+ *    names, all of them empty tmpfs dirs, /dev/null-masked files, or the
+ *    allow-backs. No host child of the masked directory appears, no content is
+ *    readable through it, and the stubs' own metadata is the tmpfs's, not the
+ *    real files'. So bwrap leaks EXISTENCE of paths junco itself names (they are
+ *    the shipped layout, and `bwrapArgs` skips a mount whose target is absent,
+ *    so the skeleton tracks which of them are materialized) and nothing else.
+ *    tests/sandbox.integration.test.ts pins the boundary that matters on both
+ *    backends: a host file inside the denied root that no policy rule names is
+ *    neither listed nor readable.
+ *
+ *    Closing even the existence gap was considered and rejected. `--perms 0111
+ *    --tmpfs <dir>` would make the mask execute-only — traversable but not
+ *    listable, i.e. exactly Seatbelt's semantics — but `--perms` is a newer
+ *    bwrap option and an older bwrap aborts on an option it does not know, which
+ *    turns a cosmetic hardening into every ticket on that host dying at sandbox
+ *    setup. It would also have to be applied to the parent mountpoints bwrap
+ *    creates implicitly (v2's `<root>/cache`), which are not emitted as ops at
+ *    all. Not worth an unverifiable spawn-abort risk to hide names that are in
+ *    the documentation.
  *  - **the JS path-jail** answers one whole path at a time through
  *    `resolveRead`; it has no traversal step, and the tools it guards never
  *    stat an ancestor. The agent's `git` runs through bash, i.e. the OS backend.
