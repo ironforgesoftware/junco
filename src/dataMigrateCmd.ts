@@ -4,11 +4,14 @@
  * unified data root (spec 2026-07-16 §7 "Explicit"), extended (2026-08-03
  * single-root plan) to relocate the whole tree to `~/.junco` and restructure
  * it into the v2 shape. Refuses while the daemon appears to be running,
- * judged two ways: ANY /health response (even non-200) means something is
- * listening on that port, and a live-held `<config dir>/worker.lock` pidfile
- * (the daemon's single-instance lock, see cli.ts) catches healthEnabled:false
- * daemons the probe can never observe. Either signal → back off rather than
- * race the daemon's own in-flight fs mutations. `--force` skips both checks
+ * judged three ways: ANY /health response (even non-200) means something is
+ * listening on that port; a live-held `<config dir>/worker.lock` pidfile (the
+ * daemon's single-instance lock, see cli.ts) catches healthEnabled:false
+ * daemons the probe can never observe; and a live-held `daemon-tree.lock` /
+ * `daemon-queue.lock` claim at any root this run touches (#310) catches a
+ * daemon that resolved a DIFFERENT config file, whose worker.lock sits beside
+ * a config this process has never heard of. Any signal → back off rather than
+ * race the daemon's own in-flight fs mutations. `--force` skips all three
  * (documented escape hatch). A pidfile lock is held at EVERY root this run
  * might read or write (see `lockRoots`, task review Important 3) — for a
  * cross-root run that includes both the legacy root and the target root,
@@ -42,7 +45,10 @@
  *
  * Order of operations: probe → plan (read-only) → (`--dry-run`: print + stop,
  * exit 0 — BEFORE the lock, whose acquisition mkdirs each lock root as a side
- * effect) → lock (all roots) → queue move → state-tree name-normalize
+ * effect) → lock (all roots) → stale-daemon-claim sweep (phase 1c: a claim
+ * left by a CRASHED daemon is a file in a directory a later phase may treat
+ * as a destination, where `isRecursivelyEmptyDir` reads it as a conflict) →
+ * queue move → state-tree name-normalize
  * (`migrateStateTree`, still same-directory, still against `cfg.dataDir`) →
  * data-root move/restructure (`flatToV2Pairs`, journaled — see the
  * `migrated.json` self-reference note below) → gh creds move (journaled) →
@@ -139,7 +145,7 @@ import {
   type RewriteReport,
 } from "./migratePathRewrite.js";
 import { acquirePidfileLock, readPidfileHolder, type PidfileLock } from "./pidfileLock.js";
-import { workerLockPath } from "./lock.js";
+import { daemonQueueClaimPath, daemonTreeClaimPath, workerLockPath } from "./lock.js";
 
 const QUEUE_DIR_KEYS: (keyof Paths)[] = ["inbox", "processing", "done", "failed"];
 
@@ -183,8 +189,18 @@ export interface DataMigrateDeps {
    * are durable before the source is deleted (#196). Default: real fsync. */
   syncPathFn?: (p: string) => void;
   /** Daemon-pidfile liveness probe (the /health-independent "is the daemon
-   * up" signal). Default: the real readPidfileHolder. */
+   * up" signal) — read-only, never mutates. Used for BOTH `worker.lock` and
+   * the two shared-root claims (#310, see phase 1a). Default: the real
+   * readPidfileHolder. */
   pidfileHolderFn?: (lockPath: string) => number | null;
+  /** Stale-claim steal — phase 1c's sweep ONLY (#310). Deliberately the
+   * ACQUIRE primitive rather than an unlink: it is what decides stale-vs-live,
+   * it returns null for any claim a live process still holds (including one
+   * taken between phase 1a's read and the sweep), and the `release()` that
+   * follows unlinks only while the file still holds our own pid. A bare
+   * `unlinkFn` here would race a daemon into existence. Default: the real
+   * acquirePidfileLock — the same primitive that WROTE the claim. */
+  acquireClaimFn?: (lockPath: string) => PidfileLock | null;
   /** Env driving `juncoHome(env)`/`homeOf(env)` (the single-root move target
    * and the fixed legacy-path probe). Default: process.env — same DI seam as
    * resolveBotGhConfigDir's callers. */
@@ -310,6 +326,72 @@ async function daemonIsUp(cfg: Config, fetchFn: typeof fetch): Promise<boolean> 
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Every shared-root daemon claim (#310) this run has to care about: the two
+ * claims `junco start` takes, spelled for each root this command may read or
+ * write.
+ *
+ * ONE list, TWO uses — phase 1a probes it for a live holder (refuse), phase 1c
+ * sweeps the provably-stale ones (repair). A second spelling of "which claims
+ * matter" would let the two drift into disagreeing about the same file.
+ *
+ * The root set mirrors phase 1b's `lockRoots` and for the same reason: on a
+ * cross-root move a daemon that has already flipped its own resolution to the
+ * target holds its claims THERE, not at this run's `cfg.dataDir`. `queueRoot`
+ * is carried separately from the data roots because a legacy `vaultRoot` puts
+ * it outside every data root; the per-root `<root>/queue` spelling is the
+ * default layout, which is what `targetRoot`/`legacyRoot` are by construction
+ * (and exactly the `join(targetRoot, "queue")` destination the queue phase and
+ * `flatToV2Pairs` both land on).
+ */
+function daemonClaimPaths(
+  cfg: Pick<Config, "dataDir" | "queueRoot">,
+  targetRoot: string,
+  legacyRoot: string | null,
+): string[] {
+  const paths = new Set<string>([
+    daemonTreeClaimPath(cfg.dataDir),
+    daemonQueueClaimPath(cfg.queueRoot),
+  ]);
+  for (const root of [targetRoot, legacyRoot]) {
+    if (root === null) continue;
+    paths.add(daemonTreeClaimPath(root));
+    paths.add(daemonQueueClaimPath(join(root, "queue")));
+  }
+  return [...paths].sort();
+}
+
+/**
+ * Phase 1c's stale-claim sweep — returns the paths actually cleared.
+ *
+ * `existsFn` gates every path so this can only ever REMOVE: it never creates a
+ * claim file, and never mkdirs a parent, at a root that has none (which
+ * `acquirePidfileLock` would do on its own, fabricating `<targetRoot>/queue`
+ * on a machine that has never had one).
+ *
+ * Staleness is not judged here — `acquireClaimFn` is. It returns null for any
+ * claim whose recorded owner is still alive, so a running daemon's claim is
+ * untouchable even under `--force` (which skips phase 1a's refusal entirely),
+ * and it steals only via the atomic rename-aside + post-move verification that
+ * cannot destroy a racing winner's fresh lock. The `release()` that follows
+ * unlinks only while the file still holds our own pid.
+ */
+function sweepStaleDaemonClaims(
+  claimPaths: string[],
+  existsFn: (p: string) => boolean,
+  acquireClaimFn: (lockPath: string) => PidfileLock | null,
+): string[] {
+  const cleared: string[] = [];
+  for (const claim of claimPaths) {
+    if (!existsFn(claim)) continue;
+    const stolen = acquireClaimFn(claim);
+    if (stolen === null) continue; // a live process holds it — never touch
+    stolen.release();
+    cleared.push(claim);
+  }
+  return cleared;
 }
 
 /** The queue-move plan: empty when `legacy.vaultRoot` is unset — the queue
@@ -755,6 +837,7 @@ export async function runDataMigrate(
       }
     });
   const pidfileHolderFn = deps.pidfileHolderFn ?? readPidfileHolder;
+  const acquireClaimFn = deps.acquireClaimFn ?? ((p: string) => acquirePidfileLock(p));
   const env = deps.env ?? process.env;
   const readdirFn = deps.readdirFn ?? ((p: string) => readdirSync(p));
   // Bound out here rather than inline in `fs` below because the data-root
@@ -818,7 +901,12 @@ export async function runDataMigrate(
   const configIsExplicitlyNamedLegacy =
     configIsExplicitlyNamed && configPath === legacyConfigPath(env);
 
-  // 1a. Daemon-up refusal — both signals skipped entirely by --force.
+  // The shared-root claims to probe (1a) and later sweep (1c) — see
+  // `daemonClaimPaths`. Computed once, after targetRoot/legacyRoot, so both
+  // phases ask about exactly the same files.
+  const claimPaths = daemonClaimPaths(cfg, targetRoot, legacyRoot);
+
+  // 1a. Daemon-up refusal — every signal skipped entirely by --force.
   if (!opts.force) {
     if (await daemonIsUp(cfg, fetchFn)) {
       print(
@@ -840,6 +928,37 @@ export async function runDataMigrate(
           `Stop it first, or pass --force to skip this check.\n`,
       );
       return 1;
+    }
+    // The shared-root claims (#310) — a THIRD signal, deliberately ADDITIVE to
+    // the worker.lock read above rather than a replacement.
+    //
+    // `worker.lock` sits beside the config file THIS command resolved, so
+    // under a `JUNCO_CONFIG` override (or any two configs naming one tree) the
+    // read above probes a file no daemon has ever written and the guard
+    // silently misses — while migrate mutates the tree underneath a live,
+    // health-disabled daemon, which is precisely the case the pidfile half
+    // exists to catch (#310's second symptom). The claims live in the SHARED
+    // state instead — the data root and the queue root — the only rendezvous
+    // two daemons that disagree about the config path still agree on.
+    //
+    // Both generations are kept because each sees what the other cannot:
+    // during an upgrade window an OLD-binary daemon takes `worker.lock` and no
+    // claim at all, so dropping that read would re-open the exact gap this
+    // closes; afterwards the claims catch the peer that resolved a different
+    // config. Order is oldest-signal-first and short-circuits, so an
+    // old-binary daemon still produces today's message verbatim.
+    for (const claim of claimPaths) {
+      const claimHolder = pidfileHolderFn(claim);
+      if (claimHolder !== null) {
+        print(
+          `junco data migrate: refusing — a junco daemon appears to be running ` +
+            `(pid ${claimHolder} holds ${claim}). That claim sits in the shared ` +
+            `tree, so that daemon may have resolved a DIFFERENT config file than ` +
+            `this command did — its own worker.lock is somewhere this process ` +
+            `cannot see. Stop it first, or pass --force to skip this check.\n`,
+        );
+        return 1;
+      }
     }
   }
 
@@ -982,6 +1101,32 @@ export async function runDataMigrate(
       return 1;
     }
     locksByRoot.set(root, l);
+  }
+
+  // 1c. Stale daemon-claim sweep (#310). A `daemon-tree.lock` /
+  // `daemon-queue.lock` left behind by a CRASHED daemon is an ordinary thing
+  // to find — that is what a stale pidfile IS — but it is also a FILE sitting
+  // in a directory this command may treat as a DESTINATION, and
+  // `isRecursivelyEmptyDir` (dataMigrate.ts) counts any non-directory entry as
+  // content. `flatToV2Pairs`' `queue -> queue` pair makes `<targetRoot>/queue`
+  // a destination on a cross-root move, so one stale claim there flips "empty
+  // scaffolding, safe to replace" into a reported `skipped-conflict` and the
+  // queue never moves; the same file at a data root makes phase 7's rmdir fail
+  // ENOTEMPTY and get reported as a leftover on every subsequent run. Neither
+  // is data loss, but both are a conflict the operator cannot act on because
+  // nothing explains it.
+  //
+  // Deliberately NOT fixed by teaching the emptiness check to ignore these
+  // basenames: that would make a LIVE claim invisible too, and the repair path
+  // would then rm -r a directory a running daemon is claiming. Clearing the
+  // provably-ownerless file instead keeps the conflict rule exactly as strict
+  // as it was — a destination holding anything real is still a conflict, and a
+  // live claim still blocks the whole run at 1a.
+  //
+  // Runs even under `--force` (which skips 1a): the sweep cannot remove a live
+  // claim regardless — see `sweepStaleDaemonClaims`.
+  for (const cleared of sweepStaleDaemonClaims(claimPaths, existsFn, acquireClaimFn)) {
+    print(`junco data migrate: cleared a stale daemon claim (no live holder) — ${cleared}\n`);
   }
 
   const queueReceipt: string[] = [];

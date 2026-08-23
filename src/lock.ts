@@ -56,6 +56,29 @@ const DATA_TREE_CLAIM = "daemon-tree.lock";
 const QUEUE_CLAIM = "daemon-queue.lock";
 
 /**
+ * The data-root claim for an ARBITRARY root, not necessarily this config's.
+ *
+ * `daemonLockPaths` below answers "what would I claim?"; these two answer
+ * "what would a daemon that resolved THAT root have claimed?" — the question
+ * `junco data migrate` has to ask, because it walks several roots in one run
+ * (this config's `dataDir`, the relocation target, the fixed legacy path) and
+ * a daemon that has already flipped its own resolution holds its claim at
+ * whichever one IT resolved. Exported rather than letting the caller spell
+ * `join(root, "daemon-tree.lock")` for the same reason `workerLockPath`
+ * exists: every reader of a claim must agree with the writer byte for byte,
+ * `resolve()` included, or the probe silently answers the wrong question
+ * (#310).
+ */
+export function daemonTreeClaimPath(dataRoot: string): string {
+  return join(resolve(dataRoot), DATA_TREE_CLAIM);
+}
+
+/** The queue-root claim for an arbitrary queue root — see daemonTreeClaimPath. */
+export function daemonQueueClaimPath(queueRoot: string): string {
+  return join(resolve(queueRoot), QUEUE_CLAIM);
+}
+
+/**
  * The daemon-singleton pidfile: `worker.lock` beside the RESOLVED config
  * (mirroring Python's `args.config.resolve().parent / "worker.lock"`).
  *
@@ -92,8 +115,8 @@ export function daemonLockPaths(
 ): DaemonLockPaths {
   return {
     worker: workerLockPath(configPath),
-    dataTree: join(resolve(cfg.dataDir), DATA_TREE_CLAIM),
-    queue: join(resolve(cfg.queueRoot), QUEUE_CLAIM),
+    dataTree: daemonTreeClaimPath(cfg.dataDir),
+    queue: daemonQueueClaimPath(cfg.queueRoot),
   };
 }
 
