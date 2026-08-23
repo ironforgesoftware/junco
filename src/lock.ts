@@ -9,11 +9,149 @@
  * stealing them atomically. See pidfileLock.ts for the mechanics.
  */
 
+import { dirname, join, resolve } from "node:path";
+import { canonicalize } from "./agent/sandbox/canonicalize.js";
 import type { PidfileLock } from "./pidfileLock.js";
 import { acquirePidfileLock, readPidfileHolder, getProcessStartTime } from "./pidfileLock.js";
+import type { Config } from "./types.js";
 
 // Re-exported so existing importers (and tests) keep resolving it from ./lock.
 export { getProcessStartTime };
+
+/**
+ * Every pidfile path the daemon singleton uses, derived once (#310).
+ *
+ * Until this existed, NINE expressions across six modules (cli, doctor,
+ * ensureDaemon, restartCmd, updateCmd, dataMigrateCmd) spelled the daemon
+ * pidfile path by hand — and they had already drifted: doctor's omitted the
+ * `resolve()` the other eight carried, so for a RELATIVE config path it
+ * probed a cwd-relative file no daemon ever writes and reported "not running"
+ * against a live one. (`join` normalizes `..` on its own, which is why the
+ * two spellings agreed everywhere else and the drift stayed invisible.)
+ * Every reader of these paths must agree with the writer or the check
+ * silently answers the wrong question, so there is one spelling and it lives
+ * here, beside the primitive that takes the locks.
+ */
+export interface DaemonLockPaths {
+  /** Beside the resolved config — unchanged, the existing worker.lock. */
+  worker: string;
+  /** The shared data root's claim. NEVER named worker.lock (see below). */
+  dataTree: string;
+  /** The shared queue root's claim. */
+  queue: string;
+}
+
+/**
+ * The two shared-tree claims are deliberately NOT named `worker.lock`, and
+ * they are deliberately named differently FROM EACH OTHER.
+ *
+ * On a default install `dataDir === dirname(configPath)` and
+ * `queueRoot === <dataDir>/queue`, so a claim reusing the `worker.lock` name
+ * would land on the file `junco start` just locked: the daemon would contend
+ * with itself and refuse to start. Distinct basenames make that impossible by
+ * construction rather than by an invariant someone has to remember — and they
+ * keep the two claims distinct even in the pathological layout where a legacy
+ * `vaultRoot` puts `queueRoot` at the same directory as `dataDir`.
+ */
+const DATA_TREE_CLAIM = "daemon-tree.lock";
+const QUEUE_CLAIM = "daemon-queue.lock";
+
+/**
+ * Every claim path goes through this, and it is `canonicalize()` — NOT
+ * `resolve()` (final review F4).
+ *
+ * `resolve()` makes a path absolute and collapses `..`; it does not follow
+ * symlinks. So config A's `dataDir: "/srv/junco"` and config B's
+ * `dataDir: "/home/ops/junco-data"` — a symlink to the same directory —
+ * computed two DIFFERENT claim paths, both `acquirePidfileLock` calls
+ * succeeded against two different files, and both daemons started over one
+ * queue: #310 unmodified, just with an extra step. A claim is a rendezvous
+ * point between processes that share a directory, so it must be keyed to the
+ * directory the kernel sees, not to the name one config happened to spell.
+ *
+ * REUSED rather than re-implemented: `agent/sandbox/canonicalize.ts` already
+ * solves exactly this and the trap that comes with it — the root may not exist
+ * yet on a first run, where a naive `realpathSync` throws. It realpaths the
+ * longest existing prefix, keeps the missing tail verbatim inside it, resolves
+ * a symlinked (even dangling) leaf, caps symlink depth, and never throws. It
+ * imports nothing but `node:fs`/`node:path` — there is no sandbox knowledge in
+ * it — and `doctor.ts` already reaches into `agent/sandbox/` for the same
+ * reason. A second spelling of a subtle path algorithm is precisely the drift
+ * this module was created to end.
+ */
+function claimRoot(root: string): string {
+  return canonicalize(root);
+}
+
+/**
+ * The data-root claim for an ARBITRARY root, not necessarily this config's.
+ *
+ * `daemonLockPaths` below answers "what would I claim?"; these two answer
+ * "what would a daemon that resolved THAT root have claimed?" — the question
+ * `junco data migrate` has to ask, because it walks several roots in one run
+ * (this config's `dataDir`, the relocation target, the fixed legacy path) and
+ * a daemon that has already flipped its own resolution holds its claim at
+ * whichever one IT resolved. Exported rather than letting the caller spell
+ * `join(root, "daemon-tree.lock")` for the same reason `workerLockPath`
+ * exists: every reader of a claim must agree with the writer byte for byte,
+ * canonicalization included, or the probe silently answers the wrong question
+ * (#310).
+ */
+export function daemonTreeClaimPath(dataRoot: string): string {
+  return join(claimRoot(dataRoot), DATA_TREE_CLAIM);
+}
+
+/** The queue-root claim for an arbitrary queue root — see daemonTreeClaimPath. */
+export function daemonQueueClaimPath(queueRoot: string): string {
+  return join(claimRoot(queueRoot), QUEUE_CLAIM);
+}
+
+/**
+ * The daemon-singleton pidfile: `worker.lock` beside the RESOLVED config
+ * (mirroring Python's `args.config.resolve().parent / "worker.lock"`).
+ *
+ * Split out from `daemonLockPaths` because `cli.ts`'s FTUE gate reads this
+ * path before any config has been loaded — it is the cheapest "is a daemon
+ * live?" probe there is, and needs no `Config` at all. Making the whole
+ * helper require one would have forced a config load earlier in `start`,
+ * which is a behaviour change, not a refactor.
+ *
+ * Normalization is load-bearing, not decoration: `resolve()` collapses `..`
+ * segments and makes a relative config path absolute rather than cwd-relative
+ * at each separate use (`resolveConfigPath` rejects a relative `JUNCO_CONFIG`
+ * outright for the same reason — see config.ts), and `canonicalize()` on the
+ * DIRECTORY closes the symlink half (F4): `/tmp/j/config.json` and
+ * `/private/tmp/j/config.json` are one config file and must be one lock.
+ *
+ * The config's DIRECTORY is canonicalized, never the config file itself: a
+ * `config.json` that is a symlink into a dotfiles repo still locks where the
+ * operator expects (`~/.junco/worker.lock`), not beside its link target.
+ */
+export function workerLockPath(configPath: string): string {
+  return join(claimRoot(dirname(resolve(configPath))), "worker.lock");
+}
+
+/**
+ * All three claims. `worker` is exactly `workerLockPath(configPath)`; the two
+ * tree claims sit at the roots the daemon actually contends for — shared
+ * state that two daemons started from two DIFFERENT config paths can still
+ * collide over, which `worker.lock` alone cannot see (#310).
+ *
+ * The roots are canonicalized for the same reason the config path is: the
+ * claim is a rendezvous point between processes, so it has to have one
+ * spelling — see `claimRoot`. (`assembleConfig` expands `~` in these but does
+ * not normalize them further.)
+ */
+export function daemonLockPaths(
+  configPath: string,
+  cfg: Pick<Config, "dataDir" | "queueRoot">,
+): DaemonLockPaths {
+  return {
+    worker: workerLockPath(configPath),
+    dataTree: daemonTreeClaimPath(cfg.dataDir),
+    queue: daemonQueueClaimPath(cfg.queueRoot),
+  };
+}
 
 export interface SingletonLock {
   /** The lock file path. */

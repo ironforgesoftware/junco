@@ -21,7 +21,8 @@ export interface StatusDeps {
   fetchFn?: typeof fetch;
   printFn?: (s: string) => void;
   lockHolderFn?: (lockPath: string) => number | null;
-  /** Lock path (the CLI passes dirname(configPath)/worker.lock, mirroring `start`). */
+  /** Lock path (the CLI passes workerLockPath(configPath) — the same one
+   * spelling `start` acquires; see lock.ts). */
   lockPath?: string;
   timeoutMs?: number;
   checkUpdateFn?: (cfg: Config) => Promise<UpdateInfo | null>;

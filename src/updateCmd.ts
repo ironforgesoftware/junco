@@ -8,10 +8,10 @@
  */
 import { existsSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
-import { join, dirname, resolve } from "node:path";
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import { loadConfig } from "./config.js";
-import { readLockHolder } from "./lock.js";
+import { readLockHolder, workerLockPath } from "./lock.js";
 import { runRestartCommand, discoverService } from "./restartCmd.js";
 import {
   checkForUpdate,
@@ -138,7 +138,7 @@ export async function runUpdateCommand(
   // daemon as nothing to do (spec §7.4/§8): discover first and only defer to
   // runRestartCommand once a unit is confirmed.
   let exit = 0;
-  const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+  const lockPath = workerLockPath(configPath);
   const holder = (deps.lockHolderFn ?? readLockHolder)(lockPath);
   if (holder !== null) {
     const svc = await (deps.discoverServiceFn ?? discoverService)(configPath);

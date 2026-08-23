@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { join, isAbsolute } from "node:path";
 import { ensureDaemon, type EnsureDaemonDeps } from "../src/ensureDaemon.js";
+import { workerLockPath } from "../src/lock.js";
 import type { ServiceRef } from "../src/restartCmd.js";
 
 const CONFIG = "/Users/u/junco/config.json";
@@ -27,6 +29,20 @@ function base(over: Partial<EnsureDaemonDeps> = {}): {
 }
 
 describe("ensureDaemon", () => {
+  it("reads the ONE derived lock path, absolute even for a relative config (#310)", async () => {
+    const REL = join("sbx-rel", "config.json");
+    const seen: string[] = [];
+    const { deps } = base({
+      lockHolderFn: (p) => {
+        seen.push(p);
+        return 4242;
+      },
+    });
+    await ensureDaemon(REL, deps);
+    expect(seen).toEqual([workerLockPath(REL)]);
+    expect(isAbsolute(seen[0])).toBe(true);
+  });
+
   it("running: lock already held → no discover/kickstart", async () => {
     const discover = vi.fn(async () => SVC);
     const { deps, kick } = base({ lockHolderFn: () => 4242, discoverServiceFn: discover });

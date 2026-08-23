@@ -1,6 +1,8 @@
 // tests/updateCmd.test.ts
 import { describe, it, expect } from "vitest";
 import { runUpdateCommand, type UpdateCmdDeps } from "../src/updateCmd.js";
+import { join, isAbsolute } from "node:path";
+import { workerLockPath } from "../src/lock.js";
 import type { Config } from "../src/types.js";
 import type { UpdateInfo } from "../src/updateCheck.js";
 
@@ -105,6 +107,22 @@ describe("runUpdateCommand", () => {
 
     const bad = harness({ check: UPD, lockHolder: 42, restartCode: 1 });
     expect(await runUpdateCommand(CONFIG_PATH, bad.deps)).toBe(1);
+  });
+
+  it("reads the ONE derived lock path, absolute even for a relative config (#310)", async () => {
+    // `update`'s drain-restart decision hangs on this read: a second spelling
+    // makes a live daemon look down and skips the restart entirely, leaving
+    // the old binary running after a "successful" update.
+    const REL = join("sbx-rel", "config.json");
+    const seen: string[] = [];
+    const { deps } = harness({ check: UPD, lockHolder: 42 });
+    deps.lockHolderFn = (p) => {
+      seen.push(p);
+      return 42;
+    };
+    expect(await runUpdateCommand(REL, deps)).toBe(0);
+    expect(seen).toEqual([workerLockPath(REL)]);
+    expect(isAbsolute(seen[0])).toBe(true);
   });
 
   it("lock held + no service unit → manual-restart guidance, exit 0, no restart invoked", async () => {

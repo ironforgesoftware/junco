@@ -16,13 +16,15 @@ import {
   rmSync,
   symlinkSync,
   lstatSync,
+  realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { Config } from "../src/types.js";
 import { runDataMigrate } from "../src/dataMigrateCmd.js";
 import { loadConfig } from "../src/config.js";
 import { acquirePidfileLock } from "../src/pidfileLock.js";
+import { daemonQueueClaimPath, daemonTreeClaimPath, workerLockPath } from "../src/lock.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
 function freshRoot(prefix = "junco-dmc-"): string {
@@ -333,6 +335,46 @@ describe("runDataMigrate — daemon pidfile refusal (health-disabled daemons)", 
     }
   });
 
+  it("probes the ONE derived lock path, absolute even for a relative config (#310)", async () => {
+    // The guard must read the file a running daemon actually holds — a second
+    // spelling here lets a migration run under a live daemon. A RELATIVE
+    // config path is what separates the two spellings (`join(dirname(p), …)`
+    // normalizes `..` on its own, so it only diverges here).
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const absConfigPath = join(root, "config.json");
+    writeFileSync(absConfigPath, "{}", "utf8");
+    const relConfigPath = relative(process.cwd(), absConfigPath);
+    expect(isAbsolute(relConfigPath)).toBe(false); // sanity: the input IS relative
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const seen: string[] = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      relConfigPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        pidfileHolderFn: (p) => {
+          seen.push(p);
+          return 4242;
+        },
+        printFn: (s) => out.push(s),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(seen).toEqual([workerLockPath(relConfigPath)]);
+    // `realpathSync(root)`, not `root`: since final review F4 the derivation
+    // canonicalizes the config directory, and on macOS a `mkdtemp` under
+    // `os.tmpdir()` lives behind the `/var -> /private/var` symlink. The point
+    // of the assertion is unchanged — the probed path is absolute and beside
+    // the config — and it is now spelled the way the kernel sees it.
+    expect(seen[0]).toBe(join(realpathSync(root), "worker.lock"));
+  });
+
   it("--force skips the pidfile check too", async () => {
     const root = trackRoot(freshRoot());
     const dataDir = join(root, "data");
@@ -379,6 +421,329 @@ describe("runDataMigrate — migration lock", () => {
       );
       expect(code).toBe(1);
       expect(out.join("")).toMatch(/another migrate is running/);
+    } finally {
+      held?.release();
+    }
+  });
+});
+
+/**
+ * Write a PROVABLY-STALE claim pidfile: OUR OWN (live) pid paired with a
+ * `c1:`-tagged start-time discriminator no live process can ever match, so
+ * `readPidfileHolder`'s recycled-pid rule reports "no holder" and
+ * `acquirePidfileLock` judges it stealable. Deliberately not a made-up "dead"
+ * pid — a number nothing owns today can be handed to an unrelated process on a
+ * busy box, which would silently flip the fixture from stale to live and make
+ * these tests assert the opposite of what they claim.
+ */
+function writeStaleClaim(path: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${process.pid}\nc1:Thu Jan  1 00:00:00 1970\n`, "utf8");
+}
+
+describe("runDataMigrate — shared-root daemon claims (#310)", () => {
+  it("refuses on a LIVE <dataDir>/daemon-tree.lock — the peer whose worker.lock this command can never see", async () => {
+    // The JUNCO_CONFIG shape from #310: the running daemon resolved a
+    // DIFFERENT config path, so its worker.lock sits beside ITS config and the
+    // guard's `workerLockPath(configPath)` read looks at a file that does not
+    // even exist. Only the shared-tree claim can see it.
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const claim = daemonTreeClaimPath(dataDir);
+    const held = acquirePidfileLock(claim);
+    expect(held).not.toBeNull();
+    try {
+      // Sanity: the OLD signal is blind here — nothing holds worker.lock.
+      expect(existsSync(workerLockPath(configPath))).toBe(false);
+
+      let renameCalls = 0;
+      const out: string[] = [];
+      const code = await runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: false, force: false },
+        {
+          fetchFn: fetchDown(),
+          renameFn: () => {
+            renameCalls++;
+          },
+          printFn: (s) => out.push(s),
+        },
+      );
+
+      expect(code).toBe(1);
+      expect(renameCalls).toBe(0);
+      expect(out.join("")).toMatch(/refus/i);
+      expect(out.join("")).toMatch(/daemon-tree\.lock/);
+      expect(out.join("")).toContain(String(process.pid));
+      // Never reached the migration-lock step.
+      expect(existsSync(join(dataDir, "migrate.lock"))).toBe(false);
+    } finally {
+      held?.release();
+    }
+  });
+
+  it("refuses on a LIVE <queueRoot>/daemon-queue.lock, even when the queue lives outside dataDir (vault shape)", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    const queueRoot = join(root, "vault", "Junco");
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(queueRoot, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot });
+
+    const claim = daemonQueueClaimPath(queueRoot);
+    const held = acquirePidfileLock(claim);
+    expect(held).not.toBeNull();
+    try {
+      const out: string[] = [];
+      const code = await runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: false, force: false },
+        { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+      );
+
+      expect(code).toBe(1);
+      expect(out.join("")).toMatch(/refus/i);
+      expect(out.join("")).toMatch(/daemon-queue\.lock/);
+      expect(existsSync(join(dataDir, "migrate.lock"))).toBe(false);
+    } finally {
+      held?.release();
+    }
+  });
+
+  it("a STALE claim is not a running daemon — the run proceeds", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+    writeStaleClaim(daemonTreeClaimPath(dataDir));
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toMatch(/receipt/i);
+  });
+
+  it("--force skips the claim checks too, and never removes the LIVE claim it was told to ignore", async () => {
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const claim = daemonTreeClaimPath(dataDir);
+    const held = acquirePidfileLock(claim);
+    expect(held).not.toBeNull();
+    const before = readFileSync(claim, "utf8");
+    try {
+      const out: string[] = [];
+      const code = await runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: false, force: true },
+        { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+      );
+
+      expect(code).toBe(0);
+      // --force skips the REFUSAL; it does not license the stale sweep to
+      // steal a claim whose owner is demonstrably alive.
+      expect(existsSync(claim)).toBe(true);
+      expect(readFileSync(claim, "utf8")).toBe(before);
+    } finally {
+      held?.release();
+    }
+  });
+});
+
+describe("runDataMigrate — stale claims in a migrate destination (#310)", () => {
+  let originalHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    tmpHome = freshRoot("junco-dmc-home-");
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  /** The cross-root fixture: a legacy flat root that relocates into
+   * `~/.junco`, so `flatToV2Pairs`' `queue -> queue` pair makes
+   * `<targetRoot>/queue` a real destination and phase 7 tries to rmdir the
+   * legacy root. Returns the paths the tests assert on. */
+  function crossRootFixture(): {
+    legacyRoot: string;
+    targetRoot: string;
+    configPath: string;
+    cfg: Config;
+  } {
+    const root = trackRoot(freshRoot());
+    const legacyRoot = join(tmpHome, ".local", "state", "junco");
+    const targetRoot = join(tmpHome, ".junco");
+
+    mkdirSync(join(legacyRoot, "queue", "inbox"), { recursive: true });
+    writeFileSync(join(legacyRoot, "queue", "inbox", "t1.md"), "---\nid: t1\n---\nbody\n", "utf8");
+    writeFileSync(join(legacyRoot, ".gitignore"), "*\n", "utf8"); // ensureDataTree's own scaffold
+    mkdirSync(join(legacyRoot, "github-outbox"), { recursive: true });
+
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ model: { id: "test-model" } }), "utf8");
+
+    const cfg = loadConfig(configPath);
+    expect(cfg.legacy.dataRoot).toBe(true);
+    expect(cfg.dataDir).toBe(legacyRoot);
+    return { legacyRoot, targetRoot, configPath, cfg };
+  }
+
+  it("a stale daemon-queue.lock in <targetRoot>/queue does NOT masquerade as a conflict", async () => {
+    const { legacyRoot, targetRoot, configPath, cfg } = crossRootFixture();
+    // The target root's queue is inert scaffolding — plus one claim file left
+    // behind by a crashed daemon. isRecursivelyEmptyDir counts ANY
+    // non-directory entry as content, so before the sweep this reads as
+    // "destination already exists and is not empty" and the queue never moves.
+    mkdirSync(join(targetRoot, "queue", "inbox"), { recursive: true });
+    const claim = daemonQueueClaimPath(join(targetRoot, "queue"));
+    writeStaleClaim(claim);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).not.toMatch(/skipped-conflict/);
+    expect(existsSync(join(targetRoot, "queue", "inbox", "t1.md"))).toBe(true);
+    expect(existsSync(join(legacyRoot, "queue"))).toBe(false);
+    // The stale claim is gone, and the operator was told so.
+    expect(existsSync(claim)).toBe(false);
+    expect(out.join("")).toMatch(/stale daemon claim/);
+  });
+
+  it("a stale daemon-tree.lock in the legacy root does not block its removal", async () => {
+    const { legacyRoot, targetRoot, configPath, cfg } = crossRootFixture();
+    const claim = daemonTreeClaimPath(legacyRoot);
+    writeStaleClaim(claim);
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(join(targetRoot, "queue", "inbox", "t1.md"))).toBe(true);
+    // Without the sweep the rmdir fails ENOTEMPTY and the receipt reports the
+    // claim as a leftover forever.
+    expect(out.join("")).not.toMatch(/still contains/);
+    expect(existsSync(legacyRoot)).toBe(false);
+  });
+
+  it("a THROWING sweep does not leak migrate.lock, and reports instead of dying bare (F3)", async () => {
+    // The sweep mkdirs/writes/unlinks via `acquirePidfileLock`, so EACCES on
+    // an unwritable root, EROFS or ENOSPC all reach the caller. It used to sit
+    // BETWEEN phase 1b's lock acquisition and the `try` whose `finally`
+    // releases them, so a throw there left a `migrate.lock` at every root it
+    // had taken, with no receipt line to say what happened.
+    const { legacyRoot, targetRoot, configPath, cfg } = crossRootFixture();
+    const claim = daemonTreeClaimPath(legacyRoot);
+    writeStaleClaim(claim); // something for the sweep to reach for
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        acquireClaimFn: () => {
+          throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" });
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    // A receipt, not a bare stack escaping runDataMigrate.
+    expect(out.join("")).toMatch(/EROFS/);
+    // Every migrate.lock phase 1b took is handed back.
+    expect(existsSync(join(legacyRoot, "migrate.lock"))).toBe(false);
+    expect(existsSync(join(targetRoot, "migrate.lock"))).toBe(false);
+    expect(existsSync(join(cfg.dataDir, "migrate.lock"))).toBe(false);
+  });
+
+  it("a LIVE claim in <targetRoot>/queue still blocks the whole run", async () => {
+    const { legacyRoot, targetRoot, configPath, cfg } = crossRootFixture();
+    mkdirSync(join(targetRoot, "queue"), { recursive: true });
+    const claim = daemonQueueClaimPath(join(targetRoot, "queue"));
+    const held = acquirePidfileLock(claim);
+    expect(held).not.toBeNull();
+    try {
+      const out: string[] = [];
+      const code = await runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: false, force: false },
+        { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+      );
+
+      expect(code).toBe(1);
+      expect(out.join("")).toMatch(/refus/i);
+      expect(out.join("")).toMatch(/daemon-queue\.lock/);
+      // Nothing moved, and the live claim is untouched.
+      expect(existsSync(join(legacyRoot, "queue", "inbox", "t1.md"))).toBe(true);
+      expect(existsSync(claim)).toBe(true);
+    } finally {
+      held?.release();
+    }
+  });
+
+  it("--force past a LIVE claim still reports the destination as a conflict — the sweep never bulldozes it", async () => {
+    // Conflict detection is NOT weakened: --force skips the refusal, the sweep
+    // declines a live claim, and the occupied destination is reported rather
+    // than repair-deleted underneath a running daemon.
+    const { legacyRoot, targetRoot, configPath, cfg } = crossRootFixture();
+    mkdirSync(join(targetRoot, "queue"), { recursive: true });
+    const claim = daemonQueueClaimPath(join(targetRoot, "queue"));
+    const held = acquirePidfileLock(claim);
+    expect(held).not.toBeNull();
+    try {
+      const out: string[] = [];
+      const code = await runDataMigrate(
+        cfg,
+        configPath,
+        { dryRun: false, force: true },
+        { fetchFn: fetchDown(), printFn: (s) => out.push(s) },
+      );
+
+      expect(code).toBe(1);
+      expect(out.join("")).toMatch(/skipped-conflict/);
+      expect(existsSync(claim)).toBe(true);
+      expect(existsSync(join(legacyRoot, "queue", "inbox", "t1.md"))).toBe(true);
     } finally {
       held?.release();
     }

@@ -1,16 +1,27 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, dirname, basename, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
-import { acquireSingletonLock, getProcessStartTime, readLockHolder } from "../src/lock.js";
+import {
+  acquireSingletonLock,
+  daemonLockPaths,
+  daemonQueueClaimPath,
+  daemonTreeClaimPath,
+  getProcessStartTime,
+  readLockHolder,
+  workerLockPath,
+} from "../src/lock.js";
 import { PIDFILE_DISCRIMINATOR_PREFIX } from "../src/pidfileLock.js";
 
 /** A recognized-but-mismatched discriminator: format-tagged (so the reader
@@ -382,6 +393,204 @@ describe("readLockHolder", () => {
     writeFileSync(p, `${process.pid}\n${getProcessStartTime(process.pid)}\n`, "utf8");
     expect(readLockHolder(p)).toBe(process.pid); // same pid, same identity
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lock-path derivation — the ONE spelling (#310 Task 1)
+//
+// Nine expressions across six modules used to construct the daemon pidfile
+// path by hand, and one of them (doctor.ts) omitted the `resolve()` every
+// other site had. These pin the single helper both spellings collapsed into,
+// and — the assertion that matters — that the two shared-tree claims can
+// never collide with `worker.lock` or with each other on a DEFAULT install,
+// where `dataDir === dirname(configPath)`.
+// ---------------------------------------------------------------------------
+
+describe("workerLockPath", () => {
+  it("is worker.lock beside the RESOLVED config (absolute input)", () => {
+    expect(workerLockPath("/sbxroot/.junco/config.json")).toBe("/sbxroot/.junco/worker.lock");
+  });
+
+  it("normalizes `..` segments in an absolute path", () => {
+    expect(workerLockPath("/sbxroot/.junco/sub/../config.json")).toBe(
+      "/sbxroot/.junco/worker.lock",
+    );
+  });
+
+  it("resolves a relative config path against the cwd (this is what doctor.ts missed)", () => {
+    // THE input the two spellings disagreed on. `join(dirname(p), "worker.lock")`
+    // normalizes `..` by itself, so it agreed for every ABSOLUTE path — it
+    // diverged only for a relative one, where it returned a relative path that
+    // re-resolves against whatever cwd each reader happens to have (a launchd
+    // daemon's is `/`). That is how doctor could report "not running" at a live
+    // daemon. Every call-site pin below uses a relative path for this reason.
+    const got = workerLockPath(join("rel", "config.json"));
+    expect(isAbsolute(got)).toBe(true);
+    expect(got).toBe(join(process.cwd(), "rel", "worker.lock"));
+  });
+});
+
+describe("daemonLockPaths", () => {
+  /** A default install: the data root IS the config's directory. */
+  const DEFAULT_CFG_PATH = "/sbxroot/.junco/config.json";
+  const defaultCfg = { dataDir: "/sbxroot/.junco", queueRoot: "/sbxroot/.junco/queue" };
+
+  it("worker is byte-identical to workerLockPath", () => {
+    expect(daemonLockPaths(DEFAULT_CFG_PATH, defaultCfg).worker).toBe(
+      workerLockPath(DEFAULT_CFG_PATH),
+    );
+  });
+
+  it("claims the shared roots: dataTree under dataDir, queue under queueRoot", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, {
+      dataDir: "/sbxroot/data",
+      queueRoot: "/sbxvault/junco",
+    });
+    expect(dirname(p.dataTree)).toBe("/sbxroot/data");
+    expect(dirname(p.queue)).toBe("/sbxvault/junco");
+  });
+
+  it("NEITHER tree claim is named worker.lock", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, defaultCfg);
+    expect(basename(p.dataTree)).not.toBe("worker.lock");
+    expect(basename(p.queue)).not.toBe("worker.lock");
+  });
+
+  it("the three paths are pairwise distinct on a DEFAULT install", () => {
+    // The regression this exists for: on a default install dataDir ===
+    // dirname(configPath), so a claim that reused the name `worker.lock`
+    // would have `junco start` contend with the lock it just took and refuse
+    // to start. Distinct BASENAMES are what makes that impossible — the
+    // claims stay distinct even for the pathological queueRoot === dataDir.
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, defaultCfg);
+    expect(dirname(p.dataTree)).toBe(dirname(p.worker)); // same directory...
+    expect(new Set([p.worker, p.dataTree, p.queue]).size).toBe(3); // ...three files
+  });
+
+  it("stays pairwise distinct even when queueRoot === dataDir === the config dir", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, {
+      dataDir: "/sbxroot/.junco",
+      queueRoot: "/sbxroot/.junco",
+    });
+    expect(new Set([p.worker, p.dataTree, p.queue]).size).toBe(3);
+  });
+
+  it("normalizes the roots the same way the config path is normalized", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, {
+      dataDir: "/sbxroot/data/sub/..",
+      queueRoot: "/sbxroot/data/sub/../queue",
+    });
+    expect(dirname(p.dataTree)).toBe("/sbxroot/data");
+    expect(dirname(p.queue)).toBe("/sbxroot/data/queue");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Symlink canonicalization (final review F4)
+//
+// `resolve()` collapses `..` and makes a path absolute; it does NOT follow
+// symlinks. So two configs whose `dataDir`s reach ONE directory through a
+// symlink computed two different claim paths, both acquisitions succeeded
+// against two different files, and both daemons started over one queue — #310
+// unmodified. These use a REAL symlinked tmp dir because that is the only way
+// to falsify the fix: with `resolve()` back in place every assertion below
+// fails.
+// ---------------------------------------------------------------------------
+
+describe("claim paths are canonicalized, not merely resolved (#310, F4)", () => {
+  it("a symlinked dataDir yields the SAME data-root claim as the real path", () => {
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "real-data");
+    const link = join(root, "link-data");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    expect(daemonTreeClaimPath(link)).toBe(daemonTreeClaimPath(real));
+    expect(daemonTreeClaimPath(link)).toBe(join(real, "daemon-tree.lock"));
+  });
+
+  it("a symlinked queueRoot yields the SAME queue claim as the real path", () => {
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "vault", "junco");
+    const link = join(root, "queue-link");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    expect(daemonQueueClaimPath(link)).toBe(daemonQueueClaimPath(real));
+    expect(daemonQueueClaimPath(link)).toBe(join(real, "daemon-queue.lock"));
+  });
+
+  it("two configs reaching one data root through a symlink collide on ONE claim", () => {
+    // The whole #310 shape, end to end at the path layer: config A names the
+    // real root, config B names the symlink, and both must contend for the
+    // same file.
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "srv-junco");
+    const link = join(root, "ops-junco-data");
+    mkdirSync(join(real, "queue"), { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    const a = daemonLockPaths(join(root, "a", "config.json"), {
+      dataDir: real,
+      queueRoot: join(real, "queue"),
+    });
+    const b = daemonLockPaths(join(root, "b", "config.json"), {
+      dataDir: link,
+      queueRoot: join(link, "queue"),
+    });
+    expect(b.dataTree).toBe(a.dataTree);
+    expect(b.queue).toBe(a.queue);
+    // …while worker.lock still legitimately differs: it is keyed to the config
+    // directory, which is exactly the blind spot the claims exist to cover.
+    expect(b.worker).not.toBe(a.worker);
+  });
+
+  it("a symlinked CONFIG DIRECTORY yields one worker.lock", () => {
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "dot-junco");
+    const link = join(root, "junco-link");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    expect(workerLockPath(join(link, "config.json"))).toBe(
+      workerLockPath(join(real, "config.json")),
+    );
+    expect(workerLockPath(join(link, "config.json"))).toBe(join(real, "worker.lock"));
+  });
+
+  it("does NOT follow a symlinked config FILE — the lock stays beside the name the operator used", () => {
+    // Canonicalizing the whole path would put worker.lock next to a dotfiles
+    // repo. Only the directory is canonicalized.
+    const root = realpathSync(makeTmpDir());
+    const home = join(root, ".junco");
+    const dotfiles = join(root, "dotfiles");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(dotfiles, { recursive: true });
+    writeFileSync(join(dotfiles, "junco.json"), "{}", "utf8");
+    symlinkSync(join(dotfiles, "junco.json"), join(home, "config.json"), "file");
+
+    expect(workerLockPath(join(home, "config.json"))).toBe(join(home, "worker.lock"));
+  });
+
+  it("a not-yet-existing root does not throw — the missing tail is kept inside the canonical parent", () => {
+    // THE trap: a naive `realpathSync` throws on a first run, before any root
+    // exists. The whole missing tail survives, resolved inside the real parent.
+    const root = realpathSync(makeTmpDir());
+    const link = join(root, "link-data");
+    const real = join(root, "real-data");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    const nested = join(link, "not", "created", "yet");
+    expect(daemonTreeClaimPath(nested)).toBe(
+      join(real, "not", "created", "yet", "daemon-tree.lock"),
+    );
+    // …and a root whose every segment is missing is left verbatim (this is
+    // what keeps the `/sbxroot/...` unit-test convention a no-op).
+    expect(daemonTreeClaimPath("/sbxroot/never/existed")).toBe(
+      "/sbxroot/never/existed/daemon-tree.lock",
+    );
   });
 });
 

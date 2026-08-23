@@ -103,7 +103,11 @@ systemctl --user enable --now junco
 
 ### Lock semantics and supervisor restart loops
 
-`junco start` acquires `worker.lock` (next to `config.json`). If a second instance starts while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
+`junco start` acquires `worker.lock` (next to `config.json`). If a second instance starts against the _same config file_ while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
+
+A second instance started from a _different_ config that resolves to the same `dataDir` or queue is refused too — see [configuration.md](configuration.md) — and **also exits 0**, for the same reason: the rendered units restart on failure (launchd `KeepAlive{SuccessfulExit:false}`, systemd `Restart=on-failure`, both throttled to 30s), so a non-zero exit would respawn-loop that unit forever without ever fixing the misconfiguration. The refusal is loud where loudness helps — twelve lines on stderr (and in `launchd.err`/the journal) naming the shared root, the claim file, the holding pid, and the fact that the daemon did **not** start. The unit then stays down until you give the second config its own `dataDir`/queue. `junco doctor` reports the same conflict as a `daemon claim` warning, which is the place to look when a supervised unit will not come up.
+
+So `junco start` never exits non-zero for a lock or claim conflict. A non-zero exit from `start` means something else went wrong (bad config, failed bot auth, a fatal main-loop error) — and _that_ is the case where you do want your supervisor to retry.
 
 `junco run-once` does **not** acquire the lock — it is safe for cron and dev use alongside a running daemon.
 

@@ -6,6 +6,8 @@ import {
   type RestartDeps,
   type ServiceRef,
 } from "../src/restartCmd.js";
+import { join, isAbsolute } from "node:path";
+import { workerLockPath } from "../src/lock.js";
 
 const CONFIG = "/Users/u/junco/config.json";
 
@@ -142,6 +144,22 @@ describe("discoverService (systemd)", () => {
 });
 
 describe("runRestartCommand", () => {
+  it("polls the ONE derived lock path, absolute even for a relative config (#310)", async () => {
+    // The path `junco update` → `junco restart` waits on must be the path the
+    // restarted daemon actually writes; a second spelling here reports
+    // "the lock holder did not change" on a SUCCESSFUL restart.
+    const REL = join("sbx-rel", "config.json");
+    const seen: string[] = [];
+    const f = makeFakes({ plists: { "junco.plist": juncoPlist } });
+    f.deps.lockHolderFn = (p) => {
+      seen.push(p);
+      return seen.length === 1 ? 100 : 200;
+    };
+    expect(await runRestartCommand(REL, f.deps)).toBe(0);
+    expect(new Set(seen)).toEqual(new Set([workerLockPath(REL)]));
+    expect(isAbsolute(seen[0])).toBe(true);
+  });
+
   it("no service found → guidance mentioning `junco service`, exit 1, no kick", async () => {
     const f = makeFakes({ plists: { "a.plist": decoyPlist }, lockPids: [null] });
     expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
