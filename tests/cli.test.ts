@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { Config } from "../src/types.js";
 import type { SingletonLock } from "../src/lock.js";
+import { acquireSingletonLock, readLockHolder } from "../src/lock.js";
+import { acquirePidfileLock } from "../src/pidfileLock.js";
 import { run } from "../src/cli.js";
 import type { CliDeps } from "../src/cli.js";
 import { submitTicket } from "../src/dispatch.js";
@@ -38,6 +40,14 @@ import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
  * `start` arm doesn't throw on a bare `{}` stub. */
 function stubConfig(): Config {
   return {
+    // #310: `start` derives the shared-tree claims from these BEFORE it takes
+    // any lock, and `daemonLockPaths` resolve()s both — an absent dataDir does
+    // not degrade, it throws inside node:path.resolve. Synthetic, deliberately
+    // non-existent paths (the `/sbxroot/...` convention used by the sandbox
+    // tests): every lock seam in makeDeps is a fake, so nothing is created
+    // here and no test can wander into the maintainer's live ~/.junco.
+    dataDir: "/sbxroot/data",
+    queueRoot: "/sbxroot/data/queue",
     legacy: {
       vaultRoot: false,
       stateDir: false,
@@ -70,10 +80,15 @@ function makeDeps(
   overrides: Partial<Parameters<typeof run>[1]> = {},
 ): NonNullable<Parameters<typeof run>[1]> {
   const fakeLock = makeFakeLock();
+  const fakeTreeLock = makeFakeLock();
   const uninstallSpy = vi.fn();
   return {
     loadConfigFn: vi.fn(() => stubConfig()),
     acquireLockFn: vi.fn(() => fakeLock),
+    // #310: never take a REAL data-root claim by default. On the maintainer's
+    // own machine the default dataDir is their live ~/.junco, and a real
+    // pidfile there would collide with (or be stolen from) their daemon.
+    acquireTreeLockFn: vi.fn(() => fakeTreeLock),
     installSignalHandlersFn: vi.fn(() => uninstallSpy),
     mainLoopFn: vi.fn(async () => {}),
     runOnceFn: vi.fn(async () => true),
@@ -316,6 +331,171 @@ describe("run(['start']) — lock held", () => {
     const deps = makeDeps({ acquireLockFn: vi.fn(() => null) });
     await run(["start"], deps);
     expect(deps.installSignalHandlersFn).not.toHaveBeenCalled();
+  });
+
+  it("does NOT claim the data root either (a lock-losing start touches nothing)", async () => {
+    const acquireTreeLockFn = vi.fn(() => makeFakeLock());
+    const deps = makeDeps({ acquireLockFn: vi.fn(() => null), acquireTreeLockFn });
+    await run(["start"], deps);
+    expect(acquireTreeLockFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// start — the data-root claim (#310)
+//
+// worker.lock is keyed to the CONFIG directory, so two daemons started from two
+// different config files never see each other's pidfile — even when both
+// configs resolve to the same dataDir and therefore the same queue. The daemon
+// additionally claims the shared data root itself, which both of them CAN see.
+// ---------------------------------------------------------------------------
+
+describe("run(['start']) — data-root claim (#310)", () => {
+  it("(b) a normal single-instance start still succeeds, claiming <dataDir>/daemon-tree.lock", async () => {
+    const acquireTreeLockFn = vi.fn(() => makeFakeLock());
+    const deps = makeDeps({ acquireTreeLockFn });
+
+    expect(await run(["start"], deps)).toBe(0);
+    expect(acquireTreeLockFn).toHaveBeenCalledTimes(1);
+    expect(acquireTreeLockFn).toHaveBeenCalledWith(join("/sbxroot/data", "daemon-tree.lock"));
+    expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("(a) refuses a second start with a DIFFERENT config path but the SAME dataDir, naming the holder pid", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-tree-claim-"));
+    try {
+      const dataDir = join(root, "shared-data");
+      const configA = join(root, "a", "config.json");
+      const configB = join(root, "b", "config.json");
+      const shared = { ...stubConfig(), dataDir, queueRoot: join(dataDir, "queue") } as Config;
+
+      // The real primitive, against a tmp tree we own — nothing here can reach
+      // the maintainer's ~/.junco (dataDir and HOME are both injected).
+      const realTreeLock = (p: string) => acquirePidfileLock(p);
+
+      let secondCode = -1;
+      const stderrLines: string[] = [];
+
+      const first = makeDeps({
+        env: { HOME: root, JUNCO_CONFIG: configA },
+        loadConfigFn: vi.fn(() => shared),
+        acquireTreeLockFn: realTreeLock,
+        // The second daemon starts WHILE the first still holds the claim.
+        mainLoopFn: vi.fn(async () => {
+          const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+            stderrLines.push(String(s));
+            return true;
+          });
+          try {
+            secondCode = await run(
+              ["start"],
+              makeDeps({
+                env: { HOME: root, JUNCO_CONFIG: configB },
+                loadConfigFn: vi.fn(() => shared),
+                acquireTreeLockFn: realTreeLock,
+                readLockHolderFn: (p: string) => readLockHolder(p),
+              }),
+            );
+          } finally {
+            spy.mockRestore();
+          }
+        }),
+      });
+
+      expect(await run(["start"], first)).toBe(0);
+
+      expect(secondCode).toBe(1);
+      const msg = stderrLines.join("");
+      expect(msg).toContain(`pid ${process.pid}`);
+      expect(msg).toContain(dataDir);
+      expect(msg).toContain(configB);
+      expect(msg).toMatch(/refusing to start/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("(a) the refusal never reaches mainLoop and releases the worker.lock it took", async () => {
+    const workerLock = makeFakeLock();
+    const deps = makeDeps({
+      acquireLockFn: vi.fn(() => workerLock),
+      acquireTreeLockFn: vi.fn(() => null),
+      readLockHolderFn: vi.fn(() => 4242),
+    });
+    const stderrLines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: any) => {
+      stderrLines.push(String(s));
+      return true;
+    });
+    try {
+      expect(await run(["start"], deps)).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(deps.mainLoopFn).not.toHaveBeenCalled();
+    expect(deps.installSignalHandlersFn).not.toHaveBeenCalled();
+    expect(workerLock.release).toHaveBeenCalledTimes(1);
+    expect(stderrLines.join("")).toContain("pid 4242");
+  });
+
+  it("(c) releases the data-root claim after mainLoop returns", async () => {
+    const treeLock = makeFakeLock();
+    const deps = makeDeps({ acquireTreeLockFn: vi.fn(() => treeLock) });
+    await run(["start"], deps);
+    expect(treeLock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("(c) STILL releases the data-root claim when mainLoop throws", async () => {
+    const treeLock = makeFakeLock();
+    const deps = makeDeps({
+      acquireTreeLockFn: vi.fn(() => treeLock),
+      mainLoopFn: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    expect(await run(["start"], deps)).toBe(1);
+    expect(treeLock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("(c) STILL releases both claims on a MID-STARTUP throw (after the claim, before mainLoop)", async () => {
+    const workerLock = makeFakeLock();
+    const treeLock = makeFakeLock();
+    const deps = makeDeps({
+      acquireLockFn: vi.fn(() => workerLock),
+      acquireTreeLockFn: vi.fn(() => treeLock),
+      installSignalHandlersFn: vi.fn(() => {
+        throw new Error("mid-startup boom");
+      }),
+    });
+    await expect(run(["start"], deps)).rejects.toThrow("mid-startup boom");
+    expect(treeLock.release).toHaveBeenCalledTimes(1);
+    expect(workerLock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("(d) a DEFAULT install (dataDir === dirname(configPath)) starts fine — no self-contention", async () => {
+    const home = mkdtempSync(join(tmpdir(), "junco-default-install-"));
+    try {
+      // Exactly the default layout: config at <home>/.junco/config.json, so
+      // dirname(configPath) IS dataDir. A claim reusing the `worker.lock`
+      // basename would land on the file `start` just locked and refuse.
+      const dataDir = join(home, ".junco");
+      const cfg = { ...stubConfig(), dataDir, queueRoot: join(dataDir, "queue") } as Config;
+      const deps = makeDeps({
+        env: { HOME: home },
+        loadConfigFn: vi.fn(() => cfg),
+        acquireLockFn: (p: string) => acquireSingletonLock(p), // REAL
+        acquireTreeLockFn: (p: string) => acquirePidfileLock(p), // REAL
+        readLockHolderFn: (p: string) => readLockHolder(p),
+      });
+
+      expect(await run(["start"], deps)).toBe(0);
+      expect(deps.mainLoopFn).toHaveBeenCalledTimes(1);
+      // Both pidfiles were distinct AND both were released on shutdown.
+      expect(existsSync(join(dataDir, "worker.lock"))).toBe(false);
+      expect(existsSync(join(dataDir, "daemon-tree.lock"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

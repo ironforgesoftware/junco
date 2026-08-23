@@ -29,7 +29,9 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
-import { acquireSingletonLock, readLockHolder, workerLockPath } from "./lock.js";
+import { acquireSingletonLock, daemonLockPaths, readLockHolder, workerLockPath } from "./lock.js";
+import type { PidfileLock } from "./pidfileLock.js";
+import { acquirePidfileLock } from "./pidfileLock.js";
 import {
   loadConfig,
   queuePaths,
@@ -102,6 +104,16 @@ export interface FtueHealthProbe {
 export interface CliDeps {
   loadConfigFn?: (path: string) => Config;
   acquireLockFn?: (lockPath: string) => SingletonLock | null;
+  /** The shared-tree claim `start` takes in ADDITION to worker.lock (#310).
+   *  worker.lock is keyed to the config directory, so two daemons launched
+   *  from two different config files never see each other's pidfile even when
+   *  both configs resolve to the same data root — and therefore the same
+   *  queue. This claim lives IN that shared root, which both of them can see.
+   *  Default: the real acquirePidfileLock (the same primitive migrate.lock
+   *  uses). Its own seam rather than acquireLockFn's so a test can drive the
+   *  two claims independently — and so a fake worker lock is never released
+   *  twice. */
+  acquireTreeLockFn?: (lockPath: string) => PidfileLock | null;
   installSignalHandlersFn?: (stopFlag: StopFlag) => () => void;
   mainLoopFn?: (
     cfg: Config,
@@ -171,9 +183,12 @@ export interface CliDeps {
   ensureDaemonFn?: (configPath: string) => Promise<import("./ensureDaemon.js").EnsureResult>;
   /** Interactivity probe gating the bare pre-flight. Default: stdout+stdin both TTY. */
   isTTYFn?: () => boolean;
-  /** FTUE gate (#273): who holds the single-instance pidfile beside the
-   *  config. Default: the real readLockHolder. Injected so a unit test never
-   *  reads the developer's own live `~/.junco/worker.lock`. */
+  /** Who holds a daemon pidfile? Read-only, path-parameterized: the FTUE gate
+   *  (#273) asks it about the single-instance pidfile beside the config, and
+   *  `start` asks it about the data-root claim it just failed to take, so the
+   *  refusal can name the pid (#310). Default: the real readLockHolder.
+   *  Injected so a unit test never reads the developer's own live
+   *  `~/.junco/worker.lock`. */
   readLockHolderFn?: (lockPath: string) => number | null;
   /** FTUE gate (#273): the /health probe used when no pidfile sits beside the
    *  resolved config path (exactly what a moved HOME looks like). Default:
@@ -375,6 +390,51 @@ function setupLogOutputs(cfg: Config, opts: { rotate: boolean }): () => void {
   }
 }
 
+/**
+ * Operator-facing refusal when another daemon already claims this data root
+ * (#310).
+ *
+ * The whole difficulty of this failure is that it looks impossible from the
+ * operator's chair: two config files, two `junco start`s, two `worker.lock`s
+ * that genuinely do not collide — and yet only one may run. So the message
+ * does not just say "already running"; it names the shared root, the claim
+ * file, and THIS config, and states the reason the two are not independent.
+ *
+ * `holderPid` is null when the claim was taken but its owner could not be
+ * identified (it was released between the failed acquire and the read, or the
+ * pidfile is unreadable). Never print "pid null" — say the pid is unavailable
+ * and keep the rest of the diagnosis, which is still correct.
+ */
+function dataRootClaimRefusal(args: {
+  dataRoot: string;
+  claimPath: string;
+  configPath: string;
+  holderPid: number | null;
+}): string {
+  const { dataRoot, claimPath, configPath, holderPid } = args;
+  const heldBy = holderPid === null ? "another live process (pid unavailable)" : `pid ${holderPid}`;
+  const stopIt =
+    holderPid === null
+      ? "Stop the daemon holding the claim"
+      : `Stop that daemon (pid ${holderPid})`;
+  return (
+    `junco: refusing to start — another junco daemon already claims this data root.\n\n` +
+    `  data root:    ${dataRoot}\n` +
+    `  claimed by:   ${heldBy}\n` +
+    `  this config:  ${configPath}\n` +
+    `  claim file:   ${claimPath}\n` +
+    `\nThat daemon resolved a DIFFERENT config file, so its worker.lock sits beside\n` +
+    `its own config and this process can never see it — but both configs resolve to\n` +
+    `the same data root, so both daemons would poll one queue, claim the same\n` +
+    `tickets and write the same worktrees. Two config files are not two junco\n` +
+    `installs: the data root is what makes them one.\n` +
+    // Kept on its own line so the advice stays inside 80 columns however many
+    // digits the pid has.
+    `\n${stopIt}, or give this config a data root of its own\n` +
+    `(\`dataDir\`), then start again.\n`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // FTUE gate (#273)
 // ---------------------------------------------------------------------------
@@ -503,6 +563,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Resolve injected collaborators (defaults wire to the real implementations)
   const loadConfigFn = deps.loadConfigFn ?? loadConfig;
   const acquireLockFn = deps.acquireLockFn ?? acquireSingletonLock;
+  // The shared-tree claim (#310) — the same pidfile primitive migrate.lock
+  // takes, addressed at the resolved data root instead of the config dir.
+  const acquireTreeLockFn = deps.acquireTreeLockFn ?? ((p: string) => acquirePidfileLock(p));
   const installSignalHandlersFn = deps.installSignalHandlersFn ?? installSignalHandlers;
   const mainLoopFn = deps.mainLoopFn ?? mainLoop;
   const watchConfigFn = deps.watchConfigFn ?? watchConfig;
@@ -699,8 +762,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     setLogLevel(cfgAuthed.logLevel);
 
-    // The daemon-singleton pidfile — one spelling for every reader (lock.ts).
-    const lockPath = workerLockPath(configPath);
+    // Every daemon pidfile path — one spelling for every reader (lock.ts).
+    const lockPaths = daemonLockPaths(configPath, cfgAuthed);
+    const lockPath = lockPaths.worker;
 
     const lock = acquireLockFn(lockPath);
     if (lock === null) {
@@ -711,90 +775,125 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return 0;
     }
 
-    // Set up the rotating worker.log sink now that we own the daemon slot —
-    // rotation is the lock holder's exclusive job (#76).
-    const teardownLogs = setupLogOutputs(cfgAuthed, { rotate: true });
-
-    // Loud warning when /health binds a non-loopback address (#44): the metrics
-    // body is unauthenticated and leaks in-flight ticket ids + operational
-    // metadata to the whole network. `junco doctor` mirrors this warning.
-    // No truthy `&& cfg.healthHost` guard: an empty/unparseable host is
-    // non-loopback (isLoopbackHost("") → false), so a value that bypassed the
-    // config normalization still triggers the warning instead of evading it (#71).
-    if (cfgAuthed.healthEnabled && !isLoopbackHost(cfgAuthed.healthHost)) {
-      log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
-        healthHost: cfgAuthed.healthHost,
-        healthPort: cfgAuthed.healthPort,
-        advice: "bind healthHost to 127.0.0.1 unless it is firewalled",
-      });
-    }
-
-    // Deprecated legacy config keys (Unified Data Root spec §5): one log.warn
-    // per set key, logged once at startup — `junco doctor` mirrors the same
-    // list as a "deprecated config keys" finding.
-    for (const line of configDeprecations(cfgAuthed)) {
-      log.warn(line);
-    }
-
-    const stopFlag = new StopFlag();
-    const uninstall = installSignalHandlersFn(stopFlag);
-
-    // Live-reload (Task 6): the holder starts seeded with the config we just
-    // loaded; the watcher re-parses config.json on change and swaps in a new
-    // Config, which mainLoop's per-iteration reads pick up without a restart.
-    // Hot-reload is optional — a watch-start failure (EMFILE/ENOSPC/EACCES/
-    // unsupported FS) must NOT crash the daemon, matching the health server's
-    // graceful-degrade pattern below: log a warning and continue with the
-    // holder seeded but never updated (hot-reload disabled until restart).
-    // Built BEFORE the gate so the gate can read retryBackoffSeconds live off
-    // holder.current (a reload:"live" lever — #180).
-    const holder = makeConfigHolder(cfgAuthed);
-
-    // Provider gate (Task 10): one instance shared between mainLoop's claim/
-    // health wiring and the hot-reload watcher below, so a successful config
-    // edit (bad key fixed, quota lifted, model id corrected) clears a stale
-    // latch without requiring a restart. The backoff getter re-reads the live
-    // retryBackoffSeconds so gate backoff windows honor a hot-reload too (#180).
-    const gate = makeProviderGate(cfgAuthed, () => holder.current.retryBackoffSeconds);
-
-    let watcher: { close(): void } | null = null;
-    try {
-      watcher = watchConfigFn(configPath, holder, {
-        onApplied: () => gate.clearLatched(),
-        // Hot reload must not silently drop (or fabricate) the bot identity:
-        // re-attach the STARTUP-resolved context while the file still enables
-        // it; a flip either way is a restart-kind lever (configLevers).
-        assembleFn: (d) => {
-          const next = assembleConfig(d);
-          return next.botAccount.enabled && cfgAuthed.ghAuth
-            ? { ...next, ghAuth: cfgAuthed.ghAuth }
-            : next;
-        },
-      });
-    } catch (e) {
-      log.warn("config watcher failed to start; hot-reload disabled until restart", {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-
-    try {
-      await mainLoopFn(
-        cfgAuthed,
-        stopFlag,
-        { once: values.once as boolean },
-        { configHolder: holder, gate },
-      );
-      return 0;
-    } catch (e) {
-      log.error("fatal error in main loop", {
-        error: e instanceof Error ? (e.stack ?? e.message) : String(e),
-      });
-      return 1;
-    } finally {
-      if (watcher) watcher.close();
-      uninstall();
+    // The data-root claim (#310) — taken IMMEDIATELY after worker.lock and
+    // before the log sink, because a peer holding this claim resolved the same
+    // dataDir and is therefore writing the very worker.log we would rotate.
+    // worker.lock cannot catch that peer: it is keyed to the config directory,
+    // and the peer's config lives somewhere this process has never heard of.
+    const treeLock = acquireTreeLockFn(lockPaths.dataTree);
+    if (treeLock === null) {
+      // Hand back the daemon slot we just took — this process is not starting.
       lock.release();
-      teardownLogs();
+      process.stderr.write(
+        dataRootClaimRefusal({
+          dataRoot: dirname(lockPaths.dataTree),
+          claimPath: lockPaths.dataTree,
+          configPath,
+          holderPid: (deps.readLockHolderFn ?? readLockHolder)(lockPaths.dataTree),
+        }),
+      );
+      // Exit 1, unlike the worker.lock case above: that one is a benign race
+      // (a supervisor double-start) and must not respawn-loop, whereas this is
+      // a configuration error only a human can fix, and it must be loud.
+      return 1;
+    }
+
+    // Both claims are held from here on: every exit path below — return, throw,
+    // or fatal — runs the outer finally that hands them back. A claim that
+    // outlives its process is a stale pidfile the next start has to steal.
+    try {
+      // Set up the rotating worker.log sink now that we own the daemon slot —
+      // rotation is the lock holder's exclusive job (#76).
+      const teardownLogs = setupLogOutputs(cfgAuthed, { rotate: true });
+
+      // Loud warning when /health binds a non-loopback address (#44): the metrics
+      // body is unauthenticated and leaks in-flight ticket ids + operational
+      // metadata to the whole network. `junco doctor` mirrors this warning.
+      // No truthy `&& cfg.healthHost` guard: an empty/unparseable host is
+      // non-loopback (isLoopbackHost("") → false), so a value that bypassed the
+      // config normalization still triggers the warning instead of evading it (#71).
+      if (cfgAuthed.healthEnabled && !isLoopbackHost(cfgAuthed.healthHost)) {
+        log.warn("health bind is not loopback — /health is UNAUTHENTICATED and exposed", {
+          healthHost: cfgAuthed.healthHost,
+          healthPort: cfgAuthed.healthPort,
+          advice: "bind healthHost to 127.0.0.1 unless it is firewalled",
+        });
+      }
+
+      // Deprecated legacy config keys (Unified Data Root spec §5): one log.warn
+      // per set key, logged once at startup — `junco doctor` mirrors the same
+      // list as a "deprecated config keys" finding.
+      for (const line of configDeprecations(cfgAuthed)) {
+        log.warn(line);
+      }
+
+      const stopFlag = new StopFlag();
+      const uninstall = installSignalHandlersFn(stopFlag);
+
+      // Live-reload (Task 6): the holder starts seeded with the config we just
+      // loaded; the watcher re-parses config.json on change and swaps in a new
+      // Config, which mainLoop's per-iteration reads pick up without a restart.
+      // Hot-reload is optional — a watch-start failure (EMFILE/ENOSPC/EACCES/
+      // unsupported FS) must NOT crash the daemon, matching the health server's
+      // graceful-degrade pattern below: log a warning and continue with the
+      // holder seeded but never updated (hot-reload disabled until restart).
+      // Built BEFORE the gate so the gate can read retryBackoffSeconds live off
+      // holder.current (a reload:"live" lever — #180).
+      const holder = makeConfigHolder(cfgAuthed);
+
+      // Provider gate (Task 10): one instance shared between mainLoop's claim/
+      // health wiring and the hot-reload watcher below, so a successful config
+      // edit (bad key fixed, quota lifted, model id corrected) clears a stale
+      // latch without requiring a restart. The backoff getter re-reads the live
+      // retryBackoffSeconds so gate backoff windows honor a hot-reload too (#180).
+      const gate = makeProviderGate(cfgAuthed, () => holder.current.retryBackoffSeconds);
+
+      let watcher: { close(): void } | null = null;
+      try {
+        watcher = watchConfigFn(configPath, holder, {
+          onApplied: () => gate.clearLatched(),
+          // Hot reload must not silently drop (or fabricate) the bot identity:
+          // re-attach the STARTUP-resolved context while the file still enables
+          // it; a flip either way is a restart-kind lever (configLevers).
+          assembleFn: (d) => {
+            const next = assembleConfig(d);
+            return next.botAccount.enabled && cfgAuthed.ghAuth
+              ? { ...next, ghAuth: cfgAuthed.ghAuth }
+              : next;
+          },
+        });
+      } catch (e) {
+        log.warn("config watcher failed to start; hot-reload disabled until restart", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+
+      try {
+        await mainLoopFn(
+          cfgAuthed,
+          stopFlag,
+          { once: values.once as boolean },
+          { configHolder: holder, gate },
+        );
+        return 0;
+      } catch (e) {
+        log.error("fatal error in main loop", {
+          error: e instanceof Error ? (e.stack ?? e.message) : String(e),
+        });
+        return 1;
+      } finally {
+        if (watcher) watcher.close();
+        uninstall();
+        teardownLogs();
+      }
+    } finally {
+      // ONE finally for both claims (#310), and the only place either is
+      // released — so a throw anywhere in startup (a signal-handler install,
+      // a log sink, the provider gate) hands them both back instead of
+      // leaving a stale pidfile for the next start to steal. Order mirrors
+      // acquisition, innermost first.
+      treeLock.release();
+      lock.release();
     }
   }
 
