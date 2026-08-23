@@ -103,7 +103,7 @@ systemctl --user enable --now junco
 
 ### Lock semantics and supervisor restart loops
 
-`junco start` acquires `worker.lock` (next to `config.json`). If a second instance starts while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice.
+`junco start` acquires `worker.lock` (next to `config.json`). If a second instance starts against the _same config file_ while the first holds the lock, it **exits 0** — it does not error out. This means your supervisor (launchd, systemd) will not enter a restart loop if you accidentally start Junco twice. A second instance started from a _different_ config that resolves to the same `dataDir` or queue is a different case — see [configuration.md](configuration.md) — and exits **1** instead, since that is a misconfiguration for a human to fix, not a benign double-start.
 
 `junco run-once` does **not** acquire the lock — it is safe for cron and dev use alongside a running daemon.
 
