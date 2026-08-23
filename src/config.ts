@@ -218,10 +218,13 @@ export function configPathOverride(
  * (doctor's copy omitted the `resolve()`, so it went cwd-relative whenever
  * the config path was). So an override relocates the lock
  * right along with the config everywhere. Two named configs are therefore two
- * daemon instances — but only genuinely independent ones when they also
- * resolve to DIFFERENT `dataDir`s: two configs over one data root give two
- * daemons both holding a lock over one queue, which corrupts it
- * (docs/configuration.md states the precondition).
+ * daemon instances — genuinely independent only when they also resolve to
+ * DIFFERENT `dataDir`s and queue roots. Two configs over ONE data root are no
+ * longer allowed to run as two daemons: `worker.lock` alone still cannot see
+ * the collision (it sits beside each config), but `junco start` also claims
+ * `<dataDir>/daemon-tree.lock` and `<queueRoot>/daemon-queue.lock`, and the
+ * second daemon refuses to start rather than doubling up on one queue (#310 —
+ * docs/configuration.md).
  */
 export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
   const existsFn = deps.existsFn ?? existsSync;

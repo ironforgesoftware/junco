@@ -16,6 +16,7 @@ import {
   rmSync,
   symlinkSync,
   lstatSync,
+  realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
@@ -366,7 +367,12 @@ describe("runDataMigrate — daemon pidfile refusal (health-disabled daemons)", 
 
     expect(code).toBe(1);
     expect(seen).toEqual([workerLockPath(relConfigPath)]);
-    expect(seen[0]).toBe(join(root, "worker.lock"));
+    // `realpathSync(root)`, not `root`: since final review F4 the derivation
+    // canonicalizes the config directory, and on macOS a `mkdtemp` under
+    // `os.tmpdir()` lives behind the `/var -> /private/var` symlink. The point
+    // of the assertion is unchanged — the probed path is absolute and beside
+    // the config — and it is now spelled the way the kernel sees it.
+    expect(seen[0]).toBe(join(realpathSync(root), "worker.lock"));
   });
 
   it("--force skips the pidfile check too", async () => {
@@ -655,6 +661,39 @@ describe("runDataMigrate — stale claims in a migrate destination (#310)", () =
     // claim as a leftover forever.
     expect(out.join("")).not.toMatch(/still contains/);
     expect(existsSync(legacyRoot)).toBe(false);
+  });
+
+  it("a THROWING sweep does not leak migrate.lock, and reports instead of dying bare (F3)", async () => {
+    // The sweep mkdirs/writes/unlinks via `acquirePidfileLock`, so EACCES on
+    // an unwritable root, EROFS or ENOSPC all reach the caller. It used to sit
+    // BETWEEN phase 1b's lock acquisition and the `try` whose `finally`
+    // releases them, so a throw there left a `migrate.lock` at every root it
+    // had taken, with no receipt line to say what happened.
+    const { legacyRoot, targetRoot, configPath, cfg } = crossRootFixture();
+    const claim = daemonTreeClaimPath(legacyRoot);
+    writeStaleClaim(claim); // something for the sweep to reach for
+
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      configPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        printFn: (s) => out.push(s),
+        acquireClaimFn: () => {
+          throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" });
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    // A receipt, not a bare stack escaping runDataMigrate.
+    expect(out.join("")).toMatch(/EROFS/);
+    // Every migrate.lock phase 1b took is handed back.
+    expect(existsSync(join(legacyRoot, "migrate.lock"))).toBe(false);
+    expect(existsSync(join(targetRoot, "migrate.lock"))).toBe(false);
+    expect(existsSync(join(cfg.dataDir, "migrate.lock"))).toBe(false);
   });
 
   it("a LIVE claim in <targetRoot>/queue still blocks the whole run", async () => {

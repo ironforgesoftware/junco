@@ -10,6 +10,7 @@
  */
 
 import { dirname, join, resolve } from "node:path";
+import { canonicalize } from "./agent/sandbox/canonicalize.js";
 import type { PidfileLock } from "./pidfileLock.js";
 import { acquirePidfileLock, readPidfileHolder, getProcessStartTime } from "./pidfileLock.js";
 import type { Config } from "./types.js";
@@ -56,6 +57,33 @@ const DATA_TREE_CLAIM = "daemon-tree.lock";
 const QUEUE_CLAIM = "daemon-queue.lock";
 
 /**
+ * Every claim path goes through this, and it is `canonicalize()` — NOT
+ * `resolve()` (final review F4).
+ *
+ * `resolve()` makes a path absolute and collapses `..`; it does not follow
+ * symlinks. So config A's `dataDir: "/srv/junco"` and config B's
+ * `dataDir: "/home/ops/junco-data"` — a symlink to the same directory —
+ * computed two DIFFERENT claim paths, both `acquirePidfileLock` calls
+ * succeeded against two different files, and both daemons started over one
+ * queue: #310 unmodified, just with an extra step. A claim is a rendezvous
+ * point between processes that share a directory, so it must be keyed to the
+ * directory the kernel sees, not to the name one config happened to spell.
+ *
+ * REUSED rather than re-implemented: `agent/sandbox/canonicalize.ts` already
+ * solves exactly this and the trap that comes with it — the root may not exist
+ * yet on a first run, where a naive `realpathSync` throws. It realpaths the
+ * longest existing prefix, keeps the missing tail verbatim inside it, resolves
+ * a symlinked (even dangling) leaf, caps symlink depth, and never throws. It
+ * imports nothing but `node:fs`/`node:path` — there is no sandbox knowledge in
+ * it — and `doctor.ts` already reaches into `agent/sandbox/` for the same
+ * reason. A second spelling of a subtle path algorithm is precisely the drift
+ * this module was created to end.
+ */
+function claimRoot(root: string): string {
+  return canonicalize(root);
+}
+
+/**
  * The data-root claim for an ARBITRARY root, not necessarily this config's.
  *
  * `daemonLockPaths` below answers "what would I claim?"; these two answer
@@ -66,16 +94,16 @@ const QUEUE_CLAIM = "daemon-queue.lock";
  * whichever one IT resolved. Exported rather than letting the caller spell
  * `join(root, "daemon-tree.lock")` for the same reason `workerLockPath`
  * exists: every reader of a claim must agree with the writer byte for byte,
- * `resolve()` included, or the probe silently answers the wrong question
+ * canonicalization included, or the probe silently answers the wrong question
  * (#310).
  */
 export function daemonTreeClaimPath(dataRoot: string): string {
-  return join(resolve(dataRoot), DATA_TREE_CLAIM);
+  return join(claimRoot(dataRoot), DATA_TREE_CLAIM);
 }
 
 /** The queue-root claim for an arbitrary queue root — see daemonTreeClaimPath. */
 export function daemonQueueClaimPath(queueRoot: string): string {
-  return join(resolve(queueRoot), QUEUE_CLAIM);
+  return join(claimRoot(queueRoot), QUEUE_CLAIM);
 }
 
 /**
@@ -88,14 +116,19 @@ export function daemonQueueClaimPath(queueRoot: string): string {
  * helper require one would have forced a config load earlier in `start`,
  * which is a behaviour change, not a refactor.
  *
- * `resolve()` is load-bearing, not decoration: it normalizes `..` segments so
- * two processes that name the same config file differently still compute the
- * same lock path, and it makes a relative config path absolute rather than
- * cwd-relative at each separate use. (`resolveConfigPath` rejects a relative
- * `JUNCO_CONFIG` outright for the same reason — see config.ts.)
+ * Normalization is load-bearing, not decoration: `resolve()` collapses `..`
+ * segments and makes a relative config path absolute rather than cwd-relative
+ * at each separate use (`resolveConfigPath` rejects a relative `JUNCO_CONFIG`
+ * outright for the same reason — see config.ts), and `canonicalize()` on the
+ * DIRECTORY closes the symlink half (F4): `/tmp/j/config.json` and
+ * `/private/tmp/j/config.json` are one config file and must be one lock.
+ *
+ * The config's DIRECTORY is canonicalized, never the config file itself: a
+ * `config.json` that is a symlink into a dotfiles repo still locks where the
+ * operator expects (`~/.junco/worker.lock`), not beside its link target.
  */
 export function workerLockPath(configPath: string): string {
-  return join(dirname(resolve(configPath)), "worker.lock");
+  return join(claimRoot(dirname(resolve(configPath))), "worker.lock");
 }
 
 /**
@@ -104,10 +137,10 @@ export function workerLockPath(configPath: string): string {
  * state that two daemons started from two DIFFERENT config paths can still
  * collide over, which `worker.lock` alone cannot see (#310).
  *
- * The roots are `resolve()`d for the same reason the config path is: the
+ * The roots are canonicalized for the same reason the config path is: the
  * claim is a rendezvous point between processes, so it has to have one
- * spelling. (`assembleConfig` expands `~` in these but does not normalize
- * them further.)
+ * spelling — see `claimRoot`. (`assembleConfig` expands `~` in these but does
+ * not normalize them further.)
  */
 export function daemonLockPaths(
   configPath: string,

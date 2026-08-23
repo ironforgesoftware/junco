@@ -1,11 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
 } from "node:fs";
 import { join, dirname, basename, isAbsolute } from "node:path";
@@ -13,6 +16,8 @@ import { tmpdir } from "node:os";
 import {
   acquireSingletonLock,
   daemonLockPaths,
+  daemonQueueClaimPath,
+  daemonTreeClaimPath,
   getProcessStartTime,
   readLockHolder,
   workerLockPath,
@@ -478,6 +483,114 @@ describe("daemonLockPaths", () => {
     });
     expect(dirname(p.dataTree)).toBe("/sbxroot/data");
     expect(dirname(p.queue)).toBe("/sbxroot/data/queue");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Symlink canonicalization (final review F4)
+//
+// `resolve()` collapses `..` and makes a path absolute; it does NOT follow
+// symlinks. So two configs whose `dataDir`s reach ONE directory through a
+// symlink computed two different claim paths, both acquisitions succeeded
+// against two different files, and both daemons started over one queue — #310
+// unmodified. These use a REAL symlinked tmp dir because that is the only way
+// to falsify the fix: with `resolve()` back in place every assertion below
+// fails.
+// ---------------------------------------------------------------------------
+
+describe("claim paths are canonicalized, not merely resolved (#310, F4)", () => {
+  it("a symlinked dataDir yields the SAME data-root claim as the real path", () => {
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "real-data");
+    const link = join(root, "link-data");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    expect(daemonTreeClaimPath(link)).toBe(daemonTreeClaimPath(real));
+    expect(daemonTreeClaimPath(link)).toBe(join(real, "daemon-tree.lock"));
+  });
+
+  it("a symlinked queueRoot yields the SAME queue claim as the real path", () => {
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "vault", "junco");
+    const link = join(root, "queue-link");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    expect(daemonQueueClaimPath(link)).toBe(daemonQueueClaimPath(real));
+    expect(daemonQueueClaimPath(link)).toBe(join(real, "daemon-queue.lock"));
+  });
+
+  it("two configs reaching one data root through a symlink collide on ONE claim", () => {
+    // The whole #310 shape, end to end at the path layer: config A names the
+    // real root, config B names the symlink, and both must contend for the
+    // same file.
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "srv-junco");
+    const link = join(root, "ops-junco-data");
+    mkdirSync(join(real, "queue"), { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    const a = daemonLockPaths(join(root, "a", "config.json"), {
+      dataDir: real,
+      queueRoot: join(real, "queue"),
+    });
+    const b = daemonLockPaths(join(root, "b", "config.json"), {
+      dataDir: link,
+      queueRoot: join(link, "queue"),
+    });
+    expect(b.dataTree).toBe(a.dataTree);
+    expect(b.queue).toBe(a.queue);
+    // …while worker.lock still legitimately differs: it is keyed to the config
+    // directory, which is exactly the blind spot the claims exist to cover.
+    expect(b.worker).not.toBe(a.worker);
+  });
+
+  it("a symlinked CONFIG DIRECTORY yields one worker.lock", () => {
+    const root = realpathSync(makeTmpDir());
+    const real = join(root, "dot-junco");
+    const link = join(root, "junco-link");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    expect(workerLockPath(join(link, "config.json"))).toBe(
+      workerLockPath(join(real, "config.json")),
+    );
+    expect(workerLockPath(join(link, "config.json"))).toBe(join(real, "worker.lock"));
+  });
+
+  it("does NOT follow a symlinked config FILE — the lock stays beside the name the operator used", () => {
+    // Canonicalizing the whole path would put worker.lock next to a dotfiles
+    // repo. Only the directory is canonicalized.
+    const root = realpathSync(makeTmpDir());
+    const home = join(root, ".junco");
+    const dotfiles = join(root, "dotfiles");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(dotfiles, { recursive: true });
+    writeFileSync(join(dotfiles, "junco.json"), "{}", "utf8");
+    symlinkSync(join(dotfiles, "junco.json"), join(home, "config.json"), "file");
+
+    expect(workerLockPath(join(home, "config.json"))).toBe(join(home, "worker.lock"));
+  });
+
+  it("a not-yet-existing root does not throw — the missing tail is kept inside the canonical parent", () => {
+    // THE trap: a naive `realpathSync` throws on a first run, before any root
+    // exists. The whole missing tail survives, resolved inside the real parent.
+    const root = realpathSync(makeTmpDir());
+    const link = join(root, "link-data");
+    const real = join(root, "real-data");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, link, "dir");
+
+    const nested = join(link, "not", "created", "yet");
+    expect(daemonTreeClaimPath(nested)).toBe(
+      join(real, "not", "created", "yet", "daemon-tree.lock"),
+    );
+    // …and a root whose every segment is missing is left verbatim (this is
+    // what keeps the `/sbxroot/...` unit-test convention a no-op).
+    expect(daemonTreeClaimPath("/sbxroot/never/existed")).toBe(
+      "/sbxroot/never/existed/daemon-tree.lock",
+    );
   });
 });
 

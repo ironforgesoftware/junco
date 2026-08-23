@@ -27,7 +27,7 @@ import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
 import { getResolvedModelInfo, type ResolvedModelInfo } from "./agent/session.js";
-import { readLockHolder, workerLockPath } from "./lock.js";
+import { daemonLockPaths, readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { selectBackend, classifyAvailability } from "./agent/sandbox/backend.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
@@ -804,9 +804,41 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       report("ok", "analyze drafts", `${drafts} pending (junco analyze review)`);
     }
 
-    // 8. daemon (informational)
-    const holder = lockHolderFn(workerLockPath(configPath));
+    // 8. daemon (informational) — and, since #310, the two shared-root claims
+    // as well (final review F6).
+    //
+    // `worker.lock` answers only "is a daemon running against THIS config?".
+    // That is the wrong question for the operator whose `junco start` was
+    // REFUSED because a peer resolved a different config file onto the same
+    // data root or queue: their daemon is genuinely not running, so this check
+    // printed a clean `ok  daemon  not running` and the actual cause — a live
+    // claim held by a pid this config has never heard of — appeared nowhere.
+    // The refusal itself is written to stderr before the log sink exists, so
+    // under a supervisor it lands only in launchd.err/the journal. Reading the
+    // claims here is additive (same `readLockHolder` seam, two more pidfiles)
+    // and turns that silence into one line naming the root, the pid and the
+    // claim file.
+    const lockPaths = daemonLockPaths(configPath, cfg);
+    const holder = lockHolderFn(lockPaths.worker);
     report("ok", "daemon", holder ? `running (pid ${holder})` : "not running");
+    // A claim held by OUR daemon is the normal case and says nothing new, so
+    // only a holder that is not this config's daemon is reported. `holder`
+    // being null makes every live claim foreign, which is exactly the refused
+    // -start shape.
+    for (const [label, claim] of [
+      ["data root", lockPaths.dataTree],
+      ["queue root", lockPaths.queue],
+    ] as const) {
+      const claimHolder = lockHolderFn(claim);
+      if (claimHolder === null || claimHolder === holder) continue;
+      report(
+        "warn",
+        "daemon claim",
+        `${label} ${dirname(claim)} is claimed by pid ${claimHolder}, which is not this ` +
+          `config's daemon — that daemon resolved a different config file, and \`junco start\` ` +
+          `here refuses while it holds ${claim} (#310)`,
+      );
+    }
 
     // 9. npm update check (spec 2026-07-16) — best-effort, never a failure.
     const update = await (deps.checkUpdateFn ?? ((c: Config) => checkForUpdate(c)))(cfg);

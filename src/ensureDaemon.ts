@@ -87,6 +87,16 @@ export async function ensureDaemon(
     }
     await sleepFn(pollMs);
   }
-  print(`daemon did not come up within ${Math.round(waitMs / 1000)}s — opening dashboard anyway\n`);
+  // One cause is #310 (final review F6): the unit started, found a shared
+  // data-root/queue claim held by a daemon that resolved a DIFFERENT config,
+  // and refused — `worker.lock` never appears and this looks like a slow boot
+  // forever. This function takes a configPath, not a Config, so it cannot
+  // derive the claim paths itself (that is the deliberate `workerLockPath` vs
+  // `daemonLockPaths` split — it must stay config-free and never throw);
+  // `junco doctor` does read them and names the holding pid.
+  print(
+    `daemon did not come up within ${Math.round(waitMs / 1000)}s — opening dashboard anyway\n` +
+      `(run \`junco doctor\` if it stays down — another daemon may claim this data root)\n`,
+  );
   return { state: "start-failed", ref: svc };
 }

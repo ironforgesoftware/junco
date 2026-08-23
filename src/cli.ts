@@ -442,6 +442,13 @@ const SHARED_ROOT_REFUSALS = {
  * identified (it was released between the failed acquire and the read, or the
  * pidfile is unreadable). Never print "pid null" — say the pid is unavailable
  * and keep the rest of the diagnosis, which is still correct.
+ *
+ * The closing line states the exit code and why (final review F1). This
+ * refusal is loud in the MESSAGE, not in the status code: the population that
+ * hits it is the one running under launchd/systemd, whose units restart on
+ * failure (`service.ts`), so a non-zero exit here buys nothing and costs a
+ * 30-second respawn loop that never ends. An operator who sees `echo $?` == 0
+ * after twelve lines of refusal deserves to be told that was deliberate.
  */
 function sharedRootClaimRefusal(args: {
   kind: keyof typeof SHARED_ROOT_REFUSALS;
@@ -468,7 +475,10 @@ function sharedRootClaimRefusal(args: {
     `\n${why}` +
     // The remedy starts on its own line so the advice stays inside 80 columns
     // however many digits the pid has.
-    `\n${stopIt}, or ${remedy}\n`
+    `\n${stopIt}, or ${remedy}\n` +
+    `\nThis daemon did NOT start. Exiting 0 on purpose: a supervisor (launchd/systemd)\n` +
+    `restarts a unit that exits non-zero, and retrying a misconfiguration every 30s\n` +
+    `forever is not a repair — the unit stays down until you fix the config above.\n`
   );
 }
 
@@ -817,57 +827,75 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // the two read the same way and the same injected probe answers for both.
     const readHolderFn = deps.readLockHolderFn ?? readLockHolder;
 
-    // The data-root claim (#310) — taken IMMEDIATELY after worker.lock and
-    // before the log sink, because a peer holding this claim resolved the same
-    // dataDir and is therefore writing the very worker.log we would rotate.
-    // worker.lock cannot catch that peer: it is keyed to the config directory,
-    // and the peer's config lives somewhere this process has never heard of.
-    const treeLock = acquireTreeLockFn(lockPaths.dataTree);
-    if (treeLock === null) {
-      // Hand back the daemon slot we just took — this process is not starting.
-      lock.release();
-      process.stderr.write(
-        sharedRootClaimRefusal({
-          kind: "data root",
-          root: dirname(lockPaths.dataTree),
-          claimPath: lockPaths.dataTree,
-          configPath,
-          holderPid: readHolderFn(lockPaths.dataTree),
-        }),
-      );
-      // Exit 1, unlike the worker.lock case above: that one is a benign race
-      // (a supervisor double-start) and must not respawn-loop, whereas this is
-      // a configuration error only a human can fix, and it must be loud.
-      return 1;
-    }
-
-    // The queue-root claim (#310) — a SEPARATE root, not a formality. A legacy
-    // `vaultRoot` puts queueRoot outside dataDir, so two configs with two
-    // different data roots can still name one shared vault queue: worker.lock
-    // misses it (config-dir keyed), the data-root claim misses it (the roots
-    // differ), and both daemons then poll one inbox. The two claims can never
-    // be the same file — `daemon-tree.lock` vs `daemon-queue.lock` (lock.ts) —
-    // so there is nothing to dedupe even when queueRoot IS dataDir.
-    const queueLock = acquireQueueLockFn(lockPaths.queue);
-    if (queueLock === null) {
-      treeLock.release();
-      lock.release();
-      process.stderr.write(
-        sharedRootClaimRefusal({
-          kind: "queue root",
-          root: dirname(lockPaths.queue),
-          claimPath: lockPaths.queue,
-          configPath,
-          holderPid: readHolderFn(lockPaths.queue),
-        }),
-      );
-      return 1;
-    }
-
-    // All three claims are held from here on: every exit path below — return,
-    // throw, or fatal — runs the outer finally that hands them back. A claim
-    // that outlives its process is a stale pidfile the next start has to steal.
+    // The two tree claims are ACQUIRED INSIDE this try, not above it (final
+    // review F2): `acquirePidfileLock` mkdirs and writes, so it can throw
+    // (EACCES on a root this user cannot write, EROFS, ENOSPC) — and a throw
+    // one statement above the `finally` would leak exactly the pidfiles that
+    // `finally` exists to hand back. Both start null so the `finally` can tell
+    // "never taken" from "held", which is also what makes an early `return`
+    // from a refusal below correct without a manual release.
+    let treeLock: PidfileLock | null = null;
+    let queueLock: PidfileLock | null = null;
     try {
+      // The data-root claim (#310) — taken IMMEDIATELY after worker.lock and
+      // before the log sink, because a peer holding this claim resolved the
+      // same dataDir and is therefore writing the very worker.log we would
+      // rotate. worker.lock cannot catch that peer: it is keyed to the config
+      // directory, and the peer's config lives somewhere this process has
+      // never heard of.
+      treeLock = acquireTreeLockFn(lockPaths.dataTree);
+      if (treeLock === null) {
+        process.stderr.write(
+          sharedRootClaimRefusal({
+            kind: "data root",
+            root: dirname(lockPaths.dataTree),
+            claimPath: lockPaths.dataTree,
+            configPath,
+            holderPid: readHolderFn(lockPaths.dataTree),
+          }),
+        );
+        // Exit 0, SAME as the worker.lock case above and for the same reason
+        // (final review F1): the rendered service units restart on failure —
+        // launchd `KeepAlive{SuccessfulExit:false}` + `ThrottleInterval 30`,
+        // systemd `Restart=on-failure` + `RestartSec=30` (service.ts) — and
+        // the operator most likely to hit THIS refusal is the one running a
+        // second supervised unit, i.e. #310's own population. Exiting 1 gave
+        // them a unit that refused, died and respawned every 30 seconds
+        // forever, writing the refusal ~2,880 times a day and re-running
+        // `withBotAuth`'s `gh` subprocess each cycle. Loudness belongs in the
+        // message (which names the root, the claim file, the holder's pid and
+        // now the exit code itself); the status code's only real consumer here
+        // is the supervisor, and its correct instruction is "stay down".
+        return 0;
+      }
+
+      // The queue-root claim (#310) — a SEPARATE root, not a formality. A
+      // legacy `vaultRoot` puts queueRoot outside dataDir, so two configs with
+      // two different data roots can still name one shared vault queue:
+      // worker.lock misses it (config-dir keyed), the data-root claim misses
+      // it (the roots differ), and both daemons then poll one inbox. The two
+      // claims can never be the same file — `daemon-tree.lock` vs
+      // `daemon-queue.lock` (lock.ts) — so there is nothing to dedupe even
+      // when queueRoot IS dataDir.
+      queueLock = acquireQueueLockFn(lockPaths.queue);
+      if (queueLock === null) {
+        process.stderr.write(
+          sharedRootClaimRefusal({
+            kind: "queue root",
+            root: dirname(lockPaths.queue),
+            claimPath: lockPaths.queue,
+            configPath,
+            holderPid: readHolderFn(lockPaths.queue),
+          }),
+        );
+        return 0; // see the data-root branch above for why 0 and not 1
+      }
+
+      // All three claims are held from here on: every exit path below —
+      // return, throw, or fatal — runs the outer finally that hands them back.
+      // A claim that outlives its process is a stale pidfile the next start
+      // has to steal.
+      //
       // Set up the rotating worker.log sink now that we own the daemon slot —
       // rotation is the lock holder's exclusive job (#76).
       const teardownLogs = setupLogOutputs(cfgAuthed, { rotate: true });
@@ -956,10 +984,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       // ONE finally for all three claims (#310), and the only place any of
       // them is released — so a throw anywhere in startup (a signal-handler
       // install, a log sink, the provider gate) hands them all back instead of
-      // leaving a stale pidfile for the next start to steal. Order mirrors
-      // acquisition, innermost first.
-      queueLock.release();
-      treeLock.release();
+      // leaving a stale pidfile for the next start to steal. Since F2 the
+      // region also covers the two ACQUISITIONS, so a throw from
+      // `acquirePidfileLock` itself no longer leaks whatever is already held —
+      // hence the null guards: a claim that was never taken has nothing to
+      // hand back. Order mirrors acquisition, innermost first.
+      queueLock?.release();
+      treeLock?.release();
       lock.release();
     }
   }

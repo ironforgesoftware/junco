@@ -203,9 +203,17 @@ export async function runRestartCommand(
     if (Date.now() - started >= timeoutMs) break;
     await sleepFn(500);
   }
+  // The second cause is #310 (final review F6): a unit that starts, finds a
+  // shared-root claim held by a daemon that resolved a DIFFERENT config, and
+  // refuses — from here that is indistinguishable from a slow drain, because
+  // `worker.lock` (the only pidfile this command has: it takes a configPath,
+  // not a Config, so it cannot derive the claims) never changes either. Point
+  // at `doctor`, which does read the claims and names the holder.
   print(
     `kick issued to ${svc.id}, but the lock holder did not change within ${Math.round(timeoutMs / 1000)}s — ` +
-      "the old daemon may still be draining a ticket. Check `junco status`.\n",
+      "the old daemon may still be draining a ticket. Check `junco status`,\n" +
+      "or `junco doctor` if it never comes up — it reports a shared data-root/queue claim\n" +
+      "held by another daemon, which makes this one refuse to start (#310).\n",
   );
   return 1;
 }

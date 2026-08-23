@@ -1103,32 +1103,6 @@ export async function runDataMigrate(
     locksByRoot.set(root, l);
   }
 
-  // 1c. Stale daemon-claim sweep (#310). A `daemon-tree.lock` /
-  // `daemon-queue.lock` left behind by a CRASHED daemon is an ordinary thing
-  // to find — that is what a stale pidfile IS — but it is also a FILE sitting
-  // in a directory this command may treat as a DESTINATION, and
-  // `isRecursivelyEmptyDir` (dataMigrate.ts) counts any non-directory entry as
-  // content. `flatToV2Pairs`' `queue -> queue` pair makes `<targetRoot>/queue`
-  // a destination on a cross-root move, so one stale claim there flips "empty
-  // scaffolding, safe to replace" into a reported `skipped-conflict` and the
-  // queue never moves; the same file at a data root makes phase 7's rmdir fail
-  // ENOTEMPTY and get reported as a leftover on every subsequent run. Neither
-  // is data loss, but both are a conflict the operator cannot act on because
-  // nothing explains it.
-  //
-  // Deliberately NOT fixed by teaching the emptiness check to ignore these
-  // basenames: that would make a LIVE claim invisible too, and the repair path
-  // would then rm -r a directory a running daemon is claiming. Clearing the
-  // provably-ownerless file instead keeps the conflict rule exactly as strict
-  // as it was — a destination holding anything real is still a conflict, and a
-  // live claim still blocks the whole run at 1a.
-  //
-  // Runs even under `--force` (which skips 1a): the sweep cannot remove a live
-  // claim regardless — see `sweepStaleDaemonClaims`.
-  for (const cleared of sweepStaleDaemonClaims(claimPaths, existsFn, acquireClaimFn)) {
-    print(`junco data migrate: cleared a stale daemon claim (no live holder) — ${cleared}\n`);
-  }
-
   const queueReceipt: string[] = [];
   const dataRootReceipt: string[] = [];
   const dataRootConflicts: string[] = [];
@@ -1165,6 +1139,41 @@ export async function runDataMigrate(
   let rewriteReport: RewriteReport = { rewritten: 0, files: [], warnings: [] };
 
   try {
+    // 1c. Stale daemon-claim sweep (#310). A `daemon-tree.lock` /
+    // `daemon-queue.lock` left behind by a CRASHED daemon is an ordinary thing
+    // to find — that is what a stale pidfile IS — but it is also a FILE sitting
+    // in a directory this command may treat as a DESTINATION, and
+    // `isRecursivelyEmptyDir` (dataMigrate.ts) counts any non-directory entry as
+    // content. `flatToV2Pairs`' `queue -> queue` pair makes `<targetRoot>/queue`
+    // a destination on a cross-root move, so one stale claim there flips "empty
+    // scaffolding, safe to replace" into a reported `skipped-conflict` and the
+    // queue never moves; the same file at a data root makes phase 7's rmdir fail
+    // ENOTEMPTY and get reported as a leftover on every subsequent run. Neither
+    // is data loss, but both are a conflict the operator cannot act on because
+    // nothing explains it.
+    //
+    // Deliberately NOT fixed by teaching the emptiness check to ignore these
+    // basenames: that would make a LIVE claim invisible too, and the repair path
+    // would then rm -r a directory a running daemon is claiming. Clearing the
+    // provably-ownerless file instead keeps the conflict rule exactly as strict
+    // as it was — a destination holding anything real is still a conflict, and a
+    // live claim still blocks the whole run at 1a.
+    //
+    // Runs even under `--force` (which skips 1a): the sweep cannot remove a live
+    // claim regardless — see `sweepStaleDaemonClaims`.
+    //
+    // INSIDE this try, not between 1b and it (final review F3): the sweep
+    // mkdirs/writes/unlinks via `acquirePidfileLock`, so it can throw
+    // (EACCES/EROFS/ENOSPC) — and from the gap above, a throw escaped past the
+    // `finally` at the bottom that releases every `migrate.lock` phase 1b took,
+    // leaking them all with no receipt line to say so. Still the FIRST statement
+    // of the acting region, so the phase order (sweep before the queue move and
+    // before every emptiness check) is unchanged; the catch path below now also
+    // turns a sweep failure into a receipt instead of a bare stack.
+    for (const cleared of sweepStaleDaemonClaims(claimPaths, existsFn, acquireClaimFn)) {
+      print(`junco data migrate: cleared a stale daemon claim (no live holder) — ${cleared}\n`);
+    }
+
     // 3. Queue move (legacy vaultRoot only). Re-probe existence under the
     // lock — the pre-lock plan flags could be stale if a concurrent migrate
     // completed in between. `claimedByEarlierPhase` records what THIS phase
