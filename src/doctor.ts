@@ -443,16 +443,24 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           "enabled with backend=none — env scrub + fs jail only, no OS isolation",
         );
       } else {
-        const ok = await backend.isAvailable((c, a) =>
-          execFn(c, a).then((r) => ({ code: r.code })),
+        const availability = await backend.checkAvailability((c, a) =>
+          execFn(c, a).then((r) => ({ code: r.code, stderr: r.stderr })),
         );
-        const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, ok);
+        const outcome = classifyAvailability(
+          cfg.sandbox.backend,
+          backend.name,
+          availability.available,
+        );
         // On trouble, tell the operator exactly how to satisfy the system
         // prerequisite (bwrap is a distro package, like git/gh — not an npm dep).
         const installHint =
           backend.name === "bwrap"
             ? "install bubblewrap (apt install bubblewrap / dnf install bubblewrap / apk add bubblewrap)"
             : "install the backend";
+        // #312: quote the probe's own refusal before the install hint — the hint
+        // is wrong advice whenever the binary is present and something else (a
+        // kernel policy, a missing userns) is what said no.
+        const why = availability.reason === undefined ? "" : ` (${availability.reason})`;
         if (outcome === "ok") {
           report("ok", "sandbox", `${backend.name} available`);
         } else if (outcome === "degrade") {
@@ -461,14 +469,14 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           report(
             "warn",
             "sandbox",
-            `${backend.name} unavailable — auto-degrading to none (env scrub + fs jail only, ` +
+            `${backend.name} unavailable${why} — auto-degrading to none (env scrub + fs jail only, ` +
               `bash not OS-confined); ${installHint} for full isolation`,
           );
         } else {
           report(
             "fail",
             "sandbox",
-            `${backend.name} unavailable — tickets fail closed. ${installHint}, or set sandbox.enabled=false`,
+            `${backend.name} unavailable${why} — tickets fail closed. ${installHint}, or set sandbox.enabled=false`,
           );
         }
       }

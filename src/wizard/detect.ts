@@ -137,8 +137,17 @@ export async function flightChecks(cfg: Config, deps: DetectDeps = {}): Promise<
         detail: "backend=none — env scrub + fs jail only",
       });
     } else {
-      const ok = await backend.isAvailable((c, a) => execFn(c, a).then((r) => ({ code: r.code })));
-      const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, ok);
+      const availability = await backend.checkAvailability((c, a) =>
+        execFn(c, a).then((r) => ({ code: r.code, stderr: r.stderr })),
+      );
+      const outcome = classifyAvailability(
+        cfg.sandbox.backend,
+        backend.name,
+        availability.available,
+      );
+      // #312: the probe's own refusal, when it had one. These receipts are
+      // one-liners, so it goes where "unavailable" alone would have stood.
+      const why = availability.reason === undefined ? "" : ` (${availability.reason})`;
       out.push(
         outcome === "ok"
           ? { verdict: "ok", label: "sandbox", detail: `${backend.name} available` }
@@ -146,12 +155,12 @@ export async function flightChecks(cfg: Config, deps: DetectDeps = {}): Promise<
             ? {
                 verdict: "warn",
                 label: "sandbox",
-                detail: `${backend.name} unavailable — degrading to none`,
+                detail: `${backend.name} unavailable${why} — degrading to none`,
               }
             : {
                 verdict: "fail",
                 label: "sandbox",
-                detail: `${backend.name} unavailable — tickets fail closed (junco doctor for the fix)`,
+                detail: `${backend.name} unavailable${why} — tickets fail closed (junco doctor for the fix)`,
               },
       );
     }

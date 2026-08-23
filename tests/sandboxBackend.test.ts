@@ -7,6 +7,8 @@ import {
   noneBackend,
   selectBackend,
   classifyAvailability,
+  defaultExecProbe,
+  PROBE_STDERR_LIMIT,
 } from "../src/agent/sandbox/backend.js";
 import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 
@@ -332,7 +334,7 @@ describe("bwrapBackend.spawnArgv", () => {
 describe("noneBackend", () => {
   it("runs bash -c directly and is always available", async () => {
     expect(noneBackend.spawnArgv("echo hi", denyNet)).toEqual(["/bin/bash", "-c", "echo hi"]);
-    expect(await noneBackend.isAvailable(async () => ({ code: 127 }))).toBe(true);
+    expect((await noneBackend.checkAvailability(async () => ({ code: 127 }))).available).toBe(true);
   });
 });
 
@@ -351,10 +353,71 @@ describe("selectBackend", () => {
   });
 });
 
-describe("isAvailable", () => {
+describe("checkAvailability", () => {
   it("seatbelt available when probe exits 0", async () => {
-    expect(await seatbeltBackend.isAvailable(async () => ({ code: 0 }))).toBe(true);
-    expect(await seatbeltBackend.isAvailable(async () => ({ code: 127 }))).toBe(false);
+    expect((await seatbeltBackend.checkAvailability(async () => ({ code: 0 }))).available).toBe(
+      true,
+    );
+    expect((await seatbeltBackend.checkAvailability(async () => ({ code: 127 }))).available).toBe(
+      false,
+    );
+  });
+
+  // #312: the exit code stays the decision input, but a refusal the child
+  // EXPLAINED must not be thrown away — "unavailable" alone sent a CI diagnosis
+  // through the runner's image version instead of through bwrap's own words.
+  it("carries the child's stderr as the failure reason", async () => {
+    const r = await bwrapBackend.checkAvailability(async () => ({
+      code: 1,
+      stderr: "bwrap: Creating new namespace failed: Operation not permitted\n",
+    }));
+    expect(r.available).toBe(false);
+    expect(r.reason).toContain("Creating new namespace failed: Operation not permitted");
+  });
+
+  it("a passing probe carries no reason", async () => {
+    const r = await bwrapBackend.checkAvailability(async () => ({ code: 0, stderr: "noise\n" }));
+    expect(r).toEqual({ available: true });
+  });
+
+  it("a silent failure yields no reason (nothing to report is not an empty string)", async () => {
+    const r = await bwrapBackend.checkAvailability(async () => ({ code: 127, stderr: "   \n" }));
+    expect(r.available).toBe(false);
+    expect(r.reason).toBeUndefined();
+  });
+
+  it("bounds a runaway stderr and collapses it to one line", async () => {
+    const r = await bwrapBackend.checkAvailability(async () => ({
+      code: 1,
+      stderr: `bwrap: boom\n${"x".repeat(500_000)}`,
+    }));
+    expect(r.reason?.length).toBeLessThanOrEqual(PROBE_STDERR_LIMIT + 1); // + the ellipsis
+    expect(r.reason).toMatch(/^bwrap: boom /);
+    expect(r.reason).not.toContain("\n");
+  });
+});
+
+describe("defaultExecProbe", () => {
+  // A real child, but a harmless one: `bwrap` is unavailable on the macOS dev
+  // host and the point is the plumbing, not the backend.
+  it("captures the child's stderr alongside the exit code", async () => {
+    const r = await defaultExecProbe(process.execPath, [
+      "-e",
+      "process.stderr.write('bwrap: Creating new namespace failed'); process.exit(1)",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("bwrap: Creating new namespace failed");
+  });
+
+  it("a missing binary is 127 with the spawn failure as the reason", async () => {
+    const r = await defaultExecProbe("/nonexistent/junco-probe-binary", []);
+    expect(r.code).toBe(127);
+    expect(r.stderr ?? "").toMatch(/ENOENT/);
+  });
+
+  it("a clean run reports code 0 and nothing to explain", async () => {
+    const r = await defaultExecProbe(process.execPath, ["-e", ""]);
+    expect(r).toEqual({ code: 0 });
   });
 });
 

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { resolveSandbox } from "../src/agent/session.js";
+import { log } from "../src/logging.js";
 import { SandboxUnavailableError } from "../src/agent/sandbox/index.js";
 import { readRules } from "../src/agent/sandbox/policy.js";
 import { resolveRead } from "../src/agent/sandbox/precedence.js";
@@ -124,6 +125,58 @@ describe("resolveSandbox", () => {
     expect(r?.backend.name).toBe("none");
     // The policy (env scrub + fs jail) is still built.
     expect(r?.policy.writableRoots).toContain("/sbxroot/work");
+  });
+
+  // #312: both refusal paths used to say only THAT the backend was unavailable.
+  // "Install bubblewrap" is actively wrong when bubblewrap is installed and the
+  // kernel is what refused (ubuntu-24.04's
+  // kernel.apparmor_restrict_unprivileged_userns=1), so the probe's own words
+  // have to reach the operator.
+  it("the degrade warning names WHY the backend refused", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await resolveSandbox(cfgWith({ backend: "auto" }), "/sbxroot/work", undefined, {
+        ...okDeps,
+        platform: "linux",
+        probe: async () => ({
+          code: 1,
+          stderr: "bwrap: Creating new namespace failed: Operation not permitted",
+        }),
+      });
+      const said = warnSpy.mock.calls.map((c) => JSON.stringify(c)).join("\n");
+      expect(said).toMatch(/Creating new namespace failed: Operation not permitted/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("the fail-closed error names WHY the backend refused", async () => {
+    await expect(
+      resolveSandbox(cfgWith({ backend: "bwrap" }), "/work", undefined, {
+        ...okDeps,
+        probe: async () => ({
+          code: 1,
+          stderr: "bwrap: Creating new namespace failed: Operation not permitted",
+        }),
+      }),
+    ).rejects.toThrow(/Creating new namespace failed: Operation not permitted/);
+  });
+
+  it("a silent refusal still degrades cleanly, with no empty reason clause", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const r = await resolveSandbox(cfgWith({ backend: "auto" }), "/sbxroot/work", undefined, {
+        ...okDeps,
+        platform: "linux",
+        probe: async () => ({ code: 127 }),
+      });
+      expect(r?.backend.name).toBe("none");
+      const msg = String(warnSpy.mock.calls[0]?.[0] ?? "");
+      expect(msg).toMatch(/no OS backend available/);
+      expect(msg).not.toMatch(/probe said/i);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("backend=none never fails closed even if a probe would fail", async () => {
