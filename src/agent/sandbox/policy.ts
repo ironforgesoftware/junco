@@ -1,7 +1,17 @@
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import type { SandboxConfig } from "../../types.js";
 import { canonicalize } from "./canonicalize.js";
 import type { ReadRule } from "./precedence.js";
+
+/** Thrown (fail-closed) when the requested policy cannot be enforced on every
+ *  backend — see `assertNoAllowAboveDenyFile`. Refusing to build is deliberate:
+ *  the alternative is emitting a policy whose meaning differs per backend. */
+export class SandboxPolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxPolicyError";
+  }
+}
 
 /** Absolute paths whose reads are always denied inside the sandbox. Not
  *  operator-removable (extra_deny_read only adds). */
@@ -76,6 +86,13 @@ export function buildPolicy(opts: {
   // would compare a canonicalized deny against a raw allow and a
   // /tmp-vs-/private/tmp-style mismatch would silently flip the answer.
   const readAllowPaths = (dataAllowPaths ?? []).map(canonicalize);
+  assertNoAllowAboveDenyFile(
+    [
+      ...writableRoots.map((path) => ({ path, what: "writable root" })),
+      ...readAllowPaths.map((path) => ({ path, what: "read allow-back" })),
+    ],
+    readDenyFiles,
+  );
   return {
     writableRoots,
     readDenyPaths,
@@ -84,6 +101,65 @@ export function buildPolicy(opts: {
     network,
     scratchDir: canonicalize(scratchDir),
   };
+}
+
+/**
+ * #311: refuse a policy in which an allow subtree is a STRICT ancestor of a
+ * by-name deny file. Both allow sources count — `readRules` turns writable
+ * roots into allow/subtree rules exactly like allow-backs, and bwrap binds
+ * them read-WRITE, so the shape is worse there, not better.
+ *
+ * Why it cannot be expressed: bwrap must skip a deny mount whose target does
+ * not exist (it cannot create a mountpoint under the read-only root bind, nor
+ * under an allow-back's ro-bind — see backend.ts's `bwrapArgs`). Every file in
+ * this list is a lazily-written receipt, absent until its first write, so
+ * inside an allow-back the mask is dropped while the ro-bind stays — and the
+ * receipt becomes readable the moment the daemon writes it. Seatbelt and the
+ * JS path-jail deny by name regardless of existence, so such a policy means
+ * three different things on three backends.
+ *
+ * Why refuse rather than repair. Dropping the offending allow would silently
+ * cost the agent a tier it may need — and for a WRITABLE root that is the C1
+ * regression (#277) by another name: the agent walled out of its own worktree,
+ * which `bwrapArgs` deliberately refuses to risk by never existence-guarding a
+ * writable root. Narrowing the allow to "everything under it except the file"
+ * is not expressible without enumerating the directory at spawn time, which
+ * would make the policy depend on what happened to exist. So the honest answer
+ * is that the configuration is self-contradictory — it asks for the tier to be
+ * readable and for a file inside it not to be — and only its author can
+ * resolve it. Same fail-closed stance as `classifyAvailability` on an explicit
+ * backend: never silently deliver less isolation than was asked for.
+ *
+ * Deny DIRECTORIES are deliberately NOT covered. A deny dir nested inside an
+ * allow-back is #308's central mechanism (deny <root> > allow cache/ > deny
+ * cache/mirror), it out-specifies the allow on all three backends, and
+ * `ensureDataTree` materializes every one of them before any spawn so bwrap's
+ * existence guard never drops one. Firing here would outlaw the design.
+ *
+ * An EXACT tie (allow path === deny file) is not an ancestor and is not
+ * refused: `orderRules` breaks a same-depth tie in favour of the narrower
+ * "file" rule, so the deny wins in the resolver, in the SBPL profile and in
+ * bwrap's mount order alike.
+ */
+function assertNoAllowAboveDenyFile(
+  allows: { path: string; what: string }[],
+  denyFiles: string[],
+): void {
+  for (const file of denyFiles) {
+    for (const allow of allows) {
+      // Strict: path-boundary match, never a raw string prefix (mirrors
+      // precedence.ts's `isUnder`), and the equal case is excluded above.
+      if (!file.startsWith(allow.path + sep)) continue;
+      throw new SandboxPolicyError(
+        `sandbox policy: ${allow.what} "${allow.path}" is an ancestor of denied file ` +
+          `"${file}". bwrap skips a deny mount whose target does not exist, so the file ` +
+          `would be readable inside that allow the moment it is written — while Seatbelt ` +
+          `and the tool jail still deny it. Point the allow below the file (or move the ` +
+          `file out of it): check git.worktreeRoot, github.externalReposRoot and ` +
+          `sandbox.extra_allow_write.`,
+      );
+    }
+  }
 }
 
 /** The policy's read rules as one ordered-by-specificity-agnostic list — the

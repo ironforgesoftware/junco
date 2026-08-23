@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { builtinDenyReadPaths, buildPolicy, readRules } from "../src/agent/sandbox/policy.js";
+import {
+  builtinDenyReadPaths,
+  buildPolicy,
+  readRules,
+  SandboxPolicyError,
+  type SandboxPolicy,
+} from "../src/agent/sandbox/policy.js";
+import { bwrapArgs } from "../src/agent/sandbox/backend.js";
 import { resolveRead } from "../src/agent/sandbox/precedence.js";
 import {
   assertReadAllowed,
@@ -245,5 +252,145 @@ describe("readRules — allow-over-deny precedence (#277)", () => {
     });
     expect(p.readAllowPaths).toEqual(["/sbxroot/data/cache"]);
     expect(resolveRead("/sbxroot/data/cache/worktrees/t1", readRules(p))).toBe("allow");
+  });
+});
+
+// #311. #308 closed the DIRECTORY half of the allow-back surface: a sensitive
+// subtree denied at its own depth out-specifies a shallower allow-back on all
+// three backends. The FILE half stayed open on bwrap, which must skip a deny
+// mount whose target does not exist (it cannot create a mountpoint under a
+// read-only bind), so a lazily-written receipt inside an allow-back had no
+// surviving deny there. Pre-creating the receipts was rejected (a placeholder
+// update-check.json blocks what `junco data migrate` must MOVE; an empty
+// spend.json/metrics.json hands their readers "" to JSON.parse), so the shape
+// is refused one layer up instead — at policy construction, once, for every
+// backend.
+describe("buildPolicy — an allow above a deny FILE is refused (#311)", () => {
+  const root = "/sbxroot/home/.junco";
+  const tier = `${root}/data`; // the v2 daemon-state tier
+  const spend = `${tier}/spend.json`; // lazily written; absent until first spend
+  const base = {
+    cfg: {
+      enabled: true,
+      backend: "auto" as const,
+      network: "deny" as const,
+      extraDenyRead: [],
+      extraAllowWrite: [],
+    },
+    cwd: `${root}/cache/worktrees/tkt-1`,
+    scratchDir: "/sbxroot/nowhere/scratch1",
+    home: "/sbxroot/home",
+    dataDenyPaths: { dirs: [root, `${tier}/transcripts`], files: [spend] },
+    network: false,
+  };
+
+  it("refuses a read allow-back that is a strict ancestor of a denied file", () => {
+    expect(() => buildPolicy({ ...base, dataAllowPaths: [tier] })).toThrow(
+      /is an ancestor of denied file/,
+    );
+  });
+
+  it("names the allow, the file and the reason, as a SandboxPolicyError", () => {
+    let caught: unknown;
+    try {
+      buildPolicy({ ...base, dataAllowPaths: [tier] });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SandboxPolicyError);
+    const err = caught as Error;
+    expect(err?.name).toBe("SandboxPolicyError");
+    expect(err.message).toContain(tier);
+    expect(err.message).toContain(spend);
+    expect(err.message).toMatch(/bwrap/);
+  });
+
+  it("refuses a WRITABLE root that is a strict ancestor of a denied file", () => {
+    // readRules() maps writable roots to allow/subtree rules exactly like
+    // allow-backs, and bwrap binds them READ-WRITE and never existence-guards
+    // them — so the same shape is strictly worse there. One rule for both.
+    expect(() => buildPolicy({ ...base, cfg: { ...base.cfg, extraAllowWrite: [tier] } })).toThrow(
+      /is an ancestor of denied file/,
+    );
+  });
+
+  it("matches on path boundaries, not string prefixes", () => {
+    expect(() =>
+      buildPolicy({
+        ...base,
+        dataDenyPaths: { dirs: [root], files: [`${root}/data-archive/spend.json`] },
+        dataAllowPaths: [tier],
+      }),
+    ).not.toThrow();
+  });
+
+  it("permits an exact-path tie — precedence already resolves it to deny", () => {
+    // Not an ancestor: `orderRules` breaks a same-depth tie in favour of the
+    // narrower "file" rule, so the deny wins in the resolver, in the SBPL
+    // profile and in bwrap's mount order alike. Nothing to refuse.
+    const p = buildPolicy({ ...base, dataAllowPaths: [spend] });
+    expect(resolveRead(spend, readRules(p))).toBe("deny");
+  });
+
+  it("does NOT fire for a deny DIRECTORY inside an allow-back", () => {
+    // The directory half is already sound: ensureDataTree materializes every
+    // deny dir before any spawn, so bwrap never skips one, and a deny at its
+    // own depth out-specifies the shallower allow. Firing here would outlaw
+    // #308's whole design.
+    const p = buildPolicy({
+      cfg: base.cfg,
+      cwd: `${root}/cache/worktrees/tkt-1`,
+      scratchDir: base.scratchDir,
+      home: base.home,
+      dataDenyPaths: { dirs: [root, `${root}/cache/mirror`], files: [] },
+      dataAllowPaths: [`${root}/cache`],
+      network: false,
+    });
+    expect(resolveRead(`${root}/cache/mirror/repo.git/HEAD`, readRules(p))).toBe("deny");
+  });
+
+  it("leaves the ordinary three-deep shape resolving exactly as before", () => {
+    // deny <root> → allow <root>/cache → deny <root>/cache/mirror, with the
+    // agent's worktree writable inside the allow-back. Pinned literally so a
+    // future guard cannot quietly change what longest-prefix-wins answers.
+    const p = buildPolicy({
+      cfg: base.cfg,
+      cwd: `${root}/cache/worktrees/tkt-1`,
+      scratchDir: base.scratchDir,
+      home: base.home,
+      dataDenyPaths: { dirs: [root, `${root}/cache/mirror`], files: [`${root}/watchlist.json`] },
+      dataAllowPaths: [`${root}/cache`],
+      network: false,
+    });
+    const rules = readRules(p);
+    expect(resolveRead(`${root}/queue/inbox/t.md`, rules)).toBe("deny");
+    expect(resolveRead(`${root}/cache/clones/watched/o__r.git/HEAD`, rules)).toBe("allow");
+    expect(resolveRead(`${root}/cache/mirror/o__r.git/HEAD`, rules)).toBe("deny");
+    expect(resolveRead(`${root}/cache/worktrees/tkt-1/src/a.ts`, rules)).toBe("allow");
+    expect(resolveRead(`${root}/watchlist.json`, rules)).toBe("deny");
+  });
+
+  it("refuses exactly the shape bwrap cannot enforce", () => {
+    // Hand-built, because buildPolicy now refuses to produce it. This is the
+    // hole itself: the receipt is not written yet, so bwrap's existence guard
+    // drops its /dev/null mask while the tier stays ro-bound — and the moment
+    // the daemon writes the receipt it is readable through that bind.
+    const leaky: SandboxPolicy = {
+      writableRoots: [`${root}/cache/worktrees/tkt-1`],
+      readDenyPaths: [root],
+      readDenyFiles: [spend],
+      readAllowPaths: [tier],
+      network: false,
+      scratchDir: "/sbxroot/nowhere/scratch1",
+    };
+    const args = bwrapArgs(leaky, (p) => p !== spend); // receipt absent at spawn
+    const at = (tokens: string[]): number =>
+      args.findIndex((_, i) => tokens.every((t, k) => args[i + k] === t));
+    expect(at(["--ro-bind", tier, tier])).toBeGreaterThanOrEqual(0);
+    expect(at(["--ro-bind", "/dev/null", spend])).toBe(-1);
+    // …which is why the policy is refused before any backend sees it.
+    expect(() => buildPolicy({ ...base, dataAllowPaths: [tier] })).toThrow(
+      /is an ancestor of denied file/,
+    );
   });
 });

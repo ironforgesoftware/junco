@@ -62,11 +62,6 @@ const LAYOUTS = {
     spend: "spend.json",
     metrics: "metrics.json",
     logs: ".",
-    /** #277: no cache/ tier in the 0.9 shape — daemon state and the agent's
-     * execution roots are siblings directly at the root, so the wholesale
-     * sandbox deny of the root has to allow worktrees/ and clones/ back
-     * one by one instead. See sandboxDenyPaths. */
-    cacheRoot: null,
   },
   v2: {
     outbox: "data/outbox",
@@ -81,11 +76,6 @@ const LAYOUTS = {
     spend: "data/spend.json",
     metrics: "data/metrics.json",
     logs: "logs",
-    /** #277: the rm -rf-safe tier the wholesale sandbox deny of the root
-     * allows back — the worktrees and clone gitdirs the agent must read live
-     * under it. Only its named sensitive subtrees (mirror, github-cache) and
-     * update-check.json are re-denied inside it. See sandboxDenyPaths. */
-    cacheRoot: "cache",
   },
 } as const;
 
@@ -205,9 +195,16 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * (`agent/sandbox/precedence.ts`), never list order, so a deny, an allow-back
  * inside it, and a re-deny inside THAT all coexist:
  *
- *   v2:    deny <root>  >  allow <root>/cache  >  deny cache/{mirror,github-cache}
- *                                               + deny cache/update-check.json (a `files` entry)
- *   flat:  deny <root>  >  allow worktrees/ and clones/   (no cache/ tier exists)
+ *   v2:    deny <root>  >  allow cache/clones/ and cache/worktrees/
+ *   flat:  deny <root>  >  allow clones/ and worktrees/
+ *
+ * The allow-backs stop at the clones/worktrees depth in BOTH layouts. A deny
+ * nested inside an allow-back still works and is still supported (that is the
+ * precedence design) — for DIRECTORIES. For a deny FILE it is unenforceable on
+ * bwrap, and `buildPolicy` refuses such a policy outright (#311); the `cache/`
+ * tier held `cache/update-check.json`, so v2's allow-back moved down to
+ * `cache/clones` and mirror/github-cache/update-check.json are now covered by
+ * the wholesale root deny alone.
  *
  * 1. CONTAINMENT — the whole data root is denied wholesale, so anything
  *    daemon-owned is denied the day it JOINS the tree rather than the day
@@ -272,18 +269,20 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
  * Every entry's resolved effect is asserted in tests/dataTree.test.ts
  * ("classifies every data-tree entry as denied or deliberately readable").
  *
- * The root receipt files stay enumerated in `files`. Most are redundant under
- * the root deny, but they are what keeps a receipt denied when a layout puts one
- * INSIDE an allow-back — v2's `cache/update-check.json` is exactly that case
- * today, and it is only denied because it is listed here. Accepted residual on
- * bwrap ONLY: that one receipt is written lazily by the CLI-side update checker
- * (updateCheck.ts), and bwrap skips a deny whose target does not exist, so while
- * it is absent a cache written mid-session is readable inside the `cache/`
- * ro-bind. It is NOT pre-created the way the directories are: `data migrate`
- * treats a FILE at a destination as a conflict (`isRecursivelyEmptyDir`), so a
- * placeholder would permanently block the real cache from migrating. The content
- * is public npm-registry data (a version string and two timestamps) with no
- * operator data in it; Seatbelt and the path-jail deny it by name regardless.
+ * The root receipt files stay enumerated in `files`. They are redundant under the
+ * root deny for as long as no allow-back sits above one — and since #311 that is
+ * no longer a convention but a checked invariant: `buildPolicy` REFUSES a policy
+ * whose allow (an allow-back or a writable root) is a strict ancestor of one of
+ * these, because bwrap must skip a deny mount whose target does not exist and
+ * every one of them is written lazily. That is why v2's allow-back is
+ * `cache/clones`, not `cache/` — the latter is an ancestor of
+ * `cache/update-check.json`. Pre-creating the receipts instead was rejected: a
+ * placeholder `update-check.json` is a FILE at a destination `data migrate` must
+ * MOVE into (`isRecursivelyEmptyDir` treats that as a conflict) and would block
+ * the real cache permanently, and an empty `spend.json`/`metrics.json` hands
+ * their readers "" to `JSON.parse`. `ensureDataTree` still materializes every
+ * deny DIRECTORY eagerly, which is what keeps the directory half enforceable
+ * inside an allow-back (tests/dataTree.test.ts pins both halves).
  *
  * `env` resolves the canonical config file location (`defaultUserConfigPath`)
  * — it may hold `model.apiKey`; the config can live outside the data root
@@ -312,8 +311,6 @@ export function sandboxDenyPaths(
   env: Record<string, string | undefined> = process.env,
 ): { dirs: string[]; files: string[]; allowDirs: string[] } {
   const p = dataTreePaths(cfg);
-  // See the LAYOUTS comment above for why the fallback is "flat", not "v2".
-  const cacheRoot = LAYOUTS[cfg.dataLayout ?? "flat"].cacheRoot;
   // #275: the explicitly-named config, when one is in effect. Same helper
   // resolveConfigPath uses — see the doc comment above.
   const overriddenConfigPath = configPathOverride(env);
@@ -357,11 +354,15 @@ export function sandboxDenyPaths(
       ]),
     ],
     allowDirs: [
-      // The tier the agent actually executes in. v2 puts worktrees and clone
-      // gitdirs under cache/; flat has no cache/ tier at all, so its clones
-      // root is allowed back directly (its worktrees root is covered by the
-      // unconditional p.worktrees entry below).
-      ...(cacheRoot ? [join(p.root, cacheRoot)] : [dirname(p.clonesWatched)]),
+      // The clones tier the agent's git actually reads. Allowed back at the
+      // clones root in BOTH layouts, never at a tier above it: v2's tier above
+      // is `cache/`, which HOLDS `cache/update-check.json` — a deny FILE, and a
+      // deny file inside an allow-back is unenforceable on bwrap, which skips a
+      // deny mount whose target does not exist (#311). buildPolicy refuses such
+      // a policy outright now, so this must stay at clones depth; the rest of
+      // `cache/` (mirror, github-cache, update-check.json) needs no allow-back
+      // and is covered by the wholesale root deny on every backend.
+      dirname(p.clonesWatched),
       // Both are legacy-overridable (git.worktreeRoot / github.externalReposRoot)
       // and can be relocated inside the denied root but outside the tier above,
       // which the wholesale deny would silently wall the agent out of. Allowing
@@ -427,13 +428,16 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
     // alongside it too. It used to be created lazily on the TUI's first cache
     // write (tui/ghClient.ts) — a violation of this module's own eager-tree
     // invariant with a security edge on bwrap: `bwrapArgs` skips a deny whose
-    // target is absent, and under v2 this one sits INSIDE the `cache/`
+    // target is absent, and under v2 this one sat INSIDE the then-`cache/`
     // allow-back, so on a tree where the TUI had never cached anything the
     // deny was dropped, `cache/` was ro-bound wholesale, and an operator
     // opening the TUI mid-run put their token-fetched GitHub issue/PR data
     // inside the agent's readable view (final review 2026-08-22, I-1).
     // Seatbelt and the path-jail deny it by name unconditionally, so the
-    // window was bwrap/Linux-only.
+    // window was bwrap/Linux-only. #311 moved that allow-back down to
+    // `cache/clones`, so this path is back under the root deny's cover — the
+    // eager mkdir stays regardless: it is what keeps ANY deny dir enforceable
+    // if an operator's legacy override ever allows its tier back by name.
     p.githubCache,
     p.clonesWatched,
     p.assessHistory,
