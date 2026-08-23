@@ -3,6 +3,7 @@ import {
   builtinDenyReadPaths,
   buildPolicy,
   readRules,
+  traversalMetadataPaths,
   SandboxPolicyError,
   type SandboxPolicy,
 } from "../src/agent/sandbox/policy.js";
@@ -392,5 +393,192 @@ describe("buildPolicy — an allow above a deny FILE is refused (#311)", () => {
     expect(() => buildPolicy({ ...base, dataAllowPaths: [tier] })).toThrow(
       /is an ancestor of denied file/,
     );
+  });
+
+  // F4 (final review 2026-08-22): `allow.path + sep` is "//" at the filesystem
+  // root, which nothing starts with, so an allow at "/" slipped past the guard
+  // entirely — and on bwrap that allow is emitted as `--bind / /` AFTER every
+  // deny, re-exposing ~/.ssh and the whole data tree read-WRITE.
+  it("fires for an allow at the filesystem root — the boundary test's root hole", () => {
+    expect(() => buildPolicy({ ...base, cfg: { ...base.cfg, extraAllowWrite: ["/"] } })).toThrow(
+      SandboxPolicyError,
+    );
+    expect(() => buildPolicy({ ...base, dataAllowPaths: ["/"] })).toThrow(
+      /is an ancestor of denied file/,
+    );
+  });
+
+  it("names JUNCO_CONFIG among the settings to check", () => {
+    // Every verified trigger must be in the operator's list. `JUNCO_CONFIG`
+    // names the ACTIVE config, which is denied by name wherever it points, so
+    // an allow above that location trips the guard — the final review verified
+    // it and the message omitted it.
+    let message = "";
+    try {
+      buildPolicy({ ...base, dataAllowPaths: [tier] });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("JUNCO_CONFIG");
+    expect(message).toContain("git.worktreeRoot");
+    expect(message).toContain("github.externalReposRoot");
+    expect(message).toContain("sandbox.extra_allow_write");
+    // …and that it is a sandbox-SETUP refusal, not something the ticket did.
+    expect(message).toMatch(/sandbox-setup refusal/);
+  });
+});
+
+// F5 (final review 2026-08-22): `extra_deny_read` used to land in
+// readDenyPaths unconditionally, so an operator denying a FILE got the
+// subtree kind — which bwrap renders as `--tmpfs <file>`, a mount tmpfs
+// cannot perform at all, and which never reached the #311 guard.
+describe("buildPolicy — extra_deny_read is classified by observation (#311/F5)", () => {
+  const base = {
+    cfg: {
+      enabled: true,
+      backend: "auto" as const,
+      network: "deny" as const,
+      extraDenyRead: [] as string[],
+      extraAllowWrite: [] as string[],
+    },
+    cwd: "/sbxroot/work/tree",
+    scratchDir: "/sbxroot/nowhere/scratch1",
+    home: "/sbxroot/home/x",
+    dataDenyPaths: { dirs: ["/sbxroot/data/queue"], files: ["/sbxroot/data/watchlist.json"] },
+    network: false,
+  };
+
+  it("routes an observed regular file to readDenyFiles, not readDenyPaths", () => {
+    const p = buildPolicy({
+      ...base,
+      cfg: { ...base.cfg, extraDenyRead: ["/sbxroot/elsewhere/.netrc"] },
+      isFile: (q) => q === "/sbxroot/elsewhere/.netrc",
+    });
+    expect(p.readDenyFiles).toContain("/sbxroot/elsewhere/.netrc");
+    expect(p.readDenyPaths).not.toContain("/sbxroot/elsewhere/.netrc");
+    // The point of the reclassification: bwrap gets a mount it can actually
+    // perform. `--tmpfs <regular file>` cannot be mounted (tmpfs needs a
+    // directory), so the old shape aborted the whole spawn on Linux.
+    const args = bwrapArgs(p, () => true);
+    const at = (tokens: string[]): number =>
+      args.findIndex((_, i) => tokens.every((t, k) => args[i + k] === t));
+    expect(at(["--ro-bind", "/dev/null", "/sbxroot/elsewhere/.netrc"])).toBeGreaterThanOrEqual(0);
+    expect(at(["--tmpfs", "/sbxroot/elsewhere/.netrc"])).toBe(-1);
+  });
+
+  it("keeps a directory — and a path that does not exist yet — as a SUBTREE deny", () => {
+    // The absent case has no observation to go on, and a subtree rule is the
+    // strictly stronger of the two on the name-based backends: it denies the
+    // path AND anything under it, so it is right whichever kind it turns out
+    // to be. Guessing "file" would expose the contents of a directory created
+    // later, and buys nothing on bwrap (a mount at a missing target is skipped
+    // either way).
+    const p = buildPolicy({
+      ...base,
+      cfg: { ...base.cfg, extraDenyRead: ["/sbxroot/wt/secrets", "/sbxroot/wt/not-yet"] },
+      isFile: () => false, // a dir, and a path that does not exist
+    });
+    expect(p.readDenyPaths).toContain("/sbxroot/wt/secrets");
+    expect(p.readDenyPaths).toContain("/sbxroot/wt/not-yet");
+    expect(p.readDenyFiles).toEqual(["/sbxroot/data/watchlist.json"]);
+    const rules = readRules(p);
+    expect(resolveRead("/sbxroot/wt/secrets/inner/key.pem", rules)).toBe("deny");
+    expect(resolveRead("/sbxroot/wt/not-yet/created/later", rules)).toBe("deny");
+  });
+
+  it("does NOT put an operator's file-deny through the #311 guard", () => {
+    // Denying a `.env` that exists inside the agent's own worktree is the
+    // documented, supported use case (docs/superpowers/plans/
+    // 2026-08-22-sandbox-allow-over-deny.md) — and unlike a lazily-written
+    // data-tree receipt it is OBSERVED to exist, which is the guard's whole
+    // premise. Refusing it would outlaw a configuration all three backends
+    // already agree on, so the guard sees only the data-tree deny files.
+    const p = buildPolicy({
+      ...base,
+      cwd: "/sbxroot/wt",
+      cfg: { ...base.cfg, extraDenyRead: ["/sbxroot/wt/.env"] },
+      isFile: (q) => q === "/sbxroot/wt/.env",
+    });
+    expect(p.readDenyFiles).toContain("/sbxroot/wt/.env");
+    expect(resolveRead("/sbxroot/wt/.env", readRules(p))).toBe("deny");
+    expect(resolveRead("/sbxroot/wt/src/a.ts", readRules(p))).toBe("allow");
+    // …and the agreement is real on bwrap: the /dev/null mask is deeper than
+    // the worktree's rw bind, so `mountOrder` emits it AFTER and it survives.
+    const args = bwrapArgs(p, () => true);
+    const at = (tokens: string[]): number =>
+      args.findIndex((_, i) => tokens.every((t, k) => args[i + k] === t));
+    expect(at(["--ro-bind", "/dev/null", "/sbxroot/wt/.env"])).toBeGreaterThan(
+      at(["--bind", "/sbxroot/wt", "/sbxroot/wt"]),
+    );
+  });
+
+  it("defaults the observation to the real filesystem", () => {
+    // No `isFile` injected: the synthetic paths do not exist, so the default
+    // statSync-based probe answers "not a file" and nothing is reclassified.
+    const p = buildPolicy({ ...base, cfg: { ...base.cfg, extraDenyRead: ["/sbxroot/nope"] } });
+    expect(p.readDenyPaths).toContain("/sbxroot/nope");
+    expect(p.readDenyFiles).toEqual(["/sbxroot/data/watchlist.json"]);
+  });
+});
+
+// F1 (final review 2026-08-22), the policy half. The execution half — the one
+// that actually caught this, and the one that matters — is the real-backend
+// `git` case in tests/sandbox.integration.test.ts.
+describe("traversalMetadataPaths — the denied ancestors of every allow", () => {
+  const root = "/sbxroot/home/.junco";
+  const base = {
+    cfg: {
+      enabled: true,
+      backend: "auto" as const,
+      network: "deny" as const,
+      extraDenyRead: [] as string[],
+      extraAllowWrite: [] as string[],
+    },
+    cwd: `${root}/cache/worktrees/tkt-1`,
+    scratchDir: "/sbxroot/scratch",
+    home: "/sbxroot/home",
+    dataDenyPaths: { dirs: [root], files: [`${root}/cache/update-check.json`] },
+    dataAllowPaths: [`${root}/cache/clones`, `${root}/cache/worktrees`],
+    network: false,
+  };
+
+  it("names exactly the denied path components between the root and an allow", () => {
+    // v2's shape: the wholesale root deny plus the narrowed cache/clones
+    // allow-back leave TWO denied components in front of the clone gitdir.
+    expect(traversalMetadataPaths(buildPolicy(base))).toEqual([root, `${root}/cache`]);
+  });
+
+  it("stops at the allow itself and never names an allowed ancestor", () => {
+    // flat: the allow-backs sit directly at the root, so only <root> is denied.
+    const p = buildPolicy({
+      ...base,
+      cwd: `${root}/worktrees/tkt-1`,
+      dataAllowPaths: [`${root}/clones`, `${root}/worktrees`],
+      dataDenyPaths: { dirs: [root], files: [`${root}/watchlist.json`] },
+    });
+    expect(traversalMetadataPaths(p)).toEqual([root]);
+  });
+
+  it("is empty when nothing denied sits above an allow", () => {
+    const p = buildPolicy({
+      ...base,
+      dataDenyPaths: { dirs: [`${root}/queue`], files: [] },
+      dataAllowPaths: [],
+    });
+    expect(traversalMetadataPaths(p)).toEqual([]);
+  });
+
+  it("never names a denied FILE, only denied directories", () => {
+    // An allow nested under a deny file is a self-contradictory config; opening
+    // stat() on the receipt would still leak its size and mtime.
+    const p: SandboxPolicy = {
+      writableRoots: [`${root}/spend.json/inner`],
+      readDenyPaths: [root],
+      readDenyFiles: [`${root}/spend.json`],
+      readAllowPaths: [],
+      network: false,
+      scratchDir: "/sbxroot/scratch",
+    };
+    expect(traversalMetadataPaths(p)).toEqual([root]);
   });
 });

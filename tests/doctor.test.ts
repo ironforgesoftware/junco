@@ -193,9 +193,12 @@ describe("runDoctor", () => {
     expect(lines.join("")).not.toMatch(/catalog-eligible/i);
   });
 
-  it("reports ✓ when the enabled sandbox backend is available", async () => {
-    const lines: string[] = [];
-    const cfg = {
+  /** A sandbox-enabled config. `env` is stated by every caller below (see
+   *  `sandboxEnv`): the policy preflight resolves the config-file denies and
+   *  the builtin ~-rooted denies through it, and a real HOME would point them
+   *  at the maintainer's live ~/.junco. */
+  function sandboxConfig(over: Partial<Config> = {}): Config {
+    return {
       ...okConfig,
       sandbox: {
         enabled: true,
@@ -204,30 +207,115 @@ describe("runDoctor", () => {
         extraDenyRead: [],
         extraAllowWrite: [],
       },
+      ...over,
     } as unknown as Config;
+  }
+  const sandboxEnv = { HOME: "/sbxroot/home", XDG_CONFIG_HOME: "/sbxroot/home/.config" };
+
+  it("reports ✓ when the enabled sandbox backend is available", async () => {
+    const lines: string[] = [];
     await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+      deps({ loadConfigFn: () => sandboxConfig(), env: sandboxEnv, printFn: (s) => lines.push(s) }),
     );
     expect(lines.join("")).toMatch(/✓ sandbox/);
   });
 
+  // #311/F2: `buildPolicy` is fail-closed and refuses a configuration it cannot
+  // enforce identically on all three backends. That refusal happens per TICKET
+  // (session.ts's resolveSandbox), so without a preflight here the operator
+  // sees a green doctor and a 100% ticket failure rate with no config-level
+  // signal anywhere.
+  describe("sandbox POLICY preflight (#311)", () => {
+    it("reports ✓ for a default arrangement", async () => {
+      const lines: string[] = [];
+      const code = await runDoctor(
+        "/x/config.json",
+        deps({
+          loadConfigFn: () => sandboxConfig(),
+          env: sandboxEnv,
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      expect(code).toBe(0);
+      expect(lines.join("")).toMatch(/✓ sandbox policy/);
+    });
+
+    it("reports ✗ and FAILS when the config trips the allow-above-deny-file guard", async () => {
+      const lines: string[] = [];
+      // git.worktreeRoot pointed at the data root itself: the root holds
+      // watchlist.json/config.json, so the allow-back is a strict ancestor of a
+      // by-name deny file — the shape bwrap cannot enforce.
+      const code = await runDoctor(
+        "/x/config.json",
+        deps({
+          loadConfigFn: () => sandboxConfig({ worktreeRoot: okConfig.dataDir }),
+          env: sandboxEnv,
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      expect(code).toBe(1);
+      expect(lines.join("")).toMatch(/✗ sandbox policy/);
+    });
+
+    it("carries the same actionable message the ticket would have failed with", async () => {
+      const lines: string[] = [];
+      await runDoctor(
+        "/x/config.json",
+        deps({
+          loadConfigFn: () => sandboxConfig({ worktreeRoot: okConfig.dataDir }),
+          env: sandboxEnv,
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      const out = lines.join("");
+      expect(out).toMatch(/is an ancestor of denied file/);
+      expect(out).toMatch(/git\.worktreeRoot/);
+      expect(out).toMatch(/JUNCO_CONFIG/);
+      expect(out).toMatch(/sandbox-setup refusal/);
+    });
+
+    it("catches an extra_allow_write that swallows a receipt", async () => {
+      const lines: string[] = [];
+      const code = await runDoctor(
+        "/x/config.json",
+        deps({
+          loadConfigFn: () =>
+            sandboxConfig({
+              sandbox: {
+                enabled: true,
+                backend: "bwrap",
+                network: "deny",
+                extraDenyRead: [],
+                extraAllowWrite: [okConfig.dataDir],
+              },
+            } as unknown as Partial<Config>),
+          env: sandboxEnv,
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      expect(code).toBe(1);
+      expect(lines.join("")).toMatch(/✗ sandbox policy/);
+    });
+
+    it("is not run at all when the sandbox is disabled", async () => {
+      const lines: string[] = [];
+      await runDoctor(
+        "/x/config.json",
+        deps({ loadConfigFn: () => okConfig, env: sandboxEnv, printFn: (s) => lines.push(s) }),
+      );
+      expect(lines.join("")).not.toMatch(/sandbox policy/);
+    });
+  });
+
   it("reports ✗ and fails when the enabled sandbox backend is unavailable", async () => {
     const lines: string[] = [];
-    const cfg = {
-      ...okConfig,
-      sandbox: {
-        enabled: true,
-        backend: "bwrap",
-        network: "deny",
-        extraDenyRead: [],
-        extraAllowWrite: [],
-      },
-    } as unknown as Config;
+    const cfg = sandboxConfig();
     const code = await runDoctor(
       "/x/config.json",
       deps({
         loadConfigFn: () => cfg,
+        env: sandboxEnv,
         // bwrap probe fails (127); other checks pass.
         execFn: async (cmd: string) =>
           cmd === "bwrap"
@@ -242,8 +330,7 @@ describe("runDoctor", () => {
 
   it("reports ⚠ (not ✗) and stays green when backend=auto has no OS backend", async () => {
     const lines: string[] = [];
-    const cfg = {
-      ...okConfig,
+    const cfg = sandboxConfig({
       sandbox: {
         enabled: true,
         backend: "auto",
@@ -251,11 +338,12 @@ describe("runDoctor", () => {
         extraDenyRead: [],
         extraAllowWrite: [],
       },
-    } as unknown as Config;
+    } as unknown as Partial<Config>);
     const code = await runDoctor(
       "/x/config.json",
       deps({
         loadConfigFn: () => cfg,
+        env: sandboxEnv,
         // The auto-selected OS backend probe fails (seatbelt on macOS / bwrap on
         // Linux); everything else passes. auto → degrade, not fail-closed.
         execFn: async (cmd: string) =>

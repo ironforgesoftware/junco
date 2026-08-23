@@ -1,7 +1,8 @@
-import { join, sep } from "node:path";
+import { statSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import type { SandboxConfig } from "../../types.js";
 import { canonicalize } from "./canonicalize.js";
-import type { ReadRule } from "./precedence.js";
+import { resolveRead, type ReadRule } from "./precedence.js";
 
 /** Thrown (fail-closed) when the requested policy cannot be enforced on every
  *  backend — see `assertNoAllowAboveDenyFile`. Refusing to build is deliberate:
@@ -32,9 +33,10 @@ export interface SandboxPolicy {
    *  subtrees, extras). Subtree semantics: the path and everything under it. */
   readDenyPaths: string[];
   /** Absolute files whose reads are denied exactly (the data root's receipt
-   *  files — watchlist/spend/metrics/log/journal). Separate from
-   *  readDenyPaths because the OS backends enforce files differently
-   *  (Seatbelt literal vs subpath; bwrap /dev/null bind vs tmpfs). */
+   *  files — watchlist/spend/metrics/log/journal, plus any `extra_deny_read`
+   *  entry observed to BE a regular file). Separate from readDenyPaths because
+   *  the OS backends enforce files differently (Seatbelt literal vs subpath;
+   *  bwrap /dev/null bind vs tmpfs — and tmpfs cannot mount on a file at all). */
   readDenyFiles: string[];
   /** Absolute subtrees that override a broader deny (e.g. cache/ inside a
    *  denied ~/.junco). Precedence between this, readDenyPaths, readDenyFiles
@@ -65,9 +67,16 @@ export function buildPolicy(opts: {
   dataAllowPaths?: string[];
   network: boolean;
   botGhConfigDir?: string;
+  /** #311/F5: how `buildPolicy` tells an `extra_deny_read` entry that names a
+   *  FILE from one that names a directory. Defaults to a real `statSync`;
+   *  injected by tests so synthetic `/sbxroot/...` paths can state their kind.
+   *  See `classifyExtraDenyRead` for why observation (and not a syntactic
+   *  guess) is the rule, and what a path that does not exist yet resolves to. */
+  isFile?: (p: string) => boolean;
 }): SandboxPolicy {
   const { cfg, cwd, scratchDir, home, dataDenyPaths, dataAllowPaths, network, botGhConfigDir } =
     opts;
+  const isFile = opts.isFile ?? defaultIsFile;
   // Canonicalize so the OS-sandbox profile and the JS jail agree with the
   // kernel's symlink-resolved view (macOS /var→/private/var, /tmp→/private/tmp).
   const writableRoots = [
@@ -75,23 +84,33 @@ export function buildPolicy(opts: {
     canonicalize(scratchDir),
     ...cfg.extraAllowWrite.map(canonicalize),
   ];
+  const extraDenyRead = classifyExtraDenyRead(cfg.extraDenyRead.map(canonicalize), isFile);
   const readDenyPaths = [
     ...builtinDenyReadPaths(home).map(canonicalize),
     ...dataDenyPaths.dirs.map(canonicalize),
     ...(botGhConfigDir ? [canonicalize(botGhConfigDir)] : []),
-    ...cfg.extraDenyRead.map(canonicalize),
+    ...extraDenyRead.dirs,
   ];
-  const readDenyFiles = dataDenyPaths.files.map(canonicalize);
+  const dataDenyFiles = dataDenyPaths.files.map(canonicalize);
+  const readDenyFiles = [...dataDenyFiles, ...extraDenyRead.files];
   // Same canonicalization as the deny lists above — otherwise precedence
   // would compare a canonicalized deny against a raw allow and a
   // /tmp-vs-/private/tmp-style mismatch would silently flip the answer.
   const readAllowPaths = (dataAllowPaths ?? []).map(canonicalize);
+  // Only the DATA-TREE deny files are guarded, not the composed list — the
+  // guard's premise is that the file is absent (see assertNoAllowAboveDenyFile),
+  // which is true of every receipt here by construction and NOT true of an
+  // operator's `extra_deny_read`, which only ever reaches `readDenyFiles` by
+  // having been OBSERVED to exist (classifyExtraDenyRead). Denying an existing
+  // `.env` inside the agent's own worktree is a supported, documented use case
+  // and all three backends already agree on it: bwrap emits the file's
+  // /dev/null mask deeper than — therefore after — the worktree's rw bind.
   assertNoAllowAboveDenyFile(
     [
       ...writableRoots.map((path) => ({ path, what: "writable root" })),
       ...readAllowPaths.map((path) => ({ path, what: "read allow-back" })),
     ],
-    readDenyFiles,
+    dataDenyFiles,
   );
   return {
     writableRoots,
@@ -101,6 +120,73 @@ export function buildPolicy(opts: {
     network,
     scratchDir: canonicalize(scratchDir),
   };
+}
+
+/** Does this path name a regular file RIGHT NOW? `false` for a directory, a
+ *  path that does not exist, and anything unstattable — see
+ *  `classifyExtraDenyRead` for why every one of those is the safe answer. */
+function defaultIsFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * #311/F5: split `sandbox.extra_deny_read` into the two deny kinds the backends
+ * actually have, instead of forcing every operator entry through the subtree
+ * kind.
+ *
+ * How we tell: by OBSERVATION (`statSync`), never by spelling. A trailing `/`
+ * is not a promise and its absence is not one either — `extra_deny_read:
+ * ["~/.netrc"]` and `["~/.aws"]` are typed identically — so a syntactic guess
+ * would misclassify at least as often as it helped.
+ *
+ * Why an observed FILE must not stay a subtree deny: bwrap renders a subtree
+ * deny as `--tmpfs <path>`, and tmpfs can only be mounted on a DIRECTORY, so an
+ * existing `extra_deny_read` file makes bwrap abort the whole spawn — every
+ * ticket dies at sandbox setup on Linux. As a `readDenyFiles` entry it becomes
+ * `--ro-bind /dev/null <file>`, which is what that list exists for, and the
+ * three backends then agree exactly (Seatbelt `literal`, bwrap /dev/null mask,
+ * path-jail exact match) — including inside the agent's own worktree, the
+ * documented use case: the mask is deeper than the rw bind, so `mountOrder`
+ * emits it after and it survives. That agreement is also why an entry that
+ * lands here is deliberately NOT put through `assertNoAllowAboveDenyFile` — see
+ * the call site in `buildPolicy`.
+ *
+ * Why everything else stays a SUBTREE deny — including a path that does not
+ * exist yet, which is the case that has no observation to go on. A subtree rule
+ * is the strictly stronger of the two wherever the NAME is what's enforced
+ * (Seatbelt, path-jail): `(deny file-read* (subpath p))` denies `p` and
+ * everything under it, so it is correct whichever kind `p` turns out to be,
+ * while a `literal` would silently expose the contents of a directory created
+ * later. On bwrap a mount at a missing target is skipped either way
+ * (`bwrapArgs`' existence guard), so guessing "file" buys nothing there and
+ * loosens the other two. Residual, unchanged by this split and shared with
+ * `builtinDenyReadPaths` (an absent `~/.aws`): under bwrap's `--ro-bind / /` a
+ * deny whose target is absent at spawn emits no mask at all, so a path created
+ * mid-run by something outside the sandbox is readable on bwrap while Seatbelt
+ * and the path-jail still deny it by name.
+ */
+function classifyExtraDenyRead(
+  paths: string[],
+  isFile: (p: string) => boolean,
+): { dirs: string[]; files: string[] } {
+  const dirs: string[] = [];
+  const files: string[] = [];
+  for (const p of paths) (isFile(p) ? files : dirs).push(p);
+  return { dirs, files };
+}
+
+/** True when `child` lies STRICTLY inside the subtree rooted at `dir` — the
+ *  equal case is excluded, and the filesystem root is handled: `"/" + sep` is
+ *  `"//"`, which nothing starts with, so the naive idiom lets an allow at `/`
+ *  slip past every boundary test (#311/F4 — and on bwrap that allow is emitted
+ *  as `--bind / /` AFTER the denies, re-exposing the whole host). */
+function isStrictlyUnder(child: string, dir: string): boolean {
+  if (child === dir) return false;
+  return child.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 }
 
 /**
@@ -143,20 +229,25 @@ export function buildPolicy(opts: {
  */
 function assertNoAllowAboveDenyFile(
   allows: { path: string; what: string }[],
+  /** The DATA-TREE deny files only — the list whose "lazily written, absent
+   *  until first write" premise above actually holds. See the call site. */
   denyFiles: string[],
 ): void {
   for (const file of denyFiles) {
     for (const allow of allows) {
-      // Strict: path-boundary match, never a raw string prefix (mirrors
-      // precedence.ts's `isUnder`), and the equal case is excluded above.
-      if (!file.startsWith(allow.path + sep)) continue;
+      // Strict: path-boundary match, never a raw string prefix, and the equal
+      // case is excluded — including at the filesystem root (see isStrictlyUnder).
+      if (!isStrictlyUnder(file, allow.path)) continue;
       throw new SandboxPolicyError(
         `sandbox policy: ${allow.what} "${allow.path}" is an ancestor of denied file ` +
           `"${file}". bwrap skips a deny mount whose target does not exist, so the file ` +
           `would be readable inside that allow the moment it is written — while Seatbelt ` +
-          `and the tool jail still deny it. Point the allow below the file (or move the ` +
-          `file out of it): check git.worktreeRoot, github.externalReposRoot and ` +
-          `sandbox.extra_allow_write.`,
+          `and the tool jail still deny it. This is a sandbox-setup refusal, not a ticket ` +
+          `failure: no ticket can run until it is resolved. Point the allow below the file ` +
+          `(or move the file out of it): check git.worktreeRoot, github.externalReposRoot, ` +
+          `sandbox.extra_allow_write, and the JUNCO_CONFIG environment variable (it names a ` +
+          `config file that is denied by name wherever it points, so an allow above THAT ` +
+          `location trips this too).`,
       );
     }
   }
@@ -180,4 +271,64 @@ export function readRules(policy: SandboxPolicy): ReadRule[] {
     ...policy.readAllowPaths.map((path): ReadRule => ({ path, effect: "allow", kind: "subtree" })),
     ...policy.writableRoots.map((path): ReadRule => ({ path, effect: "allow", kind: "subtree" })),
   ];
+}
+
+/**
+ * The denied directories the agent must still be able to `stat()` in order to
+ * REACH an allowed path — every proper ancestor of an allow rule that the
+ * policy's own rules resolve to "deny". Returned so a backend can grant
+ * METADATA-only access to exactly those nodes; contents stay denied.
+ *
+ * Why this exists (#308 regression, found at final review 2026-08-22). The data
+ * root is denied wholesale and the agent's execution roots are allowed back
+ * inside it, so `<root>` — and, since the v2 allow-back narrowed to
+ * `cache/clones`, `<root>/cache` as well — are denied path COMPONENTS of paths
+ * the agent legitimately reads. `junco` hands the agent a linked worktree
+ * (`git worktree add`), whose `.git` is a FILE holding an absolute `gitdir:`
+ * path under the clones tier, and git resolves that with `strbuf_realpath`,
+ * which lstats every component. Under a Seatbelt profile that denies
+ * `file-read*` on `<root>`, that lstat is EPERM and git aborts outright:
+ *
+ *     fatal: Invalid path '<root>': Operation not permitted
+ *
+ * — i.e. `git rev-parse` / `status` / `diff` all failed for the agent while
+ * `cat` kept working, which is why only a test that runs `git` catches it
+ * (tests/sandbox.integration.test.ts).
+ *
+ * Metadata-only is the whole point: Seatbelt separates `file-read-metadata`
+ * from `file-read-data`, so `(allow file-read-metadata (literal <dir>))` grants
+ * `stat()` on that one directory node and nothing else — not its listing, not
+ * any file under it, and not the same node's contents. Nothing that was denied
+ * becomes readable.
+ *
+ * The other two backends need nothing equivalent, for structural reasons:
+ *  - **bwrap** renders a denied directory as `--tmpfs <dir>`, which REPLACES it
+ *    with an empty directory rather than blocking access to it. The node still
+ *    exists and stats fine, and the allow-back is then `--ro-bind`ed at a
+ *    destination inside it, so traversal never fails. (This is also why the
+ *    outage was macOS-only.)
+ *  - **the JS path-jail** answers one whole path at a time through
+ *    `resolveRead`; it has no traversal step, and the tools it guards never
+ *    stat an ancestor. The agent's `git` runs through bash, i.e. the OS backend.
+ *
+ * A deny FILE that happens to sit on the path is skipped rather than opened up:
+ * an allow nested under a deny file is a self-contradictory configuration, and
+ * `stat()` on a receipt would still leak its size and mtime.
+ */
+export function traversalMetadataPaths(policy: SandboxPolicy): string[] {
+  const rules = readRules(policy);
+  const denyFiles = new Set(policy.readDenyFiles);
+  const out = new Set<string>();
+  for (const rule of rules) {
+    if (rule.effect !== "allow") continue;
+    let p = dirname(rule.path);
+    for (;;) {
+      if (!denyFiles.has(p) && resolveRead(p, rules) === "deny") out.add(p);
+      const parent = dirname(p);
+      if (parent === p) break; // reached the filesystem root
+      p = parent;
+    }
+  }
+  // Sorted for a deterministic profile: ancestors sort before their children.
+  return [...out].sort();
 }
