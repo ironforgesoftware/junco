@@ -8,9 +8,15 @@ import {
   rmSync,
   unlinkSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, dirname, basename, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
-import { acquireSingletonLock, getProcessStartTime, readLockHolder } from "../src/lock.js";
+import {
+  acquireSingletonLock,
+  daemonLockPaths,
+  getProcessStartTime,
+  readLockHolder,
+  workerLockPath,
+} from "../src/lock.js";
 import { PIDFILE_DISCRIMINATOR_PREFIX } from "../src/pidfileLock.js";
 
 /** A recognized-but-mismatched discriminator: format-tagged (so the reader
@@ -382,6 +388,96 @@ describe("readLockHolder", () => {
     writeFileSync(p, `${process.pid}\n${getProcessStartTime(process.pid)}\n`, "utf8");
     expect(readLockHolder(p)).toBe(process.pid); // same pid, same identity
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lock-path derivation — the ONE spelling (#310 Task 1)
+//
+// Nine expressions across six modules used to construct the daemon pidfile
+// path by hand, and one of them (doctor.ts) omitted the `resolve()` every
+// other site had. These pin the single helper both spellings collapsed into,
+// and — the assertion that matters — that the two shared-tree claims can
+// never collide with `worker.lock` or with each other on a DEFAULT install,
+// where `dataDir === dirname(configPath)`.
+// ---------------------------------------------------------------------------
+
+describe("workerLockPath", () => {
+  it("is worker.lock beside the RESOLVED config (absolute input)", () => {
+    expect(workerLockPath("/sbxroot/.junco/config.json")).toBe("/sbxroot/.junco/worker.lock");
+  });
+
+  it("normalizes `..` segments in an absolute path", () => {
+    expect(workerLockPath("/sbxroot/.junco/sub/../config.json")).toBe(
+      "/sbxroot/.junco/worker.lock",
+    );
+  });
+
+  it("resolves a relative config path against the cwd (this is what doctor.ts missed)", () => {
+    // THE input the two spellings disagreed on. `join(dirname(p), "worker.lock")`
+    // normalizes `..` by itself, so it agreed for every ABSOLUTE path — it
+    // diverged only for a relative one, where it returned a relative path that
+    // re-resolves against whatever cwd each reader happens to have (a launchd
+    // daemon's is `/`). That is how doctor could report "not running" at a live
+    // daemon. Every call-site pin below uses a relative path for this reason.
+    const got = workerLockPath(join("rel", "config.json"));
+    expect(isAbsolute(got)).toBe(true);
+    expect(got).toBe(join(process.cwd(), "rel", "worker.lock"));
+  });
+});
+
+describe("daemonLockPaths", () => {
+  /** A default install: the data root IS the config's directory. */
+  const DEFAULT_CFG_PATH = "/sbxroot/.junco/config.json";
+  const defaultCfg = { dataDir: "/sbxroot/.junco", queueRoot: "/sbxroot/.junco/queue" };
+
+  it("worker is byte-identical to workerLockPath", () => {
+    expect(daemonLockPaths(DEFAULT_CFG_PATH, defaultCfg).worker).toBe(
+      workerLockPath(DEFAULT_CFG_PATH),
+    );
+  });
+
+  it("claims the shared roots: dataTree under dataDir, queue under queueRoot", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, {
+      dataDir: "/sbxroot/data",
+      queueRoot: "/sbxvault/junco",
+    });
+    expect(dirname(p.dataTree)).toBe("/sbxroot/data");
+    expect(dirname(p.queue)).toBe("/sbxvault/junco");
+  });
+
+  it("NEITHER tree claim is named worker.lock", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, defaultCfg);
+    expect(basename(p.dataTree)).not.toBe("worker.lock");
+    expect(basename(p.queue)).not.toBe("worker.lock");
+  });
+
+  it("the three paths are pairwise distinct on a DEFAULT install", () => {
+    // The regression this exists for: on a default install dataDir ===
+    // dirname(configPath), so a claim that reused the name `worker.lock`
+    // would have `junco start` contend with the lock it just took and refuse
+    // to start. Distinct BASENAMES are what makes that impossible — the
+    // claims stay distinct even for the pathological queueRoot === dataDir.
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, defaultCfg);
+    expect(dirname(p.dataTree)).toBe(dirname(p.worker)); // same directory...
+    expect(new Set([p.worker, p.dataTree, p.queue]).size).toBe(3); // ...three files
+  });
+
+  it("stays pairwise distinct even when queueRoot === dataDir === the config dir", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, {
+      dataDir: "/sbxroot/.junco",
+      queueRoot: "/sbxroot/.junco",
+    });
+    expect(new Set([p.worker, p.dataTree, p.queue]).size).toBe(3);
+  });
+
+  it("normalizes the roots the same way the config path is normalized", () => {
+    const p = daemonLockPaths(DEFAULT_CFG_PATH, {
+      dataDir: "/sbxroot/data/sub/..",
+      queueRoot: "/sbxroot/data/sub/../queue",
+    });
+    expect(dirname(p.dataTree)).toBe("/sbxroot/data");
+    expect(dirname(p.queue)).toBe("/sbxroot/data/queue");
   });
 });
 

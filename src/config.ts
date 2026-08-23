@@ -211,16 +211,17 @@ export function configPathOverride(
  * before the canonical path, and normalized to an absolute path by
  * `configPathOverride`, which rejects a relative value outright rather than
  * resolving it (see there for why). `junco start` derives the daemon-singleton
- * worker.lock as
- * `dirname(resolveConfigPath())/worker.lock`; several other modules
- * (ensureDaemon, cli, restartCmd, dataMigrateCmd, updateCmd, and doctor via
- * the equivalent `dirname(configPath)`, no `resolve()`) re-derive the same
- * path independently rather than importing a shared helper, so an override
- * relocates the lock right along with the config everywhere. Two named
- * configs are therefore two daemon instances — but only genuinely independent
- * ones when they also resolve to DIFFERENT `dataDir`s: two configs over one
- * data root give two daemons both holding a lock over one queue, which
- * corrupts it (docs/configuration.md states the precondition).
+ * worker.lock as `dirname(resolve(configPath))/worker.lock`, and every other
+ * reader of it (ensureDaemon, cli, restartCmd, dataMigrateCmd, updateCmd,
+ * doctor) gets it from the ONE helper that spells it — `workerLockPath`
+ * (lock.ts, #310); they used to re-derive it by hand and had already drifted
+ * (doctor's copy omitted the `resolve()`, so it went cwd-relative whenever
+ * the config path was). So an override relocates the lock
+ * right along with the config everywhere. Two named configs are therefore two
+ * daemon instances — but only genuinely independent ones when they also
+ * resolve to DIFFERENT `dataDir`s: two configs over one data root give two
+ * daemons both holding a lock over one queue, which corrupts it
+ * (docs/configuration.md states the precondition).
  */
 export function resolveConfigPath(deps: ResolveConfigDeps = {}): string {
   const existsFn = deps.existsFn ?? existsSync;

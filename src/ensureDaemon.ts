@@ -8,8 +8,7 @@
  * regardless). See docs/superpowers/specs/2026-07-16-bare-junco-ensure-daemon-design.md.
  */
 
-import { join, dirname, resolve } from "node:path";
-import { readLockHolder } from "./lock.js";
+import { readLockHolder, workerLockPath } from "./lock.js";
 import { discoverService, kickstartService, type ServiceRef } from "./restartCmd.js";
 
 export type EnsureResult =
@@ -47,7 +46,7 @@ export async function ensureDaemon(
   const waitMs = deps.waitMs ?? 5000;
   const pollMs = deps.pollMs ?? 250;
 
-  const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+  const lockPath = workerLockPath(configPath);
 
   const existing = lockHolderFn(lockPath);
   if (existing !== null) {

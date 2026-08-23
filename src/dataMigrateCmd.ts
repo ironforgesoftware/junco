@@ -105,7 +105,7 @@ import {
   closeSync,
   unlinkSync,
 } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname } from "node:path";
 import type { Config, Paths } from "./types.js";
 import {
   HEALTH_TIMEOUT_MS,
@@ -139,6 +139,7 @@ import {
   type RewriteReport,
 } from "./migratePathRewrite.js";
 import { acquirePidfileLock, readPidfileHolder, type PidfileLock } from "./pidfileLock.js";
+import { workerLockPath } from "./lock.js";
 
 const QUEUE_DIR_KEYS: (keyof Paths)[] = ["inbox", "processing", "done", "failed"];
 
@@ -830,7 +831,7 @@ export async function runDataMigrate(
     // A health-disabled daemon never answers the probe — check its
     // single-instance pidfile instead. Same path derivation as `junco start`
     // (cli.ts): the lock lives next to config.json, not under dataDir.
-    const workerLock = join(dirname(resolve(configPath)), "worker.lock");
+    const workerLock = workerLockPath(configPath);
     const holder = pidfileHolderFn(workerLock);
     if (holder !== null) {
       print(

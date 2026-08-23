@@ -29,7 +29,7 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 import type { SingletonLock } from "./lock.js";
-import { acquireSingletonLock, readLockHolder } from "./lock.js";
+import { acquireSingletonLock, readLockHolder, workerLockPath } from "./lock.js";
 import {
   loadConfig,
   queuePaths,
@@ -434,7 +434,7 @@ async function ftueRefusal(configPath: string, deps: FtueGateDeps): Promise<stri
   // single-instance pidfile beside the config (same derivation as `start`), no
   // network and no 1500 ms timeout. `readLockHolder` is liveness-checked — a
   // stale pidfile from a dead daemon reads as null, not as a refusal.
-  const lockPath = join(dirname(resolved), "worker.lock");
+  const lockPath = workerLockPath(resolved);
   const holder = deps.readLockHolderFn(lockPath);
   let daemon: string | null = holder !== null ? `pid ${holder} holds ${lockPath}` : null;
   if (daemon === null) {
@@ -699,8 +699,8 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     setLogLevel(cfgAuthed.logLevel);
 
-    // Derive lock path: mirror Python args.config.resolve().parent / "worker.lock"
-    const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+    // The daemon-singleton pidfile — one spelling for every reader (lock.ts).
+    const lockPath = workerLockPath(configPath);
 
     const lock = acquireLockFn(lockPath);
     if (lock === null) {
@@ -814,7 +814,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     const cfg = loadConfigFn(configPath);
     return runStatusCommand(cfg, {
       printFn,
-      lockPath: join(dirname(resolve(configPath)), "worker.lock"),
+      lockPath: workerLockPath(configPath),
     });
   }
 
@@ -1149,7 +1149,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // ------------------------------------------------------------
   if (subcommand === "config") {
     const { runConfigCommand } = await import("./configCmd.js");
-    const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+    const lockPath = workerLockPath(configPath);
     return runConfigCommand(positionals.slice(1), configPath, {
       printFn,
       daemonRunningFn: () => readLockHolder(lockPath) !== null,

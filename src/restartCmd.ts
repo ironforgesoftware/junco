@@ -18,8 +18,8 @@
 import { execFile } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname, resolve } from "node:path";
-import { readLockHolder } from "./lock.js";
+import { join, resolve } from "node:path";
+import { readLockHolder, workerLockPath } from "./lock.js";
 
 export interface ServiceRef {
   platform: "launchd" | "systemd";
@@ -170,7 +170,7 @@ export async function runRestartCommand(
   const lockHolderFn = deps.lockHolderFn ?? readLockHolder;
   const sleepFn = deps.sleepFn ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const timeoutMs = deps.timeoutMs ?? 15_000;
-  const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+  const lockPath = workerLockPath(configPath);
 
   // Thread the DEFAULTED print fn down — discoverService's multi-match warn
   // must reach stdout even when the caller (the CLI) injects no printFn.

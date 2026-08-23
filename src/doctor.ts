@@ -27,7 +27,7 @@ import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
 import { splitModelId } from "./agent/modelSetup.js";
 import { getResolvedModelInfo, type ResolvedModelInfo } from "./agent/session.js";
-import { readLockHolder } from "./lock.js";
+import { readLockHolder, workerLockPath } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { selectBackend, classifyAvailability } from "./agent/sandbox/backend.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
@@ -805,7 +805,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     }
 
     // 8. daemon (informational)
-    const holder = lockHolderFn(join(dirname(configPath), "worker.lock"));
+    const holder = lockHolderFn(workerLockPath(configPath));
     report("ok", "daemon", holder ? `running (pid ${holder})` : "not running");
 
     // 9. npm update check (spec 2026-07-16) — best-effort, never a failure.

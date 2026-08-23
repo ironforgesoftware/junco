@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { runDoctor, type DoctorDeps } from "../src/doctor.js";
+import { workerLockPath } from "../src/lock.js";
 import { writeWatchlist } from "../src/watchlist.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
@@ -335,6 +336,28 @@ describe("runDoctor", () => {
       deps({ lockHolderFn: () => 4242, printFn: (s) => lines.push(s) }),
     );
     expect(lines.join("")).toMatch(/✓ daemon — running \(pid 4242\)/);
+  });
+
+  it("reads the SAME lock path `start` writes, for a relative config path (#310)", async () => {
+    // This site alone spelled the derivation `join(dirname(configPath), …)` —
+    // no `resolve()`. `join` normalizes `..` on its own, so the two spellings
+    // agreed for every absolute path and diverged only here, for a RELATIVE
+    // one: doctor probed a cwd-relative path no daemon ever writes and
+    // reported "not running" at a live daemon. THE one intended behaviour
+    // change of the helper collapse.
+    const REL = join("sbx-rel", "config.json");
+    const seen: string[] = [];
+    await runDoctor(
+      REL,
+      deps({
+        lockHolderFn: (p: string) => {
+          seen.push(p);
+          return null;
+        },
+      }),
+    );
+    expect(seen).toEqual([workerLockPath(REL)]);
+    expect(isAbsolute(seen[0])).toBe(true);
   });
 
   it("warns on a non-loopback health_host, does not fail doctor (#44)", async () => {

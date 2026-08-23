@@ -18,11 +18,12 @@ import {
   lstatSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { Config } from "../src/types.js";
 import { runDataMigrate } from "../src/dataMigrateCmd.js";
 import { loadConfig } from "../src/config.js";
 import { acquirePidfileLock } from "../src/pidfileLock.js";
+import { workerLockPath } from "../src/lock.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 
 function freshRoot(prefix = "junco-dmc-"): string {
@@ -331,6 +332,41 @@ describe("runDataMigrate — daemon pidfile refusal (health-disabled daemons)", 
     } finally {
       daemonLock?.release();
     }
+  });
+
+  it("probes the ONE derived lock path, absolute even for a relative config (#310)", async () => {
+    // The guard must read the file a running daemon actually holds — a second
+    // spelling here lets a migration run under a live daemon. A RELATIVE
+    // config path is what separates the two spellings (`join(dirname(p), …)`
+    // normalizes `..` on its own, so it only diverges here).
+    const root = trackRoot(freshRoot());
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    const absConfigPath = join(root, "config.json");
+    writeFileSync(absConfigPath, "{}", "utf8");
+    const relConfigPath = relative(process.cwd(), absConfigPath);
+    expect(isAbsolute(relConfigPath)).toBe(false); // sanity: the input IS relative
+    const cfg = makeConfig({ dataDir, queueRoot: join(dataDir, "queue") });
+
+    const seen: string[] = [];
+    const out: string[] = [];
+    const code = await runDataMigrate(
+      cfg,
+      relConfigPath,
+      { dryRun: false, force: false },
+      {
+        fetchFn: fetchDown(),
+        pidfileHolderFn: (p) => {
+          seen.push(p);
+          return 4242;
+        },
+        printFn: (s) => out.push(s),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(seen).toEqual([workerLockPath(relConfigPath)]);
+    expect(seen[0]).toBe(join(root, "worker.lock"));
   });
 
   it("--force skips the pidfile check too", async () => {
