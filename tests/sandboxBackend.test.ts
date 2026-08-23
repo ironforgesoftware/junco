@@ -133,6 +133,41 @@ describe("seatbeltProfile", () => {
       expect(denyMirror).toBeGreaterThan(broadAllow);
     });
   });
+
+  // F1 (final review 2026-08-22). The wholesale root deny EPERMs lstat() on
+  // <root>, and git realpaths every component of the linked worktree's gitdir
+  // on the way in — so `git rev-parse`/`status`/`diff` aborted with
+  // "fatal: Invalid path '<root>': Operation not permitted" while `cat` kept
+  // working. The repair is metadata-only access to the denied components.
+  describe("traversal metadata for denied ancestors (F1)", () => {
+    it("allows file-read-metadata on the denied ancestors of an allow-back", () => {
+      const p = seatbeltProfile(armedPolicy);
+      expect(p).toContain('(allow file-read-metadata (literal "/sbxroot/.junco"))');
+      // …and nothing wider: the node's CONTENTS stay denied, so no listing and
+      // no file under it becomes readable.
+      expect(p).toContain('(deny file-read* (subpath "/sbxroot/.junco"))');
+      expect(p).not.toContain('(allow file-read* (subpath "/sbxroot/.junco"))');
+    });
+
+    it("emits them AFTER every deny — the profile is last-match-wins", () => {
+      // `(deny file-read* (subpath <root>))` covers the metadata operation too,
+      // so a metadata allow emitted before it would be overridden and the fix
+      // would silently do nothing.
+      const p = seatbeltProfile(armedPolicy);
+      const denyRoot = p.indexOf('(deny file-read* (subpath "/sbxroot/.junco"))');
+      const denyMirror = p.indexOf('(deny file-read* (subpath "/sbxroot/.junco/cache/mirror"))');
+      const denyReceipt = p.indexOf('(deny file-read* (literal "/sbxroot/.junco/watchlist.json"))');
+      const meta = p.indexOf('(allow file-read-metadata (literal "/sbxroot/.junco"))');
+      expect(denyRoot).toBeGreaterThanOrEqual(0);
+      expect(meta).toBeGreaterThan(denyRoot);
+      expect(meta).toBeGreaterThan(denyMirror);
+      expect(meta).toBeGreaterThan(denyReceipt);
+    });
+
+    it("emits nothing when no denied directory sits above an allow", () => {
+      expect(seatbeltProfile(dataPolicy)).not.toContain("file-read-metadata");
+    });
+  });
 });
 
 describe("seatbeltBackend.spawnArgv", () => {

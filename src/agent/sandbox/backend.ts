@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { sep } from "node:path";
-import { type SandboxPolicy, readRules } from "./policy.js";
+import { type SandboxPolicy, readRules, traversalMetadataPaths } from "./policy.js";
 import { orderRules, type ReadRule } from "./precedence.js";
 
 export type ExecProbe = (cmd: string, args: string[]) => Promise<{ code: number }>;
@@ -52,7 +52,16 @@ function readRuleLine(rule: ReadRule): string {
  *  computes for the JS path-jail. Order among non-overlapping (sibling)
  *  rules is otherwise irrelevant to meaning: SBPL rules whose subpaths never
  *  contain the same file don't compete for last-match, regardless of the
- *  order they're emitted in. */
+ *  order they're emitted in.
+ *
+ *  One block follows the read rules: a `file-read-metadata` literal for every
+ *  denied directory that is a path COMPONENT of an allowed path
+ *  (`traversalMetadataPaths` — read its comment; without it the agent's git
+ *  cannot open its own gitdir). It must come after the denies precisely because
+ *  the profile is last-match-wins: `(deny file-read* (subpath <root>))` covers
+ *  the metadata operation too, so only a later, narrower rule can carve it back
+ *  out. `file-read-data` on those nodes stays denied, so nothing is listed or
+ *  read — only stat'd. */
 export function seatbeltProfile(policy: SandboxPolicy): string {
   const lines: string[] = [
     "(version 1)",
@@ -65,6 +74,8 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
     "(allow file-read*)",
   ];
   for (const rule of orderRules(readRules(policy))) lines.push(readRuleLine(rule));
+  for (const path of traversalMetadataPaths(policy))
+    lines.push(`(allow file-read-metadata (literal ${q(path)}))`);
   const writes = policy.writableRoots.map((r) => `(subpath ${q(r)})`).join(" ");
   lines.push(`(allow file-write* ${writes} (literal "/dev/null") (literal "/dev/dtracehelper"))`);
   lines.push(policy.network ? "(allow network*)" : "(deny network*)");

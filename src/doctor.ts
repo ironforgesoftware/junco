@@ -5,6 +5,7 @@
  */
 
 import { existsSync, readdirSync, lstatSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import {
@@ -14,6 +15,7 @@ import {
   isLoopbackHost,
   configDeprecations,
   dataRootHasTree,
+  homeOf,
 } from "./config.js";
 import {
   pendingMigrations,
@@ -21,7 +23,7 @@ import {
   fixedLegacyRoot,
   pendingConfigRelocation,
 } from "./dataMigrate.js";
-import { dataTreePaths } from "./dataTree.js";
+import { dataTreePaths, sandboxDenyPaths } from "./dataTree.js";
 import { SKILL_DIR_NAME } from "./skillLinks.js";
 import { endpointReachable, probePolicy } from "./health.js";
 import { fetchModels } from "./wizard/models.js";
@@ -30,6 +32,7 @@ import { getResolvedModelInfo, type ResolvedModelInfo } from "./agent/session.js
 import { daemonLockPaths, readLockHolder } from "./lock.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { selectBackend, classifyAvailability } from "./agent/sandbox/backend.js";
+import { buildPolicy, SandboxPolicyError } from "./agent/sandbox/policy.js";
 import { loadDispatchTemplate } from "./planPrompt.js";
 import { resolveWatchedRepos, watchlistPath } from "./watchlist.js";
 import { outboxDepth, deadCount, outboxPaths } from "./githubOutbox.js";
@@ -467,6 +470,45 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
             "sandbox",
             `${backend.name} unavailable — tickets fail closed. ${installHint}, or set sandbox.enabled=false`,
           );
+        }
+      }
+
+      // 4b. sandbox POLICY (#311/F2). Availability is only half the preflight:
+      // `buildPolicy` is fail-closed and refuses a configuration it cannot
+      // enforce identically on all three backends (an allow above a by-name
+      // deny file). That refusal happens at session-creation time
+      // (agent/session.ts's resolveSandbox), i.e. once per TICKET — so without
+      // this check a tripping config reports healthy here and then fails 100%
+      // of tickets with no config-level signal anywhere. Build the real policy
+      // from the real paths and surface the refusal as a doctor failure, with
+      // the same actionable message the ticket would have shown.
+      //
+      // `cwd`/`scratchDir` are the two per-session values doctor cannot know;
+      // stand-ins are used. That is sound for what this checks: a ticket's cwd
+      // is always a fresh leaf directory under `git.worktreeRoot` (or a clone
+      // under `github.externalReposRoot`), and a leaf can never be an ancestor
+      // of a deny file. The tier ITSELF is what can trip the guard, and it is
+      // checked for real — `sandboxDenyPaths().allowDirs` carries both tiers
+      // unconditionally, so a mis-set tier throws here exactly as it would at
+      // spawn.
+      try {
+        const dataPaths = sandboxDenyPaths(cfg, env);
+        buildPolicy({
+          cfg: cfg.sandbox,
+          cwd: join(cfg.worktreeRoot, "junco-doctor-preflight"),
+          scratchDir: join(tmpdir(), "junco-doctor-preflight"),
+          home: homeOf(env),
+          dataDenyPaths: dataPaths,
+          dataAllowPaths: dataPaths.allowDirs,
+          network: cfg.sandbox.network === "allow",
+          botGhConfigDir: cfg.botAccount.configDir,
+        });
+        report("ok", "sandbox policy", "enforceable on every backend");
+      } catch (e) {
+        if (e instanceof SandboxPolicyError) {
+          report("fail", "sandbox policy", e.message);
+        } else {
+          report("fail", "sandbox policy", e instanceof Error ? e.message : String(e));
         }
       }
     }
