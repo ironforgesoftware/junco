@@ -18,8 +18,8 @@
 import { execFile } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname, resolve } from "node:path";
-import { readLockHolder } from "./lock.js";
+import { join, resolve } from "node:path";
+import { readLockHolder, workerLockPath } from "./lock.js";
 
 export interface ServiceRef {
   platform: "launchd" | "systemd";
@@ -170,7 +170,7 @@ export async function runRestartCommand(
   const lockHolderFn = deps.lockHolderFn ?? readLockHolder;
   const sleepFn = deps.sleepFn ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const timeoutMs = deps.timeoutMs ?? 15_000;
-  const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+  const lockPath = workerLockPath(configPath);
 
   // Thread the DEFAULTED print fn down — discoverService's multi-match warn
   // must reach stdout even when the caller (the CLI) injects no printFn.
@@ -203,9 +203,17 @@ export async function runRestartCommand(
     if (Date.now() - started >= timeoutMs) break;
     await sleepFn(500);
   }
+  // The second cause is #310 (final review F6): a unit that starts, finds a
+  // shared-root claim held by a daemon that resolved a DIFFERENT config, and
+  // refuses — from here that is indistinguishable from a slow drain, because
+  // `worker.lock` (the only pidfile this command has: it takes a configPath,
+  // not a Config, so it cannot derive the claims) never changes either. Point
+  // at `doctor`, which does read the claims and names the holder.
   print(
     `kick issued to ${svc.id}, but the lock holder did not change within ${Math.round(timeoutMs / 1000)}s — ` +
-      "the old daemon may still be draining a ticket. Check `junco status`.\n",
+      "the old daemon may still be draining a ticket. Check `junco status`,\n" +
+      "or `junco doctor` if it never comes up — it reports a shared data-root/queue claim\n" +
+      "held by another daemon, which makes this one refuse to start (#310).\n",
   );
   return 1;
 }

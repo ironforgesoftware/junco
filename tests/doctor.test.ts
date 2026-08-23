@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { runDoctor, type DoctorDeps } from "../src/doctor.js";
+import { workerLockPath } from "../src/lock.js";
 import { writeWatchlist } from "../src/watchlist.js";
 import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
@@ -335,6 +336,101 @@ describe("runDoctor", () => {
       deps({ lockHolderFn: () => 4242, printFn: (s) => lines.push(s) }),
     );
     expect(lines.join("")).toMatch(/✓ daemon — running \(pid 4242\)/);
+  });
+
+  it("reads the SAME lock path `start` writes, for a relative config path (#310)", async () => {
+    // This site alone spelled the derivation `join(dirname(configPath), …)` —
+    // no `resolve()`. `join` normalizes `..` on its own, so the two spellings
+    // agreed for every absolute path and diverged only here, for a RELATIVE
+    // one: doctor probed a cwd-relative path no daemon ever writes and
+    // reported "not running" at a live daemon. THE one intended behaviour
+    // change of the helper collapse.
+    const REL = join("sbx-rel", "config.json");
+    const seen: string[] = [];
+    await runDoctor(
+      REL,
+      deps({
+        lockHolderFn: (p: string) => {
+          seen.push(p);
+          return null;
+        },
+      }),
+    );
+    // Since final review F6 doctor reads three pidfiles (worker.lock plus the
+    // two shared-root claims); the FIRST is still worker.lock, and it is the
+    // one this test is about.
+    expect(seen[0]).toBe(workerLockPath(REL));
+    expect(isAbsolute(seen[0])).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // The shared-root claims (#310, final review F6)
+  //
+  // Before this, an operator whose `junco start` was REFUSED on a shared claim
+  // got `ok  daemon  not running` — a clean bill of health with no hint of the
+  // conflict, while `ensureDaemon` said "did not come up in 5s" and `restart`
+  // said "holder did not change in 15s". The refusal text itself is written to
+  // stderr before the log sink exists, so it never reaches worker.log.
+  // -------------------------------------------------------------------------
+
+  it("warns when a shared-root claim is held by a pid that is NOT this config's daemon", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        // worker.lock empty (our daemon is not running — it was refused), the
+        // data-root claim held by the peer that resolved a different config.
+        lockHolderFn: (p: string) => (p.endsWith("daemon-tree.lock") ? 9911 : null),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(out).toMatch(/daemon — not running/);
+    expect(out).toMatch(/daemon claim/);
+    expect(out).toMatch(/pid 9911/);
+    expect(out).toContain("/sbxroot/junco-doc-state");
+    // Informational-with-teeth: a warning, never a doctor failure.
+    expect(code).toBe(0);
+  });
+
+  it("warns on a foreign QUEUE-root claim too (the vault shape)", async () => {
+    const lines: string[] = [];
+    await runDoctor(
+      "/x/config.json",
+      deps({
+        lockHolderFn: (p: string) => (p.endsWith("daemon-queue.lock") ? 8822 : null),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(out).toMatch(/daemon claim/);
+    expect(out).toMatch(/pid 8822/);
+    expect(out).toContain("/sbxroot/junco-doc-vault");
+  });
+
+  it("says nothing extra when OUR OWN daemon holds all three (the normal case)", async () => {
+    const lines: string[] = [];
+    await runDoctor(
+      "/x/config.json",
+      deps({ lockHolderFn: () => 4242, printFn: (s) => lines.push(s) }),
+    );
+    const out = lines.join("");
+    expect(out).toMatch(/daemon — running \(pid 4242\)/);
+    expect(out).not.toMatch(/daemon claim/);
+  });
+
+  it("warns when a claim is held by a DIFFERENT pid than the running daemon", async () => {
+    const lines: string[] = [];
+    await runDoctor(
+      "/x/config.json",
+      deps({
+        lockHolderFn: (p: string) => (p.endsWith("worker.lock") ? 4242 : 5353),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(out).toMatch(/daemon — running \(pid 4242\)/);
+    expect(out).toMatch(/pid 5353/);
   });
 
   it("warns on a non-loopback health_host, does not fail doctor (#44)", async () => {

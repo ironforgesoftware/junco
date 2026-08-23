@@ -8,8 +8,7 @@
  * regardless). See docs/superpowers/specs/2026-07-16-bare-junco-ensure-daemon-design.md.
  */
 
-import { join, dirname, resolve } from "node:path";
-import { readLockHolder } from "./lock.js";
+import { readLockHolder, workerLockPath } from "./lock.js";
 import { discoverService, kickstartService, type ServiceRef } from "./restartCmd.js";
 
 export type EnsureResult =
@@ -47,7 +46,7 @@ export async function ensureDaemon(
   const waitMs = deps.waitMs ?? 5000;
   const pollMs = deps.pollMs ?? 250;
 
-  const lockPath = join(dirname(resolve(configPath)), "worker.lock");
+  const lockPath = workerLockPath(configPath);
 
   const existing = lockHolderFn(lockPath);
   if (existing !== null) {
@@ -88,6 +87,16 @@ export async function ensureDaemon(
     }
     await sleepFn(pollMs);
   }
-  print(`daemon did not come up within ${Math.round(waitMs / 1000)}s — opening dashboard anyway\n`);
+  // One cause is #310 (final review F6): the unit started, found a shared
+  // data-root/queue claim held by a daemon that resolved a DIFFERENT config,
+  // and refused — `worker.lock` never appears and this looks like a slow boot
+  // forever. This function takes a configPath, not a Config, so it cannot
+  // derive the claim paths itself (that is the deliberate `workerLockPath` vs
+  // `daemonLockPaths` split — it must stay config-free and never throw);
+  // `junco doctor` does read them and names the holding pid.
+  print(
+    `daemon did not come up within ${Math.round(waitMs / 1000)}s — opening dashboard anyway\n` +
+      `(run \`junco doctor\` if it stays down — another daemon may claim this data root)\n`,
+  );
   return { state: "start-failed", ref: svc };
 }
