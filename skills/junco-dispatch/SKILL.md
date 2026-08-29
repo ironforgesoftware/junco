@@ -1,6 +1,6 @@
 ---
 name: junco-dispatch
-description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it — as a parked GitHub issue when the target repo is bridge-watched and the bot account is on, otherwise to the configured inbox — for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses), or "junco-local: <brief>" (forces the local inbox even when the repo is bridge-watched). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
+description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it — as a parked GitHub issue when GitHub integration and the bot account are on and the target repo is bridge-watched (plain fresh tickets only), otherwise to the configured inbox — for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses), or "junco-local: <brief>" (forces the local inbox even when the repo is bridge-watched). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
 ---
 
 # Junco dispatch
@@ -42,7 +42,7 @@ Ask the minimum needed — autodetect where possible, ask inline when not.
 1. **Repo target** — absolute path to a git repo.
    - Autodetect: if the current CC working directory is a git repo, default to it and confirm ("Dispatch to junco targeting `$(pwd)`?").
    - Ask only if no cwd-repo fit or the user's brief clearly refers to a different repo.
-   - Must have a GitHub remote (the worker calls `gh repo view`). If uncertain, run `gh repo view <path>` or `git -C <path> remote -v` to verify before drafting.
+   - Must have a GitHub remote (the worker needs one to open the PR). If uncertain, run `git -C <path> remote get-url origin` to verify before drafting.
 2. **Goal** — one-sentence brief. If the trigger was "send to junco" with no details, ask: "What's the goal in one sentence?"
 3. **Scope boundaries** — ask if ambiguous: "Anything specifically off-limits?" If clear from the brief, infer.
 4. **Existing plan file** — if the user says "junco this plan: <path>", skip drafting and wrap the existing file (see "Wrapping an existing plan" below).
@@ -179,16 +179,16 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 ### Interactive mode (default)
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body).
-2. **Destination — probe, then decide.** Run, in the target repo:
+2. **Destination — probe, then decide.** The issue route carries only `id`, `repo` and `pr_title` — the bridge rebuilds every other frontmatter key — so it is only for a **plain fresh single ticket**. A ticket that carries `amends_pr` (Amend mode), `depends_on` (a hand-authored ticket set), a `base_branch` other than the repo's default, or a custom `branch_name`, `tools` or `workdir` always goes to the **inbox** — no probe; the compiler-backed `junco submit --as-issue --plan` fence is the only set shape that survives the issue route. For a plain fresh ticket, run:
 
    ```
    junco config get github.enabled
    junco config get botAccount.enabled
-   gh repo view <repo-path> --json nameWithOwner -q .nameWithOwner
+   git -C <repo-path> remote get-url origin
    junco doctor
    ```
 
-   Pick the **issue destination** when the first two print `true` AND `junco doctor` lists the repo's `owner/repo` on a `github repo <owner/repo>` line (the bridge only sweeps watched repos — an unwatched repo's parked issue would never launch). Otherwise pick the **inbox**. Overrides, in priority order: a `junco-local:` trigger or a brief that says "to the inbox" / "local inbox" forces the inbox; "park it on github", "junco as issue: …", "dispatch as issue" forces the issue destination (if the probe disagrees, still run `--as-issue` and surface its refusal — it names the missing precondition). Say which destination you picked and why in one line before the preview. Leave `repo:` as the working checkout — `--as-issue` matches it to the watched repo by the checkout's `origin`.
+   (Use `npx junco …` if `junco` is not installed globally.) Read `<owner>/<repo>` off the origin URL (`https://github.com/<owner>/<repo>.git` or `git@github.com:<owner>/<repo>.git`). Pick the **issue destination** when the first two commands print `true` AND `junco doctor`'s output has a `github repo <owner>/<repo>` line naming that same repo — grep the output regardless of the command's exit code, which reflects unrelated checks (the bridge only sweeps watched repos; an unwatched repo's parked issue would never launch). Otherwise pick the **inbox**. Overrides, in priority order: a `junco-local:` trigger or a brief that says "to the inbox" / "local inbox" forces the inbox; "park it on github", "junco as issue: …", "dispatch as issue" forces the issue destination (if the probe disagrees, still run `--as-issue` and surface its refusal — it names the missing precondition). Say which destination you picked and why in one line before the preview. Leave `repo:` as the working checkout — `--as-issue` matches it to the watched repo by the checkout's `origin`.
 
 3. **Preview + approve.** Use `AskUserQuestion` with the rendered ticket as a preview. Ask: "Dispatch this to junco?" (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`.
 4. **On approve — submit via CLI.** Write the rendered ticket to a temp file, then run:
@@ -234,7 +234,7 @@ If the user says "junco this plan: `<path>`", do NOT rewrite the body. Instead:
 2. Parse any existing frontmatter (Plan mode plans typically don't have any).
 3. Prepend junco frontmatter with values inferred from the plan's H1 and structure.
 4. Ensure the "Notes for the agent (strict)" section is present at the end — if absent, append it verbatim from `TEMPLATE.md`.
-5. Preview → approve → write to inbox as normal.
+5. Run the Dispatch procedure as normal — destination probe → preview → approve → submit.
 
 ## Amend mode (follow-up tickets on existing PRs)
 
@@ -296,7 +296,7 @@ Your job here is only: resolve the target, decide whether to pass `--auto-plan`,
 ### Preconditions (check before running; fail fast with a useful message)
 
 - **The daemon must be running.** `junco assess` only _queues_ a ticket — nothing is audited and nothing is parked for review until the daemon claims it on its next poll (~15 s). Unlike a dispatch there is no PR to watch; the payoff is a reviewable batch of findings appearing a little later. If the user isn't running the daemon, say so up front.
-- **The repo needs a GitHub `origin` remote.** The daemon resolves the destination repo from `origin`; a repo with no GitHub `origin` fails the run (any filed issues need a home). Pre-check with `git -C <path> remote -v` (or `gh repo view <path>`) before queuing.
+- **The repo needs a GitHub `origin` remote.** The daemon resolves the destination repo from `origin`; a repo with no GitHub `origin` fails the run (any filed issues need a home). Pre-check with `git -C <path> remote get-url origin` before queuing.
 
 ### Interactive procedure (default)
 

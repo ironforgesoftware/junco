@@ -39,5 +39,12 @@ describe("junco-dispatch SKILL.md", () => {
     expect(SKILL).toContain('"junco-local: <brief>"'); // listed as a trigger, not only as a rule
     // The old "only on an explicit phrase" rule is gone.
     expect(SKILL).not.toContain("Otherwise stay on the inbox default without asking");
+    // The probe mirrors the CLI's own predicate (origin remote), never gh repo view <path>.
+    expect(SKILL).toContain("git -C <repo-path> remote get-url origin");
+    expect(SKILL).not.toContain("gh repo view");
+    // Amend tickets and hand-authored sets never auto-route: the issue route discards their keys.
+    expect(SKILL).toMatch(
+      /carries `amends_pr`[^\n]*`depends_on`[^\n]*always goes to the \*\*inbox\*\*/,
+    );
   });
 });
