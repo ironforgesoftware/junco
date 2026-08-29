@@ -113,6 +113,8 @@ export interface AppProps {
   /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
   queueFn: () => Promise<QueueSnapshot>;
   queuePollMs?: number; // default 1_000 — queue card / turn counters (local reads only)
+  /** Open transcript's live-tail cadence. Default 1_000; tests pass small values. */
+  transcriptPollMs?: number;
   /** Per-repo assess history source (dashboardCmd wires makeAssessHistoryFn). */
   assessHistoryFn: () => Promise<AssessHistory[]>;
   assessHistoryPollMs?: number; // default 15_000 — assess runs take minutes
@@ -257,6 +259,7 @@ export function App(props: AppProps): React.JSX.Element {
   const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
   const queuePollMs = props.queuePollMs ?? 1_000;
+  const transcriptPollMs = props.transcriptPollMs ?? 1_000;
   const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
@@ -316,7 +319,7 @@ export function App(props: AppProps): React.JSX.Element {
     moveCursor: moveTranscriptCursor,
     setCursor: setTranscriptCursor,
     toggleExpanded: toggleTranscriptExpanded,
-  } = useTranscript({ client, aliveRef });
+  } = useTranscript({ client, aliveRef, pollMs: transcriptPollMs });
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
@@ -2027,6 +2030,11 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (input === "g") {
+        // Unconditional: on a live transcript with no tool calls the cursor
+        // move is a no-op, so without this `follow` stayed on and the view
+        // re-pinned to the tail — g looked inert on exactly the transcript a
+        // reader most wants to stop scrolling.
+        setTranscriptFollow(false);
         setTranscriptCursor(0);
         return void scrollBy(-1_000_000); // clamps to 0
       }

@@ -19,7 +19,13 @@ import type { UnwatchPlan } from "../src/unwatchCmd.js";
 import { until, fireUntil } from "./helpers/until.js";
 import { makeDashPr, makeDashIssue } from "./helpers/dashFixtures.js";
 import { summarizeTranscript } from "../src/transcriptSummary.js";
-import { runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
+import {
+  agentStart,
+  runEnd,
+  runStart,
+  toolStartId,
+  turnEndFull,
+} from "./helpers/transcriptFixtures.js";
 
 // Every App mount registers a `process.on("exit")` listener via MouseProvider;
 // this file's ~57 renders never unmount on their own, which trips Node's
@@ -131,6 +137,23 @@ const LOCAL_CHEAP_WITH_RECENT: LocalCheap = {
   ...LOCAL_CHEAP,
   queue: { ...QUEUE_SNAP, recent: [RECENT_DONE] },
 };
+/** Live and tool-less — prose only, the state in which `g` used to be inert
+ * (a cursor move over zero anchors is a no-op, so `follow` never paused). */
+const LIVE_PROSE = summarizeTranscript([
+  runStart({ flow: "pr", modelId: "m" }),
+  agentStart(),
+  turnEndFull({ text: "working" }),
+]);
+/** A transcript still being written: one finished turn plus an in-flight call. */
+const LIVE_SUMMARY = summarizeTranscript([
+  runStart({ flow: "pr", modelId: "m" }),
+  agentStart(),
+  turnEndFull({
+    text: "working",
+    calls: [{ id: "c1", name: "read", args: { path: "a" }, result: "r" }],
+  }),
+  toolStartId("c2", "read", { path: "b" }),
+]);
 const DONE_SUMMARY = summarizeTranscript([
   runStart({ flow: "assess", modelId: "m" }),
   turnEndFull({
@@ -381,6 +404,7 @@ function renderApp(
   onExit: () => void = () => {},
   assessHistoryFn: () => Promise<AssessHistory[]> = async () => [],
   localCheapFn: () => Promise<LocalCheap> = async () => LOCAL_CHEAP,
+  transcriptPollMs?: number,
 ) {
   return render(
     <MouseProvider>
@@ -396,6 +420,7 @@ function renderApp(
         refreshPollMs={refreshPollMs}
         healthPollMs={999999}
         queuePollMs={999999}
+        transcriptPollMs={transcriptPollMs}
         queueFn={queueFn}
         assessHistoryFn={assessHistoryFn}
         localCheapFn={localCheapFn}
@@ -3291,6 +3316,61 @@ describe("transcript view", () => {
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("not started yet"));
     expect(r.lastFrame()).toContain("system ▸ queue");
+  });
+
+  // The RUNNING-row path (the marquee one): a transcript that does not exist
+  // yet, fills in live, and finishes while the view is open. `stage` is
+  // advanced by the test rather than a free-running sequence — with a 10ms
+  // poll an unattended third answer can land before `until` ever observes the
+  // live header, which would make the follow assertions pass vacuously.
+  it("enter on a RUNNING row opens a live transcript that fills in and finishes", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    let stage = 0;
+    (client as { readTranscript: unknown }).readTranscript = async () =>
+      stage === 0
+        ? okv({ kind: "missing" as const, path: "/x/t.jsonl" })
+        : stage === 1
+          ? okv({ kind: "read" as const, size: 3, summary: LIVE_PROSE })
+          : stage === 2
+            ? okv({ kind: "read" as const, size: 5, summary: LIVE_SUMMARY })
+            : okv({ kind: "read" as const, size: 9, summary: DONE_SUMMARY });
+    const r = renderApp(
+      client,
+      wlc(),
+      999999,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => LOCAL_CHEAP_WITH_RECENT,
+      10,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("j"); // rail → queue row
+    await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
+    r.stdin.write("l"); // pane 2, cursor 0 = the running row
+    await until(cursorOn(r, "#46 exec"));
+    r.stdin.write("\r");
+    await until(() => (r.lastFrame() ?? "").includes("transcript ▸ gh-acme-api-46"));
+    await until(() => (r.lastFrame() ?? "").includes("waiting for the agent to start…"));
+    stage = 1;
+    // The view's own header line — the footer chips carry a "follow" chip of
+    // their own, so a whole-frame match would never see the tail pause.
+    const header = () =>
+      (r.lastFrame() ?? "").split("\n").find((l) => l.includes("transcript · gh-acme-api-46")) ??
+      "";
+    await until(() => header().includes("◐ live · follow"));
+    // g pauses the tail on a transcript with no tool calls to move between —
+    // the cursor move is a no-op there, so `g` used to leave follow pinned.
+    r.stdin.write("g");
+    await until(() => header().includes("◐ live") && !header().includes("· follow"));
+    stage = 2; // the first tool call lands; the pause holds
+    await until(() => (r.lastFrame() ?? "").includes("▸ read a"));
+    expect(header()).not.toContain("· follow");
+    stage = 3;
+    await until(() => (r.lastFrame() ?? "").includes("stop · 1s"));
+    r.stdin.write(ESC);
+    await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
   });
 
   it("clicking the enter transcript footer chip opens the transcript", async () => {

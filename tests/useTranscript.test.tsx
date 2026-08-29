@@ -23,6 +23,20 @@ const DONE = summarizeTranscript([
   runEnd(),
 ]);
 const LIVE = summarizeTranscript([runStart(), toolStartId("c1", "read", { path: "a" })]);
+const THREE = summarizeTranscript([
+  runStart(),
+  turnEndFull({
+    text: "x",
+    calls: [
+      { id: "c1", name: "read", args: { path: "a" }, result: "r" },
+      { id: "c2", name: "read", args: { path: "b" }, result: "r" },
+      { id: "c3", name: "read", args: { path: "c" }, result: "r" },
+    ],
+  }),
+  runEnd(),
+]);
+/** Live (no run_end) and tool-less — prose only, so `toolCallIds` is empty. */
+const LIVE_NO_CALLS = summarizeTranscript([runStart(), turnEndFull({ text: "thinking out loud" })]);
 
 /** A client whose readTranscript answers from `seq` in order (last one repeats).
  * `delayMs`, when set, awaits a macrotask (`setTimeout`) before resolving —
@@ -143,6 +157,42 @@ describe("useTranscript", () => {
     await until(() => m.frame().includes("live:true"));
     await wait(40);
     expect(m.api().transcript?.summary).toBe(LIVE);
+  });
+
+  // Following means "cursor at the end": while `follow` is on the cursor is
+  // still the stale 0 the tail never moved, so a naive `s.cursor + delta` sent
+  // j/k to the SECOND tool call of a 3000-row transcript.
+  it("a move out of follow starts from the last anchor", async () => {
+    const { c } = client([{ kind: "read", size: 1, summary: THREE }]);
+    const m = mount(c);
+    m.api().openTranscript("t-1", { expectLive: true });
+    await until(() => m.frame().includes("loading:false"));
+    expect(m.frame()).toContain("cursor:0:follow:true");
+    m.api().moveCursor(-1);
+    await until(() => m.frame().includes("cursor:1:follow:false"));
+  });
+
+  it("a forward move out of follow clamps to the last anchor", async () => {
+    const { c } = client([{ kind: "read", size: 1, summary: THREE }]);
+    const m = mount(c);
+    m.api().openTranscript("t-1", { expectLive: true });
+    await until(() => m.frame().includes("cursor:0:follow:true"));
+    m.api().moveCursor(1);
+    await until(() => m.frame().includes("cursor:2:follow:false"));
+  });
+
+  it("an arrow pauses the tail even when the transcript has no tool calls", async () => {
+    const { c } = client([{ kind: "read", size: 1, summary: LIVE_NO_CALLS }]);
+    const m = mount(c);
+    m.api().openTranscript("t-1", { expectLive: true });
+    await until(() => m.frame().includes("live:true"));
+    expect(m.frame()).toContain("cursor:0:follow:true");
+    m.api().moveCursor(1);
+    await until(() => m.frame().includes("cursor:0:follow:false"));
+    m.api().setFollow(true);
+    await until(() => m.frame().includes("follow:true"));
+    m.api().setCursor(0);
+    await until(() => m.frame().includes("cursor:0:follow:false"));
   });
 
   it("cursor clamps and pauses follow; expand toggles by id; close resets", async () => {

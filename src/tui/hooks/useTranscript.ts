@@ -182,13 +182,16 @@ export function useTranscript({
     (on: boolean): void => setTranscript((s) => (s === null ? s : { ...s, follow: on })),
     [],
   );
+  // Both cursor moves pause `follow` even when there are no anchors to move
+  // between: on a tool-less transcript the arrows are the only way to stop the
+  // tail short of `[`, and a no-op that left follow on re-pinned the view.
   const setCursor = useCallback(
     (idx: number): void =>
       setTranscript((s) => {
         if (s === null || s.summary === null) return s;
         const n = toolCallIds(s.summary).length;
-        if (n === 0) return s;
-        return { ...s, cursor: Math.max(0, Math.min(idx, n - 1)), follow: false };
+        const cursor = n === 0 ? s.cursor : Math.max(0, Math.min(idx, n - 1));
+        return { ...s, cursor, follow: false };
       }),
     [],
   );
@@ -197,8 +200,12 @@ export function useTranscript({
       setTranscript((s) => {
         if (s === null || s.summary === null) return s;
         const n = toolCallIds(s.summary).length;
-        if (n === 0) return s;
-        return { ...s, cursor: Math.max(0, Math.min(s.cursor + delta, n - 1)), follow: false };
+        // Following means "cursor at the end", so a move out of follow starts
+        // from the LAST anchor — `s.cursor` is the stale 0 the tail never
+        // moved, and stepping from it jumped to the top of the transcript.
+        const from = s.follow ? n - 1 : s.cursor;
+        const cursor = n === 0 ? s.cursor : Math.max(0, Math.min(from + delta, n - 1));
+        return { ...s, cursor, follow: false };
       }),
     [],
   );
