@@ -5,10 +5,12 @@
  * bridge's permission gates apply unchanged.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "../types.js";
 import { dataTreePaths } from "../dataTree.js";
+import { transcriptPathFor } from "../slug.js";
+import { summarizeTranscript, type TranscriptSummary } from "../transcriptSummary.js";
 import { gh, git } from "../git.js";
 import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
 import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
@@ -25,6 +27,14 @@ import { listDrafts, removeDraft, type PendingComment } from "../commentReview.j
 import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** One `readTranscript` outcome. `unchanged` is the live poll's steady state
+ * (stat only, no read); `missing` is ENOENT — a pre-transcript ticket, or a
+ * running one whose agent hasn't started yet. */
+export type TranscriptRead =
+  | { kind: "missing"; path: string }
+  | { kind: "unchanged"; size: number }
+  | { kind: "read"; size: number; summary: TranscriptSummary };
 
 type LabelsOp = Extract<OutboxOp, { kind: "labels" }>;
 
@@ -189,6 +199,10 @@ export interface DashboardClient {
   /** Build + submit a `junco analyze` ticket for `nwo#num` via the shared
    * analyze core. */
   analyzeIssue(nwo: string, num: number): Promise<Result<{ id: string }>>;
+  /** The ticket's event transcript, summarized for the viewer — stat-gated:
+   * pass the size from the previous read and an unchanged file costs one
+   * stat. Resolves `transcriptPathFor(dataTreePaths(cfg).transcripts, id)`. */
+  readTranscript(id: string, prevSize: number | null): Promise<Result<TranscriptRead>>;
   health(): Promise<HealthInfo>;
 }
 
@@ -197,6 +211,8 @@ export interface GhClientDeps {
   gitFn?: typeof git;
   fetchFn?: typeof fetch;
   readFileFn?: (p: string) => string;
+  /** File size probe for readTranscript's stat gate (default `statSync`). */
+  statFn?: (p: string) => { size: number };
   writeFileFn?: (p: string, s: string) => void;
   renameFn?: (a: string, b: string) => void;
   mkdirFn?: (d: string) => void;
@@ -234,6 +250,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
   const gitFn = deps.gitFn ?? git;
   const fetchFn = deps.fetchFn ?? fetch;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
+  const statFn = deps.statFn ?? ((p: string) => ({ size: statSync(p).size }));
   const writeFileFn = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
   const renameFn = deps.renameFn ?? renameSync;
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
@@ -600,6 +617,26 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
 
     listReview() {
       return attempt(async () => (deps.listPendingFn ?? listPending)(cfg));
+    },
+
+    readTranscript(id, prevSize) {
+      return attempt(async () => {
+        const path = transcriptPathFor(dataTreePaths(cfg).transcripts, id);
+        let size: number;
+        try {
+          size = statFn(path).size;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === "ENOENT")
+            return { kind: "missing" as const, path };
+          throw e;
+        }
+        if (prevSize !== null && size === prevSize) return { kind: "unchanged" as const, size };
+        return {
+          kind: "read" as const,
+          size,
+          summary: summarizeTranscript(readFileFn(path).split("\n")),
+        };
+      });
     },
 
     fileReview(id, fingerprints) {

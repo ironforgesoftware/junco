@@ -36,12 +36,13 @@ function waitingNote(w: QueueWaiting): string {
 /** Full queue view (main-area slot, opened with `t`): RUNNING / WAITING /
  * RECENT built as flat rows so App's scroll offset can slice them. In LOCAL
  * mode `selectable` turns on a `▌` accent cursor over the actionable rows
- * (WAITING then RECENT, `selectedRow` indexing that concatenation); RUNNING
- * rows render but are never selectable, and the window follows the cursor so a
- * selected row past the fold stays visible. `counts` (LOCAL only) surfaces the
- * full done/failed totals the capped RECENT list can't show. Absent props →
- * byte-identical to the GitHub `t` view. Memoized (perf pass, spec
- * 2026-07-21-tui-app-decomposition task 16). */
+ * (RUNNING, then WAITING, then RECENT — `selectedRow` indexes that
+ * concatenation; a running row's only action is `enter` → its transcript),
+ * and the window follows the cursor so a selected row past the fold stays
+ * visible. `counts` (LOCAL only) surfaces the full done/failed totals the
+ * capped RECENT list can't show. Absent props → byte-identical to the GitHub
+ * `t` view. Memoized (perf pass, spec 2026-07-21-tui-app-decomposition task
+ * 16). */
 export const QueueView = React.memo(function QueueView({
   snap,
   scroll,
@@ -64,9 +65,9 @@ export const QueueView = React.memo(function QueueView({
   /** Full done/failed totals (LOCAL queue section only); absent for the GitHub
    * `t` view, which then renders byte-identically. */
   counts?: { done: number; failed: number } | null;
-  /** Actionable-row index: waiting `i`, recent `waiting.length + j`. Only
-   * wired when `selectable` — absent/false keeps the GitHub `t` view's rows
-   * bare (byte-identical). */
+  /** Actionable-row index: running `ri`, waiting `running.length + i`, recent
+   * `running.length + waiting.length + j`. Only wired when `selectable` —
+   * absent/false keeps the GitHub `t` view's rows bare (byte-identical). */
   onRowPress?: (row: number) => void;
   /** Reports `maxScroll(rows, visible)` to the owner DURING render, so the
    * owning hook can clamp its offset without duplicating this row arithmetic. */
@@ -176,14 +177,21 @@ export const QueueView = React.memo(function QueueView({
     />,
   );
   if (snap.running.length === 0) dash("run-none");
-  for (const r of snap.running) {
+  snap.running.forEach((r, ri) => {
+    const sel = selectable === true && selectedRow === ri;
+    if (sel) selRowIndex = rows.length;
     rows.push(
-      <Text key={`r-${r.id}`} wrap="truncate-end">
-        {gutter(false)}
-        <Text color="cyan">◐ </Text>
-        <Text bold>{queueLabel(r.github, r.id)}</Text>
-        <Text dimColor> {r.id}</Text>
-      </Text>,
+      pressable(
+        ri,
+        sel,
+        <Text key={`r-${r.id}`} wrap="truncate-end">
+          {gutter(sel)}
+          <Text color="cyan">◐ </Text>
+          <Text bold>{queueLabel(r.github, r.id)}</Text>
+          <Text dimColor> {r.id}</Text>
+        </Text>,
+        `r-${r.id}`,
+      ),
     );
     rows.push(
       <Text key={`rp-${r.id}`} dimColor wrap="truncate-end">
@@ -219,7 +227,7 @@ export const QueueView = React.memo(function QueueView({
         </Text>,
       );
     }
-  }
+  });
 
   rows.push(
     <Text key="wait-h" bold>
@@ -241,11 +249,11 @@ export const QueueView = React.memo(function QueueView({
   if (snap.waiting.length === 0) dash("wait-none");
   snap.waiting.forEach((w, i) => {
     const note = waitingNote(w);
-    const sel = selectable === true && selectedRow === i;
+    const sel = selectable === true && selectedRow === snap.running.length + i;
     if (sel) selRowIndex = rows.length;
     rows.push(
       pressable(
-        i,
+        snap.running.length + i,
         sel,
         <Text key={`w-${w.id}`} wrap="truncate-end">
           {gutter(sel)}
@@ -281,12 +289,13 @@ export const QueueView = React.memo(function QueueView({
     );
   }
   if (snap.recent.length === 0) dash("rec-none");
+  const recentBase = snap.running.length + snap.waiting.length;
   snap.recent.forEach((r, j) => {
-    const sel = selectable === true && selectedRow === snap.waiting.length + j;
+    const sel = selectable === true && selectedRow === recentBase + j;
     if (sel) selRowIndex = rows.length;
     rows.push(
       pressable(
-        snap.waiting.length + j,
+        recentBase + j,
         sel,
         <Text key={`f-${r.id}-${r.finishedAt}`} wrap="truncate-end">
           {gutter(sel)}
