@@ -3213,7 +3213,13 @@ describe("transcript view", () => {
     return line !== undefined && line.includes("▌");
   };
 
-  const openRecent = async (client: DashboardClient) => {
+  // SGR press/release at 1-based wire coords (the file's mouse helper).
+  const click = (x1: number, y1: number) => `\u001b[<0;${x1};${y1}M\u001b[<0;${x1};${y1}m`;
+
+  /** Queue section open, cursor parked on the recent `assess-x-1` row — the
+   * shared prefix of the key flow and the footer-chip flow (which must NOT
+   * press enter). */
+  const selectRecent = async (client: DashboardClient) => {
     (client as { readTranscript: unknown }).readTranscript = async () =>
       okv({ kind: "read" as const, size: 1, summary: DONE_SUMMARY });
     const r = renderApp(
@@ -3235,6 +3241,11 @@ describe("transcript view", () => {
     await until(cursorOn(r, "#51 plan"));
     r.stdin.write("j"); // recent (assess-x-1)
     await until(cursorOn(r, "assess-x-1"));
+    return r;
+  };
+
+  const openRecent = async (client: DashboardClient) => {
+    const r = await selectRecent(client);
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("transcript ▸ assess-x-1"));
     return r;
@@ -3280,5 +3291,22 @@ describe("transcript view", () => {
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("not started yet"));
     expect(r.lastFrame()).toContain("system ▸ queue");
+  });
+
+  it("clicking the enter transcript footer chip opens the transcript", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = await selectRecent(client);
+    // Footer chips row: the chip's ClickableBox spans its own "enter transcript"
+    // segment, so a press on the `e` lands inside it.
+    const lines = (r.lastFrame() ?? "").split("\n");
+    const yIdx = lines.findIndex((l) => l.includes("enter transcript"));
+    expect(yIdx).toBeGreaterThanOrEqual(0);
+    const x = (lines[yIdx] ?? "").indexOf("enter") + 1;
+    expect(x).toBeGreaterThan(0);
+    // fireUntil: a press can race a freshly-mounted ClickableBox's registration,
+    // and this click unmounts its own target (self-terminating — see until.ts).
+    await fireUntil(r.stdin, click(x, yIdx + 1), () =>
+      (r.lastFrame() ?? "").includes("transcript ▸ assess-x-1"),
+    );
   });
 });

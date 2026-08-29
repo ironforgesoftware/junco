@@ -541,6 +541,20 @@ export function App(props: AppProps): React.JSX.Element {
     setSectionCursor((m) => ({ ...m, [sysSection]: next }));
   };
 
+  // `enter` on a queue row — ONE implementation shared by the key branch
+  // (handleSectionBodyInput) and the footer chip recipe (structuralChipActions),
+  // so the clickable chip and the key can never drift. Callers own the
+  // `sysSection === "queue"` guard (the key branch must `return` past j/k).
+  const openQueueTranscript = useCallback((): void => {
+    const tgt = localTarget;
+    if (tgt?.kind === "running" || tgt?.kind === "recent") {
+      openTranscript(tgt.id, { expectLive: tgt.kind === "running" });
+      setView("transcript");
+    } else if (tgt?.kind === "waiting") {
+      showToast("info", "not started yet — no transcript");
+    }
+  }, [localTarget, openTranscript, showToast]);
+
   // Section-body windowing (outbox/worktrees lists) — minimal-movement
   // prevStart per section, exactly the LocalDashboard rule it replaces.
   const sectionPrev = useRef<Record<SystemSection, number>>({
@@ -1700,6 +1714,7 @@ export function App(props: AppProps): React.JSX.Element {
             if (pane === 1 && selectedRow?.kind === "repo")
               return void openRepoDetailView(selectedRow.repo);
             if (sysSection === "logs") return void onLogExpand();
+            if (sysSection === "queue") return void openQueueTranscript();
             if (pane === 2 && body?.kind === "issues") void openDetail();
           },
         };
@@ -1716,6 +1731,7 @@ export function App(props: AppProps): React.JSX.Element {
     selectedRow,
     selectedPane3Pr,
     closeTranscript,
+    openQueueTranscript,
     openPrDetail,
     openRepoDetailView,
     onLogExpand,
@@ -1840,13 +1856,7 @@ export function App(props: AppProps): React.JSX.Element {
       return;
     }
     if (sysSection === "queue" && key.return) {
-      const tgt = localTarget;
-      if (tgt?.kind === "running" || tgt?.kind === "recent") {
-        openTranscript(tgt.id, { expectLive: tgt.kind === "running" });
-        setView("transcript");
-      } else if (tgt?.kind === "waiting") {
-        showToast("info", "not started yet — no transcript");
-      }
+      openQueueTranscript();
       return;
     }
     if (input === "j" || key.downArrow) return void moveSectionCursor(1);
