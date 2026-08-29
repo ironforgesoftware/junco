@@ -58,6 +58,7 @@ import { CommandPalette, filterCommands } from "./components/CommandPalette.js";
 import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
 import { ReviewView } from "./components/ReviewView.js";
+import { TranscriptView } from "./components/TranscriptView.js";
 import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
@@ -76,6 +77,7 @@ import { useAssessHistory } from "./hooks/useAssessHistory.js";
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 import { useBotLogin } from "./hooks/useBotLogin.js";
 import { useReview } from "./hooks/useReview.js";
+import { useTranscript } from "./hooks/useTranscript.js";
 import { useCmdOutput } from "./hooks/useCmdOutput.js";
 import { usePalette } from "./hooks/usePalette.js";
 import { useLogOverlay } from "./hooks/useLogOverlay.js";
@@ -161,7 +163,8 @@ export type View =
   | "repoDetail"
   | "prs"
   | "prDetail"
-  | "review";
+  | "review"
+  | "transcript";
 
 interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
@@ -304,6 +307,16 @@ export function App(props: AppProps): React.JSX.Element {
     [],
   );
   const { reviewState, setReviewState, loadReview } = useReview({ client, aliveRef });
+  const {
+    transcript,
+    openTranscript,
+    closeTranscript,
+    toggleThinking: toggleTranscriptThinking,
+    setFollow: setTranscriptFollow,
+    moveCursor: moveTranscriptCursor,
+    setCursor: setTranscriptCursor,
+    toggleExpanded: toggleTranscriptExpanded,
+  } = useTranscript({ client, aliveRef });
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
@@ -441,12 +454,24 @@ export function App(props: AppProps): React.JSX.Element {
     if (view === "review" && reviewState.open?.kind === "draft")
       return `draft:${reviewState.open.draftIdx}`;
     if (view === "cmdOutput" && cmd) return `cmd:${cmd.token}`;
+    // `transcript:<id>` — t/expand keep the offset (the clamp absorbs shrink).
+    if (view === "transcript" && transcript) return `transcript:${transcript.id}`;
     if (view === "detail" && detail) return `detail:${detail.nwo}#${detail.issue.number}`;
     if (view === "repoDetail" && repoDetailTarget) return `repoView:${repoDetailTarget.key}`;
     if (view === "main" && body?.kind === "repoDetail") return `repo:${body.repo.key}`;
     if (view === "main" && sysSection !== null) return `sys:${sysSection}`;
     return view;
-  }, [logOverlay, view, reviewState.open, cmd, detail, repoDetailTarget, body, sysSection]);
+  }, [
+    logOverlay,
+    view,
+    reviewState.open,
+    cmd,
+    transcript,
+    detail,
+    repoDetailTarget,
+    body,
+    sysSection,
+  ]);
   const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(scrollKey);
 
   // No render-time fs call: an empty/absent file both show the placeholder until
@@ -567,13 +592,14 @@ export function App(props: AppProps): React.JSX.Element {
     if (view === "prs") return ["pull requests"];
     if (view === "review") return ["review"];
     if (view === "cmdOutput" && cmd) return ["command", cmd.title];
+    if (view === "transcript" && transcript) return ["transcript", transcript.id];
     if (view === "detail" && detail) return [detail.nwo, `#${detail.issue.number}`];
     if (view === "prDetail" && prDetail) return [prDetail.pr.nwo, `PR #${prDetail.pr.number}`];
     if (view === "repoDetail" && repoDetailTarget)
       return [repoDetailTarget.nwo ?? truncStart(repoDetailTarget.path, 30)];
     if (body?.kind === "section") return ["system", body.section];
     return [currentNwo ?? "no repo"];
-  }, [view, cmd, detail, prDetail, repoDetailTarget, body, currentNwo]);
+  }, [view, cmd, transcript, detail, prDetail, repoDetailTarget, body, currentNwo]);
 
   // Window slices live HERE (not inside the list components) so that rendering
   // and mouse hit-testing share one offset — the sticky prevStart refs move up
@@ -1116,6 +1142,7 @@ export function App(props: AppProps): React.JSX.Element {
       case "prDetail":
       case "review":
       case "cmdOutput":
+      case "transcript":
         return { kind: "view", view };
       case "main":
         return {
@@ -1167,6 +1194,10 @@ export function App(props: AppProps): React.JSX.Element {
       }
       if (view === "prDetail") return void setView(prDetail?.from ?? "main");
       if (view === "cmdOutput") return void setView("palette");
+      if (view === "transcript") {
+        closeTranscript();
+        return void setView("main");
+      }
       setView("main");
     };
     if (logOverlay) {
@@ -1212,6 +1243,21 @@ export function App(props: AppProps): React.JSX.Element {
           close,
           ...(cmd && !cmd.running
             ? { reRun: () => runPaletteCommand(cmd.name, cmd.extraArgs) }
+            : {}),
+        };
+      case "transcript":
+        return {
+          close,
+          thinking: toggleTranscriptThinking,
+          ...(transcript?.summary?.live
+            ? {
+                follow: () => {
+                  // Pausing lands at the tail first (log-overlay recipe) so the
+                  // paused window shows the newest rows, not a jump to the top.
+                  if (transcript.follow) toEnd();
+                  setTranscriptFollow(!transcript.follow);
+                },
+              }
             : {}),
         };
       case "review": {
@@ -1549,6 +1595,10 @@ export function App(props: AppProps): React.JSX.Element {
     toEnd,
     view,
     cmd,
+    transcript,
+    closeTranscript,
+    toggleTranscriptThinking,
+    setTranscriptFollow,
     prDetail,
     reviewState,
     loadReview,
@@ -1621,6 +1671,14 @@ export function App(props: AppProps): React.JSX.Element {
         };
       case "cmdOutput":
         return { esc: () => setView("palette") };
+      case "transcript":
+        // Same recipe as the q/esc close: clear the state, then navigate back.
+        return {
+          esc: () => {
+            closeTranscript();
+            setView("main");
+          },
+        };
       case "palette":
         return { esc: () => setView("main"), enter: () => paletteEnter() };
       case "addRepo":
@@ -1657,6 +1715,7 @@ export function App(props: AppProps): React.JSX.Element {
     sysSection,
     selectedRow,
     selectedPane3Pr,
+    closeTranscript,
     openPrDetail,
     openRepoDetailView,
     onLogExpand,
@@ -1778,6 +1837,16 @@ export function App(props: AppProps): React.JSX.Element {
       // Row-less viewport: enter/l/→ opens the overlay (parity with the rail
       // enter; both go through onLogExpand so opening always tails live).
       if (input === "l" || key.rightArrow || key.return) return void onLogExpand();
+      return;
+    }
+    if (sysSection === "queue" && key.return) {
+      const tgt = localTarget;
+      if (tgt?.kind === "running" || tgt?.kind === "recent") {
+        openTranscript(tgt.id, { expectLive: tgt.kind === "running" });
+        setView("transcript");
+      } else if (tgt?.kind === "waiting") {
+        showToast("info", "not started yet — no transcript");
+      }
       return;
     }
     if (input === "j" || key.downArrow) return void moveSectionCursor(1);
@@ -1926,6 +1995,31 @@ export function App(props: AppProps): React.JSX.Element {
       }
       if (key.upArrow) return void setPaletteSel((s) => Math.max(0, s - 1));
       if (key.return) return void paletteEnter();
+      return;
+    }
+
+    if (view === "transcript") {
+      // t/f dispatch at layer 3d (thinking/follow); esc mirrors the q close.
+      if (key.escape) return void actionHandlers["close"]?.();
+      if (input === "j" || key.downArrow) return void moveTranscriptCursor(1);
+      if (input === "k" || key.upArrow) return void moveTranscriptCursor(-1);
+      if (key.return || input === " ") return void toggleTranscriptExpanded();
+      if (input === "]") return void scrollBy(1);
+      if (input === "[") {
+        if (transcript?.follow) {
+          toEnd();
+          setTranscriptFollow(false);
+        }
+        return void scrollBy(-1);
+      }
+      if (input === "G" || key.end) {
+        if (transcript?.summary?.live) setTranscriptFollow(true);
+        return;
+      }
+      if (input === "g") {
+        setTranscriptCursor(0);
+        return void scrollBy(-1_000_000); // clamps to 0
+      }
       return;
     }
 
@@ -2211,6 +2305,15 @@ export function App(props: AppProps): React.JSX.Element {
     },
     [confirm, sysSection],
   );
+  // Transcript tool-row click: anchor the cursor there, then expand/collapse
+  // it — the mouse form of `↑/↓` + `enter` in one press.
+  const transcriptRowPress = useCallback(
+    (idx: number): void => {
+      setTranscriptCursor(idx);
+      toggleTranscriptExpanded();
+    },
+    [setTranscriptCursor, toggleTranscriptExpanded],
+  );
 
   // The remaining list-view row/pane press handlers (issues pane, prs view,
   // pane 3's repo-scoped PR list) — same story as railRowPress/sectionRowPress
@@ -2408,6 +2511,28 @@ export function App(props: AppProps): React.JSX.Element {
             scrollBy(d);
           }}
         />
+      ) : view === "transcript" && transcript ? (
+        <ClickableBox
+          flexGrow={1}
+          onWheel={(d) => {
+            // Wheel-up pauses follow (landing at the tail first), the `[` recipe.
+            if (d < 0 && transcript.follow) {
+              toEnd();
+              setTranscriptFollow(false);
+            }
+            scrollBy(d);
+          }}
+        >
+          <TranscriptView
+            state={transcript}
+            scroll={scroll}
+            height={listHeight}
+            width={size.columns}
+            focused
+            onScrollMax={onScrollMax}
+            onRowPress={transcriptRowPress}
+          />
+        </ClickableBox>
       ) : view === "review" ? (
         <ReviewView
           state={reviewState}

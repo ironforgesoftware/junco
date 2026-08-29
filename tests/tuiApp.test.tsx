@@ -18,6 +18,8 @@ import type { AssessHistory } from "../src/assessHistory.js";
 import type { UnwatchPlan } from "../src/unwatchCmd.js";
 import { until, fireUntil } from "./helpers/until.js";
 import { makeDashPr, makeDashIssue } from "./helpers/dashFixtures.js";
+import { summarizeTranscript } from "../src/transcriptSummary.js";
+import { runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
 
 // Every App mount registers a `process.on("exit")` listener via MouseProvider;
 // this file's ~57 renders never unmount on their own, which trips Node's
@@ -114,6 +116,30 @@ const LOCAL_CHEAP: LocalCheap = {
   },
   error: null,
 };
+
+const RECENT_DONE = {
+  id: "assess-x-1",
+  github: null,
+  status: "done" as const,
+  finishedAt: "2026-07-07T10:05:00Z",
+  resultStatus: "completed",
+  durationSeconds: 667,
+  prUrl: null,
+  repoPath: null,
+};
+const LOCAL_CHEAP_WITH_RECENT: LocalCheap = {
+  ...LOCAL_CHEAP,
+  queue: { ...QUEUE_SNAP, recent: [RECENT_DONE] },
+};
+const DONE_SUMMARY = summarizeTranscript([
+  runStart({ flow: "assess", modelId: "m" }),
+  turnEndFull({
+    thinking: "deep thoughts",
+    text: "Assessment complete.",
+    calls: [{ id: "c1", name: "read", args: { path: "game.js" }, result: "L1\nL2" }],
+  }),
+  runEnd({ stopReason: "stop", durationMs: 1000 }),
+]);
 
 function makeClient(
   issuesByRepo: Record<string, DashIssue[]>,
@@ -3173,5 +3199,86 @@ describe("unified refresh", () => {
     toDaemonRow(r);
     // Still 5m, not reset to "0s ago": the failed cycle delivered nothing.
     await until(() => (r.lastFrame() ?? "").includes("↻ 5m ago"));
+  });
+});
+
+describe("transcript view", () => {
+  const wlc = () => join(mkdtempSync(join(tmpdir(), "junco-transcript-")), "wl.json");
+  // Each keystroke must land (and re-render) before the next is written: Ink
+  // dispatches stdin synchronously, so two writes in a row are both handled by
+  // the SAME render's closure — `l` then `j` would move the rail, not the
+  // section cursor, because `pane` is still 1 in that closure.
+  const cursorOn = (r: { lastFrame: () => string | undefined }, text: string) => () => {
+    const line = (r.lastFrame() ?? "").split("\n").find((l) => l.includes(text));
+    return line !== undefined && line.includes("▌");
+  };
+
+  const openRecent = async (client: DashboardClient) => {
+    (client as { readTranscript: unknown }).readTranscript = async () =>
+      okv({ kind: "read" as const, size: 1, summary: DONE_SUMMARY });
+    const r = renderApp(
+      client,
+      wlc(),
+      999999,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => LOCAL_CHEAP_WITH_RECENT,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("j"); // rail → queue row
+    await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
+    r.stdin.write("l"); // pane 2, cursor 0 = running
+    await until(cursorOn(r, "#46 exec"));
+    r.stdin.write("j"); // waiting
+    await until(cursorOn(r, "#51 plan"));
+    r.stdin.write("j"); // recent (assess-x-1)
+    await until(cursorOn(r, "assess-x-1"));
+    r.stdin.write("\r");
+    await until(() => (r.lastFrame() ?? "").includes("transcript ▸ assess-x-1"));
+    return r;
+  };
+
+  it("enter on a recent row opens it; esc returns with the cursor preserved", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = await openRecent(client);
+    expect(r.lastFrame()).toContain("Assessment complete.");
+    expect(r.lastFrame()).toContain("▸ read game.js  → 2 lines");
+    expect(r.lastFrame()).toContain("expand"); // footer/chips
+    r.stdin.write(ESC);
+    await until(
+      () =>
+        (r.lastFrame() ?? "").includes("system ▸ queue") &&
+        !(r.lastFrame() ?? "").includes("Assessment complete."),
+    );
+    r.stdin.write("\r"); // same row still under the cursor → reopens
+    await until(() => (r.lastFrame() ?? "").includes("transcript ▸ assess-x-1"));
+  });
+
+  it("t toggles thinking; enter expands the anchored tool result", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = await openRecent(client);
+    expect(r.lastFrame()).not.toContain("deep thoughts");
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("deep thoughts"));
+    expect(r.lastFrame()).not.toContain("L2");
+    r.stdin.write("\r");
+    await until(() => (r.lastFrame() ?? "").includes("L2"));
+  });
+
+  it("enter on a waiting row toasts — no transcript yet", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wlc());
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("j");
+    await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
+    r.stdin.write("l");
+    await until(cursorOn(r, "#46 exec")); // pane 2, cursor 0 = the running row
+    r.stdin.write("j"); // waiting row (#51)
+    await until(cursorOn(r, "#51 plan"));
+    r.stdin.write("\r");
+    await until(() => (r.lastFrame() ?? "").includes("not started yet"));
+    expect(r.lastFrame()).toContain("system ▸ queue");
   });
 });

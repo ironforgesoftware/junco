@@ -19,7 +19,14 @@ export type MainBody =
   | "worktrees"
   | "daemon"
   | "logs";
-export type OverlayView = "detail" | "repoDetail" | "prs" | "prDetail" | "review" | "cmdOutput";
+export type OverlayView =
+  | "detail"
+  | "repoDetail"
+  | "prs"
+  | "prDetail"
+  | "review"
+  | "cmdOutput"
+  | "transcript";
 
 export type BindingContext =
   | { kind: "main"; body: MainBody }
@@ -117,6 +124,7 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     CLOSE,
   ],
   cmdOutput: [{ id: "reRun", label: "re-run" }, CLOSE],
+  transcript: [{ id: "thinking", label: "thinking" }, { id: "follow", label: "follow" }, CLOSE],
 };
 
 const LOG_OVERLAY_OPTIONS: MnemonicOption[] = [
@@ -146,6 +154,7 @@ function mainStructural(body: MainBody, pane: 1 | 2 | 3, mode: LayoutMode): Chip
     case "repoDetail":
       return [s("[ ]", "scroll"), s("←", "back")];
     case "queue":
+      return [s("↑/↓", "move"), s("enter", "transcript"), s("←", "back")];
     case "outbox":
     case "worktrees":
       return [s("↑/↓", "move"), s("←", "back")];
@@ -170,6 +179,8 @@ function viewStructural(view: OverlayView): Chip[] {
       return [s("↑/↓", "move"), s("enter", "open/file"), s("space", "toggle"), s("esc", "back")];
     case "cmdOutput":
       return [s("↑/↓", "scroll"), s("esc", "back")];
+    case "transcript":
+      return [s("↑/↓", "tool"), s("enter", "expand"), s("[/]", "scroll"), s("esc", "back")];
   }
 }
 

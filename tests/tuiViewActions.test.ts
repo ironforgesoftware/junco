@@ -57,6 +57,15 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       D: "discard",
       q: "close",
     });
+    expect(km({ kind: "view", view: "transcript" })).toEqual({
+      t: "thinking",
+      f: "follow",
+      q: "close",
+    });
+  });
+  it("main:queue structural chips offer enter → transcript", () => {
+    const chips = buildContextBindings({ kind: "main", body: "queue" }, 2, "wide").chips;
+    expect(chips).toContainEqual({ kind: "structural", key: "enter", label: "transcript" });
   });
   it("logOverlay", () => {
     expect(km({ kind: "logOverlay" })).toEqual({
@@ -95,6 +104,7 @@ describe("invariants", () => {
       { kind: "view", view: "prs" },
       { kind: "view", view: "prDetail" },
       { kind: "view", view: "repoDetail" },
+      { kind: "view", view: "transcript" },
       { kind: "logOverlay" },
     ];
     for (const c of contexts) {
