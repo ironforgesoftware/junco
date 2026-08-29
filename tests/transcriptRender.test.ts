@@ -263,3 +263,48 @@ describe("renderTranscriptRows", () => {
     expect(toolRow!.text.length).toBeLessThanOrEqual(20);
   });
 });
+
+// Real model output is newline-padded ('\n\nFiles match the spec…\n\n', and
+// sometimes only newlines): 35–46% of the rows a real transcript rendered were
+// blank before the renderer trimmed each block's edges.
+describe("renderTranscriptRows — newline-padded model output", () => {
+  /** rows[0] is the run header, rows[1] the turn line — the rest is prose. */
+  const prose = (text?: string, thinking?: string, showThinking = false) =>
+    renderTranscriptRows(
+      summarizeTranscript([
+        runStart(),
+        agentStart(),
+        turnEndFull({
+          ...(text === undefined ? {} : { text }),
+          ...(thinking === undefined ? {} : { thinking }),
+        }),
+        runEnd(),
+      ]),
+      opts({ showThinking }),
+    )
+      .slice(2)
+      .map((r) => r.text);
+
+  it("collapses blank runs inside a block and drops its leading/trailing padding", () => {
+    expect(prose("\n\nFiles match\n\n\n\nmore\n")).toEqual(["  Files match", "", "  more"]);
+  });
+
+  it("a block of only newlines renders no prose rows at all", () => {
+    expect(prose("\n\n\n\n")).toEqual([]);
+  });
+
+  it("thinking is trimmed the same way", () => {
+    expect(prose(undefined, "\n\nthought\n\n\n\ntwo\n", true)).toEqual(["  thought", "", "  two"]);
+    expect(prose(undefined, "\n\n\n", true)).toEqual([]);
+  });
+
+  it("a malformed run_end errorMessage never throws", () => {
+    const s = summarizeTranscript([
+      runStart(),
+      agentStart(),
+      runEnd({ stopReason: "error", errorMessage: 123 as unknown as string }),
+    ]);
+    const rows = renderTranscriptRows(s, opts());
+    expect(rows.map((r) => r.text)).toContain("   ✗ 123");
+  });
+});

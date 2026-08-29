@@ -75,6 +75,20 @@ export function wrapText(text: string, width: number): string[] {
   return out;
 }
 
+/**
+ * A prose block (`turn.text` / `turn.thinking`) wrapped for display: real model
+ * output is newline-padded — `"\n\nFiles match the spec…\n\n"`, sometimes only
+ * newlines — and `wrapText` keeps every blank line, which is right inside a
+ * paragraph but wrong at the block's edges (35–46% of a real transcript's rows
+ * rendered blank). Collapses 3+ newlines to a paragraph break and trims the
+ * edges; `[]` for a block that is only whitespace. The summary keeps the block
+ * raw, so `junco transcript --json` stays lossless.
+ */
+function proseLines(block: string, width: number): string[] {
+  const prose = block.replace(/\n{3,}/g, "\n\n").trim();
+  return prose === "" ? [] : wrapText(prose, width);
+}
+
 /** `740` / `1.8k` / `34.7k` — local (not tui/queueFmt) to keep this module
  * free of a root → tui import. */
 export function fmtK(n: number): string {
@@ -180,8 +194,11 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
       .filter((x): x is string => x !== null)
       .join(" · ");
     push(truncate(`── ${head} ──`, width), "bold");
+    // String(): a malformed record's errorMessage need not be a string (the
+    // transcript schema is not validated at parse time) — the renderer runs
+    // inside React's render, where a throw takes the whole dashboard down.
     if (run.end?.errorMessage)
-      for (const l of wrapText(`✗ ${firstLine(run.end.errorMessage)}`, width - 3))
+      for (const l of wrapText(`✗ ${firstLine(String(run.end.errorMessage))}`, width - 3))
         push(`   ${l}`, "error");
     const guardRow = (g: GuardDecisionRecord): void =>
       push(
@@ -196,8 +213,9 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
         turn.usage === null ? "" : ` · in ${fmtK(turn.usage.input)} out ${fmtK(turn.usage.output)}`;
       push(truncate(`turn ${turn.index + 1}${turn.provisional ? " ◐" : ""}${usage}`, width), "dim");
       if (o.showThinking && turn.thinking !== null)
-        for (const l of wrapText(turn.thinking, width - 2)) push(`  ${l}`, "dim");
-      if (turn.text !== null) for (const l of wrapText(turn.text, width - 2)) push(`  ${l}`);
+        for (const l of proseLines(turn.thinking, width - 2)) push(l === "" ? "" : `  ${l}`, "dim");
+      if (turn.text !== null)
+        for (const l of proseLines(turn.text, width - 2)) push(l === "" ? "" : `  ${l}`);
       for (const c of turn.toolCalls) {
         const suffix = fmtToolResult(c.result);
         push(
