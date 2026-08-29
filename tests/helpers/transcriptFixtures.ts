@@ -47,6 +47,57 @@ export const turnEnd = (output = 10): string =>
 
 export const agentEnd = (): string => j({ type: "agent_end", messages: [], willRetry: false });
 
+export const agentStart = (): string => j({ type: "agent_start" });
+
+/** tool_execution_start with a caller-chosen id (the `c`-only builders above
+ * predate result matching; the summary keys results by toolCallId). */
+export const toolStartId = (id: string, name: string, args: unknown): string =>
+  j({ type: "tool_execution_start", toolCallId: id, toolName: name, args });
+
+export const toolEndId = (id: string, name: string, text: string, isError = false): string =>
+  j({
+    type: "tool_execution_end",
+    toolCallId: id,
+    toolName: name,
+    result: { content: [{ type: "text", text }] },
+    isError,
+  });
+
+/** A complete assistant turn_end — thinking/text/toolCall content blocks plus
+ * the turn's toolResults, the exact SDK shape the transcript viewer reduces. */
+export const turnEndFull = (o: {
+  thinking?: string;
+  text?: string;
+  calls?: { id: string; name: string; args: unknown; result?: string; isError?: boolean }[];
+  usage?: { input: number; output: number };
+}): string =>
+  j({
+    type: "turn_end",
+    message: {
+      role: "assistant",
+      content: [
+        ...(o.thinking !== undefined ? [{ type: "thinking", thinking: o.thinking }] : []),
+        ...(o.text !== undefined ? [{ type: "text", text: o.text }] : []),
+        ...(o.calls ?? []).map((c) => ({
+          type: "toolCall",
+          id: c.id,
+          name: c.name,
+          arguments: c.args,
+        })),
+      ],
+      usage: o.usage ?? { input: 1, output: 1 },
+    },
+    toolResults: (o.calls ?? [])
+      .filter((c) => c.result !== undefined)
+      .map((c) => ({
+        role: "toolResult",
+        toolCallId: c.id,
+        toolName: c.name,
+        content: [{ type: "text", text: c.result }],
+        isError: c.isError ?? false,
+      })),
+  });
+
 // -- junco records -----------------------------------------------------------
 
 export const metaLine = (overrides: Partial<MetaRecord> = {}): string =>
