@@ -24,11 +24,16 @@ const DONE = summarizeTranscript([
 ]);
 const LIVE = summarizeTranscript([runStart(), toolStartId("c1", "read", { path: "a" })]);
 
-/** A client whose readTranscript answers from `seq` in order (last one repeats). */
-function client(seq: TranscriptRead[]) {
+/** A client whose readTranscript answers from `seq` in order (last one repeats).
+ * `delayMs`, when set, awaits a macrotask (`setTimeout`) before resolving —
+ * matching real `DashboardClient.readTranscript` I/O, which resolves after
+ * the mounting passive effect has already run (unlike the default instant
+ * fake, whose promise settles on a bare microtask, ahead of that effect). */
+function client(seq: TranscriptRead[], delayMs?: number) {
   const calls: (number | null)[] = [];
   const c = {
     readTranscript: async (_id: string, prev: number | null) => {
+      if (delayMs !== undefined) await new Promise((r) => setTimeout(r, delayMs));
       calls.push(prev);
       return okv(seq[Math.min(calls.length - 1, seq.length - 1)]);
     },
@@ -90,10 +95,17 @@ describe("useTranscript", () => {
   });
 
   it("opened with expectLive:false on a live transcript still polls", async () => {
-    const { c, calls } = client([
-      { kind: "read", size: 5, summary: LIVE },
-      { kind: "read", size: 9, summary: DONE },
-    ]);
+    // delayMs:5 resolves readTranscript after a macrotask — the ordering
+    // real fs I/O produces, where the first read lands after the mounting
+    // passive effect has already run once with the initial (non-live)
+    // decision. pollMs is 10, so a 5ms read still leaves room to poll.
+    const { c, calls } = client(
+      [
+        { kind: "read", size: 5, summary: LIVE },
+        { kind: "read", size: 9, summary: DONE },
+      ],
+      5,
+    );
     const m = mount(c);
     m.api().openTranscript("t-1", { expectLive: false });
     await until(() => m.frame().includes("live:false"));
