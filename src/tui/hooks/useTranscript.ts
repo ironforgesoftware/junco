@@ -56,53 +56,63 @@ export function useTranscript({
 }): TranscriptApi {
   const [transcript, setTranscript] = useState<TranscriptState | null>(null);
 
-  const computePolling = (s: TranscriptState): boolean =>
-    s.error === null && (s.summary !== null ? s.summary.live : s.expectLive);
-
-  // `size`/`polling` for the interval tick below, updated SYNCHRONOUSLY
-  // (inside the setTranscript updater, which React invokes immediately —
-  // not deferred to a re-render) so a tick never acts on a stale decision.
-  // A version keyed only off React state would leave a window, between a
-  // terminal read resolving and React actually committing + re-running the
-  // effect, where a fixed-schedule setInterval tick can still fire and
-  // issue one extra read — this ref closes that window by making the
-  // stop-polling decision available the instant the read completes.
-  const pollRef = useRef<{ size: number | null; polling: boolean } | null>(null);
+  // The interval's lifecycle is driven entirely by `polling` below — reactive
+  // React state, exactly spec §4's predicate — via the effect's dependency
+  // array: that reactive value is what starts the interval on a false→true
+  // transition and clears it on true→false. `pollRef` is NOT the lifecycle
+  // driver; it is a synchronous terminal stop-flag a tick consults right
+  // before dispatching. `readOnce`'s `.then` updates it from the read result
+  // BEFORE calling `setTranscript`, so a tick can never issue a read after
+  // the terminal result has already resolved but before React has committed
+  // the corresponding state update and re-run this effect. Under Ink's
+  // legacy root, state updates take the sync lane and flush in a microtask —
+  // ahead of any `setInterval` macrotask — so in practice that window rarely
+  // opens; the ref makes the guarantee hold regardless of that scheduling
+  // detail.
+  const pollRef = useRef<{
+    id: string;
+    expectLive: boolean;
+    size: number | null;
+    polling: boolean;
+  } | null>(null);
 
   const readOnce = useCallback(
     (id: string, prevSize: number | null): Promise<void> => {
       return client.readTranscript(id, prevSize).then((r) => {
         if (!aliveRef.current) return;
+        const p = pollRef.current;
+        if (p !== null && p.id === id) {
+          if (!r.ok) {
+            p.polling = false;
+          } else if (r.value.kind === "read") {
+            p.size = r.value.size;
+            p.polling = r.value.summary.live;
+          } else if (r.value.kind === "missing") {
+            p.polling = p.expectLive;
+          }
+          // "unchanged": leave p.size/p.polling as they are.
+        }
         setTranscript((s) => {
           if (s === null || s.id !== id) return s; // closed or reopened meanwhile
-          let next: TranscriptState;
-          if (!r.ok) {
-            next = { ...s, loading: false, error: r.error };
-          } else {
-            const v = r.value;
-            if (v.kind === "unchanged") {
-              next = s.loading ? { ...s, loading: false } : s;
-            } else if (v.kind === "missing") {
-              next = {
-                ...s,
-                loading: false,
-                path: v.path,
-                error: s.expectLive ? null : `no transcript for ${id}`,
-              };
-            } else {
-              const n = toolCallIds(v.summary).length;
-              next = {
-                ...s,
-                loading: false,
-                error: null,
-                size: v.size,
-                summary: v.summary,
-                cursor: Math.min(s.cursor, Math.max(0, n - 1)),
-              };
-            }
-          }
-          pollRef.current = { size: next.size, polling: computePolling(next) };
-          return next;
+          if (!r.ok) return { ...s, loading: false, error: r.error };
+          const v = r.value;
+          if (v.kind === "unchanged") return s.loading ? { ...s, loading: false } : s;
+          if (v.kind === "missing")
+            return {
+              ...s,
+              loading: false,
+              path: v.path,
+              error: s.expectLive ? null : `no transcript for ${id}`,
+            };
+          const n = toolCallIds(v.summary).length;
+          return {
+            ...s,
+            loading: false,
+            error: null,
+            size: v.size,
+            summary: v.summary,
+            cursor: Math.min(s.cursor, Math.max(0, n - 1)),
+          };
         });
       });
     },
@@ -111,7 +121,7 @@ export function useTranscript({
 
   const openTranscript = useCallback(
     (id: string, opts: { expectLive: boolean }): void => {
-      pollRef.current = { size: null, polling: opts.expectLive };
+      pollRef.current = { id, expectLive: opts.expectLive, size: null, polling: opts.expectLive };
       setTranscript({
         id,
         path: null,
@@ -131,9 +141,13 @@ export function useTranscript({
   );
 
   const id = transcript?.id ?? null;
+  const polling =
+    transcript !== null &&
+    transcript.error === null &&
+    (transcript.summary !== null ? transcript.summary.live : transcript.expectLive);
 
   useEffect(() => {
-    if (id === null || !(pollRef.current?.polling ?? false)) return;
+    if (!polling || id === null) return;
     // Guard against overlapping ticks: setInterval fires on a fixed schedule
     // regardless of whether the previous readOnce has resolved. Without this,
     // a slow tick (state update lagging behind the timer under load) lets a
@@ -142,14 +156,19 @@ export function useTranscript({
     const t = setInterval(() => {
       if (inFlight) return;
       const p = pollRef.current;
-      if (p === null || !p.polling) return; // terminal read already landed
+      if (p === null || p.id !== id || !p.polling) return; // terminal read already landed
       inFlight = true;
-      void readOnce(id, p.size).finally(() => {
-        inFlight = false;
-      });
+      readOnce(id, p.size).then(
+        () => {
+          inFlight = false;
+        },
+        () => {
+          inFlight = false;
+        },
+      );
     }, pollMs);
     return () => clearInterval(t);
-  }, [id, pollMs, readOnce]);
+  }, [polling, id, pollMs, readOnce]);
 
   const closeTranscript = useCallback((): void => {
     pollRef.current = null;

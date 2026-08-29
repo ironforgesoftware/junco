@@ -89,6 +89,20 @@ describe("useTranscript", () => {
     expect(calls.length).toBe(n);
   });
 
+  it("opened with expectLive:false on a live transcript still polls", async () => {
+    const { c, calls } = client([
+      { kind: "read", size: 5, summary: LIVE },
+      { kind: "read", size: 9, summary: DONE },
+    ]);
+    const m = mount(c);
+    m.api().openTranscript("t-1", { expectLive: false });
+    await until(() => m.frame().includes("live:false"));
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const n = calls.length;
+    await wait(40);
+    expect(calls.length).toBe(n);
+  });
+
   it("missing + expectLive keeps waiting (no error, keeps polling)", async () => {
     const { c, calls } = client([{ kind: "missing", path: "/p" }]);
     const m = mount(c);
