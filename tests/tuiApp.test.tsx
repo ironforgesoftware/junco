@@ -171,6 +171,7 @@ function makeClient(
     discardCommentDraft: async () => okv(null),
     discardReview: async () => okv(null),
     analyzeIssue: async () => okv({ id: "x" }),
+    readTranscript: async () => okv({ kind: "missing" as const, path: "/x/transcripts/t.jsonl" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -234,6 +235,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     discardCommentDraft: async () => okv(null),
     discardReview: async () => okv(null),
     analyzeIssue: async () => okv({ id: "x" }),
+    readTranscript: async () => okv({ kind: "missing" as const, path: "/x/transcripts/t.jsonl" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -300,6 +302,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
     discardCommentDraft: async () => okv(null),
     discardReview: async () => okv(null),
     analyzeIssue: async () => okv({ id: "x" }),
+    readTranscript: async () => okv({ kind: "missing" as const, path: "/x/transcripts/t.jsonl" }),
     health: async () => ({
       up: true,
       uptimeSeconds: 60,
@@ -893,6 +896,7 @@ describe("App", () => {
       discardCommentDraft: async () => okv(null),
       discardReview: async () => okv(null),
       analyzeIssue: async () => okv({ id: "x" }),
+      readTranscript: async () => okv({ kind: "missing" as const, path: "/x/transcripts/t.jsonl" }),
       health: async () => ({
         up: true,
         uptimeSeconds: 60,

@@ -240,6 +240,7 @@ export const stubClient: DashboardClient = {
   discardCommentDraft: async () => okv(null),
   discardReview: async () => okv(null),
   analyzeIssue: async () => okv({ id: "analyze-x-y-1" }),
+  readTranscript: async () => okv({ kind: "missing" as const, path: "/x/transcripts/t.jsonl" }),
   health: async () => ({
     up: true,
     uptimeSeconds: 60,

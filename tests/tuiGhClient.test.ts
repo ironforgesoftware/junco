@@ -12,6 +12,9 @@ import type { FileResult } from "../src/assessFiling.js";
 import type { PendingComment } from "../src/commentReview.js";
 import type { RepoAccess } from "../src/botAccess.js";
 import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
+import { transcriptPathFor } from "../src/slug.js";
+import { dataTreePaths } from "../src/dataTree.js";
+import { runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
 
 const cfg = {
   ghBin: "gh",
@@ -1200,5 +1203,67 @@ describe("botGrantPreflight", () => {
     const r = await client.botGrantPreflight("acme/api");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/auth login/);
+  });
+});
+
+describe("readTranscript", () => {
+  const path = transcriptPathFor(dataTreePaths(cfg).transcripts, "t-1");
+  const enoent = (): Error => Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+
+  it("missing file → kind missing with the resolved path, no read attempted", async () => {
+    const c = makeGhDashboardClient(cfg, {
+      statFn: () => {
+        throw enoent();
+      },
+      readFileFn: () => {
+        throw new Error("must not read");
+      },
+    });
+    expect(await c.readTranscript("t-1", null)).toEqual({
+      ok: true,
+      value: { kind: "missing", path },
+    });
+  });
+
+  it("same size as prevSize → unchanged, without reading", async () => {
+    const reads: string[] = [];
+    const c = makeGhDashboardClient(cfg, {
+      statFn: () => ({ size: 42 }),
+      readFileFn: (p) => {
+        reads.push(p);
+        return "";
+      },
+    });
+    expect(await c.readTranscript("t-1", 42)).toEqual({
+      ok: true,
+      value: { kind: "unchanged", size: 42 },
+    });
+    expect(reads).toEqual([]);
+  });
+
+  it("changed size → reads and summarizes", async () => {
+    const content = [runStart({ flow: "qa" }), turnEndFull({ text: "hi" }), runEnd()].join("\n");
+    const c = makeGhDashboardClient(cfg, {
+      statFn: () => ({ size: content.length }),
+      readFileFn: (p) => {
+        expect(p).toBe(path);
+        return content;
+      },
+    });
+    const r = await c.readTranscript("t-1", 5);
+    expect(r.ok).toBe(true);
+    if (!r.ok || r.value.kind !== "read") throw new Error("expected read");
+    expect(r.value.size).toBe(content.length);
+    expect(r.value.summary.runs[0].turns[0].text).toBe("hi");
+    expect(r.value.summary.live).toBe(false);
+  });
+
+  it("a non-ENOENT stat failure is an error Result", async () => {
+    const c = makeGhDashboardClient(cfg, {
+      statFn: () => {
+        throw new Error("EACCES: denied");
+      },
+    });
+    expect(await c.readTranscript("t-1", null)).toEqual({ ok: false, error: "EACCES: denied" });
   });
 });
