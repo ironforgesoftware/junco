@@ -76,6 +76,30 @@ describe("fmtRunOutcome", () => {
     expect(fmtRunOutcome(run({ end: null }), true)).toEqual({ text: "◐ running…", tone: "accent" });
     expect(fmtRunOutcome(run({ end: null }), false)).toEqual({ text: "truncated", tone: "warn" });
   });
+  it("abortedByGuard with errorMessage renders as killed by guard with warn tone", () => {
+    const r = run({
+      end: {
+        ...run().end!,
+        abortedByGuard: true,
+        errorMessage: "boom",
+        durationMs: null,
+        usage: null,
+      },
+    });
+    expect(fmtRunOutcome(r, false)).toEqual({ text: "killed by guard", tone: "warn" });
+  });
+  it("timedOut with errorMessage renders as timeout with warn tone", () => {
+    const r = run({
+      end: {
+        ...run().end!,
+        timedOut: true,
+        errorMessage: "connection lost",
+        durationMs: null,
+        usage: null,
+      },
+    });
+    expect(fmtRunOutcome(r, false)).toEqual({ text: "timeout", tone: "warn" });
+  });
 });
 
 describe("fmtToolCall / fmtToolResult", () => {
@@ -219,5 +243,23 @@ describe("renderTranscriptRows", () => {
     ]);
     const rows = renderTranscriptRows(summarizeTranscript([runStart(), runEnd(), "{bad"]), opts());
     expect(rows[0]).toEqual({ text: "1 invalid line skipped", tone: "warn" });
+  });
+
+  it("width invariant at MIN_WIDTH with invalid line and error result", () => {
+    const longErrorFirstLine = "x".repeat(80);
+    const s = summarizeTranscript([
+      runStart(),
+      agentStart(),
+      turnEndFull({
+        calls: [{ id: "c1", name: "bash", args: { command: "fail" }, result: longErrorFirstLine }],
+      }),
+      runEnd(),
+      "{bad",
+    ]);
+    const rows = renderTranscriptRows(s, opts({ width: 20 }));
+    expect(rows.every((r) => r.text.length <= 20)).toBe(true);
+    const toolRow = rows.find((r) => r.anchor === "c1");
+    expect(toolRow).toBeDefined();
+    expect(toolRow!.text.length).toBeLessThanOrEqual(20);
   });
 });

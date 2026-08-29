@@ -146,7 +146,8 @@ export function fmtRunOutcome(run: RunSummary, live: boolean): { text: string; t
   const parts = [base];
   if (end.durationMs !== null) parts.push(fmtDuration(end.durationMs));
   if (end.usage !== null) parts.push(`in ${fmtK(end.usage.input)} out ${fmtK(end.usage.output)}`);
-  const tone: RowTone = failed ? "error" : end.abortedByGuard || end.timedOut ? "warn" : "success";
+  const tone: RowTone =
+    base === "killed by guard" || base === "timeout" ? "warn" : failed ? "error" : "success";
   return { text: parts.join(" · "), tone };
 }
 
@@ -154,7 +155,7 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
   const width = Math.max(MIN_WIDTH, o.width);
   const rows: TranscriptRow[] = [];
   const push = (text: string, tone?: RowTone, anchor?: string): void => {
-    const row: TranscriptRow = { text };
+    const row: TranscriptRow = { text: truncate(text, width) };
     if (tone !== undefined) row.tone = tone;
     if (anchor !== undefined) row.anchor = anchor;
     rows.push(row);
