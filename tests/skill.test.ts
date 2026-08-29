@@ -27,4 +27,16 @@ describe("junco-dispatch SKILL.md", () => {
     // false-match the bare "omp" the assessPrompt test can rely on being absent.
     expect(SKILL).not.toMatch(/\b(omp|omlx|launchd|vault|pi|qwen|openai|gpt|ollama|llama|mlx)\b/i);
   });
+
+  it("auto-routes to the parked-issue destination when the repo is bridge-watched", () => {
+    // The route probe is a CLI contract — pin the exact commands the skill runs.
+    expect(SKILL).toContain("junco config get github.enabled");
+    expect(SKILL).toContain("junco config get botAccount.enabled");
+    expect(SKILL).toContain("junco submit --as-issue");
+    // The opt-out trigger and phrase.
+    expect(SKILL).toContain("junco-local:");
+    expect(SKILL).toContain("to the inbox");
+    // The old "only on an explicit phrase" rule is gone.
+    expect(SKILL).not.toContain("Otherwise stay on the inbox default without asking");
+  });
 });

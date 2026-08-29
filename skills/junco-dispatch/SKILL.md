@@ -1,11 +1,11 @@
 ---
 name: junco-dispatch
-description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it to the configured inbox — or, on request, as a parked GitHub issue — for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
+description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it — as a parked GitHub issue when the target repo is bridge-watched and the bot account is on, otherwise to the configured inbox — for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
 ---
 
 # Junco dispatch
 
-Package a unit of work into a plan-shaped markdown file with junco frontmatter, then submit it to its destination. The default destination is the configured inbox via `junco submit`. On an explicit request to park the work on GitHub instead ("park it on github", "junco as issue: …", "dispatch as issue"), the destination is a parked, unlabeled GitHub issue via `junco submit --as-issue` — see "Dispatch procedure" below. Either way the junco worker claims the resulting ticket, runs it through its configured coding agent, and opens a draft PR on completion; the issue destination just adds one more human gate before that first claim — nothing runs until a human applies the trigger label.
+Package a unit of work into a plan-shaped markdown file with junco frontmatter, then submit it to its destination. The destination is decided by a probe, not a phrase: when GitHub integration and the bot account are both on and the target repo is bridge-watched, the ticket is filed as a parked, unlabeled GitHub issue via `junco submit --as-issue`; otherwise it goes to the configured inbox via `junco submit`. A `junco-local:` trigger, or a brief that says "to the inbox" / "local inbox", forces the inbox; "park it on github" / "junco as issue: …" / "dispatch as issue" forces the issue destination even when the probe would not pick it (the CLI's refusal then says why it cannot). See "Dispatch procedure" below. Either way the junco worker claims the resulting ticket, runs it through its configured coding agent, and opens a draft PR on completion; the issue destination just adds one more human gate before that first claim — nothing runs until a human applies the trigger label.
 
 **Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
@@ -178,7 +178,17 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 ### Interactive mode (default)
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body).
-2. **Destination.** Default is the inbox. Route to a parked GitHub issue instead when the trigger phrase already said so explicitly — "park it on github", "junco as issue: …", "dispatch as issue" — no need to ask again, that phrase decided it. Otherwise stay on the inbox default without asking.
+2. **Destination — probe, then decide.** Run, in the target repo:
+
+   ```
+   junco config get github.enabled
+   junco config get botAccount.enabled
+   gh repo view <repo-path> --json nameWithOwner -q .nameWithOwner
+   junco doctor
+   ```
+
+   Pick the **issue destination** when the first two print `true` AND `junco doctor` lists the repo's `owner/repo` on a `github repo <owner/repo>` line (the bridge only sweeps watched repos — an unwatched repo's parked issue would never launch). Otherwise pick the **inbox**. Overrides, in priority order: a `junco-local:` trigger or a brief that says "to the inbox" / "local inbox" forces the inbox; "park it on github", "junco as issue: …", "dispatch as issue" forces the issue destination (if the probe disagrees, still run `--as-issue` and surface its refusal — it names the missing precondition). Say which destination you picked and why in one line before the preview. Leave `repo:` as the working checkout — `--as-issue` matches it to the watched repo by the checkout's `origin`.
+
 3. **Preview + approve.** Use `AskUserQuestion` with the rendered ticket as a preview. Ask: "Dispatch this to junco?" (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`.
 4. **On approve — submit via CLI.** Write the rendered ticket to a temp file, then run:
 
@@ -196,7 +206,7 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
    junco submit --as-issue <tempfile>
    ```
 
-   Refuses if the repo isn't bridge-watched or the bot account isn't enabled — surface the printed error and offer to fall back to the inbox instead. On success it prints the issue URL and `apply label '<trigger>' to queue`; report the URL, not a destination path — nothing is labeled yet.
+   Refuses if GitHub integration or the bot account is off, or if `repo:` is neither a watched clone path nor a checkout whose `origin` is a watched `owner/repo` — surface the printed error and offer to fall back to the inbox instead. It also warns which frontmatter it discarded (`timeout_minutes`, `priority`, `draft`, `labels` do not survive this route — the bridge builds execution frontmatter itself; the daemon's `worker.defaultTimeoutMinutes` applies); relay that warning verbatim. On success it prints the issue URL and `apply label '<trigger>' to queue`; report the URL, not a destination path — nothing is labeled yet.
 
 5. **Announce.** Tell the user:
    - **Inbox destination:** ticket id and destination path (from `junco submit` output); expected wall clock (use `timeout_minutes` as an upper bound); how to watch — the daemon's log output, or poll the `done/` and `failed/` directories under the queue root (`junco inbox-path` shows where the queue lives).
@@ -205,7 +215,7 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 
 ### Batch mode (no preview, headless harness)
 
-Triggered when the user prompt starts with `junco-batch:`. Identical to interactive mode except the preview gate and the monitor offer are skipped. Batch mode is inbox-only — its own Submit step hardcodes `junco submit <tempfile>`, so an "as issue" phrase in a `junco-batch:` prompt is not supported; route that case through interactive mode instead:
+Triggered when the user prompt starts with `junco-batch:`. Identical to interactive mode except the preview gate and the monitor offer are skipped. Batch mode is inbox-only — it skips the destination probe and its own Submit step hardcodes `junco submit <tempfile>`, so neither the auto-route nor an "as issue" phrase applies to a `junco-batch:` prompt; route that case through interactive mode instead:
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body). Same template, same rules.
 2. **(SKIPPED)** No `AskUserQuestion` preview gate. The ask tool is unavailable in a headless harness and would throw `ToolAbortError`.
