@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Box, Text } from "ink";
 import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
@@ -79,14 +79,20 @@ export const TranscriptView = React.memo(function TranscriptView({
   const visible = Math.max(1, height - 4);
   // Borders (2) + paddingX (2) + scrollbar column (1) + cursor gutter (1).
   const textWidth = Math.max(MIN_WIDTH, width - 6);
-  const rows: TranscriptRow[] =
-    state.summary === null
-      ? []
-      : renderTranscriptRows(state.summary, {
-          width: textWidth,
-          showThinking: state.showThinking,
-          expanded: state.expanded,
-        });
+  // Memoized: the row list depends only on the summary and the render options,
+  // but every scroll keystroke re-renders this component — re-rendering a
+  // 3000-row transcript from scratch on each `]` is the one hot path here.
+  const rows: TranscriptRow[] = useMemo(
+    () =>
+      state.summary === null
+        ? []
+        : renderTranscriptRows(state.summary, {
+            width: textWidth,
+            showThinking: state.showThinking,
+            expanded: state.expanded,
+          }),
+    [state.summary, state.showThinking, state.expanded, textWidth],
+  );
   const anchors = state.summary === null ? [] : toolCallIds(state.summary);
   const anchorId = anchors[state.cursor];
   const anchorRow = anchorId === undefined ? -1 : rows.findIndex((r) => r.anchor === anchorId);
