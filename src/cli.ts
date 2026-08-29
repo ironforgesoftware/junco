@@ -264,6 +264,10 @@ Subcommands:
          [--output-budget-per-turn N] [--output-budget-post-commit N] [--json]
                         Re-run a recorded event transcript through the guards
                         under a chosen (or default) policy — a what-if report
+  transcript <ticket-id|path.jsonl> [--thinking] [--tools] [--width N] [--json]
+                        Print a recorded event transcript — runs, turns, tool
+                        calls and results, the agent's answer (the dashboard
+                        opens the same view with enter on a queue row)
   unwatch <owner/repo> [--plan]  Stop watching a repo and delete its junco-owned state (--plan previews as JSON)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos
@@ -353,6 +357,11 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       "escalation-window": { type: "string" },
       "output-budget-per-turn": { type: "string" },
       "output-budget-post-commit": { type: "string" },
+      // transcript-only (src/transcriptCmd.ts parses its own slice; declared
+      // here for the same reason as the replay knobs above).
+      thinking: { type: "boolean", default: false },
+      tools: { type: "boolean", default: false },
+      width: { type: "string" },
       harness: { type: "string", multiple: true },
       plan: { type: "boolean", default: false },
       repo: { type: "string" },
@@ -1057,6 +1066,22 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       loadCfg: () => loadConfigFn(configPath),
       readFile: (p: string) => readFileSync(p, "utf8"),
       stdout: (l: string) => printFn(l + "\n"),
+    });
+  }
+
+  // ------------------------------------------------------------
+  // transcript: render a recorded event transcript (src/transcriptCmd.ts).
+  // Same raw sub-argv handoff and lazy import as replay above.
+  // ------------------------------------------------------------
+  if (subcommand === "transcript") {
+    const { runTranscriptCmd } = await import("./transcriptCmd.js");
+    const idx = argv.indexOf("transcript");
+    const subArgv = idx === -1 ? positionals.slice(1) : argv.slice(idx + 1);
+    return runTranscriptCmd(subArgv, {
+      loadCfg: () => loadConfigFn(configPath),
+      readFile: (p: string) => readFileSync(p, "utf8"),
+      stdout: (l: string) => printFn(l + "\n"),
+      columns: process.stdout.columns ?? 100,
     });
   }
 

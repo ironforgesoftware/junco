@@ -55,6 +55,7 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
     null,
     600_000, // issue-ref targets may fork + full-clone an unwatched repo
   ),
+  cmd("transcript", "<ticket-id> [--thinking] [--tools]", "Print a ticket's event transcript"),
   cmd("doctor", null, "Preflight: config, git, gh auth, endpoint, model, dirs"),
   cmd("logs", "[-n N]", "Show the worker log (bounded)", ["-n", "200", "--human"]),
   cmd("run-once", null, "Process one task and exit (no lock)", [], null, 3_600_000),
