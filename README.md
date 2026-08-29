@@ -201,24 +201,25 @@ frontmatter contract, `examples/` has templates, and the bundled
 
 ## CLI at a glance
 
-|                                                               |                                                                                                                   |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `junco start` / `junco restart`                               | run the daemon / restart the installed service                                                                    |
-| `junco submit <file>`                                         | queue a ticket (also reads stdin)                                                                                 |
-| `junco dashboard`                                             | the fullscreen TUI                                                                                                |
-| `junco dispatch <owner/repo#N \| url>`                        | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                      |
-| `junco status` / `junco list` / `junco logs -f`               | daemon, queue, and log visibility                                                                                 |
-| `junco prs`                                                   | list junco-authored pull requests across watched repos                                                            |
-| `junco assess <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`assess review`, `assess file`)   |
-| `junco analyze <owner/repo#N\|url>`                           | investigate an issue (owned or external); draft awaits review (`analyze review`, `analyze post`)                  |
-| `junco retry <name…\|--all>`                                  | move failed tickets back to the inbox                                                                             |
-| `junco outbox [flush]`                                        | inspect or push the offline GitHub backlog                                                                        |
-| `junco doctor`                                                | preflight config, git/gh auth, endpoint, model                                                                    |
-| `junco auth login`                                            | log the bot account in ([bot account guide](docs/bot-account.md))                                                 |
-| `junco auth grant <owner/repo>`                               | grant the bot push access to a repo — invite as you, accept as the bot ([bot account guide](docs/bot-account.md)) |
-| `junco config` / `junco schema` / `junco service`             | config get/set/init, ticket schema, service install                                                               |
-| `junco update`                                                | install the latest release and drain-restart the supervised daemon                                                |
-| `junco --version`                                             | print the running version                                                                                         |
+|                                                               |                                                                                                                      |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `junco start` / `junco restart`                               | run the daemon / restart the installed service                                                                       |
+| `junco submit <file>`                                         | queue a ticket (also reads stdin)                                                                                    |
+| `junco dashboard`                                             | the fullscreen TUI                                                                                                   |
+| `junco dispatch <owner/repo#N \| url>`                        | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                         |
+| `junco status` / `junco list` / `junco logs -f`               | daemon, queue, and log visibility                                                                                    |
+| `junco prs`                                                   | list junco-authored pull requests across watched repos                                                               |
+| `junco assess <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`assess review`, `assess file`)      |
+| `junco analyze <owner/repo#N\|url>`                           | investigate an issue (owned or external); draft awaits review (`analyze review`, `analyze post`)                     |
+| `junco retry <name…\|--all>`                                  | move failed tickets back to the inbox                                                                                |
+| `junco outbox [flush]`                                        | inspect or push the offline GitHub backlog                                                                           |
+| `junco doctor`                                                | preflight config, git/gh auth, endpoint, model                                                                       |
+| `junco transcript <ticket-id>`                                | print a ticket's recorded event transcript — runs, tool calls, results, the agent's answer (`--thinking`, `--tools`) |
+| `junco auth login`                                            | log the bot account in ([bot account guide](docs/bot-account.md))                                                    |
+| `junco auth grant <owner/repo>`                               | grant the bot push access to a repo — invite as you, accept as the bot ([bot account guide](docs/bot-account.md))    |
+| `junco config` / `junco schema` / `junco service`             | config get/set/init, ticket schema, service install                                                                  |
+| `junco update`                                                | install the latest release and drain-restart the supervised daemon                                                   |
+| `junco --version`                                             | print the running version                                                                                            |
 
 ## Contributing
 
