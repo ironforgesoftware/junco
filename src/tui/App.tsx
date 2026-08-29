@@ -459,11 +459,12 @@ export function App(props: AppProps): React.JSX.Element {
   // target (localTarget) are always the SAME row. That means we do NOT pre-
   // filter out non-actionable rows here (a done RECENT row, a live worktree):
   // they stay in the list, exactly where the component draws them, and the
-  // x/R handlers guard them into a safe toast instead. RUNNING/processing rows
-  // are the one exception — QueueView never makes them selectable (the daemon
-  // owns processing/), and they are absent here too, so the mapping still holds.
+  // x/R handlers guard them into a safe toast instead. RUNNING rows are
+  // selectable too (since the transcript viewer: `enter` opens their live
+  // transcript) — retry/delete guard them the same way.
   // Gives x/R/o/f an explicit LOCAL target instead of the github currentRepo.
   type LocalRow =
+    | { kind: "running"; id: string }
     | { kind: "waiting"; id: string }
     | { kind: "recent"; id: string; status: "done" | "failed" }
     | { kind: "outboxOp"; id: string }
@@ -474,9 +475,10 @@ export function App(props: AppProps): React.JSX.Element {
       case "queue": {
         const q = localCheap?.queue;
         if (!q) return [];
-        // waiting THEN all recent (done+failed) — the identical index space
-        // QueueView highlights (`selectedRow === waiting.length + j`).
+        // running THEN waiting THEN all recent (done+failed) — the identical
+        // index space QueueView highlights.
         return [
+          ...q.running.map((r) => ({ kind: "running" as const, id: r.id })),
           ...q.waiting.map((w) => ({ kind: "waiting" as const, id: w.id })),
           ...q.recent.map((rr) => ({ kind: "recent" as const, id: rr.id, status: rr.status })),
         ];
@@ -1495,6 +1497,8 @@ export function App(props: AppProps): React.JSX.Element {
               return void runLocalAction("retry", [tgt.id], { label: "requeue" });
             if (tgt?.kind === "recent" && tgt.status === "done")
               return void showToast("info", "done tickets can't be requeued");
+            if (tgt?.kind === "running")
+              return void showToast("info", "running — enter opens its transcript");
           },
           delete: () => {
             if (sysSection !== "queue") return;

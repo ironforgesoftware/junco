@@ -450,7 +450,7 @@ describe("QueueView", () => {
     expect(base).not.toContain("▌");
   });
 
-  it("selectable path: cursor marks the first WAITING row, never RUNNING", () => {
+  it("selectable path: index 0 is the first RUNNING row (running ⧺ waiting ⧺ recent)", () => {
     const frame = render(
       <QueueView
         snap={FULL}
@@ -462,16 +462,14 @@ describe("QueueView", () => {
         selectedRow={0}
       />,
     ).lastFrame()!;
-    expect(frame).toContain("▌"); // cursor present
-    expect(frame).toContain("1. #51 plan"); // still the first waiting row
-    // RUNNING row (◐ + label) carries no cursor glyph on its line.
     const runLine = frame.split("\n").find((l) => l.includes("#46 exec"))!;
-    expect(runLine).not.toContain("▌");
+    expect(runLine).toContain("▌");
+    const waitLine = frame.split("\n").find((l) => l.includes("1. #51 plan"))!;
+    expect(waitLine).not.toContain("▌");
   });
 
-  it("selectable path: selectedRow past WAITING lands on a RECENT row", () => {
-    // waiting.length === 4, so index 4 is the first RECENT row (#44).
-    const frame = render(
+  it("selectable path: WAITING follows RUNNING; RECENT follows WAITING", () => {
+    const waitFrame = render(
       <QueueView
         snap={FULL}
         scroll={0}
@@ -479,11 +477,22 @@ describe("QueueView", () => {
         height={30}
         focused={false}
         selectable
-        selectedRow={4}
+        selectedRow={FULL.running.length}
       />,
     ).lastFrame()!;
-    const recLine = frame.split("\n").find((l) => l.includes("#44 exec"))!;
-    expect(recLine).toContain("▌");
+    expect(waitFrame.split("\n").find((l) => l.includes("1. #51 plan"))!).toContain("▌");
+    const recFrame = render(
+      <QueueView
+        snap={FULL}
+        scroll={0}
+        now={NOW}
+        height={30}
+        focused={false}
+        selectable
+        selectedRow={FULL.running.length + FULL.waiting.length}
+      />,
+    ).lastFrame()!;
+    expect(recFrame.split("\n").find((l) => l.includes("#44 exec"))!).toContain("▌");
   });
 
   it("counts render the full done/failed totals (LOCAL only; absent = no line)", () => {
@@ -798,7 +807,7 @@ describe("QueueView", () => {
       height: 40,
       focused: false,
       selectable: true,
-      selectedRow: 4, // waiting.length (4) + 0 → first RECENT row (#44)
+      selectedRow: 5, // running.length (1) + waiting.length (4) + 0 → first RECENT row (#44)
       onRowPress: (): void => {},
     };
     const noStats = render(<QueueView snap={FULL} {...props} />).lastFrame()!;

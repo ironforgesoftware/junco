@@ -1309,6 +1309,26 @@ describe("header breadcrumbs", () => {
     r.stdin.write("j");
     await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
   });
+
+  it("t on a RUNNING queue row toasts instead of spawning retry", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const spawned: string[] = [];
+    const r = renderApp(client, wlc(), 999999, async (name) => {
+      spawned.push(name);
+      return { code: 0, output: "", timedOut: false };
+    });
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("j"); // rail → queue row
+    await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
+    r.stdin.write("l"); // into pane 2 — cursor 0 is the RUNNING row (#46)
+    await until(() => {
+      const line = (r.lastFrame() ?? "").split("\n").find((l) => l.includes("#46 exec"));
+      return line !== undefined && line.includes("▌");
+    });
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("enter opens its transcript"));
+    expect(spawned).toEqual([]);
+  });
 });
 
 describe("external-repo routing", () => {

@@ -49,9 +49,12 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("sub-fix-typos")); // queue body up
     r.stdin.write("l"); // enter body
     await until(() => frame(r).includes("back")); // body focus (footer)
-    // The two selectable queue rows are WAITING then failed RECENT (the RUNNING
-    // row is never in the list). Move the cursor onto the failed RECENT row
-    // (its label is the github-derived "#9 exec", not the raw ticket id).
+    // The three selectable queue rows are RUNNING, then WAITING, then failed
+    // RECENT. Cursor starts on the RUNNING row (index 0); move down twice onto
+    // the failed RECENT row (its label is the github-derived "#9 exec", not the
+    // raw ticket id).
+    r.stdin.write("j");
+    await until(() => selOn(r, "sub-fix-typos"));
     r.stdin.write("j");
     await until(() => selOn(r, "#9"));
     r.stdin.write("t"); // re[t]ry mnemonic
@@ -70,7 +73,9 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("system"));
     await tap(r, TO_QUEUE_ROW);
     await until(() => frame(r).includes("sub-fix-typos"));
-    r.stdin.write("l");
+    r.stdin.write("l"); // enter body — cursor starts on the RUNNING row
+    await until(() => selOn(r, "#1 exec"));
+    r.stdin.write("j"); // down onto the WAITING row
     await until(() => selOn(r, "sub-fix-typos")); // cursor on the WAITING row
     r.stdin.write("D"); // guarded Delete mnemonic — opens confirm (destructive)
     await until(() => frame(r).toLowerCase().includes("delete"));
@@ -91,7 +96,9 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("system"));
     await tap(r, TO_QUEUE_ROW);
     await until(() => frame(r).includes("sub-fix-typos"));
-    r.stdin.write("l");
+    r.stdin.write("l"); // enter body — cursor starts on the RUNNING row
+    await until(() => selOn(r, "#1 exec"));
+    r.stdin.write("j"); // down onto the WAITING row
     await until(() => selOn(r, "sub-fix-typos"));
     r.stdin.write("D");
     await until(() => frame(r).toLowerCase().includes("delete"));
@@ -100,7 +107,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("RUNNING/processing rows are never selectable — no action spawns", async () => {
+  it("a RUNNING row is selectable (top of the list) but retry is a guarded toast, not a spawn", async () => {
     const calls: unknown[] = [];
     const r = renderApp({
       runCliFn: async () => {
@@ -113,10 +120,10 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
     await until(() => frame(r).includes("back"));
-    r.stdin.write("g"); // top selectable row — the WAITING row, NOT the running row
-    await until(() => selOn(r, "sub-fix-typos"));
-    r.stdin.write("t"); // re[t]ry mnemonic // R only fires on a failed RECENT row → no-op here
-    await new Promise((res) => setTimeout(res, 20));
+    r.stdin.write("g"); // top selectable row — now the RUNNING row (running ⧺ waiting ⧺ recent)
+    await until(() => selOn(r, "#1 exec"));
+    r.stdin.write("t"); // re[t]ry mnemonic — guarded no-op on a running row
+    await until(() => frame(r).toLowerCase().includes("enter opens its transcript"));
     expect(calls).toHaveLength(0);
   });
 

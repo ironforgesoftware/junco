@@ -21,7 +21,13 @@ async function openWaitingRowConfirm(r: ReturnType<typeof renderApp>): Promise<v
   await until(() => frame().includes("system"));
   await tap(r, TO_QUEUE_ROW); // rail → queue system row
   await until(() => frame().includes("sub-fix-typos"));
-  r.stdin.write("l"); // enter body
+  r.stdin.write("l"); // enter body — cursor starts on the RUNNING row
+  await until(() =>
+    frame()
+      .split("\n")
+      .some((l) => l.includes("#1 exec") && l.includes("▌")),
+  );
+  r.stdin.write("j"); // down onto the WAITING row
   await until(() =>
     frame()
       .split("\n")
