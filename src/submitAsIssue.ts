@@ -2,19 +2,21 @@
  * `junco submit --as-issue` — file a locally-authored ticket as a PARKED,
  * UNLABELED GitHub issue (spec docs/superpowers/specs/2026-08-21-issue-as-
  * inbox-design.md). The bot authors; only a human's trigger label launches.
- * Frontmatter is machine-owned at extraction time (buildExecutionTicket), so
- * everything except id/repo/pr_title is discarded here — loudly.
+ * The target repo is matched by watched clone path OR by the checkout's
+ * `origin` (findWatchedForPath). Frontmatter is machine-owned at extraction
+ * time (buildExecutionTicket), so everything except id/repo/pr_title is
+ * discarded here — loudly.
  */
 import { basename } from "node:path";
-import type { Config } from "./types.js";
+import type { Config, GithubRepoMapping } from "./types.js";
 import { parseTicket } from "./ticket.js";
 import { resolveWatchedRepos } from "./watchlist.js";
 import { withBotAuth } from "./ghAuth.js";
 import { createIssueLive } from "./assessFiling.js";
-import { gh } from "./git.js";
+import { gh, git } from "./git.js";
 import { expandHome } from "./config.js";
 import { canonPath } from "./unwatchCmd.js";
-import { extractPlanSetBody } from "./githubInbox.js";
+import { extractPlanSetBody, nwoFromRemoteUrl } from "./githubInbox.js";
 import { parsePlanSet } from "./planCompiler.js";
 import { slugifyId } from "./slug.js";
 
@@ -34,8 +36,48 @@ function firstHeading(body: string): string | null {
   return m ? m[1].trim() : null;
 }
 
+/**
+ * Resolve a local path to its bridge-watched entry. Two routes: the path IS
+ * a watched clone (the bridge's own managed clone, `github.repos[].path` or
+ * the watchlist), or the path is the operator's OWN checkout of a watched
+ * repo — its `origin` remote names a watched `owner/repo`. The second route
+ * is the junco-dispatch case: the skill stamps `repo:` with the working
+ * checkout, while the watchlist points at `<dataDir>/cache/clones/watched/…`,
+ * so a path-only match refused every skill-authored ticket. Matching is
+ * case-insensitive on the nwo (GitHub owner/repo names are). External
+ * (fork-PR) entries are already excluded by resolveWatchedRepos. Any failure
+ * reading `origin` (not a git checkout, no remote, non-GitHub URL) is simply
+ * "no match" — the caller's refusal explains both routes.
+ */
+export async function findWatchedForPath(
+  cfg: Config,
+  target: string,
+  gitFn: typeof git,
+): Promise<GithubRepoMapping | null> {
+  const watched = resolveWatchedRepos(cfg);
+  const byPath = watched.find((r) => canonPath(r.path) === target);
+  if (byPath) return byPath;
+  let nwo: string | null = null;
+  try {
+    const r = await gitFn(cfg, ["remote", "get-url", "origin"], {
+      cwd: target,
+      timeoutMs: 10_000,
+      check: false,
+    });
+    nwo = r.code === 0 ? nwoFromRemoteUrl(r.stdout.trim()) : null;
+  } catch {
+    nwo = null;
+  }
+  if (nwo === null) return null;
+  const want = nwo.toLowerCase();
+  return watched.find((r) => r.nwo.toLowerCase() === want) ?? null;
+}
+
 export interface SubmitAsIssueDeps {
   ghFn?: typeof gh;
+  /** `git remote get-url origin` in the ticket's repo — the second route
+   * findWatchedForPath tries. Default: the real `git`. */
+  gitFn?: typeof git;
   printFn?: (s: string) => void;
   errFn?: (s: string) => void;
   /** Resolve (and attach) the bot's GitHub auth context onto Config. Typed
@@ -64,6 +106,7 @@ export async function submitAsIssue(
   deps: SubmitAsIssueDeps = {},
 ): Promise<number> {
   const ghFn = deps.ghFn ?? gh;
+  const gitFn = deps.gitFn ?? git;
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const err = deps.errFn ?? ((s: string) => process.stderr.write(s));
   const withBotAuthFn = deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c));
@@ -102,9 +145,12 @@ export async function submitAsIssue(
       return 1;
     }
     const target = canonPath(expandHome(opts.repoFlag));
-    const watched = resolveWatchedRepos(cfg).find((r) => canonPath(r.path) === target);
+    const watched = await findWatchedForPath(cfg, target, gitFn);
     if (!watched) {
-      err(`junco submit --as-issue: ${opts.repoFlag} is not a bridge-watched repo\n`);
+      err(
+        `junco submit --as-issue: ${opts.repoFlag} is not a bridge-watched repo — neither a watched ` +
+          "clone path nor a checkout whose origin is a watched owner/repo\n",
+      );
       return 1;
     }
     const planId = "plan-" + slugifyId(basename(fileArg).replace(/\.md$/, ""));
@@ -158,11 +204,12 @@ export async function submitAsIssue(
   }
 
   const target = canonPath(expandHome(repoRaw));
-  const watched = resolveWatchedRepos(cfg).find((r) => canonPath(r.path) === target);
+  const watched = await findWatchedForPath(cfg, target, gitFn);
   if (!watched) {
     err(
-      `junco submit --as-issue: ${repoRaw} is not a bridge-watched repo — the parked issue could ` +
-        "never launch. Watch the repo (github.repos / junco watch) or submit locally instead.\n",
+      `junco submit --as-issue: ${repoRaw} is not a bridge-watched repo — neither a watched clone ` +
+        "path nor a checkout whose origin is a watched owner/repo, so the parked issue could never " +
+        "launch. Watch the repo (github.repos / junco watch) or submit locally instead.\n",
     );
     return 1;
   }

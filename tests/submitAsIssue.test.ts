@@ -47,6 +47,20 @@ const fakeBotAuth = async (c: Config): Promise<Config> => ({
   },
 });
 
+/** Fake `git` seam: answers `remote get-url origin` with `originUrl` (or
+ * throws when null — a non-repo path), and records every call. */
+function fakeGit(originUrl: string | null, calls: { args: string[]; cwd?: string }[] = []) {
+  const fn = async (_c: unknown, args: string[], opts?: { cwd?: string }) => {
+    calls.push({ args, cwd: opts?.cwd });
+    if (originUrl === null) throw new Error("fatal: not a git repository");
+    if (args[0] === "remote" && args[1] === "get-url") {
+      return { code: 0, stdout: `${originUrl}\n`, stderr: "" };
+    }
+    throw new Error(`unhandled git: ${args.join(" ")}`);
+  };
+  return { fn: fn as never, calls };
+}
+
 const DEFAULT_GITHUB: Config["github"] = {
   enabled: true,
   triggerLabel: "junco",
@@ -173,6 +187,7 @@ describe("submitAsIssue", () => {
       { plan: false },
       {
         ghFn: ghFn as never,
+        gitFn: fakeGit(null).fn,
         printFn: () => {},
         errFn: (s) => errs.push(s),
         withBotAuthFn: fakeBotAuth,
@@ -180,6 +195,127 @@ describe("submitAsIssue", () => {
     );
 
     expect(code).not.toBe(0);
+    expect(errs.join("")).toContain("not a bridge-watched repo");
+    expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+
+  it("files on the watched owner/repo when repo: is a checkout whose origin matches (case-insensitive)", async () => {
+    const cfg = baseCfg();
+    const checkout = "/sbxroot/checkouts/api"; // NOT the watched clone path
+    const ticket = TICKET.replace(JSON.stringify(REPO_PATH), JSON.stringify(checkout));
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "create") {
+        return { code: 0, stdout: "https://github.com/acme/api/issues/12\n", stderr: "" };
+      }
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const git = fakeGit("https://github.com/Acme/API.git");
+    const out: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "t.md",
+      ticket,
+      { plan: false },
+      {
+        ghFn: ghFn as never,
+        gitFn: git.fn,
+        printFn: (s) => out.push(s),
+        errFn: () => {},
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(0);
+    // origin was read in the ticket's checkout, not the watched clone
+    expect(git.calls[0]?.args.slice(0, 3)).toEqual(["remote", "get-url", "origin"]);
+    expect(git.calls[0]?.cwd).toBe(checkout);
+    const create = calls.find((c) => c[0] === "issue" && c[1] === "create")!;
+    expect(create).toContain("acme/api"); // the WATCHED nwo, not the origin's casing
+    expect(out.join("")).toContain("issues/12");
+  });
+
+  it("does not read origin when repo: already IS a watched clone path", async () => {
+    const cfg = baseCfg();
+    const git = fakeGit("https://github.com/acme/api.git");
+    const ghFn = async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "create") {
+        return { code: 0, stdout: "https://github.com/acme/api/issues/13\n", stderr: "" };
+      }
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const code = await submitAsIssue(
+      cfg,
+      "t.md",
+      TICKET,
+      { plan: false },
+      {
+        ghFn: ghFn as never,
+        gitFn: git.fn,
+        printFn: () => {},
+        errFn: () => {},
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+    expect(code).toBe(0);
+    expect(git.calls).toHaveLength(0);
+  });
+
+  it("refuses when the checkout's origin is not a watched owner/repo", async () => {
+    const cfg = baseCfg();
+    const ticket = TICKET.replace(
+      JSON.stringify(REPO_PATH),
+      JSON.stringify("/sbxroot/checkouts/other"),
+    );
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "t.md",
+      ticket,
+      { plan: false },
+      {
+        ghFn: ghFn as never,
+        gitFn: fakeGit("https://github.com/someone/else.git").fn,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("not a bridge-watched repo");
+    expect(errs.join("")).toContain("origin"); // the refusal names the second route it tried
+    expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+
+  it("refuses when origin cannot be read (repo: is not a git checkout)", async () => {
+    const cfg = baseCfg();
+    const ticket = TICKET.replace(JSON.stringify(REPO_PATH), JSON.stringify("/sbxroot/not-a-repo"));
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "t.md",
+      ticket,
+      { plan: false },
+      {
+        ghFn: ghFn as never,
+        gitFn: fakeGit(null).fn,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+    expect(code).toBe(1);
     expect(errs.join("")).toContain("not a bridge-watched repo");
     expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
   });
@@ -211,6 +347,7 @@ describe("submitAsIssue", () => {
         { plan: false },
         {
           ghFn: ghFn as never,
+          gitFn: fakeGit("https://github.com/acme/external.git").fn,
           printFn: () => {},
           errFn: (s) => errs.push(s),
           withBotAuthFn: fakeBotAuth,
@@ -387,6 +524,36 @@ describe("submitAsIssue --as-issue --plan (parked plan-set issue)", () => {
     expect(out.join("")).toContain(cfg.github.triggerLabel); // launch instruction names the label
   });
 
+  it("--plan --repo accepts a checkout whose origin is a watched repo", async () => {
+    const cfg = planCfg();
+    const calls: string[][] = [];
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "create") {
+        return { code: 0, stdout: "https://github.com/acme/api/issues/14\n", stderr: "" };
+      }
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const git = fakeGit("git@github.com:acme/api.git");
+    const code = await submitAsIssue(
+      cfg,
+      "plan.md",
+      PLAN_DOC,
+      { plan: true, repoFlag: "/sbxroot/checkouts/api" },
+      {
+        ghFn: ghFn as never,
+        gitFn: git.fn,
+        printFn: () => {},
+        errFn: () => {},
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+    expect(code).toBe(0);
+    expect(git.calls[0]?.cwd).toBe("/sbxroot/checkouts/api");
+    const create = calls.find((c) => c[0] === "issue" && c[1] === "create")!;
+    expect(create).toContain("acme/api");
+  });
+
   it("refuses --plan when planSets are disabled", async () => {
     const cfg = planCfg({ planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 } });
     const calls: string[][] = [];
@@ -505,6 +672,7 @@ describe("submitAsIssue --as-issue --plan (parked plan-set issue)", () => {
       { plan: true, repoFlag: "/elsewhere" },
       {
         ghFn: ghFn as never,
+        gitFn: fakeGit(null).fn,
         printFn: () => {},
         errFn: (s) => errs.push(s),
         withBotAuthFn: fakeBotAuth,

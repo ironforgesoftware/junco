@@ -27,4 +27,24 @@ describe("junco-dispatch SKILL.md", () => {
     // false-match the bare "omp" the assessPrompt test can rely on being absent.
     expect(SKILL).not.toMatch(/\b(omp|omlx|launchd|vault|pi|qwen|openai|gpt|ollama|llama|mlx)\b/i);
   });
+
+  it("auto-routes to the parked-issue destination when the repo is bridge-watched", () => {
+    // The route probe is a CLI contract — pin the exact commands the skill runs.
+    expect(SKILL).toContain("junco config get github.enabled");
+    expect(SKILL).toContain("junco config get botAccount.enabled");
+    expect(SKILL).toContain("junco submit --as-issue");
+    // The opt-out trigger and phrase.
+    expect(SKILL).toContain("junco-local:");
+    expect(SKILL).toContain("to the inbox");
+    expect(SKILL).toContain('"junco-local: <brief>"'); // listed as a trigger, not only as a rule
+    // The old "only on an explicit phrase" rule is gone.
+    expect(SKILL).not.toContain("Otherwise stay on the inbox default without asking");
+    // The probe mirrors the CLI's own predicate (origin remote), never gh repo view <path>.
+    expect(SKILL).toContain("git -C <repo-path> remote get-url origin");
+    expect(SKILL).not.toContain("gh repo view");
+    // Amend tickets and hand-authored sets never auto-route: the issue route discards their keys.
+    expect(SKILL).toMatch(
+      /carries `amends_pr`[^\n]*`depends_on`[^\n]*always goes to the \*\*inbox\*\*/,
+    );
+  });
 });
