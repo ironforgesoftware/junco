@@ -36,6 +36,7 @@ describe("junco-dispatch SKILL.md", () => {
     // The opt-out trigger and phrase.
     expect(SKILL).toContain("junco-local:");
     expect(SKILL).toContain("to the inbox");
+    expect(SKILL).toContain('"junco-local: <brief>"'); // listed as a trigger, not only as a rule
     // The old "only on an explicit phrase" rule is gone.
     expect(SKILL).not.toContain("Otherwise stay on the inbox default without asking");
   });
