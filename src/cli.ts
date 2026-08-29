@@ -1670,6 +1670,24 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 // the check holds for global installs and npx.
 // ---------------------------------------------------------------------------
 
+/**
+ * `process.exit` only after every queued stdout write has flushed. Writes to a
+ * pipe are asynchronous in Node, so an immediate exit drops anything past one
+ * pipe buffer (64 KB): `junco transcript --json | jq` was cut mid-string at
+ * exactly 65,536 bytes while the same output redirected to a file was whole.
+ * The empty write queues behind everything already buffered, so its callback
+ * fires once the stream has drained.
+ */
+export function exitAfterFlush(
+  code: number,
+  deps: {
+    write: (chunk: string, cb: () => void) => unknown;
+    exit: (code: number) => void;
+  } = { write: (c, cb) => process.stdout.write(c, cb), exit: (c) => process.exit(c) },
+): void {
+  deps.write("", () => deps.exit(code));
+}
+
 function isMainModule(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
@@ -1682,9 +1700,9 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   run(process.argv.slice(2))
-    .then((code) => process.exit(code))
+    .then((code) => exitAfterFlush(code))
     .catch((e) => {
       log.error("fatal", { error: e instanceof Error ? (e.stack ?? e.message) : String(e) });
-      process.exit(1);
+      exitAfterFlush(1);
     });
 }
