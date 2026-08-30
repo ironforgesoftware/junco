@@ -439,6 +439,10 @@ export const ConfigSchema = z.object({
       network: z.enum(["deny", "allow"]).default("deny"),
       extraDenyRead: z.array(z.string()).default([]),
       extraAllowWrite: z.array(z.string()).default([]),
+      // Ceiling on ONE sandboxed bash call when the agent passes no `timeout`
+      // (seconds; 0 = none). The agent's explicit timeout always wins. A
+      // runaway `grep -r` once pinned a worker until the ticket timeout (#320).
+      bashTimeoutSeconds: z.number().int().min(0).default(600),
     })
     .default({}),
   critic: z
@@ -767,6 +771,7 @@ export function assembleConfig(
       network: d.sandbox.network,
       extraDenyRead: d.sandbox.extraDenyRead.map(expandHome),
       extraAllowWrite: d.sandbox.extraAllowWrite.map(expandHome),
+      bashTimeoutSeconds: d.sandbox.bashTimeoutSeconds,
     },
     botAccount: {
       enabled: d.botAccount.enabled,

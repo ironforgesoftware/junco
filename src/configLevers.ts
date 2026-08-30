@@ -539,6 +539,16 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Extra absolute paths where writes are permitted (added to worktree + scratch).",
   },
+  {
+    path: "sandbox.bashTimeoutSeconds",
+    type: "number",
+    default: 600,
+    min: 0,
+    editable: true,
+    reload: "live",
+    description:
+      "Ceiling (seconds) on one sandboxed bash call when the agent passes no timeout; 0 = none. The agent's explicit timeout always wins.",
+  },
 
   // --- critic.* ---
   {

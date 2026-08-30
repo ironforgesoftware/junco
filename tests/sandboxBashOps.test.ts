@@ -11,6 +11,7 @@ const policy: SandboxPolicy = {
   readAllowPaths: [],
   network: false,
   scratchDir: "/tmp/scratch",
+  bashTimeoutMs: undefined,
 };
 
 /** A fake child process the fake spawn returns; drive it in the test. */

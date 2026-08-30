@@ -100,6 +100,7 @@ async function run(
       network: "deny",
       extraDenyRead: opts.extraDeny ?? [],
       extraAllowWrite: [],
+      bashTimeoutSeconds: 600,
     },
     cwd: opts.work,
     scratchDir: opts.scratch,
