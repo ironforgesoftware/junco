@@ -13,7 +13,13 @@ import {
   type RegistryOps,
 } from "./modelSetup.js";
 import { inMemoryCredentialStore, type InMemoryCredentialStore } from "./credentialStore.js";
-import { buildPolicy, type SandboxPolicy } from "./sandbox/policy.js";
+import {
+  buildPolicy,
+  linkedWorktreeWritePaths,
+  type GitDirs,
+  type SandboxPolicy,
+} from "./sandbox/policy.js";
+import { resolveGitDirs } from "./sandbox/gitDirs.js";
 import { sandboxDenyPaths } from "../dataTree.js";
 import {
   selectBackend,
@@ -433,6 +439,9 @@ export interface ResolveSandboxDeps {
   makeScratch?: () => string;
   platform?: NodeJS.Platform;
   home?: string;
+  /** Where the cwd's git metadata lives (#320) — default asks `git rev-parse`
+   *  in the cwd via resolveGitDirs; tests inject the answer (or null). */
+  gitDirs?: (cwd: string) => Promise<GitDirs | null>;
 }
 
 export interface ResolvedSandbox {
@@ -501,10 +510,16 @@ export async function resolveSandbox(
   // readable. Precedence between them is by specificity, not list order (see
   // sandbox/precedence.ts).
   const dataPaths = sandboxDenyPaths(cfg);
+  // #320: a linked worktree's index/objects/refs live under the owning repo's
+  // .git, outside the cwd — without these roots the agent's first `git commit`
+  // dies with "Unable to create '…/index.lock': Operation not permitted".
+  const gitDirs = await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
+  const gitWritePaths = gitDirs ? linkedWorktreeWritePaths({ cwd, ...gitDirs }) : [];
   const policy = buildPolicy({
     cfg: cfg.sandbox,
     cwd,
     scratchDir,
+    gitWritePaths,
     home,
     dataDenyPaths: dataPaths,
     dataAllowPaths: dataPaths.allowDirs,
