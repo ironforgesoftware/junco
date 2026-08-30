@@ -58,8 +58,17 @@ export function makeSandboxedBashOperations(
       // group and REJECT with the exact errors Pi's own backend throws, so the
       // tool renders "Command timed out after N seconds" / "Command aborted"
       // instead of treating the killed child's null exit code as success.
-      const limitMs = options.timeout !== undefined ? options.timeout * 1000 : policy.bashTimeoutMs;
-      const limitSecs = limitMs === undefined ? undefined : Math.round(limitMs / 1000);
+      // Pi validates `timeout` (> 0) only inside its own local backend; a custom
+      // BashOperations receives the raw model value. 0/negative/NaN would otherwise
+      // slip past the timer guard and run with NO ceiling — treat them as absent.
+      const explicitMs =
+        typeof options.timeout === "number" &&
+        Number.isFinite(options.timeout) &&
+        options.timeout > 0
+          ? options.timeout * 1000
+          : undefined;
+      const limitMs = explicitMs ?? policy.bashTimeoutMs;
+      const limitSecs = limitMs === undefined ? undefined : Math.max(1, Math.round(limitMs / 1000));
 
       return new Promise<{ exitCode: number | null }>((resolve, reject) => {
         // detached → own process group, so `kill(-pid)` reaps the whole group.

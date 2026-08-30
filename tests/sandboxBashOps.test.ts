@@ -120,6 +120,46 @@ describe("makeSandboxedBashOperations", () => {
     vi.useRealTimers();
   });
 
+  it("a non-positive or non-finite explicit timeout counts as absent — the default ceiling still applies", async () => {
+    vi.useFakeTimers();
+    for (const bad of [0, -5, Number.NaN]) {
+      const proc = fakeProc();
+      const kills: Array<[number, string]> = [];
+      const ops = makeSandboxedBashOperations(
+        noneBackend,
+        { ...policy, bashTimeoutMs: 3_000 },
+        {
+          spawnFn: (() => proc) as any,
+          killFn: (pid, sig) => kills.push([pid, sig]),
+        },
+      );
+      const p = ops.exec("sleep", "/work/tree", { onData: () => {}, timeout: bad });
+      vi.advanceTimersByTime(3_001);
+      expect(kills).toContainEqual([-4242, "SIGKILL"]);
+      proc.emit("close", null);
+      await expect(p).rejects.toThrow("timeout:3");
+    }
+    vi.useRealTimers();
+  });
+
+  it("a sub-second ceiling reports at least 1 second", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const ops = makeSandboxedBashOperations(
+      noneBackend,
+      { ...policy, bashTimeoutMs: 400 },
+      {
+        spawnFn: (() => proc) as any,
+        killFn: () => {},
+      },
+    );
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {} });
+    vi.advanceTimersByTime(401);
+    proc.emit("close", null);
+    await expect(p).rejects.toThrow("timeout:1");
+    vi.useRealTimers();
+  });
+
   it("no ceiling at all when the policy has none and the agent passes no timeout", async () => {
     vi.useFakeTimers();
     const proc = fakeProc();
