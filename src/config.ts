@@ -442,7 +442,8 @@ export const ConfigSchema = z.object({
       // Ceiling on ONE sandboxed bash call when the agent passes no `timeout`
       // (seconds; 0 = none). The agent's explicit timeout always wins. A
       // runaway `grep -r` once pinned a worker until the ticket timeout (#320).
-      bashTimeoutSeconds: z.number().int().min(0).default(600),
+      // max = 2^31-1 ms in seconds — Node's setTimeout ceiling
+      bashTimeoutSeconds: z.number().int().min(0).max(2_147_483).default(600),
     })
     .default({}),
   critic: z

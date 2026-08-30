@@ -544,10 +544,11 @@ export const LEVERS: Lever[] = [
     type: "number",
     default: 600,
     min: 0,
+    max: 2_147_483,
     editable: true,
     reload: "live",
     description:
-      "Ceiling (seconds) on one sandboxed bash call when the agent passes no timeout; 0 = none. The agent's explicit timeout always wins.",
+      "Ceiling (seconds) on one sandboxed bash call when the agent passes no timeout; 0 = none, max 2147483. The agent's explicit timeout wins when positive and finite. Live for sessions spawned after the change.",
   },
 
   // --- critic.* ---

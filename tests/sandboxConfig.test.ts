@@ -66,6 +66,16 @@ describe("sandbox config", () => {
     expect(() =>
       loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: -1 } })),
     ).toThrow();
+    expect(
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 2_147_483 } })).sandbox
+        .bashTimeoutSeconds,
+    ).toBe(2_147_483);
+    expect(() =>
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 2_147_484 } })),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 1.5 } })),
+    ).toThrow();
   });
 
   it("rejects an unknown backend", () => {

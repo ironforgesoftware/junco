@@ -3,6 +3,14 @@ import { scrubEnv } from "../../scrubEnv.js";
 import type { SandboxBackend } from "./backend.js";
 import type { SandboxPolicy } from "./policy.js";
 
+/** Node clamps a `setTimeout` delay above 2^31-1 ms to 1 ms (with a
+ *  TimeoutOverflowWarning) — an "effectively unlimited" value would kill
+ *  every command instantly. Same cap Pi's own backend enforces. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+/** After a reap, how long to wait for `close` before settling on `exit`
+ *  alone — a group-escaping descendant can keep the stdio pipes open. */
+const REAP_SETTLE_GRACE_MS = 100;
+
 /** Structural mirror of the SDK's BashOperations.exec options (no SDK import). */
 export interface BashExecOptions {
   onData: (data: Buffer) => void;
@@ -54,10 +62,15 @@ export function makeSandboxedBashOperations(
       const env = { ...scrubEnv(envSource()), TMPDIR: policy.scratchDir };
 
       // The agent's explicit timeout (seconds) wins; otherwise the policy's
-      // default ceiling (ms; undefined = none). Both reap the whole process
-      // group and REJECT with the exact errors Pi's own backend throws, so the
-      // tool renders "Command timed out after N seconds" / "Command aborted"
-      // instead of treating the killed child's null exit code as success.
+      // default ceiling (ms; undefined = none), clamped to MAX_TIMEOUT_MS so an
+      // "unlimited" value can't overflow Node's setTimeout and fire after 1 ms.
+      // Both reap the whole process group and REJECT with the exact errors Pi's
+      // own backend throws (abort takes precedence over a timer that also fired
+      // — Pi checks `signal.aborted` first), so the tool renders "Command timed
+      // out after N seconds" / "Command aborted" instead of treating the killed
+      // child's null exit code as success. Once reaped, settling still prefers
+      // `close`, but falls back to `exit` plus a short grace if a process-group-
+      // escaping descendant keeps the stdio pipes open and `close` never fires.
       // Pi validates `timeout` (> 0) only inside its own local backend; a custom
       // BashOperations receives the raw model value. 0/negative/NaN would otherwise
       // slip past the timer guard and run with NO ceiling — treat them as absent.
@@ -67,7 +80,8 @@ export function makeSandboxedBashOperations(
         options.timeout > 0
           ? options.timeout * 1000
           : undefined;
-      const limitMs = explicitMs ?? policy.bashTimeoutMs;
+      const rawLimitMs = explicitMs ?? policy.bashTimeoutMs;
+      const limitMs = rawLimitMs === undefined ? undefined : Math.min(rawLimitMs, MAX_TIMEOUT_MS);
       const limitSecs = limitMs === undefined ? undefined : Math.max(1, Math.round(limitMs / 1000));
 
       return new Promise<{ exitCode: number | null }>((resolve, reject) => {
@@ -104,14 +118,16 @@ export function makeSandboxedBashOperations(
         let settled = false;
         let timedOut = false;
         let aborted = false;
+        let graceTimer: NodeJS.Timeout | undefined;
         const finish = (exitCode: number | null): void => {
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
+          if (graceTimer) clearTimeout(graceTimer);
           if (options.signal) options.signal.removeEventListener("abort", onAbort);
           reap(); // sweep any surviving group members before settling
-          if (timedOut) reject(new Error(`timeout:${limitSecs}`));
-          else if (aborted) reject(new Error("aborted"));
+          if (aborted) reject(new Error("aborted"));
+          else if (timedOut) reject(new Error(`timeout:${limitSecs}`));
           else resolve({ exitCode });
         };
 
@@ -137,6 +153,15 @@ export function makeSandboxedBashOperations(
 
         proc.on("error", () => finish(null));
         proc.on("close", (code: number | null) => finish(code));
+
+        // A reaped child can exit while an escaped descendant (setsid, a
+        // daemonizer) keeps the inherited stdio pipes open, so `close` never
+        // fires. Mirror Pi's backend: once we have decided to kill, settle on
+        // `exit` after a short grace if `close` has not arrived.
+        proc.on("exit", (code: number | null) => {
+          if (!(timedOut || aborted) || settled) return;
+          graceTimer = setTimeout(() => finish(code), REAP_SETTLE_GRACE_MS);
+        });
       });
     },
   };

@@ -133,6 +133,7 @@ export interface SandboxConfig {
   extraAllowWrite: string[];
   // Ceiling in seconds on one sandboxed bash call when the agent passes no
   // timeout; 0 = no ceiling. The agent's explicit timeout always wins.
+  // Max 2147483 (Node's setTimeout ceiling in seconds).
   bashTimeoutSeconds: number;
 }
 export interface Config {

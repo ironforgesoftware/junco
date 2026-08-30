@@ -160,6 +160,79 @@ describe("makeSandboxedBashOperations", () => {
     vi.useRealTimers();
   });
 
+  it("clamps an over-2^31-1 ms limit instead of letting Node fire it after 1 ms", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const kills: Array<[number, string]> = [];
+    const ops = makeSandboxedBashOperations(noneBackend, policy, {
+      spawnFn: (() => proc) as any,
+      killFn: (pid, sig) => kills.push([pid, sig]),
+    });
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {}, timeout: 9_999_999 });
+    vi.advanceTimersByTime(60_000);
+    expect(kills).toEqual([]); // NOT killed after 1 ms
+    vi.advanceTimersByTime(2_147_483_647);
+    expect(kills).toContainEqual([-4242, "SIGKILL"]);
+    proc.emit("close", null);
+    await expect(p).rejects.toThrow("timeout:2147484");
+    vi.useRealTimers();
+  });
+
+  it("reports 'aborted' when the session aborts after the timer already fired", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const ac = new AbortController();
+    const ops = makeSandboxedBashOperations(
+      noneBackend,
+      { ...policy, bashTimeoutMs: 1_000 },
+      {
+        spawnFn: (() => proc) as any,
+        killFn: () => {},
+      },
+    );
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {}, signal: ac.signal });
+    vi.advanceTimersByTime(1_001);
+    ac.abort();
+    proc.emit("close", null);
+    await expect(p).rejects.toThrow("aborted");
+    vi.useRealTimers();
+  });
+
+  it("settles on exit + grace when a reaped child's pipes never close (escaped descendant)", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const ops = makeSandboxedBashOperations(
+      noneBackend,
+      { ...policy, bashTimeoutMs: 1_000 },
+      {
+        spawnFn: (() => proc) as any,
+        killFn: () => {},
+      },
+    );
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {} });
+    vi.advanceTimersByTime(1_001); // reaped
+    proc.emit("exit", null); // …but no `close` ever arrives
+    vi.advanceTimersByTime(101);
+    await expect(p).rejects.toThrow("timeout:1");
+    vi.useRealTimers();
+  });
+
+  it("a normal exit without close does not settle early (only a reaped child takes the grace path)", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const ops = makeSandboxedBashOperations(noneBackend, policy, { spawnFn: (() => proc) as any });
+    let settled = false;
+    const p = ops.exec("x", "/work/tree", { onData: () => {} }).then(() => (settled = true));
+    proc.emit("exit", 0);
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    proc.emit("close", 0);
+    await p;
+    expect(settled).toBe(true);
+    vi.useRealTimers();
+  });
+
   it("no ceiling at all when the policy has none and the agent passes no timeout", async () => {
     vi.useFakeTimers();
     const proc = fakeProc();
