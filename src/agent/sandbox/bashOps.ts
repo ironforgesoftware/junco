@@ -7,6 +7,9 @@ import type { SandboxPolicy } from "./policy.js";
 export interface BashExecOptions {
   onData: (data: Buffer) => void;
   signal?: AbortSignal;
+  /** SECONDS — the model's raw `timeout` argument. Pi's own local backend
+   *  converts to ms itself (bash.js resolveTimeoutMs); a custom
+   *  BashOperations receives the schema value untouched. */
   timeout?: number;
   env?: NodeJS.ProcessEnv;
 }
@@ -50,7 +53,15 @@ export function makeSandboxedBashOperations(
       const [bin, ...args] = backend.spawnArgv(command, policy);
       const env = { ...scrubEnv(envSource()), TMPDIR: policy.scratchDir };
 
-      return new Promise<{ exitCode: number | null }>((resolve) => {
+      // The agent's explicit timeout (seconds) wins; otherwise the policy's
+      // default ceiling (ms; undefined = none). Both reap the whole process
+      // group and REJECT with the exact errors Pi's own backend throws, so the
+      // tool renders "Command timed out after N seconds" / "Command aborted"
+      // instead of treating the killed child's null exit code as success.
+      const limitMs = options.timeout !== undefined ? options.timeout * 1000 : policy.bashTimeoutMs;
+      const limitSecs = limitMs === undefined ? undefined : Math.round(limitMs / 1000);
+
+      return new Promise<{ exitCode: number | null }>((resolve, reject) => {
         // detached → own process group, so `kill(-pid)` reaps the whole group.
         const proc = spawnFn(bin, args, {
           cwd,
@@ -82,23 +93,36 @@ export function makeSandboxedBashOperations(
         };
 
         let settled = false;
+        let timedOut = false;
+        let aborted = false;
         const finish = (exitCode: number | null): void => {
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
           if (options.signal) options.signal.removeEventListener("abort", onAbort);
-          reap(); // sweep any surviving group members before resolving
-          resolve({ exitCode });
+          reap(); // sweep any surviving group members before settling
+          if (timedOut) reject(new Error(`timeout:${limitSecs}`));
+          else if (aborted) reject(new Error("aborted"));
+          else resolve({ exitCode });
         };
 
         proc.stdout?.on("data", (c: Buffer) => options.onData(c));
         proc.stderr?.on("data", (c: Buffer) => options.onData(c));
 
-        const timer = options.timeout ? setTimeout(reap, options.timeout) : undefined;
+        const timer =
+          limitMs !== undefined && limitMs > 0
+            ? setTimeout(() => {
+                timedOut = true;
+                reap();
+              }, limitMs)
+            : undefined;
 
-        const onAbort = (): void => reap();
+        const onAbort = (): void => {
+          aborted = true;
+          reap();
+        };
         if (options.signal) {
-          if (options.signal.aborted) reap();
+          if (options.signal.aborted) onAbort();
           else options.signal.addEventListener("abort", onAbort);
         }
 

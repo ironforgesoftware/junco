@@ -60,7 +60,7 @@ describe("makeSandboxedBashOperations", () => {
     expect(chunks.join("")).toBe("outerr");
   });
 
-  it("kills the process group on timeout and resolves exitCode null", async () => {
+  it("treats the agent's timeout as SECONDS (Pi passes the raw schema value) and rejects with timeout:<secs>", async () => {
     vi.useFakeTimers();
     const proc = fakeProc();
     const kills: Array<[number, string]> = [];
@@ -68,16 +68,79 @@ describe("makeSandboxedBashOperations", () => {
       spawnFn: (() => proc) as any,
       killFn: (pid, sig) => kills.push([pid, sig]),
     });
-    const p = ops.exec("sleep", "/work/tree", { onData: () => {}, timeout: 1000 });
-    vi.advanceTimersByTime(1001);
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {}, timeout: 2 });
+    vi.advanceTimersByTime(1999);
+    expect(kills).toEqual([]); // 2 s, not 2 ms
+    vi.advanceTimersByTime(2);
     expect(kills).toContainEqual([-4242, "SIGKILL"]); // negative pid = the group
     proc.emit("close", null);
-    const res = await p;
-    expect(res.exitCode).toBeNull();
+    await expect(p).rejects.toThrow("timeout:2");
     vi.useRealTimers();
   });
 
-  it("kills the process group on abort signal", async () => {
+  it("applies the policy's default ceiling when the agent passes no timeout", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const kills: Array<[number, string]> = [];
+    const ops = makeSandboxedBashOperations(
+      noneBackend,
+      { ...policy, bashTimeoutMs: 3_000 },
+      {
+        spawnFn: (() => proc) as any,
+        killFn: (pid, sig) => kills.push([pid, sig]),
+      },
+    );
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {} });
+    vi.advanceTimersByTime(3_001);
+    expect(kills).toContainEqual([-4242, "SIGKILL"]);
+    proc.emit("close", null);
+    await expect(p).rejects.toThrow("timeout:3");
+    vi.useRealTimers();
+  });
+
+  it("the agent's explicit timeout overrides the default ceiling in both directions", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const kills: Array<[number, string]> = [];
+    const ops = makeSandboxedBashOperations(
+      noneBackend,
+      { ...policy, bashTimeoutMs: 1_000 },
+      {
+        spawnFn: (() => proc) as any,
+        killFn: (pid, sig) => kills.push([pid, sig]),
+      },
+    );
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {}, timeout: 5 });
+    vi.advanceTimersByTime(4_999);
+    expect(kills).toEqual([]); // the 1 s default did not fire
+    vi.advanceTimersByTime(2);
+    expect(kills).toContainEqual([-4242, "SIGKILL"]);
+    proc.emit("close", null);
+    await expect(p).rejects.toThrow("timeout:5");
+    vi.useRealTimers();
+  });
+
+  it("no ceiling at all when the policy has none and the agent passes no timeout", async () => {
+    vi.useFakeTimers();
+    const proc = fakeProc();
+    const kills: Array<[number, string]> = [];
+    const ops = makeSandboxedBashOperations(
+      noneBackend,
+      { ...policy, bashTimeoutMs: undefined },
+      {
+        spawnFn: (() => proc) as any,
+        killFn: (pid, sig) => kills.push([pid, sig]),
+      },
+    );
+    const p = ops.exec("sleep", "/work/tree", { onData: () => {} });
+    vi.advanceTimersByTime(3_600_000);
+    expect(kills.filter(([pid]) => pid === -4242)).toEqual([]);
+    proc.emit("close", 0);
+    await expect(p).resolves.toEqual({ exitCode: 0 });
+    vi.useRealTimers();
+  });
+
+  it("kills the process group on abort and rejects with 'aborted' (Pi renders 'Command aborted')", async () => {
     const proc = fakeProc();
     const kills: Array<[number, string]> = [];
     const ac = new AbortController();
@@ -89,7 +152,15 @@ describe("makeSandboxedBashOperations", () => {
     ac.abort();
     expect(kills).toContainEqual([-4242, "SIGKILL"]);
     proc.emit("close", null);
-    await p;
+    await expect(p).rejects.toThrow("aborted");
+  });
+
+  it("a command killed by something else still resolves exitCode null (not a timeout, not an abort)", async () => {
+    const proc = fakeProc();
+    const ops = makeSandboxedBashOperations(noneBackend, policy, { spawnFn: (() => proc) as any });
+    const p = ops.exec("x", "/work/tree", { onData: () => {} });
+    proc.emit("close", null); // e.g. OOM-killed
+    await expect(p).resolves.toEqual({ exitCode: null });
   });
 
   it("spawns detached and reaps the process group on completion so a backgrounded child can't survive (#159)", async () => {
