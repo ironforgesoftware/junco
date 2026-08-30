@@ -30,6 +30,7 @@ describe("sandbox config", () => {
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],
+      bashTimeoutSeconds: 600,
     });
   });
 
@@ -51,6 +52,30 @@ describe("sandbox config", () => {
     expect(cfg.sandbox.network).toBe("allow");
     expect(cfg.sandbox.extraDenyRead[0].startsWith("~")).toBe(false);
     expect(cfg.sandbox.extraAllowWrite[0].endsWith("/scratch")).toBe(true);
+  });
+
+  it("accepts sandbox.bashTimeoutSeconds (0 = no ceiling) and rejects negatives", () => {
+    expect(
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 0 } })).sandbox
+        .bashTimeoutSeconds,
+    ).toBe(0);
+    expect(
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 90 } })).sandbox
+        .bashTimeoutSeconds,
+    ).toBe(90);
+    expect(() =>
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: -1 } })),
+    ).toThrow();
+    expect(
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 2_147_483 } })).sandbox
+        .bashTimeoutSeconds,
+    ).toBe(2_147_483);
+    expect(() =>
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 2_147_484 } })),
+    ).toThrow();
+    expect(() =>
+      loadConfig(writeConfig({ ...BASE, sandbox: { bashTimeoutSeconds: 1.5 } })),
+    ).toThrow();
   });
 
   it("rejects an unknown backend", () => {

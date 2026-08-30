@@ -17,6 +17,7 @@ const policy: SandboxPolicy = {
   readAllowPaths: [],
   network: false,
   scratchDir: "/sbxroot/scratch",
+  bashTimeoutMs: undefined,
 };
 
 describe("resolveWithin", () => {
@@ -92,6 +93,7 @@ describe("assertReadAllowed", () => {
       readAllowPaths: ["/sbxroot/.junco/cache"],
       network: false,
       scratchDir: "/sbxroot/scratch",
+      bashTimeoutMs: undefined,
     };
 
     it("denies the wholesale root", () => {

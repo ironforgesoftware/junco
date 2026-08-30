@@ -33,6 +33,7 @@ function cfgWith(sandbox: Partial<Config["sandbox"]>): Config {
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],
+      bashTimeoutSeconds: 600,
       ...sandbox,
     },
   } as unknown as Config;

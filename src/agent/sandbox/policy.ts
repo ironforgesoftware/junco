@@ -103,6 +103,9 @@ export interface SandboxPolicy {
   network: boolean;
   /** Per-session scratch dir (also the redirected TMPDIR). */
   scratchDir: string;
+  /** Default wall-clock ceiling for one bash call, ms; undefined = no ceiling.
+   *  The agent's explicit `timeout` (seconds) always overrides it. */
+  bashTimeoutMs: number | undefined;
 }
 
 export function buildPolicy(opts: {
@@ -181,6 +184,7 @@ export function buildPolicy(opts: {
     readAllowPaths,
     network,
     scratchDir: canonicalize(scratchDir),
+    bashTimeoutMs: cfg.bashTimeoutSeconds > 0 ? cfg.bashTimeoutSeconds * 1000 : undefined,
   };
 }
 

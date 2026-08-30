@@ -105,6 +105,7 @@ async function run(
       network: "deny",
       extraDenyRead: opts.extraDeny ?? [],
       extraAllowWrite: [],
+      bashTimeoutSeconds: 600,
     },
     cwd: opts.work,
     scratchDir: opts.scratch,
@@ -369,6 +370,20 @@ async function runShipped(command: string, t: ShippedTree): Promise<string> {
   return out;
 }
 
+/** Like runShipped, but with a policy whose default bash ceiling is `ms`. */
+async function runShippedWithCeiling(command: string, t: ShippedTree, ms: number): Promise<string> {
+  const ops = makeSandboxedBashOperations(
+    backend,
+    { ...t.policy, bashTimeoutMs: ms },
+    {
+      env: () => ({ ...process.env, HOME: t.home, GH_TOKEN: "SECRET_TOKEN_VALUE" }),
+    },
+  );
+  let out = "";
+  await ops.exec(command, t.worktree, { onData: (d) => (out += d.toString()) });
+  return out;
+}
+
 describe.each(["v2", "flat"] as const)(
   "sandbox integration: the shipped data tree, layout=%s",
   (layout) => {
@@ -437,6 +452,17 @@ describe.each(["v2", "flat"] as const)(
       expect(after).not.toBe(before);
       const ref = gitRun(["git", "-C", t.worktree, "rev-parse", "refs/heads/junco/tkt-1"]).trim();
       expect(ref).toBe(after);
+    });
+
+    it("a runaway command is killed at the default ceiling and reported as a timeout", async (ctx) => {
+      requireBackend(ctx);
+      const t = await shippedTree(layout);
+      const started = Date.now();
+      await expect(
+        runShippedWithCeiling(`echo started; sleep 30; echo finished`, t, 1_000),
+      ).rejects.toThrow("timeout:1");
+      // Killed at ~1 s, not after the 30 s sleep — and the whole group is gone.
+      expect(Date.now() - started).toBeLessThan(10_000);
     });
 
     it("never turns the denied root into a window on its real contents", async (ctx) => {

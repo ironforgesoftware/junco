@@ -56,7 +56,8 @@
     "backend": "auto",
     "network": "deny",
     "extraDenyRead": [],
-    "extraAllowWrite": []
+    "extraAllowWrite": [],
+    "bashTimeoutSeconds": 600
   },
   "critic": {
     "enabled": true,

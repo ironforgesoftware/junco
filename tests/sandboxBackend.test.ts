@@ -19,6 +19,7 @@ const denyNet: SandboxPolicy = {
   readAllowPaths: [],
   network: false,
   scratchDir: "/tmp/scratch",
+  bashTimeoutMs: undefined,
 };
 const allowNet: SandboxPolicy = { ...denyNet, network: true };
 
@@ -33,6 +34,7 @@ const nestedPolicy: SandboxPolicy = {
   readAllowPaths: ["/sbxroot/.junco/cache"],
   network: false,
   scratchDir: "/sbxroot/scratch",
+  bashTimeoutMs: undefined,
 };
 
 // The C1 regression shape: the worktree (cwd) and clones live UNDER the data
@@ -45,6 +47,7 @@ const dataPolicy: SandboxPolicy = {
   readAllowPaths: [],
   network: false,
   scratchDir: "/sbxroot/scratch",
+  bashTimeoutMs: undefined,
 };
 
 // The armed #277 shape (Task 7): the worktree lives UNDER a wholesale-denied
@@ -56,6 +59,7 @@ const armedPolicy: SandboxPolicy = {
   readAllowPaths: ["/sbxroot/.junco/cache"],
   network: false,
   scratchDir: "/sbxroot/scratch",
+  bashTimeoutMs: undefined,
 };
 
 // An operator's extra_deny_read INSIDE their own worktree: a deny deeper than
@@ -67,6 +71,7 @@ const denyInsideWorktree: SandboxPolicy = {
   readAllowPaths: [],
   network: false,
   scratchDir: "/sbxroot/scratch",
+  bashTimeoutMs: undefined,
 };
 
 /** argv index where the mount op `tokens` starts, or -1. bwrap mounts apply in

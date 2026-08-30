@@ -91,6 +91,7 @@ describe("buildPolicy", () => {
       network: "deny" as const,
       extraDenyRead: ["/sbxroot/extra/secret"],
       extraAllowWrite: ["/sbxroot/extra/writable"],
+      bashTimeoutSeconds: 600,
     },
     cwd: "/sbxroot/work/tree",
     scratchDir: "/sbxroot/nowhere/scratch1",
@@ -151,6 +152,15 @@ describe("buildPolicy", () => {
     expect(pol.writableRoots[0]).toBe("/sbxroot/work/tree");
   });
 
+  it("threads sandbox.bashTimeoutSeconds into the policy as milliseconds; 0 means no ceiling", () => {
+    expect(
+      buildPolicy({ ...base, cfg: { ...base.cfg, bashTimeoutSeconds: 600 } }).bashTimeoutMs,
+    ).toBe(600_000);
+    expect(
+      buildPolicy({ ...base, cfg: { ...base.cfg, bashTimeoutSeconds: 0 } }).bashTimeoutMs,
+    ).toBeUndefined();
+  });
+
   it("denies reads of the bot gh config dir when provided", () => {
     const p = buildPolicy({
       cfg: {
@@ -159,6 +169,7 @@ describe("buildPolicy", () => {
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
       },
       cwd: "/sbxroot/wt",
       scratchDir: "/sbxroot/scratch",
@@ -189,6 +200,7 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
       network: "deny" as const,
       extraDenyRead: [],
       extraAllowWrite: [],
+      bashTimeoutSeconds: 600,
     },
     cwd,
     scratchDir: "/sbxroot/nowhere/scratch1",
@@ -229,6 +241,7 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
         network: "deny" as const,
         extraDenyRead: [],
         extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
       },
       cwd,
       scratchDir: "/sbxroot/nowhere/scratch1",
@@ -300,6 +313,7 @@ describe("readRules — allow-over-deny precedence (#277)", () => {
         network: "deny" as const,
         extraDenyRead: [],
         extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
       },
       cwd: "/sbxroot/root/worktrees/wt1",
       scratchDir: "/sbxroot/nowhere/scratch1",
@@ -322,6 +336,7 @@ describe("readRules — allow-over-deny precedence (#277)", () => {
         network: "deny" as const,
         extraDenyRead: ["/sbxroot/wt/.env"],
         extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
       },
       cwd: "/sbxroot/wt",
       scratchDir: "/sbxroot/nowhere/scratch1",
@@ -343,6 +358,7 @@ describe("readRules — allow-over-deny precedence (#277)", () => {
         network: "deny" as const,
         extraDenyRead: [],
         extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
       },
       cwd: "/sbxroot/wt",
       scratchDir: "/sbxroot/nowhere/scratch1",
@@ -382,6 +398,7 @@ describe("buildPolicy — an allow above a deny FILE is refused (#311)", () => {
       network: "deny" as const,
       extraDenyRead: [],
       extraAllowWrite: [],
+      bashTimeoutSeconds: 600,
     },
     cwd: `${root}/cache/worktrees/tkt-1`,
     scratchDir: "/sbxroot/nowhere/scratch1",
@@ -488,6 +505,7 @@ describe("buildPolicy — an allow above a deny FILE is refused (#311)", () => {
       readAllowPaths: [tier],
       network: false,
       scratchDir: "/sbxroot/nowhere/scratch1",
+      bashTimeoutMs: undefined,
     };
     const args = bwrapArgs(leaky, (p) => p !== spend); // receipt absent at spawn
     const at = (tokens: string[]): number =>
@@ -545,6 +563,7 @@ describe("buildPolicy — extra_deny_read is classified by observation (#311/F5)
       network: "deny" as const,
       extraDenyRead: [] as string[],
       extraAllowWrite: [] as string[],
+      bashTimeoutSeconds: 600,
     },
     cwd: "/sbxroot/work/tree",
     scratchDir: "/sbxroot/nowhere/scratch1",
@@ -638,6 +657,7 @@ describe("traversalMetadataPaths — the denied ancestors of every allow", () =>
       network: "deny" as const,
       extraDenyRead: [] as string[],
       extraAllowWrite: [] as string[],
+      bashTimeoutSeconds: 600,
     },
     cwd: `${root}/cache/worktrees/tkt-1`,
     scratchDir: "/sbxroot/scratch",
@@ -683,6 +703,7 @@ describe("traversalMetadataPaths — the denied ancestors of every allow", () =>
       readAllowPaths: [],
       network: false,
       scratchDir: "/sbxroot/scratch",
+      bashTimeoutMs: undefined,
     };
     expect(traversalMetadataPaths(p)).toEqual([root]);
   });

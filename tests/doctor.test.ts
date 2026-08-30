@@ -206,6 +206,7 @@ describe("runDoctor", () => {
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
       },
       ...over,
     } as unknown as Config;
@@ -288,6 +289,7 @@ describe("runDoctor", () => {
                 network: "deny",
                 extraDenyRead: [],
                 extraAllowWrite: [okConfig.dataDir],
+                bashTimeoutSeconds: 600,
               },
             } as unknown as Partial<Config>),
           env: sandboxEnv,
@@ -337,6 +339,7 @@ describe("runDoctor", () => {
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
       },
     } as unknown as Partial<Config>);
     const code = await runDoctor(
