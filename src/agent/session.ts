@@ -508,6 +508,7 @@ export async function resolveSandbox(
   // dies with "Unable to create '…/index.lock': Operation not permitted".
   const gitDirs = await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
   const gitWritePaths = gitDirs ? linkedWorktreeWritePaths({ cwd, ...gitDirs }) : [];
+  log.info("sandbox: linked worktree git write roots", { cwd, roots: gitWritePaths });
   // #277: the data tree is denied WHOLESALE and its execution roots (the
   // worktrees and the clone gitdirs this session's git reads) are allowed
   // back. Both halves must be threaded in — the denies alone would wall the

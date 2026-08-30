@@ -1,15 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { resolveGitDirs } from "../src/agent/sandbox/gitDirs.js";
+import type { git } from "../src/git.js";
 
 const cfg = { gitBin: "/sbxroot/bin/git" };
 
+type GitFn = typeof git;
+
 function fakeGit(reply: { code: number; stdout: string } | Error, calls: unknown[][] = []) {
-  const fn = async (_c: unknown, args: string[], opts?: { cwd?: string }) => {
+  const fn: GitFn = async (_c, args, opts) => {
     calls.push([args, opts?.cwd]);
     if (reply instanceof Error) throw reply;
     return { code: reply.code, stdout: reply.stdout, stderr: "" };
   };
-  return { fn: fn as never, calls };
+  return { fn, calls };
 }
 
 describe("resolveGitDirs (#320)", () => {
@@ -44,6 +47,19 @@ describe("resolveGitDirs (#320)", () => {
 
   it("returns null on malformed output (fewer than two lines)", async () => {
     const g = fakeGit({ code: 0, stdout: "/sbxroot/repo/.git\n" });
+    expect(await resolveGitDirs(cfg, "/sbxroot/work/tree", g.fn)).toBeNull();
+  });
+
+  it("returns null when an old git echoes the unknown --path-format flag (three lines, exit 0)", async () => {
+    const g = fakeGit({
+      code: 0,
+      stdout: "--path-format=absolute\n/sbxroot/repo/.git/worktrees/tree\n/sbxroot/repo/.git\n",
+    });
+    expect(await resolveGitDirs(cfg, "/sbxroot/work/tree", g.fn)).toBeNull();
+  });
+
+  it("returns null when a line is not an absolute path", async () => {
+    const g = fakeGit({ code: 0, stdout: ".git/worktrees/tree\n/sbxroot/repo/.git\n" });
     expect(await resolveGitDirs(cfg, "/sbxroot/work/tree", g.fn)).toBeNull();
   });
 });
