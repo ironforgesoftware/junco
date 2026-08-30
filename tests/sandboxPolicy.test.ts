@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   builtinDenyReadPaths,
   buildPolicy,
+  linkedWorktreeWritePaths,
   readRules,
   traversalMetadataPaths,
   SandboxPolicyError,
@@ -23,6 +24,60 @@ describe("builtinDenyReadPaths", () => {
     expect(p).toContain("/sbxroot/home/x/.config/gh");
     expect(p).toContain("/sbxroot/home/x/.gnupg");
     expect(p).toContain("/sbxroot/home/x/.pi");
+  });
+});
+
+describe("linkedWorktreeWritePaths (#320)", () => {
+  const cwd = "/sbxroot/work/tree";
+
+  it("a linked worktree gets its gitdir plus the common dir's objects/refs/logs — never the common dir", () => {
+    const roots = linkedWorktreeWritePaths({
+      cwd,
+      gitDir: "/sbxroot/repo/.git/worktrees/tree",
+      commonDir: "/sbxroot/repo/.git",
+    });
+    expect(roots).toEqual([
+      "/sbxroot/repo/.git/worktrees/tree",
+      "/sbxroot/repo/.git/objects",
+      "/sbxroot/repo/.git/refs",
+      "/sbxroot/repo/.git/logs",
+    ]);
+    expect(roots).not.toContain("/sbxroot/repo/.git");
+  });
+
+  it("a standalone repo (common dir inside the cwd) adds nothing — the cwd already covers it", () => {
+    expect(
+      linkedWorktreeWritePaths({
+        cwd,
+        gitDir: "/sbxroot/work/tree/.git",
+        commonDir: "/sbxroot/work/tree/.git",
+      }),
+    ).toEqual([]);
+  });
+
+  it("a gitdir outside both the common dir and the cwd is granted alongside the common dir's subdirs", () => {
+    expect(
+      linkedWorktreeWritePaths({
+        cwd,
+        gitDir: "/sbxroot/elsewhere/gitdir",
+        commonDir: "/sbxroot/repo/.git",
+      }),
+    ).toEqual([
+      "/sbxroot/elsewhere/gitdir",
+      "/sbxroot/repo/.git/objects",
+      "/sbxroot/repo/.git/refs",
+      "/sbxroot/repo/.git/logs",
+    ]);
+  });
+
+  it("is prefix-safe: /sbxroot/work/tree-2 is not inside /sbxroot/work/tree (gitdir === common dir → that dir)", () => {
+    expect(
+      linkedWorktreeWritePaths({
+        cwd,
+        gitDir: "/sbxroot/work/tree-2/.git",
+        commonDir: "/sbxroot/work/tree-2/.git",
+      }),
+    ).toEqual(["/sbxroot/work/tree-2/.git"]);
   });
 });
 
@@ -53,6 +108,16 @@ describe("buildPolicy", () => {
     expect(pol.writableRoots).toEqual([
       "/sbxroot/work/tree",
       "/sbxroot/nowhere/scratch1",
+      "/sbxroot/extra/writable",
+    ]);
+  });
+
+  it("gitWritePaths land after cwd/scratch and before the operator's extras (#320)", () => {
+    const pol = buildPolicy({ ...base, gitWritePaths: ["/sbxroot/repo/.git"] });
+    expect(pol.writableRoots).toEqual([
+      "/sbxroot/work/tree",
+      "/sbxroot/nowhere/scratch1",
+      "/sbxroot/repo/.git",
       "/sbxroot/extra/writable",
     ]);
   });
@@ -166,6 +231,47 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
     expect(assertReadAllowed(`${dataDir}/clones/external/o2/r2/.git/HEAD`, cwd, policy)).toBe(
       `${dataDir}/clones/external/o2/r2/.git/HEAD`,
     );
+  });
+
+  it("a linked worktree's git metadata under the denied clones tier is writable once threaded in (#320)", () => {
+    const withGit = buildPolicy({
+      cfg: {
+        enabled: true,
+        backend: "auto" as const,
+        network: "deny" as const,
+        extraDenyRead: [],
+        extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
+      },
+      cwd,
+      scratchDir: "/sbxroot/nowhere/scratch1",
+      home: "/sbxroot/home/x",
+      dataDenyPaths: {
+        dirs: [`${dataDir}/queue`, `${dataDir}/review`],
+        files: [`${dataDir}/watchlist.json`],
+      },
+      gitWritePaths: [
+        `${dataDir}/clones/watched/o/r/.git/worktrees/tkt-1`,
+        `${dataDir}/clones/watched/o/r/.git/objects`,
+        `${dataDir}/clones/watched/o/r/.git/refs`,
+        `${dataDir}/clones/watched/o/r/.git/logs`,
+      ],
+      network: false,
+    });
+    const lock = `${dataDir}/clones/watched/o/r/.git/worktrees/tkt-1/index.lock`;
+    expect(assertWriteAllowed(lock, cwd, withGit)).toBe(lock);
+    expect(
+      assertWriteAllowed(`${dataDir}/clones/watched/o/r/.git/objects/ab/cd`, cwd, withGit),
+    ).toBe(`${dataDir}/clones/watched/o/r/.git/objects/ab/cd`);
+    // The common dir itself is NOT granted: hooks and config stay unwritable.
+    expect(() =>
+      assertWriteAllowed(`${dataDir}/clones/watched/o/r/.git/hooks/pre-commit`, cwd, withGit),
+    ).toThrow();
+    expect(() =>
+      assertWriteAllowed(`${dataDir}/clones/watched/o/r/.git/config`, cwd, withGit),
+    ).toThrow();
+    // Without the threading, the same write is refused — the #320 symptom.
+    expect(() => assertWriteAllowed(lock, cwd, policy)).toThrow();
   });
 
   it("still denies the sensitive subtrees and root receipt files", () => {
