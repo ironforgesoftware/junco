@@ -42,30 +42,48 @@ function isWithin(a: string, b: string): boolean {
 /**
  * Extra writable roots a LINKED worktree needs (#320). junco hands the agent
  * `git worktree add`'s output: `<cwd>/.git` is a FILE pointing at
- * `<repo>/.git/worktrees/<name>` (the gitdir — index, HEAD, logs), and every
- * commit writes `<repo>/.git/objects` and `<repo>/.git/refs` (the common dir).
- * None of that is under the cwd, so a cwd-only write policy makes the very
- * first `git commit` fail with "Unable to create '…/index.lock': Operation
- * not permitted" — which is what #320 is. Maintainer's ruling: allow the WHOLE
- * common dir (every git operation works — `config`, `gc`, ref deletion
- * included); the cost, documented in docs/operations.md, is that the owning
- * checkout's `.git/hooks` and `.git/config` become agent-writable too. The
- * gitdir is added separately only when it lies outside the common dir (a
- * `GIT_DIR`-style layout). A standalone repo — common dir inside the cwd — is
- * already writable through the cwd root and adds nothing.
+ * `<repo>/.git/worktrees/<name>` (the gitdir — index, HEAD, COMMIT_EDITMSG,
+ * the per-worktree reflog), and every commit writes `<repo>/.git/objects`,
+ * `<repo>/.git/refs` and `<repo>/.git/logs` (the common dir). None of that is
+ * under the cwd, so a cwd-only write policy makes the very first `git commit`
+ * fail with "Unable to create '…/index.lock': Operation not permitted" —
+ * which is what #320 is.
+ *
+ * The grant is the MINIMAL set: the gitdir, plus `objects/`, `refs/` and
+ * `logs/` of the common dir — never the common dir itself. `hooks/`, `config`,
+ * `info/`, the main worktree's `HEAD` and `packed-refs` stay unwritable, so an
+ * agent cannot plant a hook or set `core.hooksPath` / `core.fsmonitor` /
+ * `core.sshCommand` that junco's own unsandboxed git calls (status, commit,
+ * push, worktree add — daemon identity) would then execute. The cost: an
+ * in-session `git config`, `gc`, `pack-refs` or ref DELETION fails loud; none
+ * is needed (identity is pre-seeded, and ref updates write loose refs).
+ * A standalone repo — common dir inside the cwd — is already writable through
+ * the cwd root and adds nothing. The rare `GIT_DIR`-style layout where the
+ * gitdir IS the common dir gets that dir wholesale; a linked worktree never
+ * has that shape.
+ *
+ * Callers must ensure the three subdirs exist — session.ts mkdir -p's a
+ * missing one — because bwrap aborts on a missing bind source (backend.ts,
+ * bwrapArgs), and a fresh bare clone has no `logs/` until the first commit on
+ * a branch writes its reflog.
  */
 export function linkedWorktreeWritePaths(opts: { cwd: string } & GitDirs): string[] {
   const cwd = canonicalize(opts.cwd);
   const commonDir = canonicalize(opts.commonDir);
   const gitDir = canonicalize(opts.gitDir);
+  if (gitDir === commonDir) return isWithin(gitDir, cwd) ? [] : [gitDir];
   const roots: string[] = [];
-  if (!isWithin(commonDir, cwd)) roots.push(commonDir);
-  if (!isWithin(gitDir, commonDir) && !isWithin(gitDir, cwd)) roots.push(gitDir);
+  if (!isWithin(gitDir, cwd)) roots.push(gitDir);
+  if (!isWithin(commonDir, cwd)) {
+    roots.push(join(commonDir, "objects"), join(commonDir, "refs"), join(commonDir, "logs"));
+  }
   return roots;
 }
 
 export interface SandboxPolicy {
-  /** Absolute roots the agent may write under (worktree, scratch, the linked worktree's git common dir (#320), extras). */
+  /** Absolute roots the agent may write under: the worktree, scratch, the
+   *  linked worktree's git metadata (gitdir + objects/refs/logs, #320), and
+   *  the operator's extras. */
   writableRoots: string[];
   /** Absolute subpaths whose reads are denied (secrets, sensitive data-tree
    *  subtrees, extras). Subtree semantics: the path and everything under it. */

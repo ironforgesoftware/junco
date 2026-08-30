@@ -308,7 +308,9 @@ async function shippedTree(layout: "v2" | "flat"): Promise<ShippedTree> {
   // worktree, so the writable roots under test are the ones a ticket gets.
   const gitDirs = await resolveGitDirs(cfg, worktree);
   if (!gitDirs) throw new Error("harness: resolveGitDirs returned null for a real linked worktree");
+  // mirrors resolveSandbox — a fresh bare clone has no logs/ yet
   const gitWritePaths = linkedWorktreeWritePaths({ cwd: worktree, ...gitDirs });
+  for (const p of gitWritePaths) if (!existsSync(p)) mkdirSync(p, { recursive: true });
 
   const policy = buildPolicy({
     cfg: cfg.sandbox,
@@ -414,6 +416,8 @@ describe.each(["v2", "flat"] as const)(
           `git -c user.name=t -c user.email=t@example.invalid commit -q -m "c1" >/dev/null 2>&1; echo "commit=$?"`,
           `git checkout -q -b junco/tkt-1 >/dev/null 2>&1; echo "branch=$?"`,
           `printf 'more\\n' >> added.txt; git -c user.name=t -c user.email=t@example.invalid commit -q -am "c2" >/dev/null 2>&1; echo "commit2=$?"`,
+          `touch "$(git rev-parse --path-format=absolute --git-common-dir)/hooks/junco-probe" >/dev/null 2>&1; echo "hooks=$?"`,
+          `git config user.name probe >/dev/null 2>&1; echo "config=$?"`,
         ].join("; "),
         t,
       );
@@ -421,6 +425,12 @@ describe.each(["v2", "flat"] as const)(
       expect(out).toContain("commit=0");
       expect(out).toContain("branch=0");
       expect(out).toContain("commit2=0");
+      // The common dir itself is not granted: a hook cannot be planted and
+      // config cannot be edited from inside the sandbox.
+      expect(out).toMatch(/hooks=\d+/);
+      expect(out).not.toContain("hooks=0");
+      expect(out).toMatch(/config=\d+/);
+      expect(out).not.toContain("config=0");
       // The commits are real: HEAD moved, and the branch ref landed in the
       // owning repo's refs (outside the cwd — the whole point of #320).
       const after = gitRun(["git", "-C", t.worktree, "rev-parse", "HEAD"]).trim();

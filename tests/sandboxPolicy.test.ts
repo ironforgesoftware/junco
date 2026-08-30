@@ -30,14 +30,19 @@ describe("builtinDenyReadPaths", () => {
 describe("linkedWorktreeWritePaths (#320)", () => {
   const cwd = "/sbxroot/work/tree";
 
-  it("a linked worktree adds the owning repo's whole common dir", () => {
-    expect(
-      linkedWorktreeWritePaths({
-        cwd,
-        gitDir: "/sbxroot/repo/.git/worktrees/tree",
-        commonDir: "/sbxroot/repo/.git",
-      }),
-    ).toEqual(["/sbxroot/repo/.git"]);
+  it("a linked worktree gets its gitdir plus the common dir's objects/refs/logs — never the common dir", () => {
+    const roots = linkedWorktreeWritePaths({
+      cwd,
+      gitDir: "/sbxroot/repo/.git/worktrees/tree",
+      commonDir: "/sbxroot/repo/.git",
+    });
+    expect(roots).toEqual([
+      "/sbxroot/repo/.git/worktrees/tree",
+      "/sbxroot/repo/.git/objects",
+      "/sbxroot/repo/.git/refs",
+      "/sbxroot/repo/.git/logs",
+    ]);
+    expect(roots).not.toContain("/sbxroot/repo/.git");
   });
 
   it("a standalone repo (common dir inside the cwd) adds nothing — the cwd already covers it", () => {
@@ -50,17 +55,22 @@ describe("linkedWorktreeWritePaths (#320)", () => {
     ).toEqual([]);
   });
 
-  it("a gitdir outside both the common dir and the cwd is added too", () => {
+  it("a gitdir outside both the common dir and the cwd is granted alongside the common dir's subdirs", () => {
     expect(
       linkedWorktreeWritePaths({
         cwd,
         gitDir: "/sbxroot/elsewhere/gitdir",
         commonDir: "/sbxroot/repo/.git",
       }),
-    ).toEqual(["/sbxroot/repo/.git", "/sbxroot/elsewhere/gitdir"]);
+    ).toEqual([
+      "/sbxroot/elsewhere/gitdir",
+      "/sbxroot/repo/.git/objects",
+      "/sbxroot/repo/.git/refs",
+      "/sbxroot/repo/.git/logs",
+    ]);
   });
 
-  it("is prefix-safe: /sbxroot/work/tree-2 is not inside /sbxroot/work/tree", () => {
+  it("is prefix-safe: /sbxroot/work/tree-2 is not inside /sbxroot/work/tree (gitdir === common dir → that dir)", () => {
     expect(
       linkedWorktreeWritePaths({
         cwd,
@@ -227,7 +237,12 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
         dirs: [`${dataDir}/queue`, `${dataDir}/review`],
         files: [`${dataDir}/watchlist.json`],
       },
-      gitWritePaths: [`${dataDir}/clones/watched/o/r/.git`],
+      gitWritePaths: [
+        `${dataDir}/clones/watched/o/r/.git/worktrees/tkt-1`,
+        `${dataDir}/clones/watched/o/r/.git/objects`,
+        `${dataDir}/clones/watched/o/r/.git/refs`,
+        `${dataDir}/clones/watched/o/r/.git/logs`,
+      ],
       network: false,
     });
     const lock = `${dataDir}/clones/watched/o/r/.git/worktrees/tkt-1/index.lock`;
@@ -235,6 +250,13 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
     expect(
       assertWriteAllowed(`${dataDir}/clones/watched/o/r/.git/objects/ab/cd`, cwd, withGit),
     ).toBe(`${dataDir}/clones/watched/o/r/.git/objects/ab/cd`);
+    // The common dir itself is NOT granted: hooks and config stay unwritable.
+    expect(() =>
+      assertWriteAllowed(`${dataDir}/clones/watched/o/r/.git/hooks/pre-commit`, cwd, withGit),
+    ).toThrow();
+    expect(() =>
+      assertWriteAllowed(`${dataDir}/clones/watched/o/r/.git/config`, cwd, withGit),
+    ).toThrow();
     // Without the threading, the same write is refused — the #320 symptom.
     expect(() => assertWriteAllowed(lock, cwd, policy)).toThrow();
   });

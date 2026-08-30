@@ -46,6 +46,8 @@ const okDeps = {
   platform: "linux" as NodeJS.Platform,
   home: "/sbxroot/home/x",
   gitDirs: async () => null,
+  pathExists: () => true,
+  ensureDir: () => {},
 };
 
 describe("resolveSandbox", () => {
@@ -101,26 +103,67 @@ describe("resolveSandbox", () => {
   // .git, not under the cwd. resolveSandbox must ask git where that is and
   // thread the answer into the writable roots — or the very first
   // `git commit` fails with "Unable to create '…/index.lock'".
-  it("threads the linked worktree's git common dir into the writable roots (#320)", async () => {
+  it("threads the linked worktree's git metadata — not the common dir — into the writable roots (#320)", async () => {
     const cwd = "/sbxroot/state/worktrees/tkt-1";
+    const common = "/sbxroot/state/clones/watched/o__r.git";
     const r = await resolveSandbox(cfgWith({ backend: "none" }), cwd, undefined, {
       ...okDeps,
       gitDirs: async (c) => {
         expect(c).toBe(cwd);
-        return {
-          gitDir: "/sbxroot/state/clones/watched/o__r.git/worktrees/tkt-1",
-          commonDir: "/sbxroot/state/clones/watched/o__r.git",
-        };
+        return { gitDir: `${common}/worktrees/tkt-1`, commonDir: common };
       },
     });
     const policy = r?.policy;
     if (!policy) throw new Error("expected a sandbox policy");
-    expect(policy.writableRoots).toContain("/sbxroot/state/clones/watched/o__r.git");
-    const lock = "/sbxroot/state/clones/watched/o__r.git/worktrees/tkt-1/index.lock";
+    for (const p of [
+      `${common}/worktrees/tkt-1`,
+      `${common}/objects`,
+      `${common}/refs`,
+      `${common}/logs`,
+    ]) {
+      expect(policy.writableRoots).toContain(p);
+    }
+    expect(policy.writableRoots).not.toContain(common);
+    const lock = `${common}/worktrees/tkt-1/index.lock`;
     expect(assertWriteAllowed(lock, cwd, policy)).toBe(lock);
+    expect(() => assertWriteAllowed(`${common}/hooks/pre-commit`, cwd, policy)).toThrow();
+    expect(() => assertWriteAllowed(`${common}/config`, cwd, policy)).toThrow();
     // The clones tier sits inside the wholesale-denied data root; the writable
     // root out-specifies that deny for reads too.
     expect(resolveRead(lock, readRules(policy))).toBe("allow");
+  });
+
+  it("creates a missing git write root (a fresh clone's logs/) and keeps it (#320)", async () => {
+    const cwd = "/sbxroot/state/worktrees/tkt-1";
+    const common = "/sbxroot/state/clones/watched/o__r.git";
+    const created: string[] = [];
+    const r = await resolveSandbox(cfgWith({ backend: "none" }), cwd, undefined, {
+      ...okDeps,
+      gitDirs: async () => ({ gitDir: `${common}/worktrees/tkt-1`, commonDir: common }),
+      pathExists: (p) => !p.endsWith("/logs"),
+      ensureDir: (p) => created.push(p),
+    });
+    const roots = r?.policy.writableRoots ?? [];
+    expect(roots).toContain(`${common}/logs`);
+    expect(created).toEqual([`${common}/logs`]);
+  });
+
+  it("drops a git write root it cannot create (bwrap must never bind a missing source)", async () => {
+    const cwd = "/sbxroot/state/worktrees/tkt-1";
+    const common = "/sbxroot/state/clones/watched/o__r.git";
+    const r = await resolveSandbox(cfgWith({ backend: "none" }), cwd, undefined, {
+      ...okDeps,
+      gitDirs: async () => ({ gitDir: `${common}/worktrees/tkt-1`, commonDir: common }),
+      pathExists: (p) => !p.endsWith("/logs"),
+      ensureDir: () => {
+        throw new Error("EACCES");
+      },
+    });
+    const roots = r?.policy.writableRoots ?? [];
+    expect(roots).toContain(`${common}/objects`);
+    expect(roots).toContain(`${common}/refs`);
+    expect(roots).toContain(`${common}/worktrees/tkt-1`);
+    expect(roots).not.toContain(`${common}/logs`);
   });
 
   it("adds no git roots when the cwd is not a git checkout (#320)", async () => {

@@ -1,4 +1,4 @@
-import { mkdirSync, createWriteStream, mkdtempSync, type WriteStream } from "node:fs";
+import { mkdirSync, createWriteStream, mkdtempSync, existsSync, type WriteStream } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import type { AgentSessionEvent, CreateModelRuntimeOptions } from "@earendil-works/pi-coding-agent";
@@ -442,6 +442,15 @@ export interface ResolveSandboxDeps {
   /** Where the cwd's git metadata lives (#320) — default asks `git rev-parse`
    *  in the cwd via resolveGitDirs; tests inject the answer (or null). */
   gitDirs?: (cwd: string) => Promise<GitDirs | null>;
+  /** Existence probe for the git write roots (#320): bwrap aborts on a missing
+   *  bind source, so a candidate git creates only later (a bare clone's
+   *  `logs/`) must be dropped, not bound. Default: fs.existsSync. */
+  pathExists?: (p: string) => boolean;
+  /** Creates a missing git write root (#320) — a fresh bare clone has no
+   *  `logs/` until its first reflog write, and bwrap aborts on a missing bind
+   *  source; git would create the dir itself, so this is benign. Default:
+   *  mkdirSync recursive. */
+  ensureDir?: (p: string) => void;
 }
 
 export interface ResolvedSandbox {
@@ -507,15 +516,39 @@ export async function resolveSandbox(
   // .git, outside the cwd — without these roots the agent's first `git commit`
   // dies with "Unable to create '…/index.lock': Operation not permitted".
   const gitDirs = await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
-  const gitWritePaths = gitDirs ? linkedWorktreeWritePaths({ cwd, ...gitDirs }) : [];
-  log.info("sandbox: linked worktree git write roots", { cwd, roots: gitWritePaths });
+  const pathExists = deps.pathExists ?? existsSync;
+  const ensureDir = deps.ensureDir ?? ((p: string) => mkdirSync(p, { recursive: true }));
+  // Grant only what exists — creating a missing one first: bwrap --binds every
+  // writable root and aborts the spawn on a missing source (backend.ts
+  // bwrapArgs), and a fresh bare clone has no logs/ until the first commit on
+  // a branch writes its reflog. git would mkdir it itself, so creating it here
+  // is benign.
+  const candidates = gitDirs ? linkedWorktreeWritePaths({ cwd, ...gitDirs }) : [];
+  const gitWritePaths: string[] = [];
+  const skipped: string[] = [];
+  for (const p of candidates) {
+    if (!pathExists(p)) {
+      try {
+        ensureDir(p); // e.g. a fresh clone's logs/ — git creates it on first use anyway
+      } catch (e) {
+        log.warn("sandbox: git write root missing and not creatable; skipped", {
+          path: p,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        skipped.push(p);
+        continue;
+      }
+    }
+    gitWritePaths.push(p);
+  }
+  log.info("sandbox: linked worktree git write roots", { cwd, roots: gitWritePaths, skipped });
   // #277: the data tree is denied WHOLESALE and its execution roots (the
   // worktrees and the clone gitdirs this session's git reads) are allowed
   // back. Both halves must be threaded in — the denies alone would wall the
   // agent out of its own worktree; the allows alone would leave the queue
   // readable. Precedence between them is by specificity, not list order (see
   // sandbox/precedence.ts). #320 threads a third input the same way — the
-  // linked worktree's git common dir (`gitWritePaths` above) — as a writable
+  // linked worktree's git metadata (`gitWritePaths` above) — as a writable
   // root that out-specifies the data-root deny.
   const dataPaths = sandboxDenyPaths(cfg);
   const policy = buildPolicy({
