@@ -135,6 +135,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],
+      bashTimeoutSeconds: 600,
     },
     botAccount: { enabled: false, configDir: "/sbxroot/junco-gh" },
     planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },

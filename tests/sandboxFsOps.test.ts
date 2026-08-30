@@ -30,6 +30,7 @@ function policyFor(work: string, deny: string[] = []): SandboxPolicy {
     readAllowPaths: [],
     network: false,
     scratchDir: work,
+    bashTimeoutMs: undefined,
   };
 }
 

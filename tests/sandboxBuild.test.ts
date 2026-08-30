@@ -11,6 +11,7 @@ const policy: SandboxPolicy = {
   readAllowPaths: [],
   network: false,
   scratchDir: "/tmp/s",
+  bashTimeoutMs: undefined,
 };
 
 describe("toolOptionsFor", () => {

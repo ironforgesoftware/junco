@@ -131,6 +131,10 @@ export interface SandboxConfig {
   extraDenyRead: string[];
   // Extra absolute paths where writes are permitted (added to worktree+scratch).
   extraAllowWrite: string[];
+  // Ceiling in seconds on one sandboxed bash call when the agent passes no
+  // timeout; 0 = no ceiling. The agent's explicit timeout always wins.
+  // Max 2147483 (Node's setTimeout ceiling in seconds).
+  bashTimeoutSeconds: number;
 }
 export interface Config {
   /** Unified data root (spec 2026-07-16). Every junco path resolves under here
