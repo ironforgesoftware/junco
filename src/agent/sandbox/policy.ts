@@ -26,8 +26,46 @@ export function builtinDenyReadPaths(home: string): string[] {
   ];
 }
 
+/** The two answers of `git rev-parse --path-format=absolute --git-dir
+ *  --git-common-dir`, run in the agent's cwd. */
+export interface GitDirs {
+  gitDir: string;
+  commonDir: string;
+}
+
+/** `a` is `b` or lies strictly inside it (path-component-wise: `/x/y-2` is not
+ *  under `/x/y`). Local on purpose — pathJail.ts imports this module's types. */
+function isWithin(a: string, b: string): boolean {
+  return a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+}
+
+/**
+ * Extra writable roots a LINKED worktree needs (#320). junco hands the agent
+ * `git worktree add`'s output: `<cwd>/.git` is a FILE pointing at
+ * `<repo>/.git/worktrees/<name>` (the gitdir — index, HEAD, logs), and every
+ * commit writes `<repo>/.git/objects` and `<repo>/.git/refs` (the common dir).
+ * None of that is under the cwd, so a cwd-only write policy makes the very
+ * first `git commit` fail with "Unable to create '…/index.lock': Operation
+ * not permitted" — which is what #320 is. Maintainer's ruling: allow the WHOLE
+ * common dir (every git operation works — `config`, `gc`, ref deletion
+ * included); the cost, documented in docs/operations.md, is that the owning
+ * checkout's `.git/hooks` and `.git/config` become agent-writable too. The
+ * gitdir is added separately only when it lies outside the common dir (a
+ * `GIT_DIR`-style layout). A standalone repo — common dir inside the cwd — is
+ * already writable through the cwd root and adds nothing.
+ */
+export function linkedWorktreeWritePaths(opts: { cwd: string } & GitDirs): string[] {
+  const cwd = canonicalize(opts.cwd);
+  const commonDir = canonicalize(opts.commonDir);
+  const gitDir = canonicalize(opts.gitDir);
+  const roots: string[] = [];
+  if (!isWithin(commonDir, cwd)) roots.push(commonDir);
+  if (!isWithin(gitDir, commonDir) && !isWithin(gitDir, cwd)) roots.push(gitDir);
+  return roots;
+}
+
 export interface SandboxPolicy {
-  /** Absolute roots the agent may write under (worktree, scratch, extras). */
+  /** Absolute roots the agent may write under (worktree, scratch, the linked worktree's git common dir (#320), extras). */
   writableRoots: string[];
   /** Absolute subpaths whose reads are denied (secrets, sensitive data-tree
    *  subtrees, extras). Subtree semantics: the path and everything under it. */
@@ -67,6 +105,11 @@ export function buildPolicy(opts: {
   dataAllowPaths?: string[];
   network: boolean;
   botGhConfigDir?: string;
+  /** Extra writable roots for a LINKED worktree's git metadata — the owning
+   *  repo's common dir (and, rarely, an out-of-tree gitdir), as computed by
+   *  `linkedWorktreeWritePaths`. Threaded in by session.ts's resolveSandbox;
+   *  callers that build stand-in policies (doctor, tests) leave it empty. */
+  gitWritePaths?: string[];
   /** #311/F5: how `buildPolicy` tells an `extra_deny_read` entry that names a
    *  FILE from one that names a directory. Defaults to a real `statSync`;
    *  injected by tests so synthetic `/sbxroot/...` paths can state their kind.
@@ -82,6 +125,7 @@ export function buildPolicy(opts: {
   const writableRoots = [
     canonicalize(cwd),
     canonicalize(scratchDir),
+    ...(opts.gitWritePaths ?? []).map(canonicalize),
     ...cfg.extraAllowWrite.map(canonicalize),
   ];
   const extraDenyRead = classifyExtraDenyRead(cfg.extraDenyRead.map(canonicalize), isFile);
