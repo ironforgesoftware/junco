@@ -11,7 +11,12 @@ import {
 import { dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { selectBackend, defaultExecProbe } from "../src/agent/sandbox/backend.js";
-import { buildPolicy, type SandboxPolicy } from "../src/agent/sandbox/policy.js";
+import {
+  buildPolicy,
+  linkedWorktreeWritePaths,
+  type SandboxPolicy,
+} from "../src/agent/sandbox/policy.js";
+import { resolveGitDirs } from "../src/agent/sandbox/gitDirs.js";
 import { makeSandboxedBashOperations } from "../src/agent/sandbox/bashOps.js";
 import { dataTreePaths, sandboxDenyPaths } from "../src/dataTree.js";
 import { makeConfig } from "./helpers/config.js";
@@ -238,7 +243,7 @@ interface ShippedTree {
  *  is generated is the exact bwrap failure mode #311 is about. The policy
  *  comes back through the production path (`sandboxDenyPaths` → `buildPolicy`,
  *  as agent/session.ts's `resolveSandbox` wires it), never hand-built. */
-function shippedTree(layout: "v2" | "flat"): ShippedTree {
+async function shippedTree(layout: "v2" | "flat"): Promise<ShippedTree> {
   // A private HOME: the data root, the canonical config and the legacy XDG
   // config all resolve under it, so nothing here can touch a real ~/.junco.
   const home = tmp("junco-it-home-");
@@ -299,6 +304,12 @@ function shippedTree(layout: "v2" | "flat"): ShippedTree {
   mkdirSync(dirname(legacyConfig), { recursive: true });
   writeFileSync(legacyConfig, '{"model":{"apiKey":"SECRET_LEGACY_APIKEY"}}');
 
+  // #320: the same derivation resolveSandbox performs — real git, real linked
+  // worktree, so the writable roots under test are the ones a ticket gets.
+  const gitDirs = await resolveGitDirs(cfg, worktree);
+  if (!gitDirs) throw new Error("harness: resolveGitDirs returned null for a real linked worktree");
+  const gitWritePaths = linkedWorktreeWritePaths({ cwd: worktree, ...gitDirs });
+
   const policy = buildPolicy({
     cfg: cfg.sandbox,
     cwd: worktree,
@@ -307,6 +318,7 @@ function shippedTree(layout: "v2" | "flat"): ShippedTree {
     dataDenyPaths: paths,
     dataAllowPaths: paths.allowDirs,
     network: false,
+    gitWritePaths,
   });
   return { root, worktree, mirror, denyFiles, legacyConfig, policy, home };
 }
@@ -360,7 +372,7 @@ describe.each(["v2", "flat"] as const)(
   (layout) => {
     it("runs the agent's git inside its own worktree (F1)", async (ctx) => {
       requireBackend(ctx);
-      const t = shippedTree(layout);
+      const t = await shippedTree(layout);
       // The three commands the review reproduced the outage with. They fail
       // with "fatal: Invalid path '<root>': Operation not permitted" the moment
       // a denied path component of the gitdir cannot be lstat'd — which is
@@ -380,7 +392,7 @@ describe.each(["v2", "flat"] as const)(
 
     it("git still reports the worktree's real content, not an empty mask", async (ctx) => {
       requireBackend(ctx);
-      const t = shippedTree(layout);
+      const t = await shippedTree(layout);
       // An exit code alone would pass against a tmpfs'd-away worktree. Pin the
       // actual objects: the commit the harness seeded and the untracked file.
       const head = gitRun(["git", "-C", t.worktree, "rev-parse", "HEAD"]).trim();
@@ -389,9 +401,37 @@ describe.each(["v2", "flat"] as const)(
       expect(out).toContain("untracked.txt");
     });
 
+    it("the agent can commit inside its linked worktree (#320)", async (ctx) => {
+      requireBackend(ctx);
+      const t = await shippedTree(layout);
+      const before = gitRun(["git", "-C", t.worktree, "rev-parse", "HEAD"]).trim();
+      // A real add + commit. Identity via -c so no global config is consulted;
+      // the worktree is detached, so this exercises gitdir/HEAD + objects.
+      const out = await runShipped(
+        [
+          `printf 'hello\\n' > added.txt`,
+          `git add added.txt >/dev/null 2>&1; echo "add=$?"`,
+          `git -c user.name=t -c user.email=t@example.invalid commit -q -m "c1" >/dev/null 2>&1; echo "commit=$?"`,
+          `git checkout -q -b junco/tkt-1 >/dev/null 2>&1; echo "branch=$?"`,
+          `printf 'more\\n' >> added.txt; git -c user.name=t -c user.email=t@example.invalid commit -q -am "c2" >/dev/null 2>&1; echo "commit2=$?"`,
+        ].join("; "),
+        t,
+      );
+      expect(out).toContain("add=0");
+      expect(out).toContain("commit=0");
+      expect(out).toContain("branch=0");
+      expect(out).toContain("commit2=0");
+      // The commits are real: HEAD moved, and the branch ref landed in the
+      // owning repo's refs (outside the cwd — the whole point of #320).
+      const after = gitRun(["git", "-C", t.worktree, "rev-parse", "HEAD"]).trim();
+      expect(after).not.toBe(before);
+      const ref = gitRun(["git", "-C", t.worktree, "rev-parse", "refs/heads/junco/tkt-1"]).trim();
+      expect(ref).toBe(after);
+    });
+
     it("never turns the denied root into a window on its real contents", async (ctx) => {
       requireBackend(ctx);
-      const t = shippedTree(layout);
+      const t = await shippedTree(layout);
       // A host file inside the denied root that NO policy rule names. It is the
       // discriminator the predecessor of this case lacked: every OTHER entry in
       // that root is a path the policy itself mounts, so a listing of them is
@@ -442,7 +482,7 @@ describe.each(["v2", "flat"] as const)(
 
     it("denies every receipt, the mirror and the legacy config from that same worktree", async (ctx) => {
       requireBackend(ctx);
-      const t = shippedTree(layout);
+      const t = await shippedTree(layout);
       // One spawn, so these outcomes are proven to coexist with a working git
       // under a single profile/mount set rather than separately-tuned ones.
       const probes = [...t.denyFiles, t.legacyConfig, join(t.mirror, "repo.git", "HEAD")];
@@ -460,7 +500,7 @@ describe.each(["v2", "flat"] as const)(
 
     it("keeps the worktree WRITABLE and the write survives on the host", async (ctx) => {
       requireBackend(ctx);
-      const t = shippedTree(layout);
+      const t = await shippedTree(layout);
       // Survival is the assertion that separates a real rw bind from a tmpfs
       // the write silently landed in: bwrap rw-binds the worktree LAST, on top
       // of the clones/worktrees ro-binds, on top of the root tmpfs.
