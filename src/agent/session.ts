@@ -503,18 +503,20 @@ export async function resolveSandbox(
   }
   const network = overrides?.network ?? cfg.sandbox.network === "allow";
   const scratchDir = makeScratch();
-  // #277: the data tree is denied WHOLESALE and its execution roots (the
-  // worktrees and the clone gitdirs this session's git reads) are allowed
-  // back. Both halves must be threaded in — the denies alone would wall the
-  // agent out of its own worktree; the allows alone would leave the queue
-  // readable. Precedence between them is by specificity, not list order (see
-  // sandbox/precedence.ts).
-  const dataPaths = sandboxDenyPaths(cfg);
   // #320: a linked worktree's index/objects/refs live under the owning repo's
   // .git, outside the cwd — without these roots the agent's first `git commit`
   // dies with "Unable to create '…/index.lock': Operation not permitted".
   const gitDirs = await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
   const gitWritePaths = gitDirs ? linkedWorktreeWritePaths({ cwd, ...gitDirs }) : [];
+  // #277: the data tree is denied WHOLESALE and its execution roots (the
+  // worktrees and the clone gitdirs this session's git reads) are allowed
+  // back. Both halves must be threaded in — the denies alone would wall the
+  // agent out of its own worktree; the allows alone would leave the queue
+  // readable. Precedence between them is by specificity, not list order (see
+  // sandbox/precedence.ts). #320 threads a third input the same way — the
+  // linked worktree's git common dir (`gitWritePaths` above) — as a writable
+  // root that out-specifies the data-root deny.
+  const dataPaths = sandboxDenyPaths(cfg);
   const policy = buildPolicy({
     cfg: cfg.sandbox,
     cwd,
