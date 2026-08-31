@@ -628,16 +628,20 @@ function ticketInFlight(cfg: Config, id: string): boolean {
  * body (spec 2026-08-31-dispatch-hardening-design.md). Clamped [1, 480] on
  * both write and read; the body is covered by the edited-after-label guard,
  * and the clamp bounds hostile edits regardless. */
-const TIMEOUT_MARKER_RE = /<!--\s*junco:timeout:(\d{1,4})\s*-->/;
+const TIMEOUT_MARKER_RE = /<!--\s*junco:timeout:(\d{1,4})\s*-->/g;
 
 export function timeoutMarker(n: number): string {
   return `<!-- junco:timeout:${Math.min(480, Math.max(1, Math.round(n)))} -->`;
 }
 
+/** Takes the LAST marker match, mirroring extractFencedBlock's "newer plan
+ * supersedes" rule for the junco-ticket fence — a hand-edited body carrying
+ * two park generations should have its fence and timeout agree on which one
+ * is current. Only reachable by manual edit; the clamp bounds either way. */
 export function parseTimeoutMarker(text: string): number | null {
-  const m = TIMEOUT_MARKER_RE.exec(text);
-  if (!m) return null;
-  const n = Number(m[1]);
+  const matches = [...text.matchAll(TIMEOUT_MARKER_RE)];
+  if (matches.length === 0) return null;
+  const n = Number(matches[matches.length - 1][1]);
   if (!Number.isFinite(n) || n < 1) return null;
   return Math.min(480, Math.round(n));
 }

@@ -18,11 +18,12 @@ import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { findWatchedForPath, CARRIED_KEYS, carriedTimeoutMinutes } from "./submitAsIssue.js";
 import { canonPath } from "./unwatchCmd.js";
 import { inboxPath } from "./dispatch.js";
+import { deriveBranchName, isSafeGitRef } from "./repoContext.js";
+import { slugifyId } from "./slug.js";
 
 export interface PreflightDeps {
   gitFn?: typeof git;
   printFn?: (s: string) => void;
-  errFn?: (s: string) => void;
   existsFn?: (p: string) => boolean;
   fetchLabels?: (nwo: string) => Set<string>;
 }
@@ -33,10 +34,16 @@ export interface EnvCheckResult {
   repoNwo: string | null;
 }
 
-/** Same slug rule as dispatch.ts's submitTicket — the worker derives the
- * branch `junco/<slug(id)>`, so the collision check must match exactly. */
+/** Same slug rule as dispatch.ts's submitTicket — used for the inbox
+ * destination filename (see runSubmitDryRun's would-submit line). Delegates
+ * to the single-homed slugifyId (src/slug.ts) rather than re-implementing
+ * the regex — the traversal hole (#32) regressed once (#94) precisely
+ * because this slug step was duplicated per call site. NOT used for the
+ * branch-collision check below: the worker's real branch comes from
+ * repoContext.ts's deriveBranchName, which keeps `/` and honors a different
+ * prefix — see environmentChecks. */
 export function ticketSlug(id: string): string {
-  return id.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
+  return slugifyId(id);
 }
 
 const GIT_TIMEOUT_MS = 10_000;
@@ -96,13 +103,17 @@ export async function environmentChecks(
     }
   }
 
-  // Branch collision: the worker derives junco/<slug(id)> unless branch_name
-  // overrides. A branch already on origin fails the run after the agent's
-  // work is done — catch it before submit instead.
+  // Branch collision: mirror repoContext.ts's deriveRepoContext exactly
+  // (repoContext.ts:112-115) — branch_name is honored only when it passes
+  // isSafeGitRef, and the derived fallback uses cfg.branchPrefix (a live
+  // config lever, not a hardcoded "junco/") via deriveBranchName, which keeps
+  // '/' in the id slug rather than collapsing it like ticketSlug. A branch
+  // already on origin fails the run after the agent's work is done — catch
+  // it before submit instead.
   const branch =
-    typeof frontmatter.branch_name === "string" && frontmatter.branch_name !== ""
+    typeof frontmatter.branch_name === "string" && isSafeGitRef(frontmatter.branch_name)
       ? frontmatter.branch_name
-      : `junco/${ticketSlug(id)}`;
+      : deriveBranchName(id, cfg.branchPrefix);
   const ls = await gitFn(cfg, ["ls-remote", "--heads", "origin", branch], {
     cwd: repoPath,
     timeoutMs: GIT_TIMEOUT_MS,
@@ -177,6 +188,7 @@ export async function decideRoute(
   deps: PreflightDeps = {},
 ): Promise<RouteDecision> {
   const gitFn = deps.gitFn ?? git;
+  const existsFn = deps.existsFn ?? existsSync;
   const reasons: string[] = [];
   const carriedTimeout = carriedTimeoutMinutes(frontmatter);
   const discarded = Object.keys(frontmatter).filter(
@@ -205,12 +217,25 @@ export async function decideRoute(
   const repoPath = typeof repoRaw === "string" && repoRaw !== "" ? expandHome(repoRaw) : null;
 
   if (typeof frontmatter.base_branch === "string" && frontmatter.base_branch !== "" && repoPath) {
-    const head = await gitFn(cfg, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
-      cwd: repoPath,
-      timeoutMs: GIT_TIMEOUT_MS,
-      check: false,
-    });
-    const def = head.code === 0 ? head.stdout.trim().replace(/^origin\//, "") : null;
+    // A nonexistent repoPath (typo'd or another machine's path) must not
+    // reach gitFn: the real git wrapper THROWS (GitOpError/ENOENT) when cwd
+    // doesn't exist, which would otherwise escape decideRoute and crash
+    // `submit --dry-run` before it can print a verdict. Guard existence
+    // first, and treat any gitFn throw the same as an unresolvable default
+    // branch — both fall into the existing conservative inbox verdict.
+    let def: string | null = null;
+    if (existsFn(repoPath)) {
+      try {
+        const head = await gitFn(cfg, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
+          cwd: repoPath,
+          timeoutMs: GIT_TIMEOUT_MS,
+          check: false,
+        });
+        def = head.code === 0 ? head.stdout.trim().replace(/^origin\//, "") : null;
+      } catch {
+        def = null;
+      }
+    }
     if (def === null)
       return inbox("base_branch is set and the origin default branch could not be resolved");
     if (def !== frontmatter.base_branch)
@@ -269,7 +294,21 @@ export async function runSubmitDryRun(
     ghBin: cfg.ghBin,
     fetchLabels: deps.fetchLabels,
   });
-  const violations = [...env.violations, ...lint.violations];
+  // On the issue route, the bridge re-ids the ticket (gh-<nwo>-<n>) and the
+  // worker derives ITS branch from that new id — never from the local id
+  // checked above — so a branch_exists hit here cannot actually be the
+  // collision the check exists to catch. Downgrade to a warning so it's
+  // still visible without blocking a dry-run that would otherwise never see
+  // that branch. runLint deliberately keeps this an error: it has no routing
+  // context (it can't know a ticket will end up on the issue route), so a
+  // taken branch there is treated conservatively.
+  const envViolations =
+    route.destination === "issue"
+      ? env.violations.map((v) =>
+          v.rule === "branch_exists" ? { ...v, severity: "warning" as const } : v,
+        )
+      : env.violations;
+  const violations = [...envViolations, ...lint.violations];
   if (violations.length > 0) print(formatViolations(violations) + "\n");
   const errors = violations.filter((x) => x.severity === "error").length;
   const warnings = violations.filter((x) => x.severity === "warning").length;

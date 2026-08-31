@@ -115,7 +115,9 @@ function ghCfg(opts: { githubEnabled?: boolean; botEnabled?: boolean } = {}) {
 
 /** fakeGit with defaults suited to decideRoute: a GitHub origin resolving to
  * acme/api, and origin/main as the resolved default branch — overridable
- * per-call via the same `answers` shape fakeGit takes. */
+ * per-call via the same `answers` shape fakeGit takes. existsFn defaults to
+ * "the repo path exists" (B2's guard would otherwise short-circuit every
+ * base_branch check against the real, nonexistent sandbox REPO path). */
 function routeDeps(answers: Parameters<typeof fakeGit>[0] = {}) {
   return {
     gitFn: fakeGit({
@@ -123,6 +125,7 @@ function routeDeps(answers: Parameters<typeof fakeGit>[0] = {}) {
       head: { code: 0, stdout: "origin/main\n" },
       ...answers,
     }).fn,
+    existsFn: () => true,
   };
 }
 
@@ -264,6 +267,59 @@ describe("environmentChecks", () => {
     expect(r.violations.map((v) => v.rule)).toContain("branch_exists");
     expect(g.calls.some((a) => a[0] === "ls-remote" && a.includes("custom"))).toBe(true);
   });
+
+  // B3: the branch-collision check must mirror repoContext.ts's
+  // deriveRepoContext exactly (cfg.branchPrefix, deriveBranchName's '/'-
+  // preserving slug, isSafeGitRef gating) — not a re-derivation via
+  // ticketSlug + a hardcoded "junco/" prefix.
+
+  it("derives the branch via cfg.branchPrefix, not a hardcoded junco/ prefix", async () => {
+    const g = fakeGit({
+      origin: { code: 0, stdout: "https://github.com/acme/api.git\n" },
+      lsRemote: { code: 0, stdout: "deadbeef\trefs/heads/custom-prefix/add-x-2026-08-31\n" },
+    });
+    const r = await environmentChecks(
+      { ...cfg(), branchPrefix: "custom-prefix/" },
+      { repo: REPO },
+      "add-x-2026-08-31",
+      { gitFn: g.fn, existsFn: () => true },
+    );
+    expect(r.violations.map((v) => v.rule)).toContain("branch_exists");
+    expect(
+      g.calls.some((a) => a[0] === "ls-remote" && a.includes("custom-prefix/add-x-2026-08-31")),
+    ).toBe(true);
+  });
+
+  it("preserves '/' in the id slug (deriveBranchName), unlike ticketSlug's '-' collapse", async () => {
+    const g = fakeGit({
+      origin: { code: 0, stdout: "https://github.com/acme/api.git\n" },
+      lsRemote: { code: 0, stdout: "" },
+    });
+    await environmentChecks(cfg(), { repo: REPO }, "feat/thing-2026-08-31", {
+      gitFn: g.fn,
+      existsFn: () => true,
+    });
+    expect(
+      g.calls.some((a) => a[0] === "ls-remote" && a.includes("junco/feat/thing-2026-08-31")),
+    ).toBe(true);
+  });
+
+  it("falls back to the derived branch when branch_name is unsafe (isSafeGitRef gating)", async () => {
+    const g = fakeGit({
+      origin: { code: 0, stdout: "https://github.com/acme/api.git\n" },
+      lsRemote: { code: 0, stdout: "" },
+    });
+    await environmentChecks(
+      cfg(),
+      { repo: REPO, branch_name: "-unsafe --option" },
+      "add-x-2026-08-31",
+      { gitFn: g.fn, existsFn: () => true },
+    );
+    expect(g.calls.some((a) => a[0] === "ls-remote" && a.includes("junco/add-x-2026-08-31"))).toBe(
+      true,
+    );
+    expect(g.calls.some((a) => a.includes("-unsafe --option"))).toBe(false);
+  });
 });
 
 describe("runLint", () => {
@@ -370,6 +426,38 @@ describe("decideRoute", () => {
     );
     expect(unwatched.destination).toBe("inbox");
   });
+
+  // B2: a nonexistent repo path (typo'd, or another machine's checkout) must
+  // route to the conservative inbox verdict instead of letting the real git
+  // wrapper's ENOENT throw escape decideRoute and crash `submit --dry-run`
+  // before it can print `destination:`.
+  it("base_branch on a nonexistent repo path routes to the inbox instead of throwing", async () => {
+    const d = await decideRoute(
+      ghCfg(),
+      { repo: "/sbxroot/nonexistent-xyz/repo", base_branch: "main" },
+      {
+        gitFn: fakeGit({}).fn,
+        existsFn: () => false,
+      },
+    );
+    expect(d.destination).toBe("inbox");
+    expect(d.reasons.join(" ")).toContain(
+      "base_branch is set and the origin default branch could not be resolved",
+    );
+  });
+
+  it("a throwing gitFn on an existing repo path is caught, not propagated", async () => {
+    const throwingGit = async () => {
+      throw new Error("git ENOENT (spawn git ENOENT)");
+    };
+    await expect(
+      decideRoute(
+        ghCfg(),
+        { repo: REPO, base_branch: "main" },
+        { gitFn: throwingGit as never, existsFn: () => true },
+      ),
+    ).resolves.toMatchObject({ destination: "inbox" });
+  });
 });
 
 describe("runSubmitDryRun", () => {
@@ -420,5 +508,25 @@ describe("runSubmitDryRun", () => {
     const text = out.join("");
     expect(code).toBe(0);
     expect(text).toContain("already queued");
+  });
+
+  // O4: on the issue route the bridge re-ids the ticket, so a branch_exists
+  // hit against the LOCAL id's branch can't be the real collision — this
+  // route downgrades it to a warning instead of blocking the dry-run.
+  it("downgrades branch_exists to a warning on the issue route (bridge re-ids the ticket)", async () => {
+    const out: string[] = [];
+    const code = await runSubmitDryRun(ghCfg(), "t.md", TICKET, {
+      ...routeDeps({
+        lsRemote: { code: 0, stdout: "deadbeef\trefs/heads/junco/add-x-2026-08-31\n" },
+      }),
+      existsFn: (p) => p === REPO,
+      fetchLabels: () => new Set(["bug"]),
+      printFn: (s) => out.push(s),
+    });
+    const text = out.join("");
+    expect(code).toBe(0);
+    expect(text).toContain("destination: issue");
+    expect(text).toContain("[warning] branch_exists");
+    expect(text).not.toContain("[error] branch_exists");
   });
 });

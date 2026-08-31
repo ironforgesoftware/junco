@@ -1830,6 +1830,27 @@ describe("run(['submit', '--dry-run', ...])", () => {
     expect(code).toBe(0);
     expect(called).toBe(1);
   });
+
+  // R1/R4: combined with --as-issue, --dry-run still wins — the decision is
+  // the CLI's, per spec. stubConfig() has no `github` field, so if precedence
+  // ever regressed and this fell through to the real submitAsIssue, the run
+  // would not return the spy's 0 (it would throw on `cfg.github.enabled`).
+  it("submit --dry-run --as-issue routes to runSubmitDryRunFn, never reaching submitAsIssue", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-dry-"));
+    const file = join(dir, "t.md");
+    writeFileSync(file, "---\nid: x\nrepo: /sbxroot/r\n---\n\n# T\n", "utf8");
+    let called = 0;
+    const code = await run(["submit", "--dry-run", "--as-issue", file], {
+      loadConfigFn: () => stubConfig(),
+      runSubmitDryRunFn: async () => {
+        called++;
+        return 0;
+      },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(code).toBe(0);
+    expect(called).toBe(1);
+  });
 });
 
 // --- submit --plan (Task 12, spec 2026-08-20 Layer 2): the local CLI door

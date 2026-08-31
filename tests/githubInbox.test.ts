@@ -1384,6 +1384,11 @@ describe("parseTimeoutMarker / timeoutMarker", () => {
     expect(parseTimeoutMarker("<!-- junco:timeout:0 -->")).toBe(null);
     expect(parseTimeoutMarker("no marker")).toBe(null);
   });
+
+  it("takes the LAST marker when two are present (mirrors the fence door's newer-supersedes rule)", () => {
+    const body = "<!-- junco:timeout:30 -->\n\nsome edit\n\n<!-- junco:timeout:90 -->";
+    expect(parseTimeoutMarker(body)).toBe(90);
+  });
 });
 
 describe("buildExecutionTicket timeout stamp", () => {
