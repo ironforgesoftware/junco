@@ -143,7 +143,7 @@ function _buildAmendPreamble(
     "9. **Do not re-inspect prior commits** on this branch (the ones from the original PR). Trust that they're present; focus on the amendments.\n" +
     "10. Junco's loop guards (text-rep, tool-call literal-rep, tool-error rep) will abort the session if you get stuck. Just make progress.\n" +
     "11. **Graceful stop on spec mismatch.** If the ticket doesn't match reality (a file already exists with content the plan doesn't anticipate, a precondition has changed, the work is already done, or you cannot complete it as specified), output a single sentence explaining the mismatch and stop. Do NOT loop trying to reconcile — junco's supervisor will kill the session and the ticket lands in failed/ with no useful information; your sentence becomes the failure note that lets the dispatcher fix and re-dispatch.\n" +
-    "12. **Final summary** (2–3 sentences at session end): what you amended and any surprises. Junco's loop guards (text-rep, tool-call literal-rep, tool-error rep) abort stuck sessions — just make progress and they won't fire.\n\n" +
+    "12. **Final summary** (2–3 sentences at session end): what you amended and any surprises.\n\n" +
     "---\n\n"
   );
 }
