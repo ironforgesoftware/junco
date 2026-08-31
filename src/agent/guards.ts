@@ -7,6 +7,11 @@
  * Thresholds and trip logic must match the Python EXACTLY — they are the
  * empirically-tuned crown jewel of Junco's supervisor.
  *
+ * 2026-08-31: `todo_write: 4` was removed from DEFAULT_TOOL_LOOP_THRESHOLDS
+ * below — the tool does not exist in the agent layer (see prPrompt.ts) — so
+ * the table is now the Python's minus that one entry, not an exact mirror.
+ * Every other threshold and all trip logic are still ported verbatim.
+ *
  * Reference: worker.py RepetitionGuard ~675–726, DEFAULT_TOOL_LOOP_THRESHOLDS
  * ~738–747, ToolCallLoopGuard ~750–814, ToolErrorLoopGuard ~817–858,
  * OutputBudgetGuard ~861–927.
@@ -24,7 +29,8 @@ import { createHash } from "node:crypto";
  * args = same output; calling 3+ times is wasted compute. Edit/write tools
  * get slightly more room because exploratory edits are legitimate.
  *
- * Mirrors DEFAULT_TOOL_LOOP_THRESHOLDS in worker.py exactly.
+ * Mirrors worker.py's DEFAULT_TOOL_LOOP_THRESHOLDS minus `todo_write`,
+ * removed 2026-08-31 — the tool does not exist in the agent layer.
  */
 export const DEFAULT_TOOL_LOOP_THRESHOLDS: Record<string, number> = {
   bash: 3,

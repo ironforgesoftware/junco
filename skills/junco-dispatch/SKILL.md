@@ -31,7 +31,7 @@ Fire this skill when the user explicitly asks to dispatch work:
 ## Supporting files
 
 - `TEMPLATE.md` — the canonical plan template. Every ticket uses this exact shape.
-- `EXAMPLE.md` — two worked examples (trivial 1-commit; moderate 2-commit). Use as shape anchors when generating.
+- `EXAMPLE.md` — three worked examples (trivial 1-commit; moderate 2-commit; amend). Use as shape anchors when generating.
 
 Read these via the Read tool when you need to quote or reference the template.
 
@@ -188,7 +188,7 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 
 3. **Preview + approve, with monitoring folded in.** Use one `AskUserQuestion` call carrying two questions:
 
-   - **"Dispatch this to junco?"** (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`. The preview text is a curated essence, never the full ticket body: key design decisions, a summary of the Files and Steps tables, and the dry-run's `destination:`/`reason:`/`carried:`/`would discard:`/`timeout:` lines — plus the temp-file path so the user can read the full ticket if they want it. The `Yes, dispatch` option's **description must name the destination** — copy the template for the destination you picked in step 2, filling `<owner>/<repo>`:
+   - **"Dispatch this to junco?"** (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`. The preview text is a curated essence, never the full ticket body: key design decisions, the ticket's `repo:` target, a summary of the Files and Steps tables, and the dry-run's `destination:`/`reason:`/`carried:`/`would discard:`/`timeout:` lines — plus the temp-file path so the user can read the full ticket if they want it. The `Yes, dispatch` option's **description must name the destination** — copy the template for the destination you picked in step 2, filling `<owner>/<repo>`:
 
      - Issue destination: `Park as a GitHub issue on <owner>/<repo> — nothing runs until a human applies the trigger label.`
      - Inbox destination: `Submit to the local junco inbox — the worker claims and runs it within ~15s; no further gate.`
@@ -384,7 +384,7 @@ When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool avail
 
 ## Error handling
 
-Run `junco lint <tempfile>` before the preview gate — it performs these checks deterministically (repo path exists and is a git repo; origin remote exists and is GitHub; the derived branch is not already on origin; frontmatter labels exist on the repo) plus the worker's own plan-lint rules. Fix every `[error]` and re-run; surface `[warning]` lines in the preview. If an error cannot be fixed from the ticket (missing remote, taken branch), surface the specific problem and ask how to proceed — don't submit a ticket the worker will fail five seconds after claim.
+`junco submit --dry-run <tempfile>` (step 2) already performs these checks deterministically as part of deciding the destination: repo path exists and is a git repo; origin remote exists and is GitHub; the derived branch is not already on origin; frontmatter labels exist on the repo; plus the worker's own plan-lint rules — a clean dry-run IS the lint gate (step 2b). When it (or the preview) surfaces an `[error]`, fix the ticket and re-run `junco lint <tempfile>` to revalidate cheaply before re-previewing; surface `[warning]` lines in the preview rather than blocking on them. If an error cannot be fixed from the ticket (missing remote, taken branch), surface the specific problem and ask how to proceed — don't submit a ticket the worker will fail five seconds after claim.
 
 ## Provenance
 

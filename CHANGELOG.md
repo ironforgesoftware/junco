@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The phantom `todo_write` call: both the fresh and amend worker preambles instructed the agent to call a `todo_write` tool that does not exist in the agent layer, wasting one failed tool call every run. The instructions and the dead `todo_write` loop-guard threshold that referenced it are removed.
+- The phantom `todo_write` call: both the fresh and amend worker preambles instructed the agent to call a `todo_write` tool that does not exist in the agent layer, wasting a failed tool call whenever the agent obeyed. The instructions and the dead `todo_write` loop-guard threshold that referenced it are removed.
 
 ## [0.12.0] - 2026-08-30
 

@@ -1,6 +1,6 @@
 # Junco ticket examples
 
-Two worked examples using the canonical template. When generating a new plan,
+Three worked examples using the canonical template. When generating a new plan,
 pick the one that's closer in scope to the user's brief and use it as a
 shape-reference, not a copy-paste source.
 
