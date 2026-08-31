@@ -34,7 +34,6 @@ export const DEFAULT_TOOL_LOOP_THRESHOLDS: Record<string, number> = {
   write: 3,
   edit: 4,
   read: 5,
-  todo_write: 4,
 };
 
 // ---------------------------------------------------------------------------

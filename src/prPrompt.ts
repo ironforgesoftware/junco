@@ -2,6 +2,12 @@
  * PR-flow agent preamble builder — faithful port of worker.py:
  *   - build_prompt_with_repo_context  (lines 2084-2126)
  *   - _build_amend_preamble           (lines 2129-2154)
+ *
+ * 2026-08-31: the "Working discipline" blocks absorbed the ticket-side
+ * "Notes for the agent (strict)" rules (trust-the-ticket, no-scope-expansion,
+ * graceful-stop-on-mismatch, final-summary) so the worker — not each
+ * dispatched ticket — owns this discipline. `todo_write` was removed from
+ * both preambles: it is not a tool that exists in the agent layer.
  */
 
 import type { RepoContext } from "./repoContext.js";
@@ -95,12 +101,14 @@ function _buildFreshPreamble(
     ruleThree +
     `4. **Do not** switch branches. Stay on ${ctx.branchName}.\n\n` +
     "## Working discipline (strict — loops waste 20+ minutes of wall clock)\n\n" +
-    "5. Call `todo_write` **once** at the very start with top-level `phases: [...]` to lay out your plan. After that, use **only** the incremental fields — `start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`. **Never** pass `phases:` again after the initial plan — it replaces the entire todo list and wipes memory of what's been done, causing re-planning loops.\n" +
-    "6. The `write` and `edit` tools return `unchanged` when the file already matches the content you tried to write. That's your strong signal that it's already correct — move on. Do not retry, do not re-read; the tool layer is authoritative.\n" +
-    "7. After you run `git commit` via the `bash` tool and it exits 0, the commit is real. **Do not** run `git log`, `git status`, or `git diff` to 'verify' — these verification calls have never changed the outcome and add latency. Trust the tool's exit code.\n" +
-    "8. **Do not run the ticket's `## Verification` block.** Junco runs it automatically after your session — running it yourself wastes turns and tokens.\n" +
-    "9. When a todo item is completed, mark it completed and proceed to the next. **Do not re-inspect completed items.**\n" +
-    "10. Junco's loop guards (text-rep, tool-call literal-rep, tool-error rep) will abort the session if you get stuck. The guards are tuned per-tool — bash is more lenient than write — so just make progress and they won't fire.\n\n" +
+    "5. **Trust the ticket body below.** File paths, line numbers, and commands in it were verified by the dispatcher. Do not re-explore the repo to double-check them.\n" +
+    "6. When the plan numbers its steps, commit exactly once per step. Suggested commit messages are suggestions — a better one is fine.\n" +
+    "7. **Do not expand scope.** An issue not in the plan goes in your final summary, not in the diff.\n" +
+    "8. The `write` and `edit` tools return `unchanged` when the file already matches the content you tried to write. That's your strong signal that it's already correct — move on. Do not retry, do not re-read; the tool layer is authoritative.\n" +
+    "9. After you run `git commit` via the `bash` tool and it exits 0, the commit is real. **Do not** run `git log`, `git status`, or `git diff` to 'verify' — these verification calls have never changed the outcome and add latency. Trust the tool's exit code.\n" +
+    "10. **Do not run the ticket's `## Verification` block.** Junco runs it automatically after your session — running it yourself wastes turns and tokens. When a step is done, move to the next; do not re-inspect completed work.\n" +
+    "11. **Graceful stop on spec mismatch.** If the ticket doesn't match reality (a file already exists with content the plan doesn't anticipate, a precondition has changed, the work is already done, or you cannot complete it as specified), output a single sentence explaining the mismatch and stop. Do NOT loop trying to reconcile — junco's supervisor will kill the session and the ticket lands in failed/ with no useful information; your sentence becomes the failure note that lets the dispatcher fix and re-dispatch.\n" +
+    "12. **Final summary** (2–3 sentences at session end): what you did and any surprises. Junco's loop guards (text-rep, tool-call literal-rep, tool-error rep) abort stuck sessions — just make progress and they won't fire.\n\n" +
     "---\n\n"
   );
 }
@@ -129,12 +137,13 @@ function _buildAmendPreamble(
     "4. **Do not** `git push` or touch the remote yourself. The worker pushes your new commits to the same branch when you're done, which auto-updates the existing PR.\n" +
     `5. **Do not** switch branches. Stay on ${ctx.branchName}.\n\n` +
     "## Working discipline (strict — loops waste 20+ minutes of wall clock)\n\n" +
-    "6. Call `todo_write` **once** at the start with top-level `phases: [...]` to plan the amendments. After that, use only the incremental fields (`start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`). **Never** pass `phases:` again — it wipes progress memory.\n" +
-    "7. The `write` and `edit` tools return `unchanged` when the file already matches your intended content — that's the strong signal that it's already correct. Don't retry, don't re-read.\n" +
-    "8. After `git commit` exits 0, the commit is real. **Do not** run `git log`, `git status`, or `git diff` to verify.\n" +
-    "9. **Do not run the ticket's `## Verification` block.** Junco runs it automatically.\n" +
-    "10. **Do not re-inspect prior commits** on this branch (the ones from the original PR). Trust that they're present; focus on the amendments.\n" +
-    "11. Junco's loop guards (text-rep, tool-call literal-rep, tool-error rep) will abort the session if you get stuck. Just make progress.\n\n" +
+    "6. The `write` and `edit` tools return `unchanged` when the file already matches your intended content — that's the strong signal that it's already correct. Don't retry, don't re-read.\n" +
+    "7. After `git commit` exits 0, the commit is real. **Do not** run `git log`, `git status`, or `git diff` to verify.\n" +
+    "8. **Do not run the ticket's `## Verification` block.** Junco runs it automatically.\n" +
+    "9. **Do not re-inspect prior commits** on this branch (the ones from the original PR). Trust that they're present; focus on the amendments.\n" +
+    "10. Junco's loop guards (text-rep, tool-call literal-rep, tool-error rep) will abort the session if you get stuck. Just make progress.\n" +
+    "11. **Graceful stop on spec mismatch.** If the ticket doesn't match reality (a file already exists with content the plan doesn't anticipate, a precondition has changed, the work is already done, or you cannot complete it as specified), output a single sentence explaining the mismatch and stop. Do NOT loop trying to reconcile — junco's supervisor will kill the session and the ticket lands in failed/ with no useful information; your sentence becomes the failure note that lets the dispatcher fix and re-dispatch.\n" +
+    "12. **Final summary** (2–3 sentences at session end): what you amended and any surprises. Junco's loop guards (text-rep, tool-call literal-rep, tool-error rep) abort stuck sessions — just make progress and they won't fire.\n\n" +
     "---\n\n"
   );
 }
