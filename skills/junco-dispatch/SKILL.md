@@ -190,7 +190,13 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 
    (Use `npx junco …` if `junco` is not installed globally.) Read `<owner>/<repo>` off the origin URL (`https://github.com/<owner>/<repo>.git` or `git@github.com:<owner>/<repo>.git`). Pick the **issue destination** when the first two commands print `true` AND `junco doctor`'s output has a `github repo <owner>/<repo>` line naming that same repo — grep the output regardless of the command's exit code, which reflects unrelated checks (the bridge only sweeps watched repos; an unwatched repo's parked issue would never launch). Otherwise pick the **inbox**. Overrides, in priority order: a `junco-local:` trigger or a brief that says "to the inbox" / "local inbox" forces the inbox; "park it on github", "junco as issue: …", "dispatch as issue" forces the issue destination (if the probe disagrees, still run `--as-issue` and surface its refusal — it names the missing precondition). Say which destination you picked and why in one line before the preview. Leave `repo:` as the working checkout — `--as-issue` matches it to the watched repo by the checkout's `origin`.
 
-3. **Preview + approve.** Use `AskUserQuestion` with the rendered ticket as a preview. Ask: "Dispatch this to junco?" (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`.
+3. **Preview + approve.** Use `AskUserQuestion` with the rendered ticket as a preview. Ask: "Dispatch this to junco?" (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`. The `Yes, dispatch` option's **description must name the destination** — copy the template for the destination you picked in step 2, filling `<owner>/<repo>`:
+
+   - Issue destination: `Park as a GitHub issue on <owner>/<repo> — nothing runs until a human applies the trigger label.`
+   - Inbox destination: `Submit to the local junco inbox — the worker claims and runs it within ~15s; no further gate.`
+
+   The description is the last thing the user reads before approving: a gate that says "inbox" while the submit step would run `--as-issue` (or the reverse) is a routing defect, not a wording nit. Never present an inbox-worded gate for an issue-routed dispatch.
+
 4. **On approve — submit via CLI.** Write the rendered ticket to a temp file, then run:
 
    **Inbox destination (default):**
