@@ -1669,6 +1669,34 @@ describe("run(['schema'])", () => {
   });
 });
 
+// --- lint ---
+
+describe("lint", () => {
+  it("usage-errors without a file or with stdin", async () => {
+    const deps = { loadConfigFn: () => stubConfig() };
+    expect(await run(["lint"], deps)).toBe(2);
+    expect(await run(["lint", "-"], deps)).toBe(2);
+  });
+
+  it("routes to runLintFn with config and file content", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-lint-"));
+    const file = join(dir, "t.md");
+    writeFileSync(file, "---\nid: x\n---\n\n# T\n", "utf8");
+    const seen: string[] = [];
+    const code = await run(["lint", file], {
+      loadConfigFn: () => stubConfig(),
+      runLintFn: async (_c, fileArg, content) => {
+        seen.push(fileArg, content);
+        return 0;
+      },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(code).toBe(0);
+    expect(seen[0]).toBe(file);
+    expect(seen[1]).toContain("id: x");
+  });
+});
+
 // --- submit (stdin) ---
 
 describe("run(['submit', '-']) — stdin", () => {

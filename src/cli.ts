@@ -158,6 +158,10 @@ export interface CliDeps {
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
   readStdinFn?: () => Promise<string>;
+  /** `junco lint` implementation (submitPreflight.ts). Injected so cli tests
+   * never exercise the lazy import's real git/gh calls. Default: the real
+   * runLint via lazy import. */
+  runLintFn?: (cfg: Config, fileArg: string, content: string) => Promise<number>;
   /** Existence check for first-run detection (tests control routing). Default: fs.existsSync. */
   existsFn?: (path: string) => boolean;
   /** Process environment for config-path resolution (tests inject HOME /
@@ -295,6 +299,8 @@ Subcommands:
                   via the bot account — a human applies the trigger label to launch it
   submit --as-issue --plan <file> --repo <path>  Same, but parks a junco-plan
                   fence issue instead of a single ticket — labeling compiles the set
+  lint <file>  Validate a ticket without submitting — plan-lint plus repo,
+                  origin, and branch-collision preflight (exit 1 on errors)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
   skill install [--harness <name|path>]...  Link the junco-dispatch skill into
@@ -1384,6 +1390,34 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   if (subcommand === "schema") {
     printFn(describeTicketSchema() + "\n");
     return 0;
+  }
+
+  // ------------------------------------------------------------
+  // lint: validate a ticket (plan-lint + repo/branch preflight), submit nothing
+  // ------------------------------------------------------------
+  if (subcommand === "lint") {
+    const fileArg = positionals[1];
+    if (!fileArg || fileArg === "-") {
+      process.stderr.write(`Usage: junco lint <file>\n`);
+      return 2;
+    }
+    let content: string;
+    try {
+      content = readFileSync(fileArg, "utf8");
+    } catch (e) {
+      process.stderr.write(
+        `junco lint: cannot read '${fileArg}': ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      return 1;
+    }
+    const cfg = loadConfigFn(configPath);
+    const runLintFn =
+      deps.runLintFn ??
+      (async (c: Config, f: string, s: string) => {
+        const { runLint } = await import("./submitPreflight.js");
+        return runLint(c, f, s, { printFn: deps.printFn });
+      });
+    return await runLintFn(cfg, fileArg, content);
   }
 
   // ------------------------------------------------------------
