@@ -13,7 +13,6 @@
  * - steps_have_commits:    every ### Step N block has at least one `git commit`
  * - files_table_referenced: every path in the Files table appears in a Step body
  * - files_paths_exist:     filesystem-aware Files-table path validation
- * - notes_block_present:   strict "Notes for the agent" block is present
  * - no_forbidden_phrases:  no TBD / "Similar to Step N" / "think carefully" / etc.
  * - no_cd_in_steps (warn): no absolute `cd /Users/...` in Step bodies
  * - github_request_scope (warn): github_request rides a ticket the worker will actually fulfill
@@ -298,19 +297,6 @@ function checkFilesPathsExist(body: string, repoPath: string | null | undefined)
     }
   }
   return violations;
-}
-
-function checkNotesBlockPresent(body: string): LintViolation[] {
-  if (/^##\s+Notes for the agent\s*\(strict/m.test(body)) return [];
-  return [
-    {
-      rule: "notes_block_present",
-      severity: "error",
-      message:
-        "Strict 'Notes for the agent' section is missing. " +
-        "Copy verbatim from TEMPLATE.md — this is the anti-loop payload.",
-    },
-  ];
 }
 
 const _FORBIDDEN_PHRASES: Array<[string, string]> = [
@@ -633,7 +619,6 @@ export function lintTicket(
   violations.push(...checkStepsHaveCommits(body));
   violations.push(...checkFilesTableReferenced(body));
   violations.push(...checkFilesPathsExist(body, repoPath));
-  violations.push(...checkNotesBlockPresent(body));
   violations.push(...checkNoForbiddenPhrases(body));
   violations.push(...checkNoCdInSteps(body));
   violations.push(...checkGithubRequestScope(frontmatter));

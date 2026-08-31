@@ -339,7 +339,7 @@ describe("runLint", () => {
 
   it("exits 1 and lists violations when plan-lint or environment errors exist", async () => {
     const out: string[] = [];
-    const bad = TICKET.replace("## Notes for the agent (strict)", "## Notes");
+    const bad = TICKET.replace("Make the change.", "TBD");
     const code = await runLint(cfg(), "t.md", bad, {
       gitFn: okGit(),
       existsFn: () => false,
@@ -349,7 +349,7 @@ describe("runLint", () => {
     expect(code).toBe(1);
     const text = out.join("");
     expect(text).toContain("[error] repo_path_missing");
-    expect(text).toContain("[error] notes_block_present");
+    expect(text).toContain("[error] no_forbidden_phrases");
     expect(text).toMatch(/lint: \d+ error\(s\)/);
   });
 
@@ -481,7 +481,7 @@ describe("runSubmitDryRun", () => {
 
   it("prints the inbox verdict with the would-submit path and exits 1 on lint errors", async () => {
     const out: string[] = [];
-    const bad = TICKET_LOCAL.replace("## Notes for the agent (strict)", "## Notes"); // lint error
+    const bad = TICKET_LOCAL.replace("Make the change.", "TBD"); // lint error
     const code = await runSubmitDryRun(ghCfg({ githubEnabled: false }), "t.md", bad, {
       ...routeDeps(),
       existsFn: (p) => p === REPO,
@@ -492,7 +492,7 @@ describe("runSubmitDryRun", () => {
     expect(code).toBe(1);
     expect(text).toContain("destination: inbox");
     expect(text).toContain("would submit: ");
-    expect(text).toContain("[error] notes_block_present");
+    expect(text).toContain("[error] no_forbidden_phrases");
   });
 
   it("warns when the inbox destination is already queued", async () => {
