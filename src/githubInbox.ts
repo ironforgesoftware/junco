@@ -624,25 +624,49 @@ function ticketInFlight(cfg: Config, id: string): boolean {
   return false;
 }
 
+/** Bounded timeout carried from `junco submit --as-issue` in the VOUCHED issue
+ * body (spec 2026-08-31-dispatch-hardening-design.md). Clamped [1, 480] on
+ * both write and read; the body is covered by the edited-after-label guard,
+ * and the clamp bounds hostile edits regardless. */
+const TIMEOUT_MARKER_RE = /<!--\s*junco:timeout:(\d{1,4})\s*-->/;
+
+export function timeoutMarker(n: number): string {
+  return `<!-- junco:timeout:${Math.min(480, Math.max(1, Math.round(n)))} -->`;
+}
+
+export function parseTimeoutMarker(text: string): number | null {
+  const m = TIMEOUT_MARKER_RE.exec(text);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(480, Math.round(n));
+}
+
 /** Execution ticket from a reviewed plan: machine frontmatter (id, mapped
  * repo path, provenance) + the plan body verbatim. pr_title omitted —
- * derivePrTitle picks the plan's H1. */
+ * derivePrTitle picks the plan's H1. `opts.timeoutMinutes` stamps a
+ * `timeout_minutes:` frontmatter line when the issue-body fence door carried
+ * one (parseTimeoutMarker) — the plan-comment door never passes it, since a
+ * planner-produced plan comment carries no marker. */
 export function buildExecutionTicket(
   issueNumber: number,
   repo: GithubRepoMapping,
   planBody: string,
+  opts: { timeoutMinutes?: number | null } = {},
 ): { id: string; content: string } {
   const id = githubTicketId(repo.nwo, issueNumber);
-  const fm = [
-    "---",
-    `id: ${id}`,
-    `repo: ${JSON.stringify(repo.path)}`,
+  const fm = ["---", `id: ${id}`, `repo: ${JSON.stringify(repo.path)}`];
+  const tm = opts.timeoutMinutes;
+  if (typeof tm === "number" && Number.isFinite(tm) && tm >= 1) {
+    fm.push(`timeout_minutes: ${Math.min(480, Math.round(tm))}`);
+  }
+  fm.push(
     "github:",
     `  nwo: ${JSON.stringify(repo.nwo)}`,
     `  issue: ${issueNumber}`,
     "  kind: pr",
     "---",
-  ];
+  );
   return { id, content: fm.join("\n") + "\n\n" + planBody + "\n" };
 }
 
@@ -1122,6 +1146,7 @@ export async function pollGithubInbox(
           // (ask rails are prose-in, read-only). The edited-after-label guard
           // above vouches the body this fence is read from.
           const fenceTicket = isAsk ? null : extractPlanBody(issue.body ?? "");
+          const carriedTimeout = fenceTicket !== null ? parseTimeoutMarker(issue.body ?? "") : null;
           const parent =
             isAsk || fenceTicket !== null
               ? null
@@ -1129,7 +1154,9 @@ export async function pollGithubInbox(
           const t = isAsk
             ? issueToTicket(issue, repo, cfg, null)
             : fenceTicket !== null
-              ? buildExecutionTicket(issue.number, repo, fenceTicket)
+              ? buildExecutionTicket(issue.number, repo, fenceTicket, {
+                  timeoutMinutes: carriedTimeout,
+                })
               : buildPlanningTicket(issue, repo, cfg, parent);
           const stateLabel = isAsk || fenceTicket !== null ? ll.queued : ll.planning;
           // Same in-flight guard as the execution path: a prior sweep may have
