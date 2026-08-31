@@ -12,6 +12,9 @@ import {
   extractPlanBody,
   extractPlanSetBody,
   buildPlanComment,
+  buildExecutionTicket,
+  timeoutMarker,
+  parseTimeoutMarker,
   PLAN_SET_FENCE,
   githubTicketId,
   PLAN_COMMENT_MARKER,
@@ -19,7 +22,7 @@ import {
 } from "../src/githubInbox.js";
 import { parseTicket } from "../src/ticket.js";
 import { log } from "../src/logging.js";
-import type { Config } from "../src/types.js";
+import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { OUTBOX_MARKER_PREFIX } from "../src/githubOutbox.js";
@@ -382,6 +385,34 @@ describe("pollGithubInbox", () => {
       const edit = f.calls.find((c) => c[0] === "issue" && c[1] === "edit");
       expect(edit).toContain("junco:queued");
       expect(edit).not.toContain("junco:planning");
+    });
+
+    it("carries a <!-- junco:timeout:N --> marker from the vouched body into timeout_minutes", async () => {
+      const timeoutBody =
+        "Parked ticket.\n\n```junco-ticket\n" + fenceBody + "```\n\n<!-- junco:timeout:90 -->\n";
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: timeoutBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].content).toContain("timeout_minutes: 90");
+    });
+
+    it("no marker: submitted content carries no timeout_minutes (control)", async () => {
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: fencedBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+      expect(f.submitted[0].content).not.toContain("timeout_minutes");
     });
 
     it("ask label wins over a junco-ticket fence (prose ask ticket, fence not extracted)", async () => {
@@ -1342,6 +1373,33 @@ tasks:
       expect(list).toBeDefined();
       expect(list).toContain("acme/api");
     });
+  });
+});
+
+describe("parseTimeoutMarker / timeoutMarker", () => {
+  it("round-trips and clamps", () => {
+    expect(parseTimeoutMarker(timeoutMarker(60))).toBe(60);
+    expect(parseTimeoutMarker("x <!-- junco:timeout:480 --> y")).toBe(480);
+    expect(parseTimeoutMarker("<!-- junco:timeout:9999 -->")).toBe(480); // door clamps too
+    expect(parseTimeoutMarker("<!-- junco:timeout:0 -->")).toBe(null);
+    expect(parseTimeoutMarker("no marker")).toBe(null);
+  });
+
+  it("takes the LAST marker when two are present (mirrors the fence door's newer-supersedes rule)", () => {
+    const body = "<!-- junco:timeout:30 -->\n\nsome edit\n\n<!-- junco:timeout:90 -->";
+    expect(parseTimeoutMarker(body)).toBe(90);
+  });
+});
+
+describe("buildExecutionTicket timeout stamp", () => {
+  it("stamps timeout_minutes only when opts carry one", () => {
+    const repo = { nwo: "acme/api", path: "/sbxroot/repos/acme-api" } as GithubRepoMapping;
+    const plain = buildExecutionTicket(42, repo, "# Plan\n");
+    expect(plain.content).not.toContain("timeout_minutes");
+    const carried = buildExecutionTicket(42, repo, "# Plan\n", { timeoutMinutes: 60 });
+    expect(carried.content).toContain("timeout_minutes: 60");
+    const parsed = parseTicket(`/in/${carried.id}.md`, carried.content);
+    expect(parsed.timeoutSeconds).toBe(3600);
   });
 });
 

@@ -105,7 +105,7 @@ The compiler refuses (never strips) a plan whose free-text fields — `title`, `
 - `id`: `<slug>-<YYYY-MM-DD>` where slug is lowercase-hyphenated from the title. Examples: `add-changelog-2026-04-23`, `refactor-auth-header-2026-04-24`.
 - `created`: ISO-8601 current local time (seconds resolution).
 - `priority`: `normal` unless the user says otherwise.
-- `timeout_minutes`: per the heuristic above.
+- `timeout_minutes`: per the heuristic above. On the issue route the value is carried via a bounded marker (clamped 1–480); pick the honest number, not a defensive inflation.
 - `repo`: absolute path, `~` will expand.
 - `base_branch`: `main` unless the repo uses a different default (check `git -C <repo> symbolic-ref refs/remotes/origin/HEAD` if unsure).
 - `branch_name`: omit by default — the worker derives `junco/<id>`. Only include if the user wants to override.
@@ -179,25 +179,26 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 ### Interactive mode (default)
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body).
-2. **Destination — probe, then decide.** The issue route carries only `id`, `repo` and `pr_title` — the bridge rebuilds every other frontmatter key — so it is only for a **plain fresh single ticket**. A ticket that carries `amends_pr` (Amend mode), `depends_on` (a hand-authored ticket set), a `base_branch` other than the repo's default, or a custom `branch_name`, `tools` or `workdir` always goes to the **inbox** — no probe; the compiler-backed `junco submit --as-issue --plan` fence is the only set shape that survives the issue route. For a plain fresh ticket, run:
+2. **Destination — ask the CLI, then decide.** Write the rendered ticket to a temp file first (you resubmit the same file in step 4), then run:
 
    ```
-   junco config get github.enabled
-   junco config get botAccount.enabled
-   git -C <repo-path> remote get-url origin
-   junco doctor
+   junco submit --dry-run <tempfile>
    ```
 
-   (Use `npx junco …` if `junco` is not installed globally.) Read `<owner>/<repo>` off the origin URL (`https://github.com/<owner>/<repo>.git` or `git@github.com:<owner>/<repo>.git`). Pick the **issue destination** when the first two commands print `true` AND `junco doctor`'s output has a `github repo <owner>/<repo>` line naming that same repo — grep the output regardless of the command's exit code, which reflects unrelated checks (the bridge only sweeps watched repos; an unwatched repo's parked issue would never launch). Otherwise pick the **inbox**. Overrides, in priority order: a `junco-local:` trigger or a brief that says "to the inbox" / "local inbox" forces the inbox; "park it on github", "junco as issue: …", "dispatch as issue" forces the issue destination (if the probe disagrees, still run `--as-issue` and surface its refusal — it names the missing precondition). Say which destination you picked and why in one line before the preview. Leave `repo:` as the working checkout — `--as-issue` matches it to the watched repo by the checkout's `origin`.
+   (Use `npx junco …` if `junco` is not installed globally.) The output names the destination and why: `destination: issue` or `destination: inbox`, one `reason:` line per cause, and on the issue route `watched:`, `carried:`/`would discard:` and `timeout:` lines plus lint results. Copy the verdict — do not re-derive it. Overrides, in priority order: a `junco-local:` trigger or a brief that says "to the inbox" / "local inbox" forces the inbox regardless of the verdict; "park it on github", "junco as issue: …", "dispatch as issue" forces the issue destination (run `--as-issue` and surface its refusal if the CLI disagrees — it names the missing precondition). State the destination and its reason in one line before the preview. Leave `repo:` as the working checkout — the CLI matches it to the watched repo by the checkout's `origin`.
+
+2b. **Validate before previewing.** Run `junco lint <tempfile>`. Fix every `[error]` (edit the ticket, re-render, re-run) before showing the preview — never submit a ticket the worker's own linter will fail five seconds after claim. `[warning]` lines are surfaced in the preview, not fixed silently.
 
 3. **Preview + approve.** Use `AskUserQuestion` with the rendered ticket as a preview. Ask: "Dispatch this to junco?" (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`. The `Yes, dispatch` option's **description must name the destination** — copy the template for the destination you picked in step 2, filling `<owner>/<repo>`:
 
    - Issue destination: `Park as a GitHub issue on <owner>/<repo> — nothing runs until a human applies the trigger label.`
    - Inbox destination: `Submit to the local junco inbox — the worker claims and runs it within ~15s; no further gate.`
 
+   On the issue destination the preview itself must also quote, verbatim, the dry-run's `carried:`, `would discard:` and `timeout:` lines — the user approves knowing which frontmatter survives and what timeout will actually apply, not after submit.
+
    The description is the last thing the user reads before approving: a gate that says "inbox" while the submit step would run `--as-issue` (or the reverse) is a routing defect, not a wording nit. Never present an inbox-worded gate for an issue-routed dispatch.
 
-4. **On approve — submit via CLI.** Write the rendered ticket to a temp file, then run:
+4. **On approve — submit via CLI.** Submit the SAME temp file from step 2 (byte-identical to what lint and dry-run validated), then run:
 
    **Inbox destination (default):**
 
@@ -213,12 +214,13 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
    junco submit --as-issue <tempfile>
    ```
 
-   Refuses if GitHub integration or the bot account is off, or if `repo:` is neither a watched clone path nor a checkout whose `origin` is a watched `owner/repo` — surface the printed error and offer to fall back to the inbox instead. It also warns which frontmatter it discarded (`timeout_minutes`, `priority`, `draft`, `labels` do not survive this route — the bridge builds execution frontmatter itself; the daemon's `worker.defaultTimeoutMinutes` applies); relay that warning verbatim. On success it prints the issue URL and `apply label '<trigger>' to queue`; report the URL, not a destination path — nothing is labeled yet.
+   Refuses if GitHub integration or the bot account is off, or if `repo:` is neither a watched clone path nor a checkout whose `origin` is a watched `owner/repo` — surface the printed error and offer to fall back to the inbox instead. It also warns which frontmatter it discarded (`priority`, `draft`, `labels` do not survive this route — the bridge builds execution frontmatter itself; a valid `timeout_minutes` IS carried, clamped to 1–480 minutes, and anything else falls back to the daemon's `worker.defaultTimeoutMinutes`); relay that warning verbatim. On success it prints the issue URL and `apply label '<trigger>' to queue`; report the URL, not a destination path — nothing is labeled yet.
 
 5. **Announce.** Tell the user:
    - **Inbox destination:** ticket id and destination path (from `junco submit` output); expected wall clock (use `timeout_minutes` as an upper bound); how to watch — the daemon's log output, or poll the `done/` and `failed/` directories under the queue root (`junco inbox-path` shows where the queue lives).
    - **Issue destination:** the issue URL, and that nothing runs until a human applies the trigger label to it — doable from the GitHub app on a phone, no daemon-side action needed before then.
-6. **Offer monitoring (inbox destination only).** Ask: "Want me to monitor the ticket and notify when it lands in done/ or failed/?" If yes, spawn a Monitor tool call that polls `done/<id>` and `failed/<id>` under the queue root. Skip this offer on the issue destination — nothing is queued (so nothing to poll) until a human applies the label.
+   - **Both destinations:** end the report with one machine-checkable line: `DISPATCHED <id> -> <issue-url|inbox-path>`.
+6. **Offer monitoring.** Inbox destination: ask "Want me to monitor the ticket and notify when it lands in done/ or failed/?" — if yes, poll `done/<id>` and `failed/<id>` under the queue root. Issue destination: ask "Want me to watch the parked issue and tell you when it is labeled and picked up?" — if yes, poll `gh issue view <n> --repo <nwo> --json labels` until the trigger label appears, then switch to polling the queue dirs as above. Never apply the label yourself — that approval is the human's.
 
 ### Batch mode (no preview, headless harness)
 
@@ -384,14 +386,7 @@ When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool avail
 
 ## Error handling
 
-Before writing to inbox, validate:
-
-- Repo path exists and is a git repo → else ask for clarification.
-- Repo has a GitHub remote → else refuse with a useful message ("The worker uses `gh pr create`; this repo has no GitHub remote. Options: add one, or keep this as a local plan without junco.")
-- Branch `junco/<id>` not already on origin → else suggest bumping the id. (`git ls-remote --heads origin junco/<id>`)
-- Labels exist on repo if any are specified → else remove them and warn.
-
-If any validation fails, surface the specific problem and ask how to proceed. Don't write a broken ticket and let the worker fail 5 seconds after claim.
+Run `junco lint <tempfile>` before the preview gate — it performs these checks deterministically (repo path exists and is a git repo; origin remote exists and is GitHub; the derived branch is not already on origin; frontmatter labels exist on the repo) plus the worker's own plan-lint rules. Fix every `[error]` and re-run; surface `[warning]` lines in the preview. If an error cannot be fixed from the ticket (missing remote, taken branch), surface the specific problem and ask how to proceed — don't submit a ticket the worker will fail five seconds after claim.
 
 ## Provenance
 

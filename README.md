@@ -205,6 +205,8 @@ frontmatter contract, `examples/` has templates, and the bundled
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `junco start` / `junco restart`                               | run the daemon / restart the installed service                                                                       |
 | `junco submit <file>`                                         | queue a ticket (also reads stdin)                                                                                    |
+| `junco lint <file>`                                           | validate a ticket (plan-lint + repo/branch preflight) without submitting                                             |
+| `junco submit --dry-run <file>`                               | report destination, discarded frontmatter, and lint without submitting                                               |
 | `junco dashboard`                                             | the fullscreen TUI                                                                                                   |
 | `junco dispatch <owner/repo#N \| url>`                        | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                         |
 | `junco status` / `junco list` / `junco logs -f`               | daemon, queue, and log visibility                                                                                    |

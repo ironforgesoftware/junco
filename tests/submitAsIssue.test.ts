@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { submitAsIssue, wrapInFence } from "../src/submitAsIssue.js";
+import { submitAsIssue, wrapInFence, carriedTimeoutMinutes } from "../src/submitAsIssue.js";
 import { extractPlanBody, extractPlanSetBody } from "../src/githubInbox.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { makeConfig } from "./helpers/config.js";
@@ -145,6 +145,11 @@ describe("submitAsIssue", () => {
 
   it("warns that discarded frontmatter keys will not survive, but still files the issue", async () => {
     const cfg = baseCfg();
+    // TICKET's frontmatter is id/repo/pr_title/timeout_minutes: 60 — with a
+    // valid timeout now CARRIED (see the "timeout carry" describe below),
+    // none of those keys are discarded. Add a genuinely foreign key so this
+    // test still exercises the discard-warning path.
+    const ticket = TICKET.replace('pr_title: "Add X"', 'pr_title: "Add X"\npriority: high');
     const calls: string[][] = [];
     const ghFn = async (_c: unknown, args: string[]) => {
       calls.push(args);
@@ -156,7 +161,7 @@ describe("submitAsIssue", () => {
     const code = await submitAsIssue(
       cfg,
       "t.md",
-      TICKET,
+      ticket,
       { plan: false },
       {
         ghFn: ghFn as never,
@@ -168,7 +173,8 @@ describe("submitAsIssue", () => {
 
     expect(code).toBe(0);
     expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(true);
-    expect(errs.join("")).toContain("timeout_minutes");
+    expect(errs.join("")).toContain("priority");
+    expect(errs.join("")).not.toContain("timeout_minutes"); // carried, not discarded
   });
 
   it("refuses when the ticket's repo is not bridge-watched", async () => {
@@ -472,6 +478,131 @@ describe("submitAsIssue", () => {
     expect(code).not.toBe(0);
     expect(errs.join("")).toContain("gh login");
     expect(calls.some((c) => c[0] === "issue" && c[1] === "create")).toBe(false);
+  });
+});
+
+describe("timeout carry", () => {
+  it("embeds a clamped junco:timeout marker and stops listing timeout_minutes as discarded", async () => {
+    // Extra foreign keys alongside the carried timeout: still listed as
+    // discarded, so the carve-out is specific to timeout_minutes.
+    const ticket = TICKET.replace(
+      'pr_title: "Add X"',
+      'pr_title: "Add X"\npriority: high\ndraft: true',
+    );
+    const calls: string[][] = [];
+    let capturedBody = "";
+    const ghFn = async (_c: unknown, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "issue" && args[1] === "create") {
+        const idx = args.indexOf("--body-file");
+        capturedBody = readFileSync(args[idx + 1], "utf8");
+        return { code: 0, stdout: "https://github.com/acme/api/issues/9\n", stderr: "" };
+      }
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const out: string[] = [];
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      baseCfg(),
+      "t.md",
+      ticket,
+      { plan: false },
+      {
+        ghFn: ghFn as never,
+        printFn: (s) => out.push(s),
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(capturedBody).toContain("<!-- junco:timeout:60 -->");
+    const stderrText = errs.join("");
+    expect(stderrText).not.toContain("timeout_minutes");
+    expect(stderrText).toContain("priority"); // still discarded
+    expect(stderrText).toContain("draft"); // still discarded
+    expect(out.join("")).toContain("carried: timeout_minutes=60");
+  });
+
+  it("clamps to 480 and drops non-positive values", async () => {
+    const highTicket = TICKET.replace("timeout_minutes: 60", "timeout_minutes: 9999");
+    const zeroTicket = TICKET.replace("timeout_minutes: 60", "timeout_minutes: 0");
+
+    // 9999 clamps to 480 and is still carried.
+    {
+      let capturedBody = "";
+      const ghFn = async (_c: unknown, args: string[]) => {
+        if (args[0] === "issue" && args[1] === "create") {
+          const idx = args.indexOf("--body-file");
+          capturedBody = readFileSync(args[idx + 1], "utf8");
+          return { code: 0, stdout: "https://github.com/acme/api/issues/9\n", stderr: "" };
+        }
+        throw new Error(`unhandled: ${args.join(" ")}`);
+      };
+      const out: string[] = [];
+      const errs: string[] = [];
+      const code = await submitAsIssue(
+        baseCfg(),
+        "t.md",
+        highTicket,
+        { plan: false },
+        {
+          ghFn: ghFn as never,
+          printFn: (s) => out.push(s),
+          errFn: (s) => errs.push(s),
+          withBotAuthFn: fakeBotAuth,
+        },
+      );
+      expect(code).toBe(0);
+      expect(capturedBody).toContain("<!-- junco:timeout:480 -->");
+      expect(out.join("")).toContain("carried: timeout_minutes=480");
+      expect(errs.join("")).not.toContain("timeout_minutes");
+    }
+
+    // 0 is not carried: no marker, and timeout_minutes IS listed as discarded.
+    {
+      let capturedBody = "";
+      const ghFn = async (_c: unknown, args: string[]) => {
+        if (args[0] === "issue" && args[1] === "create") {
+          const idx = args.indexOf("--body-file");
+          capturedBody = readFileSync(args[idx + 1], "utf8");
+          return { code: 0, stdout: "https://github.com/acme/api/issues/9\n", stderr: "" };
+        }
+        throw new Error(`unhandled: ${args.join(" ")}`);
+      };
+      const out: string[] = [];
+      const errs: string[] = [];
+      const code = await submitAsIssue(
+        baseCfg(),
+        "t.md",
+        zeroTicket,
+        { plan: false },
+        {
+          ghFn: ghFn as never,
+          printFn: (s) => out.push(s),
+          errFn: (s) => errs.push(s),
+          withBotAuthFn: fakeBotAuth,
+        },
+      );
+      expect(code).toBe(0);
+      expect(capturedBody).not.toContain("junco:timeout");
+      expect(errs.join("")).toContain("timeout_minutes");
+      expect(out.join("")).not.toContain("carried: timeout_minutes");
+    }
+  });
+});
+
+describe("carriedTimeoutMinutes", () => {
+  it("clamps and rejects", () => {
+    expect(carriedTimeoutMinutes({ timeout_minutes: 60 })).toBe(60);
+    expect(carriedTimeoutMinutes({ timeout_minutes: 9999 })).toBe(480);
+    expect(carriedTimeoutMinutes({ timeout_minutes: 0.4 })).toBe(null); // < 1 → null
+    expect(carriedTimeoutMinutes({ timeout_minutes: 1.4 })).toBe(1);
+    expect(carriedTimeoutMinutes({ timeout_minutes: "90" })).toBe(90);
+    expect(carriedTimeoutMinutes({ timeout_minutes: 0 })).toBe(null);
+    expect(carriedTimeoutMinutes({ timeout_minutes: -5 })).toBe(null);
+    expect(carriedTimeoutMinutes({ timeout_minutes: "soon" })).toBe(null);
+    expect(carriedTimeoutMinutes({})).toBe(null);
   });
 });
 

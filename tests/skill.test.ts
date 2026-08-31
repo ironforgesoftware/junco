@@ -29,22 +29,31 @@ describe("junco-dispatch SKILL.md", () => {
   });
 
   it("auto-routes to the parked-issue destination when the repo is bridge-watched", () => {
-    // The route probe is a CLI contract — pin the exact commands the skill runs.
-    expect(SKILL).toContain("junco config get github.enabled");
-    expect(SKILL).toContain("junco config get botAccount.enabled");
+    // The route probe is a CLI contract — pin the exact command the skill runs
+    // (Task 3/4: the CLI decides the destination itself; no more config-get
+    // pair plus a raw git probe reimplemented in prose).
+    expect(SKILL).toContain("junco submit --dry-run <tempfile>");
+    expect(SKILL).toContain("destination: issue");
+    expect(SKILL).toContain("destination: inbox");
     expect(SKILL).toContain("junco submit --as-issue");
     // The opt-out trigger and phrase.
     expect(SKILL).toContain("junco-local:");
     expect(SKILL).toContain("to the inbox");
     expect(SKILL).toContain('"junco-local: <brief>"'); // listed as a trigger, not only as a rule
+    // Overrides, in priority order: junco-local forces the inbox regardless of
+    // the verdict; an as-issue phrase forces the issue destination.
+    expect(SKILL).toMatch(
+      /a `junco-local:` trigger[^\n]*forces the inbox regardless of the verdict/,
+    );
+    expect(SKILL).toMatch(/"park it on github"[^\n]*forces the issue destination/);
+    // Step 2b: the plan-lint gate runs before the preview, independent of the probe.
+    expect(SKILL).toContain("junco lint <tempfile>");
+    expect(SKILL).toMatch(/Fix every `\[error\]`[^\n]*before showing the preview/);
+    // The old "two config gets + a raw git probe" contract is gone.
+    expect(SKILL).not.toContain("junco config get github.enabled");
+    expect(SKILL).not.toContain("junco config get botAccount.enabled");
+    expect(SKILL).not.toContain("gh repo view");
     // The old "only on an explicit phrase" rule is gone.
     expect(SKILL).not.toContain("Otherwise stay on the inbox default without asking");
-    // The probe mirrors the CLI's own predicate (origin remote), never gh repo view <path>.
-    expect(SKILL).toContain("git -C <repo-path> remote get-url origin");
-    expect(SKILL).not.toContain("gh repo view");
-    // Amend tickets and hand-authored sets never auto-route: the issue route discards their keys.
-    expect(SKILL).toMatch(
-      /carries `amends_pr`[^\n]*`depends_on`[^\n]*always goes to the \*\*inbox\*\*/,
-    );
   });
 });

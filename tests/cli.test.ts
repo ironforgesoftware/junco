@@ -1669,6 +1669,34 @@ describe("run(['schema'])", () => {
   });
 });
 
+// --- lint ---
+
+describe("lint", () => {
+  it("usage-errors without a file or with stdin", async () => {
+    const deps = { loadConfigFn: () => stubConfig() };
+    expect(await run(["lint"], deps)).toBe(2);
+    expect(await run(["lint", "-"], deps)).toBe(2);
+  });
+
+  it("routes to runLintFn with config and file content", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-lint-"));
+    const file = join(dir, "t.md");
+    writeFileSync(file, "---\nid: x\n---\n\n# T\n", "utf8");
+    const seen: string[] = [];
+    const code = await run(["lint", file], {
+      loadConfigFn: () => stubConfig(),
+      runLintFn: async (_c, fileArg, content) => {
+        seen.push(fileArg, content);
+        return 0;
+      },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(code).toBe(0);
+    expect(seen[0]).toBe(file);
+    expect(seen[1]).toContain("id: x");
+  });
+});
+
 // --- submit (stdin) ---
 
 describe("run(['submit', '-']) — stdin", () => {
@@ -1774,6 +1802,54 @@ describe("run(['submit']) — missing file argument", () => {
       env: { HOME: vaultRoot },
     });
     expect(code).toBe(2);
+  });
+});
+
+// --- submit --dry-run: CLI-owned routing verdict (submitPreflight.ts) ---
+
+describe("run(['submit', '--dry-run', ...])", () => {
+  it("submit --dry-run routes to runSubmitDryRunFn; --plan and stdin are usage errors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-dry-"));
+    const file = join(dir, "t.md");
+    writeFileSync(file, "---\nid: x\nrepo: /sbxroot/r\n---\n\n# T\n", "utf8");
+    // NOTE: the submit block reads stdin BEFORE the --dry-run branch when
+    // fileArg is "-", so the stdin case MUST inject readStdinFn or the test
+    // hangs on real stdin (same pre-existing shape as --as-issue's stdin check).
+    const deps = { loadConfigFn: () => stubConfig(), readStdinFn: async () => "" };
+    expect(await run(["submit", "--dry-run", "--plan", file], deps)).toBe(2);
+    expect(await run(["submit", "--dry-run", "-"], deps)).toBe(2);
+    let called = 0;
+    const code = await run(["submit", "--dry-run", file], {
+      ...deps,
+      runSubmitDryRunFn: async () => {
+        called++;
+        return 0;
+      },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(code).toBe(0);
+    expect(called).toBe(1);
+  });
+
+  // R1/R4: combined with --as-issue, --dry-run still wins — the decision is
+  // the CLI's, per spec. stubConfig() has no `github` field, so if precedence
+  // ever regressed and this fell through to the real submitAsIssue, the run
+  // would not return the spy's 0 (it would throw on `cfg.github.enabled`).
+  it("submit --dry-run --as-issue routes to runSubmitDryRunFn, never reaching submitAsIssue", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-dry-"));
+    const file = join(dir, "t.md");
+    writeFileSync(file, "---\nid: x\nrepo: /sbxroot/r\n---\n\n# T\n", "utf8");
+    let called = 0;
+    const code = await run(["submit", "--dry-run", "--as-issue", file], {
+      loadConfigFn: () => stubConfig(),
+      runSubmitDryRunFn: async () => {
+        called++;
+        return 0;
+      },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(code).toBe(0);
+    expect(called).toBe(1);
   });
 });
 

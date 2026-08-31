@@ -16,11 +16,25 @@ import { createIssueLive } from "./assessFiling.js";
 import { gh, git } from "./git.js";
 import { expandHome } from "./config.js";
 import { canonPath } from "./unwatchCmd.js";
-import { extractPlanSetBody, nwoFromRemoteUrl } from "./githubInbox.js";
+import { extractPlanSetBody, nwoFromRemoteUrl, timeoutMarker } from "./githubInbox.js";
 import { parsePlanSet } from "./planCompiler.js";
 import { slugifyId } from "./slug.js";
 
-const CARRIED_KEYS = new Set(["id", "repo", "pr_title"]);
+export const CARRIED_KEYS = new Set(["id", "repo", "pr_title"]);
+
+/** Clamp a dispatcher-authored timeout_minutes to the carryable band [1, 480]
+ * (integers, Math.round); anything non-finite or < 1 is null (not carried). */
+export function carriedTimeoutMinutes(frontmatter: Record<string, unknown>): number | null {
+  const raw = frontmatter["timeout_minutes"];
+  const n =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim() !== ""
+        ? Number(raw)
+        : NaN;
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(480, Math.round(n));
+}
 
 /** Wrap `body` in a fence longer than any backtick run inside it, so the
  * bridge's extractFencedBlock (junco-ticket tag, githubInbox.ts) round-trips
@@ -217,13 +231,22 @@ export async function submitAsIssue(
   // Frontmatter is machine-owned on the issue route (buildExecutionTicket
   // stamps it fresh when the bridge later extracts the fence) — everything
   // beyond id/repo/pr_title is silently dropped by the round-trip, so warn
-  // loudly rather than let an operator believe e.g. timeout_minutes: survived.
-  const discarded = Object.keys(parsed.frontmatter).filter((k) => !CARRIED_KEYS.has(k));
+  // loudly rather than let an operator believe an arbitrary key survived.
+  // timeout_minutes is the one exception: a valid (clamped) value is carried
+  // through as a `<!-- junco:timeout:N -->` marker in the issue body (parsed
+  // back out by the bridge's fence door), so it leaves the discard list.
+  const carried = carriedTimeoutMinutes(parsed.frontmatter);
+  const discarded = Object.keys(parsed.frontmatter).filter(
+    (k) => !CARRIED_KEYS.has(k) && !(k === "timeout_minutes" && carried !== null),
+  );
   if (discarded.length > 0) {
     err(
       "junco submit --as-issue: warning — frontmatter is machine-owned on the issue route; " +
         `discarded: ${discarded.join(", ")}\n`,
     );
+  }
+  if (carried !== null) {
+    print(`carried: timeout_minutes=${carried}\n`);
   }
 
   const body = parsed.body.trim();
@@ -234,7 +257,8 @@ export async function submitAsIssue(
   const issueBody =
     `_Parked junco ticket — apply the \`${cfg.github.triggerLabel}\` label to queue it._\n\n` +
     wrapInFence("junco-ticket", body) +
-    "\n\n<!-- junco:as-issue -->\n";
+    "\n\n<!-- junco:as-issue -->\n" +
+    (carried !== null ? timeoutMarker(carried) + "\n" : "");
 
   let cfgBot: Config;
   try {

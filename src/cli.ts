@@ -158,6 +158,10 @@ export interface CliDeps {
   printFn?: (s: string) => void;
   /** Read stdin as a UTF-8 string. Injected so tests can supply content without a real stdin. */
   readStdinFn?: () => Promise<string>;
+  /** `junco lint` implementation (submitPreflight.ts). Injected so cli tests
+   * never exercise the lazy import's real git/gh calls. Default: the real
+   * runLint via lazy import. */
+  runLintFn?: (cfg: Config, fileArg: string, content: string) => Promise<number>;
   /** Existence check for first-run detection (tests control routing). Default: fs.existsSync. */
   existsFn?: (path: string) => boolean;
   /** Process environment for config-path resolution (tests inject HOME /
@@ -209,6 +213,10 @@ export interface CliDeps {
    * submitPlanSet's own default). Scoped to the plan-set door; the
    * single-ticket `submit` path is unaffected. */
   submitPlanFn?: typeof submitTicket;
+  /** `junco submit --dry-run` implementation (submitPreflight.ts). Injected so
+   * cli tests never exercise the lazy import's real git/gh calls. Default:
+   * the real runSubmitDryRun via lazy import. */
+  runSubmitDryRunFn?: (cfg: Config, fileArg: string, content: string) => Promise<number>;
 }
 
 /**
@@ -295,6 +303,10 @@ Subcommands:
                   via the bot account — a human applies the trigger label to launch it
   submit --as-issue --plan <file> --repo <path>  Same, but parks a junco-plan
                   fence issue instead of a single ticket — labeling compiles the set
+  submit --dry-run <file>  Report the destination (issue vs inbox), discarded
+                  frontmatter, and lint results without submitting
+  lint <file>  Validate a ticket without submitting — plan-lint plus repo,
+                  origin, and branch-collision preflight (exit 1 on errors)
   dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
   skill install [--harness <name|path>]...  Link the junco-dispatch skill into
@@ -317,6 +329,7 @@ Options:
   --repo <path>        (submit --plan) Repo path stamped into the compiled tickets
   --as-issue            (submit) File as a parked, unlabeled GitHub issue via the
                         bot account instead of the local inbox
+  --dry-run             (submit) Decide and report, write nothing; (data migrate) preview
   --help, -h            Show this help message
   --version             Print junco's version and exit
 `;
@@ -1387,6 +1400,34 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
+  // lint: validate a ticket (plan-lint + repo/branch preflight), submit nothing
+  // ------------------------------------------------------------
+  if (subcommand === "lint") {
+    const fileArg = positionals[1];
+    if (!fileArg || fileArg === "-") {
+      process.stderr.write(`Usage: junco lint <file>\n`);
+      return 2;
+    }
+    let content: string;
+    try {
+      content = readFileSync(fileArg, "utf8");
+    } catch (e) {
+      process.stderr.write(
+        `junco lint: cannot read '${fileArg}': ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      return 1;
+    }
+    const cfg = loadConfigFn(configPath);
+    const runLintFn =
+      deps.runLintFn ??
+      (async (c: Config, f: string, s: string) => {
+        const { runLint } = await import("./submitPreflight.js");
+        return runLint(c, f, s, { printFn: deps.printFn });
+      });
+    return await runLintFn(cfg, fileArg, content);
+  }
+
+  // ------------------------------------------------------------
   // submit: place a ticket into the inbox
   // ------------------------------------------------------------
   if (subcommand === "submit") {
@@ -1424,6 +1465,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
     const cfg = loadConfigFn(configPath);
     const idHint = fileArg !== "-" ? basename(fileArg).replace(/\.md$/, "") : undefined;
+
+    // submit --dry-run: routing verdict + lint, nothing written. The verdict
+    // is the CLI's regardless of --as-issue; --plan is unsupported (the
+    // compiler has its own validation).
+    if (values["dry-run"] === true) {
+      if (values.plan === true) {
+        process.stderr.write("junco submit: --dry-run does not support --plan\n");
+        return 2;
+      }
+      if (fileArg === "-") {
+        process.stderr.write("Usage: junco submit --dry-run <file> (stdin not supported)\n");
+        return 2;
+      }
+      const runDry =
+        deps.runSubmitDryRunFn ??
+        (async (c: Config, f: string, s: string) => {
+          const { runSubmitDryRun } = await import("./submitPreflight.js");
+          return runSubmitDryRun(c, f, s, { printFn: deps.printFn });
+        });
+      return await runDry(cfg, fileArg, content);
+    }
 
     // submit --as-issue <file> [--plan --repo <path>]: file as a parked,
     // unlabeled GitHub issue via the bot account (src/submitAsIssue.ts)
