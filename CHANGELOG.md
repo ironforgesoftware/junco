@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A parked `--as-issue` ticket now reads like a plan, not a code block: the issue body renders the ticket as normal markdown for the human reviewer, with the machine `junco-ticket` fence collapsed in a `<details>` block below it. The fence remains the only thing the bridge queues, the summary line says so, and bodies that would exceed GitHub's size cap fall back to the fence-only shape. The `--as-issue --plan` route keeps its fence-only presentation on purpose — its payload is YAML, which monospace presents correctly.
+- The `junco-dispatch` skill drops authored boilerplate the CLI and worker now own: the per-ticket `created:` timestamp, running `junco lint` again after a clean `dry-run` (whose output already carries the full lint verdict), the separate monitor-the-ticket and repo-target-confirmation `AskUserQuestion` asks (monitoring is now folded into the same call as the dispatch preview; the repo target is confirmed by the preview's `repo:` line instead of a standalone question), the unconditional `EXAMPLE.md` read before drafting (now conditional on an unfamiliar plan shape or a prior structural lint failure), and authoring-time `gh label list` pre-checks (labels are validated by dry-run/lint's own `labels_exist` check instead). The preview itself is now codified as a curated essence — key design decisions, a Files/Steps summary, and the dry-run's destination/reason/carried/discard/timeout lines — plus the temp-file path for full reading, never the raw ticket body.
+- The worker's prompt preamble now carries the full strict working discipline (trust-the-ticket, no-scope-expansion, graceful-stop-on-mismatch, final-summary) for every run, so `TEMPLATE.md` and `EXAMPLE.md` no longer ship an authored "Notes for the agent" block and plan-lint's `notes_block_present` rule is retired. An existing ticket that still carries a Notes block stays valid — it's simply wasted tokens now, not a required section.
+
+### Fixed
+
+- The phantom `todo_write` call: both the fresh and amend worker preambles instructed the agent to call a `todo_write` tool that does not exist in the agent layer, wasting one failed tool call every run. The instructions and the dead `todo_write` loop-guard threshold that referenced it are removed.
 
 ## [0.12.0] - 2026-08-30
 
