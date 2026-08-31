@@ -198,7 +198,7 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 
    The description is the last thing the user reads before approving: a gate that says "inbox" while the submit step would run `--as-issue` (or the reverse) is a routing defect, not a wording nit. Never present an inbox-worded gate for an issue-routed dispatch.
 
-4. **On approve — submit via CLI.** Write the rendered ticket to a temp file, then run:
+4. **On approve — submit via CLI.** Submit the SAME temp file from step 2 (byte-identical to what lint and dry-run validated), then run:
 
    **Inbox destination (default):**
 
