@@ -1,6 +1,6 @@
 # Junco ticket examples
 
-Two worked examples using the canonical template. When generating a new plan,
+Three worked examples using the canonical template. When generating a new plan,
 pick the one that's closer in scope to the user's brief and use it as a
 shape-reference, not a copy-paste source.
 
@@ -15,7 +15,6 @@ shape-reference, not a copy-paste source.
 ````markdown
 ---
 id: add-changelog-2026-04-23
-created: 2026-04-23T11:30:00
 priority: normal
 timeout_minutes: 30
 repo: ~/code/example-app
@@ -126,16 +125,6 @@ worktree root.
 - [ ] File contains a `## v0.1.0 — 2026-04-23` heading.
 - [ ] 1 commit on `junco/add-changelog-2026-04-23`.
 
-## Notes for the agent (strict — copy this section verbatim into every plan)
-
-1. **Trust the spec.** File paths, line numbers, and commands in this plan were verified by the planner. Do not re-explore the repo.
-2. **One commit per step.** Suggested commit messages above are just suggestions — a better one is fine, but commit exactly once per step.
-3. **Never run `git log`, `git status`, or `git diff` after a commit** to "verify" it landed. Commits with exit 0 always land. Verifying wastes turns.
-4. **Call `todo_write` once at the start with top-level `phases: [...]`** to lay out the plan. After that, use only the incremental fields — `start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`. **Never pass `phases:` again** after the initial plan — it replaces the entire todo list and wipes progress memory, triggering re-planning loops.
-5. **Do not expand scope.** If you find an issue not in this plan, note it in your final summary — do not fix it.
-6. **Do not push or open a PR.** The worker handles that.
-7. **Final summary** (2–3 sentences at session end): what you did and any surprises. (Junco runs `## Verification` itself — don't restate it.)
-
 ````
 
 ---
@@ -151,7 +140,6 @@ an anchor for moderate-complexity work.)
 ```markdown
 ---
 id: hello4-and-readme-2026-04-23
-created: 2026-04-23T12:00:00
 priority: normal
 timeout_minutes: 60
 repo: ~/code/example-app
@@ -268,16 +256,6 @@ worktree root.
 - [ ] `README.md` ends with a `## Provenance 4` section.
 - [ ] 2 commits on `junco/hello4-and-readme-2026-04-23`.
 
-## Notes for the agent (strict — copy this section verbatim into every plan)
-
-1. **Trust the spec.** File paths, line numbers, and commands in this plan were verified by the planner. Do not re-explore the repo.
-2. **One commit per step.** Suggested commit messages above are just suggestions — a better one is fine, but commit exactly once per step.
-3. **Never run `git log`, `git status`, or `git diff` after a commit** to "verify" it landed. Commits with exit 0 always land. Verifying wastes turns.
-4. **Call `todo_write` once at the start with top-level `phases: [...]`** to lay out the plan. After that, use only the incremental fields — `start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`. **Never pass `phases:` again** after the initial plan — it replaces the entire todo list and wipes progress memory, triggering re-planning loops.
-5. **Do not expand scope.** If you find an issue not in this plan, note it in your final summary — do not fix it.
-6. **Do not push or open a PR.** The worker handles that.
-7. **Final summary** (2–3 sentences at session end): what you did and any surprises. (Junco runs `## Verification` itself — don't restate it.)
-
 ````
 
 ---
@@ -293,7 +271,6 @@ worktree root.
 ```markdown
 ---
 id: amend-42-trailing-newline-2026-04-23
-created: 2026-04-23T14:20:00
 priority: normal
 timeout_minutes: 30
 repo: ~/code/example-app
@@ -338,18 +315,6 @@ surfaces results in the PR body. Don't run them yourself.
 - [ ] `HELLO.md` ends with a single LF byte.
 - [ ] 1 new commit on top of the existing PR branch.
 
-## Notes for the agent (strict — amend-mode block; copy verbatim into every amend plan)
-
-1. **You are amending, not starting over.** Previous commits on this branch are the starting point. Do not try to re-do their work.
-2. **Add new commits on top.** Do NOT rebase, squash, or amend prior commits — those would need a force-push and the worker won't do one.
-3. **Commit messages describe the amendment** (e.g. `fix: address review feedback on X`, `refactor: extract Y per review`) — not the original work.
-4. **Do not** `git push` or touch the remote. The worker pushes your new commits; GitHub updates the existing PR automatically.
-5. **Do not** switch branches. Stay on the branch you're on.
-6. **Do not re-inspect prior commits.** Trust they're present; focus on the amendments.
-7. After `git commit` exits 0, the commit is real. Do not `git log`/`status`/`diff` to verify.
-8. After the initial `todo_write` with `phases:`, use only the incremental fields (`start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`). Never pass `phases:` again — it wipes progress memory.
-9. **Final summary:** what you amended, which verification commands passed.
-
 ```
 
 ### Why this shape for amend tickets
@@ -357,7 +322,6 @@ surfaces results in the PR body. Don't run them yourself.
 - **`amends_pr: 42`** is the only metadata that matters for routing. Everything else (branch_name, base_branch, pr_title, labels) is derived from the PR or left unchanged.
 - **H1 references the PR number** so filenames + PR pages can be cross-referenced at a glance.
 - **"What needs fixing" section** replaces "Why / Scope" for amend mode — the PR already has context; what we need is the delta.
-- **Amend-mode Notes block is different** from fresh-ticket Notes (item 2 — "no force-pushes" — is amend-specific). Don't copy the fresh-ticket notes block into an amend ticket.
 
 ## Calibration notes for the skill
 

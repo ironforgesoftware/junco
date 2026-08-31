@@ -14,7 +14,6 @@ are no reusable utilities to point at). Prefer to keep a section and write
 ````markdown
 ---
 id: <slug>-<YYYY-MM-DD>
-created: <YYYY-MM-DDTHH:mm:ss>
 priority: normal
 timeout_minutes: <30 | 60 | 90 | 120 | 180>
 repo: <absolute path, ~ expands>
@@ -164,16 +163,7 @@ the commands relative to the worktree root (e.g. `test -f src/foo.ts`,
 - [ ] <observable outcome 2>
 - [ ] <N> commits on `<branch_name>` (one per step).
 
-## Notes for the agent (strict — copy this section verbatim into every plan)
-
-1. **Trust the spec.** File paths, line numbers, and commands in this plan were verified by the planner. Do not re-explore the repo.
-2. **One commit per step.** Suggested commit messages above are just suggestions — a better one is fine, but commit exactly once per step.
-3. **Never run `git log`, `git status`, or `git diff` after a commit** to "verify" it landed. Commits with exit 0 always land. Verifying wastes turns.
-4. **Call `todo_write` once at the start with top-level `phases: [...]`** to lay out the plan. After that, use only the incremental fields — `start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`. **Never pass `phases:` again** after the initial plan — it replaces the entire todo list and wipes progress memory, triggering re-planning loops.
-5. **Do not expand scope.** If you find an issue not in this plan, note it in your final summary — do not fix it.
-6. **Do not push or open a PR.** The worker handles that.
-7. **Final summary** (2–3 sentences at session end): what you did and any surprises. (Junco runs `## Verification` itself — don't restate it.)
-8. **Graceful stop on spec mismatch.** If you find the spec doesn't match reality (a file already exists with content the spec doesn't anticipate, a precondition has changed, the work is already done, or you cannot complete it as specified), output a single sentence explaining the mismatch and stop. Do NOT loop in thinking trying to reconcile — junco's supervisor will kill the session within minutes and the ticket lands in `failed/` with no useful information. Your one-sentence summary becomes the failure note that lets the user fix the spec and re-dispatch.
+<!-- The worker's prompt preamble carries the strict working discipline — do not author it here. -->
 
 ---
 
@@ -193,7 +183,7 @@ the agent minutes of confused exploration:
 - **Behavior (EARS)** — `WHEN <trigger> THE SYSTEM SHALL <response>`. The behavioral counterpart to Verification: triggers are spelled out so commands and assertions map 1:1. Distinct from Done-when (structural) — Behavior is what the system _does_, Done-when is what _exists_.
 - **Verification block** — exact commands, not "make sure it builds". The agent runs them; it doesn't narrate.
 - **Done when** — observable outcomes, not "looks good". Gives the agent a clear stop condition.
-- **Notes for the agent (strict)** — the anti-loop rules from multiple smoke tests. Copy verbatim. Cutting these costs ~15 minutes per ticket in repeated verification loops.
+- **No Notes section** — the anti-loop discipline lives in the worker's own prompt preamble; plans carry only ticket-specific content.
 
 ## Template values — guidance
 
@@ -204,7 +194,7 @@ the agent minutes of confused exploration:
   - **90–120** — moderate: feature work, multi-file refactor, possibly new tests.
   - **180** — large: architectural or cross-module. If you'd write >180, decompose into multiple tickets instead.
 - `draft`: always `true` unless the user explicitly asks for a non-draft PR.
-- `labels`: empty list by default. Only include labels that exist on the repo (run `gh label list --repo <nwo>` to verify). Nonexistent labels fail `gh pr create`.
+- `labels`: empty list by default. Only include labels that exist on the repo. When the user names labels, dry-run/lint's labels_exist check validates them — no separate gh call. Nonexistent labels fail `gh pr create`.
 - `branch_name`: omit unless the user overrides. The worker derives `junco/<id>` by default.
 - `base_branch`: `main` unless the repo uses a different default branch.
 
@@ -217,7 +207,6 @@ When the agent's original PR needs more work, use **amend mode** to push additio
 ```markdown
 ---
 id: amend-<PR#>-<short-slug>-<YYYY-MM-DD>
-created: <YYYY-MM-DDTHH:mm:ss>
 priority: normal
 timeout_minutes: 30
 repo: <absolute path>
@@ -243,17 +232,7 @@ amends_pr: 42
 - [ ] <observable outcome>
 - [ ] <N> new commits on top of the existing PR branch
 
-## Notes for the agent (strict — copy this section verbatim into every amend plan)
-
-1. **You are amending, not starting over.** Previous commits on this branch are the starting point. Do not try to re-do their work.
-2. **Add new commits on top.** Do NOT rebase, squash, or amend prior commits — those would need a force-push and the worker won't do one.
-3. **Commit messages describe the amendment** (e.g. `fix: address review feedback on X`, `refactor: extract Y per review`) — not the original work.
-4. **Do not** `git push` or touch the remote. The worker pushes your new commits; GitHub updates the existing PR automatically.
-5. **Do not** switch branches. Stay on the branch you're on.
-6. **Do not re-inspect prior commits.** Trust they're present; focus on the amendments.
-7. After `git commit` exits 0, the commit is real. Do not `git log`/`status`/`diff` to verify.
-8. After the initial `todo_write` with `phases:`, use only the incremental fields (`start`, `complete`, `abandon`, `remove`, `add_tasks`, `add_notes`, `add_phase`). Never pass `phases:` again — it wipes progress memory.
-9. **Final summary:** what you amended, which verification commands passed.
+<!-- The worker's prompt preamble carries the strict working discipline — do not author it here. -->
 ```
 
 ### Metadata rules for amend tickets

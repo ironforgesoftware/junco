@@ -26,7 +26,6 @@ describe("DEFAULT_TOOL_LOOP_THRESHOLDS", () => {
       write: 3,
       edit: 4,
       read: 5,
-      todo_write: 4,
     });
   });
 });
@@ -256,11 +255,8 @@ describe("ToolCallLoopGuard", () => {
     expect(g.lastThreshold).toBe(3);
   });
 
-  it("todo_write threshold is 4", () => {
-    const g = new ToolCallLoopGuard();
-    for (let i = 0; i < 3; i++) g.observe("todo_write", { content: "x" });
-    expect(g.observe("todo_write", { content: "x" })).toBe(true);
-    expect(g.lastThreshold).toBe(4);
+  it("todo_write is no longer a known tool threshold", () => {
+    expect(DEFAULT_TOOL_LOOP_THRESHOLDS).not.toHaveProperty("todo_write");
   });
 
   it("unknown tool defaults to threshold 4", () => {

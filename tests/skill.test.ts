@@ -46,14 +46,36 @@ describe("junco-dispatch SKILL.md", () => {
       /a `junco-local:` trigger[^\n]*forces the inbox regardless of the verdict/,
     );
     expect(SKILL).toMatch(/"park it on github"[^\n]*forces the issue destination/);
-    // Step 2b: the plan-lint gate runs before the preview, independent of the probe.
+    // Step 2b: a clean dry-run already includes the lint results (Task 3
+    // dispatch-slimming) — lint is a separate call only to re-validate after
+    // a dry-run/preview surfaces an [error].
     expect(SKILL).toContain("junco lint <tempfile>");
-    expect(SKILL).toMatch(/Fix every `\[error\]`[^\n]*before showing the preview/);
+    expect(SKILL).toMatch(/do not run lint separately after a clean dry-run/);
     // The old "two config gets + a raw git probe" contract is gone.
     expect(SKILL).not.toContain("junco config get github.enabled");
     expect(SKILL).not.toContain("junco config get botAccount.enabled");
     expect(SKILL).not.toContain("gh repo view");
     // The old "only on an explicit phrase" rule is gone.
     expect(SKILL).not.toContain("Otherwise stay on the inbox default without asking");
+  });
+
+  it("drops the authored boilerplate the CLI and worker now own (Task 3 dispatch-slimming)", () => {
+    // No more per-ticket timestamp ritual — nothing reads `created:`.
+    expect(SKILL).not.toContain("created:");
+    // A clean dry-run already carries the lint verdict.
+    expect(SKILL).toContain("A clean dry-run IS the lint gate");
+    // Plans no longer author their own anti-loop Notes section — the worker's
+    // prompt preamble injects the discipline for every run.
+    expect(SKILL).toContain('Do NOT author a "Notes for the agent" section');
+    // The preview and the monitor ask are folded into one AskUserQuestion call.
+    expect(SKILL).toContain("Monitor the ticket?");
+
+    // TEMPLATE.md ships the same cuts — mirror the SKILL loading pattern.
+    const TEMPLATE = readFileSync(
+      new URL("../skills/junco-dispatch/TEMPLATE.md", import.meta.url),
+      "utf8",
+    );
+    expect(TEMPLATE).not.toContain("copy this section verbatim");
+    expect(TEMPLATE).not.toContain("created:");
   });
 });

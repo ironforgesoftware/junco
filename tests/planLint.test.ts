@@ -238,28 +238,13 @@ describe("files_table_referenced", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Rule: notes_block_present
+// notes_block_present retired — the worker preamble now owns the discipline
 // ---------------------------------------------------------------------------
 
-describe("notes_block_present", () => {
-  it("present → no violation", () => {
-    const result = lintTicket(VALID_BODY, VALID_FM, { checkLabels: false });
-    const v = result.violations.filter((v) => v.rule === "notes_block_present");
-    expect(v).toHaveLength(0);
-  });
-
-  it("missing notes block → error", () => {
-    const body = [
-      "## Summary\nDo a thing.\n",
-      "## Steps\n",
-      "### Step 1 — Do it\nsrc/index.ts\n```bash\ngit commit -m 'step 1'\n```\n",
-      "## Verification\n```bash\nnpm test\n```\n",
-    ].join("\n");
-    const result = lintTicket(body, VALID_FM, { checkLabels: false });
-    const v = result.violations.filter((v) => v.rule === "notes_block_present");
-    expect(v).toHaveLength(1);
-    expect(v[0].severity).toBe("error");
-    expect(v[0].message).toMatch(/Notes for the agent/);
+describe("no Notes block requirement", () => {
+  it("a ticket without a Notes block passes — the worker preamble carries the discipline", () => {
+    const r = lintTicket("# T\n\n### Step 1\n\ngit commit -m x\n", {}, { checkLabels: false });
+    expect(r.violations.map((v) => v.rule)).not.toContain("notes_block_present");
   });
 });
 
@@ -838,10 +823,7 @@ describe("lintTicket — clean ticket", () => {
 
   it("rule order: no_cd_in_verification is first", () => {
     // When multiple rules fire, no_cd_in_verification should appear first
-    const body = [
-      "## Verification\n```bash\ncd /tmp\nnpm test\n```\n",
-      // missing notes block → notes_block_present
-    ].join("\n");
+    const body = ["## Verification\n```bash\ncd /tmp\nnpm test\n```\n"].join("\n");
     const result = lintTicket(body, VALID_FM, { checkLabels: false });
     expect(result.violations[0]?.rule).toBe("no_cd_in_verification");
   });

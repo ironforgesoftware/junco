@@ -31,7 +31,7 @@ Fire this skill when the user explicitly asks to dispatch work:
 ## Supporting files
 
 - `TEMPLATE.md` — the canonical plan template. Every ticket uses this exact shape.
-- `EXAMPLE.md` — two worked examples (trivial 1-commit; moderate 2-commit). Use as shape anchors when generating.
+- `EXAMPLE.md` — three worked examples (trivial 1-commit; moderate 2-commit; amend). Use as shape anchors when generating.
 
 Read these via the Read tool when you need to quote or reference the template.
 
@@ -40,9 +40,9 @@ Read these via the Read tool when you need to quote or reference the template.
 Ask the minimum needed — autodetect where possible, ask inline when not.
 
 1. **Repo target** — absolute path to a git repo.
-   - Autodetect: if the current CC working directory is a git repo, default to it and confirm ("Dispatch to junco targeting `$(pwd)`?").
+   - Autodetect: if the current CC working directory is a git repo, default to it without a separate confirmation; the preview gate displays `repo:` and approving it confirms the target.
    - Ask only if no cwd-repo fit or the user's brief clearly refers to a different repo.
-   - Must have a GitHub remote (the worker needs one to open the PR). If uncertain, run `git -C <path> remote get-url origin` to verify before drafting.
+   - dry-run's repo checks validate the remote; do not pre-check by hand.
 2. **Goal** — one-sentence brief. If the trigger was "send to junco" with no details, ask: "What's the goal in one sentence?"
 3. **Scope boundaries** — ask if ambiguous: "Anything specifically off-limits?" If clear from the brief, infer.
 4. **Existing plan file** — if the user says "junco this plan: <path>", skip drafting and wrap the existing file (see "Wrapping an existing plan" below).
@@ -94,16 +94,15 @@ The compiler refuses (never strips) a plan whose free-text fields — `title`, `
 ## Drafting procedure
 
 1. **Read the template.** Use Read tool on `~/.claude/skills/junco-dispatch/TEMPLATE.md` to load the canonical shape. Do not paraphrase from memory.
-2. **Choose an example as anchor.** Read `EXAMPLE.md`; pick the one (trivial or moderate) closest in scope.
+2. **Choose an example as anchor — conditionally.** Read `EXAMPLE.md` only when the plan shape is unfamiliar to you or your last ticket failed plan-lint structurally; otherwise skip the read.
 3. **Discover repo specifics for Pre-flight context + Reference.** Read the repo's `package.json` / `pyproject.toml` / `Cargo.toml` to capture build tool + version + key dependency versions. Read 1–2 files central to the change to extract reusable signatures (barrel exports, function signatures, type shapes). Paste these inline in the ticket — every Read avoided at execute time saves ~30 seconds. **Verify-before-drafting:** before populating Reference and Files sections, READ the actual target file(s). Do NOT assume field names, line numbers, imports, or interface shapes from memory — they have been wrong in the past (a plan-render listed a `description` field on a model that didn't exist, and called an `image` field "an HTTPS URL" when it was actually a CSS gradient). The plan-lint `files_paths_exist` rule will warn if your Files-table paths don't match the repo state.
 4. **Populate every section.** Follow the template literally. If a section is inapplicable (e.g. no reusable utilities, no observable behavior), write `_None._` — do not drop the section. Shape consistency matters more than section density.
 5. **Be specific.** Absolute paths when they help; relative-to-worktree-root (default) when the task is self-contained. Include line numbers for surgical edits.
-6. **Include the full "Notes for the agent (strict)" block verbatim.** This is the anti-loop payload — copy from `TEMPLATE.md` exactly. Do not reword.
+6. **Do NOT author a "Notes for the agent" section** — the worker's prompt preamble carries the strict working discipline and injects it for every run. A plan that includes its own copy is not rejected, just wasted tokens.
 
 ## Metadata rules
 
 - `id`: `<slug>-<YYYY-MM-DD>` where slug is lowercase-hyphenated from the title. Examples: `add-changelog-2026-04-23`, `refactor-auth-header-2026-04-24`.
-- `created`: ISO-8601 current local time (seconds resolution).
 - `priority`: `normal` unless the user says otherwise.
 - `timeout_minutes`: per the heuristic above. On the issue route the value is carried via a bounded marker (clamped 1–480); pick the honest number, not a defensive inflation.
 - `repo`: absolute path, `~` will expand.
@@ -111,7 +110,7 @@ The compiler refuses (never strips) a plan whose free-text fields — `title`, `
 - `branch_name`: omit by default — the worker derives `junco/<id>`. Only include if the user wants to override.
 - `pr_title`: first H1 from the body, verb-first, ≤70 chars, no `junco:` prefix.
 - `draft`: always `true` unless the user explicitly requests ready-for-review.
-- `labels`: empty `[]` by default. **Only include labels that exist on the repo** — `gh label list --repo <nwo>` to verify. Nonexistent labels fail `gh pr create` after push, leaving the branch on origin but no PR.
+- `labels`: empty `[]` by default. **Only include labels that exist on the repo.** When the user names labels, dry-run/lint's labels_exist check validates them — no separate gh call. Nonexistent labels fail `gh pr create` after push, leaving the branch on origin but no PR.
 
 ### Linked tracking issue (optional)
 
@@ -144,7 +143,6 @@ Empirical lessons from repeated testing. Bake these into every plan body:
   - `date -v +1d` (BSD) vs `date -d 'tomorrow'` (GNU) — prefer ISO timestamps in spec content rather than computing dates in verification.
   - `head -c N` works on both. `tail -c N` differs in offset semantics — verify the exact byte you want with `xxd` or `od` for portability.
   - When in doubt, prefer Python or `awk` one-liners over shell coreutils — they have consistent semantics across platforms.
-- **The "Notes for the agent (strict)" section is mandatory.** Copy verbatim. Dropping this is the difference between a few minutes and 20+ minutes of wall clock.
 
 ## Plan-lint (automatic pre-dispatch check)
 
@@ -154,7 +152,6 @@ The junco worker runs a deterministic linter on every ticket before claiming it.
 - Every `### Step N` block contains exactly one `git commit` line
 - Every path in the Files table appears in at least one Step body
 - Every label in frontmatter exists on the GitHub repo (`gh label list`)
-- The strict "Notes for the agent" block is present at the end
 - No forbidden phrases (`TBD`, `Similar to Step N`, `think carefully`, `consider all cases`)
 
 If you generate a ticket and lint rejects it, fix the specific rule cited and re-dispatch. The linter exists to catch known foot-guns _before_ spawning a 5-minute agent run.
@@ -187,16 +184,20 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
 
    (Use `npx junco …` if `junco` is not installed globally.) The output names the destination and why: `destination: issue` or `destination: inbox`, one `reason:` line per cause, and on the issue route `watched:`, `carried:`/`would discard:` and `timeout:` lines plus lint results. Copy the verdict — do not re-derive it. Overrides, in priority order: a `junco-local:` trigger or a brief that says "to the inbox" / "local inbox" forces the inbox regardless of the verdict; "park it on github", "junco as issue: …", "dispatch as issue" forces the issue destination (run `--as-issue` and surface its refusal if the CLI disagrees — it names the missing precondition). State the destination and its reason in one line before the preview. Leave `repo:` as the working checkout — the CLI matches it to the watched repo by the checkout's `origin`.
 
-2b. **Validate before previewing.** Run `junco lint <tempfile>`. Fix every `[error]` (edit the ticket, re-render, re-run) before showing the preview — never submit a ticket the worker's own linter will fail five seconds after claim. `[warning]` lines are surfaced in the preview, not fixed silently.
+2b. **A clean dry-run IS the lint gate** — its output already includes the full junco lint results; do not run lint separately after a clean dry-run. When dry-run (or the preview) surfaces `[error]` findings, fix the ticket, then run `junco lint <tempfile>` to re-validate cheaply before re-previewing (it repeats the validation without the routing verdict).
 
-3. **Preview + approve.** Use `AskUserQuestion` with the rendered ticket as a preview. Ask: "Dispatch this to junco?" (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`. The `Yes, dispatch` option's **description must name the destination** — copy the template for the destination you picked in step 2, filling `<owner>/<repo>`:
+3. **Preview + approve, with monitoring folded in.** Use one `AskUserQuestion` call carrying two questions:
 
-   - Issue destination: `Park as a GitHub issue on <owner>/<repo> — nothing runs until a human applies the trigger label.`
-   - Inbox destination: `Submit to the local junco inbox — the worker claims and runs it within ~15s; no further gate.`
+   - **"Dispatch this to junco?"** (on the issue destination: "Park this on GitHub as an issue?") with options `Yes, dispatch` / `Edit first` / `Cancel`. The preview text is a curated essence, never the full ticket body: key design decisions, the ticket's `repo:` target, a summary of the Files and Steps tables, and the dry-run's `destination:`/`reason:`/`carried:`/`would discard:`/`timeout:` lines — plus the temp-file path so the user can read the full ticket if they want it. The `Yes, dispatch` option's **description must name the destination** — copy the template for the destination you picked in step 2, filling `<owner>/<repo>`:
 
-   On the issue destination the preview itself must also quote, verbatim, the dry-run's `carried:`, `would discard:` and `timeout:` lines — the user approves knowing which frontmatter survives and what timeout will actually apply, not after submit.
+     - Issue destination: `Park as a GitHub issue on <owner>/<repo> — nothing runs until a human applies the trigger label.`
+     - Inbox destination: `Submit to the local junco inbox — the worker claims and runs it within ~15s; no further gate.`
 
-   The description is the last thing the user reads before approving: a gate that says "inbox" while the submit step would run `--as-issue` (or the reverse) is a routing defect, not a wording nit. Never present an inbox-worded gate for an issue-routed dispatch.
+     On the issue destination the preview itself must also quote, verbatim, the dry-run's `carried:`, `would discard:` and `timeout:` lines — the user approves knowing which frontmatter survives and what timeout will actually apply, not after submit.
+
+     The description is the last thing the user reads before approving: a gate that says "inbox" while the submit step would run `--as-issue` (or the reverse) is a routing defect, not a wording nit. Never present an inbox-worded gate for an issue-routed dispatch.
+
+   - **"Monitor the ticket?"** — destination-appropriate options, both offering `No`. Inbox destination: offer to poll `done/<id>` and `failed/<id>` under the queue root and notify when the ticket lands. Issue destination: offer to watch for the trigger label (`gh issue view <n> --repo <nwo> --json labels`) and, once it appears, switch to polling the queue dirs as above. The description makes clear that applying the label is the human's call — never apply it yourself.
 
 4. **On approve — submit via CLI.** Submit the SAME temp file from step 2 (byte-identical to what lint and dry-run validated), then run:
 
@@ -220,17 +221,16 @@ If you generate a ticket and lint rejects it, fix the specific rule cited and re
    - **Inbox destination:** ticket id and destination path (from `junco submit` output); expected wall clock (use `timeout_minutes` as an upper bound); how to watch — the daemon's log output, or poll the `done/` and `failed/` directories under the queue root (`junco inbox-path` shows where the queue lives).
    - **Issue destination:** the issue URL, and that nothing runs until a human applies the trigger label to it — doable from the GitHub app on a phone, no daemon-side action needed before then.
    - **Both destinations:** end the report with one machine-checkable line: `DISPATCHED <id> -> <issue-url|inbox-path>`.
-6. **Offer monitoring.** Inbox destination: ask "Want me to monitor the ticket and notify when it lands in done/ or failed/?" — if yes, poll `done/<id>` and `failed/<id>` under the queue root. Issue destination: ask "Want me to watch the parked issue and tell you when it is labeled and picked up?" — if yes, poll `gh issue view <n> --repo <nwo> --json labels` until the trigger label appears, then switch to polling the queue dirs as above. Never apply the label yourself — that approval is the human's.
 
 ### Batch mode (no preview, headless harness)
 
-Triggered when the user prompt starts with `junco-batch:`. Identical to interactive mode except the preview gate and the monitor offer are skipped. Batch mode is inbox-only — it skips the destination probe and its own Submit step hardcodes `junco submit <tempfile>`, so neither the auto-route nor an "as issue" phrase applies to a `junco-batch:` prompt; route that case through interactive mode instead:
+Triggered when the user prompt starts with `junco-batch:`. Identical to interactive mode except the combined preview + monitor `AskUserQuestion` call is skipped entirely. Batch mode is inbox-only — it skips the destination probe and its own Submit step hardcodes `junco submit <tempfile>`, so neither the auto-route nor an "as issue" phrase applies to a `junco-batch:` prompt; route that case through interactive mode instead:
 
 1. **Render.** Generate the full ticket as a string (frontmatter + body). Same template, same rules.
 2. **(SKIPPED)** No `AskUserQuestion` preview gate. The ask tool is unavailable in a headless harness and would throw `ToolAbortError`.
 3. **Submit via CLI.** Write the rendered ticket to a temp file, then run `junco submit <tempfile>` (or `npx junco submit <tempfile>`). The worker resolves the configured inbox and places the file atomically.
 4. **Print one-line confirmation to stdout.** Format: `BATCH_DISPATCHED <id> -> <destination-path>`. This line is what the calling shell script greps for to confirm success. (The destination path comes from `junco submit` output.)
-5. **(SKIPPED)** No monitor offer.
+5. **(SKIPPED)** No monitor ask — it's folded into the same `AskUserQuestion` call as the preview gate (step 2), which batch mode already skips entirely.
 
 Note: batch mode produces tickets with the SAME structural quality as interactive mode (same TEMPLATE.md, same plan-lint rules apply post-claim). The only difference is the absence of the human-in-the-loop preview gate. Use only for automated test loops.
 
@@ -241,8 +241,7 @@ If the user says "junco this plan: `<path>`", do NOT rewrite the body. Instead:
 1. Read the plan file.
 2. Parse any existing frontmatter (Plan mode plans typically don't have any).
 3. Prepend junco frontmatter with values inferred from the plan's H1 and structure.
-4. Ensure the "Notes for the agent (strict)" section is present at the end — if absent, append it verbatim from `TEMPLATE.md`.
-5. Run the Dispatch procedure as normal — destination probe → preview → approve → submit.
+4. Run the Dispatch procedure as normal — destination probe → preview → approve → submit.
 
 ## Amend mode (follow-up tickets on existing PRs)
 
@@ -269,7 +268,6 @@ Use this when the user wants to fix / extend an open PR that junco originally op
    - `## What needs fixing` — concrete bullets of the changes requested
    - `## Steps` — numbered, each ending in a commit with `fix:` / `refactor:` / etc. prefix
    - `## Done when` — observable outcomes
-   - `## Notes for the agent (strict)` — copy the **amend-mode** block from `TEMPLATE.md` (different from fresh-ticket notes — forbids rebasing/squashing, says "you are amending, not starting over", etc.)
 
 ### Validation before writing an amend ticket
 
@@ -386,7 +384,7 @@ When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool avail
 
 ## Error handling
 
-Run `junco lint <tempfile>` before the preview gate — it performs these checks deterministically (repo path exists and is a git repo; origin remote exists and is GitHub; the derived branch is not already on origin; frontmatter labels exist on the repo) plus the worker's own plan-lint rules. Fix every `[error]` and re-run; surface `[warning]` lines in the preview. If an error cannot be fixed from the ticket (missing remote, taken branch), surface the specific problem and ask how to proceed — don't submit a ticket the worker will fail five seconds after claim.
+`junco submit --dry-run <tempfile>` (step 2) already performs these checks deterministically as part of deciding the destination: repo path exists and is a git repo; origin remote exists and is GitHub; the derived branch is not already on origin; frontmatter labels exist on the repo; plus the worker's own plan-lint rules — a clean dry-run IS the lint gate (step 2b). When it (or the preview) surfaces an `[error]`, fix the ticket and re-run `junco lint <tempfile>` to revalidate cheaply before re-previewing; surface `[warning]` lines in the preview rather than blocking on them. If an error cannot be fixed from the ticket (missing remote, taken branch), surface the specific problem and ask how to proceed — don't submit a ticket the worker will fail five seconds after claim.
 
 ## Provenance
 
@@ -397,4 +395,4 @@ This skill's template and anti-loop rules were synthesized from:
 - Addy Osmani, "The Code Agent Orchestra" (kill-loop patterns; file ownership; Ralph Loop)
 - Empirical data from repeated end-to-end test runs comparing structured plans vs. loose prompts
 
-The "Notes for the agent (strict)" block is the single most-earned asset — multiple 20-minute looping runs led to its exact wording.
+The strict working-discipline rules — now carried by the worker's prompt preamble rather than an authored plan section — are the single most-earned asset here: multiple 20-minute looping runs led to their exact wording.

@@ -162,25 +162,44 @@ describe("buildPromptWithRepoContext — fresh ticket, working discipline rules"
     output = buildPromptWithRepoContext(TASK, FRESH_CTX, WT_PATH, NWO, {});
   });
 
-  it("rule 5: mentions todo_write once at the very start", () => {
-    expect(output).toContain("todo_write");
-    expect(output).toContain("phases:");
+  it("never mentions todo_write — the tool does not exist in the agent layer", () => {
+    expect(output).not.toContain("todo_write");
   });
 
-  it("rule 6: mentions 'unchanged' result signal", () => {
+  it("carries the trust-the-ticket rule", () => {
+    expect(output).toContain("Do not re-explore the repo to double-check them");
+  });
+
+  it("carries the scope rule", () => {
+    expect(output).toContain("Do not expand scope");
+  });
+
+  it("carries the final-summary contract", () => {
+    expect(output).toContain("Final summary");
+  });
+
+  it("carries the graceful-stop rule", () => {
+    expect(output).toContain("Graceful stop on spec mismatch");
+  });
+
+  it("carries the one-commit-per-step rule", () => {
+    expect(output).toContain("commit exactly once per step");
+  });
+
+  it("rule 8: mentions 'unchanged' result signal", () => {
     expect(output).toContain("`unchanged`");
   });
 
-  it("rule 7: mentions not to verify git commit via log/status/diff", () => {
+  it("rule 9: mentions not to verify git commit via log/status/diff", () => {
     expect(output).toContain("git log");
     expect(output).toContain("git status");
   });
 
-  it("rule 8: mentions not running the Verification block", () => {
+  it("rule 10: mentions not running the Verification block", () => {
     expect(output).toContain("## Verification");
   });
 
-  it("rule 10: mentions loop guards", () => {
+  it("rule 12: mentions loop guards", () => {
     expect(output).toContain("loop guards");
   });
 });
@@ -245,6 +264,15 @@ describe("buildPromptWithRepoContext — amend ticket", () => {
 
   it("mentions not to run Verification block", () => {
     expect(output).toContain("## Verification");
+  });
+
+  it("amend preamble never mentions todo_write", () => {
+    expect(output).not.toContain("todo_write");
+  });
+
+  it("amend preamble carries the final-summary and graceful-stop rules", () => {
+    expect(output).toContain("Final summary");
+    expect(output).toContain("Graceful stop on spec mismatch");
   });
 });
 

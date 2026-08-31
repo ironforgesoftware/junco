@@ -2,7 +2,11 @@
  * Nudge templates — structured recovery messages junco sends to the agent
  * when a guard would otherwise trigger a hard kill.
  *
- * Ported from nudges.py. Wording is VERBATIM — do not rephrase.
+ * Ported from nudges.py. Wording is VERBATIM — do not rephrase, with one
+ * exception: 2026-08-31, the tool_call_loop nudge's "mark the current todo
+ * task complete" clause was reworded to drop the todo reference — todo_write
+ * was removed from the agent layer (see prPrompt.ts) and there is no longer
+ * a todo list for the agent to mark against.
  *
  * Used exclusively by Supervisor.decide(). Pure logic, no I/O.
  */
@@ -33,8 +37,8 @@ export function buildNudgeMessage(
       `identical arguments. The prior result was already returned — ` +
       `calling again will not produce different output.\n\n` +
       `If the prior call's result said \`unchanged\` or \`created\`, the file ` +
-      `is on disk and ready. Mark the current todo task complete and run ` +
-      `\`git commit\` for this step. If the prior call errored, change your ` +
+      `is on disk and ready. Run \`git commit\` for this step and move on. ` +
+      `If the prior call errored, change your ` +
       `approach — different args, different tool, or skip this step. ` +
       `Do NOT call \`${tn}\` with these args again.`
     );
