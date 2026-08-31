@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A parked `--as-issue` ticket now reads like a plan, not a code block: the issue body renders the ticket as normal markdown for the human reviewer, with the machine `junco-ticket` fence collapsed in a `<details>` block below it. The fence remains the only thing the bridge queues, the summary line says so, and bodies that would exceed GitHub's size cap fall back to the fence-only shape. The `--as-issue --plan` route keeps its fence-only presentation on purpose — its payload is YAML, which monospace presents correctly.
+
 ## [0.12.0] - 2026-08-30
 
 ### Added
