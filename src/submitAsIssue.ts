@@ -45,6 +45,33 @@ export function wrapInFence(tag: string, body: string): string {
   return `${fence}${tag}\n${body.trimEnd()}\n${fence}`;
 }
 
+/** GitHub caps issue bodies at 65536 characters; past this budget the parked
+ * issue keeps only the machine fence rather than truncating either copy. */
+const PARKED_BODY_BUDGET = 60_000;
+
+/** Compose the parked single-ticket issue body: the plan rendered as normal
+ * markdown for the human reviewer, then the machine fence collapsed in a
+ * <details> block, then the markers. The fence stays the ONLY thing the
+ * bridge queues (it extracts the last junco-ticket-tagged fence), and the
+ * summary says so — a pre-label edit that desyncs the two copies cannot
+ * silently redirect execution, and the edited-after-label guard re-vouches
+ * everything anyway. The junco-plan (--plan) route deliberately keeps its
+ * fence-only shape: its payload is YAML, which monospace presents correctly
+ * and unfenced markdown would mangle. */
+function parkedIssueBody(header: string, body: string, markers: string): string {
+  const fenced = wrapInFence("junco-ticket", body);
+  const readable =
+    header +
+    "\n\n" +
+    body.trimEnd() +
+    "\n\n<details><summary>machine copy — this fenced block is what queues; the prose above is a rendered duplicate</summary>\n\n" +
+    fenced +
+    "\n\n</details>\n\n" +
+    markers;
+  if (readable.length <= PARKED_BODY_BUDGET) return readable;
+  return header + "\n\n" + fenced + "\n\n" + markers;
+}
+
 function firstHeading(body: string): string | null {
   const m = /^#\s+(.+)$/m.exec(body);
   return m ? m[1].trim() : null;
@@ -254,11 +281,11 @@ export async function submitAsIssue(
     (typeof parsed.frontmatter.pr_title === "string" && parsed.frontmatter.pr_title) ||
     firstHeading(body) ||
     parsed.id;
-  const issueBody =
-    `_Parked junco ticket — apply the \`${cfg.github.triggerLabel}\` label to queue it._\n\n` +
-    wrapInFence("junco-ticket", body) +
-    "\n\n<!-- junco:as-issue -->\n" +
-    (carried !== null ? timeoutMarker(carried) + "\n" : "");
+  const issueBody = parkedIssueBody(
+    `_Parked junco ticket — apply the \`${cfg.github.triggerLabel}\` label to queue it._`,
+    body,
+    "<!-- junco:as-issue -->\n" + (carried !== null ? timeoutMarker(carried) + "\n" : ""),
+  );
 
   let cfgBot: Config;
   try {

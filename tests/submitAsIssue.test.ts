@@ -829,3 +829,62 @@ describe("wrapInFence", () => {
     expect(extractPlanBody(wrapped)).toBe("plain body, no fences");
   });
 });
+
+describe("parked issue readability", () => {
+  function captureGh() {
+    const state = { body: "" };
+    const ghFn = async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "create") {
+        const idx = args.indexOf("--body-file");
+        state.body = readFileSync(args[idx + 1], "utf8");
+        return { code: 0, stdout: "https://github.com/acme/api/issues/9\n", stderr: "" };
+      }
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    return { state, ghFn };
+  }
+
+  it("renders the plan above a collapsed machine fence and keeps the round-trip", async () => {
+    const { state, ghFn } = captureGh();
+    const code = await submitAsIssue(
+      baseCfg(),
+      "t.md",
+      TICKET,
+      { plan: false },
+      { ghFn: ghFn as never, printFn: () => {}, errFn: () => {}, withBotAuthFn: fakeBotAuth },
+    );
+    expect(code).toBe(0);
+    const body = state.body;
+    const details = body.indexOf("<details><summary>machine copy");
+    expect(details).toBeGreaterThan(-1);
+    // Rendered (unfenced) copy sits above the collapsed machine fence.
+    expect(body.indexOf("# Add X")).toBeLessThan(details);
+    expect((body.match(/# Add X/g) ?? []).length).toBe(2); // rendered + fenced
+    // Markers land after the details block, at the end of the body.
+    expect(body.indexOf("<!-- junco:as-issue -->")).toBeGreaterThan(body.indexOf("</details>"));
+    expect(body).toContain("<!-- junco:timeout:60 -->");
+    // The machine fence is untouched: the bridge's extractor still returns the
+    // exact ticket body, and never the human chrome.
+    const extracted = extractPlanBody(body);
+    expect(extracted).toContain("# Add X");
+    expect(extracted).not.toContain("<details>");
+  });
+
+  it("falls back to fence-only when both copies would exceed the body budget", async () => {
+    const big = TICKET.replace("- add it", "- add it\n\n" + "long line ".repeat(4000));
+    const { state, ghFn } = captureGh();
+    const code = await submitAsIssue(
+      baseCfg(),
+      "t.md",
+      big,
+      { plan: false },
+      { ghFn: ghFn as never, printFn: () => {}, errFn: () => {}, withBotAuthFn: fakeBotAuth },
+    );
+    expect(code).toBe(0);
+    const body = state.body;
+    expect(body).not.toContain("<details>");
+    expect((body.match(/# Add X/g) ?? []).length).toBe(1); // single, fenced copy
+    expect(body).toContain("<!-- junco:as-issue -->");
+    expect(extractPlanBody(body)).toContain("long line");
+  });
+});
